@@ -137,7 +137,10 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() - damage < math.floor(maxHealth * 50 / 100) then
+    -- nefarian rule: the C++ UpdateAI HealthBelowPct(50) arm never fires
+    -- on the killing blow — the crossing latch must not cast on a lethal hit.
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 50 / 100) then
         landslide[guid] = { timer = 60000 }
         creature:CastSpell(creature, SPELL_LANDSLIDE)
         schedule(guid, "landslide_pump", 1000, function()

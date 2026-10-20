@@ -152,10 +152,12 @@ local function onDamageTaken(event, creature, attacker, damage)
         return
     end
     -- event 9 fires before the hit lands: project the post-hit health the
-    -- C++ post-damage UpdateAI tick would read, floored at 0.
+    -- C++ post-damage UpdateAI tick would read. The postDamage > 0 guard
+    -- (nefarian rule): the C++ UpdateAI HealthBelowPct arms never fire on
+    -- the killing blow, which no UpdateAI tick follows.
     local health = creature:GetHealth() - damage
-    if health < 0 then
-        health = 0
+    if health <= 0 then
+        return
     end
     -- C++ UpdateAI HealthBelowPct arms read CURRENT health
     -- (jeklik convention): health < floor(maxHealth*pct/100).

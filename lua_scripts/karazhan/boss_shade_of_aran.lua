@@ -25,7 +25,7 @@
 -- from the cast point), or circular blizzard. Below 40% health once, four
 -- water elementals; at 12 minutes and every 60s after, shadow-of-Aran
 -- berserk (Talk only). The drink/potion/pyroblast mana sequence needs
--- power APIs the creature Lua object does not expose (see deviations).
+-- power APIs the creature Lua object only partly exposes (see deviations).
 -- Deviations from C++: no summon model — the 4 water elementals (17167),
 -- the 5 shadow-of-Aran summons (18254), and the blizzard creature (17161)
 -- never spawn; the elemental sub-40% arm and the 12-min berserk keep their
@@ -40,12 +40,18 @@
 -- flame-wreath target pool is random alive players in the instance rather
 -- than the threat list. No UNIT_STATE_CASTING model — timers fire
 -- unconditionally (same convention as the other Karazhan ports), and
--- InterruptNonMeleeSpells gates are skipped. No power API on the creature
--- Lua object (no GetPower/SetPower/SetStandState) and no mana drain from
--- visual casts — the whole drink arm (SAY_DRINK=4, mass poly 29963,
--- conjure 29975, drink 29975 30024, potion 32453, AOE pyroblast 29978, the
--- drink-interrupt damage hook, the 10s interrupt timer) is skipped; SAY_4
--- never fires. The SpellHit interrupt arm stays out: CreatureEventOnHitBySpell
+-- InterruptNonMeleeSpells gates are skipped. No SetPower/SetStandState
+-- on the creature Lua object (the old "no GetPower" claim is stale:
+-- creature:GetPower()/GetMaxPower() are bridged via the object-field
+-- fallback, engine/scripting/object.go:101, live in
+-- boss_lady_deathwhisper.lua) and no mana drain from visual casts — the
+-- whole drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink
+-- 29975 30024, potion 32453, AOE pyroblast 29978, the drink-interrupt
+-- damage hook, the 10s interrupt timer) is skipped; SAY_4 never fires.
+-- The drink aura's periodic mana refill has no tick executor in Go, so
+-- the machine's refill model (drink ticks + SetPower(max-32000)) cannot be
+-- reproduced — a partial port would re-drink in a loop. The SpellHit
+-- interrupt arm stays out: CreatureEventOnHitBySpell
 -- (14) is wired and fires with caster + spell id, but C++ gates on
 -- spellInfo->Effects[i].Effect == SPELL_EFFECT_INTERRUPT_CAST and no
 -- bridge exposes a spell's effect list. The flame-wreath 3-yd check is 2D

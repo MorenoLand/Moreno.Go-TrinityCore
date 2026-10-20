@@ -138,8 +138,10 @@ local function onDamageTaken(_, creature, _, damage)
     end
     -- HealthBelowPct(5): strict health < trunc(max*5/100) = math.floor
     -- boundary, not the float product (fires 1 HP early at fractional
-    -- boundaries).
-    if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 5 / 100) then
+    -- boundaries). The postDamage > 0 guard (nefarian rule): the C++
+    -- UpdateAI arm never fires on the killing blow.
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage < math.floor(creature:GetMaxHealth() * 5 / 100) then
         rendFired[guid] = true
         creature:CastSpell(creature, SPELL_SUMMON_REND)
         creature:RemoveAura(SPELL_REND_MOUNTS)

@@ -196,8 +196,9 @@ local function onDamageTaken(_, creature, _, damage)
     local postDamageHealth = creature:GetHealth() - damage
     -- HealthBelowPct(25): strict health < trunc(max*25/100), so the
     -- boundary is math.floor, not the float product (1-HP off at
-    -- fractional boundaries).
-    if postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
+    -- fractional boundaries). The postDamageHealth > 0 guard (nefarian
+    -- rule): the C++ UpdateAI arm never fires on the killing blow.
+    if postDamageHealth > 0 and postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end
