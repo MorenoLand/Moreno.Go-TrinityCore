@@ -50,7 +50,9 @@
 -- via the luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith and
 -- the GetZulGurubAI bookkeeping arms skipped); no threat model — the
 -- charge and shadow-word-pain targets are random alive players with no
--- victim fallback, ResetThreatList skipped; no movement model — the
+-- victim fallback; ResetThreatList PORTED 2026-10-19
+-- (creature:ClearThreatList, bridged lua_objects.go:389); no movement
+-- model — the
 -- charge AttackStart arm skipped; no SetCanFly bridge — the phase-1
 -- flight is cosmetic; the C++ while-loop casting gate
 -- (UNIT_STATE_CASTING checks in UpdateAI) has no bridge — timers fire
@@ -300,6 +302,10 @@ local function jeklikDamageTaken(event, creature, attacker, damage)
     end
     st.phase = PHASE_TWO
     creature:RemoveAura(SPELL_BAT_FORM)
+    -- C++ DamageTaken phase-1->2: ResetThreatList() after the bat-form
+    -- strip (bridged lua_objects.go:389; the old "ResetThreatList skipped"
+    -- header claim was stale). SetCanFly(false) has no bridge.
+    creature:ClearThreatList()
     for _, key in ipairs(PHASE_ONE_TIMER_KEYS) do
         local per = timers[guid]
         if per and per[key] then

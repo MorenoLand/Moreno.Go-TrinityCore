@@ -77,8 +77,10 @@
 -- fake-death arm; the feign-death aura alone is removed at
 -- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); no stat-modifier bridge — the +40% tiger
 -- damage hack and the Reset -damage hack are skipped (marli/arlokk
--- convention); no threat model — ResetThreatList and the gouge
--- ModifyThreatByPercent arms skipped; no movement model — the charge
+-- convention); the EVENT_CHANGE_PHASE_3 ResetThreatList arm is PORTED
+-- 2026-10-19 (c:ClearThreatList, bridged lua_objects.go:389); the gouge
+-- ModifyThreatByPercent arms stay skipped (no bridge); no movement
+-- model — the charge
 -- AttackStart arm skipped (charge is inert anyway, see above); no
 -- SetControlled bridge — the phase-change root/unroot arms skipped and
 -- the _isChangingPhase melee skip has no bearer (melee is
@@ -288,6 +290,10 @@ local function onChangePhase3(e, thekalGuid)
     local c = e.thekal
     if c then
         c:CastSpell(c, SPELL_TIGER_FORM)
+        -- C++ EVENT_CHANGE_PHASE_3: ResetThreatList() between the tiger-form
+        -- cast and the timer arms (bridged lua_objects.go:389); the
+        -- RemoveFlag/stat-modifier/root legs stay unbridged as documented.
+        c:ClearThreatList()
     end
     schedule(thekalGuid, "forcepunch", 4000, function()
         onForcePunch(e, c, thekalGuid)

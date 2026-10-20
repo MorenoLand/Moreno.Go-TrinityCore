@@ -334,8 +334,8 @@ end
 -- _phase == PHASE_ONE && damage > me->GetPower(POWER_MANA); then
 -- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
 -- RemoveAurasDueToSpell(MANA_BARRIER), CancelGroup(GROUP_ONE), seed
--- GROUP_TWO. Dropped legs: DoStartMovement / ResetThreatList (no
--- motion/threat bridges), SetPower(MANA, 0) (no SetPower bridge —
+-- GROUP_TWO. Dropped legs: DoStartMovement (no motion bridge),
+-- SetPower(MANA, 0) (no SetPower bridge —
 -- no behavioral effect: the gate latches on PHASE_TWO).
 -- FIDELITY CAVEAT: the mana_barrier AuraScript is unbridged, so in Go
 -- mana never drains and damage > mana fires only on a single hit
@@ -371,6 +371,10 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_PHASE_2)
         creature:Talk(EMOTE_PHASE_2)
         creature:RemoveAura(SPELL_MANA_BARRIER)
+        -- C++ DamageTaken phase-2: ResetThreatList() (bridged
+        -- lua_objects.go:389; the old "no threat bridge" header claim was
+        -- stale). DoStartMovement has no motion bridge.
+        creature:ClearThreatList()
         -- C++ CancelGroup(GROUP_ONE) (:419): the shadowbolt arm dies at
         -- the phase transition; deathanddecay is phase-independent and
         -- rides the normal cancelTimers on 2/4/23.

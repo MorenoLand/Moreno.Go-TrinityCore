@@ -35,7 +35,9 @@
 -- no bridge — zone adds are not pulled; RemoveAllAuras is bridged
 -- (creature:RemoveAllAuras) and ported in Reset/JustDied, but the
 -- REACT_PASSIVE/REACT_AGGRESSIVE arms have no bridge — reset is
--- timer/state-only (jindo convention); ResetThreatList has no bridge
+-- timer/state-only (jindo convention); the EVENT_TRANSFORM
+-- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
+-- bridged lua_objects.go:389)
 -- (no threat model); the holy-nova SelectTarget(MaxThreat) scan has no
 -- bearer — alive players in the instance are scanned instead with the
 -- 5-yd melee check standing in for IsWithinMeleeRange; SelectTarget
@@ -246,14 +248,18 @@ local function onParasiticSerpent(creature, guid)
 end
 
 -- C++ EVENT_TRANSFORM: non-triggered self-cast 23849 +
--- Talk(SAY_VENOXIS_TRANSFORM=1); ResetThreatList has no bridge (no
--- threat model); the phase-one timers are canceled (C++
+-- Talk(SAY_VENOXIS_TRANSFORM=1); ResetThreatList PORTED 2026-10-19
+-- (creature:ClearThreatList, bridged lua_objects.go:389); the
+-- phase-one timers are canceled (C++
 -- SetPhase(PHASE_TWO) drops the phase-1 EventMap entries C++-exact);
 -- arms the phase-two timers.
 local function onTransform(creature, guid)
     local st = venoxisState[guid]
     creature:CastSpell(creature, SPELL_VENOXIS_TRANSFORM)
     creature:Talk(TALK_VENOXIS_TRANSFORM)
+    -- C++ EVENT_TRANSFORM: ResetThreatList() after the Talk (bridged
+    -- lua_objects.go:389; the old "no bridge" header claims were stale).
+    creature:ClearThreatList()
     cancelTimerKeys(guid, PHASE_ONE_TIMER_KEYS)
     if st then
         st.phase = PHASE_TWO

@@ -501,7 +501,10 @@ RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 23, crokReset)
 
 -- C++ npc_frostwing_ymirjar_vrykul::JustEngagedWith :1237-1273 —
 -- per-entry timer seeds, all re-keyed to event 1 (see the PORTED
--- ARMS header note for the C++-exact arm list). Single-arg
+-- ARMS header note for the C++-exact arm list). The
+-- InterruptNonMeleeSpells(false) (:1242) leg is dropped: StopSpellCast
+-- is an explicit no-op for creatures (lua_objects.go:332 — packet-only
+-- casts, no cast state to interrupt). Single-arg
 -- DoCast() resolves via UnitAI::DoCast: AITARGET_SELF (arctic
 -- chill) -> self-cast; AITARGET_VICTIM (rapid shot, death
 -- embrace) -> victim-cast.

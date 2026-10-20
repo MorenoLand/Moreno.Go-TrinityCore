@@ -28,7 +28,8 @@
 --     position +3z via player:TeleportNear, keeping each player's own
 --     orientation (p:GetO() — the Orientation field resolves through
 --     the generic object fallback); init 30s, repeat 30s.
---     C++ ResetThreatList has no threat bridge (jindo precedent) —
+--     C++ ResetThreatList PORTED 2026-10-19 (creature:ClearThreatList,
+--     bridged lua_objects.go:389) —
 --     skipped.
 --   - Reflect 22067: self-cast; init 15-30s, repeat 20-35s.
 --   - Cleave 8255: victim-cast; init 7s, repeat 7s.
@@ -127,6 +128,10 @@ local function onTeleport(creature, guid)
             unit:TeleportNear(bx, by, bz + 3, unit:GetO())
         end
     end
+    -- C++ EVENT_TELEPORT: ResetThreatList() after the player teleports
+    -- (bridged lua_objects.go:389; the old "no threat bridge" header
+    -- claim was stale).
+    creature:ClearThreatList()
     schedule(guid, "teleport", 30000, function()
         onTeleport(creature, guid)
     end)

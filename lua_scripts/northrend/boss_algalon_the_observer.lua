@@ -45,7 +45,8 @@
 -- The remaining JustEngagedWith legs (SetFlag NOT_SELECTABLE,
 -- SetImmuneToNPC, DoZoneInCombat, summons.DespawnEntry(NPC_AZEROTH),
 -- instance->SetData, PlayDirectMusic, BossAI::JustEngagedWith passthrough)
--- have no bridges.
+-- have no bridges; InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
+-- is an explicit no-op for creatures (lua_objects.go:332).
 -- KilledUnit — player-gated Talk(SAY_ALGALON_KILL 20) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious player-gated
 -- variant precedent — at least the fortieth player-gated variant ported

@@ -230,6 +230,9 @@ local function onColumnOfFrost(creature, guid)
     schedule(guid, "column_of_frost", {15000, 25000}, function() onColumnOfFrost(creature, guid) end)
 end
 
+-- C++ npc_risen_archmage engage (:657): InterruptNonMeleeSpells(false)
+-- is dropped — StopSpellCast is an explicit no-op for creatures
+-- (lua_objects.go:332 — packet-only casts, no cast state to interrupt).
 local function risenArchmageJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

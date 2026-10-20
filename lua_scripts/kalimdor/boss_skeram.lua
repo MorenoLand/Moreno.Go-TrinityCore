@@ -31,7 +31,8 @@
 --   effect legs (dismount 61286 + 2313 recast) are no-bridge,
 --   documented-only.
 -- - Blink (30-45s init -> 10-30s): self-cast one of {4801, 8195,
---   20449} (C++ BlinkSpells). The ResetThreatList + SetVisible
+--   20449} (C++ BlinkSpells). ResetThreatList PORTED 2026-10-19
+--   (creature:ClearThreatList, bridged lua_objects.go:389); SetVisible
 --   legs are no-bridge — documented-only.
 -- - Earth Shock 26194 (DoCastVictim, 2s repeat): victim cast
 --   (fankriss GetVictim convention).
@@ -55,7 +56,7 @@
 -- - EnterEvadeMode: image self-despawn (IsSummon leg) — no bridge.
 -- - BossAI ctor leg DATA_SKERAM and _Reset() — instance bridge,
 --   standing.
--- - SelectTarget/AttackStart/ResetThreatList/SetVisible/
+-- - SelectTarget/AttackStart/SetVisible/
 --   InterruptNonMeleeSpells/GetThreatModifiers — no exact
 --   threat-list SelectTarget bridge in the engine's Lua API;
 --   random-target selection IS bridged via the documented
@@ -146,10 +147,13 @@ local function onTrueFulfillment(creature, guid)
 end
 
 -- C++ EVENT_BLINK: DoCast(me, BlinkSpells[urand(0,2)]), init
--- urand(30000,45000) -> urand(10000,30000). ResetThreatList /
--- SetVisible: no bridge.
+-- urand(30000,45000) -> urand(10000,30000). ResetThreatList PORTED
+-- 2026-10-19 (creature:ClearThreatList); SetVisible: no bridge.
 local function onBlink(creature, guid)
     creature:CastSpell(creature, BLINK_SPELLS[math.random(#BLINK_SPELLS)])
+    -- C++ EVENT_BLINK: ResetThreatList() after the blink cast (bridged
+    -- lua_objects.go:389; the old "no bridge" header claims were stale).
+    creature:ClearThreatList()
     schedule(guid, "blink", math.random(10000, 30000), function()
         onBlink(creature, guid)
     end)
