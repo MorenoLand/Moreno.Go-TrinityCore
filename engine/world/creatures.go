@@ -55,6 +55,7 @@ type creatureSpawn struct {
 	Bytes2           uint32
 	Emote            uint32
 	emoteStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Emote via the motion record (forces the field into the update mask even when clearing to 0)
+	standStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
 	Item1            uint32
 	Item2            uint32
 	Item3            uint32
@@ -243,6 +244,10 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Emote = motion.EmoteState
 			spawn.emoteStateKnown = true
 		}
+		if motion.StandStateKnown {
+			spawn.Bytes1 = (spawn.Bytes1 & 0xFFFFFF00) | uint32(motion.StandState)
+			spawn.standStateKnown = true
+		}
 	}
 }
 
@@ -378,7 +383,7 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	if spawn.Mount != 0 {
 		values[unitFieldMountDisplayID] = spawn.Mount
 	}
-	if spawn.Bytes1 != 0 {
+	if spawn.Bytes1 != 0 || spawn.standStateKnown {
 		values[unitFieldBytes1] = spawn.Bytes1
 	}
 	// AuraEffect::HandleAuraUntrackable (SpellAuraEffects.cpp:2521-2537) on

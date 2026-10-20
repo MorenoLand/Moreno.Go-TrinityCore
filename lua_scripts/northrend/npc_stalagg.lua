@@ -46,7 +46,9 @@
 -- + STAND + REACT_AGGRESSIVE + NOT_SELECTABLE removal + root
 -- release + Talk(EMOTE_FEIGN_REVIVE 4) + refreshBeam + DoZoneInCombat
 -- + the !IsEngaged() -> BeginResetEncounter leg) — no
--- stand-state / react-state / flag / zone-combat bridges;
+-- zone-combat bridge (stand/react/flag bridges exist since the
+-- 2026-10-20 standstate strip; the revive TRIGGER is the unbridged
+-- thaddius DoAction machine);
 -- DoAction(ACTION_TRANSITION) — KillSelf + the coil CastStop +
 -- coil->AI()->Talk(EMOTE_TESLA_OVERLOAD 1) — no cross-AI bridge;
 -- DoAction(ACTION_TRANSITION_2) — coil->CastSpell(thaddius,
@@ -59,19 +61,23 @@
 -- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
 -- health-1 + damage = 0 legs ARE ported (see stalaggDamageTaken
 -- below — event 9 numeric-return rewrite, halazzi precedent); the
--- stand-state / react-state / flag / aura / cross-AI legs stay out;
--- the latch resets only on death (event 4 — C++ ctor reset); the
+-- cross-AI DoAction + SetControlled(root) legs stay out (the
+-- stand/react/flag/aura legs ARE ported since the 2026-10-20
+-- standstate strip); the latch clears on death (event 4) and ev23
+-- restores fresh-spawn state (Go-lifecycle analog of the C++
+-- despawn/respawn cycle — see stalaggReset); the
 -- C++ ACTION_STALAGG_REVIVED revive machine is unbridged, so a
 -- feigned stalagg stays feigned until killed/despawned — partial
 -- port, documented; SpellHit — the whole tesla-beam
 -- machine (SPELL_STALAGG_TESLA_PERIODIC 28098 -> overload state +
 -- creatureCaster Talk(EMOTE_TESLA_LINK_BREAKS 0) + CastSpell(target,
--- SPELL_TESLA_SHOCK 28099, triggered) / the refresh-beam recast of
+-- SPELL_TESLA_SHOCK 28099, triggered)) / the refresh-beam recast of
 -- SPELL_STALAGG_CHAIN_VISUAL 28096) — event 14 (OnHitBySpell) DOES
 -- fire (boss_ai.go); the arm stays out because Talk/CastStop/
 -- CastSpell all run on creatureCaster, which the event does not
 -- pass (no caster bridge), and SetImmuneToPC + the random-target
--- leg are unbridged; UpdateAI's isFeignDeath gate — no bridge.
+-- leg are unbridged; UpdateAI's isFeignDeath powerSurge hold is
+-- modeled via the Lua latch (see powerSurgeTick).
 
 local ENTRY_STALAGG = 15929
 
@@ -81,6 +87,10 @@ local SAY_STALAGG_SLAY = 1
 local SPELL_STALAGG_POWERSURGE = 28134
 
 local timers = {}
+
+-- Feign-death latch, declared before every function that touches it
+-- (powerSurgeTick's isFeignDeath gate reads it).
+local stalaggFeign = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -105,10 +115,18 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ UpdateAI powerSurgeTimer: DoCastSelf(SPELL_STALAGG_POWERSURGE
--- 28134), 10s init, urandms(25,30) repeat. The isFeignDeath delay
--- leg has no bridge (the feign-death machine is unmodeled) —
--- documented, not wired.
+-- 28134), 10s init, urandms(25,30) repeat. While feigned the C++
+-- holds the timer at 0 (powerSurgeTimer = 0u, "delay until potential
+-- revive", boss_thaddius.cpp:644) — modeled via the Lua latch: no
+-- cast, re-arm on the 1s beat; the revive never fires in this port,
+-- so the cast stays suppressed while feigned.
 local function powerSurgeTick(creature, guid)
+    if stalaggFeign[guid] then
+        schedule(guid, "powersurge", 1000, function()
+            powerSurgeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_STALAGG_POWERSURGE)
     schedule(guid, "powersurge", math.random(25, 30) * 1000, function()
         powerSurgeTick(creature, guid)
@@ -141,27 +159,48 @@ local function stalaggTargetDied(event, creature, victim)
     end
 end
 
--- Feign-death latch (declared before the handlers that touch it).
-local stalaggFeign = {}
-
 local function stalaggDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     stalaggFeign[creature:GetGUID()] = nil
 end
 
+-- UnitDefines.h react states / SharedDefines.h stand states and unit flags
+-- (engine/world/lua_creature_events.go SetReactState / SetStandState /
+-- SetFlag bridges).
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+local UNIT_FLAG_NOT_SELECTABLE = 0x200
+local UNIT_STAND_STATE_STAND = 0
+local UNIT_STAND_STATE_DEAD = 7
+
 local function stalaggReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ has no Reset override: on evade stalagg runs EnterEvadeMode ->
+    -- thaddius DoAction(ACTION_STALAGG_RESET) -> BeginResetEncounter ->
+    -- DespawnOrUnsummon (boss_thaddius.cpp:490-501) and is force-respawned
+    -- by thaddius with a fresh AI (isFeignDeath=false, template stand /
+    -- flags / react state). Go has no despawn model, so ev23 restores the
+    -- fresh-spawn equivalent and clears the Lua latch; without this a
+    -- feigned stalagg would stay damage-immune across evades.
+    stalaggFeign[guid] = nil
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+    creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetReactState(REACT_AGGRESSIVE)
 end
 
 -- C++ npc_stalagg::DamageTaken (boss_thaddius.cpp:572-602), portable
--- legs only: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) +
--- AttackStop() + damage = health-1; once latched, all further
--- damage = 0. The cross-AI
--- DoAction + stand-state / react-state / flag / aura / beam legs stay
--- out (no bridges). Event 9's second return rewrites damage
+-- legs: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) +
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) +
+-- RemoveAllAuras() + SetReactState(REACT_PASSIVE) + AttackStop() +
+-- SetStandState(UNIT_STAND_STATE_DEAD) + damage = health-1; once latched,
+-- all further damage = 0. The cross-AI DoAction(ACTION_STALAGG_DIED) +
+-- SetControlled(UNIT_STATE_ROOT) / refreshBeam legs have no bridges —
+-- documented, not wired. Event 9's second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
 -- in the AI ctor; the Lua mirror wipes the GUID entry on death
--- (event 4). The unbridged ACTION_STALAGG_REVIVED machine means a
+-- (event 4) and restores fresh-spawn state on reset (event 23, see
+-- above). The unbridged ACTION_STALAGG_REVIVED machine means a
 -- feigned stalagg never revives mid-fight in this port.
 local EMOTE_FEIGN_DEATH = 3
 
@@ -175,7 +214,11 @@ local function stalaggDamageTaken(event, creature, attacker, damage)
     end
     stalaggFeign[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
+    creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:RemoveAllAuras()
+    creature:SetReactState(REACT_PASSIVE)
     creature:AttackStop()
+    creature:SetStandState(UNIT_STAND_STATE_DEAD)
     return false, creature:GetHealth() - 1
 end
 

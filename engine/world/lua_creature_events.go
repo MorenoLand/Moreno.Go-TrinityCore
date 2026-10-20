@@ -417,6 +417,28 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetStandState is Creature::SetStandState: SetByteValue(UNIT_FIELD_BYTES_1,
+	// UNIT_BYTES_1_OFFSET_STAND_STATE, state) (Unit.cpp: UNIT_STAND_STATE_STAND=0,
+	// SIT=1, SIT_CHAIR=2, SLEEP=3, SIT_LOW_CHAIR=4, SIT_MEDIUM_CHAIR=5,
+	// SIT_HIGH_CHAIR=6, DEAD=7, KNEEL=8, SUBMERGED=9, SharedDefines.h).
+	// applyCreatureMotionToSpawn overlays motion.StandState onto the spawn
+	// record's Bytes1 byte 0 (creatures.go), so feign-death / intro /
+	// throne-sitting arms (stalagg, feugen, nefarius, ...) port with real
+	// client-visible effect; the other Bytes1 bytes are preserved.
+	methods["SetStandState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 9 {
+			return nil, fmt.Errorf("SetStandState requires a UNIT_STAND_STATE 0-9, got %d", st)
+		}
+		s.motionMu.Lock()
+		motion.StandState = uint8(st)
+		motion.StandStateKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and

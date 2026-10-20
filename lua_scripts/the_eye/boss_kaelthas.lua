@@ -54,7 +54,10 @@
 -- resurrection machine; the advisorbase_ai Reset() UNIT_
 -- STAND_STATE / UNIT_FLAG_NON_ATTACKABLE arms and the kael-
 -- evade arm (kael->AI()->EnterEvadeMode when DATA_KAELTHAS
--- is IN_PROGRESS) have no stand/flag/instance bridges;
+-- is IN_PROGRESS) have no instance bridge (stand/flag bridges exist
+-- since the 2026-10-20 standstate strip, but the machine's revive
+-- trigger — Kael'thas's SPELL_RESSURECTION SpellHit — rides the
+-- instance-driven phase machine, so the arms stay out);
 -- MoveInLineOfSight / AttackStart _inFakeDeath /
 -- NON_ATTACKABLE guards collapse into the pump (no flag
 -- bridge); JustDied kael->AI()->DoAction(ACTION_ACTIVE_
