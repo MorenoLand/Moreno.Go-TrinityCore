@@ -2048,22 +2048,26 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
-	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2638): the
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2650): the
 	// target-side SpellHit Eluna hook — CREATURE_EVENT_ON_HIT_BY_SPELL
 	// (event 14), args (event, creature, caster, spellid) — fires once
-	// per hit target, ahead of the caster-side SpellHitTarget leg below
-	// (2639-2650). DoProcessTargetContainer (Spell.cpp:3555-3566) runs the
-	// per-effect DoTargetSpellHit loop (Spell.cpp:2384) for damage first
-	// and DoDamageAndTriggers once per target after; the per-effect loop
-	// carries no AI hook — the earlier per-effect firing misattributed
-	// DoTargetSpellHit. The boolean veto gates only the empty
-	// ScriptedAI::SpellHit base (CreatureAI.h:143), so it is discarded.
-	// A miss nulls _spellHitTarget in PreprocessTarget (Spell.cpp:2347),
-	// so the hook never fires there: SPELL_MISS_EVADE verdicts are
-	// skipped below like the reflect verdicts (the ev15 leg and the
-	// trigger consumer already skip both). The Lua signature exposes no
-	// effect index, so firing once per target is exact, not an
-	// approximation — same as the player path (spells.go).
+	// per hit target, immediately followed by the caster-side
+	// SpellHitTarget leg (event 15, 2639-2650, args (caster, target,
+	// spellid); ElunaCreatureAI.h:231-238 — the return only vetoes the
+	// empty ScriptedAI arm, so it is discarded; the gameobject-caster
+	// arm has no Go model). DoProcessTargetContainer (Spell.cpp:3555-3566)
+	// runs the per-effect DoTargetSpellHit loop (Spell.cpp:2384) for
+	// damage first and DoDamageAndTriggers once per target after — every
+	// TargetInfo (primary, chain jumps, AoE fan-out) takes both legs in
+	// container order; the per-effect loop carries no AI hook (the earlier
+	// per-effect firing misattributed DoTargetSpellHit). The boolean veto
+	// gates only the empty ScriptedAI::SpellHit base (CreatureAI.h:143),
+	// so it is discarded. A miss nulls _spellHitTarget in PreprocessTarget
+	// (Spell.cpp:2347), so the hook never fires there: SPELL_MISS_EVADE
+	// verdicts are skipped below like the reflect verdicts (the trigger
+	// consumer skips both too). The Lua signature exposes no effect index,
+	// so firing once per target is exact, not an approximation — same as
+	// the player path (spells.go).
 	if spellKnown {
 		for _, guid := range hitTargets {
 			if status, reflected := reflectedTargets[guid]; reflected {
@@ -2092,25 +2096,14 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 			}
-		}
-	}
-	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-2650):
-	// a creature caster whose spell hits a unit target fires the caster
-	// AI's SpellHitTarget(target, spell) — Eluna
-	// CREATURE_EVENT_ON_SPELL_HIT_TARGET (event 15), args
-	// (caster, target, spellid); the return is discarded (ElunaCreatureAI.h:
-	// 231-238 — it only vetoes the empty ScriptedAI arm, the same ruling
-	// as the event-14 bridge). The hit-target-side SpellHit leg (event 14)
-	// fires in the block above; the gameobject-caster arm has no Go model.
-	// The reflect return-trip ev15 self-fire (target=caster) rides the
-	// ev14 loop above, once per reflected target — not this block.
-	// This runs before the
-	// DoTriggersOnSpellHit consumer below, matching C++ order (2639-2650
-	// precede 2652). Gated on spellKnown and a real hit target: C++ only
-	// reaches these arms with a SpellInfo and a non-null _spellHitTarget.
-	if spellKnown && targetGUID != 0 {
-		if _, reflected := reflectedTargets[targetGUID]; !reflected && !evadedTargets[targetGUID] {
-			s.fireCreatureSpellHitTarget(ctx, m, targetGUID, spellID)
+			// The ev15 leg rides the same target iteration, matching C++
+			// order (2639-2650 follow 2629-2638 per TargetInfo) — chain
+			// jumps take it too, not just the primary target. The guid != 0
+			// gate keeps the old targetGUID != 0 gate (C++ never has a null
+			// _spellHitTarget here).
+			if guid != 0 {
+				s.fireCreatureSpellHitTarget(ctx, m, guid, spellID)
+			}
 		}
 	}
 	// Spell::DoTriggersOnSpellHit (Spell.cpp:2913-2957): the per-hit trigger
