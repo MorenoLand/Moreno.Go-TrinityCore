@@ -214,14 +214,15 @@ end
 -- landing (boss_moorabi.cpp:128-136): _transformed latch,
 -- Talk(EMOTE_TRANSFORMED 6), cancel the EVENT_TRANFORMATION re-arm,
 -- RemoveAurasDueToSpell(SPELL_MOJO_FRENZY) (creature:RemoveAura, the alar
--- precedent). Eluna event 14 (ON_SPELL_HIT) fires on the hit target's
--- bindings (boss_ai.go:2079); for the self-cast the boss is the only hit
--- target. Go fires ev14 once per non-NONE effect of the landing cast
--- (boss_ai.go:2066-2080) while C++ target-side SpellHit fires once per
--- cast, so the Talk leg runs on the first effect-fire only (the latch
--- set, timer-cancel and RemoveAura legs are idempotent and run per
--- fire, matching C++ per landing). (Corrects the earlier event-15
--- registration: C++ has no SpellHitTarget arm on this unit.)
+-- precedent).
+-- Eluna event 14 (ON_SPELL_HIT) fires on the hit target's bindings
+-- (boss_ai.go); for the self-cast the boss is the only hit target.
+-- The engine fires ev14 once per hit target per cast — the true C++
+-- DoDamageAndTriggers twin — so the arm lands exactly once per C++
+-- landing; the first-fire Talk guard below is now a no-op safety
+-- (kept for the synchronous-landing re-arm race it already covers).
+-- (Corrects the earlier event-15 registration: C++ has no
+-- SpellHitTarget arm on this unit.)
 local function moorabiSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TRANSFORMATION then
         local guid = creature:GetGUID()

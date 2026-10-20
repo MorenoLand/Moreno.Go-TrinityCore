@@ -63,9 +63,10 @@
 -- DoCastSelf SPELL_ARCANE_OVERLOAD_1 (56432, triggered), in C++ order
 -- via event 14 (event, creature, caster, spellid) with the exact
 -- triggered flags; gated on the trigger spell ID (the C++ SpellHit
--- if) — C++ boss_malygos.cpp :1478-:1484. Note: Go fires event 14
--- once per non-NONE spell effect, C++ once per spell hit; 56430 is
--- single-arm so the deviation is theoretical for this entry.
+-- if) — C++ boss_malygos.cpp :1478-:1484. Note: the engine fires event
+-- 14 once per hit target — the true C++ DoDamageAndTriggers twin — so
+-- this is 1:1 with the C++ per-hit SpellHit (the earlier per-effect
+-- caveat is retracted).
 -- JustDied — Talk(SAY_DEATH 17) (event 4; the _JustDied
 -- bookkeeping has no bridge — tharon_ja precedent; the
 -- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject

@@ -204,10 +204,10 @@ end
 -- JustDied); C++ Unit::Kill on a dead unit is a no-op. Dropped
 -- with no bridged consumer: the _frenzyDispels counter (feeds
 -- GetData(DATA_FRENZY_DISPELS) -> the unbridged achievement only).
--- Per-effect caveat: the event-14 bridge fires once per non-NONE
--- DBC effect (boss_ai.go:2012-2033); Widow's Embrace is a
--- single-aura spell (Faerlina's own HasAura gate proves the aura
--- is its purpose), so this is 1:1 with the C++ per-cast SpellHit.
+-- Firing note: the event-14 bridge fires once per hit target — the true
+-- C++ DoDamageAndTriggers twin — so this is 1:1 with the C++ per-hit
+-- SpellHit regardless of effect count (the earlier per-effect caveat is
+-- retracted).
 local function faerlinaSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_WIDOWS_EMBRACE_10 or spellId == SPELL_WIDOWS_EMBRACE_25 then
         creature:Talk(EMOTE_WIDOW_EMBRACE, caster)

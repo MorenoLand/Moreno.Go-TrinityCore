@@ -20,12 +20,9 @@
 -- convention; selin_fireheart.lua / mr_smite.lua precedents), so
 -- the AOE knockback is cast on self the same way the C++ AOEs it
 -- from the caster position.
--- Caveat: Go fires event 14 once per non-NONE spell effect per
--- creature target (boss_ai.go Spell::TargetInfo::DoTargetSpellHit
--- leg), while C++ SpellHit fires once per spell hit — a
--- multi-effect trigger spell could double-fire the arm. 56430's
--- effect layout is single-arm; the deviation is theoretical for
--- this entry, documented not widened.
+-- Caveat (retracted): the engine fires event 14 once per hit target —
+-- the true C++ DoDamageAndTriggers twin — so a multi-effect trigger
+-- spell cannot double-fire the arm.
 -- Unmodeled (no bridges — documented, not wired):
 -- IsSummonedBy: instance->SetGUID(DATA_LAST_OVERLOAD_GUID) — no
 -- instance bridge. DoAction: phase-gated DespawnOrUnsummon

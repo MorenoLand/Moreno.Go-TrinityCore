@@ -2048,31 +2048,30 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
-	// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2626-2629): the
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2638): the
 	// target-side SpellHit Eluna hook — CREATURE_EVENT_ON_HIT_BY_SPELL
-	// (event 14), args (event, creature, caster, spellid) — fires per
-	// effect for creature hit targets, ahead of the caster-side
-	// SpellHitTarget leg below (2629 precedes 2639-2648). The boolean veto
-	// gates only the empty ScriptedAI::SpellHit base (CreatureAI.h:143),
-	// so it is discarded. Reflected targets are skipped: C++ reflect
-	// keeps _spellHitTarget away from the reflector (Spell.cpp:2350), so
-	// the hook never fires there. Per-effect firing mirrors the
-	// DoProcessTargetContainer loop (Spell.cpp:3557-3562); Go's hitTargets
-	// is a flat per-cast list (no per-effect masks), so this fires once
-	// per non-NONE effect per creature target — the same approximation as
-	// the player path (spells.go).
+	// (event 14), args (event, creature, caster, spellid) — fires once
+	// per hit target, ahead of the caster-side SpellHitTarget leg below
+	// (2639-2650). DoProcessTargetContainer (Spell.cpp:3555-3566) runs the
+	// per-effect DoTargetSpellHit loop (Spell.cpp:2384) for damage first
+	// and DoDamageAndTriggers once per target after; the per-effect loop
+	// carries no AI hook — the earlier per-effect firing misattributed
+	// DoTargetSpellHit. The boolean veto gates only the empty
+	// ScriptedAI::SpellHit base (CreatureAI.h:143), so it is discarded.
+	// Reflected targets are skipped: C++ reflect keeps _spellHitTarget
+	// away from the reflector (Spell.cpp:2350), so the hook never fires
+	// there; misses never fire either (PreprocessTarget, Spell.cpp:2347:
+	// _spellHitTarget stays null on a miss), matching the miss-filtered
+	// hitTargets. The Lua signature exposes no effect index, so firing
+	// once per target is exact, not an approximation — same as the
+	// player path (spells.go).
 	if spellKnown {
-		for i := range spellInfo.Effects {
-			if spellInfo.Effects[i].Effect == 0 {
+		for _, guid := range hitTargets {
+			if _, reflected := reflectedTargets[guid]; reflected {
 				continue
 			}
-			for _, guid := range hitTargets {
-				if _, reflected := reflectedTargets[guid]; reflected {
-					continue
-				}
-				if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-					s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
-				}
+			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 			}
 		}
 	}
