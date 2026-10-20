@@ -404,22 +404,48 @@ local ENTRY_TWILIGHT_EGG = 30882
 local ENTRY_SARTHARION_TWILIGHT_EGG = 31204
 local ENTRY_FLAME_TSUNAMI = 30616
 
+-- Shared ev4 cleanup for the acolytes' 28s despawn timers.
+local function acolyteDespawnCancel(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ npc_acolyte_of_shadron::Reset (obsidian_sanctum.cpp:632-650):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) — self-aura leg
--- ported; DespawnOrUnsummon(28s) inexpressible (Go Despawn takes
--- no delay arg); the instance-gated gift-aura legs stay out.
+-- ported; DespawnOrUnsummon(28s) ports as a 28s one-shot
+-- self-despawn (arm-if-absent: the C++ despawn countdown keeps
+-- running through evade, so the ev23-on-evade refire must not
+-- re-arm it; ev4 cancels it); the instance-gated gift-aura legs
+-- stay out.
 local function acolyteShadronReset(event, creature)
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+    local guid = creature:GetGUID()
+    local per = timers[guid]
+    if not (per and per["despawn"]) then
+        schedule(guid, "despawn", 28000, function()
+            cancelTimers(guid)
+            creature:Despawn()
+        end)
+    end
 end
 RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 23, acolyteShadronReset)
+RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 4, acolyteDespawnCancel)
 
 -- C++ npc_acolyte_of_vesperon::Reset (obsidian_sanctum.cpp:718-726):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) + DoCast(me,
 -- SPELL_TWILIGHT_TORMENT_VESP_ACO) (2-arg non-triggered self-cast)
--- ported.
+-- ported; DespawnOrUnsummon(28s) ports as a 28s one-shot
+-- self-despawn (same arm-if-absent/ev4-cancel terms as shadron).
 local function acolyteVesperonReset(event, creature)
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
     creature:CastSpell(creature, SPELL_TWILIGHT_TORMENT_VESP_ACO)
+    local guid = creature:GetGUID()
+    local per = timers[guid]
+    if not (per and per["despawn"]) then
+        schedule(guid, "despawn", 28000, function()
+            cancelTimers(guid)
+            creature:Despawn()
+        end)
+    end
 end
 RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 23, acolyteVesperonReset)
 
@@ -428,6 +454,7 @@ RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 23, acolyteVesperonReset)
 -- self leg ported; the instance/vesperon/player legs stay out.
 local function acolyteVesperonDied(event, creature, killer)
     creature:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP_ACO)
+    cancelTimers(creature:GetGUID())
 end
 RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 4, acolyteVesperonDied)
 
