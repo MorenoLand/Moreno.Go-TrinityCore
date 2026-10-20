@@ -7784,7 +7784,7 @@ func (s *session) engageLaunchTarget(ctx context.Context, spell wotlk.Spell, tar
 	if s.isFriendlyLaunchTarget(ctx, targetGUID) {
 		return
 	}
-	if !spellHasInitialThreat(spell) && !s.isLaunchTargetEngaged(targetGUID) {
+	if !spellHasInitialThreat(spell) && !s.isTargetEngaged(targetGUID) {
 		return
 	}
 	if uint16(targetGUID>>48) == 0xF130 {
@@ -7846,10 +7846,11 @@ func (s *session) launchTargetFaction(ctx context.Context, targetGUID uint64) (u
 	return uint32(faction), true
 }
 
-// isLaunchTargetEngaged mirrors the unit->IsEngaged() arm of the launch
-// engage (Spell.cpp:7748): Unit::IsEngaged is IsInCombat (Unit.h:1031) —
-// the player's UNIT_FLAG_IN_COMBAT bit, the creature motion's InCombat.
-func (s *session) isLaunchTargetEngaged(targetGUID uint64) bool {
+// isTargetEngaged mirrors the unit->IsEngaged() arm shared by the launch
+// engage (Spell.cpp:7748) and the hit-time Unit::AtTargetAttacked gate
+// (Unit.cpp:8971): Unit::IsEngaged is IsInCombat (Unit.h:1031) — the
+// player's UNIT_FLAG_IN_COMBAT bit, the creature motion's InCombat.
+func (s *session) isTargetEngaged(targetGUID uint64) bool {
 	if s == nil || s.server == nil {
 		return false
 	}
@@ -11828,6 +11829,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// and the low-GUID DB fallback must not see a player counter.
 				high := uint16(effectTarget >> 48)
 				if effectTarget != 0 && effectTarget != s.playerGUID && (high == 0xF130 || high == 0xF140 || high == 0xF150) {
+					// Unit::AtTargetAttacked (Unit.cpp:8971-8973) skips the
+					// engage when the victim is not engaged and the spell
+					// has no initial aggro (SpellInfo::HasInitialAggro,
+					// SpellInfo.cpp:1261-1263): a no-initial-aggro debuff
+					// landing on an unengaged creature engages nothing in
+					// C++ and must not pull here either.
+					if !spellHasInitialThreat(spell) && !s.isTargetEngaged(effectTarget) {
+						continue
+					}
 					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
 				}
 			}
@@ -11845,6 +11855,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				high := uint16(miss.TargetGUID >> 48)
 				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone && miss.TargetGUID != 0 &&
 					(high == 0xF130 || high == 0xF140 || high == 0xF150) {
+					// Same AtTargetAttacked gate as above, probed on the
+					// reflector: a landed reflect of a no-initial-aggro
+					// spell off an unengaged reflector engages nothing.
+					if !spellHasInitialThreat(spell) && !s.isTargetEngaged(miss.TargetGUID) {
+						continue
+					}
 					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
 				}
 			}
