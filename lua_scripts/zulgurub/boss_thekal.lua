@@ -305,10 +305,13 @@ local function onChangePhase3(e, thekalGuid)
         c:CastSpell(c, SPELL_TIGER_FORM)
         -- C++ EVENT_CHANGE_PHASE_3: RemoveFlag(IMMUNE_TO_PC|IMMUNE_TO_NPC)
         -- between the tiger-form cast and ResetThreatList
-        -- (boss_thekal.cpp:309); the stat-modifier/root legs stay
-        -- unbridged as documented.
+        -- (boss_thekal.cpp:309); the stat-modifier leg stays
+        -- unbridged as documented; SetControlled(false, ROOT)
+        -- (boss_thekal.cpp:312) releases the phase-1 root via
+        -- creature:SetRooted (lua_creature_events.go).
         c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
         c:ClearThreatList()
+        c:SetRooted(false)
     end
     schedule(thekalGuid, "forcepunch", 4000, function()
         onForcePunch(e, c, thekalGuid)
@@ -336,6 +339,9 @@ local function onChangePhase1(e, thekalGuid)
     local c = e.thekal
     e.changingPhase = true
     if c then
+        -- C++ EVENT_CHANGE_PHASE_1 (boss_thekal.cpp:292-299): root first,
+        -- then aura strip + full heal + resurrect-visual self-cast.
+        c:SetRooted(true)
         c:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
         c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
         c:SetHealth(c:GetMaxHealth())

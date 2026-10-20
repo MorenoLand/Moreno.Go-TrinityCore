@@ -595,6 +595,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetRooted is Unit::SetControlled(state, UNIT_STATE_ROOT): sets or
+	// clears the root leg of UNIT_STATE_NOT_MOVE (Unit.h:256) on the
+	// handler creature. The engine honors motion.ScriptRooted in the
+	// chase-pause gate (ChaseMovementGenerator.cpp:98-106) and the
+	// waypoint-launch gate (WaypointMovementGenerator.cpp:126-132), so
+	// feign-death / phase-change root arms (stalagg, feugen, thekal,
+	// kologarn) port with real effect; melee swings still fire while
+	// rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING only,
+	// UnitAI.cpp:61-63). STUNNED has no bridge (cast/melee blocking
+	// needs new engine state) — a future dimension.
+	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetRooted requires a bool, got no args")
+		}
+		rooted, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetRooted requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.ScriptRooted = rooted
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
 	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
 	// Creature::SetDisplayId (Creature.cpp:3210) bounding-radius /

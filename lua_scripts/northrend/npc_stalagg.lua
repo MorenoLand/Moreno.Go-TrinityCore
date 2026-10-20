@@ -62,7 +62,8 @@
 -- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
 -- health-1 + damage = 0 legs ARE ported (see stalaggDamageTaken
 -- below — event 9 numeric-return rewrite, halazzi precedent); the
--- cross-AI DoAction + SetControlled(root) legs stay out (the
+-- cross-AI DoAction leg stays out; SetControlled(root) IS ported
+-- (creature:SetRooted, lua_creature_events.go) and the
 -- stand/react/flag/aura legs ARE ported since the 2026-10-20
 -- standstate strip); the latch clears on death (event 4) and ev23
 -- restores fresh-spawn state (Go-lifecycle analog of the C++
@@ -239,15 +240,17 @@ local function stalaggReset(event, creature)
     creature:SetStandState(UNIT_STAND_STATE_STAND)
     creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetReactState(REACT_AGGRESSIVE)
+    creature:SetRooted(false)
 end
 
 -- C++ npc_stalagg::DamageTaken (boss_thaddius.cpp:572-602), portable
 -- legs: lethal damage -> Talk(EMOTE_FEIGN_DEATH 3) +
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) +
 -- RemoveAllAuras() + SetReactState(REACT_PASSIVE) + AttackStop() +
--- SetStandState(UNIT_STAND_STATE_DEAD) + damage = health-1; once latched,
--- all further damage = 0. The cross-AI DoAction(ACTION_STALAGG_DIED) +
--- SetControlled(UNIT_STATE_ROOT) legs stay out; refreshBeam = true
+-- SetStandState(UNIT_STAND_STATE_DEAD) + SetControlled(UNIT_STATE_ROOT)
+-- (creature:SetRooted, lua_creature_events.go) + damage = health-1; once latched,
+-- all further damage = 0. The cross-AI DoAction(ACTION_STALAGG_DIED)
+-- leg stays out; refreshBeam = true
 -- IS modeled via the Lua latch (see DamageTaken below). Event 9's
 -- second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
@@ -274,6 +277,7 @@ local function stalaggDamageTaken(event, creature, attacker, damage)
     creature:RemoveAllAuras()
     creature:SetReactState(REACT_PASSIVE)
     creature:AttackStop()
+    creature:SetRooted(true)
     creature:SetStandState(UNIT_STAND_STATE_DEAD)
     return false, creature:GetHealth() - 1
 end

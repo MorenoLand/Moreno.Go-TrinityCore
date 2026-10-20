@@ -30,7 +30,7 @@
 -- (the baltharus convention). Timer-driven UNGATED arms port;
 -- vehicle/arm-gated arms stay out (the gothik precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset.
+-- OnTargetDied, 4 OnDied, 5 OnSpawn, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (cpp:122, event 1; the
 -- vehicle-kit DoZoneInCombat arms leg and the
@@ -72,7 +72,9 @@
 -- 32930):
 -- Constructor (cpp:107-117) — RemoveFlag(NOT_SELECTABLE) +
 -- SetControlled(ROOT) + DoCast(SPELL_KOLOGARN_REDUCE_PARRY
--- 64651) + SetCombatMovement(false) — no init bridge.
+-- 64651) — PORTED (see kologarnSpawn below; SetCombatMovement(false)
+-- has no bridge — the root arm alone keeps him stationary via the
+-- Go chase-pause gate, the documented turret deviation).
 -- Reset — _Reset() + RemoveFlag(NOT_SELECTABLE) +
 -- eyebeamTarget.Clear() — no bridges.
 -- PassengerBoarded — Talk(SAY_LEFT_ARM_GONE 2) (cpp:170) /
@@ -156,6 +158,10 @@ local SAY_BERSERK = 7
 
 local SPELL_SUMMON_FOCUSED_EYEBEAM = 63342
 local SPELL_BERSERK = 47008
+local SPELL_KOLOGARN_REDUCE_PARRY = 64651
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x200
 
 local timers = {}
 
@@ -219,6 +225,21 @@ local function enrageTick(creature, guid)
     creature:Talk(SAY_BERSERK)
 end
 
+-- Constructor (boss_kologarn.cpp:107-117) — RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_ROOT)
+-- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
+-- SPELL_KOLOGARN_REDUCE_PARRY 64651) non-triggered, in C++ arm order;
+-- SetCombatMovement(false) has no bridge — the root arm alone keeps
+-- him stationary (Go's chase-pause NOT_MOVE gate,
+-- creaturemotion.go), the documented turret deviation. Go event 5
+-- fires once per spawn (grid/respawn funnel, creaturemotion.go:713) —
+-- the ctor analog (felmyst trail-spawn precedent).
+local function kologarnSpawn(event, creature)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(true)
+    creature:CastSpell(creature, SPELL_KOLOGARN_REDUCE_PARRY)
+end
+
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + the two bridgeable
 -- event-scheduling legs (EVENT_FOCUSED_EYEBEAM 21s,
 -- EVENT_ENRAGE 10min); the vehicle-kit DoZoneInCombat arms leg
@@ -265,4 +286,5 @@ RegisterCreatureEvent(ENTRY_KOLOGARN, 1, kologarnEnterCombat)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 2, kologarnLeaveCombat)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 3, kologarnTargetDied)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 4, kologarnDied)
+RegisterCreatureEvent(ENTRY_KOLOGARN, 5, kologarnSpawn)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 23, kologarnReset)
