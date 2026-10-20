@@ -65,8 +65,10 @@
 --   (emote legs fire inside the unmodeled intro); the INTRO_5 staff equip
 --   arm fires inside the same unmodeled intro choreography (the combat
 --   transform-toggle staff legs are ported in onTransform); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
---   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (no flag/react-state
---   bridges — koltira / eye_of_acherus precedents).
+--   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (the SetFlag(59)/
+--   SetReactState bridges exist since 2026-10-20, but these legs fire
+--   inside the unported MovementInform intro choreography, so they
+--   stay out — koltira / eye_of_acherus precedents for the machine).
 -- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript, registered
 --   by new go_brazier_of_the_herald): me->UseDoorOrButton() is ported via
 --   go:UseDoorOrButton (bridged, engine/world/lua_objects.go:1113) on the

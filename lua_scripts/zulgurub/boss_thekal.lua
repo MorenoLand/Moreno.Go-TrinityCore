@@ -24,18 +24,20 @@
 -- feign-death aura's dungeon arm), the creature's timers are
 -- pushed out 10s (C++ EventMap::DelayEvents), the kill is forwarded to
 -- thekal's SetData(DATA_FAKE_DEATH, entry) and the damage is zeroed.
--- A feign-dead creature ignores further damage (C++-exact
--- approximation of the SetImmuneToPC/NPC flags, which have no bridge).
+-- A feign-dead creature ignores further damage (zeroed in the ev9
+-- handler) and carries UNIT_FLAG_IMMUNE_TO_PC|UNIT_FLAG_IMMUNE_TO_NPC
+-- (SetFlag bridge, C++-exact targeting immunity).
 -- SetData: one or two of the three down -> thekal arms the 10s
 -- resurrection timer (once); all three down -> thekal's timers are
 -- canceled and the tiger-form phase change starts in 3s. Resurrect
 -- timer: each flagged creature casts the resurrect visual 24171 on
 -- itself (non-triggered DoCastSelf, C++-exact), drops the feign-death
--- aura and is healed to full (the SetImmuneToPC/NPC(false) arms have no
--- bridge). Phase change: root (no bridge), drop feign death, full
+-- aura, clears the immune flags (RemoveFlag bridge) and is healed to
+-- full. Phase change: root (no bridge), drop feign death, full
 -- health, self-cast 24171 -> 1s -> Talk(TALK_TIGER_PHASE=0) -> 1s ->
--- self-cast 24169 (tiger form; the immune-flag removal, the +40% damage
--- stat modifier, ResetThreatList and the unroot arms have no bridge)
+-- self-cast 24169 (tiger form; the immune-flag removal and
+-- ResetThreatList are ported, the +40% damage stat modifier and the
+-- unroot arms have no bridge)
 -- and arm force punch 24189 4s then {16s,21s} on the victim (triggered
 -- DoCastVictim, C++-exact) / charge 24193 — C++ schedules
 -- EVENT_SPELL_CHARGE (8) at 12s but the switch case reads EVENT_CHARGE
@@ -71,8 +73,10 @@
 -- shim (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI
 -- bookkeeping and the DATA_THEKAL/LORKHAN/ZATH encounter-state arms
 -- skipped); the SetImmuneToPC/NPC flag arms and the RemoveFlag
--- un-immune arms have no flag bridge — feign death is aura-only and
--- further damage while feign-dead is zeroed to approximate immunity;
+-- un-immune arms are ported via the SetFlag/RemoveFlag bridge
+-- (engine/world/lua_creature_events.go:407) — feign death sets
+-- IMMUNE_TO_PC|IMMUNE_TO_NPC (C++-exact targeting immunity) and further
+-- damage while feign-dead is still zeroed in the ev9 handler;
 -- RemoveAllAuras is bridged (creature:RemoveAllAuras) and ported in the
 -- fake-death arm; the feign-death aura alone is removed at
 -- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); no stat-modifier bridge — the +40% tiger
@@ -122,6 +126,14 @@ local TALK_FRENZY = 3
 
 local PHASE_ONE = 1
 local PHASE_TWO = 2
+
+-- UnitDefines.h unit flags; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
+-- is bridged (engine/world/lua_creature_events.go:407) and the engine
+-- honors IMMUNE_TO_PC in melee/spell targeting (combat.go).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+local UNIT_FLAG_IMMUNE_TO_NPC = 0x200
+local UNIT_FLAG_IMMUNE_MASK = UNIT_FLAG_IMMUNE_TO_PC + UNIT_FLAG_IMMUNE_TO_NPC
 
 local timers = {}
 local encounters = {}
@@ -232,9 +244,10 @@ local function clearEncounter(e)
 end
 
 -- C++ boss_thekalAI::SetData(DATA_RESURRECTED, entry): drop the feign
--- death aura and heal to full (immune-flag arms have no bridge).
+-- death aura, clear the immune flags and heal to full.
 local function resurrectCreature(c)
     c:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
     c:SetHealth(c:GetMaxHealth())
 end
 
@@ -290,9 +303,11 @@ local function onChangePhase3(e, thekalGuid)
     local c = e.thekal
     if c then
         c:CastSpell(c, SPELL_TIGER_FORM)
-        -- C++ EVENT_CHANGE_PHASE_3: ResetThreatList() between the tiger-form
-        -- cast and the timer arms (bridged lua_objects.go:389); the
-        -- RemoveFlag/stat-modifier/root legs stay unbridged as documented.
+        -- C++ EVENT_CHANGE_PHASE_3: RemoveFlag(IMMUNE_TO_PC|IMMUNE_TO_NPC)
+        -- between the tiger-form cast and ResetThreatList
+        -- (boss_thekal.cpp:309); the stat-modifier/root legs stay
+        -- unbridged as documented.
+        c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
         c:ClearThreatList()
     end
     schedule(thekalGuid, "forcepunch", 4000, function()
@@ -322,6 +337,7 @@ local function onChangePhase1(e, thekalGuid)
     e.changingPhase = true
     if c then
         c:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+        c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
         c:SetHealth(c:GetMaxHealth())
         c:CastSpell(c, SPELL_RESURRECT_VISUAL)
     end
@@ -372,10 +388,12 @@ local function fakeDeath(e, creature, entry, guid)
     creature:Talk(TALK_FAKE_DEATH)
     -- C++ arm order: Talk -> RemoveAllAuras -> SetImmuneToPC/NPC ->
     -- DoCastSelf(FEIGN_DEATH). RemoveAllAuras is bridged
-    -- (creature:RemoveAllAuras, lua_creature_events.go); the
-    -- SetImmuneToPC/NPC flag arms still have no flag bridge, so damage
-    -- while feign-dead is zeroed to approximate immunity (header).
+    -- (creature:RemoveAllAuras, lua_creature_events.go); the immune flags
+    -- ride the SetFlag bridge (lua_creature_events.go:407) — the engine
+    -- honors IMMUNE_TO_PC in melee/spell targeting, C++-exact. Damage
+    -- while feign-dead is still zeroed by the callers (header).
     creature:RemoveAllAuras()
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
     creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
     -- C++: the zealots call me->AttackStop() right after the feign cast
     -- (boss_thekal.cpp:432/541); thekal's own stop rides the feign-death
@@ -426,6 +444,7 @@ local function thekalResetEncounter(e, creature)
     end
     clearEncounter(e)
     creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
 end
 
 local function thekalEnterCombat(event, creature, target)
@@ -487,10 +506,9 @@ local function thekalDied(event, creature, killer)
 end
 
 local function thekalReset(event, creature)
-    -- C++ Reset's phase-two damage-decrease modifier, SetControlled
-    -- root clear and immune-flag removal have no bridge — only the event
-    -- reset, feign-death aura removal and encounter-state clear are
-    -- modeled.
+    -- C++ Reset's phase-two damage-decrease modifier and SetControlled
+    -- root clear have no bridge — the event reset, feign-death aura
+    -- removal, immune-flag removal and encounter-state clear are modeled.
     thekalResetEncounter(encounterState(creature), creature)
 end
 
@@ -553,6 +571,7 @@ local function lorkhanReset(e, creature, guid)
     cancelTimers(guid)
     e.lorkhanDead = false
     creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
 end
 
 local function lorkhanEnterCombat(event, creature, target)
@@ -661,6 +680,7 @@ local function zathReset(e, creature, guid)
     cancelTimers(guid)
     e.zathDead = false
     creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
 end
 
 local function zathEnterCombat(event, creature, target)

@@ -31,14 +31,17 @@
 -- precedent, so the old "no health-pct bridge" claim is stale; the
 -- machine stays out because the payload is ACTION_FREEZE_COLOSSUS +
 -- ACTION_SUMMON_ELEMENTAL (no DoAction bridge), SetImmuneToPC(true) /
--- REACT_PASSIVE / MoveIdle legs (no immune/react/motion bridges), and
+-- REACT_PASSIVE / MoveIdle legs (the SetFlag(59)/SetReactState bridges
+-- exist since 2026-10-20, but the legs ride the unported DoAction phase
+-- machine, so they stay out), and
 -- the damage=0 leg must not fire without the phase machine behind
 -- it).
 -- DoAction legs: ACTION_SUMMON_ELEMENTAL — DoCastSelf(Emerge
 -- 54850) is bridged but has no Lua fire site (no DoAction bridge,
 -- standing); ACTION_FREEZE_COLOSSUS — Clear/MoveIdle motion,
 -- REACT_PASSIVE, SetImmuneToPC(true), DoCastSelf(Freeze Anim
--- 16245), all unbridged; ACTION_UNFREEZE_COLOSSUS — immune/react
+-- 16245), the flag/react flips now bridgeable but still gated behind
+-- the absent DoAction dispatch; ACTION_UNFREEZE_COLOSSUS — immune/react
 -- flips + DoZoneInCombat behind the same absent bridges.
 -- JustDied — _JustDied() instance bookkeeping only, no bridge.
 -- Reset INTRO_DONE leg — cross-AI GetData/SetData bridge absent
