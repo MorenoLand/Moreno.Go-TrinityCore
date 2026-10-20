@@ -4990,13 +4990,19 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
-	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2639-
+	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2629-
 	// 2650) + Spell::DoTriggersOnSpellHit (Spell.cpp:2652/2913-2957) on
-	// the creature-victim arm: the Eluna SpellHitTarget hook and the
-	// per-hit trigger consumer, mirroring the player-victim arm above.
-	// The stand-up arm is player-only on the Go paths (the inline twin
-	// stands players only, creature_area_targets.go:441-447).
+	// the creature-victim arm: the Eluna SpellHit hook (2629-2638, on the
+	// victim creature's AI — the _spellHitTarget->ToCreature() gate, which
+	// the creature-victim arm satisfies by construction) ahead of the
+	// SpellHitTarget hook (2639-2650), then the per-hit trigger consumer,
+	// mirroring the player-victim arm above. Misses return early above
+	// (hitInfo 0x01), so every hit reaching this site is a non-miss, the
+	// C++ _spellHitTarget-null arm. The stand-up arm is player-only on
+	// the Go paths (the inline twin stands players only,
+	// creature_area_targets.go:441-447).
 	if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+		s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
 		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
 		s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{target.GUID})
 	}
