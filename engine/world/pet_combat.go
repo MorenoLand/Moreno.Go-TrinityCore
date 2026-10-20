@@ -4693,22 +4693,36 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
 	if damage == 0 {
-		// A missed, resisted or deflected hit never reaches Unit::DealDamage
-		// in C++ — no tap, no threat, no engage, no hooks.
+		// A missed or deflected hit never reaches Unit::DealDamage in C++
+		// (hitInfo 0x01 returns above). A zero-damage hit that reaches the
+		// damage block — fully absorbed, or fully resisted inside
+		// CalcSpellResistedDamage (Unit.cpp:1704-1770 can roll 10/10) —
+		// still runs DealDamage's pre-return legs (Spell.cpp:2548 calls
+		// DealSpellDamage on the pre-mitigation damage>0 arm): the AI
+		// hooks and the TAKE_DAMAGE strip fire; only tap, threat and
+		// engage are skipped at the !damage return (Unit.cpp:814-818).
 		if hitInfo&0x01 != 0 {
 			return
 		}
 		if isPlayerVictim {
 			// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE-interrupt
 			// strip runs before the !damage early-return — a fully resisted
-			// hit strips too, not just fully absorbed ones (Spell.cpp:2522
-			// calls DealSpellDamage even at zero damage). The absorbed-gated
-			// legs below (Unit.cpp:749-761, 814-818: ABORT_ON_DMG abort and
-			// absorbed rage, both keyed on cleanDamage->absorbed_damage) stay
+			// or absorbed hit strips too (Spell.cpp:2548 calls
+			// DealSpellDamage on the pre-mitigation damage>0 arm). Like the
+			// non-zero arm's procSpellDirectDamageAuras twin, the strip is
+			// skipped for SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS spells and
+			// excludes the damaging spell's own auras; the DIRECT_DAMAGE
+			// strip (Unit.cpp:897-898, past the !damage return) and the
+			// HITBYSPELL strip (PreprocessSpellHit, Spell.cpp:2747-2749)
+			// do not run here. The absorbed-gated legs below
+			// (Unit.cpp:749-761, 814-818: ABORT_ON_DMG abort and absorbed
+			// rage, both keyed on cleanDamage->absorbed_damage) stay
 			// gated; the god arm above returns before all of these in C++.
 			if s.server != nil {
 				if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && !victim.godCheatActive() {
-					victim.procDamageAuras(false)
+					if tickDamageBreaksAuras(s.server, spellID) {
+						victim.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
+					}
 					if absorbed > 0 {
 						victim.grantRageFromDamageTaken(ctx, absorbed)
 						victim.interruptAbsorbedCast()
@@ -4720,7 +4734,8 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Unit::DealDamage (Unit.cpp:700-703): the DamageTaken/DamageDealt AI
 		// hooks fire at the top of DealDamage on every non-miss hit — a fully
 		// resisted zero-damage hit notifies the AI too, not just absorbed
-		// ones (Spell.cpp:2522 calls DealSpellDamage even at zero damage).
+		// ones (Spell.cpp:2548 calls DealSpellDamage on the pre-mitigation
+		// damage>0 arm).
 		// The pre-return legs (Unit.cpp:814-818) then grant absorbed rage
 		// (absorbed-gated, like C++'s cleanDamage->absorbed_damage check) and
 		// return before the tap, threat and engage legs, like C++.
