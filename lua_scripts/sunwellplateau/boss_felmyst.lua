@@ -44,9 +44,11 @@
 -- flag/combat-reach/active/creature-enumeration bridges and the
 -- SetBossState(NOT_STARTED) arm is blocked on the instance-script
 -- model. OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Trail (25267): OnReset(23): triggered self-cast trail trigger
--- 45399 (C++ constructor arm, C++-exact); the NOT_SELECTABLE flag
--- and 0.01 bounding-radius arms have no flag/combat-reach bridges.
+-- Trail (25267): OnSpawn(5): triggered self-cast trail trigger
+-- 45399 + SetTarget(self) (C++ constructor arms, C++-exact — the
+-- constructor runs once at AI creation; C++ Reset() is empty, so
+-- OnReset(23) would wrongly re-fire on evade); the NOT_SELECTABLE
+-- flag and 0.01 bounding-radius arms have no flag/combat-reach bridges.
 -- Vapor (25265, "npc_felmyst_vapor") is not registered: its only
 -- C++ arms are the NOT_SELECTABLE flag, the 0.8 run-speed arm and
 -- the no-victim random-target AttackStart selection, none of which
@@ -233,21 +235,17 @@ local function felmystResetState(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ npc_felmyst_trail constructor arm: triggered self-cast
--- trail trigger 45399 (C++-exact); the NOT_SELECTABLE flag and
--- bounding-radius arms have no bridges. SetTarget(self) (:567) ported
--- 2026-10-20 via the creature:SetTarget bridge.
-local function trailReset(event, creature)
-    -- C++ npc_felmyst_trail constructor arm: triggered self-cast of the trail
-    -- trigger (boss_felmyst.lua:233 header) — spawn-only in C++, never on death.
-    -- Alive-gated so the death-leg ev23 fire is not phantom.
-    if creature:IsAlive() then
-        creature:CastSpell(creature, SPELL_TRAIL_TRIGGER, true)
-        -- C++ arm order: DoCast(me, 45399, true) -> SetTarget(me->GetGUID())
-        -- (boss_felmyst.cpp:564-567); the SetFloatValue(BOUNDINGRADIUS) leg
-        -- stays unbridged.
-        creature:SetTarget(creature:GetGUID())
-    end
+-- C++ npc_felmyst_trailAI constructor arms: triggered self-cast
+-- trail trigger 45399 + SetTarget(self) (boss_felmyst.cpp:562-567).
+-- OnSpawn(5): the constructor runs once at AI creation and C++
+-- Reset() is empty, so ev23 would wrongly re-fire on evade; ev5
+-- fires once per spawn (grid/respawn funnel, C++-exact).
+local function trailSpawn(event, creature)
+    creature:CastSpell(creature, SPELL_TRAIL_TRIGGER, true)
+    -- C++ arm order: DoCast(me, 45399, true) -> SetTarget(me->GetGUID())
+    -- (boss_felmyst.cpp:564-567); the SetFloatValue(BOUNDINGRADIUS) leg
+    -- stays unbridged.
+    creature:SetTarget(creature:GetGUID())
 end
 
 RegisterCreatureEvent(NPC_FELMYST, 1, felmystEnterCombat)
@@ -255,7 +253,7 @@ RegisterCreatureEvent(NPC_FELMYST, 2, felmystResetState)
 RegisterCreatureEvent(NPC_FELMYST, 3, felmystTargetDied)
 RegisterCreatureEvent(NPC_FELMYST, 4, felmystDied)
 RegisterCreatureEvent(NPC_FELMYST, 23, felmystResetState)
-RegisterCreatureEvent(NPC_VAPOR_TRAIL, 23, trailReset)
+RegisterCreatureEvent(NPC_VAPOR_TRAIL, 5, trailSpawn)
 
 -- C++ npc_felmyst_trailAI::MoveInLineOfSight (boss_felmyst.cpp:574) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
