@@ -8450,14 +8450,14 @@ func init() {
 	// (zulfarrak.h ZFEntries ENTRY_WEEGLI — kalecgos passes).
 	// ScriptedAI (not BossAI). Ported arms in
 	// lua_scripts/kalimdor/npc_weegli_blastfuse.lua: Bomb 8858 (victim,
-	// 10s init, 10s repeat, unconditional). AttackStartCaster, the
-	// Shoot 6660 / SetSheath arms gated on isAttackReady +
-	// IsWithinMeleeRange (no bridge — magtheridon precedent), the
-	// MovementInform pyramid legs (no instance SetData/GetData
-	// bridges), DestroyDoor's SetFaction + MovePoint legs, and the
-	// pyramid-gated gossip arms have no bridges; LandMine_Timer and
-	// SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL are dead C++
-	// legs — documented in the lua file, not wired.
+	// 10s init, 10s repeat, unconditional); Shoot 6660 + SetSheath
+	// RANGED/MELEE on the swing cadence (creature:SetSheath bridge,
+	// 2026-10-20; melee-range gate via IsWithinDist 5.0, swing gate
+	// paced at 2s). AttackStartCaster, the MovementInform pyramid legs
+	// (no instance SetData/GetData bridges), DestroyDoor's SetFaction +
+	// MovePoint legs, and the pyramid-gated gossip arms have no bridges;
+	// LandMine_Timer and SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL
+	// are dead C++ legs — documented in the lua file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
 
 	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +

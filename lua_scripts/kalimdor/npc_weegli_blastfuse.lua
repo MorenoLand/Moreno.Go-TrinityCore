@@ -28,9 +28,14 @@
 -- Unmodeled (documented-only, no bridges):
 -- - AttackStart: AttackStartCaster(victim, 10) (keep back & toss
 --   bombs/shoot) — no AttackStart bridge.
--- - Shoot 6660 + SetSheath(SHEATH_STATE_RANGED/MELEE): the
---   isAttackReady && !IsWithinMeleeRange(victim) decision gate has no
---   bridge (magtheridon precedent); SetSheath has no bridge.
+-- - Shoot 6660 + SetSheath(SHEATH_STATE_RANGED/MELEE): PORTED 2026-10-20
+--   (zulfarrak.cpp:311-322) via the new creature:SetSheath bridge
+--   (Unit::SetSheath, Unit.h:903). The isAttackReady swing gate has no
+--   bridge, so the Lua check re-arms at SWING_MS=2000 (engine default
+--   base attack time); melee-range gate via IsWithinDist(victim, 5.0)
+--   (C++ IsWithinMeleeRange = max(reach+reach+4/3, 5.0) -> 5.0 here).
+--   Melee stays engine-driven (DoMeleeAttackIfReady twin); the shoot
+--   fires at most once per swing, only when the victim is out of range.
 -- - MovementInform: PYRAMID_CAGES_OPEN -> SetData(EVENT_PYRAMID,
 --   PYRAMID_ARRIVED_AT_STAIR) + Talk(SAY_WEEGLI_OHNO=0) +
 --   SetHomePosition; destroyingDoor -> DoUseDoorOrButton(GO_END_DOOR via
@@ -50,6 +55,20 @@
 local ENTRY = 7607
 
 local SPELL_BOMB = 8858
+local SPELL_SHOOT = 6660
+
+-- C++ melee/ranged decision (zulfarrak.cpp:311-322): when the swing timer is
+-- ready and the victim is beyond melee range, Weegli shoots 6660 and shows
+-- the ranged weapon (SHEATH_STATE_RANGED); otherwise he fights melee and
+-- shows the melee weapon (SHEATH_STATE_MELEE). IsWithinMeleeRange is
+-- max(reach+reach+4/3, NOMINAL_MELEE_RANGE=5.0); weegli-vs-player resolves
+-- to 5.0 (1.5+1.5+1.333 = 4.33 < 5.0).
+local MELEE_RANGE_YD = 5.0
+-- isAttackReady pacing: the Lua side has no swing-timer bridge, so the
+-- check re-arms at the engine's default base attack time (2000ms —
+-- NULLIF(t.BaseAttackTime, 0) fallback in creaturemotion.go / combat.go);
+-- the shoot then fires at most once per swing, never faster than C++.
+local SWING_MS = 2000
 
 local timers = {}
 
@@ -87,6 +106,27 @@ local function onBomb(creature, guid)
     end)
 end
 
+-- C++ UpdateAI ranged/melee arm (zulfarrak.cpp:311-322): swing-ready and
+-- victim beyond melee range -> DoCastVictim(SPELL_SHOOT) non-triggered +
+-- SetSheath(SHEATH_STATE_RANGED); otherwise SetSheath(SHEATH_STATE_MELEE).
+-- Melee itself is engine-driven in Go (DoMeleeAttackIfReady twin, a no-op
+-- out of range), so only the shoot+sheath decision is ported; the 2s
+-- re-arm paces the isAttackReady swing gate (SWING_MS above).
+local function onSwingCheck(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        if creature:IsWithinDist(victim, MELEE_RANGE_YD) then
+            creature:SetSheath(1) -- SHEATH_STATE_MELEE
+        else
+            creature:CastSpell(victim, SPELL_SHOOT) -- DoCastVictim, non-triggered
+            creature:SetSheath(2) -- SHEATH_STATE_RANGED
+        end
+    end
+    schedule(guid, "swing", SWING_MS, function()
+        onSwingCheck(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     -- C++ Reset() is effectively empty (body commented out): Bomb_Timer
@@ -98,11 +138,25 @@ local function onEnterCombat(event, creature, target)
             onBomb(creature, guid)
         end)
     end
+    -- The C++ UpdateAI evaluates the shoot/sheath decision every tick while
+    -- a victim exists: run one immediate check, then re-arm on the swing
+    -- cadence. The poll self-cancels at nil victim only by timer removal;
+    -- it is cancelled on leave-combat and death below.
+    if not (per and per["swing"]) then
+        onSwingCheck(creature, guid)
+    end
 end
 
 -- C++ Reset() leaves Bomb_Timer untouched, so leave-combat and reset
 -- must not cancel the pending bomb; the timer resumes on re-engage.
+-- The swing poll has no C++ timer state — it is evaluated only while a
+-- victim exists — so leave-combat cancels it and re-engage restarts it.
 local function onLeaveCombat(event, creature)
+    local per = timers[creature:GetGUID()]
+    if per and per["swing"] then
+        RemoveEventById(per["swing"])
+        per["swing"] = nil
+    end
 end
 
 local function onReset(event, creature)

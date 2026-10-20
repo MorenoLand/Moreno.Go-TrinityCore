@@ -222,6 +222,10 @@ end
 local function algalonReset(event, creature)
     algalonState[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
+    -- EnterEvadeMode (boss_algalon_the_observer.cpp:449-455): instance
+    -- SetBossState(FAIL) has no bridge, but the SetSheath(UNARMED) leg is
+    -- ported — Algalon drew his weapon at the intro timer (:563 MELEE).
+    creature:SetSheath(0) -- SHEATH_STATE_UNARMED
 end
 
 RegisterCreatureEvent(ENTRY_ALGALON, 3, algalonTargetDied)
@@ -240,7 +244,9 @@ RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
 -- deviation is superseded by the latch port above. (2)
 -- EVENT_ASCEND_TO_THE_HEAVENS schedules EVENT_EVADE 2.5s later
 -- (EnterEvadeMode — boss-state FAIL, no bridge); only the Talk+cast arm is
--- ported, so the lua boss stays in combat ~2.5s past enrage. (3)
+-- ported, so the lua boss stays in combat ~2.5s past enrage. The evade
+-- SetSheath(SHEATH_STATE_UNARMED) leg IS ported (algalonReset, bridge
+-- landed 2026-10-20). (3)
 -- EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs) is
 -- not ported: the summon leg has no bridge (the arlokk precedent) and a
 -- Talk-only port would fire with no stars. (4) EVENT_BIG_BANG stays out:

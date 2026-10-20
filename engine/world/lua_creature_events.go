@@ -439,6 +439,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetSheath is Unit::SetSheath: SetByteValue(UNIT_FIELD_BYTES_2,
+	// UNIT_BYTES_2_OFFSET_SHEATH_STATE, sheathed) (Unit.h:903; Creature does
+	// not override, only Player does — the virtual-item legs are
+	// player-side, so the creature twin is the byte write alone). Sheath
+	// states: SHEATH_STATE_UNARMED=0, MELEE=1, RANGED=2 (UnitDefines.h:71-77).
+	// applyCreatureMotionToSpawn overlays motion.SheathState onto the spawn
+	// record's Bytes2 byte 0 (creatures.go), so melee/ranged-visual arms
+	// (weegli shoot, algalon evade unarm, ...) port with real client-visible
+	// effect; the other Bytes2 bytes are preserved.
+	methods["SetSheath"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 2 {
+			return nil, fmt.Errorf("SetSheath requires a SHEATH_STATE 0-2, got %d", st)
+		}
+		s.motionMu.Lock()
+		motion.SheathState = uint8(st)
+		motion.SheathStateKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,

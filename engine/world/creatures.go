@@ -57,6 +57,7 @@ type creatureSpawn struct {
 	emoteStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Emote via the motion record (forces the field into the update mask even when clearing to 0)
 	standStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
 	mountKnown       bool // set by applyCreatureMotionToSpawn when Lua overrode Mount via the motion record (forces the field into the update mask even when dismounting to 0)
+	sheathStateKnown bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 0 via the motion record (forces the field into the update mask even when unarming to 0)
 	Item1            uint32
 	Item2            uint32
 	Item3            uint32
@@ -249,6 +250,10 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Bytes1 = (spawn.Bytes1 & 0xFFFFFF00) | uint32(motion.StandState)
 			spawn.standStateKnown = true
 		}
+		if motion.SheathStateKnown {
+			spawn.Bytes2 = (spawn.Bytes2 & 0xFFFFFF00) | uint32(motion.SheathState)
+			spawn.sheathStateKnown = true
+		}
 		if motion.MountKnown {
 			spawn.Mount = motion.Mount
 			spawn.mountKnown = true
@@ -414,7 +419,7 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	if spawn.Emote != 0 || spawn.emoteStateKnown {
 		values[unitNPCEmoteState] = spawn.Emote
 	}
-	if spawn.Bytes2 != 0 {
+	if spawn.Bytes2 != 0 || spawn.sheathStateKnown {
 		values[unitFieldBytes2] = spawn.Bytes2
 	}
 	if spawn.MaxHealth > 0 {
