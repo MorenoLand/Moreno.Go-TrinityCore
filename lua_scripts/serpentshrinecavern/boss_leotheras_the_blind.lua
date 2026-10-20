@@ -50,8 +50,10 @@
 -- (C++-exact); switch-to-demon (only while !isFinalForm) 45s ->
 -- RemoveAura(37640), Talk(SAY_SWITCH_TO_DEMON), demonForm=true,
 -- needThreatReset=true, switchToDemon=45000 (the SetDisplayId
--- demon + virtual-item-slot zeroing arms have no display/item
--- bridges — unmodeled, below). Demon form: chaos blast 37674 —
+-- MODEL_DEMON 20125 + virtual-item-slot zeroing arms are PORTED
+-- 2026-10-20 — C++ arm order: display first, then Talk, then the
+-- slots (SetEquipmentSlots(0, 0, 0xFFFFFFFF) leaves the ranged
+-- slot untouched)). Demon form: chaos blast 37674 —
 -- 1s init then 3s: if the victim is within 30 yd (GetDistance
 -- bridge for the IsWithinDist gate) -> CastSpell(victim, 37674);
 -- re-arm 3000 outside the range gate (C++-exact; the BP0=100
@@ -65,24 +67,27 @@
 -- aura bridges — unmodeled, below). Switch-to-human 60s ->
 -- demonForm=false, needThreatReset=true, switchToHuman=60000
 -- (the CastConsumingMadness arm is demon-cast — no inner demons
--- exist in this model — and the DespawnDemon/SetDisplayId/
--- LoadEquipment arms stay out (display bridge live 2026-10-20 —
--- the blockers are the unbridged demon-despawn/summon and item
--- bridges) — unmodeled, below). Final
+-- exist in this model — and the DespawnDemon/LoadEquipment arms
+-- stay out (summon/item bridges missing); the SetDisplayId
+-- MODEL_NIGHTELF 20514 arm is PORTED 2026-10-20, C++ arm order
+-- first) — unmodeled, below). Final
 -- form: once-guarded healthBelowPct(creature, 15) (C++ HealthBelowPct(15),
 -- floored integer threshold — GetHealthPct() < 15 fired up to 1 HP early)
 -- -> isFinalForm=true, demonForm=false, Talk(SAY_FINAL_FORM)
--- (the DoSpawnCreature(DEMON_FORM 21875) copy arm has no summon
--- bridge — unmodeled, below). OnTargetDied(3): victim:GetObjectType() == "Player"
+-- (the SetDisplayId MODEL_NIGHTELF arm is PORTED 2026-10-20, C++
+-- arm order after Talk; the DoSpawnCreature(DEMON_FORM 21875)
+-- copy arm has no summon bridge — unmodeled, below).
+-- OnTargetDied(3): victim:GetObjectType() == "Player"
 -- -> Talk(demonForm and SAY_DEMON_SLAY or SAY_NIGHTELF_SLAY)
 -- (C++-exact per-form slay). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the demon-copy despawn is cross-creature blocked; the
 -- SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
--- OnReset(23): cancel the pump, drop per-GUID state (the Reset
--- arms — CheckChannelers summon, dual-wield/2.0f speed/display/
--- item-slot/corpse-delay setup, SPELL_DUAL_WIELD 42459 triggered
--- self-cast, SetData(NOT_STARTED) — are summon/flag/display/
--- item/instance blocked).
+-- OnReset(23): cancel the pump, drop per-GUID state, restore the
+-- nightelf model + zeroed weapon slots (PORTED 2026-10-20, C++
+-- Reset :253-255 arm order); the CheckChannelers summon, dual-
+-- wield/2.0f speed/corpse-delay setup, SPELL_DUAL_WIELD 42459
+-- triggered self-cast and SetData(NOT_STARTED) arms stay out —
+-- summon/flag/speed/instance blocked.
 -- boss_leotheras_the_blind_demonform (21875): OnEnterCombat(1):
 -- per-GUID reset (chaosBlast 1000) + Talk(SAY_FREE) (the C++
 -- JustEngagedWith -> StartEvent arm) + 1s pump. Pump: chaos
@@ -149,11 +154,17 @@
 -- threat bridge — the whirlwind target-switch MovePoint, the
 -- NeedThreatReset ResetThreatList/MoveChase arms, the chaos-
 -- blast StopMoving arm and the leotheras MoveInLineOfSight
--- intro/aggro machine unmodeled; no display/item/flag bridges —
--- the MODEL_DEMON(20125)/MODEL_NIGHTELF(20514) SetDisplayId
--- swaps, the UNIT_VIRTUAL_ITEM_SLOT zeroing, LoadEquipment, the
--- dual-wield/speed/corpse-delay setup and the SPELL_DUAL_WIELD
--- 42459 cast unmodeled; no cross-creature bridge — the spell-
+-- intro/aggro machine unmodeled; the switch-to-demon + Reset
+-- MODEL_DEMON(20125)/MODEL_NIGHTELF(20514) SetDisplayId swaps and
+-- the paired UNIT_VIRTUAL_ITEM_SLOT zeroing arms are PORTED
+-- 2026-10-20 (display bridge + SetEquipmentSlots bridge, C++ arm
+-- order); the switch-to-human + final-form SetDisplayId arms are
+-- likewise PORTED 2026-10-20 (LoadEquipment/DespawnDemon-paired
+-- legs stay out — no item/summon bridges); the banish-check
+-- (LoadEquipment-paired) swap, the dual-wield/speed/corpse-delay
+-- setup and the SPELL_DUAL_WIELD 42459 cast stay unmodeled —
+-- summon/item/flag bridges missing; no cross-creature bridge —
+-- the spell-
 -- binder leotherasGUID relay, the inner-demon victim binding,
 -- the ConsumingMadness 37749 demon casts and the demon-copy
 -- despawn unmodeled; no interrupt bridge (krosh convention) —
@@ -185,6 +196,9 @@ local ENTRY_SPELLBINDER = 21806
 local ENTRY_INNER_DEMON = 21857
 
 local CHAOS_BLAST_RANGE = 30
+
+local MODEL_DEMON = 20125
+local MODEL_NIGHTELF = 20514
 
 local leotherasTimers = {}
 local leotherasState = {}
@@ -313,7 +327,13 @@ local function leotherasTick(creature, guid)
         if not st.isFinalForm then
             if st.switchToDemon <= 1000 then
                 creature:RemoveAura(SPELL_WHIRLWIND)
+                -- C++ :495: SetDisplayId(MODEL_DEMON) — first arm at the switch.
+                creature:SetDisplayId(MODEL_DEMON)
                 creature:Talk(SAY_SWITCH_TO_DEMON)
+                -- C++ :497-498: zero the virtual item slots (paired with the
+                -- display swap, C++ arm order after Talk); 0xFFFFFFFF leaves
+                -- the ranged slot untouched.
+                creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
                 st.demonForm = true
                 st.needThreatReset = true
                 st.switchToDemon = 45000
@@ -345,9 +365,14 @@ local function leotherasTick(creature, guid)
             st.innerDemons = st.innerDemons - 1000
         end
 
-        -- Switch back to nightelf form (the ConsumingMadness/
-        -- DespawnDemon/display/equipment arms are blocked — header).
+        -- Switch back to nightelf form (the CastConsumingMadness and
+        -- DespawnDemon arms are demon-cast/summon blocked; the
+        -- LoadEquipment weapon-restore leg has no item bridge —
+        -- header).
         if st.switchToHuman <= 1000 then
+            -- C++ :568: SetDisplayId(MODEL_NIGHTELF) — first arm at the
+            -- switch; the LoadEquipment weapon-restore leg stays out.
+            creature:SetDisplayId(MODEL_NIGHTELF)
             st.demonForm = false
             st.needThreatReset = true
             st.switchToHuman = 60000
@@ -362,6 +387,11 @@ local function leotherasTick(creature, guid)
         st.isFinalForm = true
         st.demonForm = false
         creature:Talk(SAY_FINAL_FORM)
+        -- C++ :597: SetDisplayId(MODEL_NIGHTELF) after Talk (the paired
+        -- LoadEquipment weapon-restore leg has no item bridge); the
+        -- demon-copy spawn + DespawnDemon arms are summon blocked —
+        -- header.
+        creature:SetDisplayId(MODEL_NIGHTELF)
     end
 end
 
@@ -398,6 +428,12 @@ end
 
 local function leotherasReset(event, creature)
     resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
+    -- C++ Reset() :253-255 runs on evade: restore the nightelf model +
+    -- zeroed weapon slots (C++ arm order: display first, then the item
+    -- slots); the dual-wield/speed/corpse-delay/instance arms stay
+    -- unmodeled, header.
+    creature:SetDisplayId(MODEL_NIGHTELF)
+    creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
 end
 
 RegisterCreatureEvent(ENTRY_LEOTHERAS, 1, leotherasEnterCombat)
