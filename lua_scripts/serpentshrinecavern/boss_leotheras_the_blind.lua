@@ -274,6 +274,9 @@ local function leotherasTick(creature, guid)
             st.whirlwind = 15000
         end
         st.needThreatReset = false
+        -- C++ NeedThreatReset arm (leotheras :461): ResetThreatList();
+        -- the MoveChase half has no movement bridge.
+        creature:ClearThreatList()
     end
 
     -- Berserk: 10min one-shot, EnrageUsed-guarded (C++-exact),

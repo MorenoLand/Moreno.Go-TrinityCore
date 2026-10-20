@@ -569,6 +569,8 @@ end
 
 -- C++ EVENT_SCHEDULE_DEMON_SPELLS: GROUP_PHASE_DEMON arms.
 local function onDemonSpells(creature, guid)
+    -- C++ :956 ResetThreatList() before scheduling the demon phase group.
+    creature:ClearThreatList()
     schedule(guid, "shadowBlast", 1000, function()
         onShadowBlast(creature, guid)
     end)
@@ -619,6 +621,9 @@ local function onCancelDemon(creature, guid)
     end
     creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1, true)
     schedule(guid, "resumeDemon", 12000, function()
+        -- C++ EVENT_RESUME_COMBAT_DEMON: ResetThreatList() before
+        -- ScheduleEvents (LoadEquipment has no bridge).
+        creature:ClearThreatList()
         armPhaseSchedule(creature, guid, state.phase)
     end)
 end

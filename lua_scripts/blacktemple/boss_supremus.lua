@@ -270,6 +270,9 @@ local function changePhase(creature, guid)
             onSwitchTarget(creature, guid)
         end)
     end
+    -- C++ ChangePhase tail (supremus.cpp:113): ResetThreatList() before the
+    -- 60s re-arm (DoZoneInCombat is already the Go combat state).
+    creature:ClearThreatList()
     schedule(guid, "switchphase", 60000, function()
         changePhase(creature, guid)
     end)
