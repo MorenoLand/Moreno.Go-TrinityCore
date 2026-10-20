@@ -81,6 +81,8 @@ type creatureMotion struct {
 	CanFly                bool
 	ReactState            uint8
 	ReactStateKnown       bool
+	EmoteState            uint32 // UNIT_NPC_EMOTESTATE live value: Lua CreatureMethods::EmoteState (SetUInt32Value twin), init from template emote at spawn
+	EmoteStateKnown       bool
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32

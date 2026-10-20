@@ -54,6 +54,7 @@ type creatureSpawn struct {
 	Bytes1           uint32
 	Bytes2           uint32
 	Emote            uint32
+	emoteStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Emote via the motion record (forces the field into the update mask even when clearing to 0)
 	Item1            uint32
 	Item2            uint32
 	Item3            uint32
@@ -238,6 +239,10 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+		if motion.EmoteStateKnown {
+			spawn.Emote = motion.EmoteState
+			spawn.emoteStateKnown = true
+		}
 	}
 }
 
@@ -396,7 +401,7 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 		observer.server.creatureHasAuraType(creatureAuraKey{Map: observer.player.Map, InstanceID: observer.player.InstanceID, GUID: rawGUID}, spellAuraModStalked) {
 		values[unitFieldDynamicFlags] |= unitDynFlagTrackUnit
 	}
-	if spawn.Emote != 0 {
+	if spawn.Emote != 0 || spawn.emoteStateKnown {
 		values[unitNPCEmoteState] = spawn.Emote
 	}
 	if spawn.Bytes2 != 0 {

@@ -57,20 +57,23 @@
 -- bridge; no MovementInform bridge — the chase-complete phase-two
 -- gate and the EVENT_ADD_THREAT arm (threat 41602 every 3.5s) are
 -- unmodeled; no flag/immune bridge — the SetImmuneToPC / UNIT_FLAG_
--- NOT_SELECTABLE phase-one arms, the EMOTE_STATE stun/none arms,
--- SetWalk, faction and emotestate arms have no bridge; no summon
+-- NOT_SELECTABLE phase-one arms, SetWalk and the faction arms have no
+-- bridge (the EMOTE_STATE stun/none arms are PORTED 2026-10-20 via
+-- creature:EmoteState); no summon
 -- model — the channeler spawns and summons.DespawnEntry(NPC_
 -- ASHTONGUE_CHANNELER) have no bridge; the EVENT_INITIALIZE_SPAWNERS
 -- grid-creature-list arm has no bridge; the EVENT_EVADE_CHECK arm
 -- (EnterEvadeModeIfNeeded / IsInBoundary) has no evade or boundary
--- bridge; the soul-channel SpellHit(40447) arms beyond the event
--- scheduling (emote state, AttackStart on Akama) have no bridge.
+-- bridge; the soul-channel SpellHit(40447) event-scheduling and
+-- AttackStart-on-Akama arms have no bridge (the emotestate arm is
+-- ported — see shadeSpellHit).
 
 local ENTRY_SHADE_OF_AKAMA = 22841
 
 local SAY_LOW_HEALTH = 3
 
 local SPELL_SHADE_OF_AKAMA_TRIGGER = 40955
+local SPELL_AKAMA_SOUL_CHANNEL = 40447
 local SPELL_AKAMA_SOUL_RETRIEVE = 40902
 local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
 
@@ -106,11 +109,15 @@ end
 
 -- C++ SpellHit: hit by the soul-retrieve spell -> non-triggered
 -- self-cast of the expel channel. The soul-channel (40447) SpellHit
--- arms are entirely instance/flag/evade-driven and unmodeled (see
--- deviations) — the hit itself is ignored here.
+-- event-scheduling/evade/AttackStart arms are unmodeled (see
+-- deviations), but the ungated emotestate arm is C++-exact: it clears
+-- the Reset stun visual.
 local function shadeSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_AKAMA_SOUL_RETRIEVE then
         creature:CastSpell(creature, SPELL_AKAMA_SOUL_EXPEL_CHANNEL)
+    elseif spellId == SPELL_AKAMA_SOUL_CHANNEL then
+        -- C++ boss_shade_of_akama.cpp:244: SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_ONESHOT_NONE=0)
+        creature:EmoteState(0)
     end
 end
 
@@ -120,6 +127,8 @@ local function shadeLeaveCombat(event, creature)
 end
 
 local function shadeReset(event, creature)
+    -- C++ boss_shade_of_akama.cpp:221: SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_STUN=64)
+    creature:EmoteState(64)
     shadeYelledOnce[creature:GetGUID()] = nil
 end
 

@@ -399,6 +399,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// EmoteState is Creature::SetUInt32Value(UNIT_NPC_EMOTESTATE, state):
+	// the persistent emote-state update field the client renders
+	// (SharedDefines.h: EMOTE_STATE_SUBMERGED=373, EMOTE_STATE_STUN=64,
+	// EMOTE_ONESHOT_NONE=0 clears). applyCreatureMotionToSpawn overlays
+	// motion.EmoteState onto the spawn record (creatures.go), so phase and
+	// intro emotestate arms (ragnaros submerge, akama stun, ...) port with
+	// real effect; one-shot emotes stay on PerformEmote.
+	methods["EmoteState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.EmoteState = st
+		motion.EmoteStateKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and

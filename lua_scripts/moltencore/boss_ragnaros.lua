@@ -68,11 +68,13 @@
 -- starts on pull instead of after the 53s intro; the submerge
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
 -- bridged lua_objects.go:389). The submerge AttackStop,
--- InterruptNonMeleeSpells, faction change, NOT_SELECTABLE flag and
--- SUBMERGED emotestate have no bridges (AttackStop additionally stays
--- out because the emerge AttackStart resume leg is unbridged); the
--- emerge react/faction/flag/AttackStart arms have no
--- bridges (submerge/emerge emotes are ported); no summon model —
+-- InterruptNonMeleeSpells, faction change and NOT_SELECTABLE flag
+-- have no bridges (AttackStop additionally stays out because the
+-- emerge AttackStart resume leg is unbridged); the SUBMERGED/0
+-- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
+-- lua_creature_events.go); the emerge react/faction/flag/AttackStart
+-- arms have no bridges (submerge/emerge emotes are ported); no
+-- summon model —
 -- the 8 sons of
 -- flame never spawn; the magma blast IsWithinMeleeRange gate has no
 -- bridge; SPELL_RAGSUBMERGE 21107 / SPELL_RAGEMERGE 20568 /
@@ -245,7 +247,9 @@ local onSubmerge
 
 local function onEmerge(creature, guid)
     getState(guid)
-    -- C++ boss_ragnaros.cpp:133/182: HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
+    -- C++ boss_ragnaros.cpp:181-182: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
+    -- then HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
+    creature:EmoteState(0)
     creature:PerformEmote(449)
     schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
         onEruption(creature, guid)
@@ -287,7 +291,9 @@ end
 -- `local function` would shadow it and Ragnaros would never re-submerge.
 onSubmerge = function(creature, guid)
     local s = getState(guid)
-    -- C++ boss_ragnaros.cpp:260: HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE=374)
+    -- C++ boss_ragnaros.cpp:259-260: SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_SUBMERGED=373)
+    -- then HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE=374)
+    creature:EmoteState(373)
     creature:PerformEmote(374)
     -- C++ EVENT_SUBMERGE: ResetThreatList() (bridged lua_objects.go:389,
     -- PORTED 2026-10-19). The sibling AttackStop arm stays out: the emerge
@@ -354,6 +360,8 @@ local function ragnarosDied(event, creature, killer)
 end
 
 local function ragnarosReset(event, creature)
+    -- C++ boss_ragnaros.cpp:106: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
+    creature:EmoteState(0)
     ragnarosResetState(creature:GetGUID())
 end
 
