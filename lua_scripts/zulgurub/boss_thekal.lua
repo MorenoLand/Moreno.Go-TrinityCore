@@ -343,7 +343,6 @@ local function onChangePhase1(e, thekalGuid)
         -- then aura strip + full heal + resurrect-visual self-cast.
         c:SetRooted(true)
         c:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
-        c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
         c:SetHealth(c:GetMaxHealth())
         c:CastSpell(c, SPELL_RESURRECT_VISUAL)
     end
