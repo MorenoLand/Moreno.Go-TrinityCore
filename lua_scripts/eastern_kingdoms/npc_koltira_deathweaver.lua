@@ -38,19 +38,20 @@
 --   (the C++ Reset's _events.Reset() / _eventGossip=false residue;
 --   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) (chapter2.cpp:142)
 --   PORTED via creature:SetNPCFlags(), C++ arm order before
---   RemoveAllAuras; UNIT_FLAG_IMMUNE_TO_NPC / stand-state / summon
---   arms unbridged, below).
+--   RemoveAllAuras (the UNIT_FLAG_IMMUNE_TO_NPC arm, chapter2.cpp:141,
+--   is likewise PORTED via creature:SetFlag(UNIT_FIELD_FLAGS, ...)
+--   2026-10-20; stand-state / summon arms unbridged, below).
 -- - EVENT_INTRO_0's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
 --   (chapter2.cpp:166) PORTED via creature:SetNPCFlags(), C++ arm
 --   order before Talk(SAY_KOLTIRA_0). The old "no flag bridges"
---   claims were stale — GetNPCFlags/SetNPCFlags are bridged
---   (engine/world/lua_objects.go:657); only UNIT_FLAG_* set/remove
---   stays unbridged.
+--   claims were stale — GetNPCFlags/SetNPCFlags and UNIT_FIELD_FLAGS
+--   SetFlag/RemoveFlag are bridged (engine/world/lua_objects.go:657,
+--   engine/world/lua_creature_events.go:690).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - OnGossipHello's PrepareQuestMenu leg (no quest-menu bridge —
 --   kalecgos precedent; IsQuestGiver() is creature_template data).
--- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) (no unit-flag bridge —
---   unworthy_initiate precedent), SetByteValue stand-state legs (no
+-- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) PORTED (2026-10-20);
+--   SetByteValue stand-state legs (no
 --   stand-state bridge), _summons.DespawnAll (no summon/
 --   despawn bridge — dark-rider precedent). The Reset
 --   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) arm (chapter2.cpp:142)
@@ -101,6 +102,10 @@ local TEXT_ID_EVENT = 13425
 -- UNIT_NPC_FLAG_GOSSIP = 0x00000001 (UnitDefines.h:186 — zulaman /
 -- vaelastrasz precedent)
 local UNIT_NPC_FLAG_GOSSIP = 0x00000001
+-- UnitDefines.h:133; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_NPC = 0x00000200
 
 local timers = {}
 local eventGossip = {}
@@ -158,10 +163,10 @@ local function onGossipHello(event, player, creature)
 end
 
 local function onReset(_, creature)
-    -- chapter2.cpp:142 — Reset arm order: SetFlag(UNIT_NPC_FLAGS,
-    -- UNIT_NPC_FLAG_GOSSIP) after the unbridged UNIT_FLAG_IMMUNE_TO_NPC leg,
-    -- before RemoveAllAuras; the old "no flag bridges" header claim was
-    -- stale — creature:SetNPCFlags() is bridged (engine/world/lua_objects.go:657)
+    -- chapter2.cpp:139-144, C++ arm order: SetFlag(UNIT_FIELD_FLAGS,
+    -- UNIT_FLAG_IMMUNE_TO_NPC) first, then SetFlag(UNIT_NPC_FLAGS,
+    -- UNIT_NPC_FLAG_GOSSIP), then RemoveAllAuras
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC)
     creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(), UNIT_NPC_FLAG_GOSSIP))
     creature:RemoveAllAuras() -- chapter2.cpp:144, C++ arm order (before
                                -- _events.Reset()); the "no aura-removal

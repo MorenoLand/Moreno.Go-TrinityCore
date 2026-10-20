@@ -138,6 +138,11 @@ local SPELL_ENRAGE = 46587
 local SPELL_PYROGENICS = 45230
 local SPELL_FLAME_SEAR = 46771
 local SPELL_BLAZE = 45235
+
+-- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local SPELL_IMAGE_VISUAL = 45263
 local SPELL_SHADOW_FURY = 45270
 local SPELL_DARK_STRIKE = 45271
@@ -505,11 +510,17 @@ local function shadowImageLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset -> Initialize() re-arms timers only; it never casts
--- the visual (that is the per-tick maintenance arm above) — the
--- NOT_SELECTABLE flag arm has no flag bridge.
+-- C++ npc_shadow_imageAI::Reset (boss_eredar_twins.cpp:678-680):
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE), then
+-- Initialize(); the visual is the per-tick maintenance arm above.
+-- No RemoveFlag arm exists in the C++ file, so Reset re-asserts on
+-- evade (ported 2026-10-20); skip on the death path — C++ Reset
+-- never runs there (Eluna On_Reset fires ahead of OnDied).
 local function shadowImageReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if not creature:IsDead() then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    end
 end
 
 RegisterCreatureEvent(25165, 1, sacrolashEnterCombat)

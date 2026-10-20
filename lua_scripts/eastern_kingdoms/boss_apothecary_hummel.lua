@@ -72,7 +72,7 @@
 --   summons.DoAction(ACTION_START_EVENT, DummyEntryCheckPredicate) relay —
 --   no immunity/faction/summon-DoAction bridges.
 -- - DamageTaken SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
---   UNIT_FLAG_NOT_SELECTABLE) leg — no flag bridge (stands); the
+--   UNIT_FLAG_NOT_SELECTABLE) leg — PORTED (2026-10-20); the
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
 --   creature:RemoveAura (stale "no aura-remove bridge" claim retracted).
 -- - SummonedCreatureDies: no event-21 fire site in the engine, so
@@ -103,6 +103,12 @@
 -- GOSSIP_MENU_HUMMEL = 10847.
 
 local ENTRY_HUMMEL = 36296
+
+-- UnitDefines.h:149/153; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
+-- is bridged (engine/world/lua_creature_events.go:690).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_UNK_29 = 0x20000000
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local SAY_INTRO_0 = 0
 local SAY_INTRO_1 = 1
@@ -307,10 +313,13 @@ local function onDamageTaken(event, creature, attacker, damage)
             -- C++-exact arm order: RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME)
             -- via creature:RemoveAura (the "no aura-remove bridge" claim was
             -- stale — lua_objects.go), then triggered self-cast
-            -- SPELL_PERMANENT_FEIGN_DEATH; the SetFlag(UNIT_FIELD_FLAGS, ...)
-            -- leg has no flag bridge (stands); Talk(SAY_HUMMEL_DEATH) last.
+            -- SPELL_PERMANENT_FEIGN_DEATH; the SetFlag(UNIT_FIELD_FLAGS,
+            -- UNK_29|NOT_SELECTABLE) leg is PORTED (2026-10-20);
+            -- Talk(SAY_HUMMEL_DEATH) last.
             creature:RemoveAura(SPELL_ALLURING_PERFUME)
             creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
+            -- boss_apothecary_hummel.cpp:158, C++ arm order
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 + UNIT_FLAG_NOT_SELECTABLE)
             creature:Talk(SAY_HUMMEL_DEATH)
         end
         return false, creature:GetHealth() - 1

@@ -76,9 +76,10 @@
 -- DoCastSelf default triggered=false) / else _dead=true, cancel
 -- all timers, triggered self-cast remove-parasitic 41923 (the
 -- parasitic summon-despawn arm has no summon bridge) +
--- ACTION_START_OUTRO: triggered self-cast death 41218 (the
--- NOT_SELECTABLE arm has no flag bridge), Talk(SAY_ILLIDAN_
--- DEFEATED) 4s, triggered self-cast quiet suicide 3617 18s later;
+-- ACTION_START_OUTRO: triggered self-cast death 41218 +
+-- SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) (ported 2026-10-20),
+-- Talk(SAY_ILLIDAN_DEFEATED) 4s, triggered self-cast quiet
+-- suicide 3617 18s later;
 -- the maiev DoAction(ACTION_START_OUTRO) and the summon-despawn
 -- arms have no cross-creature/summon bridges — skipped. 90% health
 -- & phase<PHASE_MINIONS: Talk(SAY_ILLIDAN_MINION) + the 30s
@@ -232,6 +233,11 @@
 -- re-arming the pillar timer 30s from the barrage tick.
 
 local ENTRY_ILLIDAN = 22917
+
+-- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local ENTRY_AKAMA = 23089
 local ENTRY_FLAME_OF_AZZINOTH = 22997
 local ENTRY_DB_TARGET = 23070
@@ -814,12 +820,15 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                     SPELL_REMOVE_PARASITIC_SHADOWFIEND, true)
                 -- C++ DoAction(ACTION_START_OUTRO): AttackStop()
                 -- (ported 2026-10-19) + triggered self-cast death
-                -- 41218 (the NOT_SELECTABLE arm has no flag bridge),
-                -- defeated Talk 4s, quiet suicide 3617 18s later.
+                -- 41218 + SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE)
+                -- (ported 2026-10-20), defeated Talk 4s, quiet
+                -- suicide 3617 18s later.
                 -- The maiev DoAction(ACTION_START_OUTRO) and
                 -- summon-despawn arms have no bridges.
                 creature:AttackStop()
                 creature:CastSpell(creature, SPELL_DEATH, true)
+                -- boss_illidan.cpp:641 — C++ arm order after SPELL_DEATH
+                creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
                 schedule(guid, "defeatedText", 4000, function()
                     creature:Talk(SAY_ILLIDAN_DEFEATED)
                     schedule(guid, "quietSuicide", 18000, function()

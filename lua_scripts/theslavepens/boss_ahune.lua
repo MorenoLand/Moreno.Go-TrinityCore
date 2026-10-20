@@ -68,8 +68,9 @@
 -- EVENT_EMERGE 35s re-arm, Emerge's triggered RESURFACE 46402
 -- self-cast and its RemoveAurasDueToSpell(STAY_SUBMERGED/
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
--- documented only; no flag bridge — the Emerge NOT_SELECTABLE
--- flip unmodeled; no unit-state bridge; no SpellScript/
+-- documented only — the Emerge NOT_SELECTABLE flip stays
+-- unmodeled (its trigger rides the unregistered bunny phase
+-- machine); no unit-state bridge; no SpellScript/
 -- AuraScript bridges — the nine script classes in this file
 -- (spell_ahune_synch_health, spell_summoning_rhyme_aura,
 -- spell_summon_ice_spear_delayer, spell_ice_spear_control_

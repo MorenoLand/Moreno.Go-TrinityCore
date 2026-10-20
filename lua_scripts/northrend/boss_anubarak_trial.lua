@@ -142,9 +142,9 @@
 -- NOT_SELECTABLE) (a still-targetable submerge would fabricate
 -- behavior), instance-gated (GetBossState(DATA_ANUBARAK) — no
 -- instance bridge), and summon-context (zero registration) +
--- flag / aura / permafrost gates (flag bridges absent; creature
--- HasAura IS bridged, engine/world/lua_objects.go:228) — all
--- documented-only.
+-- flag / aura / permafrost gates (the SetFlag/RemoveFlag bridge
+-- exists — the instance/summon gates block; creature HasAura IS
+-- bridged, engine/world/lua_objects.go:228) — all documented-only.
 -- npc_anubarak_spike (34660) — zero registration (entry
 -- verifiable from the Summons enum, but zero bridgeable arms —
 -- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken

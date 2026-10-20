@@ -91,7 +91,8 @@
 -- npc_warden_mellichar is documented only, not registered
 -- (omor-heads precedent): entry NPC_MELLICHAR = 20904
 -- (arcatraz.h). Its Reset() (SetFlag(UNIT_FLAG_NON_ATTACKABLE)
--- — no flag bridge; DoCastSelf(SPELL_TARGET_OMEGA 36852);
+-- — SetFlag is bridged but the creature is unregistered, so the
+-- arm has no Lua site; DoCastSelf(SPELL_TARGET_OMEGA 36852);
 -- instance->SetBossState(DATA_HARBINGER_SKYRISS, NOT_STARTED)
 -- — instance blocked), its empty AttackStart override, its
 -- MoveInLineOfSight proximity arm (no LoS-aggro bridge —

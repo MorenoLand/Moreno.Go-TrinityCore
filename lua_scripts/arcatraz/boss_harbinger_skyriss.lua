@@ -129,7 +129,8 @@
 -- documented, not bridged; boss_harbinger_skyriss_illusion
 -- (entries 21466/21467) documented only, not registered
 -- (omor-heads precedent) — its C++ AI is a no-op: Reset()
--- only touches unit flags and immune-to-PC (no flag bridge)
+-- only touches unit flags (RemoveFlag is bridged but the creature
+-- is unregistered, so the arm has no Lua site) and immune-to-PC,
 -- and JustEngagedWith is empty, so there is nothing
 -- bridgeable; no SpellScript/AuraScript scripts in this
 -- file.

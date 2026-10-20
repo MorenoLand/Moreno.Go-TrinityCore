@@ -70,7 +70,8 @@
 -- DATA_LADYVASHJEVENT NOT_STARTED/IN_PROGRESS/DONE bookkeeping,
 -- the DATA_CANSTARTPHASE3 gate, DATA_LADYVASHJ GUID lookups and
 -- the 19s intro AggroTimer / Intro / CanAttack / UNIT_FLAG_NON_
--- ATTACKABLE MoveInLineOfSight machine skipped — no flag bridge);
+-- ATTACKABLE MoveInLineOfSight machine — the flag arms are PORTED
+-- (2026-10-20); the instance bookkeeping stays skipped);
 -- no summon bridge — the 4x shield-generator-channel (19870),
 -- enchanted-elemental (21958), tainted-elemental (22009),
 -- Coilfang-elite (22055) and Coilfang-strider (22056) summon
@@ -133,6 +134,11 @@ local SAY_SLAY = 6
 local SAY_DEATH = 7
 
 local ENTRY_LADY_VASHJ = 21212
+
+-- UnitDefines.h:125; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690/725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local ENTRY_TAINTED_ELEMENTAL = 22009
 
 local MELEE_RANGE = 5
@@ -363,6 +369,16 @@ local function vashjMoveInLOS(event, creature, unit)
     if not vashjSaidIntro[guid] then
         vashjSaidIntro[guid] = true
         creature:Talk(SAY_INTRO)
+        -- boss_lady_vashj.cpp:160 — the C++ ctor sets
+        -- UNIT_FLAG_NON_ATTACKABLE "only once on Creature create";
+        -- the 19s AggroTimer arm (:325-338) clears it. Never canceled
+        -- on 2/4/23 — C++ never cancels AggroTimer; the flag gates
+        -- every aggro path, so no combat (and no evade) can intervene
+        -- before it fires. Ported 2026-10-20.
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        CreateLuaEvent(function()
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        end, 19000)
     end
 end
 

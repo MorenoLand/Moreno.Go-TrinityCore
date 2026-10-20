@@ -78,8 +78,10 @@
 -- SAY_PEON_ATTACKED/DIES counts and the all-four-dead
 -- activation (IsMainEvent + NON_ATTACKABLE removal) are
 -- unmodeled, so SAY_INTRO/PEON_ATTACKED/PEON_DIES/TAUNT are
--- unreachable; no flag bridge — the Reset/activation NON_
--- ATTACKABLE arms unmodeled (thespia/kalithresh precedent);
+-- unreachable; the Reset/activation NON_ATTACKABLE arms stay
+-- unmodeled — their paired removal rides the unported peon-relay /
+-- intro-timer machine, and porting SetFlag alone would strand the
+-- bit (thespia/kalithresh precedent);
 -- no summon bridge — the shadow-fissure summon of the
 -- fissure NPC never fires and the JustSummoned setup
 -- (SetFaction + NON_ATTACKABLE/NOT_SELECTABLE flags +

@@ -122,11 +122,10 @@
 -- queue.
 -- npc_infernal_volcano (34813): Reset — SetReactState(REACT_PASSIVE)
 -- (no react bridge) + DoCastSelf(Infernal Eruption Effect 66252) +
--- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (no flag bridge; the
--- "no difficulty bridge" leg of the kelidan precedent is STALE
--- (IsHeroic() is bridged) but the arm still rides the unbridged summon
--- gate) — rides the
--- unbridged summon gate (burrower precedent) — documented-only;
+-- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (flag bridge exists
+-- (IsHeroic() is bridged — the "no difficulty bridge" leg of the
+-- kelidan precedent is STALE) but the arm still rides the unbridged
+-- summon gate (burrower precedent) — documented-only;
 -- joins the entry-verifiable-but-bridge-blocked queue.
 -- npc_fel_infernal (34815): Reset — instance-gated DespawnOrUnsummon
 -- + cross-AI JustSummoned (instance / cross-AI bridges absent) +
@@ -141,11 +140,11 @@
 -- interrupt, etc.)
 -- npc_nether_portal (34825): Reset — SetReactState(REACT_PASSIVE) +
 -- DoCastSelf(Nether Portal Effect 66263) + heroic RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE) — react / flag bridges absent (the
--- "no difficulty bridge" claim is STALE — IsHeroic() is bridged) but
--- the arm rides the unbridged summon gate (burrower precedent) —
--- documented-only; joins the entry-verifiable-but-bridge-blocked
--- queue.
+-- UNIT_FLAG_NOT_SELECTABLE) — no react bridge (the flag bridge
+-- exists and the "no difficulty bridge" claim is STALE — IsHeroic()
+-- is bridged) but the arm rides the unbridged summon gate (burrower
+-- precedent) — documented-only; joins the
+-- entry-verifiable-but-bridge-blocked queue.
 -- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:
 -- SelectTarget(Random,0,0.0f,true) -> DoCast(Spinning Spike 66283)
 -- non-triggered, 9s init, 20s repeat (not heroic-gated — scheduled

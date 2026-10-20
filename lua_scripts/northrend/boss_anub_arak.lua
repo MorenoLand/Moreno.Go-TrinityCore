@@ -48,7 +48,7 @@
 -- C++ code in this file — nothing to port.
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset legs: RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE
--- | UNIT_FLAG_NOT_SELECTABLE) (no unit-flag bridge), DoStopTimedAchievement(
+-- | UNIT_FLAG_NOT_SELECTABLE) PORTED (2026-10-20), DoStopTimedAchievement(
 -- ACHIEV_GOTTA_GO_START_EVENT) (instance model absent).
 -- The whole combat rotation is phase-gated through events.SetPhase /
 -- phase-group scheduling (PHASE_EMERGE / PHASE_SUBMERGE) and the
@@ -113,7 +113,8 @@
 -- -= 25 stepping (gate itself bridgeable — event 9 + GetHealthPct;
 -- the phase machine is not) — documented-only.
 -- SpellHit(SPELL_SUBMERGE 53421) payload: SetFlag(NON_ATTACKABLE |
--- NOT_SELECTABLE) (no flag bridge), RemoveAurasDueToSpell(
+-- NOT_SELECTABLE) (flag bridge exists — the trigger cast is blocked),
+-- RemoveAurasDueToSpell(
 -- LEECHING_SWARM) (RemoveAura bridged — aeranas precedent stale),
 -- DoCastSelf(IMPALE_AURA 53456, true) (bridged in isolation —
 -- creature:CastSpell(creature, spell) — but the trigger cast is
@@ -163,6 +164,12 @@
 
 local ENTRY_ANUBARAK = 29120
 
+-- UnitDefines.h:125/149; RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
@@ -189,7 +196,17 @@ local function anubarakDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_anub_arak::Reset (boss_anubarak.cpp:120): clear the
+-- NON_ATTACKABLE | NOT_SELECTABLE bits; C++ re-runs Reset on evade
+-- without respawn, so the re-assert is not template-redundant (the
+-- SetFlag counterpart rides the unbridged SpellHit submerge machine,
+-- :361). Ported 2026-10-20.
+local function anubarakReset(event, creature)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+end
+
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 3, anubarakTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 4, anubarakDied)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)

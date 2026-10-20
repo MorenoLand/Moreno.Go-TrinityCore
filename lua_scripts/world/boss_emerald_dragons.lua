@@ -122,6 +122,12 @@ local ENTRY_LETHON  = 14888
 local ENTRY_EMERISS = 14889
 local ENTRY_TAERAR  = 14890
 
+-- UnitDefines.h:125/149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
+-- is bridged (engine/world/lua_creature_events.go:690/725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 local SAY_AGGRO = 0 -- SAY_YSONDRE_AGGRO / SAY_LETHON_AGGRO /
                     -- SAY_EMERISS_AGGRO / SAY_TAERAR_AGGRO (all 0)
 
@@ -357,6 +363,11 @@ local function dragonReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     stages[guid] = 1 -- C++ Initialize()/Reset() sets _stage = 1
+    -- C++ emerald_dragonAI::Reset (boss_emerald_dragons.cpp:100):
+    -- RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE|NON_ATTACKABLE)
+    -- (ported 2026-10-20); the banish-machine SetFlag pair (:638) is
+    -- unported, so this is the only flag leg at a registered site.
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
 end
 
 -- C++ boss_taerarAI::Reset (boss_emerald_dragons.cpp:596-600):
@@ -364,7 +375,8 @@ end
 -- the base emerald_dragonAI::Reset. The apply leg (DoCast 24313 in the
 -- unported 25%-stage banish machine) never fires in Lua, so the removal
 -- is currently a no-op — kept C++-exact; the base Reset's RemoveFlag
--- (NOT_SELECTABLE/NON_ATTACKABLE) legs have no flag bridge.
+-- (NOT_SELECTABLE/NON_ATTACKABLE) legs are PORTED in dragonReset
+-- above (2026-10-20).
 local function taerarReset(event, creature)
     dragonReset(event, creature)
     creature:RemoveAura(SPELL_SHADE)

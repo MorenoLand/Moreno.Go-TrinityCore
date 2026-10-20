@@ -42,7 +42,8 @@
 -- UpdateAI victim gate passes), then every 5s on a random alive player;
 -- a nil-target tick retries in 1s (C++ leaves the timer armed and
 -- retries on the next UpdateAI tick). The Reset SetFlag
--- NOT_SELECTABLE arm has no flag bridge and is not modeled.
+-- NOT_SELECTABLE arm is ported (2026-10-20) via
+-- creature:SetFlag(UNIT_FIELD_FLAGS, ...).
 -- Deviations from C++: SAY_RAIN_FIRE(1) is defined in the C++ Says enum
 -- but never used — not modeled; no summon model — the six bloodseeker
 -- bats, the per-10s frenzied bat summons, and the fixed SpawnBat
@@ -73,6 +74,11 @@ local SPELL_CHAIN_MIND_FLAY = 26044
 local SPELL_GREATER_HEAL = 23954
 local SPELL_BAT_FORM = 23966
 local SPELL_BOMB = 40332
+
+-- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local PHASE_ONE = 1
 local PHASE_TWO = 2
@@ -396,9 +402,16 @@ local function batriderDied(event, creature, killer)
 end
 
 local function batriderReset(event, creature)
-    -- C++ Reset arms the 2s bomb initializer and sets NOT_SELECTABLE
-    -- (no flag bridge); out of combat the timer is moot, so Reset only
-    -- cancels (the enter-combat arm carries the initializer, C++-exact).
+    -- C++ npc_batriderAI::Reset (boss_jeklik.cpp:228-231): Initialize()
+    -- arms the 2s bomb initializer + SetFlag(UNIT_FIELD_FLAGS,
+    -- NOT_SELECTABLE) (ported 2026-10-20); no RemoveFlag arm exists in
+    -- the C++ file, so Reset re-asserts on evade — skip on the death
+    -- path, where C++ Reset never runs. Out of combat the timer is
+    -- moot, so Reset only cancels (the enter-combat arm carries the
+    -- initializer, C++-exact).
+    if not creature:IsDead() then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    end
     batriderResetState(creature:GetGUID())
 end
 

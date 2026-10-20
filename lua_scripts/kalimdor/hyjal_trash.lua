@@ -64,8 +64,10 @@
 --   (jeklik NOT_SELECTABLE precedent).
 -- - npc_giant_infernal: the meteor spawn choreography (MODEL_INVIS 11686,
 --   UNIT_FLAG_NOT_SELECTABLE / NON_ATTACKABLE flags, Delay, world-trigger
---   21987 summon + SPELL_METEOR 33814 visual) — flags, model swap, and
---   summon have no bridges (maiden/jeklik precedent); the IsEvent waypoint
+--   21987 summon + SPELL_METEOR 33814 visual) — flag set/clear is bridged
+--   but the meteor clear leg rides the unported summon/movement/model
+--   machine (set-without-clear hazard); model swap and summon have no
+--   bridges (maiden/jeklik precedent); the IsEvent waypoint
 --   leg (HordeWPs[7] in front of Thrall) — no escort bridge. Timing: C++
 --   runs the infernal arms only after the meteor leg sets CanMove
 --   (hyjal_trash.cpp:503); here they arm at combat-enter, the unmodeled

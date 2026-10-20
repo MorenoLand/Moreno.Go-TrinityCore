@@ -39,7 +39,7 @@
 -- C++ DamageTaken 66%/33% health-crossing -> DoCastSelf(Insanity
 -- 57496) (event 9, pre-damage damage arg; InterruptNonMeleeSpells
 -- (false) has no bridge — documented; NOT_SELECTABLE damage=0
--- leg needs the absent flag bridge — documented only).
+-- leg needs creature:HasFlag — no HasFlag bridge (documented only).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith _instance->DoStartTimedAchievement(
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_QUICK_DEMISE_START_EVENT
@@ -49,7 +49,7 @@
 -- DoCast(target, Shiver 57949) (15s repeat): the random-target
 -- SelectTarget bridge is absent (cairne/kazzak precedent).
 -- DamageTaken: UNIT_FLAG_NOT_SELECTABLE damage-nullification leg
--- (no UNIT_FIELD_FLAGS flag bridge); the 66%/33% crossing arm is
+-- (no creature:HasFlag bridge); the 66%/33% crossing arm is
 -- PORTED below (event 9; the old "no health-pct bridge (doomwalker
 -- precedent)" claim was stale — event 9 carries pre-damage damage
 -- and creature:GetHealth()/GetMaxHealth() are bridged);
@@ -71,8 +71,9 @@
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old
 -- "no aura-removal bridge (aeranas precedent)" claim was stale,
 -- player:RemoveAura is bridged, engine/world/lua_player.go:219);
--- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) + SetControlled(false,
--- UNIT_STATE_STUNNED) (no flag bridges).
+-- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) PORTED (2026-10-20);
+-- SetControlled(false, UNIT_STATE_STUNNED) stays out (no
+-- stun-control bridge).
 -- SummonedCreatureDespawn visage-phase roll-back machine
 -- (ObjectAccessor::GetCreature per-summon phase walk, player
 -- phasing-aura re-roll 57508-57512): summon STRAND + cross-AI
@@ -94,6 +95,11 @@ local ENTRY_HERALD_VOLAZJ = 29311
 local SPELL_MIND_FLAY = 57941
 local SPELL_SHADOW_BOLT_VOLLEY = 57942
 local SPELL_INSANITY = 57496 -- boss_herald_volazj.cpp:34
+
+-- UnitDefines.h:149; RemoveFlag on UNIT_FIELD_FLAGS (59) is bridged
+-- (engine/world/lua_creature_events.go:725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -213,6 +219,10 @@ local function volazjReset(event, creature)
     resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:80, C++
                                      -- arm order (after the SetPhaseMask
                                      -- leg, whose bridge is absent)
+    -- boss_herald_volazj.cpp:83 — C++ arm order after ResetPlayersPhaseMask
+    -- (ported 2026-10-20); the SetControlled(false) leg stays out
+    -- (no stun-control bridge)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
 -- C++ DamageTaken (cpp:114-134): GetHealthPct(damage) with

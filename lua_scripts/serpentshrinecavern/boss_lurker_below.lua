@@ -71,11 +71,11 @@
 -- 37138, triggered=true) (C++-exact); re-arm 3000 (15s init,
 -- C++-exact). Submerged arm: phase 60s -> submerged=false,
 -- RemoveAllAuras, DoCast self SPELL_EMERGE 20568 triggered
--- (C++-exact true), spawned=false (the 9x summon arm — 6x
+-- (C++-exact true), spawned=false + the submerged IMMUNE_TO_PC
+-- flag arms PORTED (2026-10-20; the 9x summon arm — 6x
 -- NPC_COILFANG_AMBUSHER + 3x NPC_COILFANG_GUARDIAN at the
--- AddPos coords — has no summon bridge, unmodeled; the
--- SetUInt32Value IMMUNE_TO_PC flag arm has no flag bridge,
--- unmodeled), spout=3000 (C++ "directly cast Spout after
+-- AddPos coords — has no summon bridge, unmodeled),
+-- spout=3000 (C++ "directly cast Spout after
 -- emerging!"), phase=120000, return (C++-exact). The
 -- IsThreatened/EnterEvadeMode/DoZoneInCombat arms have no
 -- evade bridge — timers fire unconditionally (jeklik
@@ -140,6 +140,11 @@ local SPELL_SHOOT = 37770
 local EMOTE_SPOUT = 0
 
 local ENTRY_LURKER = 21217
+
+-- UnitDefines.h:132; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690/725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local ENTRY_AMBUSHER = 21865
 
 local MELEE_RANGE_STANDIN = 5
@@ -351,13 +356,16 @@ local function lurkerTick(creature, guid)
         -- Submerged arm: phase 60s -> emerge: remove auras,
         -- triggered self-cast 20568 (C++-exact), spout=3s
         -- (C++ "directly cast Spout after emerging!"), phase
-        -- back to 120s (the 9x summon arm and the flag arm are
-        -- summon/flag blocked — header). The evade/zone-combat
+        -- back to 120s (the 9x summon arm is summon-blocked;
+        -- the submerged/emerge flag arms are ported — header). The
+        -- evade/zone-combat
         -- arms have no evade bridge — timers fire
         -- unconditionally (jeklik convention).
         if st.phase <= 1000 then
             st.submerged = false
             creature:RemoveAllAuras()
+            -- boss_lurker_below.cpp:351 — SetImmuneToPC(false)
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
             creature:CastSpell(nil, SPELL_EMERGE, true)
             st.spawned = false
             st.spout = 3000
@@ -365,6 +373,16 @@ local function lurkerTick(creature, guid)
             return
         else
             st.phase = st.phase - 1000
+            -- C++ first-submerged-tick (boss_lurker_below.cpp:371-379):
+            -- SetUInt32Value(UNIT_FIELD_FLAGS, IMMUNE_TO_PC); the field
+            -- holds no other AI-set bits at this point (the
+            -- NOT_SELECTABLE Reset arm was cleared at fishing-emerge),
+            -- so SetFlag is the exact ported effect. The 9x summon arm
+            -- at the same site stays out (no summon bridge).
+            if not st.spawned then
+                st.spawned = true
+                creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+            end
         end
     end
 end
@@ -388,6 +406,11 @@ end
 
 local function lurkerReset(event, creature)
     resetLurker(creature:GetGUID())
+    -- Reset hygiene: an evade mid-submerge would strand the submerged
+    -- IMMUNE_TO_PC bit (the modeled fight restarts unsubmerged on the
+    -- next pull per the magtheridon/ragnaros-intro convention; C++
+    -- Reset re-submerges via its unmodeled invisible machine).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
 end
 
 RegisterCreatureEvent(ENTRY_LURKER, 1, lurkerEnterCombat)

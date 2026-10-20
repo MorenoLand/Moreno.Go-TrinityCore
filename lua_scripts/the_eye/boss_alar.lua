@@ -50,8 +50,8 @@
 --    arms have no health/stand/flag/speed/movement bridges —
 --    unmodeled; the DoZoneInCombat arm is engine-driven).
 --    While the sequence runs, all damage is zeroed — the C++
---    UNIT_FLAG_NON_ATTACKABLE arm (the flag itself has no
---    bridge, documented below).
+--    UNIT_FLAG_NON_ATTACKABLE arm is ported (2026-10-20) via
+--    creature:SetFlag/RemoveFlag(UNIT_FIELD_FLAGS).
 -- 3. Dive-bomb chain (WE_METEOR -> WE_DIVE -> WE_LAND ->
 --    WE_SUMMON, C++ order): meteor — non-triggered DoCast(me,
 --    SPELL_DIVE_BOMB_VISUAL 35367) (C++-exact; the SpellHit
@@ -146,10 +146,12 @@
 -- documented only, not bridged (standing blocker); no
 -- display/immune/flag/stand-state/attack-state bridges —
 -- the Reset() and phase arms touching SetDisplayId/
--- ApplySpellImmune/SetDisableGravity/UNIT_FLAG_*
--- /SetStandState/IsNonMeleeSpellCast stay unmodeled (netherspite
--- precedent); the Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
--- template-rate restore arm is ported via creature:SetSpeedRate
+-- ApplySpellImmune/SetDisableGravity/UNIT_FLAG_NOT_SELECTABLE
+-- (dive-bomb machine)/SetStandState/IsNonMeleeSpellCast stay
+-- unmodeled (netherspite precedent); the Reset()
+-- UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20), as is the
+-- Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
+-- template-rate restore arm via creature:SetSpeedRate
 -- (boss_alar.cpp:165).
 
 local SPELL_FLAME_QUILLS = 34229
@@ -160,6 +162,11 @@ local SPELL_CHARGE = 35412
 local SPELL_DIVE_BOMB_VISUAL = 35367
 local SPELL_DIVE_BOMB = 35181
 local SPELL_BERSERK = 45078
+
+-- UnitDefines.h:125; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
+-- bridged (engine/world/lua_creature_events.go:690/725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
 
 local ENTRY_ALAR = 19514
 
@@ -292,6 +299,8 @@ local function combatTick(creature, guid)
         if st.revive <= 1000 then
             st.dying = false
             st.phase = 2
+            -- boss_alar.cpp:297 — C++ arm order before DoZoneInCombat/REBIRTH
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
             creature:CastSpell(creature, SPELL_REBIRTH, true)
             st.meltArmor = 60000
             st.charge = 7000
@@ -408,6 +417,8 @@ end)
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_ALAR, 2, function(_, creature)
     fullReset(creature:GetGUID())
+    -- boss_alar.cpp:170 — evade runs C++ Reset
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end)
 
 -- C++ JustDied: cleanup (the _JustDied arm is instance-
@@ -423,8 +434,8 @@ end)
 -- damage rewrite, combat.go:508), latch once (!WaitEvent —
 -- C++-exact) and start the WE_DIE -> WE_REVIVE sequence.
 -- While the sequence runs, all damage is zeroed — the C++
--- UNIT_FLAG_NON_ATTACKABLE arm (no flag bridge, documented
--- above).
+-- UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20,
+-- documented above).
 RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = alarState[guid]
@@ -443,6 +454,8 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
     if st.phase == 1 and damage >= creature:GetHealth() then
         st.dying = true
         st.revive = 5000
+        -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         return 0, 0
     end
 end)
@@ -456,4 +469,6 @@ RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     -- clears the script override, restoring it. The SetDisableGravity /
     -- ApplySpellImmune legs stay unbridged (documented above).
     creature:SetSpeedRate(1, 0)
+    -- boss_alar.cpp:170 — C++ Reset arm order after ApplySpellImmune
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end)

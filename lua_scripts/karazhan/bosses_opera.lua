@@ -30,11 +30,13 @@
 -- debuff + a fear/swipe freeze) and BackwardLunge picks a random alive
 -- player excluding the victim (approximates the C++ second-threat
 -- offset-1 pick; re-arm-on-success + next-tick retry mirror the C++
--- timer semantics, yazzai-Polymorph precedent). No UNIT_FLAG model — the
--- Oz AggroTimer RemoveFlag(NON_ATTACKABLE) arms, PretendToDie's
--- NOT_SELECTABLE/SetHealth(0)/stand-state arms, and Resurrect's
--- flag/health/stand-state restores have no bridge; fake death is
--- timer-cancel plus shared flags. No UNIT_STATE_CASTING model — timers
+-- timer semantics, yazzai-Polymorph precedent). The Oz AggroTimer
+-- RemoveFlag(NON_ATTACKABLE) arms are PORTED (2026-10-20) via
+-- creature:RemoveFlag(UNIT_FIELD_FLAGS); PretendToDie's
+-- NOT_SELECTABLE/SetHealth(0)/stand-state arms and Resurrect's
+-- flag/health/stand-state restores stay out (no broader UNIT_FLAG /
+-- stand-state model); fake death is timer-cancel plus shared flags.
+-- No UNIT_STATE_CASTING model — timers
 -- fire unconditionally (InterruptNonMeleeSpells skipped). No facing model —
 -- BackwardLunge's behind-target (HasInArc) check is skipped. The
 -- strawman fire-school SpellHit arm (Burning Straw 31075) is skipped —
@@ -75,6 +77,32 @@ local ENTRY_JULIANNE = 17534
 local ENTRY_ROMULO = 17533
 
 local timers = {}
+
+-- UnitDefines.h:125; RemoveFlag on UNIT_FIELD_FLAGS (59) is bridged
+-- (engine/world/lua_creature_events.go:725).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+
+-- Oz intro timers: the AggroTimer arms (bosses_opera.cpp) are kept out
+-- of the shared timer keyspace — C++ never cancels AggroTimer on
+-- engage (the UpdateAI arm runs in combat), and Reset restarts it.
+local introTimers = {}
+
+local function cancelIntroTimer(guid)
+    local id = introTimers[guid]
+    if id then
+        RemoveEventById(id)
+        introTimers[guid] = nil
+    end
+end
+
+local function scheduleIntroReset(guid, creature, delay)
+    cancelIntroTimer(guid)
+    introTimers[guid] = CreateLuaEvent(function()
+        introTimers[guid] = nil
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    end, delay)
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -194,6 +222,15 @@ local function dorotheeLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_dorotheeAI::UpdateAI AggroTimer (bosses_opera.cpp:204-208):
+-- 0.5s after spawn/evade the template-set NON_ATTACKABLE flag is
+-- cleared (AggroTimer=500 in Initialize, :138; no SetFlag in file).
+local function dorotheeReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    scheduleIntroReset(guid, creature, 500)
+end
+
 local function dorotheeDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(DOROTHEE_SAY_DEATH)
@@ -211,7 +248,7 @@ end
 RegisterCreatureEvent(ENTRY_DOROTHEE, 1, dorotheeEnterCombat)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 2, dorotheeLeaveCombat)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 4, dorotheeDied)
-RegisterCreatureEvent(ENTRY_DOROTHEE, 23, dorotheeLeaveCombat)
+RegisterCreatureEvent(ENTRY_DOROTHEE, 23, dorotheeReset)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 24, dorotheeReachHome)
 
 -- Tito (npc_tito, C++ ScriptName for 17548): yipping 31015 on the victim
@@ -252,7 +289,7 @@ RegisterCreatureEvent(ENTRY_TITO, 23, titoLeaveCombat)
 -- the victim every 15s (first 5s); brain wipe 31069 on a random alive
 -- player within 100 yd every 20s (first 7s). The fire-school SpellHit arm
 -- (burning straw 31075) has no bridge — event 14 carries only the spell
--- id. The AggroTimer NON_ATTACKABLE arm has no flag bridge.
+-- id. The AggroTimer NON_ATTACKABLE arm is PORTED (2026-10-20).
 local STRAWMAN_SAY_AGGRO = 0
 local STRAWMAN_SAY_DEATH = 1
 local STRAWMAN_SAY_SLAY = 2
@@ -296,6 +333,15 @@ local function strawmanLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_strawmanAI::UpdateAI AggroTimer (bosses_opera.cpp:402-408):
+-- 13s after spawn/evade the template-set NON_ATTACKABLE flag is
+-- cleared (AggroTimer=13000 in Initialize, :332; no SetFlag in file).
+local function strawmanReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    scheduleIntroReset(guid, creature, 13000)
+end
+
 local function strawmanTargetDied(event, creature, victim)
     -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
     if victim ~= nil then
@@ -321,7 +367,7 @@ RegisterCreatureEvent(ENTRY_STRAWMAN, 1, strawmanEnterCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 2, strawmanLeaveCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 3, strawmanTargetDied)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 4, strawmanDied)
-RegisterCreatureEvent(ENTRY_STRAWMAN, 23, strawmanLeaveCombat)
+RegisterCreatureEvent(ENTRY_STRAWMAN, 23, strawmanReset)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 24, strawmanReachHome)
 
 -- Tinhead (boss_tinhead, C++ ScriptName for 17547): cleave 31043 on the
@@ -379,6 +425,16 @@ local function tinheadLeaveCombat(event, creature)
     tinheadState[guid] = nil
 end
 
+-- C++ boss_tinheadAI::UpdateAI AggroTimer (bosses_opera.cpp:515-519):
+-- 15s after spawn/evade the template-set NON_ATTACKABLE flag is
+-- cleared (AggroTimer=15000 in Initialize, :452; no SetFlag in file).
+local function tinheadReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    tinheadState[guid] = nil
+    scheduleIntroReset(guid, creature, 15000)
+end
+
 local function tinheadTargetDied(event, creature, victim)
     -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
     if victim ~= nil then
@@ -406,7 +462,7 @@ RegisterCreatureEvent(ENTRY_TINHEAD, 1, tinheadEnterCombat)
 RegisterCreatureEvent(ENTRY_TINHEAD, 2, tinheadLeaveCombat)
 RegisterCreatureEvent(ENTRY_TINHEAD, 3, tinheadTargetDied)
 RegisterCreatureEvent(ENTRY_TINHEAD, 4, tinheadDied)
-RegisterCreatureEvent(ENTRY_TINHEAD, 23, tinheadLeaveCombat)
+RegisterCreatureEvent(ENTRY_TINHEAD, 23, tinheadReset)
 RegisterCreatureEvent(ENTRY_TINHEAD, 24, tinheadReachHome)
 
 -- Roar (boss_roar, C++ ScriptName for 17546): mangle 31041 on the victim
@@ -469,6 +525,15 @@ local function roarLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_roarAI::UpdateAI AggroTimer (bosses_opera.cpp:628-632):
+-- 20s after spawn/evade the template-set NON_ATTACKABLE flag is
+-- cleared (AggroTimer=20000 in Initialize, :567; no SetFlag in file).
+local function roarReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    scheduleIntroReset(guid, creature, 20000)
+end
+
 local function roarTargetDied(event, creature, victim)
     -- C++ KilledUnit Talks unconditionally (no TYPEID_PLAYER gate).
     if victim ~= nil then
@@ -494,7 +559,7 @@ RegisterCreatureEvent(ENTRY_ROAR, 1, roarEnterCombat)
 RegisterCreatureEvent(ENTRY_ROAR, 2, roarLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROAR, 3, roarTargetDied)
 RegisterCreatureEvent(ENTRY_ROAR, 4, roarDied)
-RegisterCreatureEvent(ENTRY_ROAR, 23, roarLeaveCombat)
+RegisterCreatureEvent(ENTRY_ROAR, 23, roarReset)
 RegisterCreatureEvent(ENTRY_ROAR, 24, roarReachHome)
 
 -- The Crone (boss_crone, C++ ScriptName for 18168): chain lightning 32337

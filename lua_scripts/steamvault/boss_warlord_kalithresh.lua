@@ -54,7 +54,8 @@
 -- SetBossState NOT_STARTED arm are instance-blocked).
 -- npc_naga_distiller (17954): documented only, NOT registered
 -- — its Reset SetFlag(UNIT_FLAG_NOT_SELECTABLE) /
--- UNIT_FLAG_NON_ATTACKABLE arms have no flag bridge, its
+-- UNIT_FLAG_NON_ATTACKABLE arms are bridged but the creature is
+-- unregistered, so the arms have no Lua site; its
 -- StartRageGen (RemoveFlag pair + triggered DoCast(me, SPELL_
 -- WARLORDS_RAGE_NAGA 31543) + instance SetData(DATA_DISTILLER,
 -- IN_PROGRESS)) fires only cross-creature from the boss's
@@ -70,8 +71,8 @@
 -- skipped); no FindNearestCreature/cross-creature bridge — the
 -- rage Talk(SAY_REGEN) + self-cast of SPELL_WARLORDS_RAGE
 -- 37081 + the distiller StartRageGen relay unmodeled (timer
--- bookkeeping only); no flag bridge — the distiller's
--- NOT_SELECTABLE/NON_ATTACKABLE setup unmodeled; no
+-- bookkeeping only); the distiller's NOT_SELECTABLE/
+-- NON_ATTACKABLE setup stays unmodeled (unregistered creature); no
 -- SpellScript/AuraScript scripts in this file.
 
 local SPELL_SPELL_REFLECTION = 31534
