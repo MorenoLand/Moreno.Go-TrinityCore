@@ -71,8 +71,10 @@
 -- C++ delays all other events by 18s during the wailing phase (:307) —
 -- modeled via delayTimers (thekal precedent): the other arms' timers
 -- shift 18s, so no casts fire mid-wailing. The beam sweeps the facing
--- (:313-314) via the SetFacingTo bridge (live since 2026-10-20); the
--- no-target leg stays out (no GetOrientation read bridge).
+-- (:313-314) via the SetFacingTo bridge (live since 2026-10-20);
+-- beamAngle = creature:GetO() unconditionally (:291) — the 13:00 "no
+-- GetOrientation read bridge" claim is stale (GetO resolves via the
+-- object.go generic fallback).
 -- JustDied (:203): Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg is unmodeled).
 -- KilledUnit (:176-196): player-gated, slay text selected by the CURRENT
@@ -325,9 +327,11 @@ wailingSoulsTick = function(creature, guid, remaining)
     local state = devourerState[guid]
     -- C++ :313-314 beamAngle += beamAngleDiff; SetFacingTo(beamAngle) -- the
     -- 13:00 "no facing bridge" claim is stale (bridge live since
-    -- 2026-10-20, lua_creature_events.go). No-target wailings skip the
-    -- sweep: no GetOrientation read bridge, so beamAngle is undefined there.
-    if state ~= nil and state.beamAngle ~= nil then
+    -- 2026-10-20, lua_creature_events.go); the 13:00 "no GetOrientation
+    -- read bridge" claim is stale too (creature:GetO() resolves via the
+    -- object.go generic fallback), so the sweep runs on no-target
+    -- wailings from the current orientation (C++ :291 is unconditional).
+    if state ~= nil then
         state.beamAngle = state.beamAngle + state.beamAngleDiff
         creature:SetFacingTo(state.beamAngle)
     end
@@ -374,10 +378,16 @@ wailingSoulsEvent = function(creature, guid)
     creature:Talk(EMOTE_WAILING_SOUL)
     creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
     -- C++ :287 SelectTarget(Random, 0) = threat-list random
-    -- (playerOnly=FALSE), like the well/unleashed arms above.
-    -- No-target wailings skip the beam sweep (:291-295): no GetOrientation
-    -- read bridge, so beamAngle is undefined there.
-    state.beamAngle = nil
+    -- (playerOnly=FALSE), like the well/unleashed arms above. C++ :291-295
+    -- are UNCONDITIONAL: beamAngle = GetOrientation() (the new facing after
+    -- :288 when a target was found, the current orientation otherwise) and
+    -- beamAngleDiff = +/-PI/30 (PI/2 sweep over the 15s chain) — the 13:00
+    -- "no GetOrientation read bridge" claim is stale (creature:GetO()
+    -- resolves via the object.go generic fallback), so no-target wailings
+    -- sweep from the current orientation, not nil.
+    state.beamAngle = creature:GetO()
+    state.beamAngleDiff = math.pi / 30
+    if math.random(2) == 1 then state.beamAngleDiff = -state.beamAngleDiff end
     local target = randomThreatTarget(creature)
     if target then
         -- C++ :288 SetFacingToObject(target) -- no direct bridge; the zuljin
@@ -386,11 +396,8 @@ wailingSoulsEvent = function(creature, guid)
         local face = math.atan2(target:GetY() - creature:GetY(), target:GetX() - creature:GetX())
         if face < 0 then face = face + 2 * math.pi end
         creature:SetFacingTo(face)
-        -- C++ :291-295 beamAngle = GetOrientation() (the new facing);
-        -- beamAngleDiff = +/-PI/30 (PI/2 sweep over the 15s chain).
+        -- C++ :291 beamAngle = GetOrientation() = the new facing.
         state.beamAngle = face
-        state.beamAngleDiff = math.pi / 30
-        if math.random(2) == 1 then state.beamAngleDiff = -state.beamAngleDiff end
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
     -- C++ :299 SetReactState(REACT_PASSIVE) -- the 13:00 "no bridge" claim
