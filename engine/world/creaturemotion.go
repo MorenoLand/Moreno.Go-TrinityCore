@@ -99,7 +99,7 @@ type creatureMotion struct {
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
-	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Unit::SetTarget twin, Object.cpp) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
+	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
 	BaseScale             float32             // creature_template.scale: template base for the scale twin and GetScale, init at motion creation (loadCreatureStats)
 	// CreatureType mirrors creature_template.type (8 = critter,
@@ -1963,7 +1963,9 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // SetCannotReachTarget(false)
 // is vacuous (the flag can never be set, see the no-path note below).
 // DoNotReacquireSpellFocusTarget is vacuous (creature casts acquire no spell focus).
-// SetTarget(Empty) is bridged (TargetGUID=0). GetSpellHistory()->ResetAllCooldowns()
+// SetTarget(Empty) is bridged (clearCreatureVisualTarget clears the
+// UNIT_FIELD_TARGET script slot; the threat-victim half is TargetGUID=0).
+// GetSpellHistory()->ResetAllCooldowns()
 // is bridged in triggerCreatureEvade below — the SpellCooldown* maps now live on
 // world creature motions via recordCreatureSpellCooldown; pet motions never route
 // here (pet_cooldowns.go, pets.go:2022, pet_save.go). EngagementOver()->AtDisengage()
@@ -2059,6 +2061,27 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false)
 }
 
+// clearCreatureVisualTarget is the engine half of Creature::SetTarget
+// (Creature.cpp:3221-3226): Unit::CombatStop (Unit.cpp:5774) and the
+// setDeathState death arm (Creature.cpp:2094) clear the visual target
+// (UNIT_FIELD_TARGET) — dead/evaded mobs must not keep a stare target.
+// Script arms own the sets via the SetTarget bridge; the engine owns the
+// clears, ahead of the JustDied/Reset script hooks like C++. Broadcasts
+// the empty field so clients drop the stare; silent when no script ever
+// set it.
+func (s *Server) clearCreatureVisualTarget(motion *creatureMotion) {
+	s.motionMu.Lock()
+	known := motion.ScriptTargetKnown
+	motion.ScriptTargetGUID = 0
+	motion.ScriptTargetKnown = false
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	if known {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldTarget: 0, unitFieldTarget + 1: 0})
+	}
+}
+
 func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return
@@ -2094,6 +2117,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// The own-table half (ClearAllThreat, ThreatManager.cpp:483-492) is the
 	// ClearThreat + SMSG_THREAT_CLEAR broadcast above.
 	s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, motion.GUID)
+	// Unit::CombatStop (Unit.cpp:5774) -> Creature::SetTarget
+	// (Creature.cpp:3221): combat stop clears the visual target
+	// (UNIT_FIELD_TARGET), not just the threat victim — an evaded mob
+	// must not keep a stare target. The victim half rides
+	// motion.TargetGUID = 0 below.
+	s.clearCreatureVisualTarget(motion)
 	if motion.BossAI != nil {
 		s.clearInstanceEncounter(motion)
 		motion.BossAI.OnEvade(ctx, s, motion)

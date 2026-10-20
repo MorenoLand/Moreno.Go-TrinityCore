@@ -215,7 +215,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["IsCasting"] = func(_ context.Context, _ []any) ([]any, error) {
 		return []any{false}, nil
 	}
-	// AddLootMode is CreatureMethods::AddLootMode (CreatureMethods.h:1300-1304):
+	// AddLootMode is CreatureMethods::AddLootMode (CreatureMethods.h:1321):
 	// Creature::AddLootMode (Creature.h:227) sets the mode bits on
 	// Creature::m_LootMode. Handler-surface twin of the session binding
 	// (lua_objects.go:906): yogg-saron's ev14 Val'anyr SpellHit arm calls it
@@ -812,7 +812,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return 1.0
 	})
-	// SetTarget is Unit::SetTarget (Object.cpp): m_target = guid, the visual
+	// SetTarget is Creature::SetTarget (Creature.cpp:3221-3226): the visual
 	// UNIT_FIELD_TARGET (the GUID shown above the creature's head). It is
 	// NOT the combat victim (motion.TargetGUID, driven by the threat
 	// manager) — the C++ arms this backs are the boss "stare" effects

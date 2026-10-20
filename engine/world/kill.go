@@ -690,6 +690,14 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// pet kill sites.
 	if s.server != nil {
 		s.server.removeThreatVictimFromAllLists(target.Map, target.InstanceID, target.GUID)
+		// Unit::setDeathState (Unit.cpp:8901-8907) -> Unit::CombatStop
+		// (Unit.cpp:5774) -> Creature::SetTarget (Creature.cpp:3221): death
+		// clears the visual target — dead mobs must not keep a stare
+		// target (Creature.cpp:2094). Ahead of the JustDied script hooks
+		// like C++.
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.clearCreatureVisualTarget(motion)
+		}
 		// Unit::setDeathState (Unit.cpp:8909-8911): any combo points
 		// pointed at the dying unit are lost — every holder's bank is
 		// cleared (ClearComboPointHolders).
