@@ -380,10 +380,35 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{targets}, nil
 	}
+	// SetHomePosition is CreatureMethods::SetHomePosition
+	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
+	methods["SetHomePosition"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.HomeX, motion.HomeY, motion.HomeZ = x, y, z
+		motion.Orientation = o
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,
-		"X": state.X, "Y": state.Y, "Z": state.Z,
+		"X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": motion.Orientation,
 		"Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level,
 		"InstanceId": motion.InstanceID,
 		"InWorld":    true,

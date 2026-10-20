@@ -65,7 +65,9 @@
 --   (:358) -> Talk(SAY_SVALNA_AGGRO 3) (:499-502; the SetReactState
 --   leg has no bridge) modeled as a 9000ms one-shot.
 --   The crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) leg (:355-356)
---   is cross-AI Talk (no bridge).
+--   is cross-AI Talk (no bridge); me->SetHomePosition(*me) is
+--   ported in svalnaEnterCombat (event-surface SetHomePosition +
+--   Orientation field bridged for it).
 -- boss_sister_svalna::KilledUnit (:364-388) — victim->GetTypeId()
 --   == TYPEID_PLAYER -> Talk(SAY_SVALNA_KILL 4); TYPEID_UNIT with
 --   a captain entry (37122-37125) -> Talk(SAY_SVALNA_KILL_CAPTAIN
@@ -381,6 +383,7 @@ end
 local function svalnaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:CastSpell(creature, SPELL_DIVINE_SURGE, true)
     schedule(guid, "combat", 9000, function() onSvalnaCombat(creature) end)
     schedule(guid, "impaling", {40000, 50000},

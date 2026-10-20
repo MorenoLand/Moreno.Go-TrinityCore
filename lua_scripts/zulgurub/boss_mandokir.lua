@@ -208,6 +208,7 @@ end
 local function mandokirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:Talk(SAY_AGGRO)
     schedule(guid, "overpower", math.random(7000, 9000), function()
         onOverpower(creature, guid)
