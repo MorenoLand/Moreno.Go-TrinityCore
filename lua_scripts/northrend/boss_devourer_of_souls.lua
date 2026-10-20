@@ -65,12 +65,14 @@
 -- (:305, creature:SetRooted); then the 15-tick chain (:313-316): first tick at
 -- 3000, DoCast(me, SPELL_WAILING_SOULS 68873) self-cast, re-arm 1000
 -- until 15 casts land (:319), then the phase-end legs
--- (SetDisplayId(DISPLAY_ANGER) + SetRooted(false), :323-324) fire and
+-- (SetReactState(REACT_AGGRESSIVE) + SetDisplayId(DISPLAY_ANGER) +
+-- SetRooted(false), :321-323) fire and
 -- WAILING_SOULS re-arms at {60000,70000} (:326).
 -- C++ delays all other events by 18s during the wailing phase (:307) —
 -- modeled via delayTimers (thekal precedent): the other arms' timers
--- shift 18s, so no casts fire mid-wailing. No beam sweeps the facing
--- (no SetFacingTo bridge).
+-- shift 18s, so no casts fire mid-wailing. The beam sweeps the facing
+-- (:313-314) via the SetFacingTo bridge (live since 2026-10-20); the
+-- no-target leg stays out (no GetOrientation read bridge).
 -- JustDied (:203): Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg is unmodeled).
 -- KilledUnit (:176-196): player-gated, slay text selected by the CURRENT
@@ -82,7 +84,8 @@
 -- WAILING_SOULS / phase-end arms below keep it C++-exact.
 -- Reset (:150-153): SetControlled(false, UNIT_STATE_ROOT) +
 -- SetDisplayId(DISPLAY_ANGER) PORTED on ev23 (creature:SetRooted +
--- SetDisplayId; SetReactState(REACT_AGGRESSIVE) has no bridge — skipped).
+-- SetDisplayId; SetReactState(REACT_AGGRESSIVE) (bridge live since
+-- 2026-10-20 — the 13:00 "no bridge" claim was stale).
 -- JustEngagedWith NPC_CRUCIBLE_OF_SOULS 60yd double-spawn-guard
 -- SummonCreature leg (:163-164) — no Go summon bridge, does not port.
 -- EVENT_UNLEASHED_SOULS SetDisplayId(DISPLAY_SORROW) (:271) + the
@@ -90,15 +93,18 @@
 -- PORTED (the stale "no display-ID bridge" claim retracted — the bridge
 -- went live 2026-10-20, lua_creature_events.go).
 -- EVENT_WAILING_SOULS SetDisplayId(DISPLAY_DESIRE) (:282) PORTED at the
--- arm position; the phase-end restore (:322-324) ports the
--- SetDisplayId(DISPLAY_ANGER) + SetControlled(false, ROOT) legs
--- (creature:SetDisplayId + SetRooted) — REACT_AGGRESSIVE (:322) and
--- MoveChase (:325) have no bridge and stay out.
--- The wailing beam choreography (SetFacingToObject :288, beamAngle
--- SetFacingTo :314, InterruptNonMeleeSpells :297,
--- SetReactState(REACT_PASSIVE) :299, motion Clear :304) does not port —
--- triaged out in the facing/react hunts (beam-choreography movement legs);
--- SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget bridge).
+-- arm position; the phase-end restore (:321-323) ports the
+-- SetReactState(REACT_AGGRESSIVE) + SetDisplayId(DISPLAY_ANGER) +
+-- SetControlled(false, ROOT) legs (creature:SetReactState +
+-- creature:SetDisplayId + SetRooted) — MoveChase (:324) has no bridge
+-- and stays out.
+-- The wailing beam choreography ports on the live bridges: SetFacingToObject
+-- :288 via the atan2 idiom + SetFacingTo (zuljin precedent), beamAngle
+-- SetFacingTo :314 per tick, SetReactState(REACT_PASSIVE) :299; the 13:00
+-- "no facing/react bridge" claims are stale (both bridges live since
+-- 2026-10-20). InterruptNonMeleeSpells (:297) and motion Clear (:304)
+-- stay out (no bridges); SetTarget(Empty) :302 is PORTED (2026-10-20,
+-- creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
 -- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
 -- latch feeds only GetData(DATA_THREE_FACED) (:231-236, no GetData bridge)
@@ -141,6 +147,9 @@ local SPELL_WAILING_SOULS = 68873
 local DISPLAY_ANGER = 30148
 local DISPLAY_SORROW = 30149
 local DISPLAY_DESIRE = 30150
+
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
 
 local timers = {}
 local devourerState = {}
@@ -309,19 +318,30 @@ end
 -- never ran and the full wailing arm re-fired every 3s.
 local wailingSoulsTick
 local wailingSoulsEvent
--- facing sweep (:314) has no bridge; the phase-end restore legs
--- (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot + MoveChase, :322-324) have
--- no bridge and do not port.
+-- facing sweep (:313-314) ports on the SetFacingTo bridge (live since
+-- 2026-10-20); the phase-end restore legs (REACT_AGGRESSIVE + DISPLAY_ANGER
+-- + unroot, :321-323) port; MoveChase (:324) has no bridge and stays out.
 wailingSoulsTick = function(creature, guid, remaining)
+    local state = devourerState[guid]
+    -- C++ :313-314 beamAngle += beamAngleDiff; SetFacingTo(beamAngle) -- the
+    -- 13:00 "no facing bridge" claim is stale (bridge live since
+    -- 2026-10-20, lua_creature_events.go). No-target wailings skip the
+    -- sweep: no GetOrientation read bridge, so beamAngle is undefined there.
+    if state ~= nil and state.beamAngle ~= nil then
+        state.beamAngle = state.beamAngle + state.beamAngleDiff
+        creature:SetFacingTo(state.beamAngle)
+    end
     creature:CastSpell(creature, SPELL_WAILING_SOULS)
     if remaining > 1 then
         schedule(guid, "wailingtick", 1000, function()
             wailingSoulTick(creature, guid, remaining - 1)
         end)
     else
-        -- C++ phase-end (:322-324): SetReactState(REACT_AGGRESSIVE) and
-        -- MoveChase have no bridge (skipped); SetDisplayId(DISPLAY_ANGER)
-        -- + SetControlled(false, UNIT_STATE_ROOT) are bridged.
+        -- C++ phase-end (:320-326): SetReactState(REACT_AGGRESSIVE) first
+        -- (:321 -- the 13:00 "no bridge" claim is stale), then
+        -- SetDisplayId(DISPLAY_ANGER) (:322) + SetControlled(false,
+        -- UNIT_STATE_ROOT) (:323); MoveChase (:324) has no bridge, stays out.
+        creature:SetReactState(REACT_AGGRESSIVE)
         creature:SetDisplayId(DISPLAY_ANGER)
         creature:SetRooted(false)
         schedule(guid, "wailing", {60000, 70000}, function()
@@ -337,11 +357,11 @@ end
 -- DoCast(me, SPELL_WAILING_SOULS_BEAM), gated on a target being found
 -- (:287-290); pushes every other armed timer out 18s (:307, delayTimers —
 -- no other events during wailing souls); starts the 15-tick chain at
--- 3000ms (:309). The beam/movement
--- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
--- REACT_PASSIVE :299, motion Clear :304) does not port — triaged out
--- in the facing/react hunts; SetTarget(Empty) :302 is PORTED
--- (2026-10-20, creature:SetTarget bridge) and
+-- 3000ms (:309). The beam choreography ports: SetFacingToObject :288
+-- (atan2 idiom + SetFacingTo), beamAngle SetFacingTo :314 per tick,
+-- SetReactState (REACT_PASSIVE) :299; InterruptNonMeleeSpells :297 and
+-- motion Clear :304 have no bridge and stay out. SetTarget(Empty) :302 is
+-- PORTED (2026-10-20, creature:SetTarget bridge) and
 -- SetControlled(true, UNIT_STATE_ROOT) :305 via creature:SetRooted.
 -- Plain assignment to the forward-declared slot (see above).
 wailingSoulsEvent = function(creature, guid)
@@ -355,10 +375,28 @@ wailingSoulsEvent = function(creature, guid)
     creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
     -- C++ :287 SelectTarget(Random, 0) = threat-list random
     -- (playerOnly=FALSE), like the well/unleashed arms above.
+    -- No-target wailings skip the beam sweep (:291-295): no GetOrientation
+    -- read bridge, so beamAngle is undefined there.
+    state.beamAngle = nil
     local target = randomThreatTarget(creature)
     if target then
+        -- C++ :288 SetFacingToObject(target) -- no direct bridge; the zuljin
+        -- idiom: math.atan2 from the target coords (Unit::GetAbsoluteAngle
+        -- twin), then the SetFacingTo bridge (live since 2026-10-20).
+        local face = math.atan2(target:GetY() - creature:GetY(), target:GetX() - creature:GetX())
+        if face < 0 then face = face + 2 * math.pi end
+        creature:SetFacingTo(face)
+        -- C++ :291-295 beamAngle = GetOrientation() (the new facing);
+        -- beamAngleDiff = +/-PI/30 (PI/2 sweep over the 15s chain).
+        state.beamAngle = face
+        state.beamAngleDiff = math.pi / 30
+        if math.random(2) == 1 then state.beamAngleDiff = -state.beamAngleDiff end
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
+    -- C++ :299 SetReactState(REACT_PASSIVE) -- the 13:00 "no bridge" claim
+    -- is stale: creature:SetReactState is bridged (lua_creature_events.go);
+    -- InterruptNonMeleeSpells (:297) stays out (no bridge).
+    creature:SetReactState(REACT_PASSIVE)
     -- C++ :302 SetTarget(ObjectGuid::Empty) — "remove any target" after the
     -- beam, before the motion Clear; ported 2026-10-20 via the
     -- creature:SetTarget bridge (0 = ObjectGuid::Empty).
@@ -425,13 +463,17 @@ end
 
 -- C++ boss_devourer_of_soulsAI::Reset (:148-155): _Reset() (timer/state
 -- wipe) + SetControlled(false, UNIT_STATE_ROOT) + SetDisplayId(
--- DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) (no bridge — skipped) +
+-- DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) (bridge live since
+-- 2026-10-20 — the 13:00 "no bridge" claim was stale) +
 -- Initialize() (threeFaced latch — its only consumer is the unregistered
 -- ev15 SpellHitTarget arm, so it stays out).
 local function devourerReset(event, creature)
     devourerCancelCombat(event, creature)
     creature:SetRooted(false)
     creature:SetDisplayId(DISPLAY_ANGER)
+    -- C++ :152 SetReactState(REACT_AGGRESSIVE) -- the 13:00 "no bridge"
+    -- claim is stale (creature:SetReactState bridged, lua_creature_events.go).
+    creature:SetReactState(REACT_AGGRESSIVE)
 end
 
 -- C++ KilledUnit (:176-196): player-gated; slay text selected by the live
