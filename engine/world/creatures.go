@@ -702,6 +702,76 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 	}
 }
 
+// isUnitStandState is Unit::IsStandState (Unit.cpp:10551-10555): not a sit
+// state (Unit::IsSitState, Unit.cpp:10542-10549) and neither SLEEP (3) nor
+// KNEEL (8) — DEAD (7) and SUBMERGED (9) count as standing.
+func isUnitStandState(s uint8) bool {
+	switch s {
+	case 1, 2, 4, 5, 6: // SIT, SIT_CHAIR, SIT_LOW_CHAIR, SIT_MEDIUM_CHAIR, SIT_HIGH_CHAIR
+		return false
+	}
+	return s != 3 && s != 8 // SLEEP, KNEEL
+}
+
+// creatureTemplateBytes1 mirrors the spawn query's bytes1 COALESCE
+// (creatures.go: creatures list query): creature_addon.bytes1 wins over
+// creature_template_addon.bytes1, else 0. Only the non-stand bytes are
+// ever read from it — byte 0 is the motion's live StandState.
+func (s *Server) creatureTemplateBytes1(dbGUID uint32) uint32 {
+	var b uint32
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || dbGUID == 0 {
+		return 0
+	}
+	_ = s.WorldStore.DB.QueryRowContext(context.Background(),
+		`SELECT COALESCE(ca.bytes1, cta.bytes1, 0) FROM creature AS c
+		 LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
+		 LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
+		 WHERE c.guid = ?`, dbGUID).Scan(&b)
+	return b
+}
+
+// standCreatureMotionUp mirrors the creature half of
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+// non-friendly non-positive (or dispel-effect) spell hit stands a
+// non-standing unit target up — Unit::SetStandState (Unit.cpp:10557-10570)
+// via SetByteValue on UNIT_FIELD_BYTES_1 byte 0. The live stand byte is
+// the Lua override when StandStateKnown, else the template byte 0; the
+// broadcast merges the cleared byte 0 into the template's other bytes
+// (stand flags / vis flag), and StandStateKnown is set so the next spawn
+// rebuild keeps the value (applyCreatureMotionToSpawn). The player-only
+// SMSG_STANDSTATE_UPDATE leg (Unit.cpp:10564-10568) is N/A for creatures.
+// Returns true when the creature was stood up.
+func (s *Server) standCreatureMotionUp(motion *creatureMotion) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	liveKnown := motion.StandStateKnown
+	live := motion.StandState
+	cacheKnown := motion.bytes1CacheKnown
+	cache := motion.bytes1Cache
+	s.motionMu.Unlock()
+	if !cacheKnown {
+		cache = s.creatureTemplateBytes1(uint32(motion.GUID & 0xFFFFFF))
+		s.motionMu.Lock()
+		motion.bytes1Cache, motion.bytes1CacheKnown = cache, true
+		s.motionMu.Unlock()
+	}
+	if !liveKnown {
+		live = uint8(cache & 0xFF)
+	}
+	if isUnitStandState(live) {
+		return false
+	}
+	s.motionMu.Lock()
+	motion.StandState, motion.StandStateKnown = 0, true
+	full := cache & 0xFFFFFF00
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
+	return true
+}
+
 func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {
 	packet, err := s.buildCreatureValuesUpdate(guid, fields)
 	if err != nil || packet == nil {

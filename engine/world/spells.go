@@ -10146,14 +10146,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// target up. The EVADE-miss arm is vacuous (hitTargets excludes
 		// misses, and C++ needs a live _spellHitTarget); the AtTargetAttacked
 		// half is covered by the combat-state and aggro legs further below.
-		// Creature targets carry no StandState in Go, so only player targets
-		// stand here.
+		// Creature targets stand through standCreatureMotionUp (Unit::
+		// SetStandState twin, Unit.cpp:10557-10570) instead of the player
+		// StandState field.
 		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
 			for _, effectTarget := range hitTargets {
-				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil &&
-					ts.player.StandState != 0 && !s.isFriendlyToPlayer(ts) {
-					ts.player.StandState = 0
-					ts.sendPlayerUpdate()
+				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+					if ts.player.StandState != 0 && !s.isFriendlyToPlayer(ts) {
+						ts.player.StandState = 0
+						ts.sendPlayerUpdate()
+					}
+					continue
+				}
+				if s.player != nil {
+					if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); tm != nil {
+						if s.attackTargetFriendlyToPlayer(effectTarget, combatTarget{Faction: tm.Faction}) {
+							continue
+						}
+						s.server.standCreatureMotionUp(tm)
+					}
 				}
 			}
 		}

@@ -4998,10 +4998,21 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// SpellHitTarget hook (2639-2650), then the per-hit trigger consumer,
 	// mirroring the player-victim arm above. Misses return early above
 	// (hitInfo 0x01), so every hit reaching this site is a non-miss, the
-	// C++ _spellHitTarget-null arm. The stand-up arm is player-only on
-	// the Go paths (the inline twin stands players only,
-	// creature_area_targets.go:441-447).
+	// C++ _spellHitTarget-null arm. The stand-up leg (Spell.cpp:2609-2617)
+	// runs inline below for the creature victim via standCreatureMotionUp;
+	// the player-victim arm stands players above (the inline twin stands
+	// players only, creature_area_targets.go:441-447).
 	if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+		// non-friendly non-positive (or dispel-effect) spell hit stands
+		// the target up — ahead of the AI legs below, matching C++ order
+		// (2609 precedes 2629). Misses return early above (damage == 0),
+		// and this path models no reflect verdict, so the target is live.
+		if !spellIsPositive(hitSpell) || spellHasEffect(hitSpell, spellEffectDispel) {
+			if target.GUID != 0 && !s.server.creatureFriendlyToTarget(caster, target.GUID) {
+				s.server.standCreatureMotionUp(targetMotion)
+			}
+		}
 		s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
 		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
 		s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{target.GUID})

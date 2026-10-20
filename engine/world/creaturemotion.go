@@ -87,6 +87,8 @@ type creatureMotion struct {
 	EmoteStateKnown       bool
 	StandState            uint8 // UNIT_FIELD_BYTES_1 byte 0 live value: Lua CreatureMethods::SetStandState (Creature::SetStandState twin), init from template bytes1 at spawn
 	StandStateKnown       bool
+	bytes1Cache           uint32 // UNIT_FIELD_BYTES_1 template value (creature_addon/template_addon COALESCE), seeded lazily by standCreatureMotionUp; byte 0 is stale once StandStateKnown
+	bytes1CacheKnown      bool
 	SheathState           uint8 // UNIT_FIELD_BYTES_2 byte 0 live value: Lua CreatureMethods::SetSheath (Unit::SetSheath twin, Unit.h:903), init from template bytes2 at spawn
 	SheathStateKnown      bool
 	DisplayID             uint32 // UNIT_FIELD_DISPLAYID live value: Lua CreatureMethods::SetDisplayId (Unit::SetDisplayId twin, Unit.cpp:10601), init from template model at spawn

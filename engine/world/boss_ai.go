@@ -2048,6 +2048,44 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.fireCreatureSpellLinkedTriggers(ctx, m, spellID, targetGUID)
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
+	// non-friendly non-positive (or dispel-effect) spell hit stands the
+	// target up. Placed ahead of the ev14/ev15 legs, matching C++ order
+	// (2609 precedes 2629). The EVADE-miss arm is vacuous (evaded targets
+	// are skipped below; PreprocessTarget, Spell.cpp:2347, nulls
+	// _spellHitTarget on any miss, and this path models no plain-miss
+	// verdict, so every remaining hit target is live). A landed reflect
+	// retargets _spellHitTarget to the caster (Spell.cpp:2350) — the
+	// friendly gate below makes the return trip a no-op, and a bounced
+	// return trip (IMMUNE) nulls it. The AtTargetAttacked half is covered
+	// by the combat tick's aggro when this path's no-damage-model damage
+	// lands.
+	if spellKnown && (!spellIsPositive(spellInfo) || spellHasEffect(spellInfo, spellEffectDispel)) {
+		for _, guid := range hitTargets {
+			if status, reflected := reflectedTargets[guid]; reflected {
+				if status != protocol.SpellMissNone {
+					continue
+				}
+				guid = m.GUID
+			}
+			if evadedTargets[guid] {
+				continue
+			}
+			if guid == 0 || s.creatureFriendlyToTarget(m, guid) {
+				continue
+			}
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				if ts.player.StandState != 0 {
+					ts.player.StandState = 0
+					ts.sendPlayerUpdate()
+				}
+				continue
+			}
+			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.standCreatureMotionUp(tm)
+			}
+		}
+	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2650): the
 	// target-side SpellHit Eluna hook — CREATURE_EVENT_ON_HIT_BY_SPELL
 	// (event 14), args (event, creature, caster, spellid) — fires once
