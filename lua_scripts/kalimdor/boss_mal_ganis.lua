@@ -303,20 +303,17 @@ end
 
 -- C++ JustReachedHome (boss_mal_ganis.cpp:106-110): if (!_defeated)
 -- me->DespawnOrUnsummon(Seconds(1)). The _defeated gate rides the
--- DamageTaken latch (defeated[guid]) ported above; the 1s delay ports
--- as a one-shot CreateLuaEvent via the file's schedule idiom (the
--- pending timer dies with cancelTimers on 1/2/4/23).
+-- DamageTaken latch (defeated[guid]) ported above. The 1s delay is a
+-- fire-and-forget one-shot CreateLuaEvent — C++-exact: C++
+-- DespawnOrUnsummon rides the creature's own despawn timer, not the
+-- EventMap, so a re-engage inside the 1s window does not cancel it
+-- (the tracked schedule idiom would wrongly die with cancelTimers
+-- on ev1 — fixed 2026-10-20).
 local function onReachedHome(event, creature)
-    local guid = creature:GetGUID()
-    if not defeated[guid] then
-        cancelTimers(guid)
-        schedule(guid, "despawn", 1000, function()
+    if not defeated[creature:GetGUID()] then
+        CreateLuaEvent(function()
             creature:Despawn()
-            local per = timers[guid]
-            if per then
-                per["despawn"] = nil
-            end
-        end)
+        end, 1000)
     end
 end
 
