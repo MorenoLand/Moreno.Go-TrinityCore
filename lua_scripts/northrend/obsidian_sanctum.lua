@@ -313,7 +313,15 @@ local powerAuraByEntry = {
 -- RemoveAurasDueToSpell(spellId) leg are PORTED — creature:RemoveAura
 -- is bridged (stale "only the Talk arm is bridgeable" claim retracted).
 -- DoRemoveAurasDueToSpellOnPlayers + Twilight Revenge on Sartharion
--- ride instance/player-list legs with no bridges (documented).
+-- ride instance/player-list legs (documented). Precision on the
+-- player-loop arm (obsidian_sanctum.cpp drake JustDied): the
+-- player:RemoveAura / player:HasAura / GetPlayersInWorld pieces ARE
+-- bridged, but the arm stays out — the !GetVictim() gate has no
+-- player-surface bridge, and the arm's two player self-cast de-phase
+-- spells (TWILIGHT_SHIFT_REMOVAL_ALL / TWILIGHT_RESIDUE) have no
+-- player:CastSpell bridge, so a removals-only port would strip the
+-- aura without the de-phase mechanic and would hit players the C++
+-- keeps phased.
 local function dragonDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)

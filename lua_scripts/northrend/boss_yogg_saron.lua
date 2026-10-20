@@ -114,8 +114,10 @@
 -- Talk arm (summons.Despawn + _JustDied() only); EnterEvadeMode
 -- Talk(WHISPER_VOICE_PHASE_1_WIPE, player) rides a
 -- player-loop wipe leg (RemoveAurasDueToSpell SPELL_SANITY
--- / SPELL_INSANE) gated on PHASE_ONE — no wipe / aura /
--- phase bridges; timer Talks (cross-creature
+-- / SPELL_INSANE — PORTED via GetPlayersInWorld +
+-- player:RemoveAura in yoggSaronReset/yoggSaronDied; the removals
+-- are ungated in C++, only the whisper is PHASE_ONE-gated, and the
+-- whisper keeps no phase bridge); timer Talks (cross-creature
 -- EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE on
 -- EVENT_EXTINGUISH_ALL_LIFE; EMOTE_YOGG_SARON_MADNESS +
 -- SAY_YOGG_SARON_MADNESS on EVENT_ILLUSION) ride the
@@ -179,6 +181,8 @@ local SAY_YOGG_SARON_DEATH = 6
 local SPELL_SHADOWY_BARRIER_YOGG = 63894
 local SPELL_KNOCK_AWAY = 64022
 local SPELL_IN_THE_MAWS_OF_THE_OLD_GOD = 64184
+local SPELL_SANITY = 63050
+local SPELL_INSANE = 63120
 
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
 -- Talk(SAY_SARA_AGGRO) + three ScheduleEvent legs — only
@@ -197,6 +201,26 @@ local function saraKilledUnit(event, creature, victim)
     end
 end
 
+-- C++ boss_yogg_saronAI::EnterEvadeMode (:478-490) + JustDied (:973-981):
+-- player-loop RemoveAurasDueToSpell(SPELL_SANITY) /
+-- RemoveAurasDueToSpell(SPELL_INSANE), ungated in both (no alive /
+-- distance gate in C++). Called from ev23 (EnterEvadeMode; ev23 also
+-- pre-fires on the Go death path, covering JustDied) and ev4
+-- (JustDied, belt-and-braces — the removal is idempotent). The
+-- respawn-path ev23 over-fire is a no-op: players never carry these
+-- auras outside the fight. The PHASE_ONE-gated
+-- Talk(WHISPER_VOICE_PHASE_1_WIPE, player) has no phase bridge and
+-- stays documented-only.
+local function clearSanityAuras(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_SANITY)
+            p:RemoveAura(SPELL_INSANE)
+        end
+    end
+end
+
 -- C++ JustDied (boss_yogg_saronAI, PassiveAI):
 -- Talk(SAY_YOGG_SARON_DEATH), then cross-creature kill /
 -- disappear / evade legs and player sanity-aura removal —
@@ -204,6 +228,7 @@ end
 -- JustDied-Talk precedent.
 local function yoggSaronDied(event, creature, killer)
     creature:Talk(SAY_YOGG_SARON_DEATH)
+    clearSanityAuras(creature)
 end
 
 -- C++ boss_yogg_saronAI::Reset :931-945 — DoCast(me,
@@ -219,6 +244,7 @@ local function yoggSaronReset(event, creature)
         creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_YOGG)
         creature:CastSpell(creature, SPELL_KNOCK_AWAY)
     end
+    clearSanityAuras(creature)
 end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
