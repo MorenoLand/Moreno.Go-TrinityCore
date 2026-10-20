@@ -30,11 +30,10 @@
 -- the port schedules from OnEnterCombat(1) and cancels on
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) (maiden convention).
 -- Unmodeled: the 5s home leash check (home-position 2D distance >
--- 50yd -> EnterEvadeMode + Talk(YELL_EVADE=1)) — no HomePosition
--- bridge on the luaMotionCreature surface (X/Y/Z reads only;
--- GetDistance2d needs two objects — av_marshal / balinda / drekthar
--- / galvangar precedent); evade still re-arms through OnReset(23)
--- when the engine leashes the creature.
+-- 50yd -> EnterEvadeMode + Talk(YELL_EVADE=1)) — the leash needs
+-- EnterEvadeMode (no bridge); creature:GetHomePosition() IS bridged
+-- (dfdd8cc0), so the verdict rests on the evade leg alone; evade still
+-- re-arms through OnReset(23) when the engine leashes the creature.
 -- Unmodeled: YELL_SPELL=3 (declared but unused by this AI) and the
 -- commented-out YELL_RESPAWN1/YELL_RESPAWN2 (-1810010/-1810011,
 -- "Missing in database" in the C++ comments).

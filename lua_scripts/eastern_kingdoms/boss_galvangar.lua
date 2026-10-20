@@ -33,10 +33,10 @@
 -- in-loop casting-state gate and the per-event in-loop re-check are
 -- dropped (maiden precedent).
 -- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
--- EnterEvadeMode + Talk(SAY_EVADE=1)) — no HomePosition bridge on the
--- luaMotionCreature surface (X/Y/Z reads only; GetDistance2d needs two
--- objects — av_marshal / balinda / drekthar precedent); evade still
--- re-arms through OnReset(23) when the engine leashes the creature.
+-- EnterEvadeMode + Talk(SAY_EVADE=1)) — the leash needs EnterEvadeMode
+-- (no bridge); creature:GetHomePosition() IS bridged (dfdd8cc0), so the
+-- verdict rests on the evade leg alone; evade still re-arms through
+-- OnReset(23) when the engine leashes the creature.
 -- Unmodeled: DoAction(ACTION_BUFF_YELL=-30001) -> Talk(SAY_BUFF=2) —
 -- driven by the BattlegroundAV script; no Battleground-to-Lua
 -- DoAction dispatch bridge (balinda precedent).

@@ -46,8 +46,8 @@
 -- EVENT_MIRRORED_SOUL (:259-261): DoCastAOE(SPELL_MIRRORED_SOUL_TARGET_SELECTOR
 -- 69048) = self-cast; Talk(EMOTE_MIRRORED_SOUL 5) after the cast (C++
 -- order kept); re-arm {15000,30000}.
--- EVENT_WELL_OF_SOULS (:264-266): SelectTarget(Random, 0) -> randomPlayer
--- (the archavon GetPlayersInWorld precedent); DoCast(target,
+-- EVENT_WELL_OF_SOULS (:264-266): SelectTarget(Random, 0) ->
+-- randomThreatTarget (threat-list random, playerOnly=FALSE); DoCast(target,
 -- SPELL_WELL_OF_SOULS 68820), non-triggered; re-arm 20000 unconditional
 -- (the SelectTarget if only wraps the cast).
 -- EVENT_UNLEASHED_SOULS (:269-275): SelectTarget(Random, 0) ->
@@ -223,25 +223,6 @@ local function randomThreatTarget(creature)
     return targets[math.random(#targets)]
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on the
--- same map/instance, no distance filter (the keleseth / thorim
--- GetPlayersInWorld precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
-end
-
 -- C++ EVENT_PHANTOM_BLAST (:255-256): DoCastVictim(SPELL_PHANTOM_BLAST),
 -- victim-cast, non-triggered; re-arm unconditional, 5000ms.
 local function phantomBlastTick(creature, guid)
@@ -319,11 +300,19 @@ end
 -- re-arms at {60000,70000} (:326). The beamAngle
 -- Forward-declared: the 60-70s re-arm closure in wailingSoulTick below
 -- fires after this chunk loads, and the local def lands later in the file.
+-- The wailing pair is cyclic (the EVENT arm starts the tick chain; the
+-- chain's phase-end re-arms the event), so both names are forward-declared
+-- and plain-assigned below (tharon_ja/gal_darah idiom). A `local function`
+-- here would create a second slot shadowing the forward declare — the
+-- 13:00 tick's `local function wailingSoulsTick` did exactly that, so the
+-- later EVENT-arm assignment overwrote the 3-arg chain: the 15-tick chain
+-- never ran and the full wailing arm re-fired every 3s.
 local wailingSoulsTick
+local wailingSoulsEvent
 -- facing sweep (:314) has no bridge; the phase-end restore legs
 -- (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot + MoveChase, :322-324) have
 -- no bridge and do not port.
-local function wailingSoulTick(creature, guid, remaining)
+wailingSoulsTick = function(creature, guid, remaining)
     creature:CastSpell(creature, SPELL_WAILING_SOULS)
     if remaining > 1 then
         schedule(guid, "wailingtick", 1000, function()
@@ -336,7 +325,7 @@ local function wailingSoulTick(creature, guid, remaining)
         creature:SetDisplayId(DISPLAY_ANGER)
         creature:SetRooted(false)
         schedule(guid, "wailing", {60000, 70000}, function()
-            wailingSoulsTick(creature, guid)
+            wailingSoulsEvent(creature, guid)
         end)
     end
 end
@@ -354,9 +343,8 @@ end
 -- in the facing/react hunts; SetTarget(Empty) :302 is PORTED
 -- (2026-10-20, creature:SetTarget bridge) and
 -- SetControlled(true, UNIT_STATE_ROOT) :305 via creature:SetRooted.
--- Assigned to the forward-declared upvalue (moam precedent): `local function`
--- here would shadow it and leave the re-arm closure bound to nil.
-wailingSoulsTick = function(creature, guid)
+-- Plain assignment to the forward-declared slot (see above).
+wailingSoulsEvent = function(creature, guid)
     local state = devourerState[guid]
     if state == nil then
         return
@@ -365,7 +353,9 @@ wailingSoulsTick = function(creature, guid)
     creature:Talk(SAY_FACE_WAILING_SOUL)
     creature:Talk(EMOTE_WAILING_SOUL)
     creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
-    local target = randomPlayer(creature)
+    -- C++ :287 SelectTarget(Random, 0) = threat-list random
+    -- (playerOnly=FALSE), like the well/unleashed arms above.
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
@@ -411,7 +401,7 @@ local function devourerEnterCombat(event, creature, target)
         unleashedSoulsTick(creature, guid)
     end)
     schedule(guid, "wailing", {60000, 70000}, function()
-        wailingSoulsTick(creature, guid)
+        wailingSoulsEvent(creature, guid)
     end)
 end
 

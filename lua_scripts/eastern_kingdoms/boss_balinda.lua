@@ -41,9 +41,9 @@
 -- so its timer chain is documented-only rather than a no-op dead loop.
 -- Unmodeled: EVENT_CHECK_RESET (home-position 2D distance > 50yd ->
 -- EnterEvadeMode + Talk(SAY_EVADE=1), plus the elemental's leash arm) —
--- no HomePosition bridge on the luaMotionCreature surface (X/Y/Z reads
--- only; GetDistance2d needs two objects — av_marshal precedent); evade
--- still re-arms through OnReset(23) when the engine leashes the
+-- the leash needs EnterEvadeMode (no bridge); creature:GetHomePosition()
+-- IS bridged (dfdd8cc0), so the verdict rests on the evade leg alone;
+-- evade still re-arms through OnReset(23) when the engine leashes the
 -- creature. Unmodeled: DoAction(ACTION_BUFF_YELL=-30001) -> Talk(0) —
 -- driven by the BattlegroundAV script (BattlegroundAV.cpp), and there is
 -- no Battleground-to-Lua DoAction dispatch bridge. SAY_SALVATION=2 is
