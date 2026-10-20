@@ -314,7 +314,7 @@ local function feugenSpellHit(event, creature, caster, spellId)
     local dx = creature:GetX() - hx
     local dy = creature:GetY() - hy
     local dz = creature:GetZ() - hz
-    local farFromHome = dx * dx + dy * dy + dz * dz > OVERLOAD_DISTANCE * OVERLOAD_DISTANCE
+    local farFromHome = dx * dx + dy * dy + dz * dz >= OVERLOAD_DISTANCE * OVERLOAD_DISTANCE
     if not feugenFeign[guid] and creature:IsInCombat() and farFromHome then
         if not feugenOverload[guid] then
             feugenOverload[guid] = true
