@@ -75,7 +75,7 @@
 --   timers firing unconditionally is C++-net-equal, not a missing leg.
 --   SpellHit arm PORTED 2026-10-16 (event 14,
 --   CREATURE_EVENT_ON_HIT_BY_SPELL — the earlier "no SpellHit bridge"
---   claim was stale; engine/world/spells.go:9477, boss_ai.go:2033):
+--   claim was stale; engine/world/spells.go:11709-11730, boss_ai.go:2052-2096):
 --   case SPELL_DARK_TRANSFORMATION_T (70895, :622-625) —
 --   DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered; the
 --   InterruptNonMeleeSpells(true) leg has no bridge on the
@@ -172,7 +172,7 @@
 -- (timer arms ported above); the fanatic SpellHit transformation arm
 -- (:622-625) is PORTED 2026-10-16 — event 14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
--- (engine/world/spells.go:9477, boss_ai.go:2033), so the earlier
+-- (engine/world/spells.go:11709-11730, boss_ai.go:2052-2096), so the earlier
 -- "no SpellHit bridge" claim was stale; their remaining SpellHit legs
 -- (:626-660 / :724-752) stay out per-arm (UpdateEntry,
 -- SetReactState/AttackStop, SetFlag(UNIT_FIELD_FLAGS), the
@@ -543,8 +543,8 @@ local function fanaticSpellHit(event, creature, caster, spellId)
     elseif spellId == SPELL_DARK_TRANSFORMATION then
         -- C++ :626-629 — DoCastSelf(SPELL_FULL_HEAL 17683) non-triggered
         -- fires on the self-cast hit (event 14 delivers self-cast hits,
-        -- engine/world/boss_ai.go:2033 — only reflected targets are
-        -- skipped); the me->UpdateEntry(NPC_DEFORMED_FANATIC) leg stays
+        -- engine/world/boss_ai.go:2052-2096 — evaded targets and bounced
+        -- reflects never fire; a landed reflect fires on the caster); the me->UpdateEntry(NPC_DEFORMED_FANATIC) leg stays
         -- out (no UpdateEntry bridge), so the creature heals without
         -- changing form.
         creature:CastSpell(creature, SPELL_FULL_HEAL)

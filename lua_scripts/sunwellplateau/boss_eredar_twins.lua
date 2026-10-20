@@ -26,7 +26,7 @@
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. The "event 15 never fires — no bridge"
 -- claim is STALE — CREATURE_EVENT_ON_SPELL_HIT_TARGET is bridged
--- (boss_ai.go:2033-2055; the arugal precedent). The SpellHitTarget
+-- (boss_ai.go:2097-2115; the arugal precedent). The SpellHitTarget
 -- touched-spell arms stay unmodeled on hit-target-enumeration grounds:
 -- C++ fires SpellHitTarget per ACTUAL hit unit of each cast, while Go
 -- reports the cast's single target — the shadow-blades / flame-sear /

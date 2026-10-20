@@ -606,7 +606,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// clears the root leg of UNIT_STATE_NOT_MOVE (Unit.h:256) on the
 	// handler creature. The engine honors motion.ScriptRooted in the
 	// chase-pause gate (ChaseMovementGenerator.cpp:98-106) and the
-	// waypoint-launch gate (WaypointMovementGenerator.cpp:126-132), so
+	// waypoint-launch gate (WaypointMovementGenerator.cpp:141), so
 	// feign-death / phase-change root arms (stalagg, feugen, thekal,
 	// kologarn) port with real effect; melee swings still fire while
 	// rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING only,

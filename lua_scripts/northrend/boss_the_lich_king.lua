@@ -70,8 +70,8 @@
 -- SPELL_HARVESTED_SOUL 72679 (:813-816), gated me->IsInCombat() &&
 -- !IsHeroic() — stays unmodeled on trigger-path grounds. The C++ arm
 -- fires when the boss is HIT BY the spell, i.e. Eluna event 14
--- (CreatureEventOnHitBySpell — BRIDGED: boss_ai.go:2033
--- creature-caster path + spells.go:9469 player-caster path; the
+-- (CreatureEventOnHitBySpell — BRIDGED: boss_ai.go:2052-2096
+-- creature-caster path + spells.go:11709-11730 player-caster path; the
 -- attumen/terestian/halazzi precedent; the 2026-10-17 "no event-14
 -- bridge" correction was itself wrong and is retracted here). But the
 -- SOLE caster of 72679 is the harvest-soul / in-frostmourne-room

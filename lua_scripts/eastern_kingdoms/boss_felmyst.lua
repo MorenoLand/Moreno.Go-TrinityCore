@@ -109,8 +109,8 @@
 --   SummonCreature has no Lua summon bridge (gurtogg class) —
 --   STRAND. The "event 15 never fires" label was doubly stale:
 --   the C++ hook is void SpellHit = event 14
---   (CreatureEventOnHitBySpell, bridged — boss_ai.go:2033 +
---   spells.go:9469; the 45714 caster is the fog-forced player, so
+--   (CreatureEventOnHitBySpell, bridged — boss_ai.go:2052-2096 +
+--   spells.go:11709-11730; the 45714 caster is the fog-forced player, so
 --   the player-caster path would fire it), but the arm's load-bearing
 --   SummonCreature leg keeps it unmodeled. Corrected 2026-10-17.
 -- - JustSummoned's NPC_DEAD AttackStart/random + DoZoneInCombat

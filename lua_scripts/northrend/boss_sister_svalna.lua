@@ -104,7 +104,7 @@
 --   (:895-921: setDeathState(JUST_RESPAWNED) + UpdateEntry remap +
 --   DoCastSelf(SPELL_UNDEATH 70089, true)) is blocked on the
 --   setDeathState/UpdateEntry machine legs (no bridges) — event 14
---   OnHitBySpell is bridged (boss_ai.go:2033) but the cast alone,
+--   OnHitBySpell is bridged (boss_ai.go:2052-2096) but the cast alone,
 --   without the entry swap, would be C++-inexact — documented-only.
 -- EVENT_BRANDON_DIVINE_SHIELD (500ms poll +
 --   HealthBelowPct(20) gate) and the IsUndead random-target legs
@@ -439,7 +439,7 @@ RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 23, svalnaReset)
 --     me->HasAura(SPELL_AETHER_SHIELD (71463)))
 --   { me->RemoveAurasDueToSpell(SPELL_AETHER_SHIELD);
 --     Talk(EMOTE_SVALNA_BROKEN_SHIELD (8), caster); }
--- Event 14 is bridged (boss_ai.go:2033 creature hits, spells.go:9469
+-- Event 14 is bridged (boss_ai.go:2052-2096 creature hits, spells.go:11709-11730
 -- player hits; args = (event, creature, caster, spellId)); HasAura /
 -- RemoveAura / Talk(id, target) all bridged. Idempotent: the aura is
 -- gone on re-fire. The stale "event 15 never fires / no aura bridge"

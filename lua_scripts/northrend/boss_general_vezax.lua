@@ -88,7 +88,7 @@
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
 -- achievement_shadowdodger below) — stays out on spell-id-key grounds.
 -- Event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) IS bridged
--- (boss_ai.go:2033-2055; the arugal precedent) and the EVENT_SHADOW_CRASH
+-- (boss_ai.go:2097-2115; the arugal precedent) and the EVENT_SHADOW_CRASH
 -- 62660 cast itself IS ported above, but Go fires event 15 with the CAST
 -- spellId (62660) while the C++ arm keys on 62659, the triggered
 -- sub-spell applied by 62660's effect — keying the arm on 62660 would

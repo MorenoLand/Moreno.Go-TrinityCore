@@ -56,7 +56,7 @@
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- The SpellHitTarget override: the "event 15 never fires" claim is
 -- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
--- (boss_ai.go:2033-2055; the arugal precedent). Ported: the shatter
+-- (boss_ai.go:2097-2115; the arugal precedent). Ported: the shatter
 -- performing-clear (gruulSpellHitTarget; the MoveChase correction leg
 -- has no movement bridge and stays out). Unmodeled: the ground-slam
 -- knockback arms (player hit by 33525 -> urand magnetic pull 28337 /
@@ -251,7 +251,7 @@ end
 -- C++ boss_gruul::SpellHitTarget (:125-159): the SPELL_SHATTER arm
 -- clears m_bPerformingGroundSlam when the shatter lands. Event 15
 -- (CREATURE_EVENT_ON_SPELL_HIT_TARGET) fires on the caster's bindings
--- (boss_ai.go:2033-2055; the arugal precedent); the shatter cast is a
+-- (boss_ai.go:2097-2115; the arugal precedent); the shatter cast is a
 -- self-cast so the reported target is Gruul himself, but the C++
 -- performing-clear does not gate on target type. The ground-slam
 -- knockback arm (33525 -> 28337/24199 self-casts on the hit PLAYER)

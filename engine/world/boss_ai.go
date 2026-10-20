@@ -2058,16 +2058,35 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// carries no AI hook — the earlier per-effect firing misattributed
 	// DoTargetSpellHit. The boolean veto gates only the empty
 	// ScriptedAI::SpellHit base (CreatureAI.h:143), so it is discarded.
-	// Reflected targets are skipped: C++ reflect keeps _spellHitTarget
-	// away from the reflector (Spell.cpp:2350), so the hook never fires
-	// there; misses never fire either (PreprocessTarget, Spell.cpp:2347:
-	// _spellHitTarget stays null on a miss), matching the miss-filtered
-	// hitTargets. The Lua signature exposes no effect index, so firing
-	// once per target is exact, not an approximation — same as the
-	// player path (spells.go).
+	// A miss nulls _spellHitTarget in PreprocessTarget (Spell.cpp:2347),
+	// so the hook never fires there: SPELL_MISS_EVADE verdicts are
+	// skipped below like the reflect verdicts (the ev15 leg and the
+	// trigger consumer already skip both). The Lua signature exposes no
+	// effect index, so firing once per target is exact, not an
+	// approximation — same as the player path (spells.go).
 	if spellKnown {
 		for _, guid := range hitTargets {
-			if _, reflected := reflectedTargets[guid]; reflected {
+			if status, reflected := reflectedTargets[guid]; reflected {
+				// Reflect return trip (Spell.cpp:2350): a landed reflect
+				// (ReflectResult == SPELL_MISS_NONE) retargets
+				// _spellHitTarget to the caster itself, so the caster's
+				// own AI takes the target-side SpellHit leg right here
+				// (ev14, creature=caster, caster=caster) plus the
+				// caster-side SpellHitTarget leg (ev15, target=caster)
+				// — once per reflected target, in target-container
+				// order. The reflector itself never fires
+				// (_spellHitTarget points away from it). A bounced
+				// return trip (IMMUNE) nulls _spellHitTarget — no fire
+				// at all. The return-trip damage stays out (no-damage
+				// model delta); only the AI notification legs are
+				// modeled.
+				if status == protocol.SpellMissNone {
+					s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
+					s.fireCreatureSpellHitTarget(ctx, m, m.GUID, spellID)
+				}
+				continue
+			}
+			if evadedTargets[guid] {
 				continue
 			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
@@ -2083,6 +2102,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// 231-238 — it only vetoes the empty ScriptedAI arm, the same ruling
 	// as the event-14 bridge). The hit-target-side SpellHit leg (event 14)
 	// fires in the block above; the gameobject-caster arm has no Go model.
+	// The reflect return-trip ev15 self-fire (target=caster) rides the
+	// ev14 loop above, once per reflected target — not this block.
 	// This runs before the
 	// DoTriggersOnSpellHit consumer below, matching C++ order (2639-2650
 	// precede 2652). Gated on spellKnown and a real hit target: C++ only

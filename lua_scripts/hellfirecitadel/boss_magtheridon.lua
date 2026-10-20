@@ -119,7 +119,7 @@
 -- dark-mending pick (no creature-enumeration bridge) unmodeled;
 -- the "no SpellHitTarget bridge / event 15 never fires" claim is
 -- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
--- (boss_ai.go:2033-2055; the arugal precedent). The boss's
+-- (boss_ai.go:2097-2115; the arugal precedent). The boss's
 -- SpellHit(SPELL_SHADOW_CAGE 30168) -> Talk(SAY_BANISHED) arm
 -- (:187-191) is event-14-side and is ALREADY ported
 -- (magtheridonSpellHit below, registered :364; the muru-portal

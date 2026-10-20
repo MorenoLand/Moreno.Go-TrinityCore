@@ -3736,7 +3736,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MoveType == 2 && !s.canFormationLeaderStartMoving(ctx, motion) {
 		return
 	}
-	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:126-132)
+	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:141)
 	// and RandomMovementGenerator::DoUpdate (RandomMovementGenerator.cpp:204-210):
 	// UNIT_STATE_NOT_MOVE (or LOST_CONTROL) / a preventing cast interrupts the
 	// generator and no new leg is launched until the state clears. Go's atomic
