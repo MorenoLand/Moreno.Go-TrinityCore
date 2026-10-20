@@ -181,7 +181,7 @@ local function onRainOfBones(creature, guid)
         return
     end
     -- C++ EVENT_RAIN_OF_BONES: ResetThreatList() before the random-target
-    -- cast (bridged lua_objects.go:389); SetFacingToObject still has no
+    -- cast (bridged lua_creature_events.go); SetFacingToObject still has no
     -- bridge.
     creature:ClearThreatList()
     local target = randomAlivePlayer(creature)

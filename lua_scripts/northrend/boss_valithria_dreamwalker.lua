@@ -169,9 +169,15 @@ end
 local function randomPlayer(creature, minDist, manaOnly)
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    -- C++ Map* identity (same map + same instance): the moroes.lua
+    -- GetMapId/GetInstanceId precedent. creature:GetMap() has no
+    -- handler-surface bridge and its fresh Map tables never compare
+    -- equal, so the old form nil-called and broke the whole filter.
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
     for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetGUID() ~= victimGuid and p:IsAlive() and creature:GetMap() == p:GetMap()
+        if p:GetGUID() ~= victimGuid and p:IsAlive()
+                and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
                 and creature:GetDistance(p) > minDist
                 and (not manaOnly or p:GetPowerType() == POWER_MANA) then
             candidates[#candidates + 1] = p

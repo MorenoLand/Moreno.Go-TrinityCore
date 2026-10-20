@@ -214,8 +214,9 @@ local function onSaberLash(creature, guid)
 end
 
 -- C++ shock (human/enrage phases): random target; earthshock when the
--- target is casting (player IsCasting bridge), flameshock otherwise.
--- The {10s,15s} re-arm lives inside the if(target) leg (nil target
+-- target is casting, flameshock otherwise. creature-side IsCasting is the
+-- vacuous-false twin (no cast state on handler creatures); players carry
+-- the live bridge (lua_player.go:619). The {10s,15s} re-arm lives inside the if(target) leg (nil target
 -- retries in 1s — C++ leaves ShockTimer at 0, next tick retries).
 local function onShock(creature, guid)
     local target = randomThreatTarget(creature)

@@ -201,7 +201,7 @@ local onTransformBack
 
 -- C++ panther transform: self-cast 24190 (non-triggered), vanish
 -- visual 24222, vanish 24223; ResetThreatList PORTED 2026-10-19 via
--- creature:ClearThreatList (bridged lua_objects.go:389); the passive /
+-- creature:ClearThreatList (bridged lua_creature_events.go); the passive /
 -- flag / equipment / movement arms still have no bridge. The C++
 -- EVENT_TRANSFORM was scheduled with
 -- phase PHASE_ONE, so the 1s vanish chain only runs in troll form.
@@ -255,7 +255,7 @@ local function onTransform(creature, guid)
     -- they keep firing through the vanish chain (see cancelKeys note).
     creature:CastSpell(creature, SPELL_PANTHER_TRANSFORM)
     -- C++ EVENT_TRANSFORM: ResetThreatList() between the transform and
-    -- vanish casts (bridged lua_objects.go:389); the AttackStop /
+    -- vanish casts (bridged lua_creature_events.go); the AttackStop /
     -- flag / equipment arms still have no bridge (the REACT_PASSIVE
     -- arm is PORTED 2026-10-20 — creature:SetReactState).
     creature:ClearThreatList()

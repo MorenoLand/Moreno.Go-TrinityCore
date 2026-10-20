@@ -191,6 +191,60 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
 		return []any{true}, nil
 	}
+	// ClearThreatList is UnitMethods::ClearThreatList
+	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat via
+	// Unit::GetThreatManager — Go's ClearThreat twin. Handler-surface twin
+	// of the session-bound bridge (lua_objects.go:401): nightbane's
+	// rain-of-bones, zuljin's EnterPhase and jeklik's DamageTaken phase-2
+	// ports call it from RegisterCreatureEvent handlers, where the
+	// session bridge is unreachable and the call nil-called.
+	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		return nil, nil
+	}
+	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554):
+	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are fire-and-forget
+	// (no in-flight cast state on the creature — the 2026-10-20 caststate
+	// axiom), so the handler-surface twin is the constant false twin of the
+	// session binding (lua_objects.go:342). Without it, ports calling
+	// target:IsCasting() on a non-player threat victim (halazzi's shock
+	// arm) nil-call and abort the timer chain mid-flight.
+	methods["IsCasting"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{false}, nil
+	}
+	// AddLootMode is CreatureMethods::AddLootMode (CreatureMethods.h:1300-1304):
+	// Creature::AddLootMode (Creature.h:227) sets the mode bits on
+	// Creature::m_LootMode. Handler-surface twin of the session binding
+	// (lua_objects.go:906): yogg-saron's ev14 Val'anyr SpellHit arm calls it
+	// from a RegisterCreatureEvent handler, where the session bridge is
+	// unreachable and the call nil-called.
+	methods["AddLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.LootMode |= uint16(mode)
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// WorldObject sound methods (PlayMusic/PlayDirectSound/PlayDistanceSound)
+	// are Eluna LuaWorldObject methods (WorldObjectMethods.h:1161-1242);
+	// creatures have no session, so they broadcast with a nil source like
+	// the creature-text sound arm. Handler-surface registration of the same
+	// helper the session surface uses (lua_objects.go:1036): the opera
+	// wolfDied and gurtogg berserk ports call creature:PlayDirectSound from
+	// RegisterCreatureEvent handlers, where the session-only registration
+	// nil-called and aborted the arm before its cleanup legs.
+	luaWorldObjectSoundMethods(s, nil, motion.GUID, methods)
+	// GetGUIDLow is ObjectMethods::GetGUIDLow: the counter half of the
+	// packed GUID. Handler-surface twin of the session binding
+	// (lua_objects.go:196): the blackfathom_deeps ports key their timer
+	// tables on it from RegisterCreatureEvent handlers, where the
+	// session-only registration nil-called.
+	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(motion.GUID & 0x00FFFFFF) })
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
