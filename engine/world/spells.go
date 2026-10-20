@@ -11822,7 +11822,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
 			for _, effectTarget := range hitTargets {
-				if effectTarget != 0 && effectTarget != s.playerGUID {
+				// Creature targets only (unit/pet/vehicle highs): a player
+				// victim engages the caster itself in C++
+				// (Unit::AtTargetAttacked), which has no creature-aggro twin,
+				// and the low-GUID DB fallback must not see a player counter.
+				high := uint16(effectTarget >> 48)
+				if effectTarget != 0 && effectTarget != s.playerGUID && (high == 0xF130 || high == 0xF140 || high == 0xF150) {
 					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
 				}
 			}
@@ -11831,9 +11836,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// `unit` (Spell.cpp:2609-2617). hitTargets holds the caster on
 			// the return trip, so the reflector is aggroed from the
 			// reflect's miss entry; a bounced return trip (ReflectStatus
-			// != NONE) nulls _spellHitTarget and engages nothing.
+			// != NONE) nulls _spellHitTarget and engages nothing. A player
+			// reflector is skipped: C++ engages the reflector itself
+			// (target->EngageWithTarget), which has no creature-aggro twin,
+			// and triggerCreatureAggro's low-GUID DB fallback would
+			// otherwise load a wrong creature on the player's counter.
 			for _, miss := range missStatus {
-				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone && miss.TargetGUID != 0 {
+				high := uint16(miss.TargetGUID >> 48)
+				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone && miss.TargetGUID != 0 &&
+					(high == 0xF130 || high == 0xF140 || high == 0xF150) {
 					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
 				}
 			}
