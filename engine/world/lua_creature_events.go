@@ -1061,6 +1061,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetHomePosition is CreatureMethods::GetHomePosition
+	// (CreatureMethods.h:630-644): x, y, z, o from the creature's home
+	// position — twin of the session-surface bridge (lua_objects.go) for
+	// event handlers, whose wrappers close over the motion directly.
+	methods["GetHomePosition"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		hx, hy, hz, o := motion.HomeX, motion.HomeY, motion.HomeZ, motion.Orientation
+		s.motionMu.Unlock()
+		return []any{hx, hy, hz, o}, nil
+	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
 	methods["SetHomePosition"] = func(_ context.Context, args []any) ([]any, error) {

@@ -16,7 +16,8 @@
 -- hits boss_thaddius.cpp only (loader carries only the decl/call
 -- lines); zero sql/ hits. No feugen lua existed.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
+-- OnTargetDied, 4 OnDied, 5 OnSpawn, 14 OnHitBySpell, 23 OnReset.
+-- Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. Victim gating: C++ KilledUnit checks
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType()
@@ -75,16 +76,19 @@
 -- despawn/respawn cycle — see feugenReset); the
 -- C++ ACTION_FEUGEN_REVIVED revive machine is unbridged, so a
 -- feigned feugen stays feigned until killed/despawned — partial
--- port, documented; SpellHit — the whole tesla-beam
--- machine (SPELL_FEUGEN_TESLA_PERIODIC 28110 -> overload state +
--- creatureCaster Talk(EMOTE_TESLA_LINK_BREAKS 0) + CastSpell(target,
--- SPELL_TESLA_SHOCK 28099, triggered) / the refresh-beam recast of
--- SPELL_FEUGEN_CHAIN_VISUAL 28111) — event 14 (OnHitBySpell) DOES
--- fire (boss_ai.go); the arm stays out because Talk/CastStop/
--- CastSpell all run on creatureCaster, which the event does not
--- pass (no caster bridge), and SetImmuneToPC + the random-target
--- leg are unbridged; UpdateAI's isFeignDeath early-return is
--- modeled via the Lua latch (see staticFieldTick).
+-- port, documented; SpellHit — the tesla-beam machine
+-- (npc_feugenAI::SpellHit, boss_thaddius.cpp:853-886) IS ported
+-- (see feugenSpellHit below — event 14 passes the caster as a full
+-- creature object, boss_ai.go:2074; the stale "no caster bridge"
+-- rationale is retracted). Upstream quirk preserved: the C++
+-- overload leg removes SPELL_STALAGG_CHAIN_VISUAL (28096) from
+-- feugen (boss_thaddius.cpp:870), not the feugen visual — ported
+-- as-written. Trigger caveat: nothing in the C++ tree casts
+-- SPELL_FEUGEN_TESLA_PERIODIC 28110 (whole-src grep finds only the
+-- enum decl and the SpellHit check; the tesla coil's UpdateAI is
+-- empty), so the arm is faithful but currently unfired;
+-- UpdateAI's isFeignDeath early-return is modeled via the Lua latch
+-- (see staticFieldTick).
 
 local ENTRY_FEUGEN = 15930
 
@@ -98,6 +102,41 @@ local timers = {}
 -- Feign-death latch, declared before every function that touches it
 -- (staticFieldTick's isFeignDeath gate reads it).
 local feugenFeign = {}
+
+-- Tesla-beam SpellHit state (boss_thaddius.cpp:853-886,
+-- npc_feugenAI::SpellHit): isOverloading / refreshBeam latches,
+-- declared before every function that touches them.
+local feugenOverload = {}
+local feugenRefreshBeam = {}
+
+local SPELL_FEUGEN_TESLA_PERIODIC = 28110
+local SPELL_STALAGG_CHAIN_VISUAL = 28096
+local SPELL_FEUGEN_CHAIN_VISUAL = 28111
+local SPELL_TESLA_SHOCK = 28099
+local EMOTE_TESLA_LINK_BREAKS = 0
+local OVERLOAD_DISTANCE = 28
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+
+-- C++ SelectTarget(SelectTargetMethod::Random): random alive player
+-- from the threat list (gerstahn randomPlayerTarget precedent —
+-- GetAITargets is the bridged threat list; C++ takes any unit, the
+-- in-tree idiom narrows to players, documented). maxDist <= 0 =
+-- no distance limit.
+local function randomPlayerTarget(creature, maxDist)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
+                candidates[#candidates + 1] = t
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -167,8 +206,20 @@ local function feugenTargetDied(event, creature, victim)
 end
 
 local function feugenDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    feugenFeign[creature:GetGUID()] = nil
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    feugenFeign[guid] = nil
+    feugenOverload[guid] = nil
+    feugenRefreshBeam[guid] = nil
+end
+
+-- C++ npc_feugenAI ctor (boss_thaddius.cpp:718-733): refreshBeam =
+-- true ("force tesla coil state refresh") alongside the latch inits.
+-- Go ev5 fires once per spawn (felmyst trailSpawn precedent).
+local function feugenSpawn(event, creature)
+    local guid = creature:GetGUID()
+    feugenOverload[guid] = nil
+    feugenRefreshBeam[guid] = true
 end
 
 -- UnitDefines.h react states / SharedDefines.h stand states and unit flags
@@ -191,6 +242,11 @@ local function feugenReset(event, creature)
     -- fresh-spawn equivalent and clears the Lua latch; without this a
     -- feigned feugen would stay damage-immune across evades.
     feugenFeign[guid] = nil
+    -- Fresh-AI analog of the C++ ctor (see feugenSpawn): the evade ->
+    -- despawn -> force-respawn cycle rebuilds the AI with
+    -- isOverloading=false, refreshBeam=true.
+    feugenOverload[guid] = nil
+    feugenRefreshBeam[guid] = true
     creature:SetStandState(UNIT_STAND_STATE_STAND)
     creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetReactState(REACT_AGGRESSIVE)
@@ -202,8 +258,9 @@ end
 -- RemoveAllAuras() + SetReactState(REACT_PASSIVE) + AttackStop() +
 -- SetStandState(UNIT_STAND_STATE_DEAD) + damage = health-1; once latched,
 -- all further damage = 0. The cross-AI DoAction(ACTION_FEUGEN_DIED) +
--- SetControlled(UNIT_STATE_ROOT) / refreshBeam legs have no bridges —
--- documented, not wired. Event 9's second return rewrites damage
+-- SetControlled(UNIT_STATE_ROOT) legs stay out; refreshBeam = true
+-- IS modeled via the Lua latch (see DamageTaken below). Event 9's
+-- second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
 -- in the AI ctor; the Lua mirror wipes the GUID entry on death
 -- (event 4) and restores fresh-spawn state on reset (event 23, see
@@ -220,6 +277,9 @@ local function feugenDamageTaken(event, creature, attacker, damage)
         return false, 0
     end
     feugenFeign[guid] = true
+    -- C++ DamageTaken feign arm (boss_thaddius.cpp:851): refreshBeam =
+    -- true — "force beam refresh as we just removed auras".
+    feugenRefreshBeam[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
     creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:RemoveAllAuras()
@@ -229,9 +289,52 @@ local function feugenDamageTaken(event, creature, attacker, damage)
     return false, creature:GetHealth() - 1
 end
 
+-- C++ npc_feugenAI::SpellHit (boss_thaddius.cpp:853-886), ported
+-- C++-exact for every leg, including the upstream quirk at :870
+-- (the overload leg removes SPELL_STALAGG_CHAIN_VISUAL 28096, not
+-- the feugen visual — as-written). Leg mapping is the stalagg
+-- mirror: SetImmuneToPC(false/true) = RemoveFlag/SetFlag(
+-- UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC) (thekal / lurker_below
+-- precedent); caster:Talk; CastStop = no-op, omitted
+-- (lua_objects.go:344); home-distance via the handler-surface
+-- GetHomePosition bridge (3D, OVERLOAD_DISTANCE 28).
+local function feugenSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_FEUGEN_TESLA_PERIODIC then
+        return
+    end
+    if not caster or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local guid = creature:GetGUID()
+    local hx, hy, hz = creature:GetHomePosition()
+    local dx = creature:GetX() - hx
+    local dy = creature:GetY() - hy
+    local dz = creature:GetZ() - hz
+    local farFromHome = dx * dx + dy * dy + dz * dz > OVERLOAD_DISTANCE * OVERLOAD_DISTANCE
+    if not feugenFeign[guid] and creature:IsInCombat() and farFromHome then
+        if not feugenOverload[guid] then
+            feugenOverload[guid] = true
+            caster:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+            caster:Talk(EMOTE_TESLA_LINK_BREAKS)
+            creature:RemoveAura(SPELL_STALAGG_CHAIN_VISUAL)
+        end
+        local target = randomPlayerTarget(creature, 0)
+        if target then
+            caster:CastSpell(target, SPELL_TESLA_SHOCK, true)
+        end
+    elseif feugenOverload[guid] or feugenRefreshBeam[guid] then
+        feugenOverload[guid] = false
+        feugenRefreshBeam[guid] = false
+        caster:CastSpell(creature, SPELL_FEUGEN_CHAIN_VISUAL, true)
+        caster:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_FEUGEN, 1, feugenEnterCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 2, feugenLeaveCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 3, feugenTargetDied)
 RegisterCreatureEvent(ENTRY_FEUGEN, 4, feugenDied)
+RegisterCreatureEvent(ENTRY_FEUGEN, 5, feugenSpawn)
 RegisterCreatureEvent(ENTRY_FEUGEN, 9, feugenDamageTaken)
+RegisterCreatureEvent(ENTRY_FEUGEN, 14, feugenSpellHit)
 RegisterCreatureEvent(ENTRY_FEUGEN, 23, feugenReset)
