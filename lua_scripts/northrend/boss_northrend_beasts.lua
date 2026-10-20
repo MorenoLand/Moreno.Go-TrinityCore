@@ -126,7 +126,9 @@
 -- boss_dreadscale (34799) / boss_acidmaw (35144) — the jormungar
 -- submerge/phase machine (boss_jormungarAI): Reset phase legs
 -- (SetPhase(PHASE_STATIONARY) — no phase bridge; SetControlled(ROOT) —
--- no root bridge); ScheduleTasks phase-gated events (EVENT_SPRAY /
+-- root IS bridged (creature:SetRooted, lua_creature_events.go) but the arm
+-- stays out — the submerge machine needs MovePoint/motion/react/flag/phase
+-- legs with no bridges); ScheduleTasks phase-gated events (EVENT_SPRAY /
 -- EVENT_SWEEP PHASE_STATIONARY; EVENT_BITE / EVENT_SPEW /
 -- EVENT_SLIME_POOL PHASE_MOBILE) — no phase bridge; EVENT_BITE —
 -- DoCastVictim(biteSpell: 66879 Burning Bite / 66824 Paralytic Bite),
@@ -148,7 +150,8 @@
 -- DoCastSelf(66948 / 66936) + SetSpeedRate(8.0 / 1.1111) +
 -- DoCastSelf(GROUND_VISUAL_0 66969) + SetFlag(NON_ATTACKABLE |
 -- NOT_SELECTABLE) + MovePoint + SetControlled(ROOT) (no react / emote /
--- speed / flag / motion / root bridges); EVENT_EMERGE -> Emerge() —
+-- speed / flag / motion / phase bridges — SetRooted is bridged but the
+-- paired submerge-machine legs are not); EVENT_EMERGE -> Emerge() —
 -- RemoveAurasDueToSpell + DoCastSelf(SPELL_EMERGE 66947) + DoCastAOE(
 -- SPELL_HATE_TO_ZERO 63984) + RemoveFlag + SetReactState(AGGRESSIVE)
 -- + SelectTarget(Random) + MoveChase + SetDisplayId(

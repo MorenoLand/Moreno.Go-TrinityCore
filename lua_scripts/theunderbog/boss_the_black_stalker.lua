@@ -174,8 +174,9 @@ local function bossTick(creature, guid)
 
     -- Evade check: 5s init then 1s — timer bookkeeping only:
     -- the fire arm (60-yd home-position distance check ->
-    -- EnterEvadeMode) has no GetHomePosition bridge; re-arm
-    -- 1000 regardless (C++-exact).
+    -- EnterEvadeMode) has no EnterEvadeMode bridge; re-arm
+    -- 1000 regardless (C++-exact). GetHomePosition IS bridged
+    -- (lua_creature_events.go) — the evade call is the true blocker.
     if st.check <= 1000 then
         st.check = 1000
     else

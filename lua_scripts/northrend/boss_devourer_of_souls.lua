@@ -54,49 +54,50 @@
 -- DoCast(target, SPELL_UNLEASHED_SOULS 68939), non-triggered;
 -- Talk(SAY_FACE_UNLEASH_SOUL 7) + Talk(EMOTE_UNLEASH_SOUL 6) are
 -- unconditional in C++ (outside the target-if) and kept; re-arm 30000.
--- (The SetDisplayId(DISPLAY_SORROW) leg is excluded — see below.)
--- EVENT_WAILING_SOULS (:282-310): Talk(SAY_FACE_WAILING_SOUL 9) +
+-- (SetDisplayId(DISPLAY_SORROW) + the 5s FACE_ANGER DISPLAY_ANGER restore
+-- are ported — see below.)
+-- EVENT_WAILING_SOULS (:282-310): SetDisplayId(DISPLAY_DESIRE) first
+-- (:282) + Talk(SAY_FACE_WAILING_SOUL 9) +
 -- Talk(EMOTE_WAILING_SOUL 8) (C++ order kept); DoCast(me,
 -- SPELL_WAILING_SOULS_STARTING 68912) = self-cast; random target ->
 -- DoCast(me, SPELL_WAILING_SOULS_BEAM 68875) (gated on a target being
--- found, C++ :287-290); then the 15-tick chain (:313-316): first tick at
+-- found, C++ :287-290); SetTarget(Empty) (:302) + SetControlled(true, ROOT)
+-- (:305, creature:SetRooted); then the 15-tick chain (:313-316): first tick at
 -- 3000, DoCast(me, SPELL_WAILING_SOULS 68873) self-cast, re-arm 1000
--- until 15 casts land (:319), then the phase ends and WAILING_SOULS
--- re-arms at {60000,70000} (:326).
+-- until 15 casts land (:319), then the phase-end legs
+-- (SetDisplayId(DISPLAY_ANGER) + SetRooted(false), :323-324) fire and
+-- WAILING_SOULS re-arms at {60000,70000} (:326).
 -- C++ delays all other events by 18s during the wailing phase (:307) —
 -- modeled via delayTimers (thekal precedent): the other arms' timers
 -- shift 18s, so no casts fire mid-wailing. No beam sweeps the facing
 -- (no SetFacingTo bridge).
 -- JustDied (:203): Talk(SAY_FACE_DEATH 4) — unconditional (the sjonnir
 -- JustDied-Talk precedent; the _JustDied() passthrough leg is unmodeled).
--- DOCUMENTED-ONLY (in this header; no registration beyond entry 36502):
--- KilledUnit (:230-247): player-gated BUT text-selected by
--- me->GetDisplayId() (ANGER 30148 / SORROW 30149 / DESIRE 30150 ->
+-- KilledUnit (:176-196): player-gated, slay text selected by the CURRENT
+-- runtime display (ANGER 30148 / SORROW 30149 / DESIRE 30150 ->
 -- SAY_FACE_ANGER_SLAY 1 / SAY_FACE_SORROW_SLAY 2 / SAY_FACE_DESIRE_SLAY 3).
--- creature:GetDisplayId() EXISTS in the Lua surface but returns the DB
--- template display only — the C++ mutates the RUNTIME display at Reset
--- (:152) and in the wailing/unleashed-souls phase arms (:271/:278/:282/
--- :323), which Go never tracks, so the gate would read a constant and
--- pick the wrong text; does not port (the razuvious display-gated
--- precedent).
+-- PORTED 2026-10-20 — the old "no display-ID bridge" rationale was stale:
+-- creature:GetDisplayId() returns the LIVE display
+-- (lua_creature_events.go), and the Reset / UNLEASHED_SOULS / FACE_ANGER /
+-- WAILING_SOULS / phase-end arms below keep it C++-exact.
 -- Reset (:150-153): SetControlled(false, UNIT_STATE_ROOT) +
--- SetDisplayId(DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) —
--- no display-ID / root / react-state bridge, does not port.
+-- SetDisplayId(DISPLAY_ANGER) PORTED on ev23 (creature:SetRooted +
+-- SetDisplayId; SetReactState(REACT_AGGRESSIVE) has no bridge — skipped).
 -- JustEngagedWith NPC_CRUCIBLE_OF_SOULS 60yd double-spawn-guard
 -- SummonCreature leg (:163-164) — no Go summon bridge, does not port.
 -- EVENT_UNLEASHED_SOULS SetDisplayId(DISPLAY_SORROW) (:271) + the
 -- EVENT_FACE_ANGER 5s restore SetDisplayId(DISPLAY_ANGER) (:277-278) —
--- display-ID machine with no bridge (visuals cannot be modeled), do not
--- port.
--- EVENT_WAILING_SOULS SetDisplayId(DISPLAY_DESIRE) (:282) and the
--- phase-end restore (REACT_AGGRESSIVE + DISPLAY_ANGER + unroot +
--- MoveChase, :322-324) — no display-ID / react / root / movement bridge,
--- do not port.
+-- PORTED (the stale "no display-ID bridge" claim retracted — the bridge
+-- went live 2026-10-20, lua_creature_events.go).
+-- EVENT_WAILING_SOULS SetDisplayId(DISPLAY_DESIRE) (:282) PORTED at the
+-- arm position; the phase-end restore (:322-324) ports the
+-- SetDisplayId(DISPLAY_ANGER) + SetControlled(false, ROOT) legs
+-- (creature:SetDisplayId + SetRooted) — REACT_AGGRESSIVE (:322) and
+-- MoveChase (:325) have no bridge and stay out.
 -- The wailing beam choreography (SetFacingToObject :288, beamAngle
 -- SetFacingTo :314, InterruptNonMeleeSpells :297,
--- SetReactState(REACT_PASSIVE) :299, motion Clear :304,
--- SetControlled(true, UNIT_STATE_ROOT) :305) does not port — triaged out
--- in the facing/react hunts (beam-choreography movement legs);
+-- SetReactState(REACT_PASSIVE) :299, motion Clear :304) does not port —
+-- triaged out in the facing/react hunts (beam-choreography movement legs);
 -- SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
 -- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
@@ -119,6 +120,9 @@
 local ENTRY_DEVOURER = 36502
 
 local SAY_FACE_AGGRO = 0
+local SAY_FACE_ANGER_SLAY = 1
+local SAY_FACE_SORROW_SLAY = 2
+local SAY_FACE_DESIRE_SLAY = 3
 local SAY_FACE_DEATH = 4
 local EMOTE_MIRRORED_SOUL = 5
 local EMOTE_UNLEASH_SOUL = 6
@@ -133,6 +137,10 @@ local SPELL_UNLEASHED_SOULS = 68939
 local SPELL_WAILING_SOULS_STARTING = 68912
 local SPELL_WAILING_SOULS_BEAM = 68875
 local SPELL_WAILING_SOULS = 68873
+
+local DISPLAY_ANGER = 30148
+local DISPLAY_SORROW = 30149
+local DISPLAY_DESIRE = 30150
 
 local timers = {}
 local devourerState = {}
@@ -280,12 +288,11 @@ local function wellOfSoulsTick(creature, guid)
 end
 
 -- C++ EVENT_UNLEASHED_SOULS (:269-275): DoCast(target,
--- SPELL_UNLEASHED_SOULS), non-triggered; Talk(SAY_FACE_UNLEASH_SOUL) +
+-- SPELL_UNLEASHED_SOULS), non-triggered; SetDisplayId(DISPLAY_SORROW)
+-- (:271) after the cast (C++ order); Talk(SAY_FACE_UNLEASH_SOUL) +
 -- Talk(EMOTE_UNLEASH_SOUL) are unconditional in C++ (outside the
--- target-if) and kept; re-arm unconditional, 30000ms. The
--- SetDisplayId(DISPLAY_SORROW) leg and the EVENT_FACE_ANGER 5s
--- DISPLAY_ANGER restore (:277-278) are display-ID machine with no bridge
--- and do not port.
+-- target-if) and kept; re-arm unconditional, 30000ms; the
+-- EVENT_FACE_ANGER 5s DISPLAY_ANGER restore (:277-278) is a one-shot.
 local function unleashedSoulsTick(creature, guid)
     local state = devourerState[guid]
     if state == nil then
@@ -295,8 +302,12 @@ local function unleashedSoulsTick(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
     end
+    creature:SetDisplayId(DISPLAY_SORROW)
     creature:Talk(SAY_FACE_UNLEASH_SOUL)
     creature:Talk(EMOTE_UNLEASH_SOUL)
+    schedule(guid, "faceanger", 5000, function()
+        creature:SetDisplayId(DISPLAY_ANGER)
+    end)
     schedule(guid, "unleashed", 30000, function()
         unleashedSoulsTick(creature, guid)
     end)
@@ -319,25 +330,30 @@ local function wailingSoulTick(creature, guid, remaining)
             wailingSoulTick(creature, guid, remaining - 1)
         end)
     else
+        -- C++ phase-end (:322-324): SetReactState(REACT_AGGRESSIVE) and
+        -- MoveChase have no bridge (skipped); SetDisplayId(DISPLAY_ANGER)
+        -- + SetControlled(false, UNIT_STATE_ROOT) are bridged.
+        creature:SetDisplayId(DISPLAY_ANGER)
+        creature:SetRooted(false)
         schedule(guid, "wailing", {60000, 70000}, function()
             wailingSoulsTick(creature, guid)
         end)
     end
 end
 
--- C++ EVENT_WAILING_SOULS (:282-310): Talk(SAY_FACE_WAILING_SOUL) +
+-- C++ EVENT_WAILING_SOULS (:282-310): SetDisplayId(DISPLAY_DESIRE)
+-- first (:282), then Talk(SAY_FACE_WAILING_SOUL) +
 -- Talk(EMOTE_WAILING_SOUL) (C++ order kept); DoCast(me,
 -- SPELL_WAILING_SOULS_STARTING) self-cast; random target ->
 -- DoCast(me, SPELL_WAILING_SOULS_BEAM), gated on a target being found
 -- (:287-290); pushes every other armed timer out 18s (:307, delayTimers —
 -- no other events during wailing souls); starts the 15-tick chain at
--- 3000ms (:309). The
--- SetDisplayId(DISPLAY_DESIRE) leg (:282) and the beam/movement
+-- 3000ms (:309). The beam/movement
 -- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
--- REACT_PASSIVE :299, motion Clear :304, SetControlled root :305) do not
--- port (triaged out in the facing/react hunts — beam-choreography movement
--- legs); SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget
--- bridge).
+-- REACT_PASSIVE :299, motion Clear :304) does not port — triaged out
+-- in the facing/react hunts; SetTarget(Empty) :302 is PORTED
+-- (2026-10-20, creature:SetTarget bridge) and
+-- SetControlled(true, UNIT_STATE_ROOT) :305 via creature:SetRooted.
 -- Assigned to the forward-declared upvalue (moam precedent): `local function`
 -- here would shadow it and leave the re-arm closure bound to nil.
 wailingSoulsTick = function(creature, guid)
@@ -345,6 +361,7 @@ wailingSoulsTick = function(creature, guid)
     if state == nil then
         return
     end
+    creature:SetDisplayId(DISPLAY_DESIRE)
     creature:Talk(SAY_FACE_WAILING_SOUL)
     creature:Talk(EMOTE_WAILING_SOUL)
     creature:CastSpell(creature, SPELL_WAILING_SOULS_STARTING)
@@ -356,6 +373,10 @@ wailingSoulsTick = function(creature, guid)
     -- beam, before the motion Clear; ported 2026-10-20 via the
     -- creature:SetTarget bridge (0 = ObjectGuid::Empty).
     creature:SetTarget(0)
+    -- C++ :305 SetControlled(true, UNIT_STATE_ROOT) — after the
+    -- unbridged :304 motion Clear; the root leg alone keeps the boss
+    -- stationary via the chase-pause ScriptRooted gate (creaturemotion.go).
+    creature:SetRooted(true)
     -- C++ :307 events.DelayEvents(18s) — push every other armed timer out
     -- 18s (no other events during wailing souls); the tick chain is
     -- scheduled after, so it is not delayed.
@@ -412,7 +433,41 @@ local function devourerJustDied(event, creature)
     creature:Talk(SAY_FACE_DEATH)
 end
 
+-- C++ boss_devourer_of_soulsAI::Reset (:148-155): _Reset() (timer/state
+-- wipe) + SetControlled(false, UNIT_STATE_ROOT) + SetDisplayId(
+-- DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) (no bridge — skipped) +
+-- Initialize() (threeFaced latch — its only consumer is the unregistered
+-- ev15 SpellHitTarget arm, so it stays out).
+local function devourerReset(event, creature)
+    devourerCancelCombat(event, creature)
+    creature:SetRooted(false)
+    creature:SetDisplayId(DISPLAY_ANGER)
+end
+
+-- C++ KilledUnit (:176-196): player-gated; slay text selected by the live
+-- runtime display (DISPLAY_ANGER -> 1 / DISPLAY_SORROW -> 2 /
+-- DISPLAY_DESIRE -> 3), kept C++-exact because every display-mutating arm
+-- above is now ported.
+local function devourerTargetDied(event, creature, victim)
+    if not victim or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local textId = 0
+    local displayId = creature:GetDisplayId()
+    if displayId == DISPLAY_ANGER then
+        textId = SAY_FACE_ANGER_SLAY
+    elseif displayId == DISPLAY_SORROW then
+        textId = SAY_FACE_SORROW_SLAY
+    elseif displayId == DISPLAY_DESIRE then
+        textId = SAY_FACE_DESIRE_SLAY
+    end
+    if textId ~= 0 then
+        creature:Talk(textId)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DEVOURER, 1, devourerEnterCombat)
 RegisterCreatureEvent(ENTRY_DEVOURER, 2, devourerCancelCombat)
+RegisterCreatureEvent(ENTRY_DEVOURER, 3, devourerTargetDied)
 RegisterCreatureEvent(ENTRY_DEVOURER, 4, devourerJustDied)
-RegisterCreatureEvent(ENTRY_DEVOURER, 23, devourerCancelCombat)
+RegisterCreatureEvent(ENTRY_DEVOURER, 23, devourerReset)

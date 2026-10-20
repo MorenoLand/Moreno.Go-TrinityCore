@@ -95,8 +95,9 @@
 -- DamageTaken lethal companion legs — RemoveAllAuras /
 -- RemoveAllAttackers / AttackStop / SetReactState
 -- REACT_PASSIVE / SetFlag UNIT_FLAG_NON_ATTACKABLE /
--- SetControlled root / InterruptNonMeleeSpells /
--- StopMoving / MoveIdle / SetControlled stun /
+-- SetControlled root (creature:SetRooted IS bridged, lua_creature_events.go —
+-- the root leg alone stays out: the arm is a coupled machine) /
+-- InterruptNonMeleeSpells / StopMoving / MoveIdle / SetControlled stun /
 -- CombatStop — no bridges; DoCastAOE SPELL_KILL_CREDIT
 -- 64899 + SetFaction FACTION_FRIENDLY — the kill-credit
 -- must precede the faction change in one coupled machine
