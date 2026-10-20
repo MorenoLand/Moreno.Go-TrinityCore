@@ -620,10 +620,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
 	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
-	// Creature::SetDisplayId (Creature.cpp:3210) bounding-radius /
-	// combat-reach folds from CreatureModelInfo. The gender fold
-	// (Unit.cpp:10605-10606) has no server read path, so it is not
-	// modeled. applyCreatureMotionToSpawn overlays motion.DisplayID onto
+	// Creature::SetDisplayId (Creature.cpp:3210-3218) bounding-radius /
+	// combat-reach folds from CreatureModelInfo, including the
+	// * GetObjectScale() multiplier (the SetScale script-override /
+	// template-base twin). The gender fold (Unit.cpp:10605-10606) has
+	// no server read path, so it is not modeled. The pet branch
+	// (IsPet: 1.0f / DEFAULT_PLAYER_COMBAT_REACH) stays out — the
+	// handler surface does not serve pets. applyCreatureMotionToSpawn overlays motion.DisplayID onto
 	// the spawn record (creatures.go), so morph/disguise arms (hodir
 	// icicle, valithria dream-slip, ...) port with real client-visible
 	// effect; the values-update broadcast pushes the new display to the
@@ -636,23 +639,38 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		fields := map[int]uint32{unitFieldDisplayID: id}
+		var boundingRadius, combatReach float64
 		if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
-			var boundingRadius, combatReach sql.NullFloat64
-			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", id).Scan(&boundingRadius, &combatReach); err == nil {
-				if boundingRadius.Valid && boundingRadius.Float64 > 0 {
-					fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius.Float64))
+			var br, cr sql.NullFloat64
+			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", id).Scan(&br, &cr); err == nil {
+				if br.Valid && br.Float64 > 0 {
+					boundingRadius = br.Float64
 				}
-				if combatReach.Valid && combatReach.Float64 > 0 {
-					fields[unitFieldCombatReach] = math.Float32bits(float32(combatReach.Float64))
-					s.motionMu.Lock()
-					motion.CombatReach = float32(combatReach.Float64)
-					s.motionMu.Unlock()
+				if cr.Valid && cr.Float64 > 0 {
+					combatReach = cr.Float64
 				}
 			}
 		}
 		s.motionMu.Lock()
 		motion.DisplayID = id
 		motion.DisplayIDKnown = true
+		// Creature::SetDisplayId (Creature.cpp:3216-3217) multiplies the
+		// model-info radius/reach by the live object scale (the SetScale
+		// twin: script override while known, else the template base).
+		scale := motion.BaseScale
+		if motion.ScriptScaleKnown {
+			scale = motion.ScriptScale
+		}
+		if scale <= 0 {
+			scale = 1
+		}
+		if boundingRadius > 0 {
+			fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius) * scale)
+		}
+		if combatReach > 0 {
+			fields[unitFieldCombatReach] = math.Float32bits(float32(combatReach) * scale)
+			motion.CombatReach = float32(combatReach) * scale
+		}
 		s.motionMu.Unlock()
 		if s != nil {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, fields)
