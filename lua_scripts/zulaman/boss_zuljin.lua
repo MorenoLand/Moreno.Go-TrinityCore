@@ -373,9 +373,20 @@ local function onPillar(creature, guid)
     end)
 end
 
--- C++ flame breath (dragonhawk): face a random player (no bridge),
--- DoCast(me, 43215); re-arms even with no target.
+-- C++ flame breath (dragonhawk): face a random player
+-- (SetFacingToObject via the creature:SetFacingTo bridge — facing computed
+-- with math.atan2 from the random player's coordinates, the
+-- Unit::GetAbsoluteAngle twin), then DoCast(me, 43215); re-arms even with
+-- no target.
 local function onFlameBreath(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        local dx = target:GetX() - creature:GetX()
+        local dy = target:GetY() - creature:GetY()
+        local face = math.atan2(dy, dx)
+        if face < 0 then face = face + 2 * math.pi end
+        creature:SetFacingTo(face)
+    end
     creature:CastSpell(creature, SPELL_FLAME_BREATH)
     schedule(timers, guid, "flamebreath", 10000, function()
         onFlameBreath(creature, guid)

@@ -540,6 +540,33 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetFacingTo is Unit::SetFacingTo (Unit.cpp:13669): an in-place
+	// MoveTo + SetFacing spline that turns the unit without moving it. The
+	// Go twin reuses the DistractMovementGenerator facing pattern — an
+	// in-place broadcastMonsterMoveInInstance with the Final_Angle arm
+	// (creaturemotion.go:2401) — plus the logical motion.Orientation slot
+	// write the chase worker and the values snapshot read. C++ skips the
+	// turn when the unit is moving (the IsStopped gate); the Go twin
+	// documents that instead of gating: a mid-spline call sets the logical
+	// orientation but the client turn packet can race the spline.
+	// SetFacingToObject(obj) has no direct bridge — Lua ports compute the
+	// facing with math.atan2 from creature:GetX()/GetY() and the target's
+	// coordinates (the Unit::GetAbsoluteAngle twin, atan2 normalized to
+	// [0, 2pi) per creaturemotion.go:2389), then call this bridge. Creature::SetOrientation (the
+	// raw slot write with no packet) is the slot half of this bridge.
+	methods["SetFacingTo"] = func(_ context.Context, args []any) ([]any, error) {
+		ori, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Orientation = ori
+		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true)
+		return nil, nil
+	}
 	// SetSpeedRate is Unit::SetSpeedRate (Unit.cpp:8821) for MOVE_RUN=1
 	// only: the rate is the raw m_speed_rate multiplier on base move speed
 	// (7.0 yd/s run; C++ SetSpeed's absolute form divides by that base in
