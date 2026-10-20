@@ -244,6 +244,10 @@ local function advanceDive(creature, guid)
         -- applies the dive-bomb visual aura in C++ (aura 35367),
         -- modeled as an explicit AddAura (stale "no aura bridge"
         -- claim retracted — creature AddAura is bridged).
+        -- C++ :307: the phase-1 fire-school immunity comes off before
+        -- the dive-bomb visual cast (IMMUNITY_SCHOOL/FIRE=4,
+        -- apply=false; creature:ApplySpellImmune bridge).
+        creature:ApplySpellImmune(0, 2, 4, false)
         creature:CastSpell(creature, SPELL_DIVE_BOMB_VISUAL)
         creature:AddAura(SPELL_DIVE_BOMB_VISUAL)
         st.dive = { step = "dive", wait = 4000 }

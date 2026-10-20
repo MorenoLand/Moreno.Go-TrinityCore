@@ -84,7 +84,9 @@
 -- momma_said_knock_you_out (GetData(DATA_FRENZY_DISPELS)==0) — no
 -- achievement bridge (tharon_ja precedent); npc_faerlina_add
 -- (ScriptedAI — no RegisterLuaBoss surface, razuvious precedent):
--- Reset 10-man BIND/CHARM immunities (no immunity/difficulty bridges),
+-- Reset 10-man BIND/CHARM immunities stay out — the immunity bridge
+-- exists (creature:ApplySpellImmune) but the !Is25ManRaid() gate has
+-- no difficulty bridge,
 -- JustEngagedWith cross-AI DoZoneInCombat via GetGuidData(
 -- DATA_FAERLINA) (no instance/cross-AI bridges), JustDied 10-man
 -- DoCast(WIDOWS_EMBRACE 28732) on Faerlina (same bar), UpdateAI

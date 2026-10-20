@@ -116,7 +116,10 @@
 -- legs have no bridges; RemoveAllAuras() IS bridged (the
 -- handler twin, engine/world/lua_creature_events.go:166) and
 -- rides the three event-23 handlers; brundir's SetHover(false)
--- / interrupt-immunity reset have no bridges.
+-- has no bridge. The interrupt/stun immunity-reset removes ride the
+-- creature:ApplySpellImmune bridge but are no-op removes — nothing
+-- ever adds those rows (the DoAction supercharge adds are unported),
+-- so they stay out.
 -- DoAction (all three) — ACTION_SUPERCHARGE 1 (SetFullHealth
 -- + SPELL_SUPERCHARGE 61920 + phase++ + event reschedules)
 -- and ACTION_ADD_CHARGE 2 (steelbreaker, SPELL_ELECTRICAL_
