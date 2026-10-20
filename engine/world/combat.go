@@ -2566,6 +2566,10 @@ type creatureStats struct {
 	// is an IMMUNITY_SCHOOL row for school i.
 	MechanicImmuneMask    uint32
 	SpellSchoolImmuneMask uint32
+	// Scale mirrors creature_template.scale: the template base for the
+	// object-scale twin (Creature::GetNativeObjectScale,
+	// Creature.cpp:3195-3198) and Lua CreatureMethods::GetScale.
+	Scale float32
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -2581,6 +2585,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 			BoundingRadius: 0.306349,
 			CombatReach:    1.5,
 			ReactState:     creatureReactAggressive,
+			Scale:          1,
 		}
 	}
 	s.statsMu.RLock()
@@ -2603,6 +2608,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		BoundingRadius: 0.306349,
 		CombatReach:    1.5,
 		ReactState:     creatureReactAggressive,
+		Scale:          1,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
@@ -2611,7 +2617,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
-	var healthMod, manaMod, armorMod, damageMod, baseVariance float64
+	var healthMod, manaMod, armorMod, damageMod, baseVariance, templateScale float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -2630,9 +2636,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.type, 0),
 		COALESCE(ct.MechanicImmuneMask, 0),
 		COALESCE(ct.SpellSchoolImmuneMask, 0),
-		COALESCE(ct.BaseVariance, 1.0)
+		COALESCE(ct.BaseVariance, 1.0),
+		COALESCE(ct.scale, 1.0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2641,6 +2648,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		stats.AIName = aiName
 	}
 	stats.CreatureType = uint32(creatureType)
+	stats.Scale = float32(templateScale)
 
 	if maxlevel < 1 {
 		maxlevel = 1

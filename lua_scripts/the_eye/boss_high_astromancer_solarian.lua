@@ -49,8 +49,9 @@
 -- 15000 / fear 20000 / void bolt 10000 / phase = 1 — the
 -- BossAI ctor DATA_HIGH_ASTROMANCER_SOLARIAN = 2 arm is
 -- instance-blocked, unbridgeable; the ctor defaultarmor /
--- defaultsize arms have no armor/scale bridge) + Talk(SAY_
--- AGGRO) + 1s scheduler pump.
+-- defaultsize arms have no armor bridge; the scale arm is now
+-- bridged (creature:SetScale, lua_creature_events.go) and ported
+-- below) + Talk(SAY_AGGRO) + 1s scheduler pump.
 -- Pump (C++ UpdateAI arm order — Phase == 1 branch):
 -- 1. Blinding light arm — 41s init then 45s: BlindingLight =
 --    true (C++-exact); the next arcane-missiles arm then
@@ -99,9 +100,10 @@
 -- 4 + Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
 -- RemoveFlag(NOT_SELECTABLE)/SetVisible(true) arms have no
 -- flag/visibility bridge and the SetArmor(31000)/
--- SetDisplayId(MODEL_VOIDWALKER 18988)/SetObjectScale(x2.5)
--- arms have no armor/display/scale bridges — unmodeled
--- (netherspite precedent).
+-- SetDisplayId(MODEL_VOIDWALKER 18988) arms have no
+-- armor/display bridges — unmodeled (netherspite precedent);
+-- the SetObjectScale(x2.5) arm is ported below via
+-- creature:SetScale (scale bridge now exists).
 -- Phase 4 arms (C++ arm order): fear — 20s: non-triggered
 -- DoCast(me, SPELL_FEAR 34322) (C++-exact), re-arm 20000
 -- (C++-exact); void bolt — 10s: non-triggered DoCastVictim
@@ -109,14 +111,16 @@
 -- (C++-exact). Melee is engine-driven.
 -- OnTargetDied(3): Talk(SAY_KILL) unconditionally (no player
 -- gate, C++-exact). OnDied(4): Talk(SAY_DEATH) + cleanup
--- (the _JustDied arm is instance-blocked; the SetObjectScale
--- /SetDisplayId arms have no bridges — unmodeled).
+-- (the _JustDied arm is instance-blocked); the SetObjectScale
+-- restore arm is ported as a scale clear (SetDisplayId stays
+-- unbridged).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
--- gargolmar precedent; the SetArmor/SetVisible/SetObject
--- Scale/SetDisplayId/RemoveFlag(NOT_SELECTABLE) arms have
--- no bridges — land nowhere; the _Reset arm is instance-
+-- gargolmar precedent; the SetArmor/SetVisible/
+-- SetDisplayId/RemoveFlag(NOT_SELECTABLE) arms have no
+-- bridges — land nowhere (the SetObjectScale restore arm
+-- is ported as a scale clear); the _Reset arm is instance-
 -- blocked; Eluna's On_Reset fires ahead of OnDied and
 -- OnSpawn — millhouse note — so both hooks land the same
 -- reset).
@@ -130,9 +134,10 @@
 -- movement bridge — the UpdatePosition teleports, the
 -- StopMoving/AttackStop and the AppearDelay machine
 -- unmodeled (omor precedent); no visibility/flag/display/
--- armor/scale bridge — the phase arms touching SetVisible/
--- UNIT_FLAG_NOT_SELECTABLE/SetDisplayId/SetArmor/
--- SetObjectScale unmodeled (netherspite precedent); no arc
+-- armor bridge — the phase arms touching SetVisible/
+-- UNIT_FLAG_NOT_SELECTABLE/SetDisplayId/SetArmor unmodeled
+-- (netherspite precedent), SetObjectScale ported via the
+-- scale bridge; no arc
 -- bridge — the HasInArc victim fallback unmodeled; no cast-
 -- state bridge — the InterruptNonMeleeSpells arms
 -- unmodeled, casts fire unconditionally (netherspite
@@ -320,6 +325,10 @@ local function combatTick(creature, guid)
             st.phase = 4
             creature:Talk(SAY_VOIDA)
             creature:Talk(SAY_VOIDB)
+            -- C++: me->SetObjectScale(defaultsize*2.5f) — GetScale()
+            -- reads the template base (the C++ defaultsize capture)
+            -- while no script scale is known.
+            creature:SetScale(creature:GetScale() * 2.5)
         end
     end
 end
@@ -362,15 +371,20 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 3, function(_, creature)
 end)
 
 -- C++ JustDied: Talk(SAY_DEATH) + cleanup (the _JustDied arm
--- is instance-blocked; the SetObjectScale/SetDisplayId arms
--- have no bridges — unmodeled).
+-- is instance-blocked); the SetObjectScale(defaultsize) restore
+-- arm is ported as a scale clear (SetDisplayId stays unbridged).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 4, function(_, creature)
+    creature:SetScale(0)
     creature:Talk(SAY_DEATH)
     fullReset(creature:GetGUID())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
--- this lands the same Reset() reset as the evade hook.
+-- this lands the same Reset() reset as the evade hook; the C++
+-- Reset SetObjectScale(defaultsize) restore arm ports as a scale
+-- clear (SetArmor/SetVisible/SetDisplayId/RemoveFlag arms stay
+-- unbridged).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
+    creature:SetScale(0)
     fullReset(creature:GetGUID())
 end)

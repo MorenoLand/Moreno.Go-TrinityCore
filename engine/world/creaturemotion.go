@@ -92,6 +92,9 @@ type creatureMotion struct {
 	MountKnown            bool
 	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
 	ScriptRunRateKnown    bool
+	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
+	ScriptScaleKnown      bool
+	BaseScale             float32 // creature_template.scale: template base for the scale twin and GetScale, init at motion creation (loadCreatureStats)
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32
@@ -763,6 +766,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			ReactStateKnown: st.ReactStateKnown,
 			CreatureType:    st.CreatureType,
 			AIName:          st.AIName,
+			BaseScale:       st.Scale,
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -905,6 +909,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				ReactStateKnown: st.ReactStateKnown,
 				Name:            name,
 				ScriptName:      scriptName,
+				BaseScale:       st.Scale,
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion

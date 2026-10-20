@@ -575,6 +575,62 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
 		return nil, nil
 	}
+	// SetScale is Creature::SetObjectScale (Creature.cpp:3199): sets
+	// OBJECT_FIELD_SCALE_X directly. The script scale replaces the template
+	// base in the RecalculateObjectScale twin (creatures.go) while known; a
+	// non-positive scale clears the override (the C++ Reset/JustDied arms
+	// restoring the template/default scale — solarian, sironas). The live
+	// value broadcasts as a values-update; applyCreatureMotionToSpawn
+	// overlays it onto the spawn record so rebuilds keep it.
+	// Documented deviation: the C++ arm also re-derives
+	// UNIT_FIELD_BOUNDINGRADIUS / UNIT_FIELD_COMBATREACH from the display's
+	// model info; the motion carries no per-display model info, so melee
+	// reach keeps the template value (solarian precedent: visual-only).
+	methods["SetScale"] = func(_ context.Context, args []any) ([]any, error) {
+		scale, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if scale <= 0 {
+			motion.ScriptScale = 0
+			motion.ScriptScaleKnown = false
+		} else {
+			motion.ScriptScale = scale
+			motion.ScriptScaleKnown = true
+		}
+		base := motion.BaseScale
+		if motion.ScriptScaleKnown {
+			base = motion.ScriptScale
+		}
+		if base <= 0 {
+			base = 1
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		key := creatureAuraKeyForMotion(motion)
+		s.motionMu.Unlock()
+		effective := float64(base) + float64(s.creatureAuraScaleSum(key))/100
+		if effective < 0.01 {
+			effective = 0.01
+		}
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{objectFieldScale: math.Float32bits(float32(effective))})
+		return nil, nil
+	}
+	// GetScale is Unit::GetObjectScale: the live object-scale base — the
+	// script override while known, else the template scale (what the C++
+	// solarian AI captures as defaultsize at construction).
+	methods["GetScale"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		if motion.ScriptScaleKnown {
+			return float64(motion.ScriptScale)
+		}
+		if motion.BaseScale > 0 {
+			return float64(motion.BaseScale)
+		}
+		return 1.0
+	})
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,

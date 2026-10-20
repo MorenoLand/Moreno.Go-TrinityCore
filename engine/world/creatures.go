@@ -265,6 +265,13 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Mount = motion.Mount
 			spawn.mountKnown = true
 		}
+		if motion.ScriptScaleKnown {
+			// A Lua arm overrode the live object scale (SetScale): the
+			// spawn must carry the live value, not the template row, or
+			// the RecalculateObjectScale twin below would clobber it (and
+			// the aura fold applies on top of the script base).
+			spawn.Scale = motion.ScriptScale
+		}
 	}
 }
 

@@ -41,9 +41,12 @@
 -- C++ DoMeleeAttackIfReady.
 -- OnDied(4): the C++ JustDied arms — the scale reset and the
 -- cross-creature legoso DoAction(ACTION_LEGOSO_SIRONAS_KILLED)
--- cascade via FindNearestCreature(NPC_LEGOSO) — have no
--- scale / cross-creature bridges, so the hook only drops
--- per-GUID state (illidari_spawn precedent).
+-- cascade via FindNearestCreature(NPC_LEGOSO) — the scale
+-- bridge exists but the restore is vacuous (the legoso 3.0f
+-- flip sits behind the unported escort machine — zum_rah
+-- precedent), and there is no cross-creature DoAction
+-- bridge, so the hook only drops per-GUID state
+-- (illidari_spawn precedent).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder — the
 -- event-map reset — is latched on OnEnterCombat, gargolmar
@@ -59,9 +62,11 @@
 -- 31611 and its interrupt stop) are driven by legoso's escort
 -- event machine and have no hook in this model (the engine
 -- shim fires events 1/2/3/4/5/9/14/23/26 only — omor
--- precedent); no display / scale bridge — the Reset()
--- SetDisplayId(Modelid2) and JustDied SetObjectScale(1.0f)
--- arms unmodeled (nether_drake precedent).
+-- precedent); no display bridge — the Reset()
+-- SetDisplayId(Modelid2) arm unmodeled (nether_drake
+-- precedent); the JustDied SetObjectScale(1.0f) restore is
+-- vacuous (scale bridge exists — solarian precedent — but
+-- the legoso 3.0f flip is unported).
 -- Zone set status: zone_bloodmyst_isle.cpp closed —
 -- npc_webbed_creature documented-only (no-summon /
 -- quest-credit bridges, unverifiable entry),
@@ -147,9 +152,10 @@ local function onEnterCombat(_, creature)
 end
 
 -- The C++ JustDied arms (scale reset, cross-creature legoso
--- DoAction cascade) have no scale / cross-creature bridges
--- — unmodeled; the hook drops per-GUID state (illidari_spawn
--- precedent).
+-- DoAction cascade): the scale restore is vacuous (bridge
+-- exists but the flip is unported) and there is no
+-- cross-creature DoAction bridge — unmodeled; the hook drops
+-- per-GUID state (illidari_spawn precedent).
 local function onDied(_, creature)
     fullReset(creature:GetGUID())
 end
