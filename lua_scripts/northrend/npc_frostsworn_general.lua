@@ -114,6 +114,9 @@ local SAY_DEATH = 1
 local SPELL_SHIELD_THROWN = 69222
 local SPELL_SPIKE         = 69184
 
+local SOUND_LK_SLAY_1 = 17214
+local SOUND_LK_SLAY_2 = 17215
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -203,11 +206,21 @@ local function frostswornGeneralJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+local function frostswornGeneralTargetDied(event, creature, victim)
+    -- C++ npc_frostsworn_generalAI::KilledUnit :1250-1254: player-gated
+    -- DoPlaySoundToSet(me, RAND(SOUND_LK_SLAY_1, SOUND_LK_SLAY_2)) — the
+    -- npc_the_lich_king_escape precedent.
+    if victim:GetObjectType() == "Player" then
+        creature:PlayDirectSound(math.random(SOUND_LK_SLAY_1, SOUND_LK_SLAY_2))
+    end
+end
+
 local function frostswornGeneralReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 1, frostswornGeneralJustEngagedWith)
 RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 2, frostswornGeneralReset)
+RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 3, frostswornGeneralTargetDied)
 RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 4, frostswornGeneralJustDied)
 RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 23, frostswornGeneralReset)

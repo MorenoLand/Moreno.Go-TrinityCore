@@ -722,7 +722,9 @@ end
 -- C++ EVENT_MOVE_TO_WARGLAIVE_POINT (6s): the glaive-trigger scan
 -- and the MovePoint have no bridges — the timer chain is kept,
 -- the movement is unmodeled; then throw glaive 2s (the
--- POINT_THROW_GLAIVE MovementInform arms: sound — no bridge).
+-- POINT_THROW_GLAIVE MovementInform arms: no MovementInform bridge
+-- (the sound bridge is live — creature:PlayDirectSound — but the arm
+-- rides the movement leg, so it stays out).
 local function onWarglaivePoint(creature, guid)
     schedule(guid, "throwGlaive", 2000, function()
         onThrowGlaive(creature, guid)
