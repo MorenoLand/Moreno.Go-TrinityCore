@@ -16,9 +16,11 @@
 -- Alythess EMOTE_CONFLAGRATION=4 + YELL_CANFLAGRATION=8
 -- (conflagration), YELL_ALY_KILL=5 (kill, 25%), YELL_BERSERK=9
 -- (berserk). YELL_INTRO_SAC_*=0/1/2/3 and YELL_INTRO_ALY_*=0/1/2/3
--- belong to the unmodeled intro chain; YELL_SAC_DEAD=4, YELL_SISTER_
--- ALYTHESS_DEAD=7, YELL_ALY_DEAD=6 and YELL_SISTER_SACROLASH_DEAD=7
--- belong to the sister-death arms (cross-creature blocked — below).
+-- belong to the unmodeled intro chain; YELL_SISTER_ALYTHESS_DEAD=7
+-- and YELL_SISTER_SACROLASH_DEAD=7 belong to the sister-death
+-- detection arms (cross-creature blocked — below). YELL_SAC_DEAD=4
+-- and YELL_ALY_DEAD=6 are the JustDied death yells, ported via the
+-- twinDead latch (see below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
@@ -56,8 +58,10 @@
 -- conflagration arm 45342 has no cross-creature death bridge —
 -- skipped (below). OnTargetDied(3): 25% Talk(YELL_SAC_KILL), no
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
--- gate). OnDied(4): the SisterDeath arm is cross-creature blocked —
--- documented; the loot-flag arm has no flag bridge. OnReset(23):
+-- gate). OnDied(4): the SisterDeath-gated Talk(YELL_SAC_DEAD 4) is
+-- ported via the twinDead latch (both twins' ev4 handlers live in
+-- this file and fire in death order); the loot-flag arm has no flag
+-- bridge. OnReset(23):
 -- per-GUID reset (Enraged=false, SisterDeath=false) + cancel
 -- timers; the instance sister respawn/threat relay and SetBossState
 -- (NOT_STARTED) arms are blocked on the instance-script model.
@@ -86,7 +90,7 @@
 -- shadow-nova arm 45329 and the empower/sister-dead arms have no
 -- cross-creature bridge — skipped. OnTargetDied(3): 25% Talk(YELL_
 -- ALY_KILL), no TYPEID gate. OnDied(4): sister-death-gated Talk
--- (YELL_ALY_DEAD) blocked on the cross-creature bridge; the loot-
+-- (YELL_ALY_DEAD 6) is ported via the twinDead latch; the loot-
 -- flag arm has no flag bridge. OnReset(23): per-GUID reset + cancel
 -- timers; the instance sister respawn/threat relay and SetBossState
 -- arms blocked on the instance-script model. OnLeaveCombat(2):
@@ -118,9 +122,8 @@
 -- keeping, DoZoneInCombat, sister AttackStart/respawn/threat relays
 -- skipped); no cross-creature bridge — the sister-death detection
 -- (instance->GetCreature(DATA_*), Talk(YELL_SISTER_*_DEAD), empower
--- 45366 self-cast, the sister-phase spell arms, the death Talk/
--- SetBossState(DONE) gates) and the alythess intro cross-Talk are
--- unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
+-- 45366 self-cast, the sister-phase spell arms) and the SetBossState
+-- (DONE) gates plus the alythess intro cross-Talk are unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
 -- and the alythess blaze-summon (GO 187366) arms unmodeled; no
 -- summon bridge — the shadow-image spawns unmodeled; no flag/move/
 -- threat/MoveInLineOfSight/kill bridges — the lootable-flag,
@@ -140,17 +143,34 @@ local SPELL_SHADOW_FURY = 45270
 local SPELL_DARK_STRIKE = 45271
 
 local YELL_SAC_KILL = 8
+local YELL_SAC_DEAD = 4
 local EMOTE_SHADOW_NOVA = 5
 local YELL_SHADOW_NOVA = 9
 local YELL_ENRAGE = 6
 local EMOTE_CONFLAGRATION = 4
 local YELL_CANFLAGRATION = 8
 local YELL_ALY_KILL = 5
+local YELL_ALY_DEAD = 6
 local YELL_BERSERK = 9
 
 local timers = {}
 local sacrolashState = {}
 local alythessState = {}
+
+-- Sister-death latch for the JustDied YELL_SAC_DEAD / YELL_ALY_DEAD arms
+-- (boss_eredar_twins.cpp:150-163 sacrolash, :431-441 alythess). The C++
+-- SisterDeath bool is set on the SURVIVING twin's AI when its UpdateAI
+-- poll observes the sister dead, and the DYING twin's JustDied reads its
+-- own latch — so the yell fires exactly when the sister died before this
+-- twin. Both twins' ev4 handlers live in this file and fire in death
+-- order, so the latch is module state set in ev4: no cross-creature
+-- lookup is needed (the UpdateAI empower / YELL_SISTER_*_DEAD detection
+-- arms stay out — instance->GetCreature has no bridge). Go fires ev23
+-- before ev4 on the death path (fireCreatureDied), so the reset handlers
+-- below clear the latch only when the creature is alive — C++ Reset
+-- never runs on the death path (the spark_overgrind IsDead-gate
+-- precedent).
+local twinDead = { sacrolash = false, alythess = false }
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -221,7 +241,8 @@ end
 -- C++ EVENT shadow nova: DoCast(random target, 45329) +
 -- Talk(EMOTE_SHADOW_NOVA) + Talk(YELL_SHADOW_NOVA); repeat
 -- {30s,35s}. The !SisterDeath Talk gate is always true on this
--- path (sister-death arm is cross-creature blocked); C++ fires
+-- path (the UpdateAI sister-death detection poll is cross-creature
+-- blocked; only the JustDied latch is ported); C++ fires
 -- YELL_SHADOW_NOVA even when the target pick is nil — Talk
 -- placement matches.
 local function sacrolashShadowNova(creature, guid)
@@ -287,9 +308,15 @@ local function sacrolashTargetDied(event, creature)
     end
 end
 
--- C++ JustDied: the SisterDeath arm is cross-creature blocked;
--- the lootable-flag arm has no flag bridge.
+-- C++ JustDied (:150-163): if (SisterDeath) Talk(YELL_SAC_DEAD 4) —
+-- the latch is twinDead.alythess (sister died first); the
+-- SetBossState(DONE) arm has no instance bridge and the lootable-flag
+-- arm has no flag bridge.
 local function sacrolashDied(event, creature)
+    twinDead.sacrolash = true
+    if twinDead.alythess then
+        creature:Talk(YELL_SAC_DEAD)
+    end
 end
 
 local function sacrolashLeaveCombat(event, creature)
@@ -302,6 +329,10 @@ local function sacrolashReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     sacrolashState[guid] = nil
+    if not creature:IsDead() then
+        twinDead.sacrolash = false
+        twinDead.alythess = false
+    end
 end
 
 -- ================= Grand Warlock Alythess (25166) =================
@@ -392,10 +423,15 @@ local function alythessTargetDied(event, creature)
     end
 end
 
--- C++ JustDied: the sister-death-gated Talk(YELL_ALY_DEAD) arm is
--- cross-creature blocked; the lootable-flag arm has no flag
--- bridge.
+-- C++ JustDied (:431-441): if (SisterDeath) Talk(YELL_ALY_DEAD 6) —
+-- the latch is twinDead.sacrolash (sister died first); the
+-- SetBossState(DONE) arm has no instance bridge and the lootable-flag
+-- arm has no flag bridge.
 local function alythessDied(event, creature)
+    twinDead.alythess = true
+    if twinDead.sacrolash then
+        creature:Talk(YELL_ALY_DEAD)
+    end
 end
 
 local function alythessLeaveCombat(event, creature)
@@ -408,6 +444,10 @@ local function alythessReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     alythessState[guid] = nil
+    if not creature:IsDead() then
+        twinDead.sacrolash = false
+        twinDead.alythess = false
+    end
 end
 
 -- ================= Shadow Image (25214) =================

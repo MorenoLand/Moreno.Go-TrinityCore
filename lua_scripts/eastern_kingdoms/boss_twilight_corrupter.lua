@@ -43,9 +43,10 @@
 -- TYPEID_PLAYER gate is C++-exact via victim:GetTypeId() == 4
 -- (TYPEID_PLAYER = 4; object.go:objectTypeID). On a player kill:
 -- KillCount++, Talk(YELL_TWILIGHT_CORRUPTOR_KILL 2) — the C++
--- Talk(textId, victim) targets the victim; the Go Talk bridge
--- takes a textId only (broadcast to nearby, C++-exact for the
--- line played) — documented deviation; at 3 kills DoCast(me,
+-- Talk(textId, victim) targets the victim; the Go Talk bridge takes
+-- an optional target but YELL rows ignore it (whisper rows 0x0F/0x2A
+-- only — lua_creature_events.go:102-115), so the drop is C++-exact,
+-- not a deviation — then at 3 kills DoCast(me,
 -- SPELL_LEVEL_UP 24312, true) — C++ explicit-triggered, passed as the
 -- 3rd arg (the bridge maps true to TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
 -- only, boss_ai.go:445 — documented partial parity) — then KillCount = 0.
@@ -181,8 +182,8 @@ end
 -- C++ KilledUnit: victim->GetTypeId() == TYPEID_PLAYER gates
 -- the whole arm — victim:GetTypeId() == 4 is C++-exact
 -- (object.go:objectTypeID). KillCount++ + Talk(YELL_KILL);
--- the C++ Talk(textId, victim) victim targeting has no bridge
--- (Talk takes a textId only) — the line still plays nearby.
+-- the C++ Talk(textId, victim) victim target is dropped C++-exact
+-- (YELL rows ignore the target) — the line still plays nearby.
 -- At 3 kills: DoCast(me, SPELL_LEVEL_UP, true) — the triggered
 -- flag collapses to the standard cast path (boss_ai.go:445) —
 -- then KillCount = 0. Out-of-combat kills find no pump state

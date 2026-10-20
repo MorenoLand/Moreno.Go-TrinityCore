@@ -130,9 +130,10 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 14, shadeSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 
 -- Akama shade (npc_akama_shade, C++ ScriptName; black_temple.h:88
--- NPC_AKAMA_SHADE = 23191): only the Reset stealth arm is modeled —
--- the gossip intro, soul-channel sequence and combat/outro arms are
--- instance/react/threat-driven and stay unregistered (see above).
+-- NPC_AKAMA_SHADE = 23191): the Reset stealth arm and the JustDied
+-- Talk(SAY_DEAD) are modeled — the gossip intro, soul-channel
+-- sequence and combat/outro arms are instance/react/threat-driven
+-- and stay unregistered (see above).
 -- C++ Reset: DoCastSelf(SPELL_STEALTH 34189), non-triggered (C++
 -- DoCast default is triggered=false — vaelastrasz convention).
 -- Event 23 also fires on death (reset-then-died order,
@@ -143,10 +144,22 @@ local ENTRY_AKAMA_SHADE = 23191
 
 local SPELL_STEALTH = 34189
 
+-- C++ npc_akama_shade::JustDied (boss_shade_of_akama.cpp:527-534):
+-- Talk(SAY_DEAD 4), unconditional — the sjonnir JustDied-Talk
+-- precedent. The _summons.DespawnAll() and the cross-creature
+-- EnterEvadeMode(EVADE_REASON_OTHER) on the shade ride the
+-- instance/summon bridges — documented-only.
+local SAY_DEAD = 4
+
+local function akamaShadeDied(event, creature, killer)
+    creature:Talk(SAY_DEAD)
+end
+
 local function akamaShadeReset(event, creature)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_STEALTH)
     end
 end
 
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)

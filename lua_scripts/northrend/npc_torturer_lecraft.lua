@@ -64,7 +64,9 @@
 -- C++ sources for the defender itself (entry DB-side only,
 -- unregistered file = dead code — minigob precedent); the
 -- SpellHit arms (49256 mount / 52421 low-hp emote / 49263 renew
--- talk machines) have no SpellHit bridge, the OnGossipSelect
+-- talk machines): the 'no SpellHit bridge' claim is stale (ev14
+-- fires — this file registers it below); the arms stay out on the
+-- unregistered-file / VehicleAI grounds above; the OnGossipSelect
 -- quest-12372 arm: stale 'no gossip bridge' retracted (bridged —
 -- RegisterCreatureGossipEvent); arm stays out on the no
 -- player:CastSpell bridge (kalecgos pass).
