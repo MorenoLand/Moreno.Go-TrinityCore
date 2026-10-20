@@ -55,10 +55,13 @@
 -- NPC_VESPERON 30449) have no instance bridge).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28860 — no bridgeable arms):
--- Reset / Initialize — Initialize flag clears; RemoveAurasDueToSpell
--- (SPELL_TWILIGHT_REVENGE 60639); SetHomePosition; DrakeRespawn
--- (instance-boss-state-gated drake respawn + MoveTargetedHome +
--- UNIT_FLAG_NON_ATTACKABLE legs — no instance / motion bridges);
+-- Reset / Initialize — Initialize flag clears (no Lua latches);
+-- the HasAura(60639)->RemoveAura(60639) + SetHomePosition
+-- (3246.57, 551.263, 58.6164, 4.66003) legs are PORTED in
+-- sartharionReset 2026-10-20 (C++ :152-155 order exact);
+-- DrakeRespawn (instance-boss-state-gated drake respawn +
+-- MoveTargetedHome + UNIT_FLAG_NON_ATTACKABLE legs — no
+-- instance / motion bridges);
 -- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) — no instance bridge.
 -- JustReachedHome — _Reset() bookkeeping — no bridge.
 -- AddDrakeLootMode — LOOT_MODE_HARD_MODE_1/2/3 ladder — no
@@ -108,6 +111,7 @@ local WHISPER_LAVA_CHURN    = 9
 local SPELL_CLEAVE       = 56909
 local SPELL_FLAME_BREATH = 56908
 local SPELL_TAIL_LASH    = 56910
+local SPELL_TWILIGHT_REVENGE = 60639
 
 local timers = {}
 
@@ -219,6 +223,15 @@ end
 
 local function sartharionReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset :152-155, in order: the RemoveAurasDueToSpell
+    -- (SPELL_TWILIGHT_REVENGE) leg is HasAura-gated (bridged, the
+    -- nefarius precedent), then SetHomePosition(literals) (event-
+    -- surface bridge); the Initialize flag clears have no Lua
+    -- latches, DrakeRespawn + SetBossState are instance-gated.
+    if creature:HasAura(SPELL_TWILIGHT_REVENGE) then
+        creature:RemoveAura(SPELL_TWILIGHT_REVENGE)
+    end
+    creature:SetHomePosition(3246.57, 551.263, 58.6164, 4.66003)
 end
 
 RegisterCreatureEvent(ENTRY_SARTHARION, 1, sartharionEnterCombat)

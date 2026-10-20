@@ -122,7 +122,9 @@
 --   ACTION_START_GAUNTLET follow / active / far-visible legs and
 --   ACTION_RESET_EVENT bookkeeping legs (no-DoAction bridge).
 -- npc_argent_captainAI::JustEngagedWith (:859-864) —
---   SetHomePosition / DoZoneInCombat legs (no bridge).
+--   SetHomePosition(*me) PORTED 2026-10-20 (event-surface
+--   SetHomePosition + GetX/GetY/GetZ/GetO, first in C++ order);
+--   the DoZoneInCombat leg (IsUndead-gated) has no bridge.
 -- npc_argent_captainAI::EnterEvadeMode (:869-892) —
 --   MoveFollow + far-visible/active legs (no movement bridge).
 -- npc_captain_arnath EVENT_ARNATH_FLASH_HEAL (:966-969,
@@ -265,6 +267,10 @@ local function onArnathSmite(creature, guid)
 end
 
 local function arnathEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
+    -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
+    -- DoZoneInCombat leg has no bridge.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     getCaptainState(guid)
@@ -305,6 +311,10 @@ local function onBrandonJudgement(creature, guid)
 end
 
 local function brandonEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
+    -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
+    -- DoZoneInCombat leg has no bridge.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     getCaptainState(guid)
@@ -358,6 +368,10 @@ local function onGrondelConflagration(creature, guid)
 end
 
 local function grondelEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
+    -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
+    -- DoZoneInCombat leg has no bridge.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     getCaptainState(guid)
@@ -401,6 +415,10 @@ end
 -- bridgeable); EVENT_RUPERT_MACHINE_GUN and
 -- EVENT_RUPERT_ROCKET_LAUNCH stay out (offset-1 tank-skip).
 local function rupertEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
+    -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
+    -- DoZoneInCombat leg has no bridge.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     getCaptainState(guid)
