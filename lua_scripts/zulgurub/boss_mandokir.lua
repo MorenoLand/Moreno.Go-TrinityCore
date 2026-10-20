@@ -46,7 +46,9 @@
 -- MoveTargetedHome + SetBossState(NOT_STARTED) at POINT_MANDOKIR_END,
 -- the JustReachedHome SetImmuneToAll(false) arm) has no bearer —
 -- Mandokir simply starts combat already at the arena; the Mount
--- (MODEL_OHGAN_MOUNT = 15271) / Dismount arms have no bridge; the
+-- (MODEL_OHGAN_MOUNT = 15271) / Dismount arms port via the
+-- creature:Mount/Dismount bridge (UNIT_FIELD_MOUNTDISPLAYID +
+-- UNIT_FLAG_MOUNT, Unit.cpp:8310/8365); the
 -- Ohgan and chained-spirit summon arms have no bearer (no summon
 -- model) — neither ever spawns; SummonedCreatureDies' Ohgan frenzy
 -- 24318 + Talk(SAY_OHGAN_DEAD=4) arm therefore never fires; the
@@ -210,6 +212,7 @@ local function mandokirEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:Talk(SAY_AGGRO)
+    creature:Dismount() -- C++ JustEngagedWith Dismount, Talk then Dismount order.
     schedule(guid, "overpower", math.random(7000, 9000), function()
         onOverpower(creature, guid)
     end)
@@ -254,8 +257,10 @@ end
 local function mandokirReset(event, creature)
     -- C++ Reset's Z>140 immunity/intro/summon arms have no bridge (no
     -- UNIT_STATE/immune flag, movement, instance-script, or summon
-    -- model) — only the timer cancel is modeled.
+    -- model) — only the timer cancel and the Reset-tail
+    -- Mount(MODEL_OHGAN_MOUNT 15271) are modeled.
     mandokirResetState(creature:GetGUID())
+    creature:Mount(15271)
 end
 
 RegisterCreatureEvent(ENTRY_MANDOKIR, 1, mandokirEnterCombat)

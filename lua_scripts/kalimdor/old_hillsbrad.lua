@@ -22,8 +22,11 @@
 -- tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (npc_thrall_old_hillsbrad's self-contained in-combat legs,
 -- legoso combat-rotation-only precedent; the entire escort machine below):
--- - Engage (C++ JustEngagedWith): Talk SAY_TH_RANDOM_AGGRO (13); the
---   dismount-if-mounted leg has no mount bridge — documented below.
+-- - Engage (C++ JustEngagedWith): Talk SAY_TH_RANDOM_AGGRO (13) +
+--   the dismount-if-mounted leg (creature:IsMounted/Dismount bridge;
+--   the SetSpeedRate(MOVE_RUN, SPEED_RUN) and HadMount-latch legs have
+--   no bearer — the escort/Reset machine stays unported, documented
+--   below).
 -- - LowHp latch (C++ UpdateAI, after EscortAI::UpdateAI + UpdateVictim):
 --   !LowHp && HealthBelowPct(20) -> Talk SAY_TH_RANDOM_LOW_HP (11),
 --   latched until Reset clears it (C++ Initialize() leg). Modeled as a 1s
@@ -154,6 +157,11 @@ local function onEnterCombat(event, creature, target)
     cancelPump(guid)
     lowHp[guid] = false
     creature:Talk(SAY_TH_RANDOM_AGGRO)
+    if creature:IsMounted() then
+        creature:Dismount() -- C++ DoUnmount: Dismount + SetSpeedRate(MOVE_RUN, SPEED_RUN); no run-speed bridge — the flag+field clear is modeled.
+        -- C++ also latches HadMount = true for Reset's re-mount leg; that
+        -- escort/Reset machine is unported, so the latch has no bearer.
+    end
     lowHpPump[guid] = CreateLuaEvent(function()
         if not lowHp[guid] then
             local maxHealth = creature:GetMaxHealth()

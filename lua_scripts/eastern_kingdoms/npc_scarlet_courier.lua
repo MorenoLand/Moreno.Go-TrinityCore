@@ -15,14 +15,14 @@
 -- OnEnterCombat (1) as the JustEngagedWith equivalent (maiden /
 -- unworthy_initiate convention).
 -- Ported arms:
--- - JustEngagedWith -> Talk(SAY_TREE2 = 1) on OnEnterCombat(1).
--- Documented deviations: the C++ arm also does me->Dismount() (no
--- Dismount bridge on the Lua creature surface) and sets uiStage = 0
--- (stops the stage machine — the machine's every leg is unbridged
--- below, so no state is modeled).
+-- - JustEngagedWith -> Talk(SAY_TREE2 = 1) + Dismount() on
+--   OnEnterCombat(1) (C++ Talk then Dismount order); the uiStage = 0
+--   leg stops the stage machine — the machine's every leg is unbridged
+--   below, so no state is modeled.
+-- - Reset -> Mount(14338) on OnReset(23).
+-- Documented deviations: the C++ Reset's Initialize() stage-machine
+-- legs and the uiStage = 0 state leg stay unmodeled.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Reset's me->Mount(14338) ("not sure about this id" per the
---   C++ comment): no Mount bridge (koltira precedent).
 -- - The out-of-combat stage machine (Initialize: uiStage = 1,
 --   uiStage_timer = 3000): stage 1's FindNearestGameObject(
 --   GO_INCONSPICUOUS_TREE 191144, 40.0f) (no nearest-gameobject /
@@ -46,6 +46,14 @@ local ENTRY_COURIER = 29076
 
 local function onEnterCombat(_, creature)
     creature:Talk(SAY_TREE2)
+    creature:Dismount() -- C++ JustEngagedWith: Talk then Dismount.
+end
+
+-- C++ Reset: me->Mount(14338) ("not sure about this id" per the
+-- C++ comment); the Initialize stage-machine legs stay unmodeled.
+local function onReset(_, creature)
+    creature:Mount(14338)
 end
 
 RegisterCreatureEvent(ENTRY_COURIER, 1, onEnterCombat)
+RegisterCreatureEvent(ENTRY_COURIER, 23, onReset)

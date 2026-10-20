@@ -439,6 +439,54 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
+	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
+	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,
+	// UnitDefines.h:151). applyCreatureMotionToSpawn overlays motion.Mount
+	// onto the spawn record (creatures.go), so intro / phase mount arms
+	// (mandokir Reset MODEL_OHGAN_MOUNT 15271, ...) port with real
+	// client-visible effect.
+	methods["Mount"] = func(_ context.Context, args []any) ([]any, error) {
+		displayID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if displayID != 0 {
+			motion.Mount = displayID
+		}
+		motion.UnitFlags |= 0x08000000 // UNIT_FLAG_MOUNT
+		motion.MountKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// Dismount is Unit::Dismount (Unit.cpp:8365): early-return when not
+	// mounted (the UNIT_FLAG_MOUNT check is IsMounted), then clear
+	// UNIT_FIELD_MOUNTDISPLAYID and the flag. MountKnown forces the 0
+	// clear into the update mask, mirroring the EmoteState bridge.
+	methods["Dismount"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		if motion.UnitFlags&0x08000000 == 0 { // not IsMounted
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Mount = 0
+		motion.UnitFlags &^= 0x08000000
+		motion.MountKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// IsMounted is Unit::IsMounted (Unit.cpp): HasFlag(UNIT_FIELD_FLAGS,
+	// UNIT_FLAG_MOUNT 0x08000000). motion.UnitFlags is the live flag
+	// mirror (init from template at spawn; SetFlag/RemoveFlag/Mount/
+	// Dismount write it), so the query matches the Dismount bridge's
+	// early-return gate.
+	methods["IsMounted"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		mounted := motion.UnitFlags&0x08000000 != 0
+		s.motionMu.Unlock()
+		return []any{mounted}, nil
+	}
 	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and

@@ -85,6 +85,8 @@ type creatureMotion struct {
 	EmoteStateKnown       bool
 	StandState            uint8 // UNIT_FIELD_BYTES_1 byte 0 live value: Lua CreatureMethods::SetStandState (Creature::SetStandState twin), init from template bytes1 at spawn
 	StandStateKnown       bool
+	Mount                 uint32 // UNIT_FIELD_MOUNTDISPLAYID live value: Lua CreatureMethods::Mount/Dismount (Unit::Mount/Unit::Dismount twin), init from template mount at spawn
+	MountKnown            bool
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32
