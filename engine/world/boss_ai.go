@@ -11842,6 +11842,50 @@ func init() {
 	// no-timer / no-cast / no-random-target / no-summon /
 	// no-motion / no-instance bridges — documented-only.
 	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
+	// boss_darkweaver_syth (Shadow Labyrinth, Outland dungeon pass) —
+	// fight logic in lua_scripts/outland/boss_darkweaver_syth.lua: the
+	// event-1 flame-shock / chain-lightning / frost-shock / shadow-bolt
+	// volley timers, the 50%/10% health one-shot latches (event 9), the
+	// Talk arms (SAY_AGGRO 1 event 1, SAY_SLAY 2 event 3 player-gated —
+	// the razuvious precedent, SAY_DEATH event 4). The summon-elemental
+	// / summon-clone machine legs ride no-summon / no-cast bridges —
+	// documented-only. Entry 18968 is DB-side (no NPC_ constant in the
+	// C++ tree — the syth enum in boss_darkweaver_syth.cpp carries
+	// spell/talk IDs only); ScriptName bindings are DB-side as usual.
+	RegisterLuaBoss("boss_darkweaver_syth", 18968)
+	// boss_murmur (Shadow Labyrinth, Outland dungeon pass) — fight
+	// logic in lua_scripts/outland/boss_murmur.lua: the 40%-health
+	// touch-of-murmur one-shot latch (event 23), the sonic-boom /
+	// shockwave timer arms, the Talk arms (event 1/3/4). The
+	// resonance / magnetic-pull legs ride no-cast / no-motion bridges
+	// — documented-only. Entry 18708 is DB-side (no NPC_ constant in
+	// the C++ tree); ScriptName bindings are DB-side as usual.
+	RegisterLuaBoss("boss_murmur", 18708)
+	// boss_pandemonius (Mana-Tombs, Outland dungeon pass) — fight
+	// logic in lua_scripts/outland/boss_pandemonius.lua: the event-1
+	// void-blast / dark-shell timer arms, the KilledUnit Talk(SAY_KILL
+	// 1) (event 3, the razuvious player-gated precedent), the engage
+	// Talk arm. The InterruptNonMeleeSpells legs have no bridge —
+	// documented-only. Entry 18341 is DB-side (no NPC_ constant in
+	// the C++ tree); ScriptName bindings are DB-side as usual.
+	RegisterLuaBoss("boss_pandemonius", 18341)
+	// boss_anzu (Sethekk Halls, Outland dungeon pass) — fight logic in
+	// lua_scripts/outland/boss_anzu.lua: event-1 paralyzing-screech /
+	// cyclone-of-feathers timers, the event-9 health-latch arms, the
+	// Talk arms (events 1/3/4). The BossAI::JustEngagedWith instance
+	// leg (SetBossState IN_PROGRESS) rides the no-instance bridge —
+	// documented-only. Entry 23035 is DB-side (no NPC_ constant in the
+	// C++ tree); ScriptName bindings are DB-side as usual.
+	RegisterLuaBoss("boss_anzu", 23035)
+	// boss_talon_king_ikiss (Sethekk Halls, Outland dungeon pass) —
+	// fight logic in lua_scripts/outland/boss_talon_king_ikiss.lua:
+	// the event-1 blink / arcane-volley / slow timer arms, the 20%-
+	// health one-shot latch (event 9), the intro latch + Talk(SAY_INTRO
+	// 0) (event 27), the Talk arms (events 1/3/4). The heroic-only
+	// slow leg rides the no-heroic bridge — documented-only. Entry
+	// 18473 is DB-side (no NPC_ constant in the C++ tree); ScriptName
+	// bindings are DB-side as usual.
+	RegisterLuaBoss("boss_talon_king_ikiss", 18473)
 	// boss_illidan.lua — ported bridgeable arm: boss_illidan_stormrageAI::KilledUnit
 	// Talk(SAY_ILLIDAN_KILL 1) gated on victim->GetTypeId() == TYPEID_PLAYER —
 	// the razuvious player-gated precedent (event 3). The rest — intro/combat/
