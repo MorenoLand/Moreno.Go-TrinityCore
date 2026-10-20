@@ -53,8 +53,8 @@
 -- cleanup (the _JustDied arm is instance-blocked). OnLeave
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the C++ Reset() observable remainder —
--- Initialize() re-latch + me->SetSpeedRate(MOVE_RUN, 0.7f),
--- no speed bridge — lands nowhere; the Initialize()
+-- Initialize() re-latch + me->SetSpeedRate(MOVE_RUN, 0.7f), now ported
+-- via creature:SetSpeedRate; the Initialize()
 -- re-latch lands on OnEnterCombat, gargolmar precedent;
 -- the _Reset arm is instance-blocked; Eluna's On_Reset
 -- fires ahead of OnDied and OnSpawn — millhouse note — so
@@ -110,8 +110,8 @@ end
 
 -- C++ Reset() (called on evade): the observable remainder
 -- — the Initialize() re-latch and the SetSpeedRate(MOVE_
--- RUN, 0.7f) arm (no speed bridge) — lands nowhere; the
--- re-latch lands on OnEnterCombat (gargolmar precedent).
+-- RUN, 0.7f) arm, ported via creature:SetSpeedRate — lands on
+-- OnEnterCombat (re-latch, gargolmar precedent) and OnReset(23).
 local function fullReset(guid)
     cancelCombatPump(guid)
     combatStates[guid] = nil
@@ -199,4 +199,7 @@ end)
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_WARP_SPLINTER, 23, function(_, creature)
     fullReset(creature:GetGUID())
+    -- C++ Reset() :171: SetSpeedRate(MOVE_RUN, 0.7f) (boss_warp_splinter.
+    -- cpp).
+    creature:SetSpeedRate(1, 0.7)
 end)

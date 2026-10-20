@@ -178,11 +178,14 @@ end
 
 local function marrowgarReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ Reset() :145-146: RemoveAurasDueToSpell(SPELL_BONE_STORM)
-    -- then RemoveAurasDueToSpell(SPELL_BERSERK) — order kept; the
-    -- RemoveAura bridge exists (boss_lady_deathwhisper.lua precedent).
-    -- Without this an evade during bone storm re-seeds the storm phase
-    -- with the aura still on. SetSpeedRate has no bridge.
+    -- C++ Reset() :144-146: SetSpeedRate(MOVE_RUN, _baseSpeed) restores the
+    -- template rate (_baseSpeed is GetSpeedRate(MOVE_RUN) captured in the AI
+    -- constructor); rate <= 0 clears the script override, restoring the
+    -- template rate. Then RemoveAurasDueToSpell(SPELL_BONE_STORM) and
+    -- RemoveAurasDueToSpell(SPELL_BERSERK) — order kept (RemoveAura bridge,
+    -- boss_lady_deathwhisper.lua precedent). Without this an evade during
+    -- bone storm re-seeds the storm phase with the aura still on.
+    creature:SetSpeedRate(1, 0)
     creature:RemoveAura(SPELL_BONE_STORM)
     creature:RemoveAura(SPELL_BERSERK)
 end

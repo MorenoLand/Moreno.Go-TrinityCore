@@ -90,6 +90,8 @@ type creatureMotion struct {
 	SheathStateKnown      bool
 	Mount                 uint32 // UNIT_FIELD_MOUNTDISPLAYID live value: Lua CreatureMethods::Mount/Dismount (Unit::Mount/Unit::Dismount twin), init from template mount at spawn
 	MountKnown            bool
+	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
+	ScriptRunRateKnown    bool
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32
@@ -442,6 +444,15 @@ func (s *Server) creatureAuraAmountsByType(key creatureAuraKey, auraType uint32)
 // no-bridge); the minion follow catch-up arm has no Go pet-follow-speed
 // model (documented no-bridge).
 func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
+	// A script-set rate replaces the aura fold outright: C++ keeps a
+	// single m_speed_rate[MOVE_RUN] slot that SetSpeedRate writes raw and
+	// UpdateSpeed recomputes from auras. Deviation documented: a Go
+	// aura-triggered refresh keeps the script slot where C++ UpdateSpeed
+	// would clobber it — no ported arm has speed auras, so the corner is
+	// unreached.
+	if motion != nil && motion.ScriptRunRateKnown {
+		return motion.ScriptRunRate
+	}
 	base := float32(1.0)
 	if motion != nil && motion.BaseRunRate > 0 {
 		base = motion.BaseRunRate

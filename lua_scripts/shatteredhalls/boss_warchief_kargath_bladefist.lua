@@ -39,12 +39,10 @@
 -- OnDied(4): Talk(SAY_DEATH) (the _JustDied arm is
 -- instance-blocked; the removeAdds arm is summon/
 -- ObjectAccessor-blocked — with no summon bridge the GUID
--- lists are always empty). No events 2/23: the C++ Reset/
--- leave-combat arms have no observable remainder in this
--- model — removeAdds is summon/ObjectAccessor-blocked with
--- always-empty GUID lists, _Reset is instance-blocked, the
--- speed-rate arms have no speed bridge, and Initialize() has
--- no observable remainder without a scheduler pump (omrogg
+-- lists are always empty). OnReset(23): the C++ Reset()
+-- SetSpeedRate(MOVE_RUN, 2) arm, ported via creature:SetSpeedRate
+-- (the SetWalk(false) leg has no bridge; removeAdds/_Reset/
+-- Initialize have no observable remainder in this model, omrogg
 -- "no event 3" precedent). Melee is
 -- engine-driven.
 -- Deliberate deviations (all await engine bridges): no
@@ -115,4 +113,11 @@ end)
 
 RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+end)
+
+RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 23, function(_, creature)
+    -- C++ Reset() :114: SetSpeedRate(MOVE_RUN, 2); the SetWalk(false) leg
+    -- has no bridge, and the rest of Reset (removeAdds/_Reset/Initialize)
+    -- has no observable remainder in this model (documented above).
+    creature:SetSpeedRate(1, 2)
 end)

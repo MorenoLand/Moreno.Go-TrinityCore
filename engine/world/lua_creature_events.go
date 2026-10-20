@@ -540,6 +540,41 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetSpeedRate is Unit::SetSpeedRate (Unit.cpp:8821) for MOVE_RUN=1
+	// only: the rate is the raw m_speed_rate multiplier on base move speed
+	// (7.0 yd/s run; C++ SetSpeed's absolute form divides by that base in
+	// Lua with a citation). Go has no creature MOVE_WALK/SWIM/FLIGHT
+	// model — the Unit::UpdateSpeed twin (creatureRunSpeedRate) is
+	// MOVE_RUN-only — so other move types are rejected. rate <= 0 clears
+	// the script override, restoring the aura-fold/template rate (the C++
+	// Reset arms that restore _baseSpeed/DefaultMoveSpeedRate/SPEED_RUN).
+	// The normal refresh path recomputes RunSpeed, rescales in-flight
+	// legs (PropagateSpeedChange) and broadcasts
+	// SMSG_FORCE_RUN_SPEED_CHANGE to the instance.
+	methods["SetSpeedRate"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt != 1 {
+			return nil, fmt.Errorf("SetSpeedRate supports MOVE_RUN=1 only, got %d", mt)
+		}
+		rate, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if rate <= 0 {
+			motion.ScriptRunRate = 0
+			motion.ScriptRunRateKnown = false
+		} else {
+			motion.ScriptRunRate = rate
+			motion.ScriptRunRateKnown = true
+		}
+		s.motionMu.Unlock()
+		s.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
+		return nil, nil
+	}
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,

@@ -144,11 +144,13 @@
 -- AuraScript bridge — spell_alar_flame_quills (the 24 flame-
 -- quill sub-spells 34269-34289 / 34314-34316 PeriodicTick)
 -- documented only, not bridged (standing blocker); no
--- display/immune/flag/speed/stand-state/attack-state bridges —
+-- display/immune/flag/stand-state/attack-state bridges —
 -- the Reset() and phase arms touching SetDisplayId/
--- SetSpeedRate/ApplySpellImmune/SetDisableGravity/UNIT_FLAG_*
--- /SetStandState/IsNonMeleeSpellCast unmodeled (netherspite
--- precedent).
+-- ApplySpellImmune/SetDisableGravity/UNIT_FLAG_*
+-- /SetStandState/IsNonMeleeSpellCast stay unmodeled (netherspite
+-- precedent); the Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
+-- template-rate restore arm is ported via creature:SetSpeedRate
+-- (boss_alar.cpp:165).
 
 local SPELL_FLAME_QUILLS = 34229
 local SPELL_REBIRTH = 34342
@@ -449,4 +451,9 @@ end)
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     fullReset(creature:GetGUID())
+    -- C++ Reset() :165: SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate) —
+    -- the template rate captured in the AI constructor (:117); rate <= 0
+    -- clears the script override, restoring it. The SetDisableGravity /
+    -- ApplySpellImmune legs stay unbridged (documented above).
+    creature:SetSpeedRate(1, 0)
 end)

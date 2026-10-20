@@ -52,7 +52,9 @@
 -- (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — _Reset + SetReactState(REACT_AGGRESSIVE) + SetSpeed(
--- MOVE_RUN, 12.0f) — no react-state / speed bridges; SummonedCreatureDies
+-- MOVE_RUN, 12.0f) — the speed leg is ported via creature:SetSpeedRate
+-- as the rate 12.0/7.0 (baseMoveSpeed[MOVE_RUN] = 7.0 yd/s, Unit.cpp);
+-- SummonedCreatureDies
 -- — summons.Despawn — no summon bridge; EVENT_DECIMATE's 20x
 -- EVENT_SEARCH_ZOMBIE_MULTI scheduling machine (DoCastAOE(
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) per zombie) — no summon/zombie-list
@@ -200,6 +202,11 @@ end
 
 local function gluthReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset() :113: SetSpeed(MOVE_RUN, 12.0f) — absolute form; the
+    -- rate is 12.0 / baseMoveSpeed[MOVE_RUN] (7.0 yd/s, Unit.cpp:8816-8819).
+    -- The decimate 36.0f leg stays out: it fires only inside the eating
+    -- state behind the unported zombie machine (documented above).
+    creature:SetSpeedRate(1, 12.0 / 7.0)
 end
 
 RegisterCreatureEvent(ENTRY_GLUTH, 1, gluthEnterCombat)

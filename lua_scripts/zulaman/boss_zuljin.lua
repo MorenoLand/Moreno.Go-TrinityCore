@@ -45,9 +45,10 @@
 -- phase change skipped; no equipment bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID
 -- arms skipped; no
 -- movement model — AttackStartNoMove (eagle), AttackStart victim
--- switches (claw/lynx), SetSpeedRate 5.0/1.2, and MoveChase (lynx
+-- switches (claw/lynx), and MoveChase (lynx
 -- entry) have no bearer, so the rush sequences are modeled as
--- damage-only 500ms loops: claw rage hits the current victim (random
+-- damage-only 500ms loops (the SetSpeedRate 5.0/1.2 arms ride the
+-- ported loops via creature:SetSpeedRate); claw rage hits the current victim (random
 -- player fallback), lynx rush hits a random alive player per jump
 -- (C++-exact per-hit spell, count, and 500ms cadence); the C++
 -- interleaving when a sequence starter fires while the other sequence
@@ -281,6 +282,9 @@ onSeqLoop = function(creature, guid)
         or (seq == "lynx" and st.seqCount >= 9)
     if done then
         st.sequence = nil
+        -- C++ sequence end (boss_zuljin.cpp:460 claw / :511 lynx):
+        -- SetSpeedRate(MOVE_RUN, 1.2f) when the hit counter completes.
+        creature:SetSpeedRate(1, 1.2)
         local key = seq == "claw" and "clawrage" or "lynxrush"
         local starter = seq == "claw" and onClawRage or onLynxRush
         schedule(timers, guid, key, math.random(15000, 20000), function()
@@ -314,6 +318,9 @@ onClawRage = function(creature, guid)
     end
     st.sequence = "claw"
     st.seqCount = 0
+    -- C++ claw-rage starter (boss_zuljin.cpp:434): SetSpeedRate(MOVE_RUN,
+    -- 5.0f) on target acquire (the Lua alivePlayers gate is the analog).
+    creature:SetSpeedRate(1, 5.0)
     schedule(timers, guid, "seqloop", 500, function()
         onSeqLoop(creature, guid)
     end)
@@ -338,6 +345,9 @@ onLynxRush = function(creature, guid)
     end
     st.sequence = "lynx"
     st.seqCount = 0
+    -- C++ lynx-rush starter (boss_zuljin.cpp:488): SetSpeedRate(MOVE_RUN,
+    -- 5.0f) on target acquire (the Lua alivePlayers gate is the analog).
+    creature:SetSpeedRate(1, 5.0)
     schedule(timers, guid, "seqloop", 500, function()
         onSeqLoop(creature, guid)
     end)

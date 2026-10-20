@@ -158,7 +158,10 @@ local function onEnterCombat(event, creature, target)
     lowHp[guid] = false
     creature:Talk(SAY_TH_RANDOM_AGGRO)
     if creature:IsMounted() then
-        creature:Dismount() -- C++ DoUnmount: Dismount + SetSpeedRate(MOVE_RUN, SPEED_RUN); no run-speed bridge — the flag+field clear is modeled.
+        -- C++ DoUnmount: Dismount + SetSpeedRate(MOVE_RUN, SPEED_RUN);
+        -- SPEED_RUN is 1.0f (old_hillsbrad.cpp:186).
+        creature:Dismount()
+        creature:SetSpeedRate(1, 1.0)
         -- C++ also latches HadMount = true for Reset's re-mount leg; that
         -- escort/Reset machine is unported, so the latch has no bearer.
     end

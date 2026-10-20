@@ -61,8 +61,9 @@
 -- no SpellScript, not a skipped cast); fire tail 35278:
 -- 500ms init and re-arm — non-triggered DoCast(me)
 -- self-cast (C++-exact). The rest of the C++ has no bridges:
--- Reset()'s ApplySpellImmune / SetSpeedRate(MOVE_RUN,
--- DUNGEON_MODE(0.5f,0.7f)) are unbridged, the Check_Timer
+-- Reset()'s ApplySpellImmune legs stay unbridged (the SetSpeedRate(
+-- MOVE_RUN, DUNGEON_MODE(0.5f,0.7f)) arm is ported via
+-- creature:SetSpeedRate), the Check_Timer
 -- instance-boss-state despawn check is instance-blocked, and
 -- the onlyonce MoveChase(random-target) leg has no
 -- MoveChase bridge (a random pick alone would be dead code —
@@ -267,4 +268,8 @@ end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 23, function(_, creature)
     resetFlame(creature:GetGUID())
+    -- C++ npc_ragin_flames Reset() :183: SetSpeedRate(MOVE_RUN,
+    -- DUNGEON_MODE(0.5f, 0.7f)); the ApplySpellImmune legs stay unbridged
+    -- (documented above).
+    creature:SetSpeedRate(1, creature:IsHeroic() and 0.7 or 0.5)
 end)

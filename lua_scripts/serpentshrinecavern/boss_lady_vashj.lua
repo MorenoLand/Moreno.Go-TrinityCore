@@ -342,6 +342,11 @@ end
 
 local function vashjReset(event, creature)
     resetVashj(creature:GetGUID())
+    -- C++ Reset() :592: SetSpeedRate(MOVE_RUN, 0.6f) — the persistent run
+    -- rate (never restored in C++); the adjacent MOVE_WALK 0.6f leg (:591)
+    -- has no walk model and stays out, as do the walk-machine waypoint
+    -- search and the instance leg (documented above).
+    creature:SetSpeedRate(1, 0.6)
 end
 
 -- C++ MoveInLineOfSight: one-shot Talk(SAY_INTRO 0) on first sight,
