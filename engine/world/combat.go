@@ -2570,6 +2570,11 @@ type creatureStats struct {
 	// object-scale twin (Creature::GetNativeObjectScale,
 	// Creature.cpp:3195-3198) and Lua CreatureMethods::GetScale.
 	Scale float32
+	// Model mirrors creature_template.modelid1: the template-native
+	// display (Creature::GetNativeDisplayId, Creature.cpp), init into
+	// the motion DisplayID at creation and read by Lua
+	// CreatureMethods::GetDisplayId until a SetDisplayId override lands.
+	Model uint32
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -2618,6 +2623,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
 	var healthMod, manaMod, armorMod, damageMod, baseVariance, templateScale float64
+	var modelid1 int64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -2637,9 +2643,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.MechanicImmuneMask, 0),
 		COALESCE(ct.SpellSchoolImmuneMask, 0),
 		COALESCE(ct.BaseVariance, 1.0),
-		COALESCE(ct.scale, 1.0)
+		COALESCE(ct.scale, 1.0),
+		COALESCE(ct.modelid1, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2649,6 +2656,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	}
 	stats.CreatureType = uint32(creatureType)
 	stats.Scale = float32(templateScale)
+	stats.Model = uint32(modelid1)
 
 	if maxlevel < 1 {
 		maxlevel = 1

@@ -69,10 +69,8 @@
 -- emulation + phase-1 re-arm (decay_flesh 20s, curse_of_life 1s,
 -- rain_of_fire {14s,18s}, shadow_volley {8s,10s}).
 -- Unmodeled (no bridges — documented, not wired):
--- SetDisplayId(MODEL_FLESH 27073) / me->RestoreDisplayId() (Reset
--- leg too) — no display bridge; Reset's _Reset() — instance
--- bookkeeping, no bridge; UpdateAI HasUnitState skips — no unit-
--- state bridge (moroes precedent); spell_tharon_ja_clear_gift_of_
+-- Reset's _Reset() — instance bookkeeping, no bridge; UpdateAI
+-- HasUnitState skips — no unit-state bridge (moroes precedent); spell_tharon_ja_clear_gift_of_
 -- tharon_ja SpellScript (53242 EFFECT_0 SCRIPT_EFFECT ->
 -- RemoveAura(52509)) — no SpellScript binding bridge (razelikh
 -- precedent); achievement criteria script — no achievement bridge
@@ -101,6 +99,15 @@ local SPELL_RETURN_FLESH = 53463
 local SPELL_ACHIEVEMENT_CHECK = 61863
 local SPELL_FLESH_VISUAL = 52582
 local SPELL_DUMMY = 49551
+
+-- MODEL_FLESH: boss_tharon_ja.cpp enum (line ~75), the flesh-form
+-- display for EVENT_GOING_FLESH's SetDisplayId arm.
+local MODEL_FLESH = 27073
+
+-- GUID-keyed native-display table: captured via creature:GetDisplayId()
+-- at engage; implements me->RestoreDisplayId() as
+-- creature:SetDisplayId(nativeDisplay[guid]).
+local nativeDisplay = {}
 
 -- GUID-keyed timer table (nightbane idiom); events.Reset() in the
 -- C++ phase machine is emulated by canceling every key then
@@ -262,11 +269,11 @@ decayFleshTick = function(creature, guid)
     end)
 end
 
--- C++ EVENT_GOING_FLESH: Talk(2) + triggered self-casts (the
--- SetDisplayId leg has no bridge) + events.Reset() emulation +
--- phase-2 schedule.
+-- C++ EVENT_GOING_FLESH: Talk(2) + SetDisplayId(MODEL_FLESH) +
+-- triggered self-casts + events.Reset() emulation + phase-2 schedule.
 goingFleshTick = function(creature, guid)
     creature:Talk(SAY_FLESH)
+    creature:SetDisplayId(MODEL_FLESH)
     creature:CastSpell(creature, SPELL_GIFT_OF_THARON_JA, true)
     creature:CastSpell(creature, SPELL_FLESH_VISUAL, true)
     creature:CastSpell(creature, SPELL_DUMMY, true)
@@ -283,11 +290,14 @@ returnFleshTick = function(creature, guid)
     end)
 end
 
--- C++ EVENT_GOING_SKELETAL: Talk(3) + DoCastAOE(53242, true)
--- self-cast (the RestoreDisplayId leg has no bridge) +
--- events.Reset() emulation + phase-1 re-arm.
+-- C++ EVENT_GOING_SKELETAL: Talk(3) + me->RestoreDisplayId() (as
+-- SetDisplayId(nativeDisplay[guid])) + DoCastAOE(53242, true)
+-- self-cast + events.Reset() emulation + phase-1 re-arm.
 goingSkeletalTick = function(creature, guid)
     creature:Talk(SAY_SKELETON)
+    if nativeDisplay[guid] then
+        creature:SetDisplayId(nativeDisplay[guid])
+    end
     creature:CastSpell(creature, SPELL_CLEAR_GIFT_OF_THARON_JA, true)
     cancelTimers(guid)
     schedulePhaseOne(creature, guid)
@@ -298,6 +308,7 @@ end
 local function tharonJaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
+    nativeDisplay[guid] = creature:GetDisplayId()
     cancelTimers(guid)
     schedulePhaseOne(creature, guid)
 end
@@ -325,10 +336,14 @@ local function tharonJaDied(event, creature, killer)
 end
 
 -- C++ Reset: _Reset() (instance bookkeeping, no bridge) +
--- me->RestoreDisplayId() (no display bridge); the event-table reset
--- is the timer cancel.
+-- me->RestoreDisplayId(); the event-table reset is the timer cancel.
 local function tharonJaReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    if nativeDisplay[guid] then
+        creature:SetDisplayId(nativeDisplay[guid])
+        nativeDisplay[guid] = nil
+    end
+    cancelTimers(guid)
 end
 
 RegisterCreatureEvent(ENTRY_THARON_JA, 1, tharonJaEnterCombat)

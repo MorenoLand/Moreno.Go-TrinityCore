@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"sort"
@@ -593,6 +594,57 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.SheathStateKnown = true
 		s.motionMu.Unlock()
 		return nil, nil
+	}
+	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
+	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
+	// Creature::SetDisplayId (Creature.cpp:3210) bounding-radius /
+	// combat-reach folds from CreatureModelInfo. The gender fold
+	// (Unit.cpp:10605-10606) has no server read path, so it is not
+	// modeled. applyCreatureMotionToSpawn overlays motion.DisplayID onto
+	// the spawn record (creatures.go), so morph/disguise arms (hodir
+	// icicle, valithria dream-slip, ...) port with real client-visible
+	// effect; the values-update broadcast pushes the new display to the
+	// instance immediately, matching the C++ SetUInt32Value update path.
+	// RestoreDisplayId is the Lua-side idiom SetDisplayId(nativeDisplay),
+	// with the native model captured via GetDisplayId at spawn.
+	methods["SetDisplayId"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		fields := map[int]uint32{unitFieldDisplayID: id}
+		if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+			var boundingRadius, combatReach sql.NullFloat64
+			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", id).Scan(&boundingRadius, &combatReach); err == nil {
+				if boundingRadius.Valid && boundingRadius.Float64 > 0 {
+					fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius.Float64))
+				}
+				if combatReach.Valid && combatReach.Float64 > 0 {
+					fields[unitFieldCombatReach] = math.Float32bits(float32(combatReach.Float64))
+					s.motionMu.Lock()
+					motion.CombatReach = float32(combatReach.Float64)
+					s.motionMu.Unlock()
+				}
+			}
+		}
+		s.motionMu.Lock()
+		motion.DisplayID = id
+		motion.DisplayIDKnown = true
+		s.motionMu.Unlock()
+		if s != nil {
+			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, fields)
+		}
+		return nil, nil
+	}
+	// GetDisplayId is Unit::GetDisplayId: the live UNIT_FIELD_DISPLAYID
+	// (template-native model until a SetDisplayId override lands). Lua
+	// ports capture this at engage/spawn to implement
+	// Unit::RestoreDisplayId as SetDisplayId(nativeDisplay).
+	methods["GetDisplayId"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		id := motion.DisplayID
+		s.motionMu.Unlock()
+		return []any{id}, nil
 	}
 	// SetFacingTo is Unit::SetFacingTo (Unit.cpp:13669): an in-place
 	// MoveTo + SetFacing spline that turns the unit without moving it. The

@@ -275,6 +275,13 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Mount = motion.Mount
 			spawn.mountKnown = true
 		}
+		if motion.DisplayIDKnown {
+			// A Lua arm overrode the live display model (SetDisplayId): the
+			// spawn must carry the live value, not the DB-template row, or
+			// the next rebuild would clobber it (the EmoteState/StandState
+			// precedent).
+			spawn.Model = motion.DisplayID
+		}
 		if motion.ScriptScaleKnown {
 			// A Lua arm overrode the live object scale (SetScale): the
 			// spawn must carry the live value, not the template row, or

@@ -88,6 +88,8 @@ type creatureMotion struct {
 	StandStateKnown       bool
 	SheathState           uint8 // UNIT_FIELD_BYTES_2 byte 0 live value: Lua CreatureMethods::SetSheath (Unit::SetSheath twin, Unit.h:903), init from template bytes2 at spawn
 	SheathStateKnown      bool
+	DisplayID             uint32 // UNIT_FIELD_DISPLAYID live value: Lua CreatureMethods::SetDisplayId (Unit::SetDisplayId twin, Unit.cpp:10601), init from template model at spawn
+	DisplayIDKnown        bool   // set by the event-surface SetDisplayId bridge; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	Mount                 uint32 // UNIT_FIELD_MOUNTDISPLAYID live value: Lua CreatureMethods::Mount/Dismount (Unit::Mount/Unit::Dismount twin), init from template mount at spawn
 	MountKnown            bool
 	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
@@ -770,6 +772,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			CreatureType:    st.CreatureType,
 			AIName:          st.AIName,
 			BaseScale:       st.Scale,
+			DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -913,6 +916,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				Name:            name,
 				ScriptName:      scriptName,
 				BaseScale:       st.Scale,
+				DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion
