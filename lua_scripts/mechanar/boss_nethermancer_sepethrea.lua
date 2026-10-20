@@ -268,8 +268,10 @@ end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 23, function(_, creature)
     resetFlame(creature:GetGUID())
-    -- C++ npc_ragin_flames Reset() :183: SetSpeedRate(MOVE_RUN,
-    -- DUNGEON_MODE(0.5f, 0.7f)); the ApplySpellImmune legs stay unbridged
-    -- (documented above).
+    -- C++ npc_ragin_flames::Reset() :181-182: ApplySpellImmune(0,
+    -- IMMUNITY_DAMAGE, SPELL_SCHOOL_MASK_MAGIC=126 / NORMAL=1, true).
+    creature:ApplySpellImmune(0, 3, 126, true)
+    creature:ApplySpellImmune(0, 3, 1, true)
+    -- C++ :183: SetSpeedRate(MOVE_RUN, DUNGEON_MODE(0.5f, 0.7f)).
     creature:SetSpeedRate(1, creature:IsHeroic() and 0.7 or 0.5)
 end)

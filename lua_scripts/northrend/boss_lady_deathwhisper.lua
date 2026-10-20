@@ -394,6 +394,16 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         schedule(guid, "frostboltvolley", 20000, function()
             frostboltVolleyTick(creature, guid)
         end)
+        -- C++ DamageTaken :449-450: on heroic mode the phase-2
+        -- transition makes her immune to taunt effects
+        -- (IMMUNITY_STATE/SPELL_AURA_MOD_TAUNT=11,
+        -- IMMUNITY_EFFECT/SPELL_EFFECT_ATTACK_ME=114; IsHeroic() gate,
+        -- bridged lua_creature_events.go:203). The SummonWaveP2
+        -- scheduler leg stays out (summon machine).
+        if creature:IsHeroic() then
+            creature:ApplySpellImmune(0, 1, 11, true)
+            creature:ApplySpellImmune(0, 0, 114, true)
+        end
         local newDamage = damage - mana
         if newDamage ~= damage then
             return true, newDamage
@@ -445,6 +455,11 @@ local function deathwhisperReset(event, creature)
     -- unconditional, after the channeling cast; the mana pool refills on
     -- reset via the creature:SetPower bridge.
     creature:SetPower(POWER_MANA, creature:GetMaxPower())
+    -- C++ :228-229: remove the heroic phase-2 taunt immunities on reset
+    -- (IMMUNITY_STATE/SPELL_AURA_MOD_TAUNT=11,
+    -- IMMUNITY_EFFECT/SPELL_EFFECT_ATTACK_ME=114, both apply=false).
+    creature:ApplySpellImmune(0, 1, 11, false)
+    creature:ApplySpellImmune(0, 0, 114, false)
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:

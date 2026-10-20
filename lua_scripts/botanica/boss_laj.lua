@@ -54,14 +54,16 @@
 --    engine-driven.
 -- The Transform_Timer / DoTransform() arm is a no-op in
 -- this model: rand32() % 5 only SetDisplayId(MODEL_DEFAULT /
--- MODEL_ARCANE / MODEL_FIRE / MODEL_FROST / MODEL_NATURE)
--- and ApplySpellImmune school arms, which have no display /
--- immune bridges — unmodeled (documented below).
+-- MODEL_ARCANE / MODEL_FIRE / MODEL_FROST / MODEL_NATURE) — no
+-- display bridge — and the ApplySpellImmune school flips, which ride
+-- the unported transform machine (the Reset() school matrix IS
+-- ported in the event-23 hook below via creature:ApplySpellImmune).
 -- OnDied(4): cleanup (the C++ has no JustDied override
 -- beyond the instance-blocked _JustDied). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the
--- C++ Reset() observable remainder — the SetDisplayId /
--- ApplySpellImmune arms have no bridges — lands nowhere;
+-- C++ Reset() observable remainder — the SetDisplayId arm has no
+-- bridge and lands nowhere, but the ApplySpellImmune school matrix
+-- IS ported in the event-23 hook below;
 -- the Initialize() re-latch lands on OnEnterCombat, gargolmar
 -- precedent; the _Reset arm is instance-blocked; Eluna's
 -- On_Reset fires ahead of OnDied and OnSpawn — millhouse
@@ -101,10 +103,10 @@ local function cancelCombatPump(guid)
     end
 end
 
--- C++ Reset() (called on evade): the SetDisplayId /
--- ApplySpellImmune arms have no bridges and _Reset() is
--- instance-blocked; the observable remainder — the
--- Initialize() re-latch — lands on OnEnterCombat
+-- C++ Reset() (called on evade): the SetDisplayId arm has no bridge
+-- and _Reset() is instance-blocked; the ApplySpellImmune school
+-- matrix is PORTED in the event-23 hook below; the observable
+-- remainder — the Initialize() re-latch — lands on OnEnterCombat
 -- (gargolmar precedent).
 local function fullReset(guid)
     cancelCombatPump(guid)
@@ -197,4 +199,13 @@ end)
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_LAJ, 23, function(_, creature)
     fullReset(creature:GetGUID())
+    -- C++ boss_lajAI::Reset() :87-91: school immunity matrix — shadow
+    -- school immune by default; arcane/fire/frost/nature explicitly
+    -- cleared (the DoTransform flips ride the unported transform
+    -- machine). SetDisplayId has no bridge.
+    creature:ApplySpellImmune(0, 2, 32, true)
+    creature:ApplySpellImmune(0, 2, 64, false)
+    creature:ApplySpellImmune(0, 2, 4, false)
+    creature:ApplySpellImmune(0, 2, 16, false)
+    creature:ApplySpellImmune(0, 2, 8, false)
 end)

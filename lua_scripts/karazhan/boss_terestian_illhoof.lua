@@ -274,8 +274,9 @@ RegisterCreatureEvent(ENTRY_KILREK, 23, kilrekLeaveCombat)
 
 -- Fiendish imp (npc_fiendish_imp, C++ ScriptName for 17267): firebolt 30050
 -- on the victim 2s after Reset, every 2.4s after; the fire-school
--- ApplySpellImmune has no bridge. The imps never spawn (no summon model),
--- but the AI is registered so any that exist fight correctly.
+-- ApplySpellImmune arm is PORTED in impLeaveCombat (Reset hook, :298).
+-- The imps never spawn (no summon model), but the AI is registered so
+-- any that exist fight correctly.
 local function onFirebolt(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -297,6 +298,10 @@ end
 local function impLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(impTimers, guid)
+    -- C++ npc_fiendish_imp::Reset() :298: ApplySpellImmune(0,
+    -- IMMUNITY_SCHOOL, SPELL_SCHOOL_MASK_FIRE=4, true) — fire-school
+    -- immunity (runs on evade too: C++ EnterEvadeMode calls Reset).
+    creature:ApplySpellImmune(0, 2, 4, true)
 end
 
 RegisterCreatureEvent(ENTRY_FIENDISH_IMP, 1, impEnterCombat)

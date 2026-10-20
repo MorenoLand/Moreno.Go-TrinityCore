@@ -48,8 +48,9 @@
 -- corrupted form: CorruptedForm=true, MarkOfCorruption_Count=0,
 -- Talk(SAY_SWITCH_TO_CORRUPT); the SetDisplayId(MODEL_CORRUPT
 -- 20609), ResetThreatList, DeSummonBeams, 4x DoSpawnCreature(ENTRY_
--- TAINTED_SPAWN 22036), SetMeleeDamageSchool(nature) and
--- ApplySpellImmune arms have no bridges (below). Enrage (both
+-- TAINTED_SPAWN 22036), SetMeleeDamageSchool(nature) stay out (no
+-- bridges); the ApplySpellImmune school arms are PORTED at the
+-- switch points (below). Enrage (both
 -- forms): 27680 10min then 60s, non-triggered self-cast
 -- (C++-exact — the spell carries "needs verification" in C++, kept
 -- verbatim). OnTargetDied(3): Talk(corrupted ? SAY_CORRUPT_SLAY :
@@ -199,10 +200,12 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch back to clean form inside the radius.
-        -- The SetDisplayId / beam-summon / add-spawn / melee-school /
-        -- immunity arms have no bridges (ResetThreatList PORTED
-        -- 2026-10-17: creature:ClearThreatList, bridged
-        -- lua_objects.go:389, C++ arm order after Talk).
+        -- The SetDisplayId / beam-summon / add-spawn / melee-school
+        -- arms stay out (no bridges); the school immunity arms ride
+        -- the creature:ApplySpellImmune bridge (C++ arm order after
+        -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
+        -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
+        -- arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -212,6 +215,10 @@ local function hydrossTick(creature, guid)
                 st.hydrossCount = 0
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
                 creature:ClearThreatList()
+                -- C++ :304-305: clean form is frost-school immune,
+                -- nature explicitly not (IMMUNITY_SCHOOL).
+                creature:ApplySpellImmune(0, 2, 16, true)
+                creature:ApplySpellImmune(0, 2, 8, false)
             end
             st.posCheck = 2500
         end
@@ -239,10 +246,12 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch to corrupted form outside the radius.
-        -- The SetDisplayId / beam-despawn / add-spawn / melee-school /
-        -- immunity arms have no bridges (ResetThreatList PORTED
-        -- 2026-10-17: creature:ClearThreatList, bridged
-        -- lua_objects.go:389, C++ arm order after Talk).
+        -- The SetDisplayId / beam-despawn / add-spawn / melee-school
+        -- arms stay out (no bridges); the school immunity arms ride
+        -- the creature:ApplySpellImmune bridge (C++ arm order after
+        -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
+        -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
+        -- arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -252,6 +261,10 @@ local function hydrossTick(creature, guid)
                 st.corruptCount = 0
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
                 creature:ClearThreatList()
+                -- C++ :388-389: corrupted form is nature-school immune,
+                -- frost explicitly not (IMMUNITY_SCHOOL).
+                creature:ApplySpellImmune(0, 2, 8, true)
+                creature:ApplySpellImmune(0, 2, 16, false)
             end
             st.posCheck = 2500
         end
@@ -303,6 +316,11 @@ end
 
 local function hydrossReset(event, creature)
     resetState(creature:GetGUID())
+    -- C++ Reset() :140-141: clean-form school immunities (frost-school
+    -- immune, nature explicitly not) — the creature:ApplySpellImmune
+    -- bridge (lua_creature_events.go).
+    creature:ApplySpellImmune(0, 2, 16, true)
+    creature:ApplySpellImmune(0, 2, 8, false)
 end
 
 RegisterCreatureEvent(ENTRY_HYDROSS, 1, hydrossEnterCombat)

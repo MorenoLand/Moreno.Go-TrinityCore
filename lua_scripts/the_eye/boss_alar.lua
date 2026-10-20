@@ -466,9 +466,13 @@ RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     fullReset(creature:GetGUID())
     -- C++ Reset() :165: SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate) —
     -- the template rate captured in the AI constructor (:117); rate <= 0
-    -- clears the script override, restoring it. The SetDisableGravity /
-    -- ApplySpellImmune legs stay unbridged (documented above).
+    -- clears the script override, restoring it.
     creature:SetSpeedRate(1, 0)
+    -- C++ Reset() :168: ApplySpellImmune(0, IMMUNITY_SCHOOL,
+    -- SPELL_SCHOOL_MASK_FIRE=4, true) — fire-school immunity in phase 1
+    -- (removed :307 on the phase-2 dive; flight machine unported).
+    -- The SetDisableGravity leg stays unbridged (documented above).
+    creature:ApplySpellImmune(0, 2, 4, true)
     -- boss_alar.cpp:170 — C++ Reset arm order after ApplySpellImmune
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end)

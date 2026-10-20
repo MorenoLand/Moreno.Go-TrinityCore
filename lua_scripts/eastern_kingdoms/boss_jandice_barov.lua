@@ -20,7 +20,8 @@
 -- fire unconditionally (jeklik convention). Documented-only (no
 -- bridges): JustSummoned arms (illusion AttackStart on a random
 -- target, ApplySpellImmune(0, IMMUNITY_DAMAGE, MAGIC, true) — no
--- summoned-AI/random-target or spell-immune bridge, kormok/herod
+-- summoned-AI/random-target bridge; the spell-immune bridge exists
+-- but has no summoned bearer, kormok/herod
 -- precedent) and the Summons SummonList/DespawnAll tracking;
 -- EVENT_ILLUSION's SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 -- + SetDisplayId(11686 invisible model) + ModifyThreatByPercent

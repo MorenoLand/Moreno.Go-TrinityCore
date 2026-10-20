@@ -146,6 +146,10 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset() :65: ApplySpellImmune(0, IMMUNITY_DAMAGE,
+    -- SPELL_SCHOOL_MASK_ARCANE=64, true) — arcane-damage immunity for
+    -- the evocation mechanic (lua_creature_events.go bridge).
+    creature:ApplySpellImmune(0, 3, 64, true)
 end
 
 local function onTargetDied(event, creature, victim)

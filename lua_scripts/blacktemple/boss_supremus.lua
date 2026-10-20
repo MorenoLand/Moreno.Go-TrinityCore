@@ -60,8 +60,11 @@
 -- add arms are unregistered with it; the summons.DoAction(ACTION_
 -- DISABLE_VULCANO) aura-cleanup arm has no bearer (no volcano
 -- summons exist to address); the ApplySpellImmune taunt/attack-me
--- arms have no bridge; the EnterEvadeMode summons.DespawnAll arm
--- has no bearer (no volcano summons exist to address) while the
+-- Reset arms stay out — they are no-op removes undoing the
+-- ChangePhase adds, which ride the unported phase machine (the
+-- immunity bridge itself exists: creature:ApplySpellImmune); the
+-- EnterEvadeMode summons.DespawnAll arm has no bearer (no volcano
+-- summons exist to address) while the
 -- _DespawnAtEvade() -> DespawnOrUnsummon() leg is PORTED below
 -- (stale "no despawn bridge" claim retracted: creature:Despawn()
 -- is bridged, engine/world/lua_creature_events.go:214).

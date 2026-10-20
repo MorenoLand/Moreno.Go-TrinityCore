@@ -36,6 +36,16 @@ const (
 	creatureTypeMechanical uint32 = 9     // CREATURE_TYPE_MECHANICAL (UnitMethods.h:1115)
 	sentryStoneclawSpellID uint32 = 55277 // SENTRY_STONECLAW_SPELLID (Totem.h:35)
 	sentryBindSightSpellID uint32 = 6277  // SENTRY_BIND_SIGHT_SPELLID (Totem.h:36)
+	// m_spellImmune op slots (Unit::ApplySpellImmune, Unit.cpp:8268;
+	// SharedDefines.h:1426-1432): the script-written rows the
+	// creature:ApplySpellImmune event-surface bridge writes.
+	immunityOpEffect   uint32 = 0 // IMMUNITY_EFFECT: SpellEffects
+	immunityOpState    uint32 = 1 // IMMUNITY_STATE: AuraType
+	immunityOpSchool   uint32 = 2 // IMMUNITY_SCHOOL: SpellSchoolMask
+	immunityOpDamage   uint32 = 3 // IMMUNITY_DAMAGE: SpellSchoolMask
+	immunityOpDispel   uint32 = 4 // IMMUNITY_DISPEL: DispelType
+	immunityOpMechanic uint32 = 5 // IMMUNITY_MECHANIC: Mechanics
+	immunityOpID       uint32 = 6 // IMMUNITY_ID: spell id
 )
 
 // isTotalImmune mirrors Player::isTotalImmune (Player.cpp:24785-24798): any
@@ -1197,6 +1207,42 @@ func (s *session) creatureTargetImmuneToSpellEffect(ctx context.Context, targetG
 	return creatureImmuneToSpellEffect(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, effIndex, stats, s.server.isTotemGUID(targetGUID), caster, s.creatureFriendlyToCaster(caster, targetFaction))
 }
 
+// scriptSpellImmuneRows snapshots the creature's script-written
+// m_spellImmune rows (Unit::ApplySpellImmune, Unit.cpp:8268) as
+// (op<<32|type) -> granting spell ids. Presence of a key is what the C++
+// evals test (SpellImmuneContainer::count); the spell ids are only
+// removal keys there (and the immuneSpellInfo lookup in the school
+// folds). Resolved from the live motion under motionMu — callers must
+// not hold motionMu (none of the immunity evals do) and should snapshot
+// before taking auraMu.
+func scriptSpellImmuneRows(srv *Server, key creatureAuraKey) map[uint64][]uint32 {
+	if srv == nil {
+		return nil
+	}
+	srv.motionMu.Lock()
+	defer srv.motionMu.Unlock()
+	motion := srv.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || len(motion.ScriptSpellImmune) == 0 {
+		return nil
+	}
+	out := make(map[uint64][]uint32, len(motion.ScriptSpellImmune))
+	for k, ids := range motion.ScriptSpellImmune {
+		if len(ids) == 0 {
+			continue
+		}
+		cp := make([]uint32, len(ids))
+		copy(cp, ids)
+		out[k] = cp
+	}
+	return out
+}
+
+// scriptImmuneHas reports whether the script rows contain any entry for
+// (op, immType) — the Go twin of m_spellImmune[op].count(immType) > 0.
+func scriptImmuneHas(rows map[uint64][]uint32, op, immType uint32) bool {
+	return len(rows[uint64(op)<<32|uint64(immType)]) > 0
+}
+
 // creatureImmuneToDamageSpell is the creature-target analog of
 // isImmuneToDamageSpell: Unit::IsImmunedToDamage(SpellInfo const*)
 // (Unit.cpp:7818-7860) applies to any Unit, but Go's player-only
@@ -1218,6 +1264,47 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 		spell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune != 0 {
 		return false
 	}
+
+	// Script-written IMMUNITY_SCHOOL / IMMUNITY_DAMAGE rows
+	// (Unit::IsImmunedToDamage, Unit.cpp:7829-7847): the school fold is
+	// per-row with the pierce filter; the damage mask needs full
+	// coverage, no pierce (Unit.cpp:7844-7847).
+	if scriptRows := scriptSpellImmuneRows(srv, key); len(scriptRows) > 0 {
+		var scriptSchoolMask uint32
+		for k, ids := range scriptRows {
+			if uint32(k>>32) != immunityOpSchool {
+				continue
+			}
+			bit := uint32(k)
+			if bit&schoolMask == 0 {
+				continue
+			}
+			for _, id := range ids {
+				var immuneSpell wotlk.Spell
+				if id != 0 && srv.Data != nil {
+					if sp, found, err := srv.Data.Spell(id); err == nil && found {
+						immuneSpell = sp
+					}
+				}
+				if !canSpellPierceImmuneAura(spell, immuneSpell) {
+					scriptSchoolMask |= bit
+				}
+			}
+		}
+		if scriptSchoolMask&schoolMask == schoolMask {
+			return true
+		}
+		var scriptDamageMask uint32
+		for k := range scriptRows {
+			if uint32(k>>32) == immunityOpDamage {
+				scriptDamageMask |= uint32(k)
+			}
+		}
+		if scriptDamageMask&schoolMask == schoolMask {
+			return true
+		}
+	}
+
 	srv.auraMu.Lock()
 	defer srv.auraMu.Unlock()
 	var schoolImmunityMask uint32
@@ -1294,6 +1381,16 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
 		return false
 	}
+	// Script-written m_spellImmune rows (Unit.cpp:7962-7973):
+	// IMMUNITY_EFFECT contains the effect id, IMMUNITY_MECHANIC the
+	// effect's mechanic.
+	scriptRows := scriptSpellImmuneRows(srv, key)
+	if scriptImmuneHas(scriptRows, immunityOpEffect, eff.Effect) {
+		return true
+	}
+	if eff.Mechanic != 0 && scriptImmuneHas(scriptRows, immunityOpMechanic, eff.Mechanic) {
+		return true
+	}
 	// Totem::IsImmunedToSpellEffect (Totem.cpp:183-194): immune to all
 	// positive spells except DUMMY/SCRIPT_EFFECT effects, effects whose
 	// first implicit target is the caster, TARGET_CHECK_ENTRY area effects
@@ -1336,6 +1433,11 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 		if stats.FlagsExtra&creatureFlagExtraNoTaunt != 0 && eff.Aura == spellAuraModTaunt {
 			return true
 		}
+		// IMMUNITY_STATE script row (Unit.cpp:7977-7980): the aura id
+		// itself is the immunity type.
+		if scriptImmuneHas(scriptRows, immunityOpState, eff.Aura) {
+			return true
+		}
 		// SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm
 		// (Unit.cpp:7981-7989): immune to the application of harmful
 		// magical effects whose school overlaps a live 267 row's misc
@@ -1361,6 +1463,16 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
 		return false
 	}
+	// Script-written m_spellImmune rows (Unit.cpp:7857-7876):
+	// IMMUNITY_ID holds the spell id itself; IMMUNITY_DISPEL the
+	// spell's dispel type.
+	scriptRows := scriptSpellImmuneRows(srv, key)
+	if scriptImmuneHas(scriptRows, immunityOpID, spell.ID) {
+		return true
+	}
+	if spell.DispelType != 0 && scriptImmuneHas(scriptRows, immunityOpDispel, spell.DispelType) {
+		return true
+	}
 	// The friendly verdict defers to the callback even when caster is nil: the
 	// only in-tree callback (creatureTargetImmuneToSpell) already reports false
 	// for a nil caster, so this is behavior-identical there, and it lets a
@@ -1382,9 +1494,10 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	if anyEffect && immunedToAllEffects {
 		return true
 	}
-	// Spell-level mechanic (Unit.cpp:7870-7876) vs the template
-	// IMMUNITY_MECHANIC rows.
-	if spell.Mechanic != 0 && stats.MechanicImmuneMask&(1<<(spell.Mechanic-1)) != 0 {
+	// Spell-level mechanic (Unit.cpp:7870-7876): the template
+	// IMMUNITY_MECHANIC rows plus any script-written row.
+	if spell.Mechanic != 0 && (stats.MechanicImmuneMask&(1<<(spell.Mechanic-1)) != 0 ||
+		scriptImmuneHas(scriptRows, immunityOpMechanic, spell.Mechanic)) {
 		return true
 	}
 	// School fold (Unit.cpp:7888-7919): each template IMMUNITY_SCHOOL row
@@ -1404,6 +1517,33 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 			if !spellIsPositive(spell) || caster == nil || !friendly {
 				if !canSpellPierceImmuneAura(spell, wotlk.Spell{}) {
 					schoolImmunityMask |= bit
+				}
+			}
+		}
+		// Script-written IMMUNITY_SCHOOL rows (Unit.cpp:7888-7919):
+		// whole masks like SPELL_SCHOOL_MASK_MAGIC ride the same
+		// per-row fold; spellId 0 means no immuneSpellInfo (the zero
+		// Spell twin), exactly like the template rows above.
+		for k, ids := range scriptRows {
+			if uint32(k>>32) != immunityOpSchool {
+				continue
+			}
+			bit := uint32(k)
+			if bit&schoolMask == 0 {
+				continue
+			}
+			for _, id := range ids {
+				var immuneSpell wotlk.Spell
+				immuneKnown := false
+				if id != 0 && srv.Data != nil {
+					if sp, found, err := srv.Data.Spell(id); err == nil && found {
+						immuneSpell, immuneKnown = sp, true
+					}
+				}
+				if (immuneKnown && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !friendly {
+					if !canSpellPierceImmuneAura(spell, immuneSpell) {
+						schoolImmunityMask |= bit
+					}
 				}
 			}
 		}

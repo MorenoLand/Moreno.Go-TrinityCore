@@ -69,7 +69,9 @@
 -- cannot be verified against the bindings from the C++ sources
 -- alone (garr firesworn convention). The construct's
 -- instance-creature lookup, ResetThreatList/AddThreat(1,000,000)
--- and ApplySpellImmune arms additionally have no bridges. The
+-- and ApplySpellImmune arms stay out — the immunity bridge exists
+-- (creature:ApplySpellImmune) but the recv is cross-creature via the
+-- instance lookup, with no GUID-to-creature bridge. The
 -- spell_teron_gorefiend_shadow_of_death AuraScript (damage absorb
 -- nullified, on-expire summons the spirit + 4 skeletrons + 40282 +
 -- 40268) and spell_teron_gorefiend_spiritual_vengeance AuraScript

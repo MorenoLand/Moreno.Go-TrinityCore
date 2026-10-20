@@ -154,6 +154,10 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_veknilashAI::Reset() :429: ApplySpellImmune(0,
+    -- IMMUNITY_DAMAGE, SPELL_SCHOOL_MASK_MAGIC=126, true) — Vek'nilash
+    -- is immune to magic damage (Vek'lor takes the physical side).
+    creature:ApplySpellImmune(0, 3, 126, true)
 end
 
 -- C++ KilledUnit: DoPlaySoundToSet(me, SOUND_VN_KILL 8662), ungated.

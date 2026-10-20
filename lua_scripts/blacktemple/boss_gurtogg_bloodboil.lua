@@ -48,7 +48,8 @@
 -- SpellScript bridge), arm charge player 40602 2s one-shot,
 -- non-triggered on the stored GUID (ObjectAccessor::GetUnit arm —
 -- bridged by GUID match over the threat list); the taunt /
--- attack-me ApplySpellImmune arms have no bridge. If no target is
+-- attack-me ApplySpellImmune arms are PORTED in onStartPhase2 below
+-- (creature:ApplySpellImmune bridge). If no target is
 -- found: drop back to phase 1, re-arm the phase-1 schedule and the
 -- change-phase arm at 60s (C++-exact). The two player self-casts
 -- (target->CastSpell(target, 40617/40603, true), pure aura
@@ -56,8 +57,9 @@
 -- AddAura(40617)/AddAura(40603), which reproduces the resulting
 -- aura state (deliberate deviation, documented). Back in phase 1
 -- (on the 30s change-phase arm): cancel phase-2 timers, re-arm
--- change phase 60s, the taunt/attack-me immunity-off arms have no
--- bridge, re-arm the phase-1 schedule; the
+-- change phase 60s, the taunt/attack-me immunity-off arms are PORTED
+-- in onChangePhase (creature:ApplySpellImmune bridge), re-arm the
+-- phase-1 schedule; the
 -- ModifyThreatByPercent(-100) / AttackStart(oldTarget) /
 -- AddThreat(oldThreat) victim-restore arms have no AddThreat/GetThreat
 -- bridge (ClearThreatList is bridged but the arms restore threat, not
@@ -67,7 +69,7 @@
 -- blocked on the instance-script model; the DoPlaySoundToSet(11439)
 -- arm is ported via creature:PlayDirectSound. OnLeave-
 -- Combat(2)/OnReset(23): cancel timers, drop per-GUID state. The
--- Reset ApplySpellImmune(false) arms have no bridge; the
+-- Reset ApplySpellImmune(false) arms are PORTED in gurtoggReset; the
 -- EnterEvadeMode _DespawnAtEvade arm rides creature:Despawn in
 -- gurtoggLeaveCombat (drakkari/moorabi precedent). The CanAIAttack gate
 -- (!who->HasAura(SPELL_BEWILDERING_STRIKE 40491)) has no attack-
@@ -348,6 +350,12 @@ local function onStartPhase2(creature, guid)
     schedule(guid, "chargeplayer", 2000, function()
         onChargePlayer(creature, guid)
     end)
+    -- C++ EVENT_CHANGE_PHASE :232-233: fel rage makes him immune to
+    -- taunt effects (IMMUNITY_STATE/SPELL_AURA_MOD_TAUNT=11,
+    -- IMMUNITY_EFFECT/SPELL_EFFECT_ATTACK_ME=114), after the
+    -- EVENT_CHARGE_PLAYER schedule.
+    creature:ApplySpellImmune(0, 1, 11, true)
+    creature:ApplySpellImmune(0, 0, 114, true)
 end
 
 -- Phase-2 ScheduleEvents(): the C++ phase-2 initial delays.
@@ -369,8 +377,9 @@ end
 -- C++ EVENT_CHANGE_PHASE -> ChangePhase(): phase 1 -> 2 cancels
 -- group 1, re-arms change phase 30s, and arms the phase-2 set;
 -- phase 2 -> 1 cancels group 2, re-arms change phase 60s, arms
--- the phase-1 set; the threat/AttackStart victim-restore and the
--- ApplySpellImmune arms have no bridges — the GUID state is
+-- the phase-1 set; the threat/AttackStart victim-restore arms stay
+-- out (no AddThreat/GetThreat bridge) and the ApplySpellImmune
+-- immunity-off arms are PORTED in onChangePhase — the GUID state is
 -- cleared (C++ Initialize).
 function onChangePhase(creature, guid)
     local st = state[guid]
@@ -392,6 +401,13 @@ function onChangePhase(creature, guid)
         schedule(guid, "changephase", 60000, function()
             onChangePhase(creature, guid)
         end)
+        -- C++ ChangePhase() phase 2 -> 1 :285-286: fel rage ends — the
+        -- taunt immunities come off (IMMUNITY_STATE/MOD_TAUNT=11,
+        -- IMMUNITY_EFFECT/ATTACK_ME=114, both apply=false), before the
+        -- phase-1 schedule. The victim-restore arms stay out (no
+        -- AddThreat/GetThreat bridge).
+        creature:ApplySpellImmune(0, 1, 11, false)
+        creature:ApplySpellImmune(0, 0, 114, false)
         schedulePhase1Events(creature, guid)
     end
 end
@@ -437,6 +453,12 @@ end
 
 local function gurtoggReset(event, creature)
     gurtoggResetState(creature:GetGUID())
+    -- C++ Reset() :105-106: remove the fel-rage taunt immunities
+    -- (IMMUNITY_STATE/SPELL_AURA_MOD_TAUNT=11,
+    -- IMMUNITY_EFFECT/SPELL_EFFECT_ATTACK_ME=114, both apply=false) —
+    -- undoes the onStartPhase2 adds above.
+    creature:ApplySpellImmune(0, 1, 11, false)
+    creature:ApplySpellImmune(0, 0, 114, false)
 end
 
 RegisterCreatureEvent(ENTRY_GURTOGG_BLOODBOIL, 1, gurtoggEnterCombat)

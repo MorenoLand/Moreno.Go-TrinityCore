@@ -9,9 +9,10 @@
 -- Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Deviations from C++: the engine has no summon model, so the Astral
 -- Spark (17283) summon arm is skipped — the summon timer simply does not
--- exist in this port. The npc_mana_feeder, npc_barnes, and
--- npc_image_of_medivh scripts from the same C++ file are not registered:
--- mana feeder's only arms are ApplySpellImmune (no bridge), Barnes is an
+-- exist in this port. The npc_barnes and npc_image_of_medivh scripts
+-- from the same C++ file are not registered (npc_mana_feeder is ported
+-- in its own script — the six ApplySpellImmune school arms ride the
+-- creature:ApplySpellImmune bridge); Barnes is an
 -- EscortAI with gossip waypoints and instance-script arms (no gossip /
 -- escort / instance-script bridge), and Medivh's dialogue machine is
 -- triggered by MovementInform after a MovePoint (no movement model).

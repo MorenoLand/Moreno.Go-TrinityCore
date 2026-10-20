@@ -631,6 +631,70 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return 1.0
 	})
+	// ApplySpellImmune is Unit::ApplySpellImmune (Unit.cpp:8268): with
+	// apply=true inserts (type, spellId) into m_spellImmune[op], with
+	// apply=false removes the (type, spellId) rows. The spellId is only a
+	// removal key — the C++ immunity evals never consult it — so the Go
+	// model keeps it per row but the evals fold on (op, type) presence,
+	// exactly like Unit::IsImmunedToSpell[Effect] (Unit.cpp:7852-7994).
+	// Ops (SharedDefines.h:1426): 0 EFFECT (SpellEffects), 1 STATE
+	// (AuraType), 2 SCHOOL (SpellSchoolMask), 3 DAMAGE (SpellSchoolMask),
+	// 4 DISPEL (DispelType), 5 MECHANIC (Mechanics), 6 ID (spell id).
+	// The rows are consulted by the creature-target immunity chain in
+	// immunity.go at their C++ positions; immunity is server-side logic,
+	// so there is no values-update broadcast.
+	methods["ApplySpellImmune"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		op, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if op > 6 {
+			return nil, fmt.Errorf("ApplySpellImmune supports ops 0-6, got %d", op)
+		}
+		immType, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		apply := false
+		if len(args) >= 4 {
+			if b, ok := args[3].(bool); ok {
+				apply = b
+			}
+		}
+		key := uint64(op)<<32 | uint64(immType)
+		s.motionMu.Lock()
+		if apply {
+			if motion.ScriptSpellImmune == nil {
+				motion.ScriptSpellImmune = map[uint64][]uint32{}
+			}
+			for _, id := range motion.ScriptSpellImmune[key] {
+				if id == spellID {
+					s.motionMu.Unlock()
+					return nil, nil
+				}
+			}
+			motion.ScriptSpellImmune[key] = append(motion.ScriptSpellImmune[key], spellID)
+		} else if motion.ScriptSpellImmune != nil {
+			ids := motion.ScriptSpellImmune[key]
+			kept := ids[:0]
+			for _, id := range ids {
+				if id != spellID {
+					kept = append(kept, id)
+				}
+			}
+			if len(kept) == 0 {
+				delete(motion.ScriptSpellImmune, key)
+			} else {
+				motion.ScriptSpellImmune[key] = kept
+			}
+		}
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,
