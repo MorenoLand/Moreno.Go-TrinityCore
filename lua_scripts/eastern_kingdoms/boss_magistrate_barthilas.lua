@@ -27,12 +27,12 @@
 --   non-triggered -> GetVictim + CastSpell; 15s initial, 15s re-arm.
 -- - EVENT_MIGHTY_BLOW: DoCastVictim(SPELL_MIGHTYBLOW 14099)
 --   non-triggered -> GetVictim + CastSpell; 10s initial, 20s re-arm.
--- Unmodeled (documented-only, no bridges):
+-- Ported 2026-10-20 (display bridge live — handler-surface
+-- creature:SetDisplayId):
 -- - Reset: SetDisplayId(MODEL_NORMAL 10433) when alive /
---   SetDisplayId(MODEL_HUMAN 3637) when dead — no display-ID bridge
---   (jandice precedent); the timer/state reset is modeled.
--- - JustDied: SetDisplayId(MODEL_HUMAN 3637) — same, documented-only;
---   the timer/state clear is modeled.
+--   SetDisplayId(MODEL_HUMAN 3637) when dead (C++ IsAlive() gate).
+-- - JustDied: SetDisplayId(MODEL_HUMAN 3637).
+-- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight / JustEngagedWith: empty in C++ (pass-through to
 --   ScriptedAI) — no events registered.
 -- - UpdateAI's early `return` when AngerCount > 25 also skips the
@@ -148,10 +148,20 @@ end
 
 local function onDied(event, creature)
     clearState(creature:GetGUID())
+    -- C++ JustDied: SetDisplayId(MODEL_HUMAN 3637) — PORTED
+    -- 2026-10-20 (display bridge live).
+    creature:SetDisplayId(3637)
 end
 
 local function onReset(event, creature)
     clearState(creature:GetGUID())
+    -- C++ Reset(): SetDisplayId(MODEL_NORMAL 10433) when alive,
+    -- MODEL_HUMAN 3637 when dead — PORTED 2026-10-20.
+    if creature:IsDead() then
+        creature:SetDisplayId(3637)
+    else
+        creature:SetDisplayId(10433)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BARTHILAS, 1, onEnterCombat)

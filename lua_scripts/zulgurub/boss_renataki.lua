@@ -21,10 +21,13 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
 -- InterruptSpell(CURRENT_GENERIC_SPELL) has no bridge — skipped, the
--- state flips still happen; SetDisplayId(11686/15268), the
--- SetEquipmentSlots main-hand swap, and the UNIT_FLAG_NOT_SELECTABLE
--- flag arms have no bridges (arlokk convention) — invisibility is
--- modeled as state only, the boss stays targetable; DoTeleportTo has no
+-- state flips still happen; the SetEquipmentSlots main-hand swap and
+-- the UNIT_FLAG_NOT_SELECTABLE flag arms have no bridges (arlokk
+-- convention); the SetDisplayId(11686/15268) arms are display-
+-- bridgeable but stay out — an invisible model without the
+-- NOT_SELECTABLE leg would fabricate an invisible-but-targetable
+-- state C++ never exhibits. Invisibility is modeled as state only,
+-- the boss stays targetable; DoTeleportTo has no
 -- teleport bridge (jindo convention) — the ambush teleport is skipped
 -- and the cast lands on the picked player directly; the aggro-switch
 -- GetThreat/ModifyThreatByPercent(-50) + AttackStart arms have no threat
@@ -78,9 +81,10 @@ local function alivePlayersInInstance(creature)
     return found
 end
 
--- C++ invisible timer: InterruptSpell + unequip + display 11686 +
--- NOT_SELECTABLE have no bridge; the state flip is C++-exact, re-arm
--- {15s,30s}.
+-- C++ invisible timer: InterruptSpell + unequip +
+-- NOT_SELECTABLE have no bridge; the display-11686 arm is
+-- display-bridgeable but stays out paired with the flag leg;
+-- the state flip is C++-exact, re-arm {15s,30s}.
 local function onInvisible(creature, guid)
     local st = renatakiState[guid]
     if st then
@@ -117,9 +121,10 @@ local function onAmbush(creature, guid)
 end
 
 -- C++ visible timer: 4s, gated on _ambushed; InterruptSpell +
--- SetDisplayId(15268) + re-equip + RemoveFlag have no bridge; clears
--- _invisible C++-exact; re-arm 4000 C++-exact (idempotent while
--- visible).
+-- re-equip + RemoveFlag have no bridge; the SetDisplayId(15268)
+-- restore arm is display-bridgeable but stays out with the
+-- invisible leg; clears _invisible C++-exact; re-arm 4000
+-- C++-exact (idempotent while visible).
 local function onVisible(creature, guid)
     local st = renatakiState[guid]
     if st and st.ambushed and st.invisible then

@@ -41,10 +41,13 @@
 --   the yell when Thrall kills himself — player too far or escort end).
 -- - Reset (event 23): clears the LowHp latch (C++ Initialize() leg); the
 --   re-mount-if-HadMount, virtual-item-slot clear, and
---   SetDisplayId(THRALL_MODEL_UNEQUIPPED 17292) legs have no mount /
---   display bridges; the Talk SAY_TH_LEAVE_COMBAT (15) leg is conditioned
+--   SetDisplayId(THRALL_MODEL_UNEQUIPPED 17292) legs ride the
+--   unported escort machine (display bridge live 2026-10-20;
+--   no mount bridge); the Talk SAY_TH_LEAVE_COMBAT (15) leg is
+--   conditioned
 --   on HasEscortState(STATE_ESCORT_ESCORTING) — unmodeled escort state.
--- Unmodeled (documented-only, no bridges):
+-- Unmodeled (documented-only — display bridge live 2026-10-20,
+-- the legs ride the unported escort machine):
 -- - The entire EscortAI waypoint machine (npc_thrall_old_hillsbradAI
 --   WaypointReached): case 8 SetRun(false) + SummonCreature(ENTRY_ARMORER
 --   18764, 2181.87, 112.46, 89.45, 0.26, TIMED_DESPAWN_OUT_OF_COMBAT, 5s);

@@ -211,7 +211,7 @@ end
 local function janalaiReset(event, creature)
     janalaiResetState(creature:GetGUID())
     -- C++ Reset's HatchAllEggs(1) display-id restore has no bearer (no
-    -- egg enumeration / SetDisplayId bridge).
+    -- egg enumeration bridge; display bridge live 2026-10-20).
 end
 
 RegisterCreatureEvent(ENTRY_JANALAI, 1, janalaiEnterCombat)

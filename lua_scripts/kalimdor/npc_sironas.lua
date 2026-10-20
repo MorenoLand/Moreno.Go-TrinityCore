@@ -28,7 +28,8 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ JustEngagedWith
 -- values (uppercut 15s, immolate 10s, curse of blood 5s) + 1s
 -- scheduler pump; the C++ Reset() display-id arm (SetDisplayId
--- Modelid2) has no display bridge — unmodeled.
+-- Modelid2) stays out (display bridge live 2026-10-20 — the
+-- blocker is the unbridged Modelid2 bearer) — unmodeled.
 -- Pump (C++ UpdateAI arm order): uppercut arm — 15s init
 -- then 10-12s: non-triggered DoCastVictim(SPELL_UPPERCUT
 -- 10966) (C++-exact), re-arm 10s+rand(2s) regardless;
@@ -62,9 +63,10 @@
 -- 31611 and its interrupt stop) are driven by legoso's escort
 -- event machine and have no hook in this model (the engine
 -- shim fires events 1/2/3/4/5/9/14/23/26 only — omor
--- precedent); no display bridge — the Reset()
+-- precedent); no Modelid2-bearer bridge — the Reset()
 -- SetDisplayId(Modelid2) arm unmodeled (nether_drake
--- precedent); the JustDied SetObjectScale(1.0f) restore is
+-- precedent; display bridge live 2026-10-20); the JustDied
+-- SetObjectScale(1.0f) restore is
 -- vacuous (scale bridge exists — solarian precedent — but
 -- the legoso 3.0f flip is unported).
 -- Zone set status: zone_bloodmyst_isle.cpp closed —

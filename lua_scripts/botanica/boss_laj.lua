@@ -52,17 +52,17 @@
 --    (self-cast convention, C++-exact), CanSummon = true,
 --    re-arm 30000 + rand32() % 10000 (C++-exact). Melee is
 --    engine-driven.
--- The Transform_Timer / DoTransform() arm is a no-op in
--- this model: rand32() % 5 only SetDisplayId(MODEL_DEFAULT /
--- MODEL_ARCANE / MODEL_FIRE / MODEL_FROST / MODEL_NATURE) — no
--- display bridge — and the ApplySpellImmune school flips, which ride
--- the unported transform machine (the Reset() school matrix IS
--- ported in the event-23 hook below via creature:ApplySpellImmune).
+-- The Transform_Timer / DoTransform() arm is PORTED 2026-10-20
+-- (display bridge live): rand32() % 5 -> SetDisplayId(MODEL_DEFAULT
+-- 13109 / MODEL_ARCANE 14213 / MODEL_FIRE 13110 / MODEL_FROST 14112 /
+-- MODEL_NATURE 14214) + the per-case ApplySpellImmune school matrix
+-- (C++ case order), 30s init then 25s + rand32() % 15000 re-arm
+-- (C++-exact).
 -- OnDied(4): cleanup (the C++ has no JustDied override
 -- beyond the instance-blocked _JustDied). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the
--- C++ Reset() observable remainder — the SetDisplayId arm has no
--- bridge and lands nowhere, but the ApplySpellImmune school matrix
+-- C++ Reset() observable remainder — the SetDisplayId(MODEL_DEFAULT)
+-- arm is PORTED 2026-10-20 and the ApplySpellImmune school matrix
 -- IS ported in the event-23 hook below;
 -- the Initialize() re-latch lands on OnEnterCombat, gargolmar
 -- precedent; the _Reset arm is instance-blocked; Eluna's
@@ -88,6 +88,13 @@
 local SPELL_ALLERGIC_REACTION = 34697
 local SPELL_TELEPORT_SELF = 34673
 
+-- C++ boss_laj.cpp :46-51 model enum.
+local MODEL_DEFAULT = 13109
+local MODEL_ARCANE = 14213
+local MODEL_FIRE = 13110
+local MODEL_FROST = 14112
+local MODEL_NATURE = 14214
+
 local EMOTE_SUMMON = 0
 
 local ENTRY_LAJ = 17980
@@ -103,8 +110,9 @@ local function cancelCombatPump(guid)
     end
 end
 
--- C++ Reset() (called on evade): the SetDisplayId arm has no bridge
--- and _Reset() is instance-blocked; the ApplySpellImmune school
+-- C++ Reset() (called on evade): the SetDisplayId(MODEL_DEFAULT) arm
+-- is PORTED 2026-10-20 in the event-23 hook; _Reset() is
+-- instance-blocked; the ApplySpellImmune school
 -- matrix is PORTED in the event-23 hook below; the observable
 -- remainder — the Initialize() re-latch — lands on OnEnterCombat
 -- (gargolmar precedent).
@@ -116,8 +124,8 @@ end
 -- C++ UpdateAI in arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses
 -- into the pump. Only bridgeable arms are modeled (the
--- summon-cast and display/immune arms are bridge-blocked —
--- see deviations).
+-- summon-cast arms stay bridge-blocked (see deviations); the
+-- display/immune arms are PORTED 2026-10-20).
 local function combatTick(creature, guid)
     local st = combatStates[guid]
     if not st then
@@ -159,9 +167,38 @@ local function combatTick(creature, guid)
         st.teleport = st.teleport - 1000
     end
 
-    -- 4. Transform arm: DoTransform() is SetDisplayId +
-    -- ApplySpellImmune only (no display / immune bridges) —
-    -- a documented no-op, not scheduled.
+    -- 4. Transform arm: DoTransform() — rand32() % 5 model pick +
+    -- per-case SetDisplayId + ApplySpellImmune school matrix
+    -- (C++ DoTransform case order: display first, then the
+    -- shadow/arcane/fire/frost/nature immunity flips); re-arm
+    -- 25000 + rand32() % 15000 (C++-exact).
+    if st.transform <= 1000 then
+        local roll = math.random(0, 4)
+        local model = MODEL_DEFAULT
+        local immuneMask = 32 -- SPELL_SCHOOL_MASK_SHADOW
+        if roll == 1 then
+            model = MODEL_ARCANE
+            immuneMask = 64 -- SPELL_SCHOOL_MASK_ARCANE
+        elseif roll == 2 then
+            model = MODEL_FIRE
+            immuneMask = 4 -- SPELL_SCHOOL_MASK_FIRE
+        elseif roll == 3 then
+            model = MODEL_FROST
+            immuneMask = 16 -- SPELL_SCHOOL_MASK_FROST
+        elseif roll == 4 then
+            model = MODEL_NATURE
+            immuneMask = 8 -- SPELL_SCHOOL_MASK_NATURE
+        end
+        creature:SetDisplayId(model)
+        creature:ApplySpellImmune(0, 2, 32, immuneMask == 32)
+        creature:ApplySpellImmune(0, 2, 64, immuneMask == 64)
+        creature:ApplySpellImmune(0, 2, 4, immuneMask == 4)
+        creature:ApplySpellImmune(0, 2, 16, immuneMask == 16)
+        creature:ApplySpellImmune(0, 2, 8, immuneMask == 8)
+        st.transform = 25000 + math.random(0, 14999)
+    else
+        st.transform = st.transform - 1000
+    end
 end
 
 -- C++ ctor / Initialize() values (the whole schedule lands
@@ -177,6 +214,7 @@ RegisterCreatureEvent(ENTRY_LAJ, 1, function(_, creature)
         teleport = 20000,
         summon = 2500,
         allergic = 5000,
+        transform = 30000,
     }
     combatTimers[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
@@ -199,10 +237,12 @@ end)
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_LAJ, 23, function(_, creature)
     fullReset(creature:GetGUID())
-    -- C++ boss_lajAI::Reset() :87-91: school immunity matrix — shadow
-    -- school immune by default; arcane/fire/frost/nature explicitly
-    -- cleared (the DoTransform flips ride the unported transform
-    -- machine). SetDisplayId has no bridge.
+    -- C++ boss_lajAI::Reset() :86-91: SetDisplayId(MODEL_DEFAULT)
+    -- PORTED 2026-10-20 (display bridge live — C++ arm order:
+    -- display first, then the school immunity matrix); shadow
+    -- school immune by default, arcane/fire/frost/nature explicitly
+    -- cleared (the DoTransform flips are ported in the combat tick).
+    creature:SetDisplayId(MODEL_DEFAULT)
     creature:ApplySpellImmune(0, 2, 32, true)
     creature:ApplySpellImmune(0, 2, 64, false)
     creature:ApplySpellImmune(0, 2, 4, false)

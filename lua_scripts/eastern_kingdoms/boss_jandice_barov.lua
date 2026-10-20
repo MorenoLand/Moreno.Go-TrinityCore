@@ -24,18 +24,23 @@
 -- but has no summoned bearer, kormok/herod
 -- precedent) and the Summons SummonList/DespawnAll tracking;
 -- EVENT_ILLUSION's SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
--- + SetDisplayId(11686 invisible model) + ModifyThreatByPercent
--- (victim, -99) legs and EVENT_SET_VISIBILITY's RemoveFlag +
--- SetDisplayId(11073 Jandice model) legs (no UNIT_FIELD_FLAGS,
--- display-ID, or threat bridge); EVENT_CLEAVE is declared in the C++
--- enum but never scheduled. Spell 17773's summon effect is
--- engine-driven.
+-- + SetDisplayId(11686 invisible model) legs PORTED 2026-10-20
+-- (flag/display bridges live — handler-surface SetFlag/RemoveFlag
+-- on UNIT_FIELD_FLAGS=59, creature:SetDisplayId); the
+-- ModifyThreatByPercent(victim, -99) leg has no threat bridge —
+-- documented-only. EVENT_SET_VISIBILITY's RemoveFlag +
+-- SetDisplayId(11073 Jandice model) legs PORTED 2026-10-20.
+-- EVENT_CLEAVE is declared in the C++ enum but never scheduled.
+-- Spell 17773's summon effect is engine-driven.
 
 local ENTRY_JANDICE_BAROV = 10503
 
 local SPELL_CURSE_OF_BLOOD = 24673
 local SPELL_ILLUSION = 17773
 local SPELL_DROP_JOURNAL = 26096
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 
 local timers = {}
 
@@ -75,16 +80,23 @@ end
 
 -- C++ EVENT_SET_VISIBILITY (3s one-shot from EVENT_ILLUSION):
 -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) +
--- SetDisplayId(11073). No UNIT_FIELD_FLAGS/display-ID bridge — the
--- timer shape is preserved, the legs are documented-only.
+-- SetDisplayId(11073 Jandice model) — both bridged, PORTED
+-- 2026-10-20 (handler-surface RemoveFlag(59) + SetDisplayId).
 local function onSetVisibility(creature, guid)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetDisplayId(11073)
 end
 
 -- C++ EVENT_ILLUSION: non-triggered DoCast(17773) on self; re-arm
--- 25s; schedule EVENT_SET_VISIBILITY 3s. The flag/display-ID/threat
--- legs have no bridges (see header) and are documented-only.
+-- 25s; schedule EVENT_SET_VISIBILITY 3s. The flag/display legs are
+-- ported below; the threat leg has no bridge (see header) and is
+-- documented-only.
 local function onIllusion(creature, guid)
     creature:CastSpell(creature, SPELL_ILLUSION)
+    -- C++ arm order: cast, SetFlag(NOT_SELECTABLE),
+    -- SetDisplayId(11686 invisible).
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetDisplayId(11686)
     schedule(guid, "set_visibility", 3000, function()
         onSetVisibility(creature, guid)
     end)

@@ -56,9 +56,11 @@
 -- DATA_ANUBARAK, FAIL) (instance-script model absent, standing) +
 -- SummonCreature(NPC_SCARAB) x10 (summon STRAND absent, standing).
 -- boss_anubarak_trial JustSummoned NPC_BURROW 34862 leg —
--- SetDisplayId (no display bridge) + SetReactState(REACT_PASSIVE)
--- (no react bridge) + Churning Ground self-cast (rides the
--- unbridged summon); JustSummoned NPC_SPIKE 34660 leg —
+-- SetDisplayId (display bridge live 2026-10-20) +
+-- SetReactState(REACT_PASSIVE) (react bridge exists) +
+-- Churning Ground self-cast (rides the unbridged summon — the
+-- summon never exists, the true blocker); JustSummoned
+-- NPC_SPIKE 34660 leg —
 -- SelectTarget(Random,0,0.0f,true) -> EngageWithTarget (no
 -- random-target SelectTarget bridge — cairne/kazzak precedent) +
 -- Talk(EMOTE_SPIKE 0, target) (rides the unbridged leg).
@@ -160,11 +162,13 @@
 -- npc_frost_sphere (34606) — zero registration (joins the
 -- entry-verifiable-but-bridge-blocked queue): Reset —
 -- SetReactState(REACT_PASSIVE) + DoCast(Frost Sphere 67539) +
--- SetDisplayId + MoveRandom (no react / display / motion-master
--- bridges); DamageTaken + MovementInform(POINT_FALL_GROUND)
+-- SetDisplayId + MoveRandom (react/display bridges exist — the
+-- blockers are zero registration + the motion-master bridge);
+-- DamageTaken + MovementInform(POINT_FALL_GROUND)
 -- ground-impact machine (event 9 DamageTaken IS bridged — the old
 -- "no DamageTaken hook" claim is stale; no MovementInform hook;
--- no flag / aura / display / motion bridges).
+-- no flag / aura / motion bridges — display bridge live
+-- 2026-10-20 but the hook machine itself is unported).
 -- spell_pursuing_spikes (AuraScript 65920/65922/65923) —
 -- PeriodicTick permafrost-caster check -> Spike Fail 66181 +
 -- DisappearAndDie — no AuraScript binding bridge (razelikh

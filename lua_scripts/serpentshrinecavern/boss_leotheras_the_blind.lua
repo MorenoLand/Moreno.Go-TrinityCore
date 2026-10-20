@@ -66,7 +66,9 @@
 -- demonForm=false, needThreatReset=true, switchToHuman=60000
 -- (the CastConsumingMadness arm is demon-cast — no inner demons
 -- exist in this model — and the DespawnDemon/SetDisplayId/
--- LoadEquipment arms have no bridges — unmodeled, below). Final
+-- LoadEquipment arms stay out (display bridge live 2026-10-20 —
+-- the blockers are the unbridged demon-despawn/summon and item
+-- bridges) — unmodeled, below). Final
 -- form: once-guarded healthBelowPct(creature, 15) (C++ HealthBelowPct(15),
 -- floored integer threshold — GetHealthPct() < 15 fired up to 1 HP early)
 -- -> isFinalForm=true, demonForm=false, Talk(SAY_FINAL_FORM)

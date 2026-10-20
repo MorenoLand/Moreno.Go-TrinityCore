@@ -70,8 +70,9 @@
 -- (30391 NPC_HEALTHY_MUSHROOM / 30435 NPC_POISONOUS_MUSHROOM —
 -- ahnkahet.h kalecgos pass): zero registration. Reset leg —
 -- SetReactState(REACT_PASSIVE) (no react-state bridge —
--- drakkari_colossus precedent) + SetDisplayId(Modelid2) (no
--- display bridge) + DoCastSelf triplet (Putrid Mushroom 31690 /
+-- drakkari_colossus precedent) + SetDisplayId(Modelid2) (display
+-- bridge live 2026-10-20 — the blocker is the unbridged Modelid2
+-- bearer) + DoCastSelf triplet (Putrid Mushroom 31690 /
 -- Shrink 31691 triggered / Grow 57059 triggered) + the
 -- healthy/poisonous visual-aura self-cast (56740 / 56741) + the
 -- 800ms re-Grow scheduler: wiring the bridged self-casts without

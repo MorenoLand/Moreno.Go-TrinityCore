@@ -92,8 +92,9 @@
 -- generator-channel magic-barrier upkeep (npc_shield_generator_
 -- channel, 19870: DoCast(vashj, SPELL_MAGIC_BARRIER 38112, true)
 -- via instance GUID, SetDisplayId(11686) invisible + NOT_
--- SELECTABLE flag — no cross-creature/display/flag bridges,
--- documented only, not registered), and the tainted-elemental
+-- SELECTABLE flag — no cross-creature bridge (display/flag
+-- bridges live 2026-10-20), documented only, not registered),
+-- and the tainted-elemental
 -- JustDied -> EventTaintedElementalDeath relay (unmodeled); no
 -- threat bridge — the melee-range check is the 5-yd player
 -- stand-in; the JustEngagedWith AddThreat(0.1f) arm is dropped;

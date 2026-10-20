@@ -35,10 +35,12 @@
 -- casts nothing but the timer re-arms, C++-exact). PosCheck 2.5s:
 -- if within 18 yd (2D) of (HYDROSS_X, HYDROSS_Y) -> switch to clean
 -- form: CorruptedForm=false, MarkOfHydross_Count=0, Talk(SAY_SWITCH_
--- TO_CLEAN); the SetDisplayId(MODEL_CLEAN 20162), ResetThreatList,
--- SummonBeams, 4x DoSpawnCreature(ENTRY_PURE_SPAWN 22035),
--- SetMeleeDamageSchool(frost) and ApplySpellImmune arms have no
--- bridges (below). Clean form: MarkOfHydross 15s then 15s —
+-- TO_CLEAN); the SetDisplayId(MODEL_CLEAN 20162) arm is PORTED
+-- 2026-10-20 (C++ arm order — first at the switch) and ResetThreatList
+-- is PORTED 2026-10-17; the SummonBeams, 4x DoSpawnCreature(ENTRY_
+-- PURE_SPAWN 22035) and SetMeleeDamageSchool(frost) arms have no
+-- bridges (below); the ApplySpellImmune school arms are ported
+-- (below). Clean form: MarkOfHydross 15s then 15s —
 -- DoCastVictim of 38215/38216/38217/38218/38231/40584 by stack
 -- count, same escalation rule. Water tomb 38235 7s then 7s — the
 -- C++ SelectTarget(Random, 0, 100, true) player-only 100-yd pick is
@@ -47,10 +49,12 @@
 -- (C++-exact). PosCheck 2.5s: if NOT within 18 yd -> switch to
 -- corrupted form: CorruptedForm=true, MarkOfCorruption_Count=0,
 -- Talk(SAY_SWITCH_TO_CORRUPT); the SetDisplayId(MODEL_CORRUPT
--- 20609), ResetThreatList, DeSummonBeams, 4x DoSpawnCreature(ENTRY_
--- TAINTED_SPAWN 22036), SetMeleeDamageSchool(nature) stay out (no
--- bridges); the ApplySpellImmune school arms are PORTED at the
--- switch points (below). Enrage (both
+-- 20609) arm is PORTED 2026-10-20 (C++ arm order — first at the
+-- switch) and ResetThreatList is PORTED 2026-10-17; the
+-- DeSummonBeams, 4x DoSpawnCreature(ENTRY_TAINTED_SPAWN 22036)
+-- and SetMeleeDamageSchool(nature) arms stay out (no bridges);
+-- the ApplySpellImmune school arms are PORTED at the switch
+-- points (below). Enrage (both
 -- forms): 27680 10min then 60s, non-triggered self-cast
 -- (C++-exact — the spell carries "needs verification" in C++, kept
 -- verbatim). OnTargetDied(3): Talk(corrupted ? SAY_CORRUPT_SLAY :
@@ -60,7 +64,7 @@
 -- OnReset(23): cancel the pump, drop per-GUID state (the Reset-side
 -- DeSummonBeams + Summons.DespawnAll are summon-blocked; the
 -- instance SetData(NOT_STARTED), SetMeleeDamageSchool, ApplySpell
--- Immune and SetDisplayId arms have no bridges).
+-- Immune arms have no bridges; the SetDisplayId arm is ported).
 -- Deliberate deviations (all await engine bridges): no summon
 -- bridge — the first-UpdateAI-tick SummonBeams pair (ENTRY_BEAM_
 -- DUMMY 21934 + triggered SPELL_BLUE_BEAM 38015), the 4x pure/
@@ -71,9 +75,11 @@
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
 -- arms are summon-blocked; ResetThreatList on both form switches
 -- PORTED 2026-10-17 (creature:ClearThreatList, bridged
--- lua_objects.go:389, C++ arm order after Talk); no display
--- MODEL_CORRUPT/MODEL_CLEAN SetDisplayId swaps unmodeled
--- (maulgar convention); no school bridge — SetMeleeDamageSchool
+-- lua_objects.go:389, C++ arm order after Talk); the
+-- MODEL_CORRUPT/MODEL_CLEAN SetDisplayId swaps are PORTED
+-- 2026-10-20 (handler-surface creature:SetDisplayId bridge,
+-- lua_creature_events.go — C++ arm order, first at both switches
+-- and at Reset); no school bridge — SetMeleeDamageSchool
 -- and the ApplySpellImmune frost/nature immunity arms unmodeled
 -- (karazhan mana-feeder convention); no instance-script model —
 -- boss admission via the luaBossAI shim (DATA_HYDROSSTHEUNSTABLE
@@ -200,8 +206,10 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch back to clean form inside the radius.
-        -- The SetDisplayId / beam-summon / add-spawn / melee-school
-        -- arms stay out (no bridges); the school immunity arms ride
+        -- The beam-summon / add-spawn / melee-school arms stay out
+        -- (no bridges); the SetDisplayId(MODEL_CLEAN 20162) arm is
+        -- PORTED 2026-10-20 (C++ arm order — first); the school
+        -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
         -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
@@ -211,6 +219,8 @@ local function hydrossTick(creature, guid)
             local dx = creature:GetX() - HYDROSS_X
             local dy = creature:GetY() - HYDROSS_Y
             if dx * dx + dy * dy <= SWITCH_RADIUS * SWITCH_RADIUS then
+                -- C++ :289: SetDisplayId(MODEL_CLEAN) — first arm.
+                creature:SetDisplayId(20162)
                 st.corrupted = false
                 st.hydrossCount = 0
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
@@ -246,8 +256,10 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch to corrupted form outside the radius.
-        -- The SetDisplayId / beam-despawn / add-spawn / melee-school
-        -- arms stay out (no bridges); the school immunity arms ride
+        -- The beam-despawn / add-spawn / melee-school arms stay out
+        -- (no bridges); the SetDisplayId(MODEL_CORRUPT 20609) arm is
+        -- PORTED 2026-10-20 (C++ arm order — first); the school
+        -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
         -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
@@ -257,6 +269,8 @@ local function hydrossTick(creature, guid)
             local dx = creature:GetX() - HYDROSS_X
             local dy = creature:GetY() - HYDROSS_Y
             if dx * dx + dy * dy > SWITCH_RADIUS * SWITCH_RADIUS then
+                -- C++ :373: SetDisplayId(MODEL_CORRUPT) — first arm.
+                creature:SetDisplayId(20609)
                 st.corrupted = true
                 st.corruptCount = 0
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
@@ -290,6 +304,8 @@ end
 
 local function hydrossLeaveCombat(event, creature)
     resetState(creature:GetGUID())
+    -- C++ Reset() :143 runs on evade: restore the clean model.
+    creature:SetDisplayId(20162)
 end
 
 -- C++ KilledUnit: per-form slay line, no TYPEID gate.
@@ -321,6 +337,9 @@ local function hydrossReset(event, creature)
     -- bridge (lua_creature_events.go).
     creature:ApplySpellImmune(0, 2, 16, true)
     creature:ApplySpellImmune(0, 2, 8, false)
+    -- C++ Reset() :143: SetDisplayId(MODEL_CLEAN) — C++ arm order
+    -- after the school-immunity arms.
+    creature:SetDisplayId(20162)
 end
 
 RegisterCreatureEvent(ENTRY_HYDROSS, 1, hydrossEnterCombat)

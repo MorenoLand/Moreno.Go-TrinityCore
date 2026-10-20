@@ -86,8 +86,9 @@
 -- is summon-blocked — unmodeled. Dark Fiend (25744). OnSpawn(5):
 -- triggered self-cast darkfiend skin 45934 (C++-exact — the
 -- constructor/Initialize arm, which has no Reset() override (the
--- class never re-casts it on evade); the SetDisplayId arm has no
--- display bridge and the constructor machine is unported (the react
+-- class never re-casts it on evade); the SetDisplayId arm rides the
+-- unported constructor machine (display bridge live 2026-10-20 —
+-- the blocker is the unbridged Modelid2 bearer) (the react
 -- bridge exists — creature:SetReactState — but the REACT_PASSIVE arm
 -- rides that unported constructor). The 2s arm (REACT_AGGRESSIVE
 -- + RemoveFlag(NOT_SELECTABLE) + summoner-GUID random-target
