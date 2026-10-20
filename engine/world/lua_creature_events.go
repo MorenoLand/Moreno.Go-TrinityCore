@@ -592,9 +592,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and
 	// chain/area target filtering — intro NOT_SELECTABLE/NON_ATTACKABLE arms
-	// port with real targeting effect. Other update fields have no creature
-	// backing here and are ignored, matching the no-op stance of the
-	// unbridged NPC/dynamic-flag arms.
+	// port with real targeting effect. UNIT_NPC_FLAGS (field 82) is honored
+	// too (see below); other update fields have no creature backing here and
+	// are ignored, matching the no-op stance of the unbridged dynamic-flag
+	// arms.
 	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
 		field, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -604,10 +605,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
+		var npcFlags uint32
+		npcDirty := false
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags |= flags
 			s.motionMu.Unlock()
+		} else if field == unitFieldNPCFlags {
+			// UNIT_NPC_FLAGS (UpdateFields.h:139: OBJECT_END+0x4C = 82), the
+			// live value behind the gossip/quest/vendor service flags that
+			// the server-side hello gates (gossip.go, quest_details.go,
+			// taxi.go) and the client service icons read. C++ SetFlag ORs
+			// the bits; the values-update broadcast twin mirrors the
+			// object-surface SetNPCFlags so clients see the change without
+			// waiting for the next spawn rebuild.
+			s.motionMu.Lock()
+			motion.NPCFlags |= flags
+			motion.NPCFlagsKnown = true
+			npcFlags, npcDirty = motion.NPCFlags, true
+			s.motionMu.Unlock()
+		}
+		if npcDirty {
+			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
+				map[int]uint32{unitFieldNPCFlags: npcFlags})
 		}
 		return nil, nil
 	}
@@ -620,13 +640,55 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
+		var npcFlags uint32
+		npcDirty := false
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags &^= flags
 			s.motionMu.Unlock()
+		} else if field == unitFieldNPCFlags {
+			// UNIT_NPC_FLAGS (see SetFlag above): C++ RemoveFlag ANDNs the bits.
+			s.motionMu.Lock()
+			motion.NPCFlags &^= flags
+			motion.NPCFlagsKnown = true
+			npcFlags, npcDirty = motion.NPCFlags, true
+			s.motionMu.Unlock()
+		}
+		if npcDirty {
+			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
+				map[int]uint32{unitFieldNPCFlags: npcFlags})
 		}
 		return nil, nil
 	}
+	// SetNPCFlags is CreatureMethods::SetNPCFlags (CreatureMethods.h:909-915):
+	// SetUInt32Value(UNIT_NPC_FLAGS, flags) — whole-value assignment, the
+	// SetUInt32Value twin of the granular SetFlag/RemoveFlag(82) arms above.
+	// The object surface (lua_objects.go) carries the same method for
+	// session-bound creatures, but the event surface keeps a separate method
+	// table, so it needs its own copy: spark_overgrind's Reset was calling a
+	// nil method here before this bridge existed.
+	methods["SetNPCFlags"] = func(_ context.Context, args []any) ([]any, error) {
+		flags, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.NPCFlags = flags
+		motion.NPCFlagsKnown = true
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
+			map[int]uint32{unitFieldNPCFlags: flags})
+		return nil, nil
+	}
+	// GetNPCFlags is CreatureMethods::GetNPCFlags
+	// (CreatureMethods.h:861-865): GetUInt32Value(UNIT_NPC_FLAGS), read from
+	// the motion's live value (initialized from the template npcflag at
+	// spawn, mutated by the SetNPCFlags/SetFlag(82)/RemoveFlag(82) bridges).
+	methods["GetNPCFlags"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.NPCFlags
+	})
 	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
 	// GetClosestCreatureWithEntry (ObjectAccessor): the nearest live creature
 	// of entry within dist yards (3D, the C++ IsWithinDistInMap metric) in the

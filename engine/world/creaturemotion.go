@@ -77,6 +77,7 @@ type creatureMotion struct {
 	FlagsExtra            uint32
 	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
 	NPCFlags              uint32 // UNIT_NPC_FLAGS live value: Lua CreatureMethods::GetNPCFlags/SetNPCFlags (SetUInt32Value twin), init from template npcflag at spawn
+	NPCFlagsKnown         bool   // set by the event-surface SetNPCFlags/SetFlag(82)/RemoveFlag(82) bridges; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	DisableReputationGain bool   // Creature::DisableReputationGain (Creature.h:320-321, default false); Lua IsReputationGainDisabled/SetDisableReputationGain
 	CanFly                bool
 	ReactState            uint8

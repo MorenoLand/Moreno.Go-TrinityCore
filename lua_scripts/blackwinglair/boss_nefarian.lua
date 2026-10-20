@@ -60,11 +60,12 @@
 -- comes from the DB (menu 6045) and is approximated — the real text
 -- lives in the DB, not in C++ (vaelastrasz convention); the C++
 -- BeginEvent faction/stand-state/barrier/immune-to-PC/NPC-flag and
--- AttackStart arms: the SetStandState(UNIT_STAND_STATE_STAND) leg IS
--- bridged and ported at the gossip select (see beginEvent); the
--- faction / barrier-cast / immune-to-PC / NPC-flag / AttackStart
--- legs still have no bridges — the timers are armed from the gossip
--- select (the BeginEvent site) and combat begins on pull; no
+-- AttackStart arms: the SetStandState(UNIT_STAND_STATE_STAND) and the
+-- SetUInt32Value(UNIT_NPC_FLAGS, NONE) legs ARE bridged and ported at
+-- the gossip select (see beginEvent); the faction / barrier-cast /
+-- immune-to-PC / AttackStart legs still have no bridges — the timers
+-- are armed from the gossip select (the BeginEvent site) and combat
+-- begins on pull; no
 -- summon model — the drakonid waves, the Nefarian summon, the
 -- chromatic-chaos/vaelastrasz-spawn UBRS casts, and the
 -- SummonedCreatureDies bone-construct transformation (dead
@@ -263,10 +264,14 @@ local function beginEvent(creature, guid)
     st.spawnedAdds = 0
     st.eventStarted = true
     creature:Talk(SAY_GAMESBEGIN_2)
+    -- C++ BeginEvent SetUInt32Value(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_NONE):
+    -- the whole-value NPC-flag clear is bridged (SetNPCFlags on the
+    -- event surface); the gossip option goes away once the event begins.
+    -- The faction / barrier-cast / immune / AttackStart legs still have
+    -- no bridges (see deviations).
+    creature:SetNPCFlags(0)
     -- C++ BeginEvent SetStandState(UNIT_STAND_STATE_STAND): the bridged
-    -- leg of the arm (faction / npc-flags / barrier-cast / immune /
-    -- AttackStart legs have no bridges, see deviations); he stands up
-    -- from the throne when the event begins.
+    -- leg of the arm; he stands up from the throne when the event begins.
     creature:SetStandState(UNIT_STAND_STATE_STAND)
     schedule(guid, "shadowbolt", math.random(3000, 10000), function()
         onNefariusShadowBolt(creature, guid)
@@ -310,10 +315,13 @@ local function onNefariusReset(event, creature)
     -- C++ boss_victor_nefariusAI::Reset (boss_nefarian.cpp:182-197):
     -- on map 469 he sits on the throne (SetStandState(
     -- UNIT_STAND_STATE_SIT_HIGH_CHAIR)) and the barrier aura is
-    -- removed; SetVisible / SetPhaseMask / UNIT_NPC_FLAGS / faction
-    -- legs have no bridges (see deviations), so only the bridged
-    -- legs port.
+    -- removed; SetVisible / SetPhaseMask / faction legs have no
+    -- bridges (see deviations), so only the bridged legs port.
     if creature:GetMapId() == 469 then
+        -- C++ SetUInt32Value(UNIT_NPC_FLAGS, 1): whole-value set to the
+        -- GOSSIP bit, bridged via SetNPCFlags on the event surface
+        -- (UpdateFields.h:139: UNIT_NPC_FLAGS = 82).
+        creature:SetNPCFlags(1)
         creature:SetStandState(UNIT_STAND_STATE_SIT_HIGH_CHAIR)
         creature:RemoveAura(SPELL_NEFARIANS_BARRIER)
     end

@@ -23,15 +23,16 @@
 -- Ported arms:
 -- - Reset (C++ Reset, event 23): only the !eventInProgress branch is
 --   reachable in this port (eventInProgress latches true on quest
---   accept; the C++ gossip-questgiver flag re-set has no bridge) —
---   DoCastSelf(SPELL_ARCANE_INTELLECT 13326) under the C++ HasAura
---   guard (non-triggered self-cast); local event/channeling state
---   re-armed, timers cleared.
+--   accept) — DoCastSelf(SPELL_ARCANE_INTELLECT 13326) under the C++
+--   HasAura guard (non-triggered self-cast); local event/channeling
+--   state re-armed, timers cleared; the gossip-questgiver flag re-set
+--   (SetFlag(UNIT_NPC_FLAGS, 82, 2)) IS bridged and ported.
 -- - OnQuestAccept (C++ OnQuestAccept, event 31): quest id 3525
 --   (QUEST_EXTINGUISHING_THE_IDOL) -> eventInProgress latch,
---   Talk(SAY_QUEST_ACCEPTED 0). The rest (RemoveFlag questgiver,
---   SetFaction escorted, MovePath(PATH_ESCORT 871710) escort run) has
---   no bridges — documented-only.
+--   Talk(SAY_QUEST_ACCEPTED 0); the RemoveFlag questgiver leg IS
+--   bridged (RemoveFlag(82, 2)) and ported. The rest (SetFaction
+--   escorted, MovePath(PATH_ESCORT 871710) escort run) has no bridges
+--   — documented-only.
 -- - Engage (C++ JustEngagedWith): arms Fireball at 1s and Frost Nova
 --   at {8s,12s}, and with urand(0,100) > 40 -> Talk(SAY_AGGRO 6);
 --   channeling (never set here — MovementInform has no bridge) ->
@@ -86,6 +87,10 @@ local SAY_WATCH_OUT      = 7
 local QUEST_EXTINGUISHING_THE_IDOL = 3525
 
 local SPELL_ARCANE_INTELLECT = 13326
+
+-- GossipDef.h:36: GOSSIP_OPTION_QUESTGIVER = 2 (UNIT_NPC_FLAG_QUESTGIVER).
+-- Field 82 = UNIT_NPC_FLAGS (UpdateFields.h:139).
+local UNIT_NPC_FLAG_QUESTGIVER = 2
 local SPELL_FIREBALL         = 9053
 local SPELL_FROST_NOVA       = 11831
 
@@ -221,6 +226,11 @@ local function onReset(event, creature)
             end
         end
         st.channeling = false
+        -- C++ npc_belnistraszAI::Reset (razorfen_downs.cpp:108):
+        -- me->SetFlag(UNIT_NPC_FLAGS, GOSSIP_OPTION_QUESTGIVER) — the
+        -- questgiver service flag is re-armed on reset while the event
+        -- has not started (the !eventInProgress gate above).
+        creature:SetFlag(82, UNIT_NPC_FLAG_QUESTGIVER)
     end
 end
 
@@ -234,6 +244,11 @@ local function onQuestAccept(event, player, creature, quest)
     local st = getState(creature:GetGUID())
     st.eventInProgress = true
     creature:Talk(SAY_QUEST_ACCEPTED)
+    -- C++ npc_belnistraszAI::OnQuestAccept (razorfen_downs.cpp:137):
+    -- me->RemoveFlag(UNIT_NPC_FLAGS, GOSSIP_OPTION_QUESTGIVER) — the
+    -- questgiver flag goes away once the escort event starts (the
+    -- SetFaction/MovePath legs have no bridges — documented-only).
+    creature:RemoveFlag(82, UNIT_NPC_FLAG_QUESTGIVER)
 end
 
 local function onDied(event, creature, killer)

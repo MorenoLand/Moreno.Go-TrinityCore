@@ -242,6 +242,13 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+		if motion.NPCFlagsKnown {
+			// A Lua arm overrode the live NPC flags (SetNPCFlags /
+			// SetFlag(82) / RemoveFlag(82)): the spawn must carry the live
+			// value, not the DB-template row, or the next rebuild would
+			// clobber it. Untouched creatures keep the DB/game-event value.
+			spawn.NPCFlags = motion.NPCFlags
+		}
 		if motion.EmoteStateKnown {
 			spawn.Emote = motion.EmoteState
 			spawn.emoteStateKnown = true

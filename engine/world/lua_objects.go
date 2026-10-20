@@ -172,8 +172,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	state.InstanceID = motion.InstanceID
 	state.DisplayID, state.Health, state.MaxHealth, state.Level = uint32(displayID), motion.Health, motion.MaxHealth, motion.Level
 	state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
+	npcFlagsKnown, liveNPCFlags := motion.NPCFlagsKnown, motion.NPCFlags
 	s.server.motionMu.Unlock()
 	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
+	if npcFlagsKnown {
+		// A Lua arm overrode the live NPC flags (event-surface SetNPCFlags /
+		// SetFlag(82) / RemoveFlag(82)): the server-side hello gates
+		// (gossip.go, quest_details.go, taxi.go) must see the live value,
+		// not the DB-template snapshot, or e.g. a questgiver flag set on
+		// Reset would still fail the quest-hello gate. Untouched creatures
+		// keep the DB/game-event value above (a Lua override intentionally
+		// replaces the game-event OR, matching C++ SetUInt32Value
+		// semantics).
+		state.NPCFlags = liveNPCFlags
+	}
 	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family, state.UnitFlags = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family), uint32(unitFlags)
 	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
