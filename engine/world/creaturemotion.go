@@ -2504,7 +2504,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// broke every scripted mid-combat passive phase (threat wiped,
 		// combat bounced, boss re-acquired from scratch). This is the
 		// AttackStop twin (:259-261); victim re-selection stays gated in
-		// the threat-update step below.
+		// the threat-update step below. Unit::AttackStop (Unit.cpp:5772)
+		// clears the visual stare target (UNIT_FIELD_TARGET) ahead of the
+		// stop packet — a passive phase drops the stare like any attack stop.
+		s.clearCreatureVisualTarget(motion)
 		if motion.TargetGUID != 0 {
 			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), nil)
 		}
