@@ -175,10 +175,32 @@ local function onBerserk(creature, guid)
 end
 
 -- C++ EVENT_ICE_TOMB: CastSpell(nullptr, SPELL_ICE_TOMB_TARGET,
--- TRIGGERED_FULL_MASK) — victim-less cast (:515-518), re-arm
--- {16s,23s}.
+-- TRIGGERED_FULL_MASK) with SPELLVALUE_MAX_TARGETS=1 (:515-518) — the
+-- nullptr runs the spell's implicit random-enemy selection, so the tomb
+-- lands on a random raid member, not the victim. The Go cast path binds an
+-- explicit target GUID only, so nil would always tomb the tank;
+-- randomPlayerTarget restores the C++ pick (tank stays in the pool, per the
+-- implicit targeting). Re-arm {16s,23s}.
+local function randomPlayerTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function onIceTomb(creature, guid)
-    creature:CastSpell(nil, SPELL_ICE_TOMB_TARGET, true)
+    local target = randomPlayerTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_ICE_TOMB_TARGET, true)
+    end
     schedule(guid, "ice_tomb", {16000, 23000}, function() onIceTomb(creature, guid) end)
 end
 

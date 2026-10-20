@@ -219,14 +219,37 @@ local function onSoulstorm(creature, guid)
     creature:CastSpell(creature, SPELL_SOULSTORM)
 end
 
--- C++ :200-203 EVENT_FEAR (PHASE_2 only): victim-cast 68950
--- (the { SPELLVALUE_MAX_TARGETS, 1 } custom leg has no bridge — see
--- header); re-arm {8000,12000}ms.
+-- C++ :200-203 EVENT_FEAR (PHASE_2 only): CastSpell(nullptr, SPELL_FEAR,
+-- { SPELLVALUE_MAX_TARGETS, 1 }) — the nullptr runs the spell's implicit
+-- random-enemy selection capped at 1 target, not a victim cast. The Go cast
+-- path binds an explicit target GUID only, so nil would always fear the
+-- tank; randomFearTarget restores the C++ pick (tank stays in the pool, per
+-- the implicit targeting; the existing randomPlayer helper excludes the
+-- victim for the Corrupt Soul SelectTarget(Random, 1) arm and does not
+-- apply here). Re-arm {8000,12000}ms.
+local function randomFearTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 local function onFear(creature, guid)
     if not phase2[guid] then
         return
     end
-    creature:CastSpell(nil, SPELL_FEAR)
+    local target = randomFearTarget(creature)
+    if target then
+        creature:CastSpell(target, SPELL_FEAR)
+    end
     schedule(guid, "fear", {8000, 12000}, function() onFear(creature, guid) end)
 end
 
