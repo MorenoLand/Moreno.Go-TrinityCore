@@ -17,12 +17,12 @@
 -- Lua-side: each Astral Flare summon drains 10% of max mana exactly as
 -- C++ ModifyPower(POWER_MANA, -GetMaxPower/10); the Evocate arm fires when
 -- the drain leaves mana strictly below 10%, mirroring C++ GetPower*100/
--- GetMaxPower < 10. The Lua bridge exposes no power-write APIs (reads
--- creature:GetPower()/GetMaxPower() are bridged via the object-field
--- fallback), so the Evocation
--- channel's in-spell mana refill is approximated by restoring mana to 100%
--- after the 20s channel; in-combat mana regen is not modeled (evocates on
--- a pure drain clock: 10 summons, ~100s). ApplySpellImmune(arcane damage)
+-- GetMaxPower < 10. Power writes ride the creature:SetPower bridge
+-- (lua_creature_events.go), but the Lua-side percent model stays: the
+-- engine models no in-combat mana regen, so the deterministic drain clock
+-- (10 summons, ~100s) is C++-exact where the live field would drift. The
+-- Evocation channel's in-spell mana refill is approximated by restoring
+-- mana to 100% after the 20s channel. ApplySpellImmune(arcane damage)
 -- from Reset and InterruptNonMeleeSpells(false) before Evocation have no
 -- bridge. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
 -- i.e. a non-tank — is approximated with a random alive player in 100 yd,

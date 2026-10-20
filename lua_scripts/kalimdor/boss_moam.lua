@@ -28,10 +28,10 @@
 --   RemoveAura convention), schedule next stone phase at 90s
 --   (C++ DoAction(ACTION_STONE_PHASE_END)).
 -- Unmodeled (documented-only, no bridges):
--- - Mana-full -> Arcane Eruption 25672 + SetPower(MANA, 0): the Lua
---   bridge has no SetPower for creatures (engine/scripting/object.go
---   binds GetPower/GetMaxPower reads but no setter; curator precedent
---   documents the same gap) — the eruption leg cannot be wired.
+-- - Mana-full -> Arcane Eruption 25672 + SetPower(MANA, 0): wired
+--   via the creature:SetPower bridge (lua_creature_events.go), C++ order
+--   (end stone phase, self-cast eruption, zero power). The engine models
+--   no power regen, so the leg stays dormant unless a fill lands.
 -- - EVENT_DRAIN_MANA: never scheduled in C++ Reset() (only
 --   rescheduled inside its own handler) — dead code, never fires in
 --   C++; not ported (C++-verbatim).
@@ -45,6 +45,8 @@ local SPELL_SUMMON_MANA_FIEND_1 = 25681
 local SPELL_SUMMON_MANA_FIEND_2 = 25682
 local SPELL_SUMMON_MANA_FIEND_3 = 25683
 local SPELL_ENERGIZE = 25685
+local SPELL_ARCANE_ERUPTION = 25672 -- boss_moam.cpp:123 DoCastAOE
+local POWER_MANA = 0 -- Powers enum (Unit.h): MANA 0
 
 local timers = {}
 local moamState = {}
@@ -134,6 +136,9 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     moamState[guid] = { stonePhase = false }
+    -- C++ Reset() :73: me->SetPower(POWER_MANA, 0) — the meter zeroes on
+    -- reset (after _Reset, before Initialize/schedule).
+    creature:SetPower(POWER_MANA, 0)
 end
 
 -- C++ DamageTaken: !_isStonePhase && HealthBelowPct(45) ->
@@ -144,6 +149,20 @@ end
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moamState[guid]
+    -- C++ DamageTaken mana-full leg (boss_moam.cpp :119-127): mana at max ->
+    -- end the stone phase (ACTION_STONE_PHASE_END), self-cast ARCANE
+    -- ERUPTION (DoCastAOE = self-cast), SetPower(MANA, 0). The max>0
+    -- guard skips the degenerate zero-data case (C++ templates always
+    -- carry a real max). The engine models no power regen, so this stays
+    -- dormant unless a fill lands.
+    local maxPower = creature:GetMaxPower()
+    if state ~= nil and maxPower > 0 and creature:GetPower() == maxPower then
+        if state.stonePhase then
+            endStonePhase(creature, guid)
+        end
+        creature:CastSpell(creature, SPELL_ARCANE_ERUPTION)
+        creature:SetPower(POWER_MANA, 0)
+    end
     if state == nil or state.stonePhase then
         return
     end

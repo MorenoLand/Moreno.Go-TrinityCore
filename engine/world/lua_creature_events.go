@@ -225,6 +225,84 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: health})
 		return nil, nil
 	}
+	// SetPower is Unit::SetPower (Unit.cpp): writes UNIT_FIELD_POWER1+type,
+	// clamped to the type's max (C++ clamps via std::min against
+	// GetMaxPower), then broadcasts the update field. powerType is validated
+	// 0-4 (POWER_MANA..POWER_HAPPINESS); SetPowerType legs stay out (no
+	// power-type bridge).
+	methods["SetPower"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType > 4 {
+			return nil, fmt.Errorf("SetPower requires a power type 0-4, got %d", powerType)
+		}
+		value, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if value > motion.MaxPowers[powerType] {
+			value = motion.MaxPowers[powerType]
+		}
+		motion.Powers[powerType] = value
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): value})
+		return nil, nil
+	}
+	// ModifyPower is Unit::ModifyPower (Unit.cpp:7439): the signed delta is
+	// added to the current power, floored at 0, then SetPower clamps to the
+	// type's max. Returns the new power, matching the C++ int32 return.
+	methods["ModifyPower"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType > 4 {
+			return nil, fmt.Errorf("ModifyPower requires a power type 0-4, got %d", powerType)
+		}
+		delta, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		next := int64(motion.Powers[powerType]) + delta
+		if next < 0 {
+			next = 0
+		}
+		if next > int64(motion.MaxPowers[powerType]) {
+			next = int64(motion.MaxPowers[powerType])
+		}
+		motion.Powers[powerType] = uint32(next)
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): uint32(next)})
+		return []any{uint32(next)}, nil
+	}
+	// SetMaxPower is Unit::SetMaxPower (Unit.cpp): writes
+	// UNIT_FIELD_MAXPOWER1+type and broadcasts the update field. The current
+	// power is left untouched (C++ does not clamp current on max change).
+	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType > 4 {
+			return nil, fmt.Errorf("SetMaxPower requires a power type 0-4, got %d", powerType)
+		}
+		value, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.MaxPowers[powerType] = value
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldMaxPower1 + int(powerType): value})
+		return nil, nil
+	}
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
 	// creature leaves the world immediately — motion removed, a
 	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,
@@ -647,11 +725,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	motionPowerType := motion.PowerType
+	if motionPowerType >= uint32(len(motion.Powers)) {
+		motionPowerType = 0
+	}
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{
 		"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry,
 		"Map": state.Map, "MapId": state.Map,
 		"X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": motion.Orientation,
 		"Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level,
+		"Power": motion.Powers[motionPowerType], "MaxPower": motion.MaxPowers[motionPowerType],
+		"PowerType":  motionPowerType,
 		"InstanceId": motion.InstanceID,
 		"InWorld":    true,
 	}, Methods: methods}

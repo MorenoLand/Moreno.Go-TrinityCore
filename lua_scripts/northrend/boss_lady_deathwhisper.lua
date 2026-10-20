@@ -218,6 +218,7 @@ local SAY_DARNAVAN_AGGRO = 0
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_MANA_BARRIER = 70842
 local SPELL_SHADOW_CHANNELING = 43897 -- :226 Reset self-cast
+local POWER_MANA = 0 -- Powers enum (Unit.h): MANA 0
 local SPELL_FROSTBOLT = 71420 -- :66
 local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
 local SPELL_DARK_TRANSFORMATION_T = 70895 -- :71 (boss trigger)
@@ -333,10 +334,10 @@ end
 -- C++ DamageTaken phase-2 transition (:407-417): gate
 -- _phase == PHASE_ONE && damage > me->GetPower(POWER_MANA); then
 -- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
--- RemoveAurasDueToSpell(MANA_BARRIER), CancelGroup(GROUP_ONE), seed
--- GROUP_TWO. Dropped legs: DoStartMovement (no motion bridge),
--- SetPower(MANA, 0) (no SetPower bridge —
--- no behavioral effect: the gate latches on PHASE_TWO).
+-- SetPower(MANA, 0), RemoveAurasDueToSpell(MANA_BARRIER),
+-- CancelGroup(GROUP_ONE), seed GROUP_TWO. Dropped leg: DoStartMovement
+-- (no motion bridge). SetPower(MANA, 0) rides the creature:SetPower
+-- bridge (lua_creature_events.go), C++ order (drain, zero, strip aura).
 -- FIDELITY CAVEAT: the mana_barrier AuraScript is unbridged, so in Go
 -- mana never drains and damage > mana fires only on a single hit
 -- exceeding her full mana pool — the transition condition is C++-exact,
@@ -370,6 +371,10 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         deathwhisperPhase[guid] = 3
         creature:Talk(SAY_PHASE_2)
         creature:Talk(EMOTE_PHASE_2)
+        -- C++ :412-413: damage -= me->GetPower(POWER_MANA);
+        -- me->SetPower(POWER_MANA, 0) — drain then zero, before the aura
+        -- strip.
+        creature:SetPower(POWER_MANA, 0)
         creature:RemoveAura(SPELL_MANA_BARRIER)
         -- C++ DamageTaken phase-2: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no threat bridge" header claim was
@@ -436,6 +441,10 @@ local function deathwhisperReset(event, creature)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SHADOW_CHANNELING)
     end
+    -- C++ :227: me->SetPower(POWER_MANA, me->GetMaxPower(POWER_MANA)) —
+    -- unconditional, after the channeling cast; the mana pool refills on
+    -- reset via the creature:SetPower bridge.
+    creature:SetPower(POWER_MANA, creature:GetMaxPower())
 end
 
 -- C++ boss_lady_deathwhisper::KilledUnit:

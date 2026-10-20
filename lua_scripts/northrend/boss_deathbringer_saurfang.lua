@@ -122,8 +122,9 @@
 --   SPELL_MARK_OF_THE_FALLEN_CHAMPION_S 72256 /
 --   SPELL_RUNE_OF_BLOOD_S 72408, true) all TRIGGERED (:264-268) +
 --   RemoveAurasDueToSpell(SPELL_BERSERK / SPELL_FRENZY) via the
---   RemoveAura bridge (the arlokk / bronjahm idiom). The _Reset() /
---   SetPower(ENERGY, 0) / SetPhase bookkeeping legs have no bridge.
+--   RemoveAura bridge (the arlokk / bronjahm idiom) + SetPower(ENERGY, 0)
+--   (:265) via the creature:SetPower bridge (lua_creature_events.go).
+--   The _Reset() / SetPhase bookkeeping legs have no bridge.
 --   Mirrors the `if (_dead) return;` early-out (:277-278): after the
 --   fight-won leg the reset casts are skipped.
 -- JustDied (:315-317) is EMPTY in C++ — event 4 only cancels timers
@@ -246,6 +247,8 @@ local SPELL_BLOOD_LINK = 72178
 local SPELL_BLOOD_POWER = 72371
 local SPELL_MARK_OF_THE_FALLEN_CHAMPION_S = 72256
 local SPELL_RUNE_OF_BLOOD_S = 72408
+
+local POWER_ENERGY = 3 -- Powers enum (Unit.h): MANA 0, RAGE 1, FOCUS 2, ENERGY 3
 
 local FIGHT_WON_VALUE = 100000 -- boss_deathbringer_saurfang.cpp:614
 
@@ -379,6 +382,10 @@ local function saurfangReset(event, creature)
         return
     end
     saurfangState[guid] = { frenzied = false, dead = false }
+    -- C++ Reset() :265: me->SetPower(POWER_ENERGY, 0) — the blood-power
+    -- meter zeroes on reset (SPELL_ZERO_POWER's aura scripts are
+    -- unbridged; the bridge writes the live power field).
+    creature:SetPower(POWER_ENERGY, 0)
     -- C++ Reset(): DoCastSelf(ZERO_POWER/BLOOD_LINK/BLOOD_POWER/
     -- MARK_OF_THE_FALLEN_CHAMPION_S/RUNE_OF_BLOOD_S) are Reset-only
     -- (boss_deathbringer_saurfang.cpp). Alive-gated; the timer cancel and
