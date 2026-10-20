@@ -199,8 +199,10 @@ local onRavage
 local onTransformBack
 
 -- C++ panther transform: self-cast 24190 (non-triggered), vanish
--- visual 24222, vanish 24223; threat/passive/flag/equipment/movement
--- arms have no bridge. The C++ EVENT_TRANSFORM was scheduled with
+-- visual 24222, vanish 24223; ResetThreatList PORTED 2026-10-19 via
+-- creature:ClearThreatList (bridged lua_objects.go:389); the passive /
+-- flag / equipment / movement arms still have no bridge. The C++
+-- EVENT_TRANSFORM was scheduled with
 -- phase PHASE_ONE, so the 1s vanish chain only runs in troll form.
 local function onVanish2(creature, guid)
     local st = arlokkState(guid)
@@ -248,6 +250,10 @@ local function onTransform(creature, guid)
     -- C++ does not cancel the troll timers here: with _phase still 0
     -- they keep firing through the vanish chain (see cancelKeys note).
     creature:CastSpell(creature, SPELL_PANTHER_TRANSFORM)
+    -- C++ EVENT_TRANSFORM: ResetThreatList() between the transform and
+    -- vanish casts (bridged lua_objects.go:389); the AttackStop /
+    -- REACT_PASSIVE / flag / equipment arms still have no bridge.
+    creature:ClearThreatList()
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     creature:CastSpell(creature, SPELL_VANISH)
     schedule(timers, guid, "vanish", 1000, function()

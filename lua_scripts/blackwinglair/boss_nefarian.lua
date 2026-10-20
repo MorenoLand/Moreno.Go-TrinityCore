@@ -203,6 +203,9 @@ local function onNefariusShadowBolt(creature, guid)
             creature:CastSpell(target, SPELL_SHADOWBOLT)
         end
     end
+    -- C++ EVENT_SHADOW_BOLT: ResetThreatList after the cast (threat wipe
+    -- is the arm's core mechanic; bridged lua_objects.go:389).
+    creature:ClearThreatList()
     schedule(guid, "shadowbolt", math.random(3000, 10000), function()
         onNefariusShadowBolt(creature, guid)
     end)

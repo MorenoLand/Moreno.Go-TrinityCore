@@ -16,7 +16,8 @@
 -- magic
 -- grounding 19714 24s then 35s, non-triggered self-cast / counterspell
 -- 19715 15s then {16s,20s}, non-triggered DoCastVictim / Gate of
--- Shazzrah 45s then 45s (ResetThreatList has no bridge; DoCastAOE(23138)
+-- Shazzrah 45s then 45s (ResetThreatList PORTED 2026-10-19 via
+-- creature:ClearThreatList, bridged lua_objects.go:389; DoCastAOE(23138)
 -- ports as non-triggered self-cast, selin_fireheart convention — the
 -- SpellScript teleport/target-switch legs have no bridge): schedules the triggered arcane explosion
 -- 2s later (non-triggered DoCastVictim 19712, one-shot) and
@@ -129,8 +130,9 @@ local function onCounterspell(creature, guid)
     end)
 end
 
--- C++ EVENT_SHAZZRAH_GATE: 45s then 45s. ResetThreatList has no
--- bridge (no threat model); the DoCastAOE(SPELL_SHAZZRAH_GATE_DUMMY
+-- C++ EVENT_SHAZZRAH_GATE: 45s then 45s. ResetThreatList PORTED
+-- 2026-10-19 (creature:ClearThreatList, bridged lua_objects.go:389);
+-- the DoCastAOE(SPELL_SHAZZRAH_GATE_DUMMY
 -- 23138) leg lowers to non-triggered self-cast (selin_fireheart
 -- DoCastAOE convention — the old "no bridge" claim was wrong). The
 -- spell_shazzrah_gate_dummy SpellScript (random area target, that
@@ -146,6 +148,10 @@ local function onGateTriggeredExplosion(creature, guid)
 end
 
 local function onShazzrahGate(creature, guid)
+    -- C++ EVENT_SHAZZRAH_GATE: ResetThreatList() before the gate dummy
+    -- cast (bridged lua_objects.go:389; the old "no bridge" header claim
+    -- was stale).
+    creature:ClearThreatList()
     creature:CastSpell(creature, SPELL_SHAZZRAH_GATE_DUMMY)
     schedule(guid, "gateexplosion", 2000, function()
         onGateTriggeredExplosion(creature, guid)

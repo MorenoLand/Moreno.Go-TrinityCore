@@ -180,10 +180,14 @@ local function onRainOfBones(creature, guid)
     if nightbaneState[guid] == nil then
         return
     end
+    -- C++ EVENT_RAIN_OF_BONES: ResetThreatList() before the random-target
+    -- cast (bridged lua_objects.go:389); SetFacingToObject still has no
+    -- bridge.
+    creature:ClearThreatList()
     local target = randomAlivePlayer(creature)
     if target ~= nil then
-        -- C++ SetFacingToObject / ResetThreatList have no bridge; the
-        -- AuraScript periodic skeleton summon has no AuraScript model.
+        -- C++ SetFacingToObject has no bridge; the AuraScript periodic
+        -- skeleton summon has no AuraScript model.
         creature:CastSpell(target, SPELL_RAIN_OF_BONES)
     end
 end

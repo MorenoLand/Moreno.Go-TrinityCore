@@ -66,9 +66,12 @@
 -- the ObjectAccessor majordomo kill) has no react/flag/immune/
 -- creature-lookup bridges (emerge emote is ported) — the fight
 -- starts on pull instead of after the 53s intro; the submerge
--- AttackStop, ResetThreatList, InterruptNonMeleeSpells, faction
--- change, NOT_SELECTABLE flag and SUBMERGED emotestate have no
--- bridges; the emerge react/faction/flag/AttackStart arms have no
+-- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
+-- bridged lua_objects.go:389). The submerge AttackStop,
+-- InterruptNonMeleeSpells, faction change, NOT_SELECTABLE flag and
+-- SUBMERGED emotestate have no bridges (AttackStop additionally stays
+-- out because the emerge AttackStart resume leg is unbridged); the
+-- emerge react/faction/flag/AttackStart arms have no
 -- bridges (submerge/emerge emotes are ported); no summon model —
 -- the 8 sons of
 -- flame never spawn; the magma blast IsWithinMeleeRange gate has no
@@ -286,6 +289,11 @@ onSubmerge = function(creature, guid)
     local s = getState(guid)
     -- C++ boss_ragnaros.cpp:260: HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE=374)
     creature:PerformEmote(374)
+    -- C++ EVENT_SUBMERGE: ResetThreatList() (bridged lua_objects.go:389,
+    -- PORTED 2026-10-19). The sibling AttackStop arm stays out: the emerge
+    -- AttackStart leg has no bridge, so stopping attacks here would leave
+    -- the boss passive after emerge.
+    creature:ClearThreatList()
     if not s.hasSubmergedOnce then
         creature:Talk(SAY_REINFORCEMENTS1)
         s.hasSubmergedOnce = true
