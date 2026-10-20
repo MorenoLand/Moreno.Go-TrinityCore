@@ -2054,19 +2054,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// (2609 precedes 2629). The EVADE-miss arm is vacuous (evaded targets
 	// are skipped below; PreprocessTarget, Spell.cpp:2347, nulls
 	// _spellHitTarget on any miss, and this path models no plain-miss
-	// verdict, so every remaining hit target is live). A landed reflect
-	// retargets _spellHitTarget to the caster (Spell.cpp:2350) — the
-	// friendly gate below makes the return trip a no-op, and a bounced
-	// return trip (IMMUNE) nulls it. The AtTargetAttacked half is covered
-	// by the combat tick's aggro when this path's no-damage-model damage
-	// lands.
+	// verdict, so every remaining hit target is live). A bounced reflect
+	// return trip (IMMUNE) nulls _spellHitTarget (Spell.cpp:2346-2350) and
+	// stands nothing; a LANDED reflect keeps the ORIGINAL target for this
+	// arm — the stand-up leg fires on TargetInfo::unit (the reflector),
+	// not on _spellHitTarget (the caster). The AtTargetAttacked half is
+	// covered by the combat tick's aggro when this path's no-damage-model
+	// damage lands.
 	if spellKnown && (!spellIsPositive(spellInfo) || spellHasEffect(spellInfo, spellEffectDispel)) {
 		for _, guid := range hitTargets {
-			if status, reflected := reflectedTargets[guid]; reflected {
-				if status != protocol.SpellMissNone {
-					continue
-				}
-				guid = m.GUID
+			if status, reflected := reflectedTargets[guid]; reflected && status != protocol.SpellMissNone {
+				continue
 			}
 			if evadedTargets[guid] {
 				continue

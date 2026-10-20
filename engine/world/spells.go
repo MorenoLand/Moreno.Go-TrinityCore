@@ -10167,6 +10167,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			}
+			// A landed reflect retargets hitTargets to the caster, but the
+			// stand-up arm fires on TargetInfo::unit — the reflector
+			// (Spell.cpp:2609-2617) — gated on !caster->IsFriendlyTo(unit).
+			// The bounced return trip (ReflectStatus != NONE) nulls
+			// _spellHitTarget (Spell.cpp:2346-2350) and stands nothing.
+			for _, miss := range missStatus {
+				if miss.Reason != protocol.SpellMissReflect || miss.ReflectStatus != protocol.SpellMissNone {
+					continue
+				}
+				if ts := s.server.findSessionByGUID(miss.TargetGUID); ts != nil && ts.player != nil {
+					if ts.player.StandState != 0 && !s.isFriendlyToPlayer(ts) {
+						ts.player.StandState = 0
+						ts.sendPlayerUpdate()
+					}
+					continue
+				}
+				if s.player != nil {
+					if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, miss.TargetGUID); tm != nil {
+						if s.attackTargetFriendlyToPlayer(miss.TargetGUID, combatTarget{Faction: tm.Faction}) {
+							continue
+						}
+						s.server.standCreatureMotionUp(tm)
+					}
+				}
+			}
 		}
 		// Per-(cast, target) first-merge marker for the aura re-apply path
 		// (Spell.cpp:2842): only the first aura effect per target runs the
@@ -11799,6 +11824,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			for _, effectTarget := range hitTargets {
 				if effectTarget != 0 && effectTarget != s.playerGUID {
 					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
+				}
+			}
+			// A landed reflect engages the reflector (TargetInfo::unit),
+			// not the retargeted caster: Unit::AtTargetAttacked fires on
+			// `unit` (Spell.cpp:2609-2617). hitTargets holds the caster on
+			// the return trip, so the reflector is aggroed from the
+			// reflect's miss entry; a bounced return trip (ReflectStatus
+			// != NONE) nulls _spellHitTarget and engages nothing.
+			for _, miss := range missStatus {
+				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone && miss.TargetGUID != 0 {
+					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
 				}
 			}
 		}
