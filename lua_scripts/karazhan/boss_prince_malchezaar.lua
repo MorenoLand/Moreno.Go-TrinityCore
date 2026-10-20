@@ -177,6 +177,26 @@ armShadowNova = function(creature, guid, delay)
     schedule(guid, "shadow", delay, function() onShadowNova(creature, guid) end)
 end
 
+-- C++ UpdateAI every-tick arm (boss_prince_malchezaar.cpp:404-405): after
+-- the EnfeebleReset branch and the UNIT_STATE_STUNNED early-return,
+-- before the phase arms —
+--   if (me->GetVictim() && me->GetTarget() != me->EnsureVictim()->GetGUID())
+--       me->SetTarget(me->EnsureVictim()->GetGUID());
+-- The visual target re-syncs to the victim whenever they differ. Modeled
+-- as a 1s self-re-arming timer (the file's UpdateAI-timer idiom); the
+-- stun-gate is not modeled — timers fire unconditionally, the standing
+-- convention for these ports (documented above).
+local function onTargetSync(creature, guid)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        local victimGuid = victim:GetGUID()
+        if creature:GetTarget() ~= victimGuid then
+            creature:SetTarget(victimGuid)
+        end
+    end
+    schedule(guid, "targetsync", 1000, function() onTargetSync(creature, guid) end)
+end
+
 local function onEnfeebleReset(creature, guid)
     local st = malchezaarState[guid]
     if st == nil then
@@ -388,6 +408,7 @@ local function malchezaarEnterCombat(event, creature, target)
     armShadowNova(creature, guid, 35500)
     armSWPain(creature, guid, 20000)
     schedule(guid, "infernal", 40000, function() onInfernal(creature, guid) end)
+    schedule(guid, "targetsync", 1000, function() onTargetSync(creature, guid) end)
 end
 
 local function malchezaarLeaveCombat(event, creature)

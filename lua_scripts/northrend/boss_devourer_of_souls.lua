@@ -94,9 +94,10 @@
 -- do not port.
 -- The wailing beam choreography (SetFacingToObject :288, beamAngle
 -- SetFacingTo :314, InterruptNonMeleeSpells :297,
--- SetReactState(REACT_PASSIVE) :299, SetTarget(Empty) :302, motion
--- Clear :304, SetControlled(true, UNIT_STATE_ROOT) :305) — no facing /
--- interrupt / react / motion / root bridge, does not port.
+-- SetReactState(REACT_PASSIVE) :299, motion Clear :304,
+-- SetControlled(true, UNIT_STATE_ROOT) :305) does not port — triaged out
+-- in the facing/react hunts (beam-choreography movement legs);
+-- SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
 -- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
 -- latch feeds only GetData(DATA_THREE_FACED) (:231-236, no GetData bridge)
@@ -333,8 +334,10 @@ end
 -- 3000ms (:309). The
 -- SetDisplayId(DISPLAY_DESIRE) leg (:282) and the beam/movement
 -- choreography (SetFacingToObject :288, InterruptNonMeleeSpells :297,
--- REACT_PASSIVE :299, SetTarget(Empty) :302, motion Clear :304,
--- SetControlled root :305) have no bridge and do not port.
+-- REACT_PASSIVE :299, motion Clear :304, SetControlled root :305) do not
+-- port (triaged out in the facing/react hunts — beam-choreography movement
+-- legs); SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget
+-- bridge).
 -- Assigned to the forward-declared upvalue (moam precedent): `local function`
 -- here would shadow it and leave the re-arm closure bound to nil.
 wailingSoulsTick = function(creature, guid)
@@ -349,6 +352,10 @@ wailingSoulsTick = function(creature, guid)
     if target then
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
+    -- C++ :302 SetTarget(ObjectGuid::Empty) — "remove any target" after the
+    -- beam, before the motion Clear; ported 2026-10-20 via the
+    -- creature:SetTarget bridge (0 = ObjectGuid::Empty).
+    creature:SetTarget(0)
     -- C++ :307 events.DelayEvents(18s) — push every other armed timer out
     -- 18s (no other events during wailing souls); the tick chain is
     -- scheduled after, so it is not delayed.

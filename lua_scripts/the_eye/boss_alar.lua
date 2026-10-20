@@ -460,6 +460,11 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         st.revive = 5000
         -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        -- boss_alar.cpp:212 — C++ arm order after SetFlag(:210) /
+        -- AttackStop(:211): clear the visual target (ObjectGuid::Empty);
+        -- the Interrupt(:208)/RemoveAllAuras(:209)/speed(:213)/motion
+        -- (:214-215) legs stay unbridged.
+        creature:SetTarget(0)
         return 0, 0
     end
 end)

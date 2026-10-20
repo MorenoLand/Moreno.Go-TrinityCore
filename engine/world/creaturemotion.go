@@ -95,6 +95,8 @@ type creatureMotion struct {
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
+	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Unit::SetTarget twin, Object.cpp) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
+	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
 	BaseScale             float32             // creature_template.scale: template base for the scale twin and GetScale, init at motion creation (loadCreatureStats)
 	// CreatureType mirrors creature_template.type (8 = critter,
 	// CritterAI::Permissible, PassiveAI.cpp:95-100).

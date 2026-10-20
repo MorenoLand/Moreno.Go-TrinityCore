@@ -658,6 +658,39 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return 1.0
 	})
+	// SetTarget is Unit::SetTarget (Object.cpp): m_target = guid, the visual
+	// UNIT_FIELD_TARGET (the GUID shown above the creature's head). It is
+	// NOT the combat victim (motion.TargetGUID, driven by the threat
+	// manager) — the C++ arms this backs are the boss "stare" effects
+	// (malchezaar enfeeble, cthun eye beam, northrend_beasts icehowl stare,
+	// kaelthas mind-control stares) plus the Reset/JustDied clears that
+	// restore the empty target. Accepts a GUID number or a creature/player
+	// object (luaObjectGUID); nil/0 clears, the ObjectGuid::Empty twin. The
+	// live value broadcasts as a values-update; applyCreatureMotionToSpawn
+	// overlays it onto the spawn record so rebuilds keep it. Backs the
+	// target-gap hunt (hidden_files/target_gap_hunt.py, 2026-10-20).
+	methods["SetTarget"] = func(_ context.Context, args []any) ([]any, error) {
+		var guid uint64
+		if len(args) > 0 && args[0] != nil {
+			guid = luaObjectGUID(args[0])
+		}
+		s.motionMu.Lock()
+		motion.ScriptTargetGUID = guid
+		motion.ScriptTargetKnown = true
+		mapID, instanceID, motionGUID := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, motionGUID,
+			map[int]uint32{unitFieldTarget: uint32(guid), unitFieldTarget + 1: uint32(guid >> 32)})
+		return nil, nil
+	}
+	// GetTarget is Unit::GetTarget: the live visual target GUID — the script
+	// override while known, else 0 (the C++ field defaults to empty until a
+	// script sets it; the combat victim is NOT reflected here).
+	methods["GetTarget"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.ScriptTargetGUID
+	})
 	// ApplySpellImmune is Unit::ApplySpellImmune (Unit.cpp:8268): with
 	// apply=true inserts (type, spellId) into m_spellImmune[op], with
 	// apply=false removes the (type, spellId) rows. The spellId is only a

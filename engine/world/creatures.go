@@ -58,6 +58,8 @@ type creatureSpawn struct {
 	standStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
 	mountKnown       bool // set by applyCreatureMotionToSpawn when Lua overrode Mount via the motion record (forces the field into the update mask even when dismounting to 0)
 	sheathStateKnown bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 0 via the motion record (forces the field into the update mask even when unarming to 0)
+	ScriptTargetGUID uint64
+	targetKnown      bool // set by applyCreatureMotionToSpawn when Lua overrode the visual target via the motion record (forces the field into the update mask even when clearing to 0)
 	Item1            uint32
 	Item2            uint32
 	Item3            uint32
@@ -261,6 +263,14 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Bytes2 = (spawn.Bytes2 & 0xFFFFFF00) | uint32(motion.SheathState)
 			spawn.sheathStateKnown = true
 		}
+		if motion.ScriptTargetKnown {
+			// A Lua arm overrode the visual target (SetTarget): the spawn
+			// must carry the live value, not the default empty field, or
+			// the next rebuild would resurrect a stale stare target (or
+			// drop a live one).
+			spawn.ScriptTargetGUID = motion.ScriptTargetGUID
+			spawn.targetKnown = true
+		}
 		if motion.MountKnown {
 			spawn.Mount = motion.Mount
 			spawn.mountKnown = true
@@ -435,6 +445,13 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	}
 	if spawn.Bytes2 != 0 || spawn.sheathStateKnown {
 		values[unitFieldBytes2] = spawn.Bytes2
+	}
+	if spawn.ScriptTargetGUID != 0 || spawn.targetKnown {
+		// UNIT_FIELD_TARGET is unwritten unless a script arm set it
+		// (Unit::SetTarget); the known flag forces the field into the
+		// update even when clearing back to empty.
+		values[unitFieldTarget] = uint32(spawn.ScriptTargetGUID)
+		values[unitFieldTarget+1] = uint32(spawn.ScriptTargetGUID >> 32)
 	}
 	if spawn.MaxHealth > 0 {
 		values[unitFieldMaxHealth] = spawn.MaxHealth

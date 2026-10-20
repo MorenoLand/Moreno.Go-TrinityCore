@@ -40,7 +40,8 @@
 --   :627/:671/:815 stomach/weak, :840 done), so a Lua-local phase
 --   simulation would drift from the real shared state;
 --   (b) InterruptNonMeleeSpells — absent from the method list;
---   (c) SetTarget — absent from the method list. The cast core
+--   (c) SetTarget — bridged 2026-10-20 (creature:SetTarget), but the
+--   phase gate (a) still blocks the port. The cast core
 --   (random threat pick via GetAITargets + CastSpell 26134) IS
 --   bridgeable in isolation, but without the phase gate a ported
 --   3s beam timer would keep firing green beams through the 35s
@@ -60,9 +61,9 @@
 --   sweep machine (:340-:361: per-tick SetOrientation(DarkGlareAngle
 --   +/- tick*pi/35), StopMoving, DoCast(me, SPELL_DARK_GLARE
 --   26029, false)). GetAbsoluteAngle is absent from the Lua
---   method list, and so are SetOrientation, StopMoving,
---   SetReactState, and SetTarget — the whole dark-glare
---   orientation machine is unportable. Not ported.
+--   method list, and so are SetOrientation and StopMoving — the whole
+--   dark-glare orientation machine is unportable (SetTarget itself was
+--   bridged 2026-10-20 via creature:SetTarget). Not ported.
 --
 -- Surrounding machinery, also unbridged (for the record, not
 -- wired): Reset (:210-:220, RemoveAurasDueToSpell + SetVisible +
@@ -72,9 +73,9 @@
 -- EyeTentacleTimer 45s 8-spot spawn block (:247-:263, summon
 -- bridge blocker); PhaseTimer transitions (:303-:335 green->red,
 -- :363-:383 red->green — phase SetData legs, no bridge);
--- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget/SetHealth/SetVisible —
--- unbridged; cross-AI hand-off to the cthun body, DoAction has no
--- bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
+-- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget — bridged 2026-10-20 via
+-- creature:SetTarget; SetHealth/SetVisible — unbridged; cross-AI hand-off
+-- to the cthun body, DoAction has no bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
 -- DespawnOrUnsummon — no bridge).
 --
 -- The 4 tentacle NPCs' own AIs are ported separately
