@@ -83,11 +83,12 @@
 -- ACTION_FESTERGUT_DEATH) + RemoveBlight legs, JustReachedHome
 -- instance->SetBossState(FAIL), EnterEvadeMode cross-AI professor
 -- EnterEvadeMode — no instance / DoAction bridge.
--- SpellHitTarget — PORTED (2026-10-20): the Talk-free
--- PUNGENT_BLIGHT_HELPER -> INOCULATED_HELPER aura-removal leg
--- (boss_festergut.cpp:160-168) rides the now-live event-15 bridge;
--- the trigger (3rd-inhale self-cast 69195) is ported in
--- onInhaleBlight below, so the arm is fully C++-exact.
+-- SpellHitTarget (boss_festergut.cpp:160-168) — STAYS OUT, retracted
+-- 2026-10-20: the 11:55 tick's ev15 port stripped INOCULATED from the
+-- boss himself (Go's cast path carries only the explicit target, so the
+-- self-cast trigger delivers target=self); C++ strips it from the
+-- players hit by the blight AoE, whom Go never enumerates. Fabricating
+-- the per-player legs would invent hit targets — trigger-path blocked.
 -- All 10 Talk() calls in the file accounted for (10 =
 -- SAY_STINKY_DEAD 0 (1, cross-AI from npc_stinky_icc) + SAY_AGGRO 1
 -- (1) + EMOTE_GAS_SPORE 2 (1) + EMOTE_WARN_GAS_SPORE 3 (1) +
@@ -260,31 +261,18 @@ end
 -- C++ boss_festergut::SpellHitTarget (boss_festergut.cpp:160-168):
 -- PUNGENT_BLIGHT_HELPER (RAID_MODE 69195/71219/73031/73032) ->
 -- unitTarget:RemoveAurasDueToSpell(INOCULATED_HELPER) (RAID_MODE
--- 69291/72101/72102/72103, same raid-mode index). The trigger is the
--- 3rd-inhale self-cast ported in onInhaleBlight above, so event 15
--- reaches this arm with target = the boss itself (C++ unitTarget);
--- Go creature casts carry only the explicit target (boss_ai.go:1497),
--- so the C++ per-player hit legs of the same arm are unmodelable
--- without fabricating area targeting — the arm strips here from the
--- only reachable hit target. RemoveAura is bridged for creature and
--- player targets (lua_creature_events.go:157, lua_player.go:219).
-local PUNGENT_BLIGHT_TO_INOCULATED = {
-    [69195] = 69291,
-    [71219] = 72101,
-    [73031] = 72102,
-    [73032] = 72103,
-}
-local function festergutSpellHitTarget(event, caster, target, spellid)
-    local inoculated = PUNGENT_BLIGHT_TO_INOCULATED[spellid]
-    if inoculated == nil or target == nil then
-        return
-    end
-    target:RemoveAura(inoculated)
-end
+-- 69291/72101/72102/72103, same raid-mode index). STAYS OUT:
+-- trigger-path blocked — the C++ arm strips INOCULATED from each PLAYER
+-- hit by the blight AoE, but Go's creature cast path carries only the
+-- explicit target (boss_ai.go:1497, no area fan-out); the 3rd-inhale
+-- trigger is a self-cast, so event 15 would deliver target = the boss
+-- himself, whom the C++ arm never strips. Retracts the 11:55 ev15 port
+-- (13:28 verified map+gates but not the target correspondence): a
+-- self-target strip fabricates a leg the C++ arm never performs.
+-- RemoveAura stays bridged (lua_creature_events.go:157).
 
 RegisterCreatureEvent(ENTRY_FESTERGUT, 1, festergutJustEngagedWith)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 3, festergutKilledUnit)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 4, festergutJustDied)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 23, festergutReset)
-RegisterCreatureEvent(ENTRY_FESTERGUT, 15, festergutSpellHitTarget)

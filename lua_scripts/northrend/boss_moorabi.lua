@@ -22,11 +22,11 @@
 -- (EMOTE_BEGIN_TRANSFORM 5) + Talk(SAY_TRANSFORM 3) +
 -- DoCastSelf(Transformation 55098) + DoCastSelf(Summon Phantom
 -- Transform 55097, triggered) + Repeat(10s) until the landing; the
--- landing rides the event-15 SpellHitTarget hook (self-cast —
--- moorabiSpellHitTarget), which sets _transformed,
--- Talk(EMOTE_TRANSFORMED 6), cancels the re-arm, and strips
--- SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136) verbatim.
--- Ported 2026-10-17 (the "event 15 never fires" claim was stale).
+-- landing rides the event-14 SpellHit hook (self-cast — moorabiSpellHit),
+-- which sets _transformed, Talk(EMOTE_TRANSFORMED 6), cancels the re-arm,
+-- and strips SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136)
+-- verbatim. Ported 2026-10-17; corrected 2026-10-20 to event 14 (C++ is
+-- SpellHit, not SpellHitTarget — the 10-17 port used the wrong event).
 -- The _transformed flag is emulation-internal and has no other modeled
 -- reader. KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType() == "Player" — nalorakk precedent);
@@ -48,7 +48,7 @@
 -- creature:Despawn (bridged this tick); the instance
 -- SetBossState(FAIL) half rides the no-instance bridge.
 -- GetData(DATA_LESS_RABI) has no cross-AI bridge (zero hits);
--- the SpellHit(55098) latch now lands via event 15 (see transformTick).
+-- the SpellHit(55098) latch now lands via event 14 (see transformTick).
 -- achievement_less_rabi (AchievementCriteriaScript, CAST_AI cross-AI
 -- OnCheck) — no achievement-criteria bridge on the Lua surface
 -- (snakes precedent) — documented-only.
@@ -117,13 +117,11 @@ local function transformTick(creature, guid)
     creature:CastSpell(creature, SPELL_TRANSFORMATION)
     creature:CastSpell(creature, SPELL_SUMMON_PHANTOM_TRANSFORM, true)
     -- C++ Repeat(10s) (:171): re-arms until the transformation LANDS;
-    -- the landing is caught by the event-15 hook below
-    -- (moorabiSpellHitTarget), which sets _transformed, fires
+    -- the landing is caught by the event-14 SpellHit hook below
+    -- (moorabiSpellHit), which sets _transformed, fires
     -- Talk(EMOTE_TRANSFORMED), cancels this re-arm, and strips
     -- SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136)
-    -- verbatim. Ported 2026-10-17 (the "event 15 never fires" claim
-    -- was stale: the self-cast fires the caster-side SpellHitTarget
-    -- hook, bridged; the arugal precedent).
+    -- verbatim. Ported 2026-10-17; corrected 2026-10-20 to event 14.
     schedule(guid, "transform", 10000, function()
         transformTick(creature, guid)
     end)
@@ -205,15 +203,15 @@ local function moorabiReset(event, creature)
     transformed[creature:GetGUID()] = nil
 end
 
--- C++ boss_moorabi::SpellHitTarget on the SPELL_TRANSFORMATION
--- self-cast landing (event 15 fires on the caster's bindings,
--- boss_ai.go:1904; the cast is a self-cast so the boss is both
--- parties — C++ fires both the target-side SpellHit and this
--- caster-side hook). Ports the SpellHit(55098) arm (:128-136):
--- _transformed latch, Talk(EMOTE_TRANSFORMED 6), cancel the
--- EVENT_TRANFORMATION re-arm, RemoveAurasDueToSpell(SPELL_MOJO_FRENZY)
--- (creature:RemoveAura, the alar precedent).
-local function moorabiSpellHitTarget(event, creature, target, spellId)
+-- C++ boss_moorabi::SpellHit on the SPELL_TRANSFORMATION self-cast
+-- landing (boss_moorabi.cpp:128-136): _transformed latch,
+-- Talk(EMOTE_TRANSFORMED 6), cancel the EVENT_TRANFORMATION re-arm,
+-- RemoveAurasDueToSpell(SPELL_MOJO_FRENZY) (creature:RemoveAura, the alar
+-- precedent). Eluna event 14 (ON_SPELL_HIT) fires on the hit target's
+-- bindings (boss_ai.go:2079); for the self-cast the boss is the only hit
+-- target, so the arm lands once, C++-exact. (Corrects the earlier
+-- event-15 registration: C++ has no SpellHitTarget arm on this unit.)
+local function moorabiSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TRANSFORMATION then
         local guid = creature:GetGUID()
         transformed[guid] = true
@@ -232,4 +230,4 @@ RegisterCreatureEvent(ENTRY_MOORABI, 2, moorabiLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOORABI, 3, moorabiTargetDied)
 RegisterCreatureEvent(ENTRY_MOORABI, 4, moorabiDied)
 RegisterCreatureEvent(ENTRY_MOORABI, 23, moorabiReset)
-RegisterCreatureEvent(ENTRY_MOORABI, 15, moorabiSpellHitTarget)
+RegisterCreatureEvent(ENTRY_MOORABI, 14, moorabiSpellHit)
