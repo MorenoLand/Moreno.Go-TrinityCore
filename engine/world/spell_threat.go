@@ -267,7 +267,7 @@ func (s *session) spellDamageStep1Gate(spellID uint32, engaged bool) bool {
 }
 
 func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) (float32, bool) {
-	if s == nil || s.server == nil || damage <= 0 {
+	if s == nil || s.server == nil {
 		return 0, false
 	}
 	var spell wotlk.Spell
@@ -277,8 +277,15 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 			spell, spellKnown = sp, true
 		}
 	}
+	// The step-1 gate runs on the zero AddThreat too (Unit.cpp:906 calls
+	// AddThreat with float(damage) even when damage is 0): a gated spell
+	// engages nothing, an ungated one creates the 0-ref and engages
+	// ("threat implies combat", ThreatManager.cpp:366-368).
 	if spellThreatStep1Gate(spell, spellKnown, engaged) {
 		return 0, true
+	}
+	if damage <= 0 {
+		return 0, false
 	}
 	// ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659):
 	// the spell_threat-row pctMod applies even though its flatMod/apPctMod

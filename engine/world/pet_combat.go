@@ -4665,6 +4665,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 		}
 	}
+	if !isPlayerVictim && damage > 0 {
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): shield absorbs on a
+		// creature victim soak pet spell damage, matching the player
+		// funnel's creature arm (spells.go:15360); the attacker's 194/245
+		// bypass pct folds the pet's creature aura key.
+		bypass := absorbIgnoreBypass(damage, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
+		damage += bypass
+	}
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
@@ -4684,16 +4693,42 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
 	if damage == 0 {
-		// Unit::DealDamage absorbed legs (Unit.cpp:742-761, 813-819): a fully
-		// absorbed pet-spell hit still strips TAKE_DAMAGE-interrupt auras,
-		// grants absorbed rage, and aborts ABORT_ON_DMG casts on a player
-		// victim — the god arm above returns before all of these in C++.
-		if isPlayerVictim && absorbed > 0 && s.server != nil {
-			if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && !victim.godCheatActive() {
-				victim.grantRageFromDamageTaken(ctx, absorbed)
-				victim.procDamageAuras(false)
-				victim.interruptAbsorbedCast()
+		// A missed, resisted or deflected hit never reaches Unit::DealDamage
+		// in C++ — no tap, no threat, no engage, no hooks.
+		if hitInfo&0x01 != 0 {
+			return
+		}
+		if isPlayerVictim {
+			// Unit::DealDamage absorbed legs (Unit.cpp:742-761, 813-819): a
+			// fully absorbed pet-spell hit still strips
+			// TAKE_DAMAGE-interrupt auras, grants absorbed rage, and aborts
+			// ABORT_ON_DMG casts on a player victim — the god arm above
+			// returns before all of these in C++.
+			if absorbed > 0 && s.server != nil {
+				if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && !victim.godCheatActive() {
+					victim.grantRageFromDamageTaken(ctx, absorbed)
+					victim.procDamageAuras(false)
+					victim.interruptAbsorbedCast()
+				}
 			}
+			return
+		}
+		// A fully-absorbed hit on a creature victim runs DealDamage's
+		// pre-return legs (Unit.cpp:700-704, 805-821) — the DamageTaken AI
+		// hook and rage from the absorbed amount — but returns before the
+		// tap, threat and engage legs, like C++.
+		if absorbed > 0 && s.server != nil {
+			s.server.motionMu.Lock()
+			if tm := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); tm != nil {
+				if tm.BossAI == nil {
+					tm.BossAI = getBossAIForCreature(tm, tm.ScriptName)
+				}
+				fireDealDamageAIHooks(ctx, s.server, tm, caster, caster.GUID, tm.GUID, &damage)
+				if next, changed := s.server.addCreatureRageLocked(tm, tm.Level, absorbed); changed {
+					s.server.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next})
+				}
+			}
+			s.server.motionMu.Unlock()
 		}
 		return
 	}
@@ -4946,8 +4981,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				}
 			}
 			consumeKillCommandStack(caster)
-			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received.
-			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage); changed {
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received;
+			// rage_damage folds the absorbed amount (Unit.cpp:919).
+			if next, changed := s.server.addCreatureRageLocked(targetMotion, targetMotion.Level, damage+absorbed); changed {
 				rageNext, rageChanged = next, true
 			}
 		}

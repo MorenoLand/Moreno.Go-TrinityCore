@@ -15701,9 +15701,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if damage > 0 && motion.OwnerGUID == 0 {
 				motion.LastDamaged = time.Now()
 			}
-			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received
-			// (creature victims; no absorbed model on this path).
-			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage); changed {
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received;
+			// rage_damage folds the absorbed amount (Unit.cpp:919).
+			if next, changed := s.server.addCreatureRageLocked(motion, motion.Level, damage+absorbed); changed {
 				rageChanged, rageNext = true, next
 				rageMapID, rageInstanceID, rageGUID = motion.Map, motion.InstanceID, motion.GUID
 			}
