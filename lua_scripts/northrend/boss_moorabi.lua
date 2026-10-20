@@ -122,9 +122,16 @@ local function transformTick(creature, guid)
     -- Talk(EMOTE_TRANSFORMED), cancels this re-arm, and strips
     -- SPELL_MOJO_FRENZY — the C++ SpellHit(55098) arm (:128-136)
     -- verbatim. Ported 2026-10-17; corrected 2026-10-20 to event 14.
-    schedule(guid, "transform", 10000, function()
-        transformTick(creature, guid)
-    end)
+    -- C++ re-arms BEFORE the async landing, so the SpellHit cancel kills
+    -- the repeat; Go's ev14 lands synchronously inside CastSpell, so the
+    -- cancel hits the already-fired timer and this trailing schedule
+    -- would re-arm it — re-arm only while the landing hasn't happened,
+    -- otherwise the transform repeats every 10s after landing.
+    if not transformed[guid] then
+        schedule(guid, "transform", 10000, function()
+            transformTick(creature, guid)
+        end)
+    end
 end
 
 -- C++ EVENT_GROUND_TREMOR: DoCastAOE; 18s init, 10s repeat; 50%
@@ -209,13 +216,20 @@ end
 -- RemoveAurasDueToSpell(SPELL_MOJO_FRENZY) (creature:RemoveAura, the alar
 -- precedent). Eluna event 14 (ON_SPELL_HIT) fires on the hit target's
 -- bindings (boss_ai.go:2079); for the self-cast the boss is the only hit
--- target, so the arm lands once, C++-exact. (Corrects the earlier
--- event-15 registration: C++ has no SpellHitTarget arm on this unit.)
+-- target. Go fires ev14 once per non-NONE effect of the landing cast
+-- (boss_ai.go:2066-2080) while C++ target-side SpellHit fires once per
+-- cast, so the Talk leg runs on the first effect-fire only (the latch
+-- set, timer-cancel and RemoveAura legs are idempotent and run per
+-- fire, matching C++ per landing). (Corrects the earlier event-15
+-- registration: C++ has no SpellHitTarget arm on this unit.)
 local function moorabiSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TRANSFORMATION then
         local guid = creature:GetGUID()
+        local first = not transformed[guid]
         transformed[guid] = true
-        creature:Talk(EMOTE_TRANSFORMED)
+        if first then
+            creature:Talk(EMOTE_TRANSFORMED)
+        end
         local per = timers[guid]
         if per and per["transform"] then
             RemoveEventById(per["transform"])
