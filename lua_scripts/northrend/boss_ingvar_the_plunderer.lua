@@ -67,8 +67,11 @@
 -- the yell fires exactly once (the moroes threshold+latch precedent);
 -- the latch also cancels the human timers (the phase gate above) — the
 -- RemoveAllAuras / DoCast SPELL_INGVAR_FEIGN_DEATH 42795 /
--- non-attackable/immune flags / the damage = 0 rewrite in PHASE_EVENT
--- have no bridges.
+-- non-attackable/immune flags have no bridges, but the PHASE_EVENT
+-- damage = 0 rewrite IS bridged (numeric second return,
+-- fireCreatureDamageTaken; the anubarak-spike / halazzi precedent) —
+-- the latch returns false, 0 and any further PHASE_EVENT damage is
+-- zeroed too (C++ boss_ingvar_the_plunderer.cpp:139).
 -- JustDied — Talk(SAY_DEATH 2) unconditional (event 4, both entries —
 -- the real (undead-phase) death yell; the sjonnir JustDied-Talk
 -- precedent).
@@ -245,12 +248,17 @@ end
 -- requirement, the feignDead latch the one-shot transition (the moroes
 -- threshold+latch precedent); cancelTimers mirrors the EventMap phase
 -- gate — the human timers never fire again once PHASE_EVENT starts.
--- The PHASE_EVENT damage = 0 rewrite has no bridge. Registered on the
--- human entry only — the arm is unreachable for the undead entry in C++
--- (PHASE_HUMAN is never re-entered).
+-- The PHASE_EVENT damage = 0 rewrite IS bridged (return false, 0 —
+-- the anubarak-spike / halazzi precedent; see header).
 local function ingvarDamageTaken(event, creature, attacker, damage)
     local state = getState(creature:GetGUID())
-    if state.feignDead or not state.engaged then
+    if state.feignDead then
+        -- C++ zeroes ALL damage in PHASE_EVENT
+        -- (boss_ingvar_the_plunderer.cpp:139) — a hit already in flight
+        -- must not kill the feigning boss.
+        return false, 0
+    end
+    if not state.engaged then
         return
     end
     if damage >= creature:GetHealth() then
@@ -258,6 +266,10 @@ local function ingvarDamageTaken(event, creature, attacker, damage)
         cancelTimers(creature:GetGUID())
         creature:RemoveAllAuras()
         creature:Talk(SAY_DEATH)
+        -- C++ DamageTaken zeroes the killing blow in the same call
+        -- (PHASE_EVENT rewrite) — without the rewrite Go applies the
+        -- lethal hit and the undead-phase machine never starts.
+        return false, 0
     end
 end
 

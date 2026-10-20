@@ -346,6 +346,13 @@ local function halionDamageTaken(event, creature, attacker, damage)
         creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
         cancelTimers(guid)
     end
+    -- C++ never-die cap (boss_halion.cpp:283): lethal damage before
+    -- phase three is clamped to health - 1, evaluated before the 75%
+    -- check — the latch above fires on the killing blow exactly as in
+    -- C++ (DamageTaken-class, fires on lethal by design).
+    if damage >= health then
+        return false, health - 1
+    end
 end
 
 -- C++ boss_halion::JustDied :267:
@@ -536,7 +543,8 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
         return
     end
     -- C++ applies the never-die cap before the 50% check; mirror the
-    -- evaluation order for the check without rewriting damage.
+    -- evaluation order for the check, and rewrite the damage at the end
+    -- (boss_halion.cpp:469).
     local effDamage = damage
     if effDamage >= health then
         effDamage = health - 1
@@ -547,6 +555,12 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
         twilightPhaseThree[guid] = true
         creature:CastSpell(creature, SPELL_TWILIGHT_DIVISION)
         creature:Talk(SAY_PHASE_THREE)
+    end
+    -- C++ never-die cap (boss_halion.cpp:469): lethal damage before
+    -- phase three is clamped to health - 1 so the twilight half cannot
+    -- die early (the akama / illidan health-1 precedent).
+    if damage >= health then
+        return false, health - 1
     end
 end
 
