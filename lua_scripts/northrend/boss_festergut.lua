@@ -82,8 +82,12 @@
 -- instance / DoAction bridge; JustDied _JustDied + DoAction(
 -- ACTION_FESTERGUT_DEATH) + RemoveBlight legs, JustReachedHome
 -- instance->SetBossState(FAIL), EnterEvadeMode cross-AI professor
--- EnterEvadeMode — no instance / DoAction bridge. SpellHitTarget
--- is Talk-free (PUNGENT_BLIGHT_HELPER aura-removal leg only).
+-- EnterEvadeMode — no instance / DoAction bridge.
+-- SpellHitTarget — PORTED (2026-10-20): the Talk-free
+-- PUNGENT_BLIGHT_HELPER -> INOCULATED_HELPER aura-removal leg
+-- (boss_festergut.cpp:160-168) rides the now-live event-15 bridge;
+-- the trigger (3rd-inhale self-cast 69195) is ported in
+-- onInhaleBlight below, so the arm is fully C++-exact.
 -- All 10 Talk() calls in the file accounted for (10 =
 -- SAY_STINKY_DEAD 0 (1, cross-AI from npc_stinky_icc) + SAY_AGGRO 1
 -- (1) + EMOTE_GAS_SPORE 2 (1) + EMOTE_WARN_GAS_SPORE 3 (1) +
@@ -253,8 +257,34 @@ local function festergutJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_festergut::SpellHitTarget (boss_festergut.cpp:160-168):
+-- PUNGENT_BLIGHT_HELPER (RAID_MODE 69195/71219/73031/73032) ->
+-- unitTarget:RemoveAurasDueToSpell(INOCULATED_HELPER) (RAID_MODE
+-- 69291/72101/72102/72103, same raid-mode index). The trigger is the
+-- 3rd-inhale self-cast ported in onInhaleBlight above, so event 15
+-- reaches this arm with target = the boss itself (C++ unitTarget);
+-- Go creature casts carry only the explicit target (boss_ai.go:1497),
+-- so the C++ per-player hit legs of the same arm are unmodelable
+-- without fabricating area targeting — the arm strips here from the
+-- only reachable hit target. RemoveAura is bridged for creature and
+-- player targets (lua_creature_events.go:157, lua_player.go:219).
+local PUNGENT_BLIGHT_TO_INOCULATED = {
+    [69195] = 69291,
+    [71219] = 72101,
+    [73031] = 72102,
+    [73032] = 72103,
+}
+local function festergutSpellHitTarget(event, caster, target, spellid)
+    local inoculated = PUNGENT_BLIGHT_TO_INOCULATED[spellid]
+    if inoculated == nil or target == nil then
+        return
+    end
+    target:RemoveAura(inoculated)
+end
+
 RegisterCreatureEvent(ENTRY_FESTERGUT, 1, festergutJustEngagedWith)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 3, festergutKilledUnit)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 4, festergutJustDied)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 23, festergutReset)
+RegisterCreatureEvent(ENTRY_FESTERGUT, 15, festergutSpellHitTarget)

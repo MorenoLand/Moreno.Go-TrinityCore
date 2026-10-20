@@ -54,18 +54,23 @@
 -- precedent)" claim was stale — event 9 carries pre-damage damage
 -- and creature:GetHealth()/GetMaxHealth() are bridged);
 -- me->InterruptNonMeleeSpells(false) still has no bridge.
--- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — event
--- 15 never fires (standing); plus the payload needs absent
--- bridges: SummonCreature(NPC_TWISTED_VISAGE 30625,
--- TEMPSUMMON_CORPSE_DESPAWN) (summon STRAND absent — standing),
--- player->CastSpell(summon, Spell Clone Player 57507, triggered)
--- (victim-unit CastSpell bridge absent), summon->SetPhaseMask(
--- 1<<(4+_insanityHandled)) + player phase-mask aura bookkeeping
--- (no phase-mask bridge), me->SetFlag(UNIT_FIELD_FLAGS,
--- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_
--- STUNNED) (no flag / stun-control bridges), DoCast(me,
--- Insanity Visual 57561, triggered) (bridged in isolation but its
--- trigger is event 15).
+-- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — stays
+-- out on reachability grounds: the only 57496 cast is the
+-- ported 66%/33% self-cast, whose hit target is the boss itself,
+-- and the C++ arm's first gate (target->GetTypeId() != TYPEID_PLAYER)
+-- rejects it — the payload (first-hit Insanity Visual 57561 +
+-- SetFlag NOT_SELECTABLE + stun) requires the C++ implicit
+-- area-targeting that puts players in the hit list, which Go's
+-- self-cast model does not produce; firing it on the self-cast
+-- would fabricate player hits. (The 2026-10-11 event-15 bridge is
+-- live — the old "event 15 never fires" rationale is stale; the
+-- remaining payload legs also need absent bridges:
+-- SummonCreature(NPC_TWISTED_VISAGE 30625, TEMPSUMMON_CORPSE_
+-- DESPAWN) (summon STRAND absent — standing), player->CastSpell(
+-- summon, Spell Clone Player 57507, triggered) (player CastSpell
+-- not bridged), summon->SetPhaseMask(1<<(4+_insanityHandled)) +
+-- player phase-mask aura bookkeeping (no phase-mask bridge),
+-- SetControlled(true, UNIT_STATE_STUNNED) (no stun-control bridge).)
 -- Reset: SetPhaseMask((1|16|32|64|128|256), true) (no phase-mask
 -- bridge); ResetPlayersPhaseMask() is PORTED below via
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old
