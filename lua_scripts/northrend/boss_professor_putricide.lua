@@ -221,6 +221,9 @@ end
 
 local function putricideReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
+    -- (Reset: flip follows events.Reset).
+    creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
 -- C++ boss_professor_putricide::KilledUnit:

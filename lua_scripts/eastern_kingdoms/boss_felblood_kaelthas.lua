@@ -97,10 +97,12 @@
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden
 -- convention). The outro's damage cap (lethal non-self damage is
 -- clamped to health-1 so the boss survives at 1 HP through the
--- death sequence), AttackStop / REACT_PASSIVE / InterruptNonMelee-
+-- death sequence), AttackStop / InterruptNonMelee-
 -- Spells / RemoveAuras / summons.DespawnAll / DoCastAOE(CLEAR_
--- FLIGHT) machinery has no bridges — the outro chain plays as the
--- observable remnant (documented). The intro is SetData(DATA_
+-- FLIGHT) machinery has no bridges (the REACT_PASSIVE arm is PORTED
+-- — creature:SetReactState, 2026-10-20); the outro chain plays as the
+-- observable remnant (documented).
+-- The intro is SetData(DATA_
 -- KAELTHAS_INTRO)-gated (instance arm — no bridge); the intro talks
 -- are unreached (vaelastrasz gossip precedent). JustDied's
 -- instance->SetBossState(DONE) has no bridge (instance precedent).
@@ -292,6 +294,9 @@ local function onDamageTaken(_, creature, attacker, damage)
         -- the outro phase is set.
         outroFired[guid] = true
         cancelTimers(guid)
+        -- C++ boss_felblood_kaelthas.cpp:182: me->SetReactState(REACT_PASSIVE)
+        -- (outro arm order: AttackStop -> flip -> InterruptNonMeleeSpells).
+        creature:SetReactState(0) -- REACT_PASSIVE
         creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)
         schedule(guid, "outro_1", 1000, function()

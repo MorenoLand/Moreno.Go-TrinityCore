@@ -110,7 +110,9 @@
 -- delayed 12s (the root/interrupt arms have no bridge; the pending
 -- 72s cancel-demon timer is kept, C++-exact) / else start phase 4:
 -- cancel the phase-1/2/3 timers, triggered self-cast shadow prison
--- 40647 (the react/flag and summon-DoAction arms have no bridges),
+-- 40647 (the REACT_PASSIVE arm is PORTED 2026-10-20 —
+-- creature:SetReactState; the flag and summon-DoAction arms have
+-- no bridges),
 -- Talk(SAY_ILLIDAN_SHADOW_PRISON) 500ms, non-triggered self-cast
 -- summon maiev 40403 9s (the summon itself has no bridge), Talk
 -- (SAY_ILLIDAN_CONFRONT_MAIEV) 9s later, resume combat 13s later:
@@ -149,9 +151,11 @@
 -- bridge. OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
 -- Flame of Azzinoth (22997): OnReset: triggered self-cast flame
 -- tear 39856 (C++ DoCastSelf(..., true); the boss-state despawn
--- check is blocked on the instance-script model; REACT_PASSIVE
--- has no bridge). OnEnterCombat: engage 3s (the react/zone-
--- combat arms have no bridges), then charge 42003 5s on a random
+-- check is blocked on the instance-script model; the REACT_PASSIVE
+-- arm is PORTED 2026-10-20 — creature:SetReactState). OnEnterCombat:
+-- engage 3s (the REACT_AGGRESSIVE arm is PORTED 2026-10-20 —
+-- creature:SetReactState; the zone-combat arm has no bridge),
+-- then charge 42003 5s on a random
 -- alive player in the instance more than 25 yd (2D) from both
 -- blade positions (676.226,325.231) and (678.060,285.220)
 -- (C++ ChargeTargetSelector, C++-exact), repeat 5s with a target
@@ -195,8 +199,10 @@
 -- 40836 flame crash ground.
 -- Not registered (entries verifiable but no modelable arm without
 -- engine bridges): npc_parasitic_shadowfiend (23498 — Reset is the
--- instance boss-state check + react/zone-combat arms, all
--- bridgeless; UpdateAI is melee only), npc_illidari_elite (23226
+-- instance boss-state check + react/zone-combat arms (the react
+-- bridge exists — creature:SetReactState — but the unit is
+-- unregistered, so the arms stay out); UpdateAI is melee only),
+-- npc_illidari_elite (23226
 -- — Reset is AttackStart/AddThreat on akama, CanAIAttack gates
 -- illidan; no threat/attack-gating bridges). Not registered
 -- (entries not verifiable from the C++ sources — the ScriptNames
@@ -222,8 +228,9 @@
 -- maiev/shadow-demon/cage-trap/blade-tear/spirit/minion summons
 -- never spawn; stale 'no gossip bridge' retracted (bridged) — the
 -- akama intro stays out on the movement/instance machine;
--- no flag/react/equipment/gravity/threat/immune/sound/
--- despawn bridges — those arms are skipped (the throw-glaive-2 sheath
+-- no flag/equipment/gravity/threat/immune/sound/despawn bridges —
+-- those arms are skipped (react bridge exists: the phase-machine
+-- react arms stay out, documented per-arm; the throw-glaive-2 sheath
 -- arm IS ported via the creature:SetSheath bridge; the Reset/intro/
 -- air-finalize sheath arms ride unported machines); the air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,
@@ -753,7 +760,8 @@ end
 -- documented extension since the finalize arm has no bearer),
 -- triggered self-cast shadow prison 40647, Talk 500ms, summon
 -- maiev (cast kept, summon unmodeled) 9s, confront text 9s,
--- resume combat 13s re-arming the phase-4 schedule. The react/
+-- resume combat 13s re-arming the phase-4 schedule. The REACT_
+-- PASSIVE arm is PORTED 2026-10-20 — creature:SetReactState; the
 -- flag and summon-DoAction arms have no bridges.
 local function startPhase4(creature, guid)
     cancelPhaseSchedule(guid)
@@ -764,6 +772,10 @@ local function startPhase4(creature, guid)
     -- (GROUP_PHASE_ALL) survives, C++-exact.
     cancelAirPhase(guid)
     creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
+    -- C++ boss_illidan.cpp:626: me->SetReactState(REACT_PASSIVE)
+    -- (ACTION_START_PHASE_4: the summons.DoAction/AttackStop/SetFlag co-arms
+    -- stay out on no-bridge grounds; the flip fires unconditionally here).
+    creature:SetReactState(0) -- REACT_PASSIVE
     schedule(guid, "shadowPrisonText", 500, function()
         creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
         schedule(guid, "summonMaiev", 9000, function()
@@ -771,6 +783,9 @@ local function startPhase4(creature, guid)
             schedule(guid, "confrontMaiev", 9000, function()
                 creature:Talk(SAY_ILLIDAN_CONFRONT_MAIEV)
                 schedule(guid, "resumeCombat4", 13000, function()
+                    -- C++ boss_illidan.cpp:1000: me->SetReactState(REACT_AGGRESSIVE)
+                    -- (EVENT_RESUME_COMBAT_PHASE_4: flip before the phase-4 re-arm).
+                    creature:SetReactState(2) -- REACT_AGGRESSIVE
                     armPhaseSchedule(creature, guid, PHASE_4)
                 end)
             end)
@@ -852,7 +867,8 @@ local function illidanDamageTaken(event, creature, attacker, damage)
     elseif healthPct < 65 and state.phase < PHASE_2 then
         state.phase = PHASE_2
         -- C++ DoAction(ACTION_START_PHASE_2): cancels GROUP_PHASE_1
-        -- (the react/flag/emote/sound/gravity arms have no bridges).
+        -- (the react arm stays out: the phase-2 liftoff machine is
+        -- unported; the flag/emote/sound/gravity arms have no bridges).
         for _, key in ipairs({ "flameCrash", "drawSoul", "shear",
                 "parasitic" }) do
             cancelTimer(guid, key)
@@ -991,9 +1007,13 @@ local function onFlameCharge(creature, guid)
     end
 end
 
--- C++ EVENT_ENGAGE (3s): the react/zone-combat arms have no
--- bridges; arms the charge and keeps the blast cycle.
+-- C++ EVENT_ENGAGE (3s): the REACT_AGGRESSIVE arm is PORTED
+-- 2026-10-20 — creature:SetReactState (the zone-combat arm has no
+-- bridge); arms the charge and keeps the blast cycle.
 local function onEngage(creature, guid)
+    -- C++ boss_illidan.cpp:1509: me->SetReactState(REACT_AGGRESSIVE)
+    -- (flame EVENT_ENGAGE: flip is the first arm; DoZoneInCombat stays out).
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     schedule(guid, "flameCharge", 5000, function()
         onFlameCharge(creature, guid)
     end)
@@ -1017,11 +1037,15 @@ local function flameReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ flame Reset(): DoCastSelf(SPELL_FLAME_TEAR_OF_AZZINOTH, true)
-    -- is Reset-only (boss_illidan.cpp; react/scheduler legs unbridged).
+    -- is Reset-only (boss_illidan.cpp; the REACT_PASSIVE arm is PORTED
+    -- 2026-10-20 — creature:SetReactState; the scheduler leg is unbridged).
     -- The cast is alive-gated; the timer cancel rides the death leg
     -- deliberately.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_FLAME_TEAR_OF_AZZINOTH, true)
+        -- C++ boss_illidan.cpp:1489: me->SetReactState(REACT_PASSIVE)
+        -- (flame Reset order: cast -> flip).
+        creature:SetReactState(0) -- REACT_PASSIVE
     end
 end
 
@@ -1193,6 +1217,9 @@ local function genericFireReset(event, creature)
     -- C++ Reset() entry switch, all triggered self-casts, Reset-only
     -- (boss_illidan.cpp). Alive-gated like bladeReset.
     if not creature:IsAlive() then return end
+    -- C++ boss_illidan.cpp:1823: me->SetReactState(REACT_PASSIVE)
+    -- (generic fire Reset: flip first; the fires stay passive forever).
+    creature:SetReactState(0) -- REACT_PASSIVE
     local entry = creature:GetEntry()
     if entry == ENTRY_DEMON_FIRE then
         creature:CastSpell(creature, SPELL_DEMON_FIRE, true)

@@ -315,6 +315,9 @@ end
 
 local function valithriaReset(event, creature)
     valithriaState[creature:GetGUID()] = nil
+    -- C++ boss_valithria_dreamwalker.cpp:288: me->SetReactState(REACT_PASSIVE)
+    -- (Reset init arm; no flip anywhere in C++).
+    creature:SetReactState(0) -- REACT_PASSIVE
 end
 
 -- C++ npc_blistering_zombie::JustDied — unconditional

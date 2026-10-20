@@ -249,7 +249,8 @@ end
 -- C++ npc_onyx_flamecaller::JustEngagedWith (:200-204):
 -- ScheduleEvent(EVENT_BLAST_NOVA, 17s) + ScheduleEvent(EVENT_LAVA_GOUT,
 -- 3s). Reset (:195-199): _events.Reset() + _lavaGoutCount = 0 (the
--- motion/react legs have no bridges).
+-- motion leg has no bridge; the REACT_DEFENSIVE arm is PORTED
+-- 2026-10-20 — creature:SetReactState).
 local function flamecallerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -272,6 +273,9 @@ end
 
 local function flamecallerReset(event, creature)
     flamecallerCancel(creature:GetGUID())
+    -- C++ boss_general_zarithrian.cpp:193: me->SetReactState(REACT_DEFENSIVE)
+    -- (npc_onyx_flamecaller Reset: DEFENSIVE is the permanent baseline).
+    creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 1, flamecallerEnterCombat)

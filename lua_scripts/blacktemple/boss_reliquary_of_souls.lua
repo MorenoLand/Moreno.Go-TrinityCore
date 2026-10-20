@@ -45,7 +45,9 @@
 -- DoAction(ACTION_KILL_SELF) arm has no cross-creature DoAction
 -- bridge. OnLeaveCombat/OnReset: cancel timers, drop per-GUID
 -- state (C++ Reset: _Reset, REACT_PASSIVE, _inCombat=false, phase
--- reset — the react/summons arms have no bridge). OnDied: cancel
+-- reset — the REACT_PASSIVE arm is PORTED 2026-10-20 —
+-- creature:SetReactState; the summons arms have no bridge).
+-- OnDied: cancel
 -- timers (the instance SetBossState(DONE) arm is blocked on the
 -- instance-script model). The UpdateAI !_inCombat early return is
 -- implicit — timers only exist once pulled; the UNIT_STATE_
@@ -55,14 +57,15 @@
 -- _DespawnAtEvade arms have no bridges (evade-side cleanup is
 -- engine-side).
 -- Enslaved Soul: OnReset: triggered self-cast enslaved soul
--- passive 41535 (C++-exact; the REACT_PASSIVE arm, the
--- reliquary->JustSummoned link and the DoZoneInCombat arms have
--- no react/instance bridges, and the 3s REACT_AGGRESSIVE +
--- DoZoneInCombat scheduler arm has no bridge). OnDamageTaken(9):
+-- passive 41535 (C++-exact; the REACT_PASSIVE and 3s
+-- REACT_AGGRESSIVE arms are PORTED 2026-10-20 — creature:SetReactState;
+-- the reliquary->JustSummoned link and the DoZoneInCombat arms have
+-- no instance bridge). OnDamageTaken(9):
 -- lethal damage is rewritten to 0 (C++ damage = 0, C++-exact)
 -- with the once-guard in per-GUID state, plus the triggered
--- self-cast soul release 41542 (the REACT_PASSIVE/AttackStop/
--- MotionMaster-clear arms have no bridge, and the 500ms-delayed
+-- self-cast soul release 41542 (the AttackStop/MotionMaster-clear
+-- arms have no bridge — the REACT_PASSIVE arm is the Reset arm,
+-- PORTED 2026-10-20, creature:SetReactState — and the 500ms-delayed
 -- KillSelf arm has no despawn/kill bridge — the soul survives at
 -- its pre-lethal health after the release cast). The reliquary-
 -- driven DoAction(ACTION_KILL_SELF) soul-release path has no
@@ -226,22 +229,35 @@ end
 
 local function reliquaryReset(event, creature)
     reliquaryClear(creature:GetGUID())
+    -- C++ boss_reliquary_of_souls.cpp:147: me->SetReactState(REACT_PASSIVE)
+    -- (Reset: _Reset -> flip -> _inCombat = false).
+    creature:SetReactState(0) -- REACT_PASSIVE
 end
 
 -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535
--- (C++-exact). The REACT_PASSIVE arm, the reliquary JustSummoned
--- link and the 3s REACT_AGGRESSIVE + DoZoneInCombat scheduler arm
--- have no react/instance bridges.
+-- (C++-exact). The REACT_PASSIVE and 3s REACT_AGGRESSIVE arms are
+-- PORTED 2026-10-20 — creature:SetReactState; the reliquary
+-- JustSummoned link and the DoZoneInCombat scheduler arm have
+-- no instance/cross-creature bridges.
 local function soulReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     soulState[guid] = nil
+    -- C++ boss_reliquary_of_souls.cpp:595: me->SetReactState(REACT_PASSIVE)
+    -- (enslaved soul Reset: flip follows _scheduler setup).
+    creature:SetReactState(0) -- REACT_PASSIVE
     -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535 (Reset-only arm).
     -- Event 23 fires on death too (engine reset-then-died order) but the C++
     -- Reset() never runs on death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_ENSLAVED_SOUL_PASSIVE, true)
     end
+    -- C++ boss_reliquary_of_souls.cpp:603: 3s scheduler ->
+    -- SetReactState(REACT_AGGRESSIVE). The DoZoneInCombat co-arm has no
+    -- bridge and stays out (react arm only); cancelTimers covers cleanup.
+    schedule(guid, "soulAggressive", 3000, function()
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+    end)
 end
 
 local function soulClear(guid)
@@ -259,9 +275,10 @@ end
 
 -- C++ npc_enslaved_soul::DamageTaken: lethal damage is zeroed
 -- (damage = 0, C++-exact), and once per soul the soul-release
--- cast fires. The REACT_PASSIVE/AttackStop/MotionMaster-clear arms
--- and the 500ms-delayed KillSelf arm have no bridges (no
--- despawn/kill bridge) — the soul survives at its pre-lethal
+-- cast fires. The AttackStop/MotionMaster-clear arms and the
+-- 500ms-delayed KillSelf arm have no bridges (the REACT_PASSIVE arm
+-- is the Reset arm — PORTED 2026-10-20, creature:SetReactState;
+-- no despawn/kill bridge) — the soul survives at its pre-lethal
 -- health after the release cast.
 local function soulDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()

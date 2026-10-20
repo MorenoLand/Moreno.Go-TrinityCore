@@ -48,8 +48,9 @@
 -- bridge); no threat model — mark-of-arlokk target is a random alive
 -- player (victim fallback), ResetThreatList skipped; no equipment
 -- bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID dagger arms skipped; no
--- flag/react-state bridge — the NON_ATTACKABLE/NOT_SELECTABLE/REACT_
--- PASSIVE arms skipped (the phase stays damageable); no stat-modifier
+-- flag bridge — the NON_ATTACKABLE/NOT_SELECTABLE arms skipped
+-- (the phase stays damageable); the REACT_PASSIVE arm is PORTED
+-- (creature:SetReactState, 2026-10-20); no stat-modifier
 -- bridge — the C++ damage +/-35% hack skipped; no movement model —
 -- the Reset MovePoint, vanish MovePoint, and AttackStart arms skipped;
 -- Talk(id, target) is bridged (the whisperTarget arm, engine/world/
@@ -216,6 +217,9 @@ local function onVanish2(creature, guid)
         if st2.panther then
             return
         end
+        -- C++ boss_arlokk.cpp:264: me->SetReactState(REACT_AGGRESSIVE)
+        -- (EVENT_VISIBLE: flip is the first arm).
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
         -- C++ EVENT_VISIBLE: SetPhase(PHASE_TWO) discards the pending
         -- phase-one timers (shadow word pain / gouge / transform).
         cancelKeys(timers, guid, { "swp", "gouge", "transform" })
@@ -252,8 +256,12 @@ local function onTransform(creature, guid)
     creature:CastSpell(creature, SPELL_PANTHER_TRANSFORM)
     -- C++ EVENT_TRANSFORM: ResetThreatList() between the transform and
     -- vanish casts (bridged lua_objects.go:389); the AttackStop /
-    -- REACT_PASSIVE / flag / equipment arms still have no bridge.
+    -- flag / equipment arms still have no bridge (the REACT_PASSIVE
+    -- arm is PORTED 2026-10-20 — creature:SetReactState).
     creature:ClearThreatList()
+    -- C++ boss_arlokk.cpp:245: me->SetReactState(REACT_PASSIVE)
+    -- (EVENT_TRANSFORM: ResetThreatList -> flip).
+    creature:SetReactState(0) -- REACT_PASSIVE
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     creature:CastSpell(creature, SPELL_VANISH)
     schedule(timers, guid, "vanish", 1000, function()

@@ -209,12 +209,17 @@ shutdownTick = function(creature, guid)
 end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith + react state + ScheduleEvent
--- x6 + ActiveTower() — only the four unconditional timer casts and the
--- EVENT_SHUTDOWN 150s timer path are bridgeable; the tower-condition aggro
--- talk, the shutdown early path and EVENT_SUMMON are documented-only.
+-- x6 + ActiveTower() — the four unconditional timer casts, the
+-- REACT_PASSIVE arm (PORTED 2026-10-20 — creature:SetReactState) and
+-- the EVENT_SHUTDOWN 150s timer path are bridgeable; the
+-- tower-condition aggro talk, the shutdown early path and EVENT_SUMMON
+-- are documented-only.
 local function flameLeviathanEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ boss_flame_leviathan.cpp:278: me->SetReactState(REACT_PASSIVE)
+    -- (JustEngagedWith: flip before EVENT_PURSUE).
+    creature:SetReactState(0) -- REACT_PASSIVE
     schedule(guid, "pursue", 1, function()
         pursueTick(creature, guid)
     end)
@@ -245,6 +250,9 @@ end
 
 local function flameLeviathanReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_flame_leviathan.cpp:272: me->SetReactState(REACT_DEFENSIVE)
+    -- (Reset last leg).
+    creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 1, flameLeviathanEnterCombat)

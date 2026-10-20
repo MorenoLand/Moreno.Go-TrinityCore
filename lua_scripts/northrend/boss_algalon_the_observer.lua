@@ -226,6 +226,9 @@ local function algalonReset(event, creature)
     -- SetBossState(FAIL) has no bridge, but the SetSheath(UNARMED) leg is
     -- ported — Algalon drew his weapon at the intro timer (:563 MELEE).
     creature:SetSheath(0) -- SHEATH_STATE_UNARMED
+    -- C++ boss_algalon_the_observer.cpp:305: me->SetReactState(REACT_PASSIVE)
+    -- (Reset arm order: _Reset -> flip -> Initialize).
+    creature:SetReactState(0) -- REACT_PASSIVE
 end
 
 RegisterCreatureEvent(ENTRY_ALGALON, 3, algalonTargetDied)

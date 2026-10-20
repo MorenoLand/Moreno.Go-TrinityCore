@@ -86,8 +86,10 @@
 -- is summon-blocked — unmodeled. Dark Fiend (25744). OnSpawn(5):
 -- triggered self-cast darkfiend skin 45934 (C++-exact — the
 -- constructor/Initialize arm, which has no Reset() override (the
--- class never re-casts it on evade); the SetDisplayId/REACT_PASSIVE
--- arms have no display/react bridges). The 2s arm (REACT_AGGRESSIVE
+-- class never re-casts it on evade); the SetDisplayId arm has no
+-- display bridge and the constructor machine is unported (the react
+-- bridge exists — creature:SetReactState — but the REACT_PASSIVE arm
+-- rides that unported constructor). The 2s arm (REACT_AGGRESSIVE
 -- + RemoveFlag(NOT_SELECTABLE) + summoner-GUID random-target
 -- AttackStart) has no react/flag/cross-creature/movement bridges
 -- — skipped; the 3s 500ms-repeat proximity arm (victim within
@@ -108,11 +110,13 @@
 -- melee is engine-driven (C++ DoMeleeAttackIfReady). Darkness /
 -- Black Hole (25879). OnReset(23): non-triggered self-cast
 -- blackhole summon visual 46242 (C++ DoCast default is
--- triggered=false — vaelastrasz convention; the REACT_PASSIVE
--- arm has no react bridge), then the C++ repeat-counter visual
--- chain: after 1s cast 46247 (the REACT_AGGRESSIVE + AttackStart
--- (DATA_PLAYER_GUID) arms have no react/instance-player/movement
--- bridges — skipped), after a further 1.2s cast 46242, after a
+-- triggered=false — vaelastrasz convention; the REACT_PASSIVE arm
+-- is PORTED 2026-10-20 — creature:SetReactState), then the C++
+-- repeat-counter visual
+-- chain: after 1s cast 46247 (the REACT_AGGRESSIVE arm is PORTED
+-- 2026-10-20 — creature:SetReactState; the AttackStart
+-- (DATA_PLAYER_GUID) co-arm has no instance-player bridge —
+-- skipped), after a further 1.2s cast 46242, after a
 -- further 2s cast 46228 + 46235, then the chain ends (C++-exact
 -- — no repeat after the counter-2 arm). The 15s DisappearAndDie
 -- arm (Reset scheduler, cpp:528-531) is ported in blackholeReset
@@ -132,8 +136,9 @@
 -- (dispel-remove -> passive + 45936 visual + 3s despawn),
 -- spell_transform_visual_missile_periodic (periodic 46208/46178
 -- missile) and spell_summon_blood_elves_periodic (periodic 46050
--- re-cast) unmodeled (standing gaps); no aura-enumeration/
--- flag/visibility/react/movement/kill/despawn bridges — the muru
+-- re-cast) unmodeled (standing gaps); no aura-enumeration/kill/
+-- despawn bridges (flag/visibility/react bridges exist — the arms
+-- below stay out on unported-machine grounds) — the muru
 -- phase-two RemoveAllAuras arm is bridged and ported in
 -- muruDamageTaken; the NOT_SELECTABLE arm, the portal DoResetPortals
 -- grid scan, the dark-fiend display/react/proximity-despawn arms, the
@@ -413,6 +418,10 @@ local function blackholeVisualStep1(creature, guid)
 end
 
 local function blackholeVisualStep0(creature, guid)
+    -- C++ boss_muru.cpp:539: me->SetReactState(REACT_AGGRESSIVE)
+    -- (1s scheduler: flip first; the co-arm AttackStart on the
+    -- instance-stored victim has no bridge and stays out).
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL_2)
     schedule(guid, "visual", 1200, function()
         blackholeVisualStep1(creature, guid)
@@ -428,6 +437,9 @@ local function blackholeReset(event, creature)
     -- UpdateAI never ticks on a corpse, so neither the visual nor the phantom
     -- DisappearAndDie schedule can fire post-death. cancelTimers rides the death leg.
     if creature:IsAlive() then
+        -- C++ boss_muru.cpp:526: me->SetReactState(REACT_PASSIVE)
+        -- (blackhole Reset: flip first).
+        creature:SetReactState(0) -- REACT_PASSIVE
         creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL)
         schedule(guid, "visual", 1000, function()
             blackholeVisualStep0(creature, guid)

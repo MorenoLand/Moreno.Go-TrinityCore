@@ -63,8 +63,9 @@
 -- majordomo-executus kill arm are unmodeled; the intro sequence
 -- (intro Talks SAY_ARRIVAL1_RAG/SAY_ARRIVAL3_RAG/SAY_ARRIVAL5_RAG,
 -- REACT_PASSIVE/AGGRESSIVE, UNIT_FLAG_NON_ATTACKABLE, SetImmuneToPC,
--- the ObjectAccessor majordomo kill) has no react/flag/immune/
--- creature-lookup bridges (emerge emote is ported) — the fight
+-- the ObjectAccessor majordomo kill) — the react/flag/immune/
+-- creature-lookup bridges all exist (lua_creature_events.go) but the
+-- intro machine itself is unported, so the arms stay out — the fight
 -- starts on pull instead of after the 53s intro; the submerge
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
 -- bridged lua_objects.go:389). The submerge AttackStop,
@@ -72,8 +73,9 @@
 -- have no bridges (AttackStop additionally stays out because the
 -- emerge AttackStart resume leg is unbridged); the SUBMERGED/0
 -- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
--- lua_creature_events.go); the emerge react/faction/flag/AttackStart
--- arms have no bridges (submerge/emerge emotes are ported); no
+-- lua_creature_events.go); the emerge react arm is PORTED
+-- (creature:SetReactState, 2026-10-20); the faction/flag/AttackStart
+-- arms still have no bridges (submerge/emote arms are ported); no
 -- summon model —
 -- the 8 sons of
 -- flame never spawn; the magma blast IsWithinMeleeRange gate has no
@@ -247,6 +249,9 @@ local onSubmerge
 
 local function onEmerge(creature, guid)
     getState(guid)
+    -- C++ boss_ragnaros.cpp:178: me->SetReactState(REACT_AGGRESSIVE)
+    -- (emerge arm order: flip first, then faction/flag/emote arms).
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     -- C++ boss_ragnaros.cpp:181-182: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
     -- then HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
     creature:EmoteState(0)
@@ -284,8 +289,9 @@ end
 -- previous submerge in real time. The port models the freeze as
 -- cancel + re-arm: submerge arms only the 90s emerge; emerge re-arms
 -- the 3min submerge. The summon (8 sons of flame), threat reset,
--- faction/flag/react/immobilize arms have no bridges (submerge/emerge
--- emotes are ported).
+-- faction/flag/immobilize arms have no bridges (the react arm is
+-- PORTED — creature:SetReactState, 2026-10-20; submerge/emote
+-- arms are ported).
 -- NOTE: plain assignment, NOT `local function` — the forward-declared
 -- `local onSubmerge` above is a separate slot; re-declaring with
 -- `local function` would shadow it and Ragnaros would never re-submerge.
@@ -300,6 +306,9 @@ onSubmerge = function(creature, guid)
     -- AttackStart leg has no bridge, so stopping attacks here would leave
     -- the boss passive after emerge.
     creature:ClearThreatList()
+    -- C++ boss_ragnaros.cpp:252: me->SetReactState(REACT_PASSIVE)
+    -- (submerge arm order: ResetThreatList -> flip -> InterruptNonMeleeSpells).
+    creature:SetReactState(0) -- REACT_PASSIVE
     if not s.hasSubmergedOnce then
         creature:Talk(SAY_REINFORCEMENTS1)
         s.hasSubmergedOnce = true

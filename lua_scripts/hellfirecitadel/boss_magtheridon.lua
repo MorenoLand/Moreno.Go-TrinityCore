@@ -55,13 +55,17 @@
 -- damage hook): incoming damage would take health to <=30% of
 -- max and phase ~= "collapsed" -> phase="collapsed",
 -- Talk(SAY_COLLAPSE), non-triggered DoCastAOE self-cast camera
--- shake 36455 (kalecgos convention; the react-passive/
--- AttackStop arms have no bridges), 6s -> 4s -> start the 20s
--- debris loop, non-triggered DoCastAOE self-cast debris 30630
+-- shake 36455 (kalecgos convention; the react bridge exists —
+-- creature:SetReactState — but the collapse PASSIVE arm stays out:
+-- its AGGRESSIVE restore rides the unported world-trigger machine,
+-- so the flip alone would strand the boss passive; the AttackStop
+-- arm has no bridge), 6s -> 4s -> start the 20s
 -- (the instance SetData COLLAPSE / COLLAPSE_2 arms and the
 -- world-trigger 36449 cast via instance->GetCreature(DATA_
 -- WORLD_TRIGGER) have no instance/cross-creature bridges; the
--- react-state flip back to aggressive has no react bridge).
+-- react-state flip back to aggressive stays out — the react bridge
+-- exists (creature:SetReactState) but the world-trigger machine is
+-- unported).
 -- Damage is NOT rewritten (C++-exact — the arm only gates on
 -- the 30% line). OnSpellHit(14): hit by 30168 (shadow cage) ->
 -- Talk(SAY_BANISHED) (muru-portal event-14 precedent). OnTarget-
@@ -72,8 +76,9 @@
 -- timers, drop per-GUID state (the evade-side summons.
 -- DespawnAll + instance-disable arms are summon/instance
 -- blocked). Hellfire Channeler (17256). OnReset(23): per-GUID
--- state cleared, non-triggered self-cast 30207 (the REACT_
--- DEFENSIVE arm has no react bridge). OnEnterCombat(1): the
+-- state cleared, non-triggered self-cast 30207 (the REACT_DEFENSIVE
+-- arm is PORTED 2026-10-20 — creature:SetReactState).
+-- OnEnterCombat(1): the
 -- magtheridon->DoAction(ACTION_START_CHANNELERS_EVENT) relay
 -- is cross-creature blocked (documented below); the self-
 -- contained timers arm normally: shadow bolt volley 30510 20s
@@ -104,9 +109,11 @@
 -- unmodeled — so the port treats magtheridon's own pull as the
 -- release (EMOTE_BREAKS_FREE + SAY_FREE + the RELEASED timer
 -- set, C++-exact values); no summon bridge — the channeler
--- group summon skipped; no react/flag bridge — the passive/
--- aggressive/react-defensive, NOT_SELECTABLE and immune-to-PC
--- arms unmodeled; no interrupt/distance bridges — the
+-- group summon skipped; the magtheridon passive/aggressive arms stay
+-- out on the unported collapse machine; no flag bridge — the
+-- NOT_SELECTABLE and immune-to-PC arms unmodeled (the channeler
+-- REACT_DEFENSIVE arm is PORTED 2026-10-20 — creature:SetReactState);
+-- no interrupt/distance bridges — the
 -- quake/blaze SPELLVALUE target-count args, the channeler
 -- InterruptNonMeleeSpells and the DoSelectBelowHpPctFriendly
 -- dark-mending pick (no creature-enumeration bridge) unmodeled;
@@ -390,7 +397,7 @@ local function channelerAbyssal(creature, guid)
 end
 
 -- C++ Reset: non-triggered self-cast 30207 (the REACT_DEFENSIVE
--- arm has no react bridge).
+-- arm is PORTED 2026-10-20 — creature:SetReactState).
 local function channelerReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -401,6 +408,9 @@ local function channelerReset(event, creature)
     -- so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SHADOW_GRASP_C)
+        -- C++ boss_magtheridon.cpp:330: me->SetReactState(REACT_DEFENSIVE)
+        -- (channeler Reset order: cast -> flip).
+        creature:SetReactState(1) -- REACT_DEFENSIVE
     end
 end
 

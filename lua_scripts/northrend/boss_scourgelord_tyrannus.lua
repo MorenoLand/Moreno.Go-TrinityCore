@@ -103,8 +103,11 @@
 --   legs (:242-249) ride it out with the machine.
 -- Tyrannus Reset / InitializeAI (:142-162) — REACT_PASSIVE +
 --   UNIT_FLAG_NON_ATTACKABLE + instance SetBossState(DATA_TYRANNUS,
---   NOT_STARTED/DONE) + DespawnOrUnsummon — no react / flag / instance
---   bridges.
+--   NOT_STARTED/DONE) + DespawnOrUnsummon — no flag / instance
+--   bridges (the react bridge exists — creature:SetReactState — but
+--   the intro DoAction/area-trigger machine is unported, so the
+--   PASSIVE arm stays out: porting it alone would strand the boss
+--   passive).
 -- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176), EnterEvadeMode
 --   (:178-186: instance SetBossState(FAIL) + rimefang EnterEvadeMode +
 --   DespawnOrUnsummon) — no bridges.
@@ -130,7 +133,8 @@
 -- Rimefang Reset (:306-320: waypoint/GUID init + SetCanFly / REACT_PASSIVE
 --   / NON_ATTACKABLE), JustReachedHome InstallAllAccessories (:322-326,
 --   vehicle), DoAction legs (:328-340: ACTION_START_RIMEFANG /
---   ACTION_END_COMBAT) — no bridges.
+--   ACTION_END_COMBAT) — no movement/vehicle/flag bridges (the
+--   REACT_PASSIVE arm is PORTED 2026-10-20 — creature:SetReactState).
 -- spell_tyrannus_rimefang_icy_blast SpellScript (:507-539: EFFECT_1
 --   SPELL_EFFECT_TRIGGER_MISSILE -> SummonCreature(NPC_ICY_BLAST 36731) +
 --   triggered SPELL_ICY_BLAST_AURA 69238) — no SpellScript / summon bridge.
@@ -315,6 +319,9 @@ end
 
 local function rimefangCancelCombat(event, creature)
     initState(creature:GetGUID())
+    -- C++ boss_scourgelord_tyrannus.cpp:318: me->SetReactState(REACT_PASSIVE)
+    -- (rimefang Reset: PASSIVE is the permanent baseline, no flip in C++).
+    creature:SetReactState(0) -- REACT_PASSIVE
 end
 
 RegisterCreatureEvent(ENTRY_TYRANNUS, 1, tyrannusEnterCombat)
