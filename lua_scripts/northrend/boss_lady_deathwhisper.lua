@@ -517,10 +517,15 @@ end
 
 -- C++ npc_cult_fanatic::SpellHit (:618-646) — bridged as event 14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL (engine/world/spells.go:9477,
--- boss_ai.go:2033), args (event, creature, caster, spellid); fires per
--- non-NONE effect per creature hit target — the C++ switch is per
--- effect index in the target's EffectMask (Spell.cpp:3557-3562), so Go
--- matches the C++ over-fire semantics.
+-- boss_ai.go:2033), args (event, creature, caster, spellid). Go fires
+-- ev14 once per non-NONE effect per creature hit target
+-- (boss_ai.go:2066-2080); C++ fires the AI SpellHit hook once per hit
+-- target (Spell.cpp:2629, inside DoDamageAndTriggers — NOT per effect),
+-- so a multi-effect landing spell over-fires this arm vs C++. Both legs
+-- below are over-fire-safe: the FULL_HEAL re-cast is net-idempotent and
+-- the DARK_TRANSFORMATION re-cast is visually harmless (C++ gates the
+-- repeat behind the UpdateEntry one-way transition, unmodeled here) —
+-- no first-fire gate needed, unlike the moorabi Talk arm.
 -- PORTED arm — case SPELL_DARK_TRANSFORMATION_T (70895, :622-625):
 -- DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered.
 -- InterruptNonMeleeSpells(true) has no bridge on the event-creature

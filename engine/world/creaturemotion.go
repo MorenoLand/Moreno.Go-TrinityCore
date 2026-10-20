@@ -2509,6 +2509,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// stop packet — a passive phase drops the stare like any attack stop.
 		s.clearCreatureVisualTarget(motion)
 		if motion.TargetGUID != 0 {
+			// Unit::AttackStop (Unit.cpp:5779-5782) resets the
+			// once-per-engagement assistance latch ahead of the stop
+			// packet — a passive phase re-opens CallAssistance for new
+			// attackers, like the creature:AttackStop() Lua bridge; gated
+			// on an actual stop (C++ !m_attacking early-return).
+			motion.AlreadyCallAssistance = false
 			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), nil)
 		}
 		motion.TargetGUID = 0
