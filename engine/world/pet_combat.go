@@ -4699,33 +4699,42 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			return
 		}
 		if isPlayerVictim {
-			// Unit::DealDamage absorbed legs (Unit.cpp:742-761, 813-819): a
-			// fully absorbed pet-spell hit still strips
-			// TAKE_DAMAGE-interrupt auras, grants absorbed rage, and aborts
-			// ABORT_ON_DMG casts on a player victim — the god arm above
-			// returns before all of these in C++.
-			if absorbed > 0 && s.server != nil {
+			// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE-interrupt
+			// strip runs before the !damage early-return — a fully resisted
+			// hit strips too, not just fully absorbed ones (Spell.cpp:2522
+			// calls DealSpellDamage even at zero damage). The absorbed-gated
+			// legs below (Unit.cpp:749-761, 814-818: ABORT_ON_DMG abort and
+			// absorbed rage, both keyed on cleanDamage->absorbed_damage) stay
+			// gated; the god arm above returns before all of these in C++.
+			if s.server != nil {
 				if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && !victim.godCheatActive() {
-					victim.grantRageFromDamageTaken(ctx, absorbed)
 					victim.procDamageAuras(false)
-					victim.interruptAbsorbedCast()
+					if absorbed > 0 {
+						victim.grantRageFromDamageTaken(ctx, absorbed)
+						victim.interruptAbsorbedCast()
+					}
 				}
 			}
 			return
 		}
-		// A fully-absorbed hit on a creature victim runs DealDamage's
-		// pre-return legs (Unit.cpp:700-704, 805-821) — the DamageTaken AI
-		// hook and rage from the absorbed amount — but returns before the
-		// tap, threat and engage legs, like C++.
-		if absorbed > 0 && s.server != nil {
+		// Unit::DealDamage (Unit.cpp:700-703): the DamageTaken/DamageDealt AI
+		// hooks fire at the top of DealDamage on every non-miss hit — a fully
+		// resisted zero-damage hit notifies the AI too, not just absorbed
+		// ones (Spell.cpp:2522 calls DealSpellDamage even at zero damage).
+		// The pre-return legs (Unit.cpp:814-818) then grant absorbed rage
+		// (absorbed-gated, like C++'s cleanDamage->absorbed_damage check) and
+		// return before the tap, threat and engage legs, like C++.
+		if s.server != nil {
 			s.server.motionMu.Lock()
 			if tm := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); tm != nil {
 				if tm.BossAI == nil {
 					tm.BossAI = getBossAIForCreature(tm, tm.ScriptName)
 				}
 				fireDealDamageAIHooks(ctx, s.server, tm, caster, caster.GUID, tm.GUID, &damage)
-				if next, changed := s.server.addCreatureRageLocked(tm, tm.Level, absorbed); changed {
-					s.server.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next})
+				if absorbed > 0 {
+					if next, changed := s.server.addCreatureRageLocked(tm, tm.Level, absorbed); changed {
+						s.server.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next})
+					}
 				}
 			}
 			s.server.motionMu.Unlock()
