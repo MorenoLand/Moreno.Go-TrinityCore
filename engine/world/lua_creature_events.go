@@ -550,10 +550,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
-	// SetStandState is Creature::SetStandState: SetByteValue(UNIT_FIELD_BYTES_1,
-	// UNIT_BYTES_1_OFFSET_STAND_STATE, state) (Unit.cpp: UNIT_STAND_STATE_STAND=0,
-	// SIT=1, SIT_CHAIR=2, SLEEP=3, SIT_LOW_CHAIR=4, SIT_MEDIUM_CHAIR=5,
-	// SIT_HIGH_CHAIR=6, DEAD=7, KNEEL=8, SUBMERGED=9, SharedDefines.h).
+	// SetStandState is Unit::SetStandState (Unit.cpp:10557-10570):
+	// SetByteValue(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_STAND_STATE,
+	// state) (UNIT_STAND_STATE_STAND=0, SIT=1, SIT_CHAIR=2, SLEEP=3,
+	// SIT_LOW_CHAIR=4, SIT_MEDIUM_CHAIR=5, SIT_HIGH_CHAIR=6, DEAD=7,
+	// KNEEL=8, SUBMERGED=9, SharedDefines.h); the player-only
+	// SMSG_STANDSTATE_UPDATE leg is N/A for creatures. The
+	// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_SEATED) leg
+	// (state != STAND) stays out: it is vacuous for every current caller
+	// (feign arms RemoveAllAuras first; nefarius's barrier is stripped by
+	// his explicit RemoveAura) and wiring it would require unlocking
+	// motionMu around the aura-strip call.
 	// applyCreatureMotionToSpawn overlays motion.StandState onto the spawn
 	// record's Bytes1 byte 0 (creatures.go), so feign-death / intro /
 	// throne-sitting arms (stalagg, feugen, nefarius, ...) port with real
@@ -1155,17 +1162,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return []any{out}, nil
 	}
 	// GetHomePosition is CreatureMethods::GetHomePosition
-	// (CreatureMethods.h:630-644): x, y, z, o from the creature's home
-	// position — twin of the session-surface bridge (lua_objects.go) for
-	// event handlers, whose wrappers close over the motion directly.
+	// (CreatureMethods.h:630-644): x, y, z, o from the creature's HOME
+	// position (Creature.h:296-297: m_homePosition) — twin of the
+	// session-surface bridge (lua_objects.go) for event handlers, whose
+	// wrappers close over the motion directly. The 4th value is the home
+	// orientation, NOT the live facing.
 	methods["GetHomePosition"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
-		hx, hy, hz, o := motion.HomeX, motion.HomeY, motion.HomeZ, motion.Orientation
+		hx, hy, hz, ho := motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO
 		s.motionMu.Unlock()
-		return []any{hx, hy, hz, o}, nil
+		return []any{hx, hy, hz, ho}, nil
 	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
-	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
+	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o)
+	// (Creature.h:294) relocates m_homePosition ONLY — the live
+	// position/orientation is untouched, so the bridge must not write
+	// motion.Orientation here (the old write snapped the live facing,
+	// e.g. sartharion's Reset to 4.66003).
 	methods["SetHomePosition"] = func(_ context.Context, args []any) ([]any, error) {
 		x, err := luaFloat32Arg(args, 0)
 		if err != nil {
@@ -1184,8 +1197,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		s.motionMu.Lock()
-		motion.HomeX, motion.HomeY, motion.HomeZ = x, y, z
-		motion.Orientation = o
+		motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO = x, y, z, o
 		s.motionMu.Unlock()
 		return nil, nil
 	}

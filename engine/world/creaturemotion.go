@@ -51,6 +51,7 @@ type creatureMotion struct {
 	HomeX         float32
 	HomeY         float32
 	HomeZ         float32
+	HomeO         float32 // home orientation (C++ m_homePosition.GetOrientation()): spawn orientation, SetHomePosition o, or the waypoint end-of-path arm's owner orientation; returned as GetHomePosition's 4th value
 	X             float32
 	Y             float32
 	Z             float32
@@ -741,6 +742,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			HomeX:       x,
 			HomeY:       y,
 			HomeZ:       z,
+			HomeO:       orientation,
 			Orientation: orientation,
 			X:           x,
 			Y:           y,
@@ -828,6 +830,7 @@ func (s *Server) relocateTransportCreatureMotions(ctx context.Context, passenger
 		motion.TransportGUID = passenger.TransportGUID
 		motion.Map, motion.InstanceID = passenger.Map, 0
 		motion.HomeX, motion.HomeY, motion.HomeZ = passenger.X, passenger.Y, passenger.Z
+		motion.HomeO = passenger.Orientation
 		motion.X, motion.Y, motion.Z, motion.Orientation = passenger.X, passenger.Y, passenger.Z, passenger.Orientation
 		motion.Moving, motion.MoveType, motion.Wander = false, 0, 0
 		motion.PathID, motion.Points, motion.NextIdx = 0, nil, 0
@@ -3740,11 +3743,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// destination: a creature that aggros mid-patrol and then evades
 		// returns to where it was patrolling, not to its original spawn.
 		// (RandomMovementGenerator carries no such arm. The orientation in
-		// C++ SetHomePosition(x,y,z,o) has no Go HomeO model and stays
-		// unmodeled, as does the non-repeating-path end-of-path arm,
-		// WaypointMovementGenerator.cpp:297-309 — Go paths repeat by
-		// default.)
+		// C++ SetHomePosition(x,y,z,o) carries the owner's CURRENT orientation
+		// (WaypointMovementGenerator.cpp:297-300: o = owner->GetOrientation()),
+		// so HomeO tracks it; the non-repeating-path end-of-path arm stays
+		// unmodeled (WaypointMovementGenerator.cpp:297-309 — Go paths repeat
+		// by default.)
 		motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
+		motion.HomeO = motion.Orientation
 	} else if motion.MoveType == 1 {
 		// RandomMovementGenerator<Creature>::SetRandomLocation
 		// (RandomMovementGenerator.cpp): frand(0, _wanderDistance) around the

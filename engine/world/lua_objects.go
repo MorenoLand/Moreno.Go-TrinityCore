@@ -344,14 +344,15 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// Unit::CastStop. No-op for creatures — no cast state to interrupt.
 	methods["StopSpellCast"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	// GetHomePosition is CreatureMethods::GetHomePosition
-	// (CreatureMethods.h:630-644): x, y, z, o from the creature's home
-	// position (Creature::GetHomePosition).
+	// (CreatureMethods.h:630-644): x, y, z, o from the creature's HOME
+	// position (Creature::GetHomePosition, Creature.h:296-297); the 4th
+	// value is the home orientation, NOT the live facing.
 	methods["GetHomePosition"] = func(_ context.Context, _ []any) ([]any, error) {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		if motion == nil {
 			return []any{float32(0), float32(0), float32(0), float32(0)}, nil
 		}
-		return []any{motion.HomeX, motion.HomeY, motion.HomeZ, motion.Orientation}, nil
+		return []any{motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO}, nil
 	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o).
@@ -374,8 +375,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		s.server.motionMu.Lock()
 		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
-			motion.HomeX, motion.HomeY, motion.HomeZ = x, y, z
-			motion.Orientation = o
+			motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO = x, y, z, o
 		}
 		s.server.motionMu.Unlock()
 		return nil, nil
