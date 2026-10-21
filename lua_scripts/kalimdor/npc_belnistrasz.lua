@@ -58,9 +58,11 @@
 --   without victim never clears scheduled events, but the hyjal.lua
 --   convention clears timers on leave-combat; no timer re-arm
 --   semantics change).
--- - Died (event 4): clear timers + state (C++ instance
---   SetBossState(DATA_EXTINGUISHING_THE_IDOL 6, DONE) + 5s despawn
---   have no bridges — documented-only).
+-- - Died (event 4): clear timers + state; the 5s DespawnOrUnsummon leg
+--   ports via the freya delayed-despawn idiom (CreateLuaEvent one-shot
+--   -> creature:Despawn, bridged); only the instance
+--   SetBossState(DATA_EXTINGUISHING_THE_IDOL 6, DONE) leg stays out
+--   (no instance bridge).
 -- Unmodeled (documented-only, no bridges):
 -- - MovementInform WAYPOINT id 17 (channeling start), the escort
 --   MovePath machine, EVENT_CHANNEL/IDOL_ROOM_SPAWNER/PROGRESS/
@@ -253,6 +255,13 @@ end
 
 local function onDied(event, creature, killer)
     clearState(creature:GetGUID())
+    -- C++ npc_belnistraszAI::JustDied (razorfen_downs.cpp:125-128):
+    -- instance->SetBossState(DATA_EXTINGUISHING_THE_IDOL, DONE) has no
+    -- instance bridge (stays out); me->DespawnOrUnsummon(5s) ports via
+    -- the freya delayed-despawn idiom (CreateLuaEvent one-shot).
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 5000)
 end
 
 RegisterCreatureEvent(ENTRY_BELNISTRASZ, 1, onEnterCombat)

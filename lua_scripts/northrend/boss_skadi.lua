@@ -103,7 +103,10 @@
 -- spline-chain gated (PassengerBoarded / MovementInform SPLINE_CHAIN_
 -- MOTION_TYPE: EMOTE_ON_RANGE / EMOTE_BREATH Talks, FREEZING_CLOUD
 -- periodic casts, ACTION_DRAKE_BREATH handoff) — no MovementInform /
--- spline / vehicle bridges. Stay out.
+-- spline / vehicle bridges. Stay out; only the JustDied
+-- DespawnOrUnsummon(Seconds(6)) leg ports (event 4, below — the freya
+-- delayed-despawn idiom), the paired skadi->ExitVehicle() leg having
+-- no cross-creature bridge.
 -- npc_ymirjar_harpooner JustDied — DoCast(SPELL_SUMMON_HARPOON 56789)
 -- is a pure summon leg (no bridge — the zarithrian precedent). Stay
 -- out.
@@ -121,6 +124,7 @@ local ENTRY_SKADI_THE_RUTHLESS = 26693
 local ENTRY_YMIRJAR_WARRIOR = 26690
 local ENTRY_YMIRJAR_WITCH_DOCTOR = 26691
 local ENTRY_YMIRJAR_HARPOONER = 26692
+local ENTRY_GRAUF = 26893 -- utgarde_pinnacle.h:70
 
 local SAY_KILL = 1
 local SAY_DEATH = 3
@@ -270,3 +274,15 @@ RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 1, harpoonerEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 23, cancelCombatTimers)
+
+-- C++ npc_graufAI::JustDied (boss_skadi.cpp:350-356): the
+-- skadi->ExitVehicle() leg is cross-creature (no bridge, stays out);
+-- me->DespawnOrUnsummon(Seconds(6)) ports via the freya
+-- delayed-despawn idiom (CreateLuaEvent one-shot).
+local function graufJustDied(event, creature, killer)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 6000)
+end
+
+RegisterCreatureEvent(ENTRY_GRAUF, 4, graufJustDied)

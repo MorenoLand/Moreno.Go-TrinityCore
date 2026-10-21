@@ -179,10 +179,13 @@
 -- npc_corrupted_soul_fragment precedent).
 -- The other 8 CreatureScripts / go_twilight_portal / the 15
 -- SpellScriptLoaders — zero Talk (npc_orb_carrier /
--- npc_meteor_strike* / npc_combustion_consumption / npc_living_inferno
--- / npc_living_ember) or spell-model arms (no-SpellScript /
--- no-AuraScript bridge, the sindragosa ice_tomb_target precedent) —
--- NOT registered.
+-- npc_meteor_strike* / npc_combustion_consumption) or spell-model arms
+-- (no-SpellScript / no-AuraScript bridge, the sindragosa
+-- ice_tomb_target precedent) — NOT registered. npc_living_inferno
+-- (40681) / npc_living_ember (40683): only their JustDied
+-- DespawnOrUnsummon(1ms) legs port (event 4, below — 1ms ≈ immediate
+-- creature:Despawn); the rest stays out (no SetFlag / CastStop /
+-- cross-creature-SetData bridges).
 -- SAY_BERSERK 7 — dead text, no Talk() call in the file.
 -- All 13 Talk() calls in the file accounted for (SAY_AGGRO 2 +
 -- SAY_DEATH 5 + SAY_KILL 6 ported; SAY_PHASE_TWO 4 + SAY_REGENERATE 0
@@ -203,6 +206,8 @@
 
 local ENTRY_HALION = 39863
 local ENTRY_TWILIGHT_HALION = 40142
+local ENTRY_LIVING_INFERNO = 40681 -- ruby_sanctum.h:83
+local ENTRY_LIVING_EMBER = 40683 -- ruby_sanctum.h:84
 
 local SAY_INTRO    = 1 -- (documented-only, rides the controller's cross-AI intro)
 local SAY_AGGRO    = 2
@@ -569,3 +574,13 @@ RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 2, twilightHalionLeaveCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 4, twilightHalionDied)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 9, twilightHalionDamageTaken)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionReset)
+
+-- C++ npc_living_infernoAI::JustDied (boss_halion.cpp:1292-1296) and
+-- npc_living_emberAI::JustDied (:1329-1333): me->DespawnOrUnsummon(1ms)
+-- ports as immediate creature:Despawn() (1ms ≈ immediate, bridged).
+local function livingAddJustDied(event, creature, killer)
+    creature:Despawn()
+end
+
+RegisterCreatureEvent(ENTRY_LIVING_INFERNO, 4, livingAddJustDied)
+RegisterCreatureEvent(ENTRY_LIVING_EMBER, 4, livingAddJustDied)

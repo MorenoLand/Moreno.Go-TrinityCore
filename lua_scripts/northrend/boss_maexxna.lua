@@ -39,8 +39,11 @@
 -- SetGUID-cross-AI / MoveJump / MoveSplineInit bridges (frogger
 -- precedent); Talk(EMOTE_WEB_WRAP 1) is target-conditional in C++
 -- and stays out with the wrap leg rather than fabricate a lone emote;
--- npc_webwrap (CreatureScript "npc_webwrap") is the summon-side AI of
--- that same machine and is not registered either.
+-- npc_webwrap (CreatureScript "npc_webwrap", entry 16486) is the
+-- summon-side AI of that same machine; only its JustDied
+-- DespawnOrUnsummon(5s) leg ports (event 4, below — the freya
+-- delayed-despawn idiom); the victimGUID aura-removal leg has no
+-- bridge (stays out).
 
 local SPELL_WEB_SPRAY = 29484
 local SPELL_POISON_SHOCK = 28741
@@ -52,6 +55,7 @@ local EMOTE_SPIDERS = 0
 local EMOTE_WEB_SPRAY = 2
 
 local ENTRY = 15952
+local ENTRY_WEB_WRAP = 16486 -- boss_maexxna.cpp:47
 
 local timers = {}
 
@@ -158,3 +162,15 @@ RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ npc_webwrapAI::JustDied (boss_maexxna.cpp:243-250): the victim
+-- aura-removal leg rides the victimGUID member (no bridge, stays out);
+-- me->DespawnOrUnsummon(5s) ports via the freya delayed-despawn idiom
+-- (CreateLuaEvent one-shot).
+local function webWrapJustDied(event, creature, killer)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 5000)
+end
+
+RegisterCreatureEvent(ENTRY_WEB_WRAP, 4, webWrapJustDied)

@@ -126,6 +126,11 @@
 -- creature:CastSpell(target, spell, true) per the file
 -- doctrine. The class's UpdateAI/summon legs stay out (see
 -- DOCUMENTED-ONLY).
+-- npc_iron_roots (33088) JustDied (boss_freya.cpp:243-253) —
+-- me->DespawnOrUnsummon() ports (event 4, creature:Despawn,
+-- bridged); the summonerGUID aura-removal legs have no bridge
+-- (stay out); the rest of the class stays out (see
+-- DOCUMENTED-ONLY).
 --
 -- DEVIATIONS from C++ (all bridge-limited, documented):
 -- - No UNIT_STATE_CASTING model in Go (creature casts are
@@ -227,6 +232,7 @@ local ENTRY_BRIGHTLEAF = 32915
 local ENTRY_STONEBARK = 32914
 local ENTRY_IRONBRANCH = 32913
 local ENTRY_ANCIENT_CONSERVATOR = 33203
+local ENTRY_IRON_ROOTS = 33088 -- boss_freya.cpp:168
 
 local SPELL_DRAINED_OF_POWER = 62467
 
@@ -607,3 +613,13 @@ local function conservatorEnterCombat(event, creature, target)
 end
 
 RegisterCreatureEvent(ENTRY_ANCIENT_CONSERVATOR, 1, conservatorEnterCombat)
+
+-- C++ npc_iron_rootsAI::JustDied (boss_freya.cpp:243-253): the
+-- summoner aura-removal legs ride the summonerGUID member (no
+-- bridge, stay out); me->DespawnOrUnsummon() ports
+-- (creature:Despawn, bridged).
+local function ironRootsJustDied(event, creature, killer)
+    creature:Despawn()
+end
+
+RegisterCreatureEvent(ENTRY_IRON_ROOTS, 4, ironRootsJustDied)

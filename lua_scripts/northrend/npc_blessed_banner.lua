@@ -17,9 +17,9 @@
 -- C++-exact for the line played — lecraft aggro-Talk
 -- precedent). The banner never engages combat, so OnReset(23)
 -- re-arms the same Reset fragment (C++ Reset semantics —
--- mushroom precedent); OnDied(4) carries no modeled arm (no
--- timers to cancel — the EVENT_ENDED / JustDied despawn chain
--- sits behind the summon / despawn bridges, unmodeled).
+-- mushroom precedent); OnDied(4) carries the JustDied self-despawn
+-- leg (zone_icecrown.cpp:455-459; the Summons.DespawnAll() half stays
+-- out — no summon-list bridge).
 -- Unmodeled: SetRegenerateHealth(false) (no regen bridge);
 -- EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900 with
 -- MovePoint machines — summon / movement bridges);
@@ -98,6 +98,9 @@ local BLESSED_BANNER_ENTRY = 30891
 -- SPELL_THREAT_PULSE + Talk(BANNER_SAY). The banner never
 -- engages, so the fragment is one-shot per spawn / reset;
 -- no timers, no per-GUID state.
+-- Died (event 4): the JustDied self-despawn leg ports
+-- (me->DespawnOrUnsummon(), creature:Despawn, bridged); the paired
+-- Summons.DespawnAll() leg has no summon-list bridge (stays out).
 local function onSpawnOrReset(_, creature)
     -- C++ npc_blessed_bannerAI::Reset(): DoCast(SPELL_THREAT_PULSE) +
     -- Talk(BANNER_SAY) (zone_icecrown.cpp). Alive-gated so the death-leg
@@ -111,6 +114,15 @@ end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 23, onSpawnOrReset)
+
+-- C++ npc_blessed_bannerAI::JustDied (zone_icecrown.cpp:455-459):
+-- Summons.DespawnAll() has no summon-list bridge (stays out);
+-- me->DespawnOrUnsummon() ports (creature:Despawn, bridged).
+local function onDied(event, creature, killer)
+    creature:Despawn()
+end
+
+RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 4, onDied)
 
 -- C++ npc_blessed_bannerAI::MoveInLineOfSight (zone_icecrown.cpp:447) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight

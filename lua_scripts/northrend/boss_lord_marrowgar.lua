@@ -65,14 +65,17 @@
 -- kept; 10min one-shot seeded on engage, no phase/machine/random-
 -- target gates (the festergut/rotface/putricide/sindragosa berserk
 -- precedent; TRIGGERED self-cast).
--- DOCUMENTED-ONLY (in this header; only entry 36612 registered):
--- npc_coldflame (36672) and npc_bone_spike (36619) expose zero own
--- Talk lines in their classes; their legs (IsSummonedBy
--- vehicle/cast/teleport legs, UpdateAI EVENT_COLDFLAME_TRIGGER /
--- EVENT_FAIL_BONED machines, JustDied/KilledUnit aura-removal legs,
--- PassengerBoarded spline leg, DATA_BONED_ACHIEVEMENT instance
--- SetData leg) have no bridges — not registered (the bronjahm
--- npc_corrupted_soul_fragment precedent).
+-- DOCUMENTED-ONLY (in this header; entries 36612 + 36619 registered):
+-- npc_coldflame (36672) exposes zero own Talk lines; its legs
+-- (IsSummonedBy vehicle/cast/teleport legs, UpdateAI
+-- EVENT_COLDFLAME_TRIGGER machine, PassengerBoarded spline leg) have no
+-- bridges — not registered (the bronjahm npc_corrupted_soul_fragment
+-- precedent). npc_bone_spike (36619): the JustDied/KilledUnit
+-- DespawnOrUnsummon legs PORT (event 4 / event 3, below); the JustDied
+-- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()
+-- (no bridge, stays out); the rest (IsSummonedBy vehicle/cast/teleport
+-- legs, UpdateAI EVENT_FAIL_BONED machine, DATA_BONED_ACHIEVEMENT
+-- instance SetData leg) has no bridges.
 -- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
 -- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
 -- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
@@ -118,6 +121,9 @@
 -- bone-storm 2 + bonespike 3 + emote-bone-storm 7).
 
 local ENTRY_LORD_MARROWGAR = 36612
+local ENTRY_BONE_SPIKE = 36619 -- icecrown_citadel.h:171
+
+local SPELL_IMPALED = 69065 -- boss_lord_marrowgar.cpp:54
 
 local SAY_AGGRO = 1
 local SAY_KILL = 4
@@ -212,3 +218,22 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 2, marrowgarLeaveCombat)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 3, marrowgarKilledUnit)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 4, marrowgarJustDied)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
+
+-- C++ npc_bone_spike::JustDied (boss_lord_marrowgar.cpp:424-431): the
+-- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()
+-- (no summoner-unit bridge, stays out); me->DespawnOrUnsummon() ports
+-- (creature:Despawn, bridged).
+local function boneSpikeJustDied(event, creature, killer)
+    creature:Despawn()
+end
+
+-- C++ npc_bone_spike::KilledUnit (:433-437): me->DespawnOrUnsummon() +
+-- victim->RemoveAurasDueToSpell(SPELL_IMPALED), C++ order kept;
+-- victim:RemoveAura is the player/creature RemoveAura bridge.
+local function boneSpikeKilledUnit(event, creature, victim)
+    creature:Despawn()
+    victim:RemoveAura(SPELL_IMPALED)
+end
+
+RegisterCreatureEvent(ENTRY_BONE_SPIKE, 3, boneSpikeKilledUnit)
+RegisterCreatureEvent(ENTRY_BONE_SPIKE, 4, boneSpikeJustDied)
