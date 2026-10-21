@@ -45,9 +45,13 @@
 -- MovePoint + MovementInform change-image Talk/SAY_ chain +
 -- EVENT_GET_TARGETS 5s StoreTargets GetCreatureListWithEntryInGrid
 -- / FindNearestCreature + ChangeImage SetEntry/SetDisplayId +
--- SPELL_HEROIC_IMAGE_CHANNEL cast + TurnAudience SetFacingToObject)
--- sits behind the no-movement / no-world-search / no-entry-update /
--- no-cross-creature-facing bridges — documented-only.
+-- SPELL_HEROIC_IMAGE_CHANNEL cast + TurnAudience SetFacingToObject —
+-- the TurnAudience facing leg (creature->SetFacingToObject(me),
+-- C++ :290) is bridgeable via the atan2 twin (devourer_of_souls
+-- precedent), retracting the old "no-cross-creature-facing"
+-- parenthetical; the machine stays documented-only — the payload
+-- legs ride the no-movement / no-world-search /
+-- no-entry-update / no-summon bridges.
 -- spell_q12096_q12092_dummy — Strengthen the Ancients On Interact
 -- Dummy to Woodlands Walker (roll 1: CastSpell-on-player 47550
 -- item bark + Talk SAY_WALKER_FRIENDLY + DespawnOrUnsummon 1s;

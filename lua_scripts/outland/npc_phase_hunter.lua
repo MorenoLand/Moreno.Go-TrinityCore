@@ -15,7 +15,13 @@
 -- no-bridge arms — cross-creature GUID coordination with
 -- Ardonis (19830) via FindNearestCreature, Pathaleon's image
 -- (21504) via SummonCreature + the JustSummoned GUID latch,
--- SetFacingToObject / SetStandState kneel choreography, the
+-- SetFacingToObject / SetStandState kneel choreography (the facing
+-- legs — me->SetFacingToObject(pathaleon) C++ :131, me->
+-- SetFacingToObject(ardonis) C++ :147 — are bridgeable via the atan2
+-- twin, devourer_of_souls precedent, but the choreography rides the
+-- cross-creature GUID machine: FindNearestCreature +
+-- SummonCreature + the JustSummoned GUID latch — no summon /
+-- world-search / cross-creature bridges), the
 -- AreaTrigger start condition (player HasAura(SPELL_SUNFURY_
 -- DISGUISE 34603) + quest 10198 incomplete within 30 yd) and
 -- the quest credit via AreaExploredOrEventHappens (no cross-

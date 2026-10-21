@@ -84,7 +84,12 @@
 --   (CORPSE) legs, me->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_
 --   ATTACKABLE) / me->Attack / Unit::Kill(me, Madrigosa) /
 --   SetFacingToObject / AttackStop / SetOrientation / StopMoving
---   legs — none of these have Lua bridges; MoveInLineOfSight's
+--   legs — the SetFacingToObject leg (C++ :199-200 me<->Madrigosa)
+--   is bridgeable via the atan2 twin (devourer_of_souls precedent),
+--   retracting the old "none of these have Lua bridges" parenthetical
+--   on that one leg only; the intro stays documented-only — the faced
+--   target (Madrigosa via instance->GetCreature(DATA_MADRIGOSA))
+--   rides the instance-blocked machine. MoveInLineOfSight's
 --   SetBossState(SPECIAL) + StartIntro trigger, AttackStart's
 --   intro gate, and EnterEvadeMode's !Intro gate share the
 --   block — the intro stays documented-only (not a firesworn

@@ -12,8 +12,8 @@
 -- wowhead corroboration (www.wowhead.com/npc=4829/akumai, Classic Aku'mai) —
 -- kalecgos-level evidence, jeklik precedent; the creature_template
 -- ScriptName binding stays DB-side.
--- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 9 OnDamageTaken
--- (fires pre-damage), 23 OnReset. Timers via CreateLuaEvent; melee is
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
+-- 9 OnDamageTaken (fires pre-damage), 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms:
 -- - Reset (23, C++-exact for the C++ Initialize() leg): IsEnraged flag
@@ -96,6 +96,13 @@ local function akuMaiLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
+-- re-arming poison-cloud timer must be cancelled on death or it keeps
+-- casting from the corpse forever (ouro precedent).
+local function akuMaiOnDied(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (no bridge) +
 -- ScheduleEvent(EVENT_POISON_CLOUD, 5s, 9s).
 local function akuMaiEnterCombat(event, creature, target)
@@ -131,5 +138,6 @@ end
 
 RegisterCreatureEvent(ENTRY_AKU_MAI, 1, akuMaiEnterCombat)
 RegisterCreatureEvent(ENTRY_AKU_MAI, 2, akuMaiLeaveCombat)
+RegisterCreatureEvent(ENTRY_AKU_MAI, 4, akuMaiOnDied)
 RegisterCreatureEvent(ENTRY_AKU_MAI, 9, akuMaiDamageTaken)
 RegisterCreatureEvent(ENTRY_AKU_MAI, 23, akuMaiOnReset)

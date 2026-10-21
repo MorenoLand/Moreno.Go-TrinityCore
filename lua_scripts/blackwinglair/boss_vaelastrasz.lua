@@ -15,7 +15,7 @@
 -- Vael (one-shot gossip option — the C++ UNIT_NPC_FLAG_GOSSIP flag
 -- removal is ported via GetNPCFlags/SetNPCFlags on the Eluna gossip
 -- creature (the old "no flag bridge" claim was stale —
--- engine/world/lua_objects.go:657/666), so the option is never
+-- engine/world/lua_objects.go:665/675), so the option is never
 -- offered again after the first select, and C++ Reset does NOT restore
 -- it, so the one-shot survives wipes), then the speech machine runs
 -- while out of combat — 1s SAY_LINE1 (0), 12s SAY_LINE2 (1), 12s

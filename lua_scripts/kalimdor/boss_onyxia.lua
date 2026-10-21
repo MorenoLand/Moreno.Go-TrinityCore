@@ -56,7 +56,12 @@
 --   GetMoveData / SetNextRandomPoint, MoveTakeoff 11, MovePoint
 --   cascade (ids 8/10/11), SetCanFly / SetDisableGravity / flight
 --   speed legs, SpellHit MovePoint-8 redirect, SetFacingToObject
---   trigger facing, EVENT_DEEP_BREATH (PointData->SpellId via
+--   trigger facing (C++ :408 me->SetFacingToObject(trigger) — the
+--   facing leg is bridgeable via the atan2 twin, devourer_of_souls
+--   precedent — but it fires inside the unreachable phase-2 flight
+--   machine: the trigger comes from ObjectAccessor::GetCreature via
+--   triggerGUID, no movement / world-access bridges),
+--   EVENT_DEEP_BREATH (PointData->SpellId via
 --   DoCast(me)), EVENT_MOVEMENT (25s cadence), EVENT_FIREBALL
 --   (random-target 18392), EVENT_LAIR_GUARD / EVENT_WHELP_SPAWN
 --   summons (NPC_LAIRGUARD 36561 / NPC_WHELP 11262, 90s / 500ms

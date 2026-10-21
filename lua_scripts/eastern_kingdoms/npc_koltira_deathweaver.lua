@@ -44,9 +44,9 @@
 -- - EVENT_INTRO_0's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
 --   (chapter2.cpp:166) PORTED via creature:SetNPCFlags(), C++ arm
 --   order before Talk(SAY_KOLTIRA_0). The old "no flag bridges"
---   claims were stale — GetNPCFlags/SetNPCFlags and UNIT_FIELD_FLAGS
---   SetFlag/RemoveFlag are bridged (engine/world/lua_objects.go:657,
---   engine/world/lua_creature_events.go:690).
+--   claims were stale — GetNPCFlags/SetNPCFlags (lua_objects.go:665/
+--   675) and UNIT_FIELD_FLAGS SetFlag/RemoveFlag
+--   (lua_creature_events.go:968/1033) are bridged.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - OnGossipHello's PrepareQuestMenu leg (no quest-menu bridge —
 --   kalecgos precedent; IsQuestGiver() is creature_template data).

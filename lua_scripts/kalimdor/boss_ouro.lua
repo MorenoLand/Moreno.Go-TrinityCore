@@ -10,7 +10,7 @@
 -- NPC_OURO constant in temple_of_ahnqiraj.h — the
 -- creature_template ScriptName binding stays DB-side, loader
 -- convention). DATA_OURO = 8 (temple_of_ahnqiraj.h:38).
--- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Zero Talk() calls in C++.
@@ -210,10 +210,19 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
+-- re-arming sweep / sandblast / submerge / back chain must be cancelled
+-- on death or it keeps casting from the corpse forever (the submerged
+-- latch clears in cancelTimers too).
+local function onDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)

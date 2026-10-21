@@ -87,30 +87,42 @@
 -- boss_anubarak_trial EVENT_NERUBIAN_SHADOW_STRIKE (heroic) —
 -- summons.DoAction(ACTION_SHADOW_STRIKE) — cross-AI DoAction
 -- bridge absent — documented-only.
--- boss_anubarak_trial EVENT_SUBMERGE — DoCast(me,
+-- boss_anubarak_trial EVENT_SUBMERGE (boss_anubarak_trial.cpp:335-347,
+-- gated on !_reachedPhase3 && !HasAura(BERSERK)) — DoCast(me,
 -- Submerge 65981) + DoCast(me, Clear All Debuffs 34098) +
 -- SetFlag(NON_ATTACKABLE | NOT_SELECTABLE) + Talk(EMOTE_BURROWER
--- 3) + phase switch — no flag / phase bridges — documented-only.
+-- 3) + SetPhase(PHASE_SUBMERGED) + the submerged schedules — stays out:
+-- no phase / summon bridges (the SetFlag leg IS bridgeable —
+-- lua_creature_events.go:968 — but the phase machine and the submerged
+-- schedules ride unported ground); the old "no flag bridge" wording
+-- was stale — documented-only.
 -- boss_anubarak_trial EVENT_PURSUING_SPIKE — DoCast(
 -- Spike Call 66169) (rides the unbridged phase machine).
 -- boss_anubarak_trial EVENT_SUMMON_SCARAB — burrow GUID-list
 -- walk + ObjectAccessor::GetCreature + burrow->CastSpell(
 -- burrow, 66340) — no ObjectAccessor / cross-AI cast bridges —
 -- documented-only.
--- boss_anubarak_trial EVENT_EMERGE — DoCast(Spike Tele 66170) +
--- summons.DespawnEntry(NPC_SPIKE) + RemoveAurasDueToSpell +
--- RemoveFlag + DoCast(me, Emerge 65982) + Talk(EMOTE_EMERGE 4) +
--- phase switch + full timer re-arm — no flag / phase / summon
--- bridges — documented-only.
+-- boss_anubarak_trial EVENT_EMERGE (boss_anubarak_trial.cpp:372-390) —
+-- DoCast(Spike Tele 66170) + summons.DespawnEntry(NPC_SPIKE) +
+-- RemoveAurasDueToSpell(SUBMERGE_ANUBARAK) + RemoveFlag(
+-- NON_ATTACKABLE | NOT_SELECTABLE) + DoCast(me, Emerge 65982) +
+-- Talk(EMOTE_EMERGE 4) + SetPhase(PHASE_MELEE) + full timer re-arm —
+-- stays out: no phase / summon / despawn bridges (the RemoveFlag leg
+-- IS bridgeable — lua_creature_events.go:1033 — but the phase machine
+-- and the spike/summon legs ride unported ground); the old "no flag
+-- bridge" wording was stale — documented-only.
 -- boss_anubarak_trial EVENT_SUMMON_FROST_SPHERE — ObjectAccessor
 -- sphere GUID walk + SummonCreature(NPC_FROST_SPHERE) +
 -- _sphereGUID latch (no ObjectAccessor / summon bridges).
--- boss_anubarak_trial phase-3 leg — HealthBelowPct(30) (no
--- health-pct bridge — doomwalker precedent) + DoCastAOE(
--- Leeching Swarm 66118) (stays out: PHASE_MELEE-gated, and the whole
--- effect is the spell_anubarak_leeching_swarm AuraScript — shazzrah
--- precedent) + Talk(EMOTE_LEECHING_SWARM 6) +
--- Talk(SAY_LEECHING_SWARM 5) (ride the unbridged leg).
+-- boss_anubarak_trial phase-3 leg (boss_anubarak_trial.cpp:420-426) —
+-- HealthBelowPct(30) && IsInPhase(PHASE_MELEE) && !_reachedPhase3 ->
+-- _reachedPhase3 latch + DoCastAOE(Leeching Swarm 66118) +
+-- Talk(EMOTE_LEECHING_SWARM 6) + Talk(SAY_LEECHING_SWARM 5) — stays
+-- out: PHASE_MELEE-gated (no phase bridge), and the whole effect is the
+-- spell_anubarak_leeching_swarm AuraScript (no SpellScript/AuraScript
+-- bridge — shazzrah precedent). The old "no health-pct bridge
+-- (doomwalker precedent)" claim was stale — GetHealthPct is bridged
+-- (engine/scripting/object.go:107); the phase + AuraScript gates block.
 -- boss_anubarak_trial JustDied's grid despawn of frost spheres
 -- and burrowers — PORTED via the GetCreaturesInGrid bridge
 -- (engine/world/lua_creature_events.go); creature:Despawn() was
@@ -136,17 +148,21 @@
 -- Awakened 66311) + DoZoneInCombat + cross-AI JustSummoned ride
 -- the unbridged summon gate; DoAction(ACTION_SHADOW_STRIKE):
 -- SelectTarget(Random,0) -> DoCast(Shadow Strike 66134) — no
--- DoAction / random-target bridges; UpdateAI submerge timer:
--- HealthBelowPct(80) — the old "no health-pct bridge (doomwalker
--- precedent)" claim was stale (event 9 + creature:GetHealthPct()
--- observe it, eck/sindragosa precedent) — but the arm stays
--- documented-only: conjunctive on unbridged SetFlag/RemoveFlag(
--- NOT_SELECTABLE) (a still-targetable submerge would fabricate
--- behavior), instance-gated (GetBossState(DATA_ANUBARAK) — no
--- instance bridge), and summon-context (zero registration) +
--- flag / aura / permafrost gates (the SetFlag/RemoveFlag bridge
--- exists — the instance/summon gates block; creature HasAura IS
--- bridged, engine/world/lua_objects.go:228) — all documented-only.
+-- DoAction / random-target bridges; UpdateAI submerge timer
+-- (boss_anubarak_trial.cpp:580-596): (_submergeTimer <= diff) &&
+-- HealthBelowPct(80) -> the SUBMERGE_EFFECT aura branch (
+-- RemoveAurasDueToSpell + DoCast(me, EMERGE 65982) + DoCast(me,
+-- AWAKENED 66311) + RemoveFlag(NOT_SELECTABLE)) or the
+-- !PERMAFROST_HELPER branch (DoCast(me, SUBMERGE_EFFECT 65981) +
+-- SetFlag(NOT_SELECTABLE) + DoCast(me, PERSISTENT_DIRT, true)) —
+-- stays documented-only: instance-gated (_instance->GetBossState(
+-- DATA_ANUBARAK) != IN_PROGRESS -> DisappearAndDie, no instance
+-- bridge), the phase machine has no bridge, and the burrower summon
+-- context has zero registration. The flag/aura legs are bridgeable in
+-- isolation (SetFlag/RemoveFlag live, lua_creature_events.go:968+;
+-- creature:HasAura bridged, lua_objects.go:228) — the old "no
+-- health-pct bridge (doomwalker precedent)" claim was stale
+-- (GetHealthPct, object.go:107); the instance/phase/summon gates block.
 -- npc_anubarak_spike (34660) — zero registration (entry
 -- verifiable from the Summons enum, but zero bridgeable arms —
 -- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken

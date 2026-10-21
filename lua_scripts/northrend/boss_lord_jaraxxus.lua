@@ -73,8 +73,11 @@
 -- 9s (rides the intro machine); EVENT_KILL_GNOME: DoCastSelf(Fel
 -- Lightning Intro 67888) (rides the intro machine); MovementInform
 -- SPLINE_CHAIN_POINT_SUMMONED -> SetFacingToObject(wilfred via
--- instance->GetCreature(DATA_FIZZLEBANG)) (no MovementInform hook —
--- instance model absent); EVENT_CHANGE_ORIENTATION: SetFacingTo(
+-- instance->GetCreature(DATA_FIZZLEBANG)) — the facing leg itself is
+-- bridgeable via the atan2 twin (devourer_of_souls precedent), but the
+-- arm stays documented-only: no MovementInform hook, and the faced
+-- target (wilfred via instance->GetCreature(DATA_FIZZLEBANG)) rides the
+-- absent instance model; EVENT_CHANGE_ORIENTATION: SetFacingTo(
 -- 4.729842f) (SetFacingTo is bridged — lua_creature_events.go:711 —
 -- but the arm rides the unported intro machine); EVENT_START_COMBAT:
 -- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE) +

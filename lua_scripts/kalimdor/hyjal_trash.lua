@@ -59,9 +59,16 @@
 -- - hyjal_trashAI::DamageTaken: instance->SetData(DATA_RAIDDAMAGE, damage)
 --   raid-damage accounting (instance-data bridge blocked); ::JustDied:
 --   instance->SetData(DATA_TRASH, 0) wave signal (blocked) and
---   RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE) below the
---   MINRAIDDAMAGE (700000) / world-boss damageTaken gate — no flag bridge
---   (jeklik NOT_SELECTABLE precedent).
+--   RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE) (hyjal_trash.cpp:406-407)
+--   below the MINRAIDDAMAGE (700000) / world-boss damageTaken gate —
+--   the old "no flag bridge" claim was stale (the dynamic-flag bridge
+--   is live, lua_creature_events.go:1033+); the arm stays out on its
+--   gates: the non-world-boss disjunct reads instance->GetData(
+--   DATA_RAIDDAMAGE) < MINRAIDDAMAGE (no instance-data bridge), and the
+--   world-boss disjunct (damageTaken < GetMaxHealth()/4, bridgeable in
+--   isolation via a per-GUID event-9 accumulator + creature:IsWorldBoss())
+--   never fires for the registered trash entries (none carries the
+--   BOSS_MOB type flag), so it would be inert code.
 -- - npc_giant_infernal: the meteor spawn choreography (MODEL_INVIS 11686,
 --   UNIT_FLAG_NOT_SELECTABLE / NON_ATTACKABLE flags, Delay, world-trigger
 --   21987 summon + SPELL_METEOR 33814 visual) — flag set/clear is bridged

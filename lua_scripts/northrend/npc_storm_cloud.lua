@@ -32,7 +32,10 @@
 -- + ride-vehicle legs are the blockers) — documented-only.
 -- npc_drakuru_shackles — the Reset arm (SetFlag NOT_SELECTABLE,
 -- GetClosePoint + SummonCreature NPC_RAGECLAW 29686, SetFacing
--- ToObject pair) sits behind the flag / summon / facing bridges;
+-- ToObject pair — the LockRageclaw facing pair (C++ :74-75) is
+-- bridgeable via the atan2 twin, devourer_of_souls precedent,
+-- retracting "facing" from the blocker list) sits behind the flag /
+-- summon bridges;
 -- the SpellHit(55083 UNLOCK_SHACKLE) machine (player-caster +
 -- quest-12861 INCOMPLETE gates -> DoCast(rageclaw, 55223)
 -- triggered + setDeathState(DEAD) + KilledMonster + RemoveAura
@@ -65,10 +68,13 @@
 -- engine/world/gossip.go:129/369), creature:CastSpell(player) and
 -- Despawn are bridged too — the real blockers are the flag /
 -- emotestate writes (no UNIT_NPC_FLAGS / UNIT_FIELD_EMOTESTATE
--- write bridge), SetFacingToObject / SetWalk / MovePoint (no
--- facing/movement bridges), and the entry, which is not
--- C++-verifiable (DB-side ScriptName bind), so nothing can be
--- registered — documented-only. 50633/12509 verifiable.
+-- write bridge), SetWalk / MovePoint (no movement bridges), and the
+-- entry, which is not C++-verifiable (DB-side ScriptName bind), so
+-- nothing can be registered — documented-only. The OnGossipSelect
+-- me->SetFacingToObject(player) leg (zone_zuldrak.cpp :276) is
+-- bridgeable via the atan2 twin (devourer_of_souls precedent) —
+-- the faced target IS the Lua-available gossip player — but the
+-- blockers above keep the verdict. 50633/12509 verifiable.
 -- go_scourge_enclosure (GameObjectAI) — the OnGossipHello arm
 -- (UseDoorOrButton + quest-12916 INCOMPLETE gate -> FindNearest
 -- Creature(29928, 20yd) -> KilledMonsterCredit + dummy CastSpell

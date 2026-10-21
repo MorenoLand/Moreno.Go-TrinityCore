@@ -111,10 +111,13 @@
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
 -- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
 -- "no DamageTaken hook + no health-pct bridge" claim was stale
--- (event 9 carries pre-damage damage; the crusher's 5% mitigation
--- arm needs attacker->IsControlledByPlayer(), which has zero hits
--- in engine/scripting/ and engine/world/lua_*.go — that missing
--- attacker-classification bridge is the true blocker, and a
+-- (event 9 carries pre-damage damage; the frenzy arm is PORTED below).
+-- Hadronox's own 5% mitigation arm (boss_hadronox.cpp:361-369:
+-- HealthBelowPct(70) / HealthBelowPctDamaged(5, damage) zeroing +
+-- GetHealthPct() damage scaling) needs attacker->IsControlledByPlayer(),
+-- which has no Lua-surface bridge (the Go mirror
+-- creatureIsPlayerControlled, boss_ai.go:894, is unexported) — that
+-- missing attacker-classification bridge is the true blocker, and a
 -- GetObjectType()=="Player" approximation would wrongly reduce
 -- pet/charm damage that C++ lets through at full). JustDied ->
 -- hadronox AI

@@ -47,8 +47,12 @@
 -- creature:CastSpell(player,...), player:HasAura, IsWithinDistInMap,
 -- OnAIUpdate 7 with 100ms diff) but: no entry consts in the C++ tree
 -- (cannot register), no IsWithinLOS bridge (the emote gate needs LOS, not
--- just distance), no SetFacingToObject / Relocate / SetDisableGravity /
--- heartbeat bridges. Emote/text-emote IDs verified from
+-- just distance), no Relocate / SetDisableGravity / heartbeat bridges.
+-- The me->SetFacingToObject(player) leg (C++ :364) is bridgeable via
+-- the atan2 twin (devourer_of_souls precedent) — the old "no
+-- SetFacingToObject bridge" parenthetical is retracted — but the class
+-- stays documented-only on the no-entry-consts + no-IsWithinLOS
+-- grounds above. Emote/text-emote IDs verified from
 -- src/server/shared/SharedDefines.h (TEXT_EMOTE_KISS 58, WAVE 101, BOW 17,
 -- JOKE 329, DANCE 34; EMOTE_ONESHOT_DANCE 94, SHY 24, LAUGH 11) for the
 -- sibling lines 1154+ run if it ever gains entry constants.

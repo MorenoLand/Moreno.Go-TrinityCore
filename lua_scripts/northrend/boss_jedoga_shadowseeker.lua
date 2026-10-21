@@ -88,10 +88,15 @@
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE), MovePoint(
 -- POINT_PHASE_TWO)), EVENT_FLY_DELAY (SetDisableGravity(true) +
 -- MoveTakeoff(POINT_PHASE_TWO_FLY)), EVENT_CHOOSE_VOLUNTEER
--- (controller summon + SetFacingToObject + SPELL_SACRIFICE_VISUAL
--- 56133 self-cast + Talk(SAY_CHOOSE 1) + random volunteer pick via
--- _volunteerGUIDS + ObjectAccessor::GetCreature + cross-AI
--- DoAction(ACTION_CHOSEN)), EVENT_SUMMON_VOLUNTEER re-summon
+-- (controller summon + SetFacingToObject — the me->
+-- SetFacingToObject(controller) leg (C++ :337) is bridgeable via the
+-- atan2 twin (devourer_of_souls precedent), but the arm stays
+-- documented-only: the controller is created by SummonCreature (no
+-- summon bridge) inside the unported phase-two machine; +
+-- SPELL_SACRIFICE_VISUAL 56133 self-cast + Talk(SAY_CHOOSE 1) +
+-- random volunteer pick via _volunteerGUIDS + ObjectAccessor::
+-- GetCreature + cross-AI DoAction(ACTION_CHOSEN)),
+-- EVENT_SUMMON_VOLUNTEER re-summon
 -- machine, EVENT_END_PHASE_TWO (summons.DespawnEntry(controller) +
 -- DoCastSelf(SPELL_HOVER_FALL_2 56157) + MoveLand(POINT_GROUND)):
 -- summon STRAND + motion-master (MovePoint / MoveLand / MoveTakeoff

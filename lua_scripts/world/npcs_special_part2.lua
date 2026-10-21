@@ -74,7 +74,11 @@
 -- npc_training_dummy (:1463-1497) — DOCUMENTED-ONLY: DamageTaken
 -- (:1470-1478) zeroes damage and arms a 5s per-attacker timer; UpdateAI
 -- (:1480-1495) ends PvE combat for attackers idle >5s via
--- GetCombatManager(). Gap: no DamageTaken bridge (event 9 has no
--- damage-rewrite twin in the runtime), no GetCombatManager/EndCombat
--- bridge, no entry const in the C++ tree. All arms accounted for
+-- GetCombatManager(). Gap: the damage=0 arm is registerable in
+-- principle (event 9 now has a damage-rewrite twin —
+-- TriggerCreatureEvent2Updated, lua_creature_events.go:1381 — the old
+-- "no damage-rewrite twin" parenthetical was stale), but there is no
+-- entry const in the C++ tree to bind a RegisterCreatureEvent to,
+-- and the 5s per-attacker timer arm needs GetCombatManager/EndCombat
+-- (no bridge). Verdict holds: DOCUMENTED-ONLY. All arms accounted for
 -- (this file now covers the full :1154-2632 range).

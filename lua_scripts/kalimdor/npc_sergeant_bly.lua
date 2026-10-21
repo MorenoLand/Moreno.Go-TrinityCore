@@ -14,7 +14,7 @@
 -- Entry: zulfarrak.h ZFEntries names ENTRY_BLY = 7604 (alongside the
 -- pyramid ENTRY_RAVEN/ORO/WEEGLI/MURTA entries) — kalecgos check PASSES;
 -- creature_template ScriptName binding stays DB-side. Eluna creature
--- events: 1 OnEnterCombat, 2 OnLeaveCombat, 23 OnReset. Timers via
+-- events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady. No C++ HasUnitState(UNIT_STATE_CASTING)
 -- gates in this AI.
@@ -113,10 +113,18 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
+-- re-arming shield-bash / revenge timers must be cancelled on death or
+-- they keep casting from the corpse forever.
+local function onDied(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)

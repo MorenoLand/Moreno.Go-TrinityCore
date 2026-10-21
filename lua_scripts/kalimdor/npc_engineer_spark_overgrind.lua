@@ -131,6 +131,15 @@ local function onLeaveCombat(event, creature)
     end)
 end
 
+-- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
+-- re-arming dynamite / emote timers must be cancelled on death or they
+-- keep casting from the corpse forever. Event 23 fires before 4 on the
+-- kill path and its IsDead guard skips the emote re-arm, so this lands
+-- the same reset as leave-combat without re-arming anything.
+local function onDied(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -158,4 +167,5 @@ end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
