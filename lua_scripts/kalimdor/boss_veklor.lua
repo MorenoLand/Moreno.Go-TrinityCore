@@ -64,6 +64,7 @@
 --   DontYellWhenDead death latch have no cross-AI bridge, so
 --   aggro/death sounds play per-creature; zero Talk() in C++.
 local ENTRY = 15276
+local ENTRY_VEKNILASH = 15275 -- temple_of_ahnqiraj.h:75
 
 local SPELL_SHADOWBOLT = 26006
 local SPELL_BLIZZARD = 26607
@@ -223,8 +224,33 @@ local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_twinemperorsAI::DamageTaken (boss_twinemperors.cpp:115-128):
+-- the struck twin mirrors a health-proportional share of the hit onto
+-- the other twin (dPercent from own max health, odmg from the twin's max
+-- health, (int) truncation); fires on every hit incl. the killing blow,
+-- so no postDamage guard. The setDeathState(JUST_DIED) +
+-- UNIT_DYNFLAG_LOOTABLE legs on the 0-hp twin have no bridge
+-- (engine-side death handling) and stay out.
+local function onDamageTaken(event, creature, attacker, damage)
+    local other = creature:FindNearestCreature(ENTRY_VEKNILASH, 150.0)
+    if other == nil then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local odmg = math.floor(damage / maxHealth * other:GetMaxHealth())
+    local ohealth = other:GetHealth() - odmg
+    if ohealth < 0 then
+        ohealth = 0
+    end
+    other:SetHealth(ohealth)
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)

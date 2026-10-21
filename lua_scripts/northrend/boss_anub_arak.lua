@@ -107,11 +107,11 @@
 -- despawns immediately at evade, the 30s default is respawn-side —
 -- ScriptedCreature.cpp:596-616; the instance SetBossState(FAIL) leg
 -- stays out — no instance bridge).
--- DamageTaken: HasAura(SUBMERGE) damage=0 / the
+-- DamageTaken: HasAura(SUBMERGE) damage=0 — PORTED (event 9, the
+-- leg is ungated: no postDamage guard); the
 -- HealthBelowPctDamaged(_nextSubmerge, damage) -> RescheduleEvent(
 -- EVENT_SUBMERGE, 0s, 0, PHASE_EMERGE) gate with the _nextSubmerge
--- -= 25 stepping (gate itself bridgeable — event 9 + GetHealthPct;
--- the phase machine is not) — documented-only.
+-- -= 25 stepping stays out — the phase machine it arms is unbridged.
 -- SpellHit(SPELL_SUBMERGE 53421) payload: SetFlag(NON_ATTACKABLE |
 -- NOT_SELECTABLE) (flag bridge exists — the trigger cast is blocked),
 -- RemoveAurasDueToSpell(
@@ -174,6 +174,8 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
 
+local SPELL_SUBMERGE = 53421 -- boss_anubarak.cpp:34
+
 local function anubarakEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
 end
@@ -205,8 +207,19 @@ local function anubarakReset(event, creature)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
 end
 
+-- C++ boss_anub_arak::DamageTaken (boss_anubarak.cpp:345-354):
+-- while submerged the boss takes no damage; creature:HasAura is
+-- bridged. The else-leg (submerge reschedule at the 75/50/25% damage
+-- crossings) rides the unbridged phase machine and stays out.
+local function anubarakDamageTaken(event, creature, attacker, damage)
+    if creature:HasAura(SPELL_SUBMERGE) then
+        return false, 0
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 3, anubarakTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 4, anubarakDied)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 9, anubarakDamageTaken)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)

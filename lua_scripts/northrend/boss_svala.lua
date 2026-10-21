@@ -139,6 +139,14 @@
 -- spell_paralyze_pinnacle (SpellScript target filter) and
 -- achievement_incredible_hulk (GetData(DATA_INCREDIBLE_HULK 2043))
 -- — no SpellScript / GetData / achievement bridges. Stay out.
+-- npc_scourge_hulk DamageTaken — PORTED: lethal damage from Svala
+-- (attacker:GetEntry() == NPC_SVALA_SORROWGRAVE 26668) latches
+-- killedByRitualStrike (boss_svala.cpp:560-564). Pure bool latch —
+-- no damage rewrite (thekal convention: no return), fires on lethal
+-- hits so no postDamage guard. The C++ latch is read only by
+-- GetData(DATA_INCREDIBLE_HULK) for the achievement script, which
+-- has no bridge — the latch is kept per-GUID in a Lua local so a
+-- future bridge lands on real state.
 
 local ENTRY_SVALA_SORROWGRAVE = 26668
 local ENTRY_SCOURGE_HULK = 26555
@@ -261,8 +269,21 @@ local function hulkEnterCombat(event, creature)
 end
 
 -- Shared timer wipe for events 2/23/4 on the hulk.
+local hulkRitualStrike = {}
+
+-- C++ npc_scourge_hulkAI::DamageTaken (boss_svala.cpp:560-564).
+local function hulkDamageTaken(event, creature, attacker, damage)
+    if damage >= creature:GetHealth() and attacker ~= nil
+            and attacker:GetEntry() == ENTRY_SVALA_SORROWGRAVE then
+        hulkRitualStrike[creature:GetGUID()] = true
+    end
+end
+
+-- Shared timer wipe for events 2/23/4 on the hulk.
 local function hulkCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    hulkRitualStrike[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 1, svalaEnterCombat)
@@ -271,5 +292,6 @@ RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 4, svalaJustDied)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 1, hulkEnterCombat)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 2, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 4, hulkCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 9, hulkDamageTaken)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 23, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 23, channelerReset)

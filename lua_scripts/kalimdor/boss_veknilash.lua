@@ -7,7 +7,7 @@
 -- Entry: 15275 = NPC_VEKNILASH (temple_of_ahnqiraj.h:75; the
 -- creature_template ScriptName binding stays DB-side).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
+-- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs):
 -- - Unbalancing Strike 26613 (DoCastVictim): init urand(8s,18s)
@@ -24,9 +24,14 @@
 -- Unmodeled (documented-only, no bridges):
 -- - TwinReset / BossAI ctor leg DATA_TWIN_EMPERORS: instance
 --   bridge, standing.
--- - Shared health (DamageTaken %mirroring via GetOtherBoss +
---   SpellHit SPELL_HEAL_BROTHER 7393 rebalance): cross-boss via
---   instance->GetCreature(DATA_VEKLOR) — no instance bridge.
+-- - Shared health, DamageTaken half PORTED (boss_veklor precedent):
+--   the C++ GetOtherBoss leg (instance->GetCreature(DATA_VEKLOR))
+--   is reached via the bridged creature:FindNearestCreature
+--   (150y, entry-unique per map — the veklor-port idiom); the
+--   ohealth<=0 setDeathState(JUST_DIED) + DYNFLAG_LOOTABLE legs stay
+--   out (engine-side death handling, no bridge). The SpellHit
+--   SPELL_HEAL_BROTHER 7393 rebalance half stays out (cross-AI
+--   GetOtherBoss + SetHealth rebalance math — no bridge).
 -- - TryHealBrother: VN casts 7393 on VEKLOR when within 60y —
 --   cross-boss, no bridge.
 -- - TeleportToMyBrother + SetAfterTeleport + TryActivateAfterTTelep:
@@ -44,6 +49,7 @@
 --   DontYellWhenDead death latch have no cross-AI bridge, so
 --   aggro/death sounds play per-creature; zero Talk() in C++.
 local ENTRY = 15275
+local ENTRY_VEKLOR = 15276 -- temple_of_ahnqiraj.h:74
 
 local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_UPPERCUT = 26007
@@ -173,8 +179,33 @@ local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_twinemperorsAI::DamageTaken (boss_twinemperors.cpp:115-128):
+-- the struck twin mirrors a health-proportional share of the hit onto
+-- the other twin (dPercent from own max health, odmg from the twin's max
+-- health, (int) truncation); fires on every hit incl. the killing blow,
+-- so no postDamage guard. The setDeathState(JUST_DIED) +
+-- UNIT_DYNFLAG_LOOTABLE legs on the 0-hp twin have no bridge
+-- (engine-side death handling) and stay out. Mirrors the veklor port.
+local function onDamageTaken(event, creature, attacker, damage)
+    local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
+    if other == nil then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local odmg = math.floor(damage / maxHealth * other:GetMaxHealth())
+    local ohealth = other:GetHealth() - odmg
+    if ohealth < 0 then
+        ohealth = 0
+    end
+    other:SetHealth(ohealth)
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)

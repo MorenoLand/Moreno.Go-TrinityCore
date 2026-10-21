@@ -44,17 +44,22 @@
 -- 4 (its instance SetBossState(BOSS_BLACK_KNIGHT, DONE) leg has no
 -- bridge — instance model absent, standing). OnLeaveCombat(2) /
 -- OnDied(4) / OnReset(23) cancel the scheduler (gargolmar precedent).
+-- Ported arms, continued:
+-- boss_black_knight DamageTaken + resurrect machine — PORTED:
+-- damage > health && uiPhase <= PHASE_SKELETON -> damage = 0 +
+-- SetHealth(0) + rooted (SetRooted covers the ROOT half of
+-- AddUnitState(ROOT | STUNNED); the STUNNED half has no bridge) +
+-- SetDisplayId(MODEL_SKELETON 29846 on the UNDEAD->SKELETON fall /
+-- MODEL_GHOST 21300 on SKELETON->GHOST) + the UpdateAI resurrect
+-- machine (4s one-shot: SetFullHealth + triggered DoCastSelf(Black
+-- Knight Res 67693) + phase advance + root clear). The stale "no
+-- DamageTaken hook / no display bridge" note is retracted (event 9
+-- fires pre-damage; SetDisplayId/SetRooted bridged). The bEventInProgress
+-- latch is modeled as the Lua-side resurrecting flag so repeat
+-- lethal hits in the fake-death window re-run the idempotent legs
+-- without re-arming the timer (C++ never re-arms uiResurrectTimer
+-- mid-window either). summons.DespawnAll() has no summon bridge.
 -- Unmodeled (no bridges — documented, not wired):
--- boss_black_knight DamageTaken — damage > health && uiPhase <=
--- PHASE_SKELETON -> damage = 0 + SetHealth(0) + AddUnitState(ROOT |
--- STUNNED) + summons.DespawnAll() + SetDisplayId(MODEL_SKELETON
--- 29846 / MODEL_GHOST 21300) + bEventInProgress — no DamageTaken hook
--- (npc_unkor_the_ruthless precedent) + no unit-state / display /
--- summon bridges.
--- boss_black_knight bEventInProgress resurrect machine —
--- SetFullHealth + DoCastSelf(Black Knight Res 67693, true) + uiPhase++
--- + ClearUnitState, gated solely on the unbridged DamageTaken leg
--- (jedoga over-cast bar — never fires here).
 -- boss_black_knight uiDeathRespiteTimer (PHASE_UNDEAD) —
 -- SelectTarget(Random, 0, 100, true) -> DoCast(Death's Respite 67745),
 -- urand(15000,16000) — random-target SelectTarget bridge absent
@@ -103,6 +108,13 @@ local ENTRY_BLACK_KNIGHT = 35451
 local SPELL_ICY_TOUCH = 67718
 local SPELL_OBLITERATE = 67725
 local SPELL_KILL_CREDIT = 68663
+local SPELL_BLACK_KNIGHT_RES = 67693 -- boss_black_knight.cpp:56
+
+local MODEL_SKELETON = 29846 -- boss_black_knight.cpp:66
+local MODEL_GHOST = 21300 -- boss_black_knight.cpp:67
+
+local PHASE_UNDEAD = 1 -- boss_black_knight.cpp:72
+local PHASE_SKELETON = 2 -- boss_black_knight.cpp:73
 
 local timers = {}
 
@@ -161,9 +173,15 @@ local function obliterateTick(creature, guid)
     end)
 end
 
+local bkState = {}
+local nativeDisplay = {}
+
 local function blackKnightEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if nativeDisplay[guid] == nil then
+        nativeDisplay[guid] = creature:GetDisplayId()
+    end
     schedule(guid, "icy_touch", math.random(5000, 9000), function()
         icyTouchTick(creature, guid)
     end)
@@ -175,22 +193,79 @@ local function blackKnightEnterCombat(event, creature, target)
     end)
 end
 
+local function getBlackKnightState(guid)
+    local st = bkState[guid]
+    if not st then
+        st = { phase = PHASE_UNDEAD, resurrecting = false }
+        bkState[guid] = st
+    end
+    return st
+end
+
+-- C++ boss_black_knight::DamageTaken (boss_black_knight.cpp:268-290)
+-- + the UpdateAI resurrect machine (:159-170): while the phase is
+-- UNDEAD or SKELETON a killing blow is absorbed (damage = 0), the
+-- knight plays dead at 0 health rooted in the next form's display,
+-- and 4s later he resurrects at full health (triggered self-cast
+-- Black Knight Res 67693, phase advance, root clear). Strict
+-- incoming-damage check (uiDamage > health), so no postDamage guard.
+local function blackKnightDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = getBlackKnightState(guid)
+    if st.phase <= PHASE_SKELETON and damage > creature:GetHealth() then
+        creature:SetHealth(0)
+        creature:SetRooted(true)
+        if st.phase == PHASE_UNDEAD then
+            creature:SetDisplayId(MODEL_SKELETON)
+        else
+            creature:SetDisplayId(MODEL_GHOST)
+        end
+        if not st.resurrecting then
+            st.resurrecting = true
+            schedule(guid, "resurrect", 4000, function()
+                creature:SetHealth(creature:GetMaxHealth())
+                creature:CastSpell(creature, SPELL_BLACK_KNIGHT_RES, true)
+                st.phase = st.phase + 1
+                st.resurrecting = false
+                creature:SetRooted(false)
+            end)
+        end
+        return false, 0
+    end
+end
+
 local function blackKnightLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    bkState[guid] = nil
 end
 
 -- C++ JustDied: DoCastSelf(Kill Credit 68663) (the
 -- instance->SetBossState leg has no bridge).
 local function blackKnightDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_KILL_CREDIT)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    bkState[guid] = nil
+    nativeDisplay[guid] = nil
 end
 
 local function blackKnightReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    bkState[guid] = nil
+    -- C++ Reset: SetDisplayId(GetNativeDisplayId()) — no native-display
+    -- bridge, so the tharon_ja idiom: the display captured at first
+    -- combat is restored (an evade mid-fake-death would otherwise leave
+    -- the skeleton/ghost morph).
+    if nativeDisplay[guid] ~= nil then
+        creature:SetDisplayId(nativeDisplay[guid])
+        nativeDisplay[guid] = nil
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 1, blackKnightEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 2, blackKnightLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 4, blackKnightDied)
+RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 9, blackKnightDamageTaken)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 23, blackKnightReset)

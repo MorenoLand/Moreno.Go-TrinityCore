@@ -17,7 +17,7 @@
 -- boss_argent_challenge.cpp only (loader carries only the
 -- AddSC decl/call lines); zero sql/ hits.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
--- OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is
+-- OnDied, 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. C++ DoCast default is triggered=false
 -- (vaelastrasz convention): creature:CastSpell(creature, spell)
@@ -45,10 +45,15 @@
 -- boss_eadric constructor — SetReactState(REACT_PASSIVE) +
 -- SetFlag(UNIT_FLAG_NON_ATTACKABLE) — no react-state / flag
 -- bridges (drakkari_colossus precedent).
--- boss_eadric DamageTaken — damage >= health -> damage = 0 +
--- EnterEvadeMode + SetFaction(FACTION_FRIENDLY) + bDone latch —
--- no DamageTaken hook (npc_unkor_the_ruthless precedent) + no
--- faction / evade bridges.
+-- boss_eadric DamageTaken — PORTED: damage >= health -> damage =
+-- 0 + EnterEvadeMode (AttackStop + ClearThreatList approximation —
+-- no evade bridge; the MotionMaster MovePoint home leg stays out)
+-- + SetFaction(FACTION_FRIENDLY 35, bridged) — the stale "no
+-- DamageTaken hook / no faction bridge" note is retracted: event 9
+-- is bridged and fires pre-damage (the alar return-0,0 convention);
+-- the UpdateAI bDone-reset MovePoint(0, 746.87, 665.87, 411.75) leg
+-- stays out (no motion-master bridge), so no per-GUID bDone latch
+-- is kept (C++ reads bDone only in UpdateAI).
 -- boss_eadric MovementInform (POINT_MOTION_TYPE) ->
 -- instance->SetBossState(BOSS_ARGENT_CHALLENGE_E, DONE) +
 -- DisappearAndDie — no motion-master bridge + instance-script
@@ -91,6 +96,14 @@
 -- NPC_PALETRESS — kalecgos pass) but every combat arm rides an
 -- absent bridge — bridgeable-but-entry-blocked does not apply;
 -- nothing wired.
+-- boss_paletress DamageTaken — PORTED (same arm as boss_eadric,
+-- boss_argent_challenge.cpp:320-328): damage >= health -> damage =
+-- 0 + EnterEvadeMode (AttackStop + ClearThreatList) +
+-- SetFaction(FACTION_FRIENDLY 35). Entry 34928 verifiable
+-- (trial_of_the_champion.h NPC_PALETRESS — kalecgos pass), so this
+-- arm registers here on its own entry even though the rest of
+-- paletress stays out (constructor/Reset/UpdateAI legs on absent
+-- bridges — see below).
 -- npc_memory — ENTRY UNVERIFIABLE (no NPC constant in
 -- trial_of_the_champion.h or anywhere in the C++ sources; the
 -- memory creatures materialize through the DB-side summon spells
@@ -133,6 +146,9 @@
 -- (gargolmar precedent).
 
 local ENTRY_EADRIC = 35119
+local ENTRY_PALETRESS = 34928 -- trial_of_the_champion.h:71
+
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
 
 local SPELL_VENGEANCE = 66865
 local SPELL_RADIANCE = 66935
@@ -247,7 +263,24 @@ local function eadricReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_eadricAI::DamageTaken (boss_argent_challenge.cpp:192-200)
+-- and boss_paletressAI::DamageTaken (:320-328) — identical arms: a
+-- lethal hit is absorbed (damage = 0) and the champion evades as a
+-- friendly (EnterEvadeMode -> AttackStop + ClearThreatList, the
+-- MovePoint home leg unbridged; SetFaction bridged). Incoming-damage
+-- check, so no postDamage guard.
+local function argentDamageTaken(event, creature, attacker, damage)
+    if damage >= creature:GetHealth() then
+        creature:AttackStop()
+        creature:ClearThreatList()
+        creature:SetFaction(FACTION_FRIENDLY)
+        return false, 0
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EADRIC, 1, eadricEnterCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 2, eadricLeaveCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 4, eadricDied)
+RegisterCreatureEvent(ENTRY_EADRIC, 9, argentDamageTaken)
 RegisterCreatureEvent(ENTRY_EADRIC, 23, eadricReset)
+RegisterCreatureEvent(ENTRY_PALETRESS, 9, argentDamageTaken)
