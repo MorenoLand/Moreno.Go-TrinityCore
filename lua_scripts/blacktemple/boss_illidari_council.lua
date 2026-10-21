@@ -70,8 +70,9 @@
 -- rule arm — lethal damage from anyone but self is rewritten to
 -- health-1 (C++-exact). OnTargetDied(3): Talk(SAY_COUNCIL_SLAY),
 -- TYPEID_PLAYER gate (terestian convention); the 30% random-
--- other-member Talk(SAY_COUNCIL_COMNT) has no cross-creature
--- bridge — skipped. OnDied(4): Talk(SAY_COUNCIL_DEATH).
+-- other-member Talk(SAY_COUNCIL_COMNT) is PORTED via
+-- creature:GetCreaturesInGrid (GUID exclusion for GetRandomBossExcept).
+-- OnDied(4): Talk(SAY_COUNCIL_DEATH).
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- High Nethermancer Zerevor (22950): OnReset: triggered self-cast
 -- 41341 + non-triggered self-cast dampen magic 41478, _canUse
@@ -336,12 +337,30 @@ local function memberDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ KilledUnit: player victim -> Talk(SAY_COUNCIL_SLAY). The
--- 30% random-other-member Talk(SAY_COUNCIL_COMNT) has no cross-
--- creature bridge — skipped.
+-- C++ KilledUnit (boss_illidari_council.cpp:284-292): player victim
+-- -> Talk(SAY_COUNCIL_SLAY); roll_chance_i(30) -> a random OTHER
+-- council member Talks SAY_COUNCIL_COMNT (C++ picks via
+-- instance->GetCreature(GetRandomBossExcept(_bossId)); Lua gathers
+-- the other three entries via creature:GetCreaturesInGrid and
+-- excludes the speaker by GUID — adjacent members, all within 60y).
+local COUNCIL_ENTRIES = { ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }
 local function memberTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_COUNCIL_SLAY)
+    end
+    if math.random(100) <= 30 then -- roll_chance_i(30)
+        local guid = creature:GetGUID()
+        local others = {}
+        for _, entry in ipairs(COUNCIL_ENTRIES) do
+            for _, other in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+                if other:GetGUID() ~= guid then
+                    others[#others + 1] = other
+                end
+            end
+        end
+        if #others > 0 then
+            others[math.random(#others)]:Talk(SAY_COUNCIL_COMNT)
+        end
     end
 end
 

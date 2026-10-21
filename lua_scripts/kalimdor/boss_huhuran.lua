@@ -232,7 +232,13 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) < math.floor(31 * maxHealth / 100) then
+    -- C++ arm is UpdateAI post-damage; no tick follows the killing
+    -- blow, so the arm never fires on lethal damage (nefarian rule).
+    local postDamage = health - damage
+    if postDamage <= 0 then
+        return
+    end
+    if postDamage < math.floor(31 * maxHealth / 100) then
         s.berserk = true
         creature:Talk(EMOTE_BERSERK)
         creature:CastSpell(creature, SPELL_BERSERK)

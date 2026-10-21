@@ -142,7 +142,13 @@ local function checkTransform(creature, guid, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 20 then
+    -- C++ arm is UpdateAI post-damage; no tick follows the killing
+    -- blow, so the arm never fires on lethal damage (nefarian rule).
+    local postDamage = creature:GetHealth() - damage
+    if postDamage <= 0 then
+        return
+    end
+    if postDamage * 100 / maxHealth < 20 then
         state.phase = PHASE_TRANSFORM
         creature:CastSpell(creature, SPELL_BURU_TRANSFORM)
         creature:CastSpell(creature, SPELL_FULL_SPEED, true)

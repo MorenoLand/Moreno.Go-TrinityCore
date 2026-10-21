@@ -207,9 +207,10 @@ local function onBarkskin(creature, guid)
         creature:CastSpell(creature, SPELL_BARKSKIN)
         schedule(guid, "barkskin", 60000, function() onBarkskin(creature, guid) end)
     else
-        -- C++ else-leg: events.RescheduleEvent(EVENT_HEAL_BARKSKIN, 3s)
-        -- (boss_faction_champions.cpp:823), not 5s.
-        schedule(guid, "barkskin", 3000, function() onBarkskin(creature, guid) end)
+        -- C++ EVENT_DPS_BARKSKIN else-leg: 5s
+        -- (boss_faction_champions.cpp:1590; the 3s else-leg belongs to
+        -- the resto druid's EVENT_HEAL_BARKSKIN, :823).
+        schedule(guid, "barkskin", 5000, function() onBarkskin(creature, guid) end)
     end
 end
 

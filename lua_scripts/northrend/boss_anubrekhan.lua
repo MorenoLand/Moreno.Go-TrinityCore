@@ -86,6 +86,7 @@ local EMOTE_LOCUST = 3
 
 local SPELL_LOCUST_SWARM = 28785
 local SPELL_BERSERK = 27680
+local SPELL_SUMMON_CORPSE_SCARABS_PLR = 29105 -- boss_anubrekhan.cpp:55
 
 local timers = {}
 
@@ -148,11 +149,14 @@ local function anubrekhanLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ KilledUnit: victim->CastSpell(victim,
--- SPELL_SUMMON_CORPSE_SCARABS_PLR 29105, me->GetGUID()) when
--- TYPEID_PLAYER (summon STRAND absent — unmodeled); Talk(SAY_SLAY 2)
--- is C++-unconditional — fires for any victim.
+-- C++ KilledUnit (boss_anubrekhan.cpp:143-149): TYPEID_PLAYER-gated
+-- victim->CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR, me)
+-- + unconditional Talk(SAY_SLAY 2). The original-caster GUID 3rd
+-- arg has no Lua bridge (the cast itself is C++-exact).
 local function anubrekhanTargetDied(event, creature, victim)
+    if victim and victim:GetObjectType() == "Player" then
+        victim:CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR)
+    end
     creature:Talk(SAY_SLAY)
 end
 
