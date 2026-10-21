@@ -20,7 +20,7 @@
 --   visual via SetVisual then re-shows the same menu.
 -- ADAPTATION (documented, behavior-identical): C++ keeps the hand choice in
 -- the AI's MainHand member; Lua encodes it in the menu-item action
--- (1000+index main-hand, 2000+index off-hand) so concurrent players cannot
+-- (1100+index main-hand, 2100+index off-hand) so concurrent players cannot
 -- clobber each other's choice.
 -- SetVisual (C++: player->SetUInt16Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT
 -- + (item->GetSlot() * 2), 0, visual)) is the player:SetVisibleItemEnchantment
@@ -108,22 +108,23 @@ end
 local function onSelect(event, player, creature, sender, action)
     player:GossipClearMenu()
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
-        showMenu(player, creature, 1, 1000)
+        showMenu(player, creature, 1, 1100)
         return
     end
     if action == GOSSIP_ACTION_INFO_DEF + 2 then
-        showMenu(player, creature, 1, 2000)
+        showMenu(player, creature, 1, 2100)
         return
     end
     if action == GOSSIP_ACTION_INFO_DEF + 3 then
         player:GossipComplete()
         return
     end
-    -- Visual-menu actions: 1000+index main-hand, 2000+index off-hand.
-    local actionBase = 1000
+    -- Visual-menu actions: 1100+index main-hand, 2100+index off-hand
+    -- (1001-1003 are the hello-menu control actions; bases sit clear of them).
+    local actionBase = 1100
     local mainHand = true
-    if action >= 2000 then
-        actionBase = 2000
+    if action >= 2100 then
+        actionBase = 2100
         mainHand = false
     end
     local idx = action - actionBase + 1
