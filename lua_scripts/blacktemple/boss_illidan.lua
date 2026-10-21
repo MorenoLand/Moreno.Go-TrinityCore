@@ -763,9 +763,12 @@ local function onWarglaivePoint(creature, guid)
     end)
 end
 
--- C++ EVENT_FLY (1s): the orientation arm has no facing bridge —
--- kept as a timer step; then the warglaive point 6s.
+-- C++ EVENT_FLY (boss_illidan.cpp:884-887): ChangeOrientation(3.137039f)
+-- schedules a 1ms EVENT_CHANGE_ORIENTATION (:881-883) that does
+-- me->SetFacingTo(_orientation) — ports via creature:SetFacingTo
+-- (lua_creature_events.go:711); then the warglaive point 6s.
 local function onFly(creature, guid)
+    creature:SetFacingTo(3.137039)
     schedule(guid, "warglaivePoint", 6000, function()
         onWarglaivePoint(creature, guid)
     end)
@@ -887,7 +890,7 @@ local function illidanDamageTaken(event, creature, attacker, damage)
         -- out: the phase-2 liftoff machine is unported); the LIFTOFF
         -- emote (:599, EMOTE_ONESHOT_LIFTOFF, SharedDefines.h:2003,
         -- value 254) ports via creature:PerformEmote, and the takeoff
-        -- sound (:601, ILLIDAN_TAKEOFF_SOUND_ID 11479, boss_illidan.cpp:29)
+        -- sound (:601, ILLIDAN_TAKEOFF_SOUND_ID 11479, boss_illidan.cpp:81)
         -- ports via creature:PlayDirectSound (standalone leg, C++-verbatim
         -- position after the emote).
         for _, key in ipairs({ "flameCrash", "drawSoul", "shear",

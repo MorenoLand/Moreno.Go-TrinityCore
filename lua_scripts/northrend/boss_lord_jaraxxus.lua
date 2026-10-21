@@ -75,7 +75,8 @@
 -- SPLINE_CHAIN_POINT_SUMMONED -> SetFacingToObject(wilfred via
 -- instance->GetCreature(DATA_FIZZLEBANG)) (no MovementInform hook —
 -- instance model absent); EVENT_CHANGE_ORIENTATION: SetFacingTo(
--- 4.729842f) (no facing bridge); EVENT_START_COMBAT:
+-- 4.729842f) (SetFacingTo is bridged — lua_creature_events.go:711 —
+-- but the arm rides the unported intro machine); EVENT_START_COMBAT:
 -- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE) +
 -- DoZoneInCombat (no immune / react / zone-in-combat bridges);
 -- DoAction(ACTION_JARAXXUS_ENGAGE): RemoveAurasDueToSpell(
