@@ -113,10 +113,12 @@
 -- is a player, so the cast-state check itself is bridgeable via
 -- player IsCasting — not a no-bridge case);
 -- no flee bridge — the spellbinder 15% DoFleeToGetAssistance
--- latch unmodeled; no SpellHit bridge — the base banner
--- AI's bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
--- 32307 / SPELL_PLANT_KIL_SORROW_BANNER 32314) unmodeled
--- (its only observable is the ConditionScript).
+-- latch unmodeled; SpellHit (event 14) IS bridged (stale "no
+-- SpellHit bridge" label retracted) — the base banner AI's
+-- bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
+-- 32307 / SPELL_PLANT_KIL_SORROW_BANNER 32314) still stays out:
+-- its only observable is the ConditionScript (no ConditionScript
+-- bridge), so the arm verdict is unchanged.
 
 local ENTRY_KIL_SORROW_SPELLBINDER = 17146
 local ENTRY_KIL_SORROW_CULTIST     = 17147
