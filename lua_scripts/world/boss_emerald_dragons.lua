@@ -87,7 +87,12 @@
 -- spells (24795/24811/24910) have no Go effect implementation —
 -- visual-only casts like midnight's SPELL_SUMMON_ATTUMEN.
 -- boss_lethon SpellHitTarget — the DRAW_SPIRIT hit-target summon
--- machine (NPC_SPIRIT_SHADE 15261, 50s) — no-SpellHitTarget bridge.
+-- machine (NPC_SPIRIT_SHADE 15261, 50s) — stale "no-SpellHitTarget
+-- bridge" retracted (2026-10-21): ev15
+-- CREATURE_EVENT_ON_SPELL_HIT_TARGET IS bridged
+-- (engine/scripting/runtime.go:228; fired boss_ai.go:2280-2287);
+-- arm stays out: the whole payload is me->SummonCreature (summon
+-- machine, no Lua bridge) — an ev15 handler would be an empty shell.
 -- boss_taerar DamageTaken — Talk(SAY_TAERAR_SUMMON_SHADES 1) rides the
 -- 25%-per-stage banish machine (3x triggered victim-cast shade summons
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
@@ -250,9 +255,10 @@ end
 
 -- C++ boss_lethon::DamageTaken (:376-384): if (!HealthAbovePct(100 -
 -- 25*_stage)) { Talk(1); DoCast(me, 24811) non-triggered; ++_stage; }.
--- The SpellHitTarget spirit-shade summon machine stays out
--- (no-SpellHitTarget bridge); the draw-spirit cast is visual-only
--- (no Go effect for 24811).
+-- The SpellHitTarget spirit-shade summon machine stays out (ev15
+-- dispatch IS bridged — the "no-SpellHitTarget bridge" claim was
+-- stale; the summon machine itself has no bridge); the draw-spirit
+-- cast is visual-only (no Go effect for 24811).
 local function lethonDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local stage = stages[guid] or 1

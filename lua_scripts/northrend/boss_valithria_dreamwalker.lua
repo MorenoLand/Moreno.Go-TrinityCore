@@ -324,6 +324,11 @@ local function valithriaReset(event, creature)
     -- C++ boss_valithria_dreamwalker.cpp:288: me->SetReactState(REACT_PASSIVE)
     -- (Reset init arm; no flip anywhere in C++).
     creature:SetReactState(0) -- REACT_PASSIVE
+    -- C++ :291-294 — percent-heal immunity arms (bridged
+    -- lua_creature_events.go; ops 1 STATE / 0 EFFECT / 6 ID).
+    creature:ApplySpellImmune(0, 1, 20, true)
+    creature:ApplySpellImmune(0, 0, 136, true)
+    creature:ApplySpellImmune(0, 6, 56131, true)
 end
 
 -- C++ npc_blistering_zombie::JustDied — unconditional

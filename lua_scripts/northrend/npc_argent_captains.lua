@@ -113,11 +113,18 @@
 --   re-arm {5000,17000}ms.
 --
 -- DOCUMENTED-ONLY (no bridgeable arm):
--- npc_argent_captainAI::SpellHit (:894-934) — Talk(
---   SAY_CAPTAIN_RESURRECTED 1) rides the SPELL_REVIVE_CHAMPION
---   SpellHit arm (event 14 per runtime.go:195-214 never fires; the anub_arak precedent);
---   the UpdateEntry / DoCastSelf(SPELL_UNDEATH 70089, true) legs
---   have no bridge.
+-- npc_argent_captainAI::SpellHit (:894-922) — stale "no SpellHit
+--   bridge" retracted (2026-10-21): ev14 IS bridged (fires from the Go
+--   spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 +
+--   spells.go:11765); the old "event 14 never fires" parenthetical
+--   (runtime.go:195-214, the anub_arak precedent) misattributed the
+--   events-constant block — but the arm stays out: SPELL_REVIVE_
+--   CHAMPION 70053 is never cast in Go (Svalna's EVENT_SVALNA_
+--   RESURRECT DoCast rides the unbridged gauntlet DoAction machine —
+--   boss_sister_svalna.lua DOCUMENTED-ONLY), and the arm's core legs
+--   have no bridge: UpdateEntry (zero Lua hits) and setDeathState(
+--   JUST_RESPAWNED). Talk(1) + the UNDEATH 70089 self-cast alone would
+--   Talk a living-entry captain the revive never flips — C++-inexact.
 -- npc_argent_captainAI::DoAction (:838-857) —
 --   ACTION_START_GAUNTLET follow / active / far-visible legs and
 --   ACTION_RESET_EVENT bookkeeping legs (no-DoAction bridge).

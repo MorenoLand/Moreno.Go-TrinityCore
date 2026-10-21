@@ -89,9 +89,13 @@
 -- — per the gothik bubble-phase precedent it stays out: the
 -- shatter / DRAINED / re-bubble legs are all unbridged DoAction and
 -- AuraScript legs, so a ported bubble would never shatter.
--- The npc_ichor_globule machine (SpellHit TRANSFORM 54268 +
--- MoveFollow, MovementInform FOLLOW_MOTION_TYPE MERGE 54269 +
--- DespawnOrUnsummon) — no SpellHit / MovementInform bridges; the
+-- The npc_ichor_globule SpellHit machine — stale "no SpellHit bridge" retracted (2026-10-21): ev14 IS bridged
+-- (fires from the Go spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 + spells.go:11765) — but the arm stays
+-- out: the VISUAL 54260 trigger rides Ichoron's JustSummoned (:172-178) behind the unbridged spell_ichoron_splatter
+-- AuraScript (entry 29321 never spawns), and the arm's legs are MoveFollow -> the MovementInform FOLLOW_MOTION_TYPE
+-- merge gate on the instance DATA_ICHORON object GUID -> SPELL_MERGE 54269 + DespawnOrUnsummon (no MoveFollow /
+-- MovementInform / instance-object-GUID / DespawnOrUnsummon bridges) — the gothik bubble-phase precedent: a ported
+-- TRANSFORM 54268 self-cast would never merge; the
 -- DamageTaken SPLASH 59516 arm IS bridged (event 9, registered
 -- 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
 -- spell_ichoron_drained (59820 AuraScript: expire -> DoAction

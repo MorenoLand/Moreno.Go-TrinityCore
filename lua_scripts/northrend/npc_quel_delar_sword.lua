@@ -50,8 +50,10 @@
 -- JustDied (:2629-2633) — uther->AI()->DoAction(ACTION_UTHER_OUTRO)
 --   via instance GetGuidData: no-DoAction / no-instance-GetGuidData
 --   bridges. MovementInform (:2635-2645): no-MovementInform bridge.
--- The ctor's SetDisplayId(Modelid2) (:2610) and
---   SetSpeedRate(MOVE_FLIGHT, 4.5f) (:2615) have no bridges.
+-- The ctor's SetDisplayId(Modelid2) (:2610) is display-bridgeable
+--   (creature:SetDisplayId) but has no construction/first-spawn hook
+--   (event 5 fires respawn-only); Reset()'s SetSpeedRate(MOVE_FLIGHT,
+--   4.5f) (:2615) is rejected by the MOVE_RUN-only speed bridge.
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (the maiden

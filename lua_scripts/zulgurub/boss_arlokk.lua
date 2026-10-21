@@ -35,9 +35,15 @@
 -- Prowler (15101): OnReset self-casts the sneak auras 22766 + 7939
 -- (C++-exact non-triggered casts; the MovePoint to Arlokk has no
 -- bridge); OnEnterCombat removes both sneak auras (C++
--- JustEngagedWith). Melee is engine-driven. Its 6s attack timer,
--- SpellHit(24211) attack arm, and JustDied arlokk-SetData/despawn arms
--- have no bridge and are not modeled.
+-- JustEngagedWith). Melee is engine-driven. The 6s attack timer has
+-- no Attack bridge; the SpellHit(24211) arm stays out on the same
+-- blocker — stale "no SpellHit bridge" retracted (2026-10-21; ev14
+-- fires), but the arm's whole body is me->Attack(unitCaster, true)
+-- (boss_arlokk.cpp:378-385), which has no bridge (registering it
+-- would be a stub, firesworn convention); the JustDied
+-- arlokk-SetData(_sideData, 0) leg is cross-creature summon
+-- bookkeeping with no bridge (stays out — the 4s despawn leg IS
+-- ported below).
 -- Deviations from C++: no summon model — the zulian prowlers, the
 -- panther triggers 15091, and the SummonCreature(14515) from the gong
 -- never exist, so EVENT_SUMMON_PROWLERS, the trigger scan, the

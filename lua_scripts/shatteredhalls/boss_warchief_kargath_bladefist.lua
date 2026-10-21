@@ -68,8 +68,9 @@
 -- until target_num hits 0, then InBlade = false /
 -- SetSpeedRate(MOVE_RUN, 2) / MoveChase(victim) /
 -- Blade_Dance_Timer = 30000 — none of it can run without a
--- movement bridge, and the speed-rate arms have no speed
--- bridge; the IsHeroic()-gated Charge_timer = 5000 arm at
+-- movement bridge; the speed-rate arms (SetSpeedRate MOVE_RUN is
+-- bridged, lua_creature_events.go:735) stay out with the unbridged
+-- MovePoint/MovementInform machine; the IsHeroic()-gated Charge_timer = 5000 arm at
 -- blade-dance end and its DoCast(SelectTarget(Random, 0),
 -- H_SPELL_CHARGE 25821) fire arm stay unmodeled — the "no
 -- difficulty bridge" claim was stale and is retracted

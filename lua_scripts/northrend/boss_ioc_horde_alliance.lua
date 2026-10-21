@@ -133,8 +133,14 @@ end
 -- bridge (GetDistance exists but no home-position accessor); porting
 -- unconditionally would leave RAGE up permanently — unfaithful, stays out.
 -- SpellHit (:80-88): unitCaster->IsVehicle() -> Unit::Kill(me, unitCaster)
--- — no-SpellHit bridge (the SpellHit-15-never-fires
--- queue). UpdateAI UNIT_STATE_CASTING early-out — unmodeled (maiden
+-- — stale "no-SpellHit bridge" retracted (2026-10-21): ev14
+-- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
+-- (engine/scripting/runtime.go:227; fired boss_ai.go:2125/2134,
+-- spells.go:11765); arm stays out: caster->IsVehicle() has no Lua
+-- bridge (no IsVehicle on the unit method set) and Unit::Kill(me,
+-- unitCaster) has no Lua bridge — the vehicle-caster gate can't be
+-- reproduced, so no port.
+-- UpdateAI UNIT_STATE_CASTING early-out — unmodeled (maiden
 -- precedent). DoMeleeAttackIfReady — engine-side.
 
 RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 1, iocBossJustEngagedWith)

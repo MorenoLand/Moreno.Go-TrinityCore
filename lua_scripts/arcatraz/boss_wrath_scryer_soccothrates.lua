@@ -83,7 +83,9 @@
 -- 1..9 chain, Talk(SAY_SOCCOTHRATES_CONVO_1..4), the dalliah->
 -- AI()->Talk(SAY_DALLIAH_CONVO_1..3) arms, the dalliah + self
 -- MovePoint arms and the SetFacingToObject / SetHomePosition
--- arms (no cross-creature / movement / facing bridges); no
+-- arms (SetFacingTo + SetHomePosition are bridged, but the arms ride
+-- the unmodeled cross-creature preFight chain — no cross-creature /
+-- movement bridges); no
 -- cross-creature bridge — the EVENT_ME_FIRST 6s arm (dalliah->
 -- AI()->Talk(SAY_AGGRO_SOCCOTHRATES_FIRST) when Dalliah is
 -- alive and out of combat) unmodeled; the HealthBelowPct(25)

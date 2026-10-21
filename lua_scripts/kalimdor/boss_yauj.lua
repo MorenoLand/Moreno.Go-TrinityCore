@@ -6,8 +6,8 @@
 -- Entry: 15543 (no NPC_YAUJ constant exists in temple_of_ahnqiraj.h —
 -- only NPC_VEM = 15544 and NPC_KRI = 15511; binding is DB-side via
 -- RegisterTempleOfAhnQirajCreatureAI).
--- Ported: Fear 19408 on victim (12-24s -> 20s; the ResetThreatList
--- leg has no bridge — zero usage in lua_scripts).
+-- Ported: Fear 19408 on victim (12-24s -> 20s) + the ResetThreatList leg
+-- (2026-10-21, creature:ClearThreatList — fires ungated C++-exact).
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
@@ -46,6 +46,9 @@ local function onFear(creature, guid)
     if victim then
         creature:CastSpell(victim, SPELL_FEAR)
     end
+    -- C++ boss_bug_trio.cpp:290 — ResetThreatList() fires with the fear
+    -- cast, ungated on victim (bridged lua_creature_events.go).
+    creature:ClearThreatList()
     schedule(guid, "fear", 20000, function()
         onFear(creature, guid)
     end)

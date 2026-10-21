@@ -46,17 +46,20 @@
 --    charge 7000 / dive bomb 40000+rand()%5000 (the flame-
 --    patch summon arm has no summon bridge — steamrigger
 --    precedent — so its timer is not tracked; the WE_DIE /
---    WE_REVIVE SetHealth/SetStandState/flag/speed/MovePoint
---    arms have no health/stand/flag/speed/movement bridges —
---    unmodeled; the DoZoneInCombat arm is engine-driven).
+--    WE_REVIVE SetStandState/MovePoint/Interrupt/RemoveAllAuras/
+--    AttackStop legs stay unbridged — the WE_DIE 5.0f speed arm
+--    rides the unbridged MovePoint; the DoZoneInCombat arm is
+--    engine-driven; SetFlag/SetTarget/SetHealth/RemoveFlag ported
+--    below, 2026-10-21).
 --    While the sequence runs, all damage is zeroed — the C++
 --    UNIT_FLAG_NON_ATTACKABLE arm is ported (2026-10-20) via
 --    creature:SetFlag/RemoveFlag(UNIT_FIELD_FLAGS).
 -- 3. Dive-bomb chain (WE_METEOR -> WE_DIVE -> WE_LAND ->
 --    WE_SUMMON, C++ order): meteor — non-triggered DoCast(me,
 --    SPELL_DIVE_BOMB_VISUAL 35367) (C++-exact; the SpellHit
---    SetDisplayId/ApplySpellImmune arms have no display/
---    immune bridge — unmodeled; the ascent MovePoint has no
+--    SetDisplayId/ApplySpellImmune arms are PORTED below
+--    (stale "no display/immune bridge" retracted 2026-10-21);
+--    the ascent MovePoint has no
 --    movement bridge — the 5s meteor wait approximates the
 --    flight, nightbane precedent); dive (+4s, C++-exact) —
 --    TRIGGERED DoCast(target, SPELL_DIVE_BOMB 35181, true) on
@@ -319,6 +322,8 @@ local function combatTick(creature, guid)
         if st.revive <= 1000 then
             st.dying = false
             st.phase = 2
+            -- boss_alar.cpp:294 — SetFullHealth() before the flag clear.
+            creature:SetHealth(creature:GetMaxHealth())
             -- boss_alar.cpp:297 — C++ arm order before DoZoneInCombat/REBIRTH
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
             creature:CastSpell(creature, SPELL_REBIRTH, true)

@@ -77,7 +77,13 @@
 -- the 1%-hp pseudo-death, not a hook; event 4 is deliberately NOT
 -- registered since C++ never calls Talk(SAY_DEATH) from JustDied.
 -- boss_thorimAI SpellHit (SPELL_TOUCH_OF_DOMINION_TRIGGERED 62565 — sif
--- despawn) / SpellHitTarget legs — no SpellHit / cross-creature bridges.
+-- despawn): stale "no SpellHit bridge" retracted (2026-10-21) — ev14
+-- CreatureEventOnHitBySpell is bridged; the arm stays out: its payload is
+-- a cross-creature relay (instance->GetCreature(DATA_SIF) -> sif
+-- Talk(SAY_SIF_DESPAWN)/DespawnOrUnsummon) with no instance/cross-AI
+-- bridge. SpellHitTarget (SPELL_LIGHTNING_RELEASE 62466 -> player target
+-- -> _dontStandInTheLightning = false) stays out: achievement/GetData
+-- machine unbridged, and SpellHitTarget is not the bridged ev14.
 -- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) —
 -- DoAction(ACTION_ACTIVATE_RUNIC_SMASH)-gated; no DoAction bridge.
 -- npc_runic_colossusAI / npc_ancient_rune_giantAI JustDied — GO door legs

@@ -33,9 +33,10 @@
 -- rhino->troll flip is scheduled 5s after the SECOND
 -- EVENT_WHIRLING_SLASH / EVENT_IMPALING_CHARGE respectively
 -- (:187-:192 / :207-:211), and both trigger arms are timer-driven
--- and bridgeable — unlike moorabi, where the transformation flip is
--- SpellHit-driven and unbridged (moorabi precedent does NOT apply
--- here). SetPhase schedules the new phase's event set fresh; the old
+-- and bridgeable — unlike moorabi's transformation flip, which is
+-- SpellHit-driven and PORTED via event 14 (moorabiSpellHit; the
+-- moorabi precedent does NOT apply here — this flip is timer-driven).
+-- SetPhase schedules the new phase's event set fresh; the old
 -- phase's pending events are dropped in C++ when they come due
 -- (EventMap::ExecuteEvent discards phase-mismatched events) — the Lua
 -- port cancels them at flip time, which is observationally identical

@@ -58,11 +58,14 @@
 -- SAY_SPAWN (3) and SAY_CHARGED (4) are never Talk()ed anywhere in the
 -- file (dead enum text, the cyanigosa precedent).
 -- Talk(SAY_SUMMON_ENERGY 6) rides the SpellHit SPELL_ARCANE_POWER
--- (54160) / H_SPELL_ARCANE_POWER (59474) leg — stays out: the
--- trigger is the unregistered npc_ethereal_sphere's proximity
--- DoCastAOE (boss_xevozz.cpp:224-241), so event 14 can never fire
--- with these IDs (the old "no SpellHit bridge" label was stale —
--- event 14 fires from the Go spell path).
+-- (54160) / H_SPELL_ARCANE_POWER (59474) leg — stale "no SpellHit
+-- bridge" retracted (2026-10-21): ev14 IS bridged (fires from the Go
+-- spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 +
+-- spells.go:11765) — but the arm stays out: the only in-instance
+-- source of these IDs is the unregistered npc_ethereal_sphere's
+-- 3.0f-proximity DoCastAOE (boss_xevozz.cpp:227-241), and entry
+-- 29271 can never exist in Go (Xevozz's sphere summon leg is
+-- unbridged), so ev14 can never fire with 54160/59474.
 -- The ScheduleTasks ethereal-sphere summon leg (Talk(SAY_REPEAT_
 -- SUMMON 5), 5s init / 45-47s Repeat, random summon-spell pick from
 -- {54102, 54137, 54138} via DoCast(me, ...), heroic 2.5s delayed

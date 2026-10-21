@@ -98,8 +98,10 @@
 -- arms blocked on the instance-script model. OnLeaveCombat(2):
 -- cancel timers, drop per-GUID state. The SpellHitTarget arm (45235
 -- -> blaze-summon 45236 self-cast on the hit target; 45342/46771 ->
--- flame touched 45348; 45329 -> dark touched 45347) has no
--- SpellHitTarget bridge — unmodeled. The 8-step intro chain
+-- flame touched 45348; 45329 -> dark touched 45347) — the
+-- SpellHitTarget bridge is LIVE (event 15, see header top); the arm
+-- stays unmodeled on hit-target-enumeration grounds. The 8-step intro
+-- chain
 -- (MoveInLineOfSight sighting + cross-creature Talk relays) has no
 -- MoveInLineOfSight bridge — the fight starts on pull (ragnaros-
 -- intro convention). The no-victim threat handoff from the sister

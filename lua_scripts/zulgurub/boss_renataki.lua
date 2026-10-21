@@ -20,14 +20,12 @@
 -- triggered per C++ default DoCastVictim non-triggered).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
--- InterruptSpell(CURRENT_GENERIC_SPELL) has no bridge — skipped, the
--- state flips still happen; the SetEquipmentSlots main-hand swap and
--- the UNIT_FLAG_NOT_SELECTABLE flag arms have no bridges (arlokk
--- convention); the SetDisplayId(11686/15268) arms are display-
--- bridgeable but stay out — an invisible model without the
--- NOT_SELECTABLE leg would fabricate an invisible-but-targetable
--- state C++ never exhibits. Invisibility is modeled as state only,
--- the boss stays targetable; DoTeleportTo has no
+-- InterruptSpell(CURRENT_GENERIC_SPELL) is a no-op (no cast state in
+-- Go) — skipped, the state flips still happen; the invisible/visible
+-- visual arms are PORTED (2026-10-21): SetEquipmentSlots main-hand
+-- swap + SetDisplayId(11686/15268) + UNIT_FLAG_NOT_SELECTABLE
+-- SetFlag/RemoveFlag (all bridged) — the boss actually goes
+-- invisible + unselectable C++-exact; DoTeleportTo has no
 -- teleport bridge (jindo convention) — the ambush teleport is skipped
 -- and the cast lands on the picked player directly; the aggro-switch
 -- GetThreat/ModifyThreatByPercent(-50) + AttackStart arms have no threat
@@ -42,6 +40,9 @@ local ENTRY_RENATAKI = 15084
 
 local SPELL_AMBUSH = 34794
 local SPELL_THOUSANDBLADES = 34799
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 local renatakiState = {}
@@ -81,15 +82,18 @@ local function alivePlayersInInstance(creature)
     return found
 end
 
--- C++ invisible timer: InterruptSpell + unequip +
--- NOT_SELECTABLE have no bridge; the display-11686 arm is
--- display-bridgeable but stays out paired with the flag leg;
--- the state flip is C++-exact, re-arm {15s,30s}.
+-- C++ invisible timer :67-74: InterruptSpell is a no-op (no cast state
+-- in Go) + SetEquipmentSlots(main-hand unequip) + SetDisplayId(11686) +
+-- SetFlag(UNIT_FLAG_NOT_SELECTABLE); the state flip is C++-exact,
+-- re-arm {15s,30s}.
 local function onInvisible(creature, guid)
     local st = renatakiState[guid]
     if st then
         st.invisible = true
     end
+    creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
+    creature:SetDisplayId(11686)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     schedule(guid, "invisible", math.random(15000, 30000), function()
         onInvisible(creature, guid)
     end)
@@ -120,15 +124,18 @@ local function onAmbush(creature, guid)
     end)
 end
 
--- C++ visible timer: 4s, gated on _ambushed; InterruptSpell +
--- re-equip + RemoveFlag have no bridge; the SetDisplayId(15268)
--- restore arm is display-bridgeable but stays out with the
--- invisible leg; clears _invisible C++-exact; re-arm 4000
+-- C++ visible timer :99-106: 4s, gated on _ambushed; InterruptSpell is a
+-- no-op (no cast state in Go) + SetDisplayId(15268) + SetEquipmentSlots
+-- (EQUIP_ID_MAIN_HAND = 0, boss_renataki.cpp:30) + RemoveFlag(
+-- UNIT_FLAG_NOT_SELECTABLE); clears _invisible C++-exact; re-arm 4000
 -- C++-exact (idempotent while visible).
 local function onVisible(creature, guid)
     local st = renatakiState[guid]
     if st and st.ambushed and st.invisible then
         st.invisible = false
+        creature:SetDisplayId(15268)
+        creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     end
     schedule(guid, "visible", 4000, function()
         onVisible(creature, guid)

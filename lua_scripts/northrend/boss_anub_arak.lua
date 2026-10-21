@@ -121,7 +121,10 @@
 -- blocked), SetPhase(PHASE_SUBMERGE) + the 50%/25%/0% _nextSubmerge
 -- pet-count machine (_assassinCount 4->6->6, _guardianCount 2,
 -- _venomancerCount 0->2->2, third wave arms EVENT_DARTER) — event 14
--- fires; the phase/flag/pet machine stays unbridged — documented-only.
+-- fires; stale "no SpellHit bridge" retracted (2026-10-21); arm stays
+-- out: the only hit source is the boss's own EVENT_SUBMERGE cast
+-- (unported — phase-machine-blocked), so the hit can never fire in Lua;
+-- SetPhase + pet-count machine unbridged — documented-only.
 -- UpdateAI UNIT_STATE_CASTING skip — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 -- npc_anubarak_anub_ar_darter / _assassin / _guardian / _venomancer
 -- / npc_anubarak_impale_target — ENTRY UNVERIFIABLE (no NPC

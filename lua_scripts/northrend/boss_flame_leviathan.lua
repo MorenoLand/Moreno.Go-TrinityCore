@@ -58,12 +58,16 @@
 -- excluded.
 -- SpellHitTarget (SPELL_PURSUED: _pursueTarget GUID + vehicle seat walk ->
 -- Talk(EMOTE_PURSUE 12, passenger)) — no vehicle bridge.
--- SpellHit (SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
+-- SpellHit: stale "no SpellHit bridge" retracted (2026-10-21) — ev14
+-- CreatureEventOnHitBySpell is bridged; the arms stay out on their own
+-- machines: SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
 -- no vehicle bridge; SPELL_ELECTROSHOCK 62522
 -- InterruptSpell(CURRENT_CHANNELED_SPELL) — no interrupt bridge
 -- (CastSpell itself is bridged; the arm interrupts, it doesn't cast);
--- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown — the early-4s shutdown
--- consumer calls InterruptNonMeleeSpells, also unbridged).
+-- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown — the only consumer is the
+-- early-4s shutdown (ScheduleEvent(EVENT_SHUTDOWN, 4s) +
+-- InterruptNonMeleeSpells, unbridged), so the counter alone is dead
+-- state.
 -- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS) /
 -- SetData(DATA_UNBROKEN) / DoAction tower-destruction loot-mode ladder —
 -- no GetData/SetData/DoAction bridges.
@@ -85,7 +89,11 @@
 -- npc_freya_ward_summon — aura/timer/summon/move legs, no Talk arms anywhere
 -- — no registrations EXCEPT the pool-of-tar DamageTaken immunity
 -- (damage = 0, boss_flame_leviathan.cpp:909-912 — registered 2026-10-19,
--- event 9 numeric-return rewrite).
+-- event 9 numeric-return rewrite). npc_pool_of_tar SpellHit (:914-917):
+-- FIRE-school hit && !HasAura(SPELL_BLAZE 62292) -> DoCastSelf(BLAZE,
+-- true) — the ev14 handler receives only spellId (no spell-school lookup
+-- bridge), so the SCHOOL_MASK_FIRE gate can't be reproduced —
+-- documented-only.
 -- npc_brann_bronzebeard_ulduar_intro / npc_lorekeeper — gossip legs:
 -- the gossip bridge IS live (RegisterCreatureGossipEvent,
 -- engine/world/gossip.go:129/369) — the "no gossip bridge" claim was

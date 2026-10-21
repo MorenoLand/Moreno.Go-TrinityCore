@@ -182,12 +182,18 @@ local function onRainOfBones(creature, guid)
         return
     end
     -- C++ EVENT_RAIN_OF_BONES: ResetThreatList() before the random-target
-    -- cast (bridged lua_creature_events.go); SetFacingToObject still has no
-    -- bridge.
+    -- cast (bridged lua_creature_events.go); SetFacingToObject has no
+    -- direct bridge — facing computed with math.atan2 (the Unit::
+    -- GetAbsoluteAngle twin, zuljin precedent) then SetFacingTo.
     creature:ClearThreatList()
     local target = randomAlivePlayer(creature)
     if target ~= nil then
-        -- C++ SetFacingToObject has no bridge; the AuraScript periodic
+        local dx = target:GetX() - creature:GetX()
+        local dy = target:GetY() - creature:GetY()
+        local face = math.atan2(dy, dx)
+        if face < 0 then face = face + 2 * math.pi end
+        creature:SetFacingTo(face)
+        -- C++ SetFacingToObject arm ported above; the AuraScript periodic
         -- skeleton summon has no AuraScript model.
         creature:CastSpell(target, SPELL_RAIN_OF_BONES)
     end

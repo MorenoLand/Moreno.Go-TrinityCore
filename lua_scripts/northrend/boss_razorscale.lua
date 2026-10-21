@@ -98,8 +98,13 @@
 -- DamageTaken (:547-555) — HealthBelowPctDamaged(50) +
 -- PHASE_GROUND-gated perma-ground latch + DoAction
 -- (ACTION_START_PERMA_GROUND) — no damage-taken / phase bridges.
--- SpellHit (:497-506) — SPELL_HARPOON_TRIGGER 62505 harpoon-hit
--- counter -> DoAction(ACTION_GROUND_PHASE) — phase machine.
+-- SpellHit (:497-506) — stale "no SpellHit bridge" retracted
+-- (2026-10-21): ev14 IS bridged (fires from the Go spell path) —
+-- but the arm stays out: SPELL_HARPOON_TRIGGER 62505 drives a
+-- counter whose sole effect is DoAction(ACTION_GROUND_PHASE) — no
+-- DoAction bridge, and it feeds the unbridged air/ground phase
+-- machine; a ported counter with no downstream would be an inert
+-- no-op.
 -- CanAIAttack / JustSummoned / SummonedCreatureDies /
 -- EnterEvadeMode / HandleMusic / SummonMinions — no bridges.
 -- npc_expedition_commander (33210 ulduar.h:90 — entry-verifiable
@@ -146,7 +151,13 @@
 -- (SPELL_WHIRLWIND 63808) 17s init, re-arm {10s,13s} —
 -- same blocker; no registration.
 -- npc_razorscale_harpoon_fire_state (33282 ulduar.h:95):
--- SpellHit(SPELL_FIREBOLT) machine — no bridge; no registration.
+-- SpellHit(SPELL_FIREBOLT 62669) machine — stale "no bridge"
+-- retracted (2026-10-21): ev14 IS bridged (fires from the Go spell
+-- path) — but the arm stays out: the DoCastSelf(HARPOON_FIRE_STATE
+-- 62696) rides an instance-GetCreature(DATA_EXPEDITION_COMMANDER)
+-- -> DoAction(ACTION_DESTROY_HARPOONS) cross-creature relay (no
+-- instance-GetCreature / DoAction bridges), and 33282 itself has
+-- no registration.
 -- npc_razorscale_devouring_flame: Reset one-shot DoCastSelf
 -- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
 -- timer-driven; no registration.
