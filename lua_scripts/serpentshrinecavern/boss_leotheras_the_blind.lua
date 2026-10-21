@@ -282,9 +282,9 @@ local function leotherasTick(creature, guid)
     end
 
     -- NeedThreatReset arm: fires once the whirlwind aura lapses or
-    -- a form switches (the ResetThreatList + MotionMaster Clear/
-    -- MoveChase arms have no threat/movement bridges — timer
-    -- bookkeeping only, below).
+    -- a form switches (the ResetThreatList half is PORTED below via
+    -- creature:ClearThreatList; the MotionMaster Clear/MoveChase half
+    -- has no movement bridge — timer bookkeeping otherwise).
     if st.needThreatReset and not creature:HasAura(SPELL_WHIRLWIND) then
         if st.demonForm then
             st.innerDemons = 30000

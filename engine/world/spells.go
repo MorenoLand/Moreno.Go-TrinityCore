@@ -7864,7 +7864,7 @@ func (s *session) isTargetEngaged(targetGUID uint64) bool {
 }
 
 // breakHitBySpellAuras mirrors the AURA_INTERRUPT_FLAG_HITBYSPELL arm of
-// Spell::PreprocessSpellHit (Spell.cpp:2747-2749): when the caster can
+// Spell::PreprocessSpellHit (Spell.cpp:2743-2744): when the caster can
 // validly attack the target, the target loses its HITBYSPELL-flagged auras
 // on any spell hit — not only when damage lands (the damage pipeline breaks
 // these through procDamageAuras; this leg covers non-damaging hits such as
@@ -10106,7 +10106,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			hitTargets = liveTargets
 		}
-		// Spell::PreprocessSpellHit (Spell.cpp:2747-2749): the
+		// Spell::PreprocessSpellHit (Spell.cpp:2743-2744): the
 		// AURA_INTERRUPT_FLAG_HITBYSPELL arm runs per target here, ahead of
 		// the effect loops — the PreprocessTarget position, before
 		// DoTargetSpellHit/HandleEffects. Missed targets carry no hit (the
@@ -16659,7 +16659,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (Spell.cpp:2606) is structural — this path has no miss model.
 	var comboGainTarget uint64
 	var comboGain int8
-	// Spell::PreprocessSpellHit (Spell.cpp:2747-2749) runs on the triggered
+	// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) runs on the triggered
 	// path too — triggered casts go through the same per-target processing
 	// (PreprocessTarget ahead of the effect loop).
 	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334) runs per target, so the

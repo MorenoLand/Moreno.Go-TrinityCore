@@ -178,7 +178,7 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 // SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS — and the DIRECT_DAMAGE strip, both
 // excepting the damaging spell's own aura; then the breakable-CC drain with
 // the taken-damage proc flag. HITBYSPELL rides along with no exception:
-// Spell::PreprocessSpellHit (Spell.cpp:2747-2749) strips it at spell-hit
+// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it at spell-hit
 // time on the player-cast path, and the pet/creature-spell funnels never
 // model that hit arm, so the damage-time strip is their only coverage.
 func (s *session) procSpellDirectDamageAuras(spellID uint32, damage ...uint32) {
@@ -203,7 +203,12 @@ func (s *session) procSpellDirectDamageAuras(spellID uint32, damage ...uint32) {
 // TAKE_DAMAGE strip (attr4-gated, excepting the damaging spell) and the
 // DIRECT_DAMAGE strip (excepting the damaging spell), then the breakable-CC
 // drain with the taken-damage proc flag. spellID 0 is the melee arm
-// (spellProto null in C++): both strips run with no exception.
+// (spellProto null in C++): both strips run with no exception. The
+// HITBYSPELL strip rides along for spell hits only:
+// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it at hit time on
+// every non-miss spell hit — melee never passes through that arm — and the
+// pet funnel never models the hit arm, so this is its only coverage
+// (ungated, no exception, like C++).
 func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
 	if s != nil {
 		s.motionMu.Lock()
@@ -214,6 +219,9 @@ func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint
 				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagTakeDamage, spellID)
 			}
 			s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagDirectDamage, spellID)
+			if spellID != 0 {
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell)
+			}
 		}
 	}
 	s.procCreatureDamageAuras(key, true, damage, maxHealth)
@@ -300,7 +308,7 @@ func (s *session) drainBreakableCCAurasOnTakenDamage(wantProcFlag uint32, dmg ui
 // procPeriodicTickDamageAuras mirrors the Unit::DealDamage victim arm
 // (Unit.cpp:738-750) for a periodic (DoT) tick: the strip covers
 // AURA_INTERRUPT_FLAG_TAKE_DAMAGE only — HITBYSPELL was already stripped at
-// spell-hit time (Spell.cpp:2747-2749) — excludes the ticking spell's own
+// spell-hit time (Spell.cpp:2743-2744) — excludes the ticking spell's own
 // aura, and is skipped entirely when the tick spell carries
 // SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS (Unit.cpp:743). The strip runs even
 // on zero-damage ticks (it precedes the !damage early-return in C++); the

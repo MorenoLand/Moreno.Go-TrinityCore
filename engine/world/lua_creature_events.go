@@ -1111,8 +1111,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	})
 	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
 	// GetClosestCreatureWithEntry (ScriptedCreature.h): the nearest live
-	// creature of entry within dist yards (3D, both combat reaches added —
-	// the C++ IsWithinDistInMap metric) in the same map+instance, excluding
+	// creature of entry within dist yards (3D gate with both combat reaches
+	// added — the C++ IsWithinDistInMap metric; winner picked by
+	// reach-adjusted distance, the C++ GetDistance i_range narrowing) in
+	// the same map+instance, excluding
 	// self; nil when none. Backs the creature-search arms (flame-tsunami
 	// lava-blaze buff) that headers documented as bridge-blocked.
 	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
@@ -1128,7 +1130,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		srcReach := float64(motion.combatReachOrDefault())
 		s.motionMu.Lock()
 		var best *creatureMotion
-		bestD := dist
+		bestAdj := dist
 		for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
 			if guid == motion.GUID || m.Entry != entry || m.Health == 0 {
 				continue
@@ -1136,8 +1138,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			dx := float64(m.X - motion.X)
 			dy := float64(m.Y - motion.Y)
 			dz := float64(m.Z - motion.Z)
-			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+srcReach+float64(m.combatReachOrDefault()) && (best == nil || d < bestD) {
-				best, bestD = m, d
+			candReach := float64(m.combatReachOrDefault())
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+srcReach+candReach {
+				// C++ narrows i_range to GetDistance (3D minus both combat
+				// reaches, floored at 0, Object.cpp:1169) — the winner is
+				// the reach-adjusted nearest, not the raw-3D nearest.
+				adj := d - srcReach - candReach
+				if adj < 0 {
+					adj = 0
+				}
+				if best == nil || adj < bestAdj {
+					best, bestAdj = m, adj
+				}
 			}
 		}
 		s.motionMu.Unlock()

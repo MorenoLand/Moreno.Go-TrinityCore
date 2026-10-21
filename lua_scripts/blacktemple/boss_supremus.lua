@@ -49,7 +49,7 @@
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
 -- skipped); no threat model — the ResetThreatList/AddThreat
 -- (1,000,000 on the charge target) arms and the threat-list pick
--- for hateful strike: ClearThreatList IS bridged (lua_objects.go:389)
+-- for hateful strike: ClearThreatList IS bridged (lua_objects.go:401)
 -- but the arm is intentionally skipped — the C++ pairs it with the
 -- unbridged AddThreat(1e6) top-up, and clearing alone would leave the
 -- Go threat table empty/victimless, a state the C++ never produces;
@@ -219,7 +219,7 @@ end
 -- C++ EVENT_SWITCH_TARGET: non-triggered charge 41581 on the charge
 -- target + Talk(EMOTE_NEW_TARGET); repeat 10s unconditional
 -- (C++-exact). The ResetThreatList/AddThreat arms are skipped:
--- ClearThreatList is bridged (lua_objects.go:389) but the C++ arm
+-- ClearThreatList is bridged (lua_objects.go:401) but the C++ arm
 -- pairs it with the unbridged AddThreat(target, 1e6) top-up — clearing
 -- alone would leave the threat table empty/victimless (Go
 -- ClearThreat also zeroes currentVictim), a state the C++ never
@@ -236,13 +236,17 @@ local function onSwitchTarget(creature, guid)
 end
 
 -- C++ ChangePhase: STRIKE from INITIAL or CHASE (removes the snare
--- aura; the taunt-immune drops are no-op removes of un-inserted rows
--- and the volcano summons' DoAction has no bearer); CHASE otherwise
--- (arms volcano/switch-target, non-triggered self-cast snare; the
--- taunt-immune raise stays out — the Go taunt path doesn't consult
--- the immunity rows). The ResetThreatList arm is PORTED below; the
--- DoZoneInCombat re-engage has no bridge — Go keeps the stale victim
--- while the table rebuilds from damage.
+-- aura, drops the taunt-immune rows, and the volcano summons'
+-- DoAction has no bearer); CHASE otherwise (arms volcano/
+-- switch-target, non-triggered self-cast snare, raises the
+-- taunt-immune rows). The rows are LIVE: creature:ApplySpellImmune
+-- feeds the script-immunity rows the Go hit/aura gates consult
+-- (immunity.go:1390 IMMUNITY_EFFECT, :1440 IMMUNITY_STATE), so a
+-- raised row blocks effect-114 taunts (IMMUNE2 strip) and aura-11
+-- taunts (aura-apply strip) — gurtogg precedent ported at
+-- boss_gurtogg_bloodboil.lua:357-358. The ResetThreatList arm is
+-- PORTED below; the DoZoneInCombat re-engage has no bridge — Go
+-- keeps the stale victim while the table rebuilds from damage.
 -- EVENT_SWITCH_PHASE is re-armed 60s unconditional (C++-exact).
 -- NOTE (2026-10-13): the opposite-phase timer cancels above are
 -- LOCAL-TREE-exact. Stock TC's EventMap keeps phase-mismatched
@@ -260,6 +264,12 @@ local function changePhase(creature, guid)
         schedule(guid, "hateful", 2000, function()
             onHatefulStrike(creature, guid)
         end)
+        -- C++ ChangePhase STRIKE (supremus.cpp:101-102): drop the
+        -- taunt-immune rows (op 1 = IMMUNITY_STATE, 11 =
+        -- SPELL_AURA_MOD_TAUNT; op 0 = IMMUNITY_EFFECT, 114 =
+        -- SPELL_EFFECT_ATTACK_ME).
+        creature:ApplySpellImmune(0, 1, 11, false)
+        creature:ApplySpellImmune(0, 0, 114, false)
     else
         st.phase = PHASE_CHASE
         cancelTimer(guid, "hateful")
@@ -270,6 +280,10 @@ local function changePhase(creature, guid)
         schedule(guid, "switchtarget", 10000, function()
             onSwitchTarget(creature, guid)
         end)
+        -- C++ ChangePhase CHASE (supremus.cpp:109-110): raise the
+        -- taunt-immune rows.
+        creature:ApplySpellImmune(0, 1, 11, true)
+        creature:ApplySpellImmune(0, 0, 114, true)
     end
     -- C++ ChangePhase tail (supremus.cpp:113): ResetThreatList() before the
     -- 60s re-arm (the DoZoneInCombat re-engage has no bridge — Go keeps
@@ -311,6 +325,9 @@ end
 
 local function supremusReset(event, creature)
     supremusResetState(creature:GetGUID())
+    -- C++ Reset (supremus.cpp:73-75): drop the taunt-immune rows.
+    creature:ApplySpellImmune(0, 1, 11, false)
+    creature:ApplySpellImmune(0, 0, 114, false)
 end
 
 RegisterCreatureEvent(ENTRY_SUPREMUS, 1, supremusEnterCombat)
