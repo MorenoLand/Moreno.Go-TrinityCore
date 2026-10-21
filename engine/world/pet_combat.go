@@ -4688,6 +4688,27 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// (Spell.cpp:2909), ahead of DealDamage's CHEAT_GOD return
 	// (Unit.cpp:735-737), so a god-cheat victim still feeds the heal —
 	// the damage log below likewise carries the pre-negation amount.
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2530): the
+	// IsImmunedToDamage arm zeroes the damage and sends NO damage-log packet
+	// ("no packet found in sniffs") — immunity shows only via the miss path;
+	// DealSpellDamage never runs, so no hooks, strips, or leech fire. The
+	// check sits after the taken legs like C++ (post-CalculateSpellDamageTaken)
+	// and ahead of the log send.
+	immuneToDmg := false
+	if s.server != nil && s.server.Data != nil {
+		if dmgSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			if isPlayerVictim {
+				if vs := s.server.findSessionByGUID(target.GUID); vs != nil && vs.player != nil {
+					immuneToDmg = vs.isImmuneToDamageSpell(dmgSpell, uint32(schoolMask))
+				}
+			} else if s.findCreatureMotion(target.GUID) != nil {
+				immuneToDmg = creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), dmgSpell, uint32(schoolMask))
+			}
+		}
+	}
+	if immuneToDmg {
+		return
+	}
 	leechDealt := damage - overkill
 	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
@@ -4701,12 +4722,25 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// DealSpellDamage on the pre-mitigation damage>0 arm): the AI
 		// hooks and the TAKE_DAMAGE strip fire; only tap, threat and
 		// engage are skipped at the !damage return (Unit.cpp:814-818).
-		// (The hooks arm is C++-true; the Go player zero arm below fires
-		// no DealDamage AI hooks — creature arm only, pre-existing gap.)
+		// The AI hooks arm (Unit.cpp:700-704) is C++-true here too and fires
+		// ahead of the god return and the strips — the player arm fires it
+		// like the creature arm below.
 		if hitInfo&0x01 != 0 {
 			return
 		}
 		if isPlayerVictim {
+			// Unit::DealDamage (Unit.cpp:700-704): the DamageTaken/DamageDealt
+			// AI hooks fire at the top of DealDamage on every non-miss hit —
+			// ahead of the CHEAT_GOD return (Unit.cpp:735-737) and the strip
+			// arms (Unit.cpp:738+). The victim is a player (no BossAI leg)
+			// and the pet motion carries no BossAI, so both legs are
+			// documented no-fires today (pet_combat.go convention); the call
+			// holds the hook point like the creature arm below.
+			if s.server != nil && caster != nil {
+				s.server.motionMu.Lock()
+				fireDealDamageAIHooks(ctx, s.server, nil, caster, caster.GUID, target.GUID, &damage)
+				s.server.motionMu.Unlock()
+			}
 			// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE-interrupt
 			// strip runs before the !damage early-return — a fully resisted
 			// or absorbed hit strips too (Spell.cpp:2548 calls
@@ -4788,6 +4822,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		victim := s.server.findSessionByGUID(target.GUID)
 		if victim == nil || victim.player == nil {
 			return
+		}
+		// Unit::DealDamage (Unit.cpp:700-704): the DamageTaken/DamageDealt AI
+		// hooks fire at the top of DealDamage on every non-miss hit, ahead of
+		// the CHEAT_GOD return (Unit.cpp:735-737). Same documented-no-fire
+		// legs as the zero arm (player victim, pet motion with no BossAI).
+		if s.server != nil && caster != nil {
+			s.server.motionMu.Lock()
+			fireDealDamageAIHooks(ctx, s.server, nil, caster, caster.GUID, target.GUID, &damage)
+			s.server.motionMu.Unlock()
 		}
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the spell damage log (sent pre-DealDamage in C++); the taken
@@ -5051,12 +5094,14 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	if targetMotion.Health == 0 {
-		// Unit::DealDamage (Unit.cpp:739-748 + 897-898): the TAKE_DAMAGE and
-		// DIRECT_DAMAGE strips fire before Unit::Kill (Unit.cpp:957-973), so
-		// the lethal arm strips too — attr4-gated, excepting the hitting
-		// spell's aura — the same twin the non-lethal arm runs at the end
-		// of the funnel.
-		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForMotion(targetMotion), spellID, damage, targetMotion.MaxHealth)
+		// Unit::DealDamage (Unit.cpp:738-748 + :882-889): the TAKE_DAMAGE
+		// strip fires before the lethal check, so the lethal arm strips it
+		// too — attr4-gated, excepting the hitting spell's aura, plus the
+		// HITBYSPELL strip (Spell.cpp:2743-2744, every non-miss spell hit).
+		// The DIRECT_DAMAGE strip (Unit.cpp:897) sits inside the non-lethal
+		// else and never fires on a lethal hit — Kill's death cleanup owns
+		// those auras — so the lethal arm must not run it.
+		s.server.procCreatureLethalDamageAuras(creatureAuraKeyForMotion(targetMotion), spellID, damage, targetMotion.MaxHealth)
 		s.server.stopCreatureMotionInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
 		// The corpse keeps TAPPED when the tap survived to death
 		// (Unit.cpp:11172-11175), so broadcast the real flags.

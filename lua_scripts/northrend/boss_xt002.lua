@@ -256,7 +256,7 @@ end
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
-    -- C++ boss_xt002::JustDied (boss_xt002.cpp:213): the heart-phase
+    -- C++ boss_xt002::JustDied (boss_xt002.cpp:214): the heart-phase
     -- NOT_SELECTABLE is cleared on death.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end

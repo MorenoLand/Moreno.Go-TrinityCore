@@ -914,7 +914,7 @@ local function illidanCleanup(event, creature)
     cancelTimers(guid)
     illidanState[guid] = nil
     if event == 4 then
-        -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:650):
+        -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649):
         -- clear the NOT_SELECTABLE set by the defeat sequence (death
         -- path only — the handler is shared with events 2/23).
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)

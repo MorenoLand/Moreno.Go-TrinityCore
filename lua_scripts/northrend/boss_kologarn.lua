@@ -280,7 +280,7 @@ end
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
-    -- C++ boss_kologarnAI::JustDied (boss_kologarn.cpp:150): the corpse
+    -- C++ boss_kologarnAI::JustDied (boss_kologarn.cpp:151): the corpse
     -- stays unselectable (SetCorpseDelay 604800 keeps the corpse a week).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end

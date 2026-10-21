@@ -227,6 +227,30 @@ func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint
 	s.procCreatureDamageAuras(key, true, damage, maxHealth)
 }
 
+// procCreatureLethalDamageAuras mirrors the Unit::DealDamage strip arms that
+// run on a lethal pet-spell hit (Unit.cpp:738-748 fire before the
+// health<=damage check at :882): the TAKE_DAMAGE strip (attr4-gated,
+// excepting the damaging spell) and the HITBYSPELL strip for spell hits
+// (Spell.cpp:2743-2744) — then the breakable-CC drain. The DIRECT_DAMAGE
+// strip (Unit.cpp:897) sits inside the non-lethal else and never fires on a
+// lethal hit; Kill's death cleanup owns those auras instead.
+func (s *Server) procCreatureLethalDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
+	if s != nil {
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+		s.motionMu.Unlock()
+		if m != nil {
+			if tickDamageBreaksAuras(s, spellID) {
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagTakeDamage, spellID)
+			}
+			if spellID != 0 {
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell)
+			}
+		}
+	}
+	s.procCreatureDamageAuras(key, true, damage, maxHealth)
+}
+
 // stripRecursiveTakeDamageAuras mirrors the first Unit::DealDamage strip arm
 // (Unit.cpp:738-750) for recursive direct-damage strikes that never pass
 // through a spell hit (damage shields, split-damage redirection): the
