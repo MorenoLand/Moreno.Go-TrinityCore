@@ -55,13 +55,14 @@
 --   hook whose SetGoState/NOT_SELECTABLE arms are purely cosmetic would be
 --   a firesworn stub (go_keystone_chamber / go_altar_of_archaedas
 --   precedent) — DOCUMENTED, not registered.
--- - npc_morridune (entry 6729): the whole choreography is EscortAI
---   waypoint work (Reset Talk(0) + Start, WaypointReached(4) -> pause +
---   SetFacingTo + UNIT_NPC_FLAG_GOSSIP + Talk(1)) — no movement/waypoint
---   bridge; the gossip flag is only set at escort waypoint 4, so a
---   spawn-time gossip hook would fire at the wrong time (harrison
---   precedent) — DOCUMENTED, not registered. The teleport DoCast(player,
---   9268) arm is unreachable without the escort.
+-- - npc_morridune (entry 6729, blackfathom_deeps.h:59): PORTED below —
+--   Reset's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) twin on
+--   spawn (event 5) keeps the select arm gated exactly like C++ (the
+--   flag is only re-set at escort waypoint 4, which rides the
+--   unported EscortAI machine), plus the OnGossipSelect teleport
+--   DoCast(player, 9268) arm. Reset's Talk(0) rides the same spawn
+--   hook; escort Start / WaypointReached(4) legs stay documented-only
+--   (no movement/waypoint bridge).
 
 local ENTRY_AKU_MAI_SNAPJAW = 4825
 local ENTRY_AKU_MAI_SERVANT = 4978
@@ -184,3 +185,32 @@ local function onAltarGossip(_, player)
 end
 
 RegisterGameObjectGossipEvent(ENTRY_ALTAR_OF_THE_DEEPS, 1, onAltarGossip)
+
+-- npc_morridune (entry 6729, blackfathom_deeps.h:59; blackfathom_deeps.cpp:196-232).
+local ENTRY_MORRIDUNE = 6729
+local UNIT_NPC_FLAGS_FIELD = 82
+local UNIT_NPC_FLAG_GOSSIP = 1
+local SAY_MORRIDUNE_1 = 0
+local SPELL_TELEPORT_DARNASSUS = 9268
+
+-- C++ Reset() (:202-207): Talk(SAY_MORRIDUNE_1 0) + RemoveFlag(UNIT_NPC_FLAGS,
+-- UNIT_NPC_FLAG_GOSSIP) + Start(false). The escort Start rides the unported
+-- EscortAI machine; the flag removal is ported so the select arm below stays
+-- gated exactly like C++ (flag re-set only at escort waypoint 4, :213-218,
+-- unported). Field 82 = UNIT_NPC_FLAGS (lua_creature_events.go).
+local function morriduneSpawn(_, creature)
+    creature:Talk(SAY_MORRIDUNE_1)
+    creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+end
+
+-- C++ OnGossipSelect (:222-226): DoCast(player, SPELL_TELEPORT_DARNASSUS 9268),
+-- non-triggered (default DoCast overload); no CloseGossipMenuFor, so the menu
+-- stays open; return false lets the AI/native select arms proceed (Eluna
+-- gossip polarity, gossip.go).
+local function morriduneGossipSelect(_, player, creature)
+    creature:CastSpell(player, SPELL_TELEPORT_DARNASSUS)
+    return false
+end
+
+RegisterCreatureEvent(ENTRY_MORRIDUNE, 5, morriduneSpawn)
+RegisterCreatureGossipEvent(ENTRY_MORRIDUNE, 2, morriduneGossipSelect)
