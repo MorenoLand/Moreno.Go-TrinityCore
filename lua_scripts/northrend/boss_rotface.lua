@@ -235,8 +235,14 @@ local function rotfaceKilledUnit(event, creature, victim)
 end
 
 -- C++ boss_rotface::JustDied:
--- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
+-- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent; _JustDied()
+-- resets the EventMap, so the self-re-arming mutated/hasten/vile
+-- timers must be cancelled here (CreateLuaEvent timers have no death
+-- auto-cancel — the devourer/festergut death-cancel precedent).
 local function rotfaceJustDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infection[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 
