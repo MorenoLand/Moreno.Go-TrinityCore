@@ -110,17 +110,26 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 	// (0x2A) with TEXT_RANGE_NORMAL the chat packet and the sound go to the
 	// whisper target only (CreatureTextMgrImpl.h:87, CreatureTextMgr.cpp:306).
 	// Non-player whisper targets drop the message, like C++.
-	whispered := whisperTarget != 0 && (chatType == 0x0F || chatType == 0x2A)
+	whispered := chatType == 0x0F || chatType == 0x2A
 	var whisperSess *session
 	if whispered {
-		whisperSess = s.findSessionByGUID(whisperTarget)
+		// CreatureTextMgr::SendNonChatPacket (CreatureTextMgr.cpp:322-331):
+		// for whisper rows with TEXT_RANGE_NORMAL — the only range
+		// CreatureAI::Talk ever passes (CreatureAI.cpp:48-51) — a null or
+		// non-player whisper target silently drops the chat message AND its
+		// sound; they are never broadcast. The emote leg is gated separately
+		// below (CreatureTextMgr::SendEmote has no whisper target, so the
+		// emote still broadcasts to nearby).
+		if whisperTarget != 0 {
+			whisperSess = s.findSessionByGUID(whisperTarget)
+		}
 		if whisperSess == nil || whisperSess.player == nil {
-			return
+			whisperSess = nil
 		}
 	}
 
 	// 1. Play Sound
-	if chosen.Sound > 0 {
+	if chosen.Sound > 0 && (!whispered || whisperSess != nil) {
 		soundPkt := protocol.NewBuffer(4)
 		soundPkt.WriteU32(chosen.Sound)
 		if whispered {
@@ -136,11 +145,15 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		emotePkt.WriteU32(chosen.Emote)
 		emotePkt.WriteU64(creatureGUID)
 		// CreatureTextMgr::SendEmote takes no whisper target (HandleEmoteCommand
-		// broadcasts to nearby), so the emote stays broadcast on the whisper arm.
+		// broadcasts to nearby), so the emote stays broadcast on the whisper arm,
+		// even when the chat message itself was dropped.
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
 	}
 
 	// 3. Broadcast chat message
+	if whispered && whisperSess == nil {
+		return
+	}
 	chatPkt := protocol.BuildMonsterChatMessage(chatType, uint32(chosen.Language), creatureGUID, creatureName, msg)
 	if whispered {
 		_ = whisperSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, true)
