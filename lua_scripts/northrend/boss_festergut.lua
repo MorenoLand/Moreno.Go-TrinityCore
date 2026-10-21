@@ -53,8 +53,13 @@
 -- {20000,25000}, re-arm {40000,45000} (:235-240). MAX_TARGETS
 -- spell-mod leg (:238) has no Lua bridge — the DB spell is
 -- raid-moded with the same 2/3 values, so the default cast is
--- faithful. RescheduleEvent(EVENT_VILE_GAS) (:240) rides the OUT
--- vile-gas event — dropped.
+-- faithful.
+-- PORTED (2026-10-21): EVENT_VILE_GAS (:209-233, first fire from the
+-- gas-spore arm's RescheduleEvent :240) — alive-player pools split by
+-- 5.0yd, melee top-up to 10-man minTargets 3 (25-man 8 has no bridge,
+-- hodir precedent), 1 random target (25-man 3), DoCast 69240
+-- non-triggered, re-arm {28s,35s} unconditional; GetAITargets +
+-- GetDistance bridges (putricide/moroes precedents).
 -- npc_stinky_icc::JustDied — festergut->AI()->Talk(SAY_STINKY_DEAD
 -- 0) is cross-AI Talk with no bridge; NOT registered. Bridgeable-
 -- in-principle but ENTRY-BLOCKED (the pit_of_saron flamebearer
@@ -108,6 +113,7 @@ local SPELL_BERSERK2 = 47008
 local SPELL_INHALE_BLIGHT = 69165
 local SPELL_PUNGENT_BLIGHT = 69195
 local SPELL_GAS_SPORE = 69278
+local SPELL_VILE_GAS = 69240
 local EMOTE_WARN_PUNGENT_BLIGHT = 5
 local SAY_PUNGENT_BLIGHT = 4
 local EMOTE_WARN_GAS_SPORE = 3
@@ -196,6 +202,39 @@ local function onInhaleBlight(creature, guid)
     schedule(guid, "inhale_blight", {33500, 35000}, function() onInhaleBlight(creature, guid) end)
 end
 
+-- C++ EVENT_VILE_GAS (:209-233): SelectTargetList(ranged, 25,
+-- Random, 0, -5.0f, playerOnly) + SelectTargetList(melee, 25, Random,
+-- 0, 5.0f, playerOnly) — DefaultTargetSelector excludes dist>0
+-- outside-range and dist<0 inside-range (UnitAI.cpp:271-274), so
+-- ranged = alive players at distance >= 5.0yd, melee = alive players
+-- < 5.0yd; top ranged up from melee to RAID_MODE minTargets(3,8,3,8)
+-- -> 10-man 3 (no 10/25-man bridge — the hodir icicle precedent;
+-- 25-man 8 documented in header); RandomResize(ranged,
+-- RAID_MODE(1,3,1,3) -> 10-man 1) -> DoCast(target, SPELL_VILE_GAS)
+-- non-triggered. Re-arm {28s,35s} unconditional (:232); first fire
+-- comes from the gas-spore arm's RescheduleEvent(:240) 28s..35s after
+-- the first gas spore. Threat-list pool via creature:GetAITargets()
+-- (the putricide slime-puddle precedent).
+local function vileGasTick(creature, guid)
+    local ranged, melee = {}, {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            if creature:GetDistance(unit) >= 5.0 then
+                ranged[#ranged + 1] = unit
+            else
+                melee[#melee + 1] = unit
+            end
+        end
+    end
+    while #ranged < 3 and #melee > 0 do
+        ranged[#ranged + 1] = table.remove(melee, math.random(#melee))
+    end
+    if #ranged > 0 then
+        creature:CastSpell(table.remove(ranged, math.random(#ranged)), SPELL_VILE_GAS)
+    end
+    schedule(guid, "vile_gas", {28000, 35000}, function() vileGasTick(creature, guid) end)
+end
+
 -- C++ EVENT_GAS_SPORE (:235-240): Talk(EMOTE_WARN_GAS_SPORE) +
 -- Talk(EMOTE_GAS_SPORE) + self-cast SPELL_GAS_SPORE non-triggered.
 onGasSpore = function(creature, guid)
@@ -203,6 +242,9 @@ onGasSpore = function(creature, guid)
     creature:Talk(EMOTE_GAS_SPORE)
     creature:CastSpell(creature, SPELL_GAS_SPORE)
     schedule(guid, "gas_spore", {40000, 45000}, function() onGasSpore(creature, guid) end)
+    -- C++ :240 — events.RescheduleEvent(EVENT_VILE_GAS, 28s, 35s):
+    -- schedule() cancels any pending key first, the exact twin.
+    schedule(guid, "vile_gas", {28000, 35000}, function() vileGasTick(creature, guid) end)
 end
 
 -- C++ boss_festergut::JustEngagedWith:
