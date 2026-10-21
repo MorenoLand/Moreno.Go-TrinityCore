@@ -98,9 +98,11 @@
 -- Phase 4 latch (C++ arm order — after the phase branches,
 -- every tick): if Phase ~= 4 and HealthBelowPct(20): Phase =
 -- 4 + Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
--- RemoveFlag(NOT_SELECTABLE)/SetVisible(true) arms have no
--- flag/visibility bridge and the SetArmor(31000) arm has no
--- armor bridge — unmodeled (netherspite precedent); the
+-- RemoveFlag(NOT_SELECTABLE) is flag-bridgeable (creature:RemoveFlag 59)
+-- but stays out paired with the unbridged SetVisible(true) leg (a reveal
+-- without visibility would fabricate a state C++ never exhibits); the
+-- SetArmor(31000) arm has no armor bridge — unmodeled
+-- (netherspite precedent); the
 -- SetDisplayId(MODEL_VOIDWALKER 18988) arm is display-bridgeable
 -- but stays out paired with the unbridged reveal legs (a morph
 -- without the reveal would fabricate a state C++ never exhibits);
@@ -119,9 +121,9 @@
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
--- gargolmar precedent; the SetArmor/SetVisible/
--- RemoveFlag(NOT_SELECTABLE) arms have no bridges and the
--- SetDisplayId arm stays out paired with them — land nowhere
+-- gargolmar precedent; the SetArmor/SetVisible arms have no bridges and
+-- RemoveFlag(NOT_SELECTABLE) stays out paired with the unbridged reveal
+-- legs; the SetDisplayId arm stays out paired with them — land nowhere
 -- (the SetObjectScale restore arm is ported as a scale clear);
 -- the _Reset arm is instance-
 -- blocked; Eluna's On_Reset fires ahead of OnDied and
@@ -136,10 +138,10 @@
 -- priest summons unmodeled (steamrigger precedent); no
 -- movement bridge — the UpdatePosition teleports, the
 -- StopMoving/AttackStop and the AppearDelay machine
--- unmodeled (omor precedent); no visibility/flag/armor
--- bridge — the phase arms touching SetVisible/
--- UNIT_FLAG_NOT_SELECTABLE/SetArmor unmodeled
--- (netherspite precedent); the SetDisplayId arm is
+-- unmodeled (omor precedent); no visibility/armor bridge — the phase
+-- arms touching SetVisible/SetArmor unmodeled (netherspite precedent);
+-- the UNIT_FLAG_NOT_SELECTABLE RemoveFlag arm is flag-bridgeable but
+-- stays out paired with the unbridged reveal legs; the SetDisplayId arm is
 -- display-bridgeable but stays out paired with the unbridged
 -- reveal legs, SetObjectScale ported via the
 -- scale bridge; no arc
@@ -321,9 +323,9 @@ local function combatTick(creature, guid)
     -- Phase 4 latch (C++ arm order — after the phase
     -- branches): HealthBelowPct(20) while not already phase
     -- 4 — Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
-    -- flag/visibility/armor/scale arms have no bridges and the
-    -- display arm stays out paired with the reveal legs —
-    -- unmodeled, see header.
+    -- flag/visibility/armor arms have no bridges and the display arm
+    -- stays out paired with the reveal legs — unmodeled, see header;
+    -- the scale arm is ported below via creature:SetScale.
     if st.phase ~= 4 then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
@@ -345,7 +347,8 @@ end
 -- void bolt 10000 / phase = 1 (the BossAI ctor DATA_HIGH_
 -- ASTROMANCER_SOLARIAN = 2 arm is instance-blocked,
 -- unbridgeable; the ctor defaultarmor/defaultsize arms have
--- no armor/scale bridge).
+-- no armor bridge — the defaultsize capture is subsumed by
+-- GetScale's template-base read now that the scale bridge exists).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 1, function(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
@@ -389,8 +392,9 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook; the C++
 -- Reset SetObjectScale(defaultsize) restore arm ports as a scale
--- clear (SetArmor/SetVisible/RemoveFlag arms stay unbridged;
--- the SetDisplayId arm stays out with them).
+-- clear (SetArmor/SetVisible arms stay unbridged; the
+-- RemoveFlag(NOT_SELECTABLE) leg stays out paired with the unbridged
+-- reveal; the SetDisplayId arm stays out with them).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
     creature:SetScale(0)
     fullReset(creature:GetGUID())

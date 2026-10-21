@@ -42,8 +42,8 @@
 -- arms (incl. JustDied's), and the vortex summon/cleanup arms are
 -- skipped (the vortex AI is still registered so any spawned 24136
 -- zaps back correctly); no teleport bridge — DoTeleportTo(CENTER) on
--- phase change skipped; no equipment bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID
--- arms skipped; no
+-- phase change skipped; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
+-- via creature:SetEquipmentSlots (33975 on reset, 0 on phase change); no
 -- movement model — AttackStartNoMove (eagle), AttackStart victim
 -- switches (claw/lynx), and MoveChase (lynx
 -- entry) have no bearer, so the rush sequences are modeled as
@@ -377,7 +377,9 @@ end
 -- (SetFacingToObject via the creature:SetFacingTo bridge — facing computed
 -- with math.atan2 from the random player's coordinates, the
 -- Unit::GetAbsoluteAngle twin), then DoCast(me, 43215); re-arms even with
--- no target.
+-- no target. Deviation: C++ SelectTarget picks from the threat list
+-- (pets/totems possible), Lua randomPlayer from all alive in-instance
+-- players.
 local function onFlameBreath(creature, guid)
     local target = randomPlayer(creature)
     if target then
@@ -397,9 +399,10 @@ end
 local PHASE_TIMER_KEYS = { "intro", "whirlwind", "grievous", "paralysis",
     "clawrage", "lynxrush", "seqloop", "flamework", "flamebreath", "pillar" }
 
--- C++ EnterPhase(NextPhase): teleport/equipment/AttackStart arms have
--- no bridge; the threat reset, transform unaura removal, transform cast,
--- yell, energy-storm cast/removal, and per-phase timer arming are modeled.
+-- C++ EnterPhase(NextPhase): teleport/AttackStart arms have no bridge;
+-- the equipment arm is ported below via creature:SetEquipmentSlots; the
+-- threat reset, transform unaura removal, transform cast, yell,
+-- energy-storm cast/removal, and per-phase timer arming are modeled.
 -- Phase timers start ticking only on phase entry (C++ decrements them
 -- only in their phase's UpdateAI case).
 local function enterPhase(creature, guid, next)
@@ -416,6 +419,9 @@ local function enterPhase(creature, guid, next)
     if next >= PHASE_BEAR then
         -- C++ EnterPhase cases 1-4: ResetThreatList().
         creature:ClearThreatList()
+        -- C++ EnterPhase cases 1-4: SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 0)
+        -- (boss_zuljin.cpp:303); the EQUIP_NO_CHANGE slots skip as 0xFFFFFFFF.
+        creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
     end
     st.sequence = nil
     st.seqCount = 0
@@ -498,8 +504,11 @@ local function zuljinDied(event, creature, killer)
     creature:Talk(YELL_DEATH)
 end
 
+-- C++ Reset(): SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 33975)
+-- (boss_zuljin.cpp:201) — the EQUIP_NO_CHANGE slots skip as 0xFFFFFFFF.
 local function zuljinReset(event, creature)
     zuljinResetState(creature:GetGUID())
+    creature:SetEquipmentSlots(33975, 0xFFFFFFFF, 0xFFFFFFFF)
 end
 
 -- C++ UpdateAI phase check: when no rush sequence is active and

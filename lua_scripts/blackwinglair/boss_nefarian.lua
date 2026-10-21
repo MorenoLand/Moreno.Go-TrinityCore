@@ -277,9 +277,13 @@ local function beginEvent(creature, guid)
     -- C++ BeginEvent SetUInt32Value(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_NONE):
     -- the whole-value NPC-flag clear is bridged (SetNPCFlags on the
     -- event surface); the gossip option goes away once the event begins.
-    -- The barrier-cast / immune / AttackStart legs still have
-    -- no bridges (see deviations).
+    -- The immune / AttackStart legs still have no bridges (see
+    -- deviations); the barrier cast is ported below via self-cast.
     creature:SetNPCFlags(0)
+    -- C++ BeginEvent: DoCast(me, SPELL_NEFARIANS_BARRIER 22663)
+    -- (boss_nefarian.cpp:213), in order after the NPC-flag clear and
+    -- before the stand change; non-triggered like the C++ DoCast.
+    creature:CastSpell(creature, SPELL_NEFARIANS_BARRIER)
     -- C++ BeginEvent SetStandState(UNIT_STAND_STATE_STAND): the bridged
     -- leg of the arm; he stands up from the throne when the event begins.
     creature:SetStandState(UNIT_STAND_STATE_STAND)

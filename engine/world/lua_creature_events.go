@@ -698,7 +698,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MoveTo + SetFacing spline that turns the unit without moving it. The
 	// Go twin reuses the DistractMovementGenerator facing pattern — an
 	// in-place broadcastMonsterMoveInInstance with the Final_Angle arm
-	// (creaturemotion.go:2401) — plus the logical motion.Orientation slot
+	// (creaturemotion.go:2458) — plus the logical motion.Orientation slot
 	// write the chase worker and the values snapshot read. C++ skips the
 	// turn when the unit is moving (the IsStopped gate); the Go twin
 	// documents that instead of gating: a mid-spline call sets the logical
@@ -706,7 +706,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SetFacingToObject(obj) has no direct bridge — Lua ports compute the
 	// facing with math.atan2 from creature:GetX()/GetY() and the target's
 	// coordinates (the Unit::GetAbsoluteAngle twin, atan2 normalized to
-	// [0, 2pi) per creaturemotion.go:2389), then call this bridge. Creature::SetOrientation (the
+	// [0, 2pi) per creaturemotion.go:2430), then call this bridge. Creature::SetOrientation (the
 	// raw slot write with no packet) is the slot half of this bridge.
 	methods["SetFacingTo"] = func(_ context.Context, args []any) ([]any, error) {
 		ori, err := luaFloat32Arg(args, 0)
@@ -976,9 +976,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		var npcFlags uint32
 		npcDirty := false
+		var unitFlags uint32
+		unitFlagsDirty := false
+		var mapID, instanceID uint32
+		var guid uint64
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags |= flags
+			unitFlags, unitFlagsDirty = motion.UnitFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
 		} else if field == unitFieldNPCFlags {
 			// UNIT_NPC_FLAGS (UpdateFields.h:139: OBJECT_END+0x4C = 82), the
@@ -998,6 +1004,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
 				map[int]uint32{unitFieldNPCFlags: npcFlags})
 		}
+		if unitFlagsDirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldFlags: unitFlags})
+		}
 		return nil, nil
 	}
 	methods["RemoveFlag"] = func(_ context.Context, args []any) ([]any, error) {
@@ -1011,9 +1021,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		var npcFlags uint32
 		npcDirty := false
+		var unitFlags uint32
+		unitFlagsDirty := false
+		var mapID, instanceID uint32
+		var guid uint64
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags &^= flags
+			unitFlags, unitFlagsDirty = motion.UnitFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
 		} else if field == unitFieldNPCFlags {
 			// UNIT_NPC_FLAGS (see SetFlag above): C++ RemoveFlag ANDNs the bits.
@@ -1026,6 +1042,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if npcDirty {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
 				map[int]uint32{unitFieldNPCFlags: npcFlags})
+		}
+		if unitFlagsDirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldFlags: unitFlags})
 		}
 		return nil, nil
 	}
@@ -1075,8 +1095,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.Faction = faction
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
-		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 			map[int]uint32{unitFieldFaction: faction})
 		return nil, nil
 	}
