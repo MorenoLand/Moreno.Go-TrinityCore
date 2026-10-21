@@ -228,8 +228,10 @@
 -- maiev/shadow-demon/cage-trap/blade-tear/spirit/minion summons
 -- never spawn; stale 'no gossip bridge' retracted (bridged) — the
 -- akama intro stays out on the movement/instance machine;
--- no flag/equipment/gravity/threat/immune/sound/despawn bridges —
--- those arms are skipped (react bridge exists: the phase-machine
+-- no equipment/gravity/threat/immune/sound/despawn bridges —
+-- those arms are skipped (flag bridge is live: SetFlag/RemoveFlag on
+-- UNIT_FIELD_FLAGS (59) is honored, lua_creature_events.go:968 —
+-- retracted 2026-10-20 for the field-59 arms; react bridge exists —
 -- react arms stay out, documented per-arm; the throw-glaive-2 sheath
 -- arm IS ported via the creature:SetSheath bridge; the Reset/intro/
 -- air-finalize sheath arms ride unported machines); the air-phase
@@ -911,6 +913,12 @@ local function illidanCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     illidanState[guid] = nil
+    if event == 4 then
+        -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:650):
+        -- clear the NOT_SELECTABLE set by the defeat sequence (death
+        -- path only — the handler is shared with events 2/23).
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ILLIDAN, 1, illidanEnterCombat)

@@ -39,8 +39,8 @@
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (cpp:159, event
 -- 3; who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied — Talk(SAY_DEATH 6) (cpp:148, event 4; the MoveTargetedHome
--- leg, the SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+-- JustDied — Talk(SAY_DEATH 6) + SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) (cpp:148, event 4; the MoveTargetedHome
 -- leg, the SetCorpseDelay(604800) leg and the _JustDied()
 -- passthrough have no bridges — the sjonnir JustDied-Talk
 -- precedent). The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
@@ -280,6 +280,9 @@ end
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ boss_kologarnAI::JustDied (boss_kologarn.cpp:150): the corpse
+    -- stays unselectable (SetCorpseDelay 604800 keeps the corpse a week).
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
 RegisterCreatureEvent(ENTRY_KOLOGARN, 1, kologarnEnterCombat)

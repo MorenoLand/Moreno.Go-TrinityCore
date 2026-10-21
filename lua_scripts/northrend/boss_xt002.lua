@@ -65,10 +65,12 @@
 -- KilledUnit (:204-208) — player-gated Talk(SAY_SLAY 4) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied (:210-215) — Talk(SAY_DEATH 6) (event 4; the
--- _JustDied() passthrough + RemoveFlag(UNIT_FIELD_FLAGS,
--- UNIT_FLAG_NOT_SELECTABLE) legs have no bridges — the sjonnir
--- JustDied-Talk precedent); also wipes the enrage timer.
+-- JustDied (:210-215) — Talk(SAY_DEATH 6) +
+-- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+-- (event 4; the _JustDied() passthrough has no bridge — the sjonnir
+-- JustDied-Talk precedent; the flag bridge is live: SetFlag/RemoveFlag
+-- on UNIT_FIELD_FLAGS (59) is honored, lua_creature_events.go:968);
+-- also wipes the enrage timer.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33293):
 -- Reset / Initialize / EnterEvadeMode — _Reset() +
@@ -183,6 +185,12 @@ local SAY_SLAY = 4
 local SAY_BERSERK = 5
 local SAY_DEATH = 6
 
+-- UpdateFields.h: UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35 = 59;
+-- UNIT_FLAG_NOT_SELECTABLE = 0x02000000 (UnitDefines.h). The
+-- SetFlag/RemoveFlag bridge honors field 59 (lua_creature_events.go:968).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 local SPELL_ENRAGE = 26662
 local SPELL_ARCANE_POWER_STATE = 49411
 local SPELL_STATIC_CHARGED = 64227
@@ -248,6 +256,9 @@ end
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_xt002::JustDied (boss_xt002.cpp:213): the heart-phase
+    -- NOT_SELECTABLE is cleared on death.
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
 -- Shared timer wipe for events 2/23.
