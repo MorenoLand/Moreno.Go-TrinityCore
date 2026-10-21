@@ -107,7 +107,8 @@
 -- has no bearer and the air phase loops on the pillar timer —
 -- documented. 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
 -- cancel the demon-spell timers, triggered self-cast 40511, phase-4
--- delayed 12s (the root/interrupt arms have no bridge; the pending
+-- delayed 12s (the interrupt arm has no bridge; the root arm ports
+-- via creature:SetRooted, 2026-10-21; the pending
 -- 72s cancel-demon timer is kept, C++-exact) / else start phase 4:
 -- cancel the phase-1/2/3 timers, triggered self-cast shadow prison
 -- 40647 (the REACT_PASSIVE arm is PORTED 2026-10-20 —
@@ -132,8 +133,9 @@
 -- and equipment arms have no bridges)). OnTargetDied(3):
 -- Talk(SAY_ILLIDAN_KILL), GetObjectType() == "Player" gate (terestian convention).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers, drop
--- per-GUID state (the Reset summon-group/equipment/sheath/root/
--- gravity arms and the akama-intro DoAction have no bridges; the
+-- per-GUID state (the Reset summon-group/equipment/sheath/gravity
+-- arms and the akama-intro DoAction have no bridges; the root
+-- arm ports via creature:SetRooted, 2026-10-21; the
 -- JustDied instance SetBossState arm is blocked on the
 -- instance-script model).
 -- Akama (23089): OnEnterCombat arms the healing-potion loop 1s:
@@ -612,11 +614,15 @@ end
 
 -- C++ EVENT_CANCEL_DEMON_FORM (specialEvents, 72s one-shot):
 -- _isDemon=false, triggered self-cast 40511, resume-demon 12s
--- re-arms the phase schedule (C++-exact; the interrupt/root arms
--- have no bridges).
+-- re-arms the phase schedule (C++-exact; the interrupt arm has no
+-- bridge; the root arm ports via creature:SetRooted, 2026-10-21).
 local function onCancelDemon(creature, guid)
     local state = getIllidanState(guid)
     state.isDemon = false
+    -- C++ boss_illidan.cpp:774-776 order: InterruptNonMeleeSpells
+    -- (unbridged), SetControlled(false, UNIT_STATE_ROOT), then the
+    -- demon-spell event-group cancel.
+    creature:SetRooted(false)
     for _, key in ipairs({ "shadowBlast", "flameBurst",
             "shadowDemon" }) do
         cancelTimer(guid, key)
@@ -632,10 +638,13 @@ end
 
 -- C++ EVENT_DEMON (60s one-shot): _isDemon=true, cancel the phase
 -- schedule, triggered self-cast 40511, demon text 2s, demon
--- spells 15s, cancel-demon 72s (the root/equipment arms have no
--- bridges).
+-- spells 15s, cancel-demon 72s (the equipment arm has no bridge;
+-- the root arm ports via creature:SetRooted, 2026-10-21).
 onDemon = function(creature, guid)
     local state = getIllidanState(guid)
+    -- C++ boss_illidan.cpp:944-947 order: SetControlled(true,
+    -- UNIT_STATE_ROOT), then _isDemon=true.
+    creature:SetRooted(true)
     state.isDemon = true
     cancelPhaseSchedule(guid)
     creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1, true)
@@ -890,8 +899,12 @@ local function illidanDamageTaken(event, creature, attacker, damage)
         state.phase = PHASE_4
         if state.isDemon then
             state.isDemon = false
-            -- The root/interrupt arms have no bridges; the pending
-            -- 72s cancel-demon timer is kept, C++-exact.
+            -- C++ boss_illidan.cpp:751-753 order: _isDemon=false,
+            -- SetControlled(false, UNIT_STATE_ROOT), then the
+            -- demon event-group cancel (the interrupt arm has no
+            -- bridge; the pending 72s cancel-demon timer is kept,
+            -- C++-exact).
+            creature:SetRooted(false)
             cancelPhaseSchedule(guid)
             creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1,
                 true)
@@ -916,6 +929,14 @@ local function illidanCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     illidanState[guid] = nil
+    if event == 2 or event == 23 then
+        -- C++ boss_illidan_stormrage::Reset (boss_illidan.cpp:479):
+        -- me->SetControlled(false, UNIT_STATE_ROOT) — ports via
+        -- creature:SetRooted (2026-10-21; thekal/urom/ionar
+        -- precedent). Gated off event 4: C++ JustDied (:649) never
+        -- calls Reset, so the death path leaves root alone.
+        creature:SetRooted(false)
+    end
     if event == 4 then
         -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649):
         -- clear the NOT_SELECTABLE set by the defeat sequence (death

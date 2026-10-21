@@ -150,13 +150,15 @@ end
 -- Submerge re-armed to urand(60000,120000), C++-verbatim.
 local function onBack(creature, guid)
     local s = st(guid)
-    s.submerged = false
     creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetFaction(FACTION_MONSTER)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_GROUND_RUPTURE)
     end
+    -- C++ boss_ouro.cpp:137-143 order: RemoveFlag, SetFaction, cast,
+    -- then Submerged=false; the Lua latch follows the same order.
+    s.submerged = false
     schedule(guid, "submerge", math.random(60000, 120000), function()
         onSubmerge(creature, guid)
     end)
@@ -169,15 +171,15 @@ end
 -- st(guid); Back_Timer = urand(30000,45000), C++-verbatim.
 onSubmerge = function(creature, guid)
     local s = st(guid)
-    s.submerged = true
     -- C++ boss_ouro.cpp:114:
     -- me->HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE) (SharedDefines.h:2012,
     -- value 374), then the flag/faction legs (C++-verbatim order),
-    -- before the Dirt Mound Passive cast.
+    -- before the Dirt Mound Passive cast; Submerged=true follows.
     creature:PerformEmote(374)
     creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetFaction(FACTION_FRIENDLY)
     creature:CastSpell(creature, SPELL_DIRTMOUND_PASSIVE)
+    s.submerged = true
     schedule(guid, "back", math.random(30000, 45000), function()
         onBack(creature, guid)
     end)
