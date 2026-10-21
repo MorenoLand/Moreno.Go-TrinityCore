@@ -883,15 +883,19 @@ local function illidanDamageTaken(event, creature, attacker, damage)
     elseif healthPct < 65 and state.phase < PHASE_2 then
         state.phase = PHASE_2
         -- C++ DoAction(ACTION_START_PHASE_2) (boss_illidan.cpp:594-605):
-        -- cancels GROUP_PHASE_1 (the react/flag/sound/gravity arms stay
+        -- cancels GROUP_PHASE_1 (the react/flag/gravity arms stay
         -- out: the phase-2 liftoff machine is unported); the LIFTOFF
         -- emote (:599, EMOTE_ONESHOT_LIFTOFF, SharedDefines.h:2003,
-        -- value 254) ports via creature:PerformEmote.
+        -- value 254) ports via creature:PerformEmote, and the takeoff
+        -- sound (:601, ILLIDAN_TAKEOFF_SOUND_ID 11479, boss_illidan.cpp:29)
+        -- ports via creature:PlayDirectSound (standalone leg, C++-verbatim
+        -- position after the emote).
         for _, key in ipairs({ "flameCrash", "drawSoul", "shear",
                 "parasitic" }) do
             cancelTimer(guid, key)
         end
         creature:PerformEmote(254)
+        creature:PlayDirectSound(11479)
         schedule(guid, "fly", 1000, function()
             onFly(creature, guid)
         end)
