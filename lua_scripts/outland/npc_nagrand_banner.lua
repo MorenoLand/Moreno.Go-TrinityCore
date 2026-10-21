@@ -93,8 +93,10 @@
 -- DamageTaken latch — HealthBelowPctDamaged(50, damage)
 -- — health after this hit strictly below 50% (shahraz
 -- strict-fraction precedent): used_healing = true +
--- non-triggered DoCastSelf(SPELL_HEALING_WAVE 12491)
--- (C++-exact). Melee is engine-driven.
+-- non-triggered DoCastSelf(SPELL_HEALING_WAVE 11986)
+-- (C++-exact; warmaul shaman's own enum at zone_nagrand.cpp:630-634 —
+-- 12491 is the unported maghar/kurenai captive enums' own ID)
+-- Melee is engine-driven.
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the pump,
 -- drop per-GUID state (the C++ Reset() observable
 -- remainder — scheduler.CancelAll() — lands as the pump
@@ -129,7 +131,10 @@ local SPELL_BLOODTHIRST            = 31996
 local SPELL_GISELDA_TRANSFORM_DND  = 33316
 local SPELL_SCORCHING_TOTEM        = 15038
 local SPELL_FROST_SHOCK            = 12548
-local SPELL_HEALING_WAVE           = 12491
+local SPELL_HEALING_WAVE           = 11986
+-- (npc_warmaul_shamanAI's own enum, zone_nagrand.cpp:630-634; the
+-- 12491 in the maghar/kurenai captive enums :56/:244 belongs to the
+-- unported EscortAI captives, never to this file)
 
 local timers = {}
 local states = {}
