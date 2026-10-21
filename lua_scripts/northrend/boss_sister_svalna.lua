@@ -62,10 +62,17 @@
 -- boss_sister_svalna::JustEngagedWith (:353-362) — DoCastSelf(
 --   SPELL_DIVINE_SURGE 71465, true) (:357) = TRIGGERED self-cast
 --   on engage; events.ScheduleEvent(EVENT_SVALNA_COMBAT, 9s)
---   (:358) -> Talk(SAY_SVALNA_AGGRO 3) (:499-502; the SetReactState
---   leg has no bridge) modeled as a 9000ms one-shot.
+--   (:358) -> Talk(SAY_SVALNA_AGGRO 3) + SetReactState(
+--   REACT_DEFENSIVE 1) (:499-502; bridge live — the 2026-10-16
+--   "no bridge" note was stale, retracted; lana'thel precedent)
+--   modeled as a 9000ms one-shot.
 --   The crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) leg (:355-356)
 --   is cross-AI Talk (no bridge).
+-- boss_sister_svalna::JustReachedHome (:389-395) — _JustReachedHome()
+--   then SetReactState(REACT_PASSIVE 0); the SetDisableGravity /
+--   SetHover legs have no bridge and stay out. Ported as event-24
+--   reach-home; pairs with the 9s one-shot DEFENSIVE restore
+--   (evade -> PASSIVE, re-engage -> DEFENSIVE, C++-exact).
 -- boss_sister_svalna::KilledUnit (:364-388) — victim->GetTypeId()
 --   == TYPEID_PLAYER -> Talk(SAY_SVALNA_KILL 4); TYPEID_UNIT with
 --   a captain entry (37122-37125) -> Talk(SAY_SVALNA_KILL_CAPTAIN
@@ -368,7 +375,10 @@ end
 -- (re-scheduled outside the target guard). The -71443
 -- aura-exclusion leg and the offset-1 tank-skip are documented
 -- unbridged caveats, not blockers.
+-- C++ :499-502: SetReactState(REACT_DEFENSIVE 1) then Talk(
+-- SAY_SVALNA_AGGRO 3) — arm order kept.
 local function onSvalnaCombat(creature)
+    creature:SetReactState(1)
     creature:Talk(SAY_SVALNA_AGGRO)
 end
 
@@ -429,11 +439,19 @@ local function svalnaReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_sister_svalna::JustReachedHome :389-395 —
+-- _JustReachedHome() then SetReactState(REACT_PASSIVE 0);
+-- SetDisableGravity / SetHover legs have no bridge and stay out.
+local function svalnaReachHome(event, creature)
+    creature:SetReactState(0)
+end
+
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 1, svalnaEnterCombat)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 2, svalnaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 3, svalnaKilledUnit)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 4, svalnaJustDied)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 23, svalnaReset)
+RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 24, svalnaReachHome)
 
 -- C++ boss_sister_svalna::SpellHit :430-437 — ungated arm:
 -- if (spellInfo->Id == SPELL_HURL_SPEAR (71466) &&

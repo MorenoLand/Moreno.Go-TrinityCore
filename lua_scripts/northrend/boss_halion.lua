@@ -137,12 +137,18 @@
 -- AddAura (halion->AddAura(SPELL_COPY_DAMAGE, me) to dodge
 -- SPELL_ATTR6_CANT_TARGET_SELF) and the other body is unreachable from
 -- Lua (no cross-creature bridge; the Lua AddAura bridge is self-only).
--- Health sync / phase-mask / react-state / combat-flag legs ride absent
--- bridges (no SetPhaseMask / SetReactState / SetFlag methods —
--- verified in engine/world/lua_objects.go this run); TAIL_LASH's 12s
--- constructor-arm is documented as a spawn->engage drift on the first
--- tick only (twilight halion spawns in combat, so the delta is
--- near-zero).
+-- Health sync / phase-mask / react-state / combat-flag legs: only the
+-- phase-mask leg rides an absent bridge (no creature SetPhaseMask method).
+-- SetReactState and SetFlag ARE bridged (lua_creature_events.go:524;
+-- e.g. SetFlag(59,0x300) in the incarcerator port) — the react-state /
+-- IN_COMBAT-flag legs stay out for want of a construction-time hook, not
+-- a bridge: CREATURE_EVENT_ON_SPAWN (5) fires on first grid activation
+-- since 2026-10-19 but temp summons bypass that funnel
+-- (creaturemotion.go), and the twilight phase machine is unmodeled
+-- (75063's summon leg never fires), so entry 40142 never spawns;
+-- TAIL_LASH's 12s constructor-arm is documented as a spawn->engage drift
+-- on the first tick only (twilight halion spawns in combat, so the delta
+-- is near-zero).
 -- boss_twilight_halion DamageTaken — PORTED (event 9, pre-damage):
 -- the 50% transition (boss_halion.cpp:469-482) — the stale
 -- "(no-DamageTaken bridge)" claim is retracted (event 9 is bridged and

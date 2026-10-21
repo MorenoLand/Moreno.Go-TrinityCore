@@ -66,8 +66,10 @@
 -- player->GetSession()->SendShowMailBox (no bridge). Entry 33238 IS in
 -- the file (:2312) but the flag/mail legs block every arm.
 -- npc_bountiful_table + CastFoodSpell (:2553-2601) — PassengerBoarded
--- (:2577) has no Lua event; MoveSpline/vehicle accessory/DisplayId
--- legs unbridged; CastFoodSpell's m_Events arm has no creature-event
+-- (:2577) has no Lua event; MoveSpline/vehicle accessory legs unbridged;
+-- the DisplayId leg IS bridgeable (creature:SetDisplayId,
+-- lua_creature_events.go:643) but is gated behind the unbridged event,
+-- so it stays out with the rest. CastFoodSpell's m_Events arm has no
 -- twin for boarding. Chair entries (34812/34823/34819/34824/34822) and
 -- chair->spell map (:2540-2547) are in the file but unusable.
 --

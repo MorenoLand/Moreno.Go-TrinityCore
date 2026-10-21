@@ -507,6 +507,9 @@ local function nefarianDied(event, creature, killer)
     nefarianClear(creature:GetGUID())
 end
 
+-- C++ JustReachedHome: Reset(). nefarianReset is idempotent
+-- (cancelTimers + state nil), so the ev24 re-run is C++-exact and
+-- cannot double-fire anything.
 local function nefarianReset(event, creature)
     nefarianClear(creature:GetGUID())
 end
@@ -523,3 +526,4 @@ RegisterCreatureEvent(ENTRY_NEFARIAN, 3, nefarianTargetDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 4, nefarianDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 9, nefarianDamageTaken)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 23, nefarianReset)
+RegisterCreatureEvent(ENTRY_NEFARIAN, 24, nefarianReset)
