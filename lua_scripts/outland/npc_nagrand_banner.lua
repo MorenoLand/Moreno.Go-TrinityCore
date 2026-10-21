@@ -93,7 +93,7 @@
 -- DamageTaken latch — HealthBelowPctDamaged(50, damage)
 -- — health after this hit strictly below 50% (shahraz
 -- strict-fraction precedent): used_healing = true +
--- non-triggered DoCastSelf(SPELL_HEALING_WAVE 11986)
+-- non-triggered DoCastSelf(SPELL_HEALING_WAVE 12491)
 -- (C++-exact). Melee is engine-driven.
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the pump,
 -- drop per-GUID state (the C++ Reset() observable
@@ -129,7 +129,7 @@ local SPELL_BLOODTHIRST            = 31996
 local SPELL_GISELDA_TRANSFORM_DND  = 33316
 local SPELL_SCORCHING_TOTEM        = 15038
 local SPELL_FROST_SHOCK            = 12548
-local SPELL_HEALING_WAVE           = 11986
+local SPELL_HEALING_WAVE           = 12491
 
 local timers = {}
 local states = {}
