@@ -103,9 +103,10 @@
 -- intro convention). The no-victim threat handoff from the sister
 -- and the sister AttackStart relays have no cross-creature/threat
 -- bridges — unmodeled. Shadow Image (25214). OnReset(23): the NOT_
--- SELECTABLE flag arm has no flag bridge — Reset never casts the
--- visual (C++:678-682 sets only the flag; the cast lives in the
--- per-tick HasAura arm, C++:712). OnEnterCombat(1): arm
+-- SELECTABLE flag arm is PORTED 2026-10-20 via the live flag bridge
+-- (the old "no flag bridge" claim is retracted; C++:677-679 sets only
+-- the flag + Initialize(); the cast lives in the per-tick HasAura
+-- arm, C++:712). OnEnterCombat(1): arm
 -- shadow fury 45270 {5s,20s} then 10s, non-triggered self-cast /
 -- dark strike 45271 3s then 3s, non-triggered DoCastVictim (nil
 -- ticks cast nothing but keep the schedule); a 10s visual-

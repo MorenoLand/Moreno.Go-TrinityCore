@@ -110,9 +110,13 @@
 -- release (EMOTE_BREAKS_FREE + SAY_FREE + the RELEASED timer
 -- set, C++-exact values); no summon bridge — the channeler
 -- group summon skipped; the magtheridon passive/aggressive arms stay
--- out on the unported collapse machine; no flag bridge — the
--- NOT_SELECTABLE and immune-to-PC arms unmodeled (the channeler
--- REACT_DEFENSIVE arm is PORTED 2026-10-20 — creature:SetReactState);
+-- out on the unported collapse machine; the EVENT_RELEASED
+-- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) leg is
+-- PORTED (boss_magtheridon.cpp:253, magtheridonEnterCombat below —
+-- the flag bridge is live since e9387671; the old "no flag bridge"
+-- claim is retracted for this leg); the paired SetImmuneToPC(false)
+-- leg has no bridge (stays out) — the channeler REACT_DEFENSIVE arm
+-- is PORTED 2026-10-20 (creature:SetReactState);
 -- no interrupt/distance bridges — the
 -- quake/blaze SPELLVALUE target-count args, the channeler
 -- InterruptNonMeleeSpells and the DoSelectBelowHpPctFriendly
@@ -169,6 +173,9 @@ local SAY_COLLAPSE = 4
 local SAY_DEATH = 5
 local EMOTE_BREAKS_FREE = 8
 local EMOTE_BLAST_NOVA = 9
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- boss_magtheridon.cpp:253
 
 local timers = {}
 local magState = {}
@@ -287,13 +294,17 @@ end
 
 -- C++ CombatStart + EVENT_RELEASED collapsed onto the pull (see
 -- the header deviation): EMOTE_BREAKS_FREE + SAY_FREE,
--- RemoveAura(30205), phase released, the C++ timer set.
+-- RemoveAura(30205), RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) (EVENT_RELEASED, boss_magtheridon.cpp:253;
+-- the paired SetImmuneToPC(false) leg has no bridge, stays out),
+-- phase released, the C++ timer set.
 local function magtheridonEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     magState[guid] = { phase = "released", channelers = 5 }
     creature:Talk(EMOTE_BREAKS_FREE)
     creature:Talk(SAY_FREE)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:RemoveAura(SPELL_SHADOW_CAGE_C)
     schedule(guid, "cleave", 10000, function()
         magtheridonCleave(creature, guid)
