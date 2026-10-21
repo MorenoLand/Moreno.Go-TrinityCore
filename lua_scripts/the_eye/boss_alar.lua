@@ -46,11 +46,12 @@
 --    charge 7000 / dive bomb 40000+rand()%5000 (the flame-
 --    patch summon arm has no summon bridge — steamrigger
 --    precedent — so its timer is not tracked; the WE_DIE /
---    WE_REVIVE SetStandState/MovePoint/Interrupt/RemoveAllAuras/
---    AttackStop legs stay unbridged — the WE_DIE 5.0f speed arm
---    rides the unbridged MovePoint; the DoZoneInCombat arm is
---    engine-driven; SetFlag/SetTarget/SetHealth/RemoveFlag ported
---    below, 2026-10-21).
+--    WE_REVIVE MovePoint/Interrupt legs stay unbridged — the WE_DIE
+--    5.0f speed arm rides the unbridged MovePoint (SetSpeedRate is
+--    bridged but the motion leg is not); the DoZoneInCombat arm is
+--    engine-driven; SetFlag/SetTarget/SetHealth/RemoveFlag/
+--    RemoveAllAuras/SetStandState/AttackStop ported below,
+--    2026-10-21).
 --    While the sequence runs, all damage is zeroed — the C++
 --    UNIT_FLAG_NON_ATTACKABLE arm is ported (2026-10-20) via
 --    creature:SetFlag/RemoveFlag(UNIT_FIELD_FLAGS).
@@ -513,19 +514,21 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
     if st.phase == 1 and damage >= creature:GetHealth() then
         st.dying = true
         st.revive = 5000
-        -- boss_alar.cpp:206 — SetHealth(0) before the flag arm; the
-        -- Interrupt(:207) leg stays unbridged.
+        -- boss_alar.cpp:207 — SetHealth(0) before the flag arm; the
+        -- Interrupt(:208) leg stays unbridged.
         creature:SetHealth(0)
-        -- boss_alar.cpp:208 — C++ arm order after SetHealth / before
+        -- boss_alar.cpp:209 — C++ arm order after SetHealth / before
         -- SetFlag(:210); the "no aura bridge" note from the 14:24 tick
         -- is retracted — creature:RemoveAllAuras is bridged
         -- (lua_creature_events.go:169, venoxis precedent).
         creature:RemoveAllAuras()
         -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
-        -- boss_alar.cpp:212 — C++ arm order after SetFlag(:210) /
-        -- AttackStop(:211): clear the visual target (ObjectGuid::Empty);
-        -- the Interrupt(:208)/RemoveAllAuras(:209)/speed(:213)/motion
+        -- boss_alar.cpp:211 — C++ arm order after SetFlag / before
+        -- SetTarget(:212) (hodir/freya lethal-arm precedent).
+        creature:AttackStop()
+        -- boss_alar.cpp:212 — clear the visual target
+        -- (ObjectGuid::Empty); the Interrupt(:208)/speed(:213)/motion
         -- (:214-215) legs stay unbridged.
         creature:SetTarget(0)
         return 0, 0
