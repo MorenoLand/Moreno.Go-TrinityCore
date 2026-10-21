@@ -6,10 +6,13 @@
 -- npc_lake_frog script (one `new` at :1130), so both entries share this AI —
 -- both are registered.
 -- Ported: Reset's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) twin on
--- spawn (event 5) — the flag is managed by the script's kiss state machine
--- (:706/:731/:735), so the select arm below stays gated exactly like C++ —
+-- spawn (event 5) — C++ Reset (:702-707) is entry-conditional: it removes
+-- the flag ONLY for NPC_LAKE_FROG_QUEST (33224), so only that entry is
+-- registered below. 33211 keeps its template flag exactly like C++ (the
+-- kiss machine that could ever touch it is documented-only). The select
+-- arm below stays gated exactly like C++ —
 -- plus the OnGossipSelect DoCast(player, SPELL_SUMMON_ASHWOOD_BRAND 62554)
--- arm (:95-98), non-triggered (default DoCast overload); return false lets
+-- arm (:774-778), non-triggered (default DoCast overload); return false lets
 -- the AI/native select arms proceed (Eluna gossip polarity, gossip.go).
 -- Documented-only: the whole MoveInLineOfSight/EVENT_LAKEFROG kiss machine
 -- (_following/_runningScript latches, SPELL_FROG_KISS 62536,
@@ -31,7 +34,6 @@ local function lakeFrogGossipSelect(_, player, creature)
     return false
 end
 
-RegisterCreatureEvent(ENTRY_LAKE_FROG, 5, lakeFrogSpawn)
 RegisterCreatureEvent(ENTRY_LAKE_FROG_QUEST, 5, lakeFrogSpawn)
 RegisterCreatureGossipEvent(ENTRY_LAKE_FROG, 2, lakeFrogGossipSelect)
 RegisterCreatureGossipEvent(ENTRY_LAKE_FROG_QUEST, 2, lakeFrogGossipSelect)

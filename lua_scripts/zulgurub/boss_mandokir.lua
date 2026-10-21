@@ -233,8 +233,8 @@ local function mandokirEnterCombat(event, creature, target)
 end
 
 -- C++ KilledUnit: player victims only; every third kill -> Talk
--- (SAY_DING_KILL), jindo congrats (no instance-script bridge, skipped),
--- triggered self-cast 24312, count reset.
+-- (SAY_DING_KILL), jindo congrats via entry search (no instance-script
+-- bridge), triggered self-cast 24312, count reset.
 local function mandokirTargetDied(event, creature, victim)
     if victim:GetObjectType() ~= "Player" then
         return
