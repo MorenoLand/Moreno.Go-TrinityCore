@@ -38,10 +38,10 @@
 -- stand-state model); fake death is timer-cancel plus shared flags.
 -- No UNIT_STATE_CASTING model — timers
 -- fire unconditionally (InterruptNonMeleeSpells skipped). No facing model —
--- BackwardLunge's behind-target (HasInArc) check is skipped. The
+-- BackwardLunge's behind-target (HasInArc) gate is ported via the inArc twin. The
 -- strawman fire-school SpellHit arm (Burning Straw 31075) is skipped —
 -- event 14 carries only the spell id, no school mask. The crone's
--- RemoveFlag/SetImmuneToPC spawn hack has no bridge. npc_cyclone (18412)
+-- RemoveFlag/SetImmuneToPC spawn hack is PORTED in croneLeaveCombat. npc_cyclone (18412)
 -- is not registered: movement-only AI, no combat hooks ever fire.
 -- npc_grandmother (17603) is not registered: the gossip select's only
 -- effects are the wolf summon (no bearer) and self-despawn — registering
@@ -153,6 +153,22 @@ local function alivePlayersInRange(creature, maxDist)
         end
     end
     return found
+end
+
+-- C++ Position::HasInArc twin (Position.cpp:120-137): |relative angle| <=
+-- arc/2 with the default border 2.0. math.atan2 is the GetAngle twin
+-- (nightbane rain-of-bones precedent); creature:GetO() resolves through
+-- the object.go generic fallback like GetX/GetY.
+local function inArc(creature, target, arc)
+    local dx = target:GetX() - creature:GetX()
+    local dy = target:GetY() - creature:GetY()
+    local ang = math.atan2(dy, dx)
+    if ang < 0 then ang = ang + 2 * math.pi end
+    local o = creature:GetO()
+    if o < 0 then o = o + 2 * math.pi end
+    local diff = math.abs(ang - o)
+    if diff > math.pi then diff = 2 * math.pi - diff end
+    return diff <= arc / 2
 end
 
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
@@ -570,7 +586,7 @@ RegisterCreatureEvent(ENTRY_ROAR, 24, roarReachHome)
 -- The Crone (boss_crone, C++ ScriptName for 18168): chain lightning 32337
 -- on the victim every 15s (first 10s). The cyclone summon (30s) never
 -- fires — no summon model. The spawn-hack RemoveFlag/SetImmuneToPC arms
--- have no bridge.
+-- are PORTED in croneLeaveCombat (ev2+ev23 = C++ Reset path).
 local CRONE_SAY_AGGRO = 0
 local CRONE_SAY_DEATH = 1
 local CRONE_SAY_SLAY = 2
@@ -598,6 +614,13 @@ end
 
 local function croneLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_crone::Initialize (bosses_opera.cpp:686-687): the spawn-hack
+    -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) +
+    -- SetImmuneToPC(false) (= RemoveFlag(59, 0x100), Unit.cpp:8440-8449)
+    -- runs on every Reset; ev23 fires on initial spawn, evade-reset and
+    -- respawn (lua_creature_events.go:1560, creaturemotion.go:719).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, 0x100)
 end
 
 local function croneTargetDied(event, creature, victim)
@@ -1163,9 +1186,10 @@ RegisterCreatureEvent(ENTRY_JULIANNE, 24, julianneReachHome)
 
 -- C++ EVENT_BACKWARD_LUNGE (:1335-1343): SelectTarget(Random, 1, 100, true)
 -- (offset 1 = second-threat pick, tank excluded) + !me->HasInArc(M_PI)
--- (behind-target check — skipped, no facing bridge, documented above).
--- The timer resets urand(15000,30000) ONLY on a successful cast; a failed
--- pick retries next tick (yazzai-Polymorph precedent).
+-- (behind-target gate via the inArc twin above). The timer resets
+-- urand(15000,30000) ONLY on a successful cast; a failed gate or empty
+-- pick leaves the timer expired for a next-tick retry
+-- (yazzai-Polymorph precedent).
 local function romuloLunge(creature, guid)
     local victim = creature:GetVictim()
     local pool = {}
@@ -1175,15 +1199,18 @@ local function romuloLunge(creature, guid)
         end
     end
     if #pool > 0 then
-        creature:CastSpell(pool[math.random(#pool)], SPELL_BACKWARD_LUNGE)
-        rajSchedule(guid, "lunge", math.random(15000, 30000), function()
-            romuloLunge(creature, guid)
-        end)
-    else
-        rajSchedule(guid, "lunge", 1000, function()
-            romuloLunge(creature, guid)
-        end)
+        local target = pool[math.random(#pool)]
+        if not inArc(creature, target, math.pi) then
+            creature:CastSpell(target, SPELL_BACKWARD_LUNGE)
+            rajSchedule(guid, "lunge", math.random(15000, 30000), function()
+                romuloLunge(creature, guid)
+            end)
+            return
+        end
     end
+    rajSchedule(guid, "lunge", 1000, function()
+        romuloLunge(creature, guid)
+    end)
 end
 
 local function romuloDaring(creature, guid)

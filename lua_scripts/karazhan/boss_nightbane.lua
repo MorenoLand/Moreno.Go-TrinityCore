@@ -34,9 +34,9 @@
 -- AuraScript periodic skeleton-summon arm (SPELL_SUMMON_SKELETON 30170,
 -- every 5th tick) has no bridge; AuraScript check handlers are a standing
 -- unmodeled area. No threat model, so ResetThreatList is skipped. Tail
--- Sweep's HasInArc(PI) behind-target gate is skipped: the bridge exposes
--- no reliable facing, so the random target is cast on directly. No
--- UNIT_STATE_CASTING model, so timers fire unconditionally.
+-- Sweep's HasInArc(PI) behind-target gate is PORTED via the inArc twin
+-- (GetX/GetY/GetO are bridged). No UNIT_STATE_CASTING model, so timers
+-- fire unconditionally.
 
 local ENTRY_NIGHTBANE = 17225
 
@@ -108,6 +108,22 @@ local function randomAlivePlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ Position::HasInArc twin (Position.cpp:120-137): |relative angle| <=
+-- arc/2 with the default border 2.0. math.atan2 is the GetAngle twin
+-- (used above for SetFacingToObject); creature:GetO() resolves through
+-- the object.go generic fallback like GetX/GetY.
+local function inArc(creature, target, arc)
+    local dx = target:GetX() - creature:GetX()
+    local dy = target:GetY() - creature:GetY()
+    local ang = math.atan2(dy, dx)
+    if ang < 0 then ang = ang + 2 * math.pi end
+    local o = creature:GetO()
+    if o < 0 then o = o + 2 * math.pi end
+    local diff = math.abs(ang - o)
+    if diff > math.pi then diff = 2 * math.pi - diff end
+    return diff <= arc / 2
+end
+
 local function onCleave(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "g_cleave", {6000, 15000}, function() onCleave(creature, guid) end)
@@ -115,8 +131,9 @@ end
 
 local function onTailSweep(creature, guid)
     local target = randomAlivePlayer(creature)
-    if target ~= nil then
-        -- C++ HasInArc(PI, target) behind-gate has no facing bridge.
+    -- C++ !me->HasInArc(M_PI, target) (boss_nightbane.cpp:348): tail sweep
+    -- only hits behind the boss; the 20-30s re-arm is unconditional (:350).
+    if target ~= nil and not inArc(creature, target, math.pi) then
         creature:CastSpell(target, SPELL_TAIL_SWEEP)
     end
     schedule(guid, "g_tailsweep", {20000, 30000}, function() onTailSweep(creature, guid) end)

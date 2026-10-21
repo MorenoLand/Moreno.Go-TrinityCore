@@ -71,8 +71,8 @@
 --    BLINDING_LIGHT 33009) (C++-exact), BlindingLight =
 --    false; else target = SelectTarget(Random, 0) — random
 --    alive player in the instance (thespia precedent); the
---    !HasInArc(2.5f) victim-fallback arm has no arc bridge
---    — unmodeled, the cast lands on the random target;
+--    !HasInArc(2.5f) victim-fallback arm is PORTED via the
+--    inArc twin (arc 2.5);
 --    non-triggered DoCast(target, SPELL_ARCANE_MISSILES
 --    33031) (C++-exact), re-arm 3000 regardless (C++-exact).
 -- 4. Wrath-of-the-astromancer arm — 15000 init: InterruptNon
@@ -212,6 +212,21 @@ local function randomAlivePlayer(creature)
     return players[math.random(#players)]
 end
 
+-- C++ Position::HasInArc twin (Position.cpp:120-137): |relative angle| <=
+-- arc/2 with the default border 2.0. math.atan2 is the GetAngle twin;
+-- creature:GetO() resolves through the object.go generic fallback.
+local function inArc(creature, target, arc)
+    local dx = target:GetX() - creature:GetX()
+    local dy = target:GetY() - creature:GetY()
+    local ang = math.atan2(dy, dx)
+    if ang < 0 then ang = ang + 2 * math.pi end
+    local o = creature:GetO()
+    if o < 0 then o = o + 2 * math.pi end
+    local diff = math.abs(ang - o)
+    if diff > math.pi then diff = 2 * math.pi - diff end
+    return diff <= arc / 2
+end
+
 -- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random,
 -- 1): any alive player in the instance excluding the current
 -- victim, within `maxDist` yd (nil = no distance limit) —
@@ -266,15 +281,19 @@ local function combatTick(creature, guid)
         -- 3. Arcane missiles arm — 2000 init then 3000:
         -- BlindingLight latched -> non-triggered Blinding Light
         -- on the victim; else non-triggered Arcane Missiles on
-        -- a random player (the HasInArc victim fallback has no
-        -- arc bridge — unmodeled); re-arm regardless
-        -- (C++-exact).
+        -- a random player, falling back to the victim when the pick
+        -- is outside the 2.5-rad frontal arc (C++ HasInArc(2.5, target),
+        -- boss_astromancer.cpp:257-258, via the inArc twin); re-arm
+        -- regardless (C++-exact).
         if st.arcaneMissilesTimer <= 1000 then
             if st.blindingLight then
                 creature:CastSpell(nil, SPELL_BLINDING_LIGHT)
                 st.blindingLight = false
             else
                 local target = randomAlivePlayer(creature)
+                if target ~= nil and not inArc(creature, target, 2.5) then
+                    target = creature:GetVictim()
+                end
                 if target then
                     creature:CastSpell(target, SPELL_ARCANE_MISSILES)
                 end
