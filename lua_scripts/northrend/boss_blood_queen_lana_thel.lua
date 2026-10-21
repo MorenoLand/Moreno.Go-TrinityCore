@@ -50,8 +50,9 @@
 -- have no instance bridge.
 -- boss_blood_queen_lana_thel JustReachedHome — the Talk(SAY_WIPE 9) leg
 -- is ported below on event 24 (this tick — the old "no event-24 port
--- precedent" note was stale); the SetDisableGravity / REACT_AGGRESSIVE
--- / instance->SetBossState(FAIL) legs have no bridges and stay out.
+-- precedent" note was stale); the SetDisableGravity / instance->SetBossState(FAIL)
+-- legs have no bridges and stay out (SetReactState(2) REACT_AGGRESSIVE is
+-- bridged and ported in the reach-home arm in C++ order).
 -- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
@@ -247,9 +248,12 @@ end
 
 -- C++ boss_blood_queen_lana_thel::JustReachedHome: the Talk(SAY_WIPE 9)
 -- leg is ungated and fires at the home-move completion (event 24); the
--- SetDisableGravity(false) / REACT_AGGRESSIVE / instance FAIL legs ride
--- the no-gravity / no-react-state / no-instance bridges and stay out.
+-- SetDisableGravity(false) / instance FAIL legs ride the no-gravity /
+-- no-instance bridges and stay out. SetReactState(REACT_AGGRESSIVE 2) is
+-- bridged (lua_creature_events.go:524) and ported in C++ arm order ahead
+-- of the Talk; the old "no-react-state bridge" note was stale.
 local function lanaThelReachHome(event, creature)
+    creature:SetReactState(2)
     creature:Talk(SAY_WIPE)
 end
 

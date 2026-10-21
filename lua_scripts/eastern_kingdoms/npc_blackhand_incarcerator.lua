@@ -39,7 +39,8 @@
 -- JustAppeared's DoCast(SPELL_ENCAGE_EMBERSEER 15281) is ported below on
 -- event 5 (OnSpawn; storm_cloud convention — Go fires 5 on the respawn
 -- path). JustReachedHome's self-cast 15281 is ported below on event 24,
--- and SetImmuneToAll(true) has no bridge. The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
+-- plus its SetImmuneToAll(true) = SetFlag(59, 0x300) leg (skyriss
+-- precedent). The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 60.0f -> DoZoneInCombat each —
 -- "Had to do this because CallForHelp will ignore any npcs without
 -- LOS") has no creature-list / zone-in-combat bridges.
@@ -125,9 +126,12 @@ end
 -- resolves via AISpellInfo target AITARGET_SELF to a self-cast, so this is
 -- creature:CastSpell(creature, 15281) on event 24 (OnReachHome fires at the
 -- same point as C++ HomeMovementGenerator::DoFinalize). The
--- me->SetImmuneToAll(true) leg has no bridge and stays out.
+-- me->SetImmuneToAll(true) leg = SetFlag(UNIT_FIELD_FLAGS 59,
+-- UNIT_FLAG_IMMUNE_TO_PC 0x100 | UNIT_FLAG_IMMUNE_TO_NPC 0x200 = 0x300)
+-- (Unit.cpp:8440-8451; skyriss precedent), in C++ arm order after the cast.
 local function onReachHome(_, creature)
     creature:CastSpell(creature, SPELL_ENCAGE_EMBERSEER)
+    creature:SetFlag(59, 0x300)
 end
 
 RegisterCreatureEvent(ENTRY_BLACKHAND_INCARCERATOR, 1, onEnterCombat)

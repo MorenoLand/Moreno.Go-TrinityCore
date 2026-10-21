@@ -239,11 +239,27 @@ local function sindragosaReset(event, creature)
     sindragosaThirdPhase[creature:GetGUID()] = nil
     -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
     -- unconditional one-shot. The engine fires event 23 on death too
-    -- (Eluna reset-then-died order, lua_creature_events.go) but the C++
-    -- AI Reset() never runs on death, so the cast is alive-gated.
+    -- (Eluna reset-then-died order, lua_creature_events.go) but the C++ AI
+    -- Reset() never runs on death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_TANK_MARKER, true)
+        -- Fresh-spawn analog (stalagg/feugen precedent): C++ respawns a new
+        -- creature at the template REACT_AGGRESSIVE, but the Go motion keeps
+        -- the ev24 DEFENSIVE write below across respawns. C++ Reset() itself
+        -- leaves react state untouched; on the evade path event 24 re-applies
+        -- DEFENSIVE after this, so the transient here is harmless.
+        creature:SetReactState(2)
     end
+end
+
+-- C++ boss_sindragosa::JustReachedHome (:294-300): BossAI::JustReachedHome()
+-- is instance bookkeeping (no bridge), instance->SetBossState(FAIL) has no
+-- bridge, SetCanFly(false)/SetDisableGravity(false) have no bridges; the
+-- SetReactState(REACT_DEFENSIVE 1) leg is bridged (lua_creature_events.go:524)
+-- and ported. Event 24 fires at the home-move completion (C++
+-- HomeMovementGenerator::DoFinalize twin).
+local function sindragosaReachHome(event, creature)
+    creature:SetReactState(1)
 end
 
 -- C++ boss_sindragosa::DamageTaken: !_isThirdPhase && !HealthAbovePct(35)
@@ -367,6 +383,7 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 9, sindragosaDamageTaken)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 24, sindragosaReachHome)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 1, spinestalkerEnterCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 23, addReset)

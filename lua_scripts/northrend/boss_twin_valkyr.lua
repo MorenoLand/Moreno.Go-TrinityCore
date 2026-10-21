@@ -91,8 +91,9 @@
 -- (no achievement bridge — fjola only); JustReachedHome:
 -- instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL) + HandleRemoveAuras
 -- + summons.DespawnAll + DespawnOrUnsummon + DoUseDoorOrButton(
--- DATA_MAIN_GATE) (instance model + no aura/despawn/door bridges —
--- fjola's EnterEvadeMode adds another DoUseDoorOrButton leg).
+-- DATA_MAIN_GATE): the RemoveAllAuras + DespawnOrUnsummon arms are PORTED
+-- on event 24 below (both twins); instance SetBossState / door legs have
+-- no bridges — fjola's EnterEvadeMode adds another DoUseDoorOrButton leg.
 -- EVENT_SPECIAL_ABILITY (fjola only, 45s) — the shuffled stage
 -- machine: cross-AI sister->AI()->DoAction(ACTION_VORTEX /
 -- ACTION_PACT) or own DoAction for light stages (no cross-AI DoAction
@@ -363,6 +364,22 @@ RegisterCreatureEvent(ENTRY_EYDIS, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_EYDIS, 3, targetDied)
 RegisterCreatureEvent(ENTRY_EYDIS, 4, died)
 RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
+
+-- C++ boss_twin_baseAI::JustReachedHome (boss_twin_valkyr.cpp:203-208,
+-- shared by both twins): instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL)
+-- has no instance bridge; summons.DespawnAll() is vacuous (no summon model,
+-- adds unregistered); the separable bridgeable arms are HandleRemoveAuras()
+-- -> creature:RemoveAllAuras() and me->DespawnOrUnsummon() ->
+-- creature:Despawn() (respawns DB-spawned creatures on their normal
+-- spawntimesecs, opera precedent), in C++ arm order. Event 24 fires at the
+-- home-move completion.
+local function reachHome(event, creature)
+    creature:RemoveAllAuras()
+    creature:Despawn()
+end
+
+RegisterCreatureEvent(ENTRY_FJOLA, 24, reachHome)
+RegisterCreatureEvent(ENTRY_EYDIS, 24, reachHome)
 
 -- npc_essence_of_twin OnGossipHello (boss_twin_valkyr.cpp:548-555):
 -- C++-exact RemoveAurasDueToSpell(ESSENCE_REMOVE) + triggered
