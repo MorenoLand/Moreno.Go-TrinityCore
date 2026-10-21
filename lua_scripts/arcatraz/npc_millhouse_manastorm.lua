@@ -50,10 +50,11 @@
 -- DoCastSelf(SPELL_ARCANE_INTELLECT 36880), re-arm 7000;
 -- phase 6 — Talk(SAY_READY), re-arm 6000; phase 7 — the
 -- instance->SetData(DATA_WARDEN_2, DONE) arm is instance-
--- blocked, the me->SetImmuneToNPC(false) arm has no immune
--- bridge (executioner precedent), so the observable remainder
--- is Init = true — the pump self-cancels (the C++ ++Phase
--- takes it to 8 and the `Phase < 8` gate ends the machine).
+-- blocked, the me->SetImmuneToNPC(false) arm is PORTED via the
+-- bridged unit-flags surface (executioner precedent), so the
+-- observable remainder is Init = true — the pump self-cancels
+-- (the C++ ++Phase takes it to 8 and the `Phase < 8` gate ends
+-- the machine).
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize()
 -- combat values (LowHp = false / Pyroblast_Timer = 1000 /
 -- Fireball_Timer = 2500 — the C++ has no JustEngagedWith
@@ -122,8 +123,10 @@
 -- instance-script model — the DATA_WARDEN_2/DATA_HARBINGER_
 -- SKYRISS reads in Reset() and the phase-7 SetData arm are
 -- skipped (instance_arcatraz.cpp stays blocked on the
--- instance-script model); no immune bridge — the phase-7
--- SetImmuneToNPC(false) arm unmodeled; no movement bridge —
+-- instance-script model); the Reset() instance-gated
+-- SetImmuneToNPC(false) arm stays fused to its unported
+-- instance gate (the phase-7 arm is PORTED via the bridged
+-- unit-flags surface — see introTick); no movement bridge —
 -- the AttackStart MoveChase(who, 25.0f) arm unmodeled (omor
 -- SetCombatMovement precedent); no cast-state bridge — the
 -- pyroblast IsNonMeleeSpellCast(false) early-return gate
@@ -214,10 +217,13 @@ local function introTick(creature, guid)
             st.timer = 6000
         else
             -- Phase 7: the instance->SetData(DATA_WARDEN_2,
-            -- DONE) arm is instance-blocked and the
-            -- SetImmuneToNPC(false) arm has no immune bridge;
-            -- the observable remainder is Init = true.
+            -- DONE) arm is instance-blocked; C++ arcatraz.cpp:182
+            -- me->SetImmuneToNPC(false) = RemoveFlag(UNIT_FIELD_FLAGS
+            -- = 59, UNIT_FLAG_IMMUNE_TO_NPC 0x200; Unit.cpp:8476-8495)
+            -- is PORTED via the bridged unit-flags surface; the
+            -- observable remainder is Init = true.
             introDone[guid] = true
+            creature:RemoveFlag(59, 0x200)
             cancelIntro(guid)
             introState[guid] = nil
             return

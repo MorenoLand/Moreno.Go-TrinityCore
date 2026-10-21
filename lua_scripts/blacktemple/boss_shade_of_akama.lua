@@ -56,10 +56,12 @@
 -- DoAction(ACTION_START/STOP/DESPAWN_ALL_SPAWNS) arms have no
 -- bridge; no MovementInform bridge — the chase-complete phase-two
 -- gate and the EVENT_ADD_THREAT arm (threat 41602 every 3.5s) are
--- unmodeled; no flag/immune bridge — the SetImmuneToPC / UNIT_FLAG_
--- NOT_SELECTABLE phase-one arms, SetWalk and the faction arms have no
--- bridge (the EMOTE_STATE stun/none arms are PORTED 2026-10-20 via
--- creature:EmoteState); no summon
+-- unmodeled; the SetImmuneToPC / UNIT_FLAG_NOT_SELECTABLE Reset
+-- arms are PORTED via the bridged unit-flags surface (see shadeReset) —
+-- the MovementInform removal pair stays out (no MovementInform bridge);
+-- SetWalk still has no bridge, and the SetFaction arms live in the
+-- unregistered channeler/sorcerer AIs (the EMOTE_STATE stun/none arms
+-- are PORTED 2026-10-20 via creature:EmoteState); no summon
 -- model — the channeler spawns and summons.DespawnEntry(NPC_
 -- ASHTONGUE_CHANNELER) have no bridge; the EVENT_INITIALIZE_SPAWNERS
 -- grid-creature-list arm has no bridge; the EVENT_EVADE_CHECK arm
@@ -121,7 +123,9 @@ local function shadeSpellHit(event, creature, caster, spellId)
     end
 end
 
--- C++ Reset/EnterEvadeMode arms have no bridges — nothing modeled.
+-- C++ EnterEvadeMode arms (events.Reset / summons.DespawnAll /
+-- spawner DoActions / _DespawnAtEvade) have no bridges -- the Reset
+-- flag/emotestate legs live in shadeReset below.
 local function shadeLeaveCombat(event, creature)
     shadeYelledOnce[creature:GetGUID()] = nil
 end
@@ -129,6 +133,18 @@ end
 local function shadeReset(event, creature)
     -- C++ boss_shade_of_akama.cpp:221: SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_STUN=64)
     creature:EmoteState(64)
+    -- C++ boss_shade_of_akama.cpp:219-220 (Reset): SetImmuneToPC(true)
+    -- = SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC 0x100), and SetFlag(59,
+    -- UNIT_FLAG_NOT_SELECTABLE 0x2000000) -- both PORTED via the bridged
+    -- unit-flags surface (Unit.cpp:8440-8495). The MovementInform
+    -- chase-complete removal pair (:259-260) stays out -- no
+    -- MovementInform bridge. IsAlive-gated: C++ Reset() never runs on
+    -- death, and ev23 fires ahead of ev4 on the death path (the
+    -- bladeReset convention in this file).
+    if creature:IsAlive() then
+        creature:SetFlag(59, 0x100)
+        creature:SetFlag(59, 0x2000000)
+    end
     shadeYelledOnce[creature:GetGUID()] = nil
 end
 

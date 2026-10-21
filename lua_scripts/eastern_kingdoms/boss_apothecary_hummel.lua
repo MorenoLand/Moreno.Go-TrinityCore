@@ -60,9 +60,10 @@
 -- - JustDied: Talk(5) only when the feign-death latch never fired (C++
 --   `if (!_isDead)`), then cancel timers.
 -- Deviation from C++ (documented): the intro is gated on gossip/quest in
--- C++; faction/immunity have no bridges, so a direct pull also starts the
--- intro via OnEnterCombat when still in PHASE_ALL (coren precedent: the
--- fight starts when a player pulls).
+-- C++; SetFaction and the unit-flags immunity surface are bridged now,
+-- but the intro gate itself stays gossip/quest-driven, so a direct pull
+-- also starts the intro via OnEnterCombat when still in PHASE_ALL (coren
+-- precedent: the fight starts when a player pulls).
 -- Unmodeled (documented-only, no bridges):
 -- - Reset: SetFaction(FACTION_FRIENDLY) + SummonCreatureGroup(1) (Baxter/
 --   Frye spawn from the group; the per-GUID latch is cleared in Lua).
@@ -70,7 +71,8 @@
 --   summon/evade bridges; Lua cancels timers on 2.
 -- - DoAction: SetImmuneToPC(true) + SetFaction(FACTION_MONSTER) +
 --   summons.DoAction(ACTION_START_EVENT, DummyEntryCheckPredicate) relay —
---   no immunity/faction/summon-DoAction bridges.
+--   the immunity/faction bridges are live (unit-flags surface), but the
+--   arm stays out behind the unported DoAction/summon-relay machine.
 -- - DamageTaken SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
 --   UNIT_FLAG_NOT_SELECTABLE) leg — PORTED (2026-10-20); the
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
@@ -83,14 +85,18 @@
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
 -- - START_FIGHT: SetImmuneToAll(false) + DoZoneInCombat + despawn
---   NPC_CROWN_APOTHECARY 36885 in grid — no bridges.
+--   NPC_CROWN_APOTHECARY 36885 in grid — the immune leg would be
+--   RemoveFlag(59, 0x300) on the bridged surface, but the arm rides the
+--   unported DoAction plus unbridged DoZoneInCombat/grid-despawn.
 -- - CALL_BAXTER/FRYE: summons.DoAction(ACTION_START_FIGHT,
 --   EntryCheckPredicate) + summons.DoZoneInCombat(BAXTER) relay — no
 --   bridges; the Talk arms are modeled.
 -- - npc_apothecary_genericAI DoAction legs (MovePoint to BaxterMovePos /
 --   FryeMovePos + EMOTE_STATE_USE_STANDING on MovementInform;
---   ACTION_START_FIGHT immunity/combat legs) — no MotionMaster/emote-
---   state/immunity bridges (already noted in the baxter/frye files).
+--   ACTION_START_FIGHT immunity/combat legs) — no MotionMaster/
+--   MovementInform bridges; the emote-state and immunity surfaces are
+--   bridged, but the legs ride the unported DoAction machine (already
+--   noted in the baxter/frye files).
 -- - UpdateAI UNIT_STATE_CASTING gates — no bridge (maiden precedent).
 -- Verifiable numbers (file's own enums): SAY_INTRO_0..2 = 0..2,
 -- SAY_CALL_BAXTER = 3, SAY_CALL_FRYE = 4, SAY_HUMMEL_DEATH = 5,

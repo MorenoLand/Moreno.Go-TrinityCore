@@ -44,7 +44,8 @@
 -- from spawn — the C++ ticks it inside UpdateAI before the
 -- !UpdateVictim early return — so a 1s intro pump starts on
 -- spawn with phase 1 / 5000 (the C++ Reset() SetImmuneToAll
--- (!Intro) arm has no immune bridge and the pre-Intro
+-- (!Intro) arm is PORTED via the bridged unit-flags surface —
+-- see resetImmuneFlags — and the pre-Intro
 -- MoveInLineOfSight suppression has no LoS-aggro bridge, so
 -- the intro runs on spawn, documented under deviations).
 -- Intro pump: phase 1 Talk(SAY_INTRO), re-arm 25000; phase 2
@@ -107,9 +108,10 @@
 -- no cross-creature bridge — the intro phase-2 mellic->
 -- setDeathState(JUST_DIED)/SetHealth(0) kill and the phase-1
 -- HandleGameObject(DATA_WARDENS_SHIELD, false) arm unmodeled
--- (instance GUID data); no immune bridge — the C++ Reset()
--- SetImmuneToAll(!Intro) arm and the intro phase-3 SetImmune
--- ToAll(false) arm unmodeled; no LoS-aggro bridge — the
+-- (instance GUID data); the C++ Reset() SetImmuneToAll(!Intro)
+-- arm and the intro phase-3 SetImmuneToAll(false) arm are PORTED
+-- via the bridged unit-flags surface (see resetImmuneFlags); no
+-- LoS-aggro bridge — the
 -- MoveInLineOfSight Intro gate unmodeled (gargolmar
 -- precedent); no summon bridge — the DoSplit illusion summons
 -- and the JustSummoned health-set (66%/33%)/AttackStart-
@@ -192,6 +194,22 @@ local function fullReset(guid)
     introStates[guid] = { phase = INTRO_PHASE_1, timer = 5000, done = false }
 end
 
+-- C++ Reset(): me->SetImmuneToAll(!Intro)
+-- (boss_harbinger_skyriss.cpp:103) — the immune legs ride the bridged
+-- unit-flags surface (SetImmuneToAll = Set/RemoveFlag(UNIT_FIELD_FLAGS
+-- = 59, UNIT_FLAG_IMMUNE_TO_PC 0x100 | UNIT_FLAG_IMMUNE_TO_NPC 0x200;
+-- Unit.cpp:8440-8450); ValidateAttackersAndOwnTarget / EndAllCombat are
+-- engine-combat legs with no Lua bridge). The JustSummoned
+-- summon->SetImmuneToAll(false) arm (:136) stays out — cross-creature,
+-- the illusions are unregistered (see file header).
+local function resetImmuneFlags(creature, guid)
+    if introStates[guid].done then
+        creature:RemoveFlag(59, 0x300)
+    else
+        creature:SetFlag(59, 0x300)
+    end
+end
+
 local function introTick(creature, guid)
     local st = introStates[guid]
     if not st or st.done then
@@ -203,10 +221,10 @@ local function introTick(creature, guid)
         return
     end
 
-    -- Intro machine in C++ arm order — only the bridgeable
-    -- Talk arms are modeled (the game-object / cross-creature
-    -- / immune arms are instance- or bridge-blocked, see
-    -- deviations).
+    -- Intro machine in C++ arm order — the bridgeable Talk arms
+    -- and the phase-3 SetImmuneToAll(false) arm (see resetImmuneFlags)
+    -- are modeled; the game-object / cross-creature arms are
+    -- instance- or bridge-blocked, see deviations.
     if st.phase == INTRO_PHASE_1 then
         creature:Talk(SAY_INTRO)
         st.phase = INTRO_PHASE_2
@@ -216,7 +234,11 @@ local function introTick(creature, guid)
         st.phase = INTRO_PHASE_3
         st.timer = 3000
     elseif st.phase == INTRO_PHASE_3 then
-        -- C++: me->SetImmuneToAll(false); Intro = true.
+        -- C++: me->SetImmuneToAll(false); Intro = true
+        -- (boss_harbinger_skyriss.cpp:188-189) — C++ arm order, flag
+        -- clear first; rides the bridged unit-flags surface
+        -- (see resetImmuneFlags).
+        creature:RemoveFlag(59, 0x300)
         st.done = true
         cancelIntroPump(guid)
     end
@@ -379,6 +401,7 @@ end)
 RegisterCreatureEvent(ENTRY_SKYRISS, 5, function(_, creature)
     local guid = creature:GetGUID()
     fullReset(guid)
+    resetImmuneFlags(creature, guid)
     introTimers[guid] = CreateLuaEvent(function()
         introTick(creature, guid)
     end, 1000, 0)
@@ -402,6 +425,7 @@ end)
 RegisterCreatureEvent(ENTRY_SKYRISS, 2, function(_, creature)
     local guid = creature:GetGUID()
     fullReset(guid)
+    resetImmuneFlags(creature, guid)
     local intro = introStates[guid]
     if intro and not intro.done then
         introTimers[guid] = CreateLuaEvent(function()
@@ -429,6 +453,7 @@ end)
 RegisterCreatureEvent(ENTRY_SKYRISS, 23, function(_, creature)
     local guid = creature:GetGUID()
     fullReset(guid)
+    resetImmuneFlags(creature, guid)
     local intro = introStates[guid]
     if intro and not intro.done then
         introTimers[guid] = CreateLuaEvent(function()
