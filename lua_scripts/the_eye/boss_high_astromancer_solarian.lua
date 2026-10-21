@@ -323,9 +323,11 @@ local function combatTick(creature, guid)
     -- Phase 4 latch (C++ arm order — after the phase
     -- branches): HealthBelowPct(20) while not already phase
     -- 4 — Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
-    -- flag/visibility/armor arms have no bridges and the display arm
-    -- stays out paired with the reveal legs — unmodeled, see header;
-    -- the scale arm is ported below via creature:SetScale.
+    -- visibility/armor arms have no bridges and the display arm stays
+    -- out paired with the reveal legs — unmodeled, see header (the
+    -- RemoveFlag(NOT_SELECTABLE) leg is flag-bridgeable but stays out
+    -- paired with the unbridged reveal legs); the scale arm is ported
+    -- below via creature:SetScale.
     if st.phase ~= 4 then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0

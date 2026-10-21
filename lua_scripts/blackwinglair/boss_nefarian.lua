@@ -258,8 +258,9 @@ end
 
 -- C++ BeginEvent (from OnGossipSelect): Talk(SAY_GAMESBEGIN_1) happens
 -- in the select handler; the faction/flag/stand arms are bridged and
--- ported below; the barrier-cast / immune / AttackStart arms have no
--- bridge. Talk(SAY_GAMESBEGIN_2), then arm the fight.
+-- ported below, as is the barrier cast (self-cast); the immune /
+-- AttackStart arms have no bridge. Talk(SAY_GAMESBEGIN_2), then arm the
+-- fight.
 local function beginEvent(creature, guid)
     local st = nefariusState[guid]
     if not st then

@@ -303,7 +303,7 @@ local function hydrossEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     pumpTimers[guid] = CreateLuaEvent(function()
         hydrossTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function hydrossLeaveCombat(event, creature)

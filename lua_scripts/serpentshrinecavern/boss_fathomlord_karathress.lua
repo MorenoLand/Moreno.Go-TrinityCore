@@ -265,7 +265,7 @@ local function karathressEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     pumpTimers[guid] = CreateLuaEvent(function()
         karathressTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function karathressLeaveCombat(event, creature)
@@ -327,7 +327,7 @@ local function sharkkisEnterCombat(event, creature)
     sharkkisState[guid] = freshSharkkisState()
     pumpTimers[guid] = CreateLuaEvent(function()
         sharkkisTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function sharkkisLeaveCombat(event, creature)
@@ -396,7 +396,7 @@ local function tidalvessEnterCombat(event, creature)
     creature:CastSpell(creature, SPELL_WINDFURY_WEAPON)
     pumpTimers[guid] = CreateLuaEvent(function()
         tidalvessTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function tidalvessLeaveCombat(event, creature)
@@ -456,7 +456,7 @@ local function caribdisEnterCombat(event, creature)
     caribdisState[guid] = freshCaribdisState()
     pumpTimers[guid] = CreateLuaEvent(function()
         caribdisTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function caribdisLeaveCombat(event, creature)

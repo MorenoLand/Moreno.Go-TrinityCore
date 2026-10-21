@@ -404,7 +404,7 @@ local function leotherasEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     leotherasTimers[guid] = CreateLuaEvent(function()
         leotherasTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function leotherasLeaveCombat(event, creature)
@@ -480,7 +480,7 @@ local function demonEnterCombat(event, creature)
     creature:Talk(SAY_FREE)
     demonTimers[guid] = CreateLuaEvent(function()
         demonTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function demonCleanup(event, creature)
@@ -547,7 +547,7 @@ local function binderEnterCombat(event, creature)
     binderState[guid] = freshBinderState()
     binderTimers[guid] = CreateLuaEvent(function()
         binderTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function binderCleanup(event, creature)
@@ -605,7 +605,7 @@ local function innerEnterCombat(event, creature)
     innerState[guid] = freshInnerState()
     innerTimers[guid] = CreateLuaEvent(function()
         innerTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function innerCleanup(event, creature)

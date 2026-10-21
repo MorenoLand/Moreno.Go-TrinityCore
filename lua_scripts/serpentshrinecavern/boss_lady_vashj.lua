@@ -330,7 +330,7 @@ local function vashjEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     vashjTimers[guid] = CreateLuaEvent(function()
         vashjTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function vashjLeaveCombat(event, creature)
@@ -449,7 +449,7 @@ local function elementalEnterCombat(event, creature)
     elementalState[guid] = freshElementalState()
     elementalTimers[guid] = CreateLuaEvent(function()
         elementalTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function elementalCleanup(event, creature)

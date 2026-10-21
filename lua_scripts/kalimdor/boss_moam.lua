@@ -27,11 +27,18 @@
 -- - Stone phase exit: RemoveAura(ENERGIZE 25685) (netherspite
 --   RemoveAura convention), schedule next stone phase at 90s
 --   (C++ DoAction(ACTION_STONE_PHASE_END)).
+-- - UpdateAI mana-full leg: per-tick pump (1s, repeat-forever) checks
+--   GetPower(MANA) == GetMaxPower(MANA) (C++ boss_moam.cpp UpdateAI
+--   :121-127, after events.Update, before the stone-phase return): mana
+--   at max -> end the stone phase (ACTION_STONE_PHASE_END), self-cast
+--   ARCANE ERUPTION 25672 (DoCastAOE = self-cast), SetPower(MANA, 0).
+--   Dormant: the engine models no power regen, so no fill ever lands.
 -- Unmodeled (documented-only, no bridges):
 -- - Mana-full -> Arcane Eruption 25672 + SetPower(MANA, 0): wired
---   via the creature:SetPower bridge (lua_creature_events.go), C++ order
---   (end stone phase, self-cast eruption, zero power). The engine models
---   no power regen, so the leg stays dormant unless a fill lands.
+--   via the creature:SetPower bridge (lua_creature_events.go) in the
+--   UpdateAI pump (C++ order: end stone phase, self-cast eruption, zero
+--   power). The engine models no power regen, so the leg stays dormant
+--   unless a fill lands.
 -- - EVENT_DRAIN_MANA: never scheduled in C++ Reset() (only
 --   rescheduled inside its own handler) — dead code, never fires in
 --   C++; not ported (C++-verbatim).
@@ -50,6 +57,7 @@ local POWER_MANA = 0 -- Powers enum (Unit.h): MANA 0
 
 local timers = {}
 local moamState = {}
+local pumpTimers = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -58,6 +66,14 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+local function cancelPump(guid)
+    local id = pumpTimers[guid]
+    if id then
+        RemoveEventById(id)
+        pumpTimers[guid] = nil
     end
 end
 
@@ -117,24 +133,50 @@ endStonePhase = function(creature, guid)
     end)
 end
 
+-- C++ UpdateAI mana-full leg (boss_moam.cpp :121-127): the check
+-- runs every UpdateAI tick (after events.Update, before the stone-phase
+-- early return), NOT in DamageTaken. The max>0 guard skips the
+-- degenerate zero-data case (C++ templates always carry a real max).
+local function moamTick(creature, guid)
+    local state = moamState[guid]
+    if state == nil then
+        return
+    end
+    local maxPower = creature:GetMaxPower()
+    if maxPower > 0 and creature:GetPower() == maxPower then
+        if state.stonePhase then
+            endStonePhase(creature, guid)
+        end
+        creature:CastSpell(creature, SPELL_ARCANE_ERUPTION)
+        creature:SetPower(POWER_MANA, 0)
+    end
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    cancelPump(guid)
     moamState[guid] = { stonePhase = false }
     schedule(guid, "stonephase", 90000, function()
         startStonePhase(creature, guid)
     end)
+    -- UpdateAI twin: repeat-forever 1s pump (broggok convention).
+    pumpTimers[guid] = CreateLuaEvent(function()
+        moamTick(creature, guid)
+    end, 1000, 0)
 end
 
 local function onLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    cancelPump(guid)
     moamState[guid] = nil
 end
 
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    cancelPump(guid)
     moamState[guid] = { stonePhase = false }
     -- C++ Reset() :73: me->SetPower(POWER_MANA, 0) — the meter zeroes on
     -- reset (after _Reset, before Initialize/schedule).
@@ -149,20 +191,9 @@ end
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = moamState[guid]
-    -- C++ DamageTaken mana-full leg (boss_moam.cpp :119-127): mana at max ->
-    -- end the stone phase (ACTION_STONE_PHASE_END), self-cast ARCANE
-    -- ERUPTION (DoCastAOE = self-cast), SetPower(MANA, 0). The max>0
-    -- guard skips the degenerate zero-data case (C++ templates always
-    -- carry a real max). The engine models no power regen, so this stays
-    -- dormant unless a fill lands.
-    local maxPower = creature:GetMaxPower()
-    if state ~= nil and maxPower > 0 and creature:GetPower() == maxPower then
-        if state.stonePhase then
-            endStonePhase(creature, guid)
-        end
-        creature:CastSpell(creature, SPELL_ARCANE_ERUPTION)
-        creature:SetPower(POWER_MANA, 0)
-    end
+    -- (The mana-full eruption leg lives in the UpdateAI pump above, not
+    -- here — C++ boss_moam.cpp :121-127 is inside UpdateAI, after
+    -- events.Update and before the stone-phase return.)
     if state == nil or state.stonePhase then
         return
     end
@@ -178,6 +209,7 @@ end
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    cancelPump(guid)
     moamState[guid] = nil
 end
 
