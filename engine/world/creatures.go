@@ -740,6 +740,7 @@ func (s *Server) creatureTemplateBytes1(dbGUID uint32) uint32 {
 // (stand flags / vis flag), and StandStateKnown is set so the next spawn
 // rebuild keeps the value (applyCreatureMotionToSpawn). The player-only
 // SMSG_STANDSTATE_UPDATE leg (Unit.cpp:10564-10568) is N/A for creatures.
+// Standing strips AURA_INTERRUPT_FLAG_NOT_SEATED auras (Unit.cpp:10560).
 // Returns true when the creature was stood up.
 func (s *Server) standCreatureMotionUp(motion *creatureMotion) bool {
 	if s == nil || motion == nil {
@@ -768,6 +769,7 @@ func (s *Server) standCreatureMotionUp(motion *creatureMotion) bool {
 	full := cache & 0xFFFFFF00
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	s.motionMu.Unlock()
+	s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagNotSeated)
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
 	return true
 }
