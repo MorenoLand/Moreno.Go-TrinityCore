@@ -52,10 +52,16 @@
 -- AddAura/Empathy and SetCombatPulseDelay/setActive have no bridges
 -- — tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER 6)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
--- precedent); JustDied Talk(SAY_DEATH 8) (event 4; _JustDied
--- instance bookkeeping — SetBossState DONE/SPECIAL, lootable flags,
--- HandleRemoveAuras, summons.DespawnAll — has no bridge — tharon_ja
--- precedent); EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075
+-- precedent); JustDied Talk(SAY_DEATH 8) (event 4) + the sister-gated
+-- lootable legs (boss_twin_valkyr.cpp:238-262) — PORTED via the
+-- creature:SetFlag(79)/RemoveFlag(79) dynamic-flag bridge
+-- (lua_creature_events.go): a sister-alive death clears LOOTABLE on me
+-- (Go's lethal path had already set it); a both-dead death sets it on
+-- me (redundant with the lethal path) and on the sister via
+-- GetCreaturesInGrid (150y — same arena; no cross-creature GUID
+-- bridge). The instance SetBossState DONE/SPECIAL + HandleRemoveAuras
+-- + summons.DespawnAll legs have no bridge (documented);
+-- EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075
 -- / Dark Twin Spike 66069), 20s init, 20s repeat (moroes precedent;
 -- C++ UpdateAI runs combat events whenever UpdateVictim() holds —
 -- the PHASE_EVENT leg only matters pre-combat for EVENT_START_MOVE);
@@ -261,8 +267,21 @@ local function twinSpikeTick(creature, guid, spell)
     end)
 end
 
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79);
+-- UNIT_DYNFLAG_LOOTABLE (SharedDefines.h:3128).
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
+-- Both sisters share this module scope, so the C++ GetSister() liveness
+-- check is modeled as a per-pull death count: the first death of a pull
+-- takes the sister-alive branch, the second the both-dead branch. Reset
+-- on engage — ev23 also fires on the death path (ahead of ev4), so the
+-- counter cannot live in reset().
+local sisterDeaths = 0
+
 local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
     return function(event, creature, target)
+        sisterDeaths = 0
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
         local guid = creature:GetGUID()
@@ -303,6 +322,22 @@ end
 local function died(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_twin_valkyr.cpp:238-262): Talk(SAY_DEATH), then
+    -- the sister-gated lootable legs, in C++ order.
+    sisterDeaths = sisterDeaths + 1
+    if sisterDeaths >= 2 then
+        -- Both dead: C++ sets LOOTABLE on me (redundant — Go's lethal
+        -- path already set it) and on the sister.
+        creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        local sisterEntry = creature:GetEntry() == ENTRY_FJOLA and ENTRY_EYDIS or ENTRY_FJOLA
+        for _, other in ipairs(creature:GetCreaturesInGrid(sisterEntry, 150)) do
+            other:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        end
+    else
+        -- Sister still fighting: not lootable (clears the lethal path's
+        -- auto-set).
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+    end
 end
 
 local function reset(event, creature)

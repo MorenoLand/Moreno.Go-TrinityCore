@@ -88,10 +88,12 @@
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
 -- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-
--- OUT, decided 2026-10-14: all three payload legs are unbridged (no
--- SetHomePosition / leave-combat / aura-application bridges on the
--- Lua creature object; the creature cast path has no
--- spellEffectApplyAura delivery leg), and the trigger path
+-- OUT, decided 2026-10-14: the arm's LeaveCombat-teardown purpose is
+-- unbridged (no leave-combat / aura-application bridges on the Lua
+-- creature object; the creature cast path has no
+-- spellEffectApplyAura delivery leg — SetHomePosition IS bridged,
+-- lua_creature_events.go, but a lone home-position write without the
+-- teardown would strand the add in combat), and the trigger path
 -- (StartAttack's self-cast of the menagerie spells) is itself
 -- unported, so event 14 could never fire these IDs.
 -- spell_urom_frostbomb — AuraScript OnPeriodic (EFFECT_1 SPELL_AURA_

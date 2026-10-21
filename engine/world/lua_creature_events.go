@@ -962,9 +962,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// which the engine reads in help-call (creaturemotion.go:1089) and
 	// chain/area target filtering — intro NOT_SELECTABLE/NON_ATTACKABLE arms
 	// port with real targeting effect. UNIT_NPC_FLAGS (field 82) is honored
-	// too (see below); other update fields have no creature backing here and
-	// are ignored, matching the no-op stance of the unbridged dynamic-flag
-	// arms.
+	// too (see below); UNIT_DYNAMIC_FLAGS (field 79) is honored too (see
+	// below); other update fields have no creature backing here and are
+	// ignored.
 	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
 		field, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -978,6 +978,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		npcDirty := false
 		var unitFlags uint32
 		unitFlagsDirty := false
+		var dynFlags uint32
+		dynDirty := false
 		var mapID, instanceID uint32
 		var guid uint64
 		if field == 59 {
@@ -999,6 +1001,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			motion.NPCFlagsKnown = true
 			npcFlags, npcDirty = motion.NPCFlags, true
 			s.motionMu.Unlock()
+		} else if field == unitFieldDynamicFlags {
+			// UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79),
+			// the live value behind the lootable/dead/tapped bits the
+			// client corpse/loot gates read (motion.DynamicFlags is the
+			// live slot — spawn rebuilds sync from it, so no Known flag
+			// is needed). C++ SetFlag ORs the bits; the values-update
+			// broadcast twin mirrors the 59/82 arms. Backs script
+			// lootable/dead legs such as twin_valkyr JustDied and the
+			// opera Romulo/Julianne cross-kill.
+			s.motionMu.Lock()
+			motion.DynamicFlags |= flags
+			dynFlags, dynDirty = motion.DynamicFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			s.motionMu.Unlock()
 		}
 		if npcDirty {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
@@ -1007,6 +1023,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if unitFlagsDirty {
 			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{unitFieldFlags: unitFlags})
+		}
+		if dynDirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldDynamicFlags: dynFlags})
 		}
 		return nil, nil
 	}
@@ -1023,6 +1043,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		npcDirty := false
 		var unitFlags uint32
 		unitFlagsDirty := false
+		var dynFlags uint32
+		dynDirty := false
 		var mapID, instanceID uint32
 		var guid uint64
 		if field == 59 {
@@ -1038,6 +1060,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			motion.NPCFlagsKnown = true
 			npcFlags, npcDirty = motion.NPCFlags, true
 			s.motionMu.Unlock()
+		} else if field == unitFieldDynamicFlags {
+			// UNIT_DYNAMIC_FLAGS (see SetFlag above): C++ RemoveFlag ANDNs
+			// the bits. Backs the twin_valkyr sister-alive un-lootable leg.
+			s.motionMu.Lock()
+			motion.DynamicFlags &^= flags
+			dynFlags, dynDirty = motion.DynamicFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			s.motionMu.Unlock()
 		}
 		if npcDirty {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID,
@@ -1046,6 +1076,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if unitFlagsDirty {
 			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{unitFieldFlags: unitFlags})
+		}
+		if dynDirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldDynamicFlags: dynFlags})
 		}
 		return nil, nil
 	}
