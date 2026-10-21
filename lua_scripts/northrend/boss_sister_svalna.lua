@@ -435,8 +435,15 @@ local function svalnaJustDied(event, creature, killer)
     creature:Talk(SAY_SVALNA_DEATH)
 end
 
+-- C++ boss_sister_svalna::Reset :326-331 — _Reset() then
+-- SetReactState(REACT_DEFENSIVE 1); the _isEventInProgress latch has
+-- no bridge. Ported in C++ arm order (the venoxis ev23 precedent).
+-- The InitializeAI (:320-324) spawn-time REACT_PASSIVE stays out:
+-- the intro DoAction machine is unported and porting PASSIVE alone
+-- would strand her passive (the tyrannus precedent).
 local function svalnaReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
 -- C++ boss_sister_svalna::JustReachedHome :389-395 —
