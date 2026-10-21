@@ -11821,7 +11821,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
+		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2611-2617): the
+		// AtTargetAttacked half fires per hit target under the
+		// !m_caster->IsFriendlyTo(unit) gate — a per-target friendliness
+		// check, not the spell-level harmful heuristic — plus the
+		// non-positive (or dispel-effect) arm of the same statement,
+		// mirroring the stand-up leg above.
+		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) && !damageEffectSeen {
 			for _, effectTarget := range hitTargets {
 				// Creature targets only (unit/pet/vehicle highs): a player
 				// victim engages the caster itself in C++
@@ -11829,6 +11835,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// and the low-GUID DB fallback must not see a player counter.
 				high := uint16(effectTarget >> 48)
 				if effectTarget != 0 && effectTarget != s.playerGUID && (high == 0xF130 || high == 0xF140 || high == 0xF150) {
+					// Spell.cpp:2611 !IsFriendlyTo(unit) gate, per target: a
+					// creature the caster is friendly to engages nothing
+					// (the stand-up leg above runs the same check). Faction
+					// 0 resolves unknown -> non-friendly inside
+					// attackTargetFriendlyToPlayer, keeping the aggro.
+					if s.player != nil {
+						if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); tm != nil {
+							if s.attackTargetFriendlyToPlayer(effectTarget, combatTarget{Faction: tm.Faction}) {
+								continue
+							}
+						}
+					}
 					// Unit::AtTargetAttacked (Unit.cpp:8971-8973) skips the
 					// engage when the victim is not engaged and the spell
 					// has no initial aggro (SpellInfo::HasInitialAggro,
@@ -11855,6 +11873,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				high := uint16(miss.TargetGUID >> 48)
 				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone && miss.TargetGUID != 0 &&
 					(high == 0xF130 || high == 0xF140 || high == 0xF150) {
+					// The return trip's AtTargetAttacked fires on the
+					// reflector (Spell.cpp:2611-2617: `unit`), so the
+					// friendly gate probes the reflector too — a landed
+					// reflect off a friendly creature engages nothing.
+					if s.player != nil {
+						if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, miss.TargetGUID); tm != nil {
+							if s.attackTargetFriendlyToPlayer(miss.TargetGUID, combatTarget{Faction: tm.Faction}) {
+								continue
+							}
+						}
+					}
 					// Same AtTargetAttacked gate as above, probed on the
 					// reflector: a landed reflect of a no-initial-aggro
 					// spell off an unengaged reflector engages nothing.

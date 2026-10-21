@@ -4739,9 +4739,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// The pre-return legs (Unit.cpp:814-818) then grant absorbed rage
 		// (absorbed-gated, like C++'s cleanDamage->absorbed_damage check) and
 		// return before the tap, threat and engage legs, like C++.
+		var tm *creatureMotion
 		if s.server != nil {
 			s.server.motionMu.Lock()
-			if tm := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); tm != nil {
+			if m := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); m != nil {
+				tm = m
 				if tm.BossAI == nil {
 					tm.BossAI = getBossAIForCreature(tm, tm.ScriptName)
 				}
@@ -4753,6 +4755,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				}
 			}
 			s.server.motionMu.Unlock()
+			// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE strip runs
+			// before the !damage early-return for any non-NODAMAGE hit — a
+			// fully resisted or absorbed pet-spell hit strips the creature
+			// victim's TAKE_DAMAGE auras too, attr4-gated and excepting the
+			// hitting spell's own aura. Runs after the unlock: the aura
+			// remove path re-resolves the motion (findCreatureMotion) and
+			// must not run under motionMu (damage_shield.go convention). The
+			// DIRECT_DAMAGE strip (Unit.cpp:897-898) lives past the !damage
+			// return and does not run on the zero arm.
+			if tm != nil && tickDamageBreaksAuras(s.server, spellID) {
+				s.server.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagTakeDamage, spellID)
+			}
 		}
 		return
 	}
@@ -5037,6 +5051,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			healthUpdate[unitFieldPower1+powerRage] = rageNext
 		}
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, healthUpdate)
+		// Unit::DealDamage (Unit.cpp:743-748 + 897-898): the TAKE_DAMAGE
+		// strip (attr4-gated, excepting the hitting spell's aura) and the
+		// DIRECT_DAMAGE strip, plus the breakable-CC drain — the same twin
+		// the player-cast path runs at spells.go:15784. The zero-damage arm
+		// above runs only the TAKE_DAMAGE half.
+		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForMotion(targetMotion), spellID, damage, targetMotion.MaxHealth)
 		// The step-1 gate skips victim engagement
 		// (ThreatManager.cpp:311-317) — without this guard the tail
 		// aggro call would re-engage a victim C++ leaves unengaged.
