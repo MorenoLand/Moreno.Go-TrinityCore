@@ -319,10 +319,22 @@ local function combatTick(creature, guid)
     -- 5s then the WE_REVIVE arm — TRIGGERED DoCast(me, SPELL_
     -- REBIRTH, true) + phase 2 schedule (C++-exact).
     if st.dying then
+        -- boss_alar.cpp:287-291 — the WE_DIE pose lands on the first
+        -- UpdateAI tick after the lethal blow, not synchronously in
+        -- DamageTaken: UNIT_STAND_STATE_DEAD = 7 (vaelastrasz
+        -- precedent).
+        if not st.deadPose then
+            st.deadPose = true
+            creature:SetStandState(7)
+        end
         if st.revive <= 1000 then
             st.dying = false
+            st.deadPose = false
             st.phase = 2
-            -- boss_alar.cpp:294 — SetFullHealth() before the flag clear.
+            -- boss_alar.cpp:294 — SetStandState(UNIT_STAND_STATE_STAND = 0)
+            -- before SetFullHealth(:295) (vaelastrasz precedent).
+            creature:SetStandState(0)
+            -- boss_alar.cpp:295 — SetFullHealth() before the flag clear.
             creature:SetHealth(creature:GetMaxHealth())
             -- boss_alar.cpp:297 — C++ arm order before DoZoneInCombat/REBIRTH
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
@@ -502,8 +514,13 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         st.dying = true
         st.revive = 5000
         -- boss_alar.cpp:206 — SetHealth(0) before the flag arm; the
-        -- Interrupt(:207)/RemoveAllAuras(:208) legs stay unbridged.
+        -- Interrupt(:207) leg stays unbridged.
         creature:SetHealth(0)
+        -- boss_alar.cpp:208 — C++ arm order after SetHealth / before
+        -- SetFlag(:210); the "no aura bridge" note from the 14:24 tick
+        -- is retracted — creature:RemoveAllAuras is bridged
+        -- (lua_creature_events.go:169, venoxis precedent).
+        creature:RemoveAllAuras()
         -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         -- boss_alar.cpp:212 — C++ arm order after SetFlag(:210) /
