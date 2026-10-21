@@ -11826,37 +11826,45 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// !m_caster->IsFriendlyTo(unit) gate — a per-target friendliness
 		// check, not the spell-level harmful heuristic — plus the
 		// non-positive (or dispel-effect) arm of the same statement,
-		// mirroring the stand-up leg above.
-		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) && !damageEffectSeen {
-			for _, effectTarget := range hitTargets {
-				// Creature targets only (unit/pet/vehicle highs): a player
-				// victim engages the caster itself in C++
-				// (Unit::AtTargetAttacked), which has no creature-aggro twin,
-				// and the low-GUID DB fallback must not see a player counter.
-				high := uint16(effectTarget >> 48)
-				if effectTarget != 0 && effectTarget != s.playerGUID && (high == 0xF130 || high == 0xF140 || high == 0xF150) {
-					// Spell.cpp:2611 !IsFriendlyTo(unit) gate, per target: a
-					// creature the caster is friendly to engages nothing
-					// (the stand-up leg above runs the same check). Faction
-					// 0 resolves unknown -> non-friendly inside
-					// attackTargetFriendlyToPlayer, keeping the aggro.
-					if s.player != nil {
-						if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); tm != nil {
-							if s.attackTargetFriendlyToPlayer(effectTarget, combatTarget{Faction: tm.Faction}) {
-								continue
+		// mirroring the stand-up leg above. The !damageEffectSeen arm below
+		// is Go's own anti-double-aggro guard: on damaging spells the
+		// damage funnel's own engage covers the hit targets, so the hit
+		// leg skips. The reflector leg MUST NOT share that gate — C++'s
+		// statement (Spell.cpp:2610) has no damage gate: a landed reflect
+		// of a damaging spell still engages the reflector via the return
+		// trip's AtTargetAttacked(unit).
+		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+			if !damageEffectSeen {
+				for _, effectTarget := range hitTargets {
+					// Creature targets only (unit/pet/vehicle highs): a player
+					// victim engages the caster itself in C++
+					// (Unit::AtTargetAttacked), which has no creature-aggro twin,
+					// and the low-GUID DB fallback must not see a player counter.
+					high := uint16(effectTarget >> 48)
+					if effectTarget != 0 && effectTarget != s.playerGUID && (high == 0xF130 || high == 0xF140 || high == 0xF150) {
+						// Spell.cpp:2611 !IsFriendlyTo(unit) gate, per target: a
+						// creature the caster is friendly to engages nothing
+						// (the stand-up leg above runs the same check). Faction
+						// 0 resolves unknown -> non-friendly inside
+						// attackTargetFriendlyToPlayer, keeping the aggro.
+						if s.player != nil {
+							if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); tm != nil {
+								if s.attackTargetFriendlyToPlayer(effectTarget, combatTarget{Faction: tm.Faction}) {
+									continue
+								}
 							}
 						}
+						// Unit::AtTargetAttacked (Unit.cpp:8971-8973) skips the
+						// engage when the victim is not engaged and the spell
+						// has no initial aggro (SpellInfo::HasInitialAggro,
+						// SpellInfo.cpp:1261-1263): a no-initial-aggro debuff
+						// landing on an unengaged creature engages nothing in
+						// C++ and must not pull here either.
+						if !spellHasInitialThreat(spell) && !s.isTargetEngaged(effectTarget) {
+							continue
+						}
+						s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
 					}
-					// Unit::AtTargetAttacked (Unit.cpp:8971-8973) skips the
-					// engage when the victim is not engaged and the spell
-					// has no initial aggro (SpellInfo::HasInitialAggro,
-					// SpellInfo.cpp:1261-1263): a no-initial-aggro debuff
-					// landing on an unengaged creature engages nothing in
-					// C++ and must not pull here either.
-					if !spellHasInitialThreat(spell) && !s.isTargetEngaged(effectTarget) {
-						continue
-					}
-					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
 				}
 			}
 			// A landed reflect engages the reflector (TargetInfo::unit),

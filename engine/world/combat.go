@@ -2819,6 +2819,11 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 	}
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
 	target.Map = uint32(rowMapID)
+	// The motion is spawned under (mapID, instanceID) below when no tracked
+	// motion exists, so the fallback target must carry the same instance —
+	// downstream lookups key on (Map, InstanceID, GUID) and a 0 InstanceID
+	// silently missed the motion in instances.
+	target.InstanceID = instanceID
 
 	var ori sql.NullFloat64
 	{

@@ -5037,6 +5037,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	if targetMotion.Health == 0 {
+		// Unit::DealDamage (Unit.cpp:739-748 + 897-898): the TAKE_DAMAGE and
+		// DIRECT_DAMAGE strips fire before Unit::Kill (Unit.cpp:957-973), so
+		// the lethal arm strips too — attr4-gated, excepting the hitting
+		// spell's aura — the same twin the non-lethal arm runs at the end
+		// of the funnel.
+		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForMotion(targetMotion), spellID, damage, targetMotion.MaxHealth)
 		s.server.stopCreatureMotionInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, targetMotion.X, targetMotion.Y, targetMotion.Z)
 		// The corpse keeps TAPPED when the tap survived to death
 		// (Unit.cpp:11172-11175), so broadcast the real flags.
