@@ -26,6 +26,7 @@ local ENTRY_OVERLORD_AGMAR = 34922
 local SPELL_BRUTAL_STRIKE = 58460 -- BossSpells :34
 local SPELL_CRUSHING_LEAP = 68506 -- BossSpells :36
 local SPELL_DAGGER_THROW  = 67280 -- BossSpells :25
+local SPELL_RAGE          = 66776 -- BossSpells :27
 
 local timers = {}
 
@@ -93,14 +94,37 @@ local function onDaggerThrow(creature, guid)
     schedule(guid, "dagger_throw", 7000, function() onDaggerThrow(creature, guid) end)
 end
 
+-- C++ :108-113 EVENT_CHECK_RANGE: init 1s / unconditional re-arm 1s;
+-- home-distance > 25.0f -> DoCast(me, SPELL_RAGE 66776) else
+-- RemoveAurasDueToSpell(66776), 2-arg (non-triggered). The distance gate
+-- uses the handler-surface GetHomePosition bridge (3D, squared compare
+-- is C++-exact for the strict >: dx*dx+dy*dy+dz*dz > 625 <=> dist > 25)
+-- via the stalagg tesla home-distance idiom. The 2026-10-21 header note
+-- claiming "no home-position accessor" was stale: creature:GetHomePosition
+-- is bridged at lua_creature_events.go:1241.
+local function onCheckRange(creature, guid)
+    local hx, hy, hz = creature:GetHomePosition()
+    local dx = creature:GetX() - hx
+    local dy = creature:GetY() - hy
+    local dz = creature:GetZ() - hz
+    if dx * dx + dy * dy + dz * dz > 25.0 * 25.0 then
+        creature:CastSpell(creature, SPELL_RAGE)
+    else
+        creature:RemoveAura(SPELL_RAGE)
+    end
+    schedule(guid, "check_range", 1000, function() onCheckRange(creature, guid) end)
+end
+
 -- C++ boss_ioc_horde_alliance::JustEngagedWith (:72-78): the EventMap
--- seeds — only BRUTAL_STRIKE and CRUSHING_LEAP port (below).
+-- seeds — BRUTAL_STRIKE / CRUSHING_LEAP / DAGGER_THROW / CHECK_RANGE
+-- port (below); SpellHit + Reset guard-respawn legs stay out.
 local function iocBossJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "brutal_strike", 5000, function() onBrutalStrike(creature, guid) end)
     schedule(guid, "crushing_leap", 15000, function() onCrushingLeap(creature, guid) end)
     schedule(guid, "dagger_throw", 7000, function() onDaggerThrow(creature, guid) end)
+    schedule(guid, "check_range", 1000, function() onCheckRange(creature, guid) end)
 end
 
 -- C++ Reset()/LeaveCombat/JustDied event machinery — cancel/re-arm on
@@ -127,11 +151,10 @@ end
 -- pool (randomNonTankThreatTarget — offset 1 skips the MaxThreat
 -- head, the netherspite/curator offset-1 precedent generalized to
 -- the whole threat list since playerOnly defaults FALSE).
--- EVENT_CHECK_RANGE (:108-113): init 1s / re-arm 1s; home-distance >
--- 25.0f -> DoCast(me, SPELL_RAGE 66776) else RemoveAurasDueToSpell(66776)
--- — the distance gate needs me->GetHomePosition(), which has no lua
--- bridge (GetDistance exists but no home-position accessor); porting
--- unconditionally would leave RAGE up permanently — unfaithful, stays out.
+-- EVENT_CHECK_RANGE (:108-113): PORTED above (onCheckRange) via the
+-- handler-surface GetHomePosition bridge — the "no home-position
+-- accessor" rationale recorded here 2026-10-21 is stale
+-- (lua_creature_events.go:1241).
 -- SpellHit (:80-88): unitCaster->IsVehicle() -> Unit::Kill(me, unitCaster)
 -- — stale "no-SpellHit bridge" retracted (2026-10-21): ev14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
