@@ -41,8 +41,11 @@
 -- bridges (vael precedent: SetFaction and AttackStart on the gossip
 -- player have no bearer), so the fight starts when a player pulls.
 -- The option texts are approximated — the real strings live in the
--- DB broadcast_text rows (vael precedent) — but the menu ids 2601/2605
--- and the continue-item icon 1 are C++-exact (boss_tomb_of_seven.cpp).
+-- DB broadcast_text rows (vael precedent). C++ uses the DB-reference
+-- AddGossipItemFor overload (ScriptedGossip.cpp:49-53): hello adds menu
+-- 1947 item 0, select adds menu 1828 item 1 — that overload has no Go
+-- bridge, so icon/message stay the inline approximation (icon 0, chat).
+-- The npc_text ids 2601/2605 are C++-exact (SendGossipMenuFor).
 -- Ported arms (C++ JustEngagedWith schedule + UpdateAI event machine):
 -- EVENT_IMMOLATE: random-player IMMOLATE 12742 — SelectTarget(Random,
 -- 0, 100.0f, true) playerOnly, ported via the keleseth/beast
@@ -81,7 +84,6 @@ local SPELL_IMMOLATE = 12742
 local SPELL_SUMMON_VOIDWALKERS = 15092
 
 local GOSSIP_ICON_CHAT = 0
-local GOSSIP_ICON_CONTINUE = 1 -- boss_tomb_of_seven.cpp: GOSSIP_MENU_ID_CONTINUE
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
 local MENU_ID_CHALLENGE = 2601 -- boss_tomb_of_seven.cpp (SendGossipMenuFor hello)
@@ -234,7 +236,7 @@ local function onGossipSelect(event, player, creature, sender, action)
     end
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipClearMenu()
-        player:GossipMenuAddItem(GOSSIP_ICON_CONTINUE, GOSSIP_CONFIRM_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_CONFIRM_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
         player:GossipSendMenu(0, creature, MENU_ID_CONFIRM)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipClearMenu()
