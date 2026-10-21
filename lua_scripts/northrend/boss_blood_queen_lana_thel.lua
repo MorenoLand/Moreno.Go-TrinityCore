@@ -56,7 +56,8 @@
 -- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
--- SetReactState / scheduler reschedule legs) has no bridge.
+-- hover legs, plus a SetReactState leg that is bridged in isolation)
+-- rides the unported movement machine.
 -- PORTED (2026-10-13 retraction re-audit): EVENT_BERSERK —
 -- single-fire 330s — Talk(EMOTE_BERSERK_RAID 12) +
 -- Talk(SAY_BERSERK 10) + DoCastSelf(SPELL_BERSERK 26662)

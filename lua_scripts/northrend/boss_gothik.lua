@@ -49,8 +49,9 @@
 -- orphaned (vortex precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_gothik: Reset — SetReactState(REACT_PASSIVE) + instance->
--- SetData(DATA_GOTHIK_GATE, GO_STATE_ACTIVE) — no react-state / GO-
--- state / instance bridges; JustSummoned / SummonedCreatureDespawn —
+-- SetData(DATA_GOTHIK_GATE, GO_STATE_ACTIVE) — instance / GO-state
+-- blocked (no bridges); the react-state leg is bridgeable in isolation
+-- but Reset is unported, so it stays out with the rest; JustSummoned / SummonedCreatureDespawn —
 -- no summon bridge; EVENT_SUMMON — the waves10/waves25 wave tables +
 -- CGUID_TRIGGER (127618) spawn-offset layout (rider center-back/north,
 -- knight north/center-front/south, trainee south/center-front/north)
@@ -61,8 +62,10 @@
 -- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE 28026) 2-arg
 -- (non-triggered) + Talk(
 -- SAY_PHASE_TWO 4) + Talk(EMOTE_PHASE_TWO 7) + the EVENT_TELEPORT/
--- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — stays OUT: no phase /
--- react-state / threat-list bridges (the Oct-12 "no DoCastAOE bridge"
+-- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — stays OUT: no phase
+-- bridge (react-state / threat-list ARE bridged — SetReactState,
+-- creature:ClearThreatList — but every arm rides the unported wave/
+-- phase machine; the Oct-12 "no DoCastAOE bridge"
 -- claim is superseded by the phase-machine verdict);
 -- EVENT_TELEPORT — HealthBelowPct(30) gate + SetReactState +
 -- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE/SPELL_TELEPORT_DEAD
@@ -79,7 +82,8 @@
 -- the unbridged EVENT_PHASE_TWO / EVENT_TELEPORT machine (porting it
 -- from combat start would deviate from C++ — phase-one Gothik casts
 -- no shadow bolts) — documented-only; EVENT_RESUME_ATTACK —
--- SetReactState(REACT_AGGRESSIVE) — no bridge; DoAction(
+-- SetReactState(REACT_AGGRESSIVE) — bridged, but rides the unported
+-- phase machine; DoAction(
 -- ACTION_MINION_EVADE) + OpenGate — instance SetData + summon-list
 -- iteration + cross-AI DoAction — no instance / summon / cross-AI
 -- bridges; DamageTaken — damage = 0 while not in PHASE_TWO — no

@@ -67,11 +67,12 @@
 -- — no registration, no lua; its arms are documented here only:
 -- Reset — SetReactState(REACT_PASSIVE) + MoveRandom(40.0f) + AddAura(
 -- SPELL_UNSTABLE_SPHERE_PASSIVE 50756, SPELL_UNSTABLE_SPHERE_TIMER
--- 50758, self) + DespawnOrUnsummon(19s) — no react-state / motion
--- bridges (the aura and despawn legs ARE bridged: AddAura on the
--- event-handler surface (lua_creature_events.go:170), Despawn in
--- lua_objects.go — the sphere still has no lua because its entry is
--- unverifiable and there is no registration); UpdateAI pulseTimer
+-- 50758, self) + DespawnOrUnsummon(19s) — motion-blocked (no motion
+-- bridge; react-state / aura / despawn legs are bridged in isolation —
+-- SetReactState, AddAura on the event-handler surface
+-- (lua_creature_events.go:170), Despawn in lua_objects.go — but the
+-- sphere still has no lua because its entry is unverifiable and there
+-- is no registration); UpdateAI pulseTimer
 -- 3000ms ->
 -- DoCast(SPELL_UNSTABLE_SPHERE_PULSE 50757) + 3s repeat — the
 -- cast/timer/aura/despawn legs ARE bridged (CastSpell +

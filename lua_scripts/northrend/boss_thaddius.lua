@@ -78,8 +78,8 @@
 -- EVENT_ENGAGE/EVENT_ENABLE_BALL_LIGHTNING/EVENT_SHIFT/EVENT_CHAIN/
 -- EVENT_BERSERK schedules — no phase / flag / cross-AI bridges, so
 -- SAY_AGGRO rides the unportable leg (vortex — not ported orphaned);
--- EVENT_ENABLE_BALL_LIGHTNING / EVENT_ENGAGE — no react-state /
--- phase bridges; EVENT_SHIFT — CastStop + DoCastAOE(SPELL_POLARITY_
+-- EVENT_ENABLE_BALL_LIGHTNING / EVENT_ENGAGE — phase-machine-gated
+-- (no phase bridge; the react-state leg is bridged in isolation); EVENT_SHIFT — CastStop + DoCastAOE(SPELL_POLARITY_
 -- SHIFT 28089) + the EVENT_SHIFT_TALK/EVENT_SHIFT schedules —
 -- DoCastAOE is bridged as self-cast, but the arm rides the unbridged
 -- EVENT_TRANSITION_3 phase-machine schedule; EVENT_SHIFT_TALK

@@ -65,11 +65,12 @@
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- InitializeAI — instance GetBossState(BOSS_SAPPHIRON) / GetData(
--- DATA_HAD_SAPPHIRON_BIRTH) legs + visibility/flag/react-state legs
--- (no instance / flag / react-state bridges).
+-- DATA_HAD_SAPPHIRON_BIRTH) legs + visibility/flag/react-state legs —
+-- instance-blocked (no instance bridge; flag/react-state ARE bridged in
+-- isolation).
 -- Reset — flight-phase DoRemoveAurasDueToSpellOnPlayers(ICEBOLT)
--- (instance model), SetReactState / hover legs (no react-state /
--- hover bridges) + _Reset bookkeeping.
+-- (instance model), SetReactState / hover legs (hover-blocked; the
+-- react-state leg is bridged in isolation) + _Reset bookkeeping.
 -- DamageTaken — air-phase death prevention (damage = health-1):
 -- the event-9 numeric-return bridge EXISTS (fireCreatureDamageTaken;
 -- halazzi precedent) — the arm stays out because the leg is

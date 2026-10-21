@@ -33,9 +33,10 @@
 -- (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI bookkeeping
 -- and the DATA_VENOXIS encounter-state arms skipped); DoZoneInCombat has
 -- no bridge — zone adds are not pulled; RemoveAllAuras is bridged
--- (creature:RemoveAllAuras) and ported in Reset/JustDied, but the
--- REACT_PASSIVE/REACT_AGGRESSIVE arms have no bridge — reset is
--- timer/state-only (jindo convention); the EVENT_TRANSFORM
+-- (creature:RemoveAllAuras) and ported in Reset/JustDied, and the
+-- REACT_PASSIVE/REACT_AGGRESSIVE arms are PORTED (creature:SetReactState,
+-- bridged lua_creature_events.go:524 — the stale "no bridge" note is
+-- retracted); the EVENT_TRANSFORM
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
 -- bridged lua_objects.go:389)
 -- (no threat model); the holy-nova SelectTarget(MaxThreat) scan has no
@@ -46,6 +47,10 @@
 -- the 15s re-arm cycle is modeled (jeklik six-bat convention).
 
 local ENTRY_VENOXIS = 14507
+
+-- UnitDefines.h:340-342.
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
 
 local SPELL_THRASH = 3391
 local SPELL_DISPEL_MAGIC = 23859
@@ -308,13 +313,10 @@ end
 RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    -- C++ Reset: _Reset, RemoveAllAuras (bridged — creature:RemoveAllAuras),
-    -- SetReactState(REACT_PASSIVE) has no bridge — state and timers only
-    -- (jindo convention). C++ JustEngagedWith:
-    -- BossAI::JustEngagedWith bookkeeping and DoZoneInCombat have no
-    -- bridge.
-    creature:RemoveAllAuras()
-    venoxisState[guid] = { phase = PHASE_ONE, transformed = false, frenzied = false }
+    -- C++ boss_venoxisAI::JustEngagedWith (boss_venoxis.cpp:125-128):
+    -- SetReactState(REACT_AGGRESSIVE); BossAI::JustEngagedWith
+    -- bookkeeping and DoZoneInCombat have no bridge.
+    creature:SetReactState(REACT_AGGRESSIVE)
     schedule(guid, "thrash", 5000, function()
         onThrash(creature, guid)
     end)
@@ -350,5 +352,12 @@ end)
 RegisterCreatureEvent(ENTRY_VENOXIS, 9, onDamageTaken)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    -- C++ boss_venoxisAI::Reset (boss_venoxis.cpp:107-116): _Reset,
+    -- RemoveAllAuras, SetReactState(REACT_PASSIVE), Initialize
+    -- (latch defaults), events.SetPhase(PHASE_ONE).
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:RemoveAllAuras()
+    creature:SetReactState(REACT_PASSIVE)
+    venoxisState[guid] = { phase = PHASE_ONE, transformed = false, frenzied = false }
 end)

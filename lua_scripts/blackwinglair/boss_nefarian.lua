@@ -507,9 +507,11 @@ local function nefarianDied(event, creature, killer)
     nefarianClear(creature:GetGUID())
 end
 
--- C++ JustReachedHome: Reset(). nefarianReset is idempotent
--- (cancelTimers + state nil), so the ev24 re-run is C++-exact and
--- cannot double-fire anything.
+-- C++ boss_nefarianAI::Reset (boss_nefarian.cpp:418-421) = Initialize():
+-- Phase3/canDespawn latch clears. The dragon's JustReachedHome
+-- (boss_nefarian.cpp:423-426) is canDespawn = true, whose only consumer
+-- is the instance-blocked DespawnTimer/FAIL arm (see deviations above),
+-- so entry 11583 gets no ev24 registration.
 local function nefarianReset(event, creature)
     nefarianClear(creature:GetGUID())
 end
@@ -519,6 +521,9 @@ RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusGossipSelect)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusReset)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 4, onNefariusReset)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 23, onNefariusReset)
+-- C++ boss_victor_nefariusAI::JustReachedHome (boss_nefarian.cpp:200-203)
+-- calls Reset() outright; onNefariusReset is its idempotent twin.
+RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 24, onNefariusReset)
 
 RegisterCreatureEvent(ENTRY_NEFARIAN, 1, nefarianEnterCombat)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 2, nefarianLeaveCombat)
@@ -526,4 +531,3 @@ RegisterCreatureEvent(ENTRY_NEFARIAN, 3, nefarianTargetDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 4, nefarianDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 9, nefarianDamageTaken)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 23, nefarianReset)
-RegisterCreatureEvent(ENTRY_NEFARIAN, 24, nefarianReset)

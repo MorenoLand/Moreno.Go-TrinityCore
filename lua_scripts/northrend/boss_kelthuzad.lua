@@ -94,9 +94,12 @@
 -- UpdateAI frostbolt filler — DoCastVictim(SPELL_FROSTBOLT_SINGLE
 -- 28478) — phase-gated on !PHASE_ONE and the UNIT_STATE_CASTING check
 -- — no phase / unit-state bridges; DamageTaken — damage = 0 in
--- PHASE_ONE — no phase bridge; Reset — SetReactState(REACT_PASSIVE) +
--- NOT_SELECTABLE + SetImmuneToPC(true) — no react-state / immunity
--- bridges; EnterEvadeMode — portal GO-state legs — instance model;
+-- PHASE_ONE — no phase bridge; Reset (boss_kelthuzad.cpp:223-235) —
+-- SetReactState(REACT_PASSIVE) + NOT_SELECTABLE + SetImmuneToPC(true) —
+-- the bridges exist (creature:SetReactState; SetFlag/RemoveFlag(59) for
+-- the immunity pair, 07:47 sweep) but Reset itself is unported (the
+-- whole encounter is intro/DoAction-machine-gated), so the legs stay
+-- out with it; EnterEvadeMode — portal GO-state legs — instance model;
 -- DoAction(ACTION_BEGIN_ENCOUNTER) — instance->SetBossState(BOSS_KELTHUZAD,
 -- IN_PROGRESS) + DoCastAOE(SPELL_VISUAL_CHANNEL 29423) 2-arg
 -- (non-triggered) + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup ×7
@@ -116,7 +119,9 @@
 -- entry-blocked — joins the bridgeable-but-entry-blocked queue;
 -- abomination JustDied — cross-AI DoAction(ACTION_ABOMINATION_DIED)
 -- via DATA_KELTHUZAD — instance / cross-AI bridges absent; minion
--- JustEngagedWith pocket-aggro legs — no react-state / grid bridges;
+-- JustEngagedWith pocket-aggro legs — grid-blocked (no grid
+-- bridge; the react-state leg is bridgeable in isolation but rides the
+-- unported pocket machine);
 -- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) —
 -- no bridge. npc_kelthuzad_guardian (16441 — entry-unverifiable,
 -- entry-blocked): ACTION_JUST_SUMMONED visibility/react/combat-pulse
