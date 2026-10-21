@@ -91,8 +91,9 @@
 -- never-die damage cap (damage = health-1 while not PHASE_THREE) rides
 -- the unbridged phase machine and stays out; the UNIT_FLAG_NOT_
 -- SELECTABLE / CastStop / controller SetData(PHASE_TWO) legs ride
--- absent bridges (no SetFlag / CastStop / cross-creature-SetData
--- methods — verified in engine/world/lua_objects.go this run).
+-- absent bridges (SetFlag IS bridged — field 59/82/79 live — but no
+-- CastStop / cross-creature-SetData methods — verified in
+-- engine/world/lua_objects.go this run).
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
 -- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
@@ -184,8 +185,8 @@
 -- ice_tomb_target precedent) — NOT registered. npc_living_inferno
 -- (40681) / npc_living_ember (40683): only their JustDied
 -- DespawnOrUnsummon(1ms) legs port (event 4, below — 1ms ≈ immediate
--- creature:Despawn); the rest stays out (no SetFlag / CastStop /
--- cross-creature-SetData bridges).
+-- creature:Despawn); the rest stays out (SetFlag IS bridged but no
+-- CastStop / cross-creature-SetData bridges).
 -- SAY_BERSERK 7 — dead text, no Talk() call in the file.
 -- All 13 Talk() calls in the file accounted for (SAY_AGGRO 2 +
 -- SAY_DEATH 5 + SAY_KILL 6 ported; SAY_PHASE_TWO 4 + SAY_REGENERATE 0
@@ -330,8 +331,8 @@ end
 -- SPELL_TWILIGHT_PHASING 74808 cast port (non-triggered ->
 -- creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) — the DoCastSelf
 -- lowering, same idiom as the BREATH self-casts); the flag / CastStop /
--- controller SetData legs ride absent bridges (no SetFlag / CastStop /
--- cross-creature SetData methods — verified in
+-- controller SetData legs ride absent bridges (SetFlag IS bridged
+-- but no CastStop / cross-creature SetData methods — verified in
 -- engine/world/lua_objects.go this run). The never-die
 -- damage cap (damage = health-1 while not PHASE_THREE) rides the
 -- unbridged phase machine and stays out.

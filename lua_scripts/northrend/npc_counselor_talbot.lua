@@ -32,8 +32,13 @@
 --   coords (:513) — he cannot be in combat outside the staging area,
 --   so the missing gate has no behavioral delta in practice.
 -- - bCheck / FindNearestCreature(NPC_LERYSSA 25251, NPC_GENERAL_ARLOS
---   25250, 50.0f) GUID latch (:876-886): no FindNearestCreature /
---   ObjectAccessor bridge (dark-rider precedent).
+--   25250, 50.0f) GUID latch (:876-886): FindNearestCreature IS
+--   bridged (lua_creature_events.go:1154, alive-only built in —
+--   matches the C++ `true` filter) but no ObjectAccessor bridge
+--   (dark-rider precedent); the latch's consumers (JustDied :913-938:
+--   arlos AI-Talk/KillSelf, leryssa RemoveAura/ClearUnitState/SetWalk/
+--   MovePoint, RewardPlayerAndGroupAtEvent) have no cross-creature /
+--   reward / motion bridges — the latch would be dead bookkeeping.
 -- - MovementInform(POINT_MOTION_TYPE) -> ENSURE_AI(npc_thassarian)
 --   talbotInPosition cross-AI latch (:860-868): no MovementInform /
 --   cross-AI-ENSURE bridge.

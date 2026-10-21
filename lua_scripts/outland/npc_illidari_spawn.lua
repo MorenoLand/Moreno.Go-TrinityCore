@@ -13,10 +13,15 @@
 -- plus a display-id check on the summoned infernal — documented-only
 -- (steamrigger summon precedent).
 -- npc_infernal_attacker (21419, NPC_INFERNAL_ATTACKER — verifiable):
--- Reset = SetDisplayId(MODEL_INVISIBLE) + MoveRandom, SpellHit arm =
--- RemoveFlag(PACIFIED|NOT_SELECTABLE) + SetDisplayId(MODEL_INFERNAL)
--- behind the no-display/flag bridges, the IsSummonedBy GUID latch and
--- JustDied SetData cascade behind the cross-creature SetData bridge —
+-- Reset = SetDisplayId(MODEL_INVISIBLE 20577) + MoveRandom, SpellHit
+-- arm = RemoveFlag(UNIT_FIELD_FLAGS, PACIFIED|NOT_SELECTABLE) +
+-- SetDisplayId(MODEL_INFERNAL 17312) (SetDisplayId IS bridged —
+-- lua_creature_events.go:643; RemoveFlag(59) IS bridged — :968; the
+-- old "no-display/flag bridges" claim is stale) — the arms stay out:
+-- 21419 materializes only via the caster's SummonCreature
+-- (zone_shadowmoon_valley.cpp:94 — no summon bridge, dead code),
+-- MoveRandom has no bridge, and the IsSummonedBy GUID latch +
+-- JustDied SetData cascade are cross-creature (no bridge) —
 -- documented-only.
 -- npc_mature_netherwing_drake: bridgeable combat arm (Nether Breath
 -- 38467 every 5s) but no NPC_ entry constant anywhere in the C++

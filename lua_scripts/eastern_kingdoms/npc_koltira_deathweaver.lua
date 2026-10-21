@@ -71,8 +71,12 @@
 --   EVENT_INTRO_4 (DoCastSelf 52899 / LoadEquipment / MovePoint),
 --   EVENT_INTRO_5 (Talk 2 / DoCastSelf 52894) and EVENT_INTRO_6
 --   (Talk 3 / kneel / gossip flag / _eventGossip=true).
--- - FakeValrothTalk (no FindNearestCreature / ObjectAccessor
---   bridge — dark-rider precedent).
+-- - FakeValrothTalk (FindNearestCreature IS bridged —
+--   lua_creature_events.go:1154, and the found creature's :Talk is
+--   expressible — but no ObjectAccessor bridge; all three call sites
+--   (EVENT_SPAWN_WAVE_1/3, EVENT_SPAWN_VALROTH) ride the unported
+--   MovementInform/summon machine — dead code until those land;
+--   dark-rider precedent).
 -- - SummonCreatureGroup waves 1-3 + valroth (no summon-group
 --   bridge); EVENT_KOLTIRA_ADVICE (stranded on the summon list);
 --   JustSummoned / SummonedCreatureDespawn (no summon-list model;

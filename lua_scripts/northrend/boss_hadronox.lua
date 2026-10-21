@@ -39,13 +39,17 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- The whole pre-fight/step movement machine — InitializeAI
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
--- (no react-state or float-value bridges — drakkari_colossus precedent)
+-- (SetReactState IS bridged — frozen_core precedent,
+-- lua_creature_events.go:524; SetHomePosition IS bridged on the event
+-- surface — 796 tick; SetFloatValue has NO Lua bridge — verified
+-- absent from lua_creature_events.go/object.go)
 -- + SetStep(0); SetStep: _lastPlayerCombatState latch, SetReactState(
 -- REACT_PASSIVE), SetHomePosition(hadronoxStep[step]),
 -- MotionMaster Clear + MovePoint — motion-master bridge absent; the
 -- DoAction(ACTION_HADRONOX_MOVE) driver behind the no-DoAction bridge
 -- (drakkari_colossus precedent) — so Talk(HADRONOX_EMOTE_MOVE 1) is
--- unbridged too.
+-- unbridged too. A partial InitializeAI port would strand the boss
+-- passive at step 0 — the machine stays out as a unit.
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —

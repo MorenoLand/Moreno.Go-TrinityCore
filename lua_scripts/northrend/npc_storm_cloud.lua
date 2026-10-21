@@ -46,11 +46,11 @@
 -- but the release machine (SpellHit 55223: RemoveAura(55009) +
 -- SetStandState(STAND) + SetFaction(template) + DoCast(me,
 -- 55085) + Talk(0) + MoveRandom(10) + DespawnOrUnsummon(10s))
--- has no faction / stand-state / movement / despawn
--- bridges (SpellHit IS bridged — event 14), so the Reset arm was
--- deferred rather than ported as
--- a stranded half (a permanently-chained NPC is worse than no
--- registration); MoveInLineOfSight overridden empty —
+-- has the faction / stand-state bridges (SetFaction + SetStandState
+-- both live) but not movement / despawn — the release machine's
+-- MoveRandom + DespawnOrUnsummon legs block it, so the Reset arm stays
+-- deferred rather than ported as a stranded half (a permanently-
+-- chained NPC is worse than no registration); MoveInLineOfSight overridden empty —
 -- documented-only. 55085 verifiable.
 -- npc_released_offspring_harkoa — the Reset arm (GetClosePoint
 -- + MovePoint(0)) and the MovementInform despawn arm sit behind

@@ -60,8 +60,9 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The whole pre-combat phase state machine: PHASE_CHAINED's
 --   FindNearestCreature(29521, 30) anchor acquisition + anchor
---   SetGUID/GetGUID GUID-passing (SetGUID/GetGUID and
---   FindNearestCreature have no bridges) + the anchor's triggered
+--   SetGUID/GetGUID GUID-passing (SetGUID has no bridge — GetGUID
+--   exists via generic object methods; FindNearestCreature IS
+--   bridged — lua_creature_events.go:1154) + the anchor's triggered
 --   CastSpell(SOUL_PRISON_CHAIN 54612) on the prisoner (no
 --   cross-creature cast bridge) + the 12-entry soul-prison
 --   gameobject ResetDoorOrButton ring (no gameobject bridges);

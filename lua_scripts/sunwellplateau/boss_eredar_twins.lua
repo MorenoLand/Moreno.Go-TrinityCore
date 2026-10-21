@@ -60,8 +60,9 @@
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
 -- gate). OnDied(4): the SisterDeath-gated Talk(YELL_SAC_DEAD 4) is
 -- ported via the twinDead latch (both twins' ev4 handlers live in
--- this file and fire in death order); the loot-flag arm has no flag
--- bridge. OnReset(23):
+-- this file and fire in death order); the loot-flag arm ports as
+-- RemoveFlag(79, LOOTABLE) on the sister-alive death (dynamic-flag
+-- bridge live, twin_valkyr precedent). OnReset(23):
 -- per-GUID reset (Enraged=false, SisterDeath=false) + cancel
 -- timers; the instance sister respawn/threat relay and SetBossState
 -- (NOT_STARTED) arms are blocked on the instance-script model.
@@ -91,7 +92,8 @@
 -- cross-creature bridge — skipped. OnTargetDied(3): 25% Talk(YELL_
 -- ALY_KILL), no TYPEID gate. OnDied(4): sister-death-gated Talk
 -- (YELL_ALY_DEAD 6) is ported via the twinDead latch; the loot-
--- flag arm has no flag bridge. OnReset(23): per-GUID reset + cancel
+-- flag arm ports as RemoveFlag(79, LOOTABLE) on the sister-alive
+-- death (dynamic-flag bridge live). OnReset(23): per-GUID reset + cancel
 -- timers; the instance sister respawn/threat relay and SetBossState
 -- arms blocked on the instance-script model. OnLeaveCombat(2):
 -- cancel timers, drop per-GUID state. The SpellHitTarget arm (45235
@@ -177,6 +179,13 @@ local alythessState = {}
 -- never runs on the death path (the spark_overgrind IsDead-gate
 -- precedent).
 local twinDead = { sacrolash = false, alythess = false }
+
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79);
+-- UNIT_DYNFLAG_LOOTABLE (SharedDefines.h:3128) — the dynamic-flag
+-- bridge is live (twin_valkyr precedent); the old "lootable-flag arm
+-- has no flag bridge" claims are retracted 2026-10-21.
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -316,12 +325,16 @@ end
 
 -- C++ JustDied (:150-163): if (SisterDeath) Talk(YELL_SAC_DEAD 4) —
 -- the latch is twinDead.alythess (sister died first); the
--- SetBossState(DONE) arm has no instance bridge and the lootable-flag
--- arm has no flag bridge.
+-- SetBossState(DONE) arm has no instance bridge; the lootable-flag
+-- arm ports as the else-branch RemoveFlag(79) (C++-verbatim:
+-- sister-alive death clears LOOTABLE on me — Go's lethal path
+-- auto-set it, twin_valkyr precedent).
 local function sacrolashDied(event, creature)
     twinDead.sacrolash = true
     if twinDead.alythess then
         creature:Talk(YELL_SAC_DEAD)
+    else
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
 end
 
@@ -431,12 +444,15 @@ end
 
 -- C++ JustDied (:431-441): if (SisterDeath) Talk(YELL_ALY_DEAD 6) —
 -- the latch is twinDead.sacrolash (sister died first); the
--- SetBossState(DONE) arm has no instance bridge and the lootable-flag
--- arm has no flag bridge.
+-- SetBossState(DONE) arm has no instance bridge; the lootable-flag
+-- arm ports as the else-branch RemoveFlag(79) (C++-verbatim, see
+-- sacrolashDied above).
 local function alythessDied(event, creature)
     twinDead.alythess = true
     if twinDead.sacrolash then
         creature:Talk(YELL_ALY_DEAD)
+    else
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
 end
 

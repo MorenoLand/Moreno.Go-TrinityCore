@@ -101,7 +101,10 @@
 -- EVENT_SWEEP (cpp:263-266) — DoCast(sweep stalker,
 -- SPELL_ARM_SWEEP 63766, true) gated on left-arm presence
 -- (the PassengerBoarded `left` flag); no PassengerBoarded
--- bridge, no FindNearestCreature bridge.
+-- bridge (boarded-state has no bearer — arm-creature presence is
+-- not equivalent); FindNearestCreature IS bridged
+-- (lua_creature_events.go:1154) — the stalker search + triggered
+-- DoCast are expressible once the gate has a bearer.
 -- EVENT_SMASH (cpp:268-273) —
 -- DoCastVictim(SPELL_TWO_ARM_SMASH 63356 / SPELL_ONE_ARM_SMASH
 -- 63573) gated on left/right arm presence; no bridge.

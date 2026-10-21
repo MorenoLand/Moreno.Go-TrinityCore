@@ -76,14 +76,17 @@
 -- Talk(WHISPER_OPEN_PORTAL 6 / WHISPER_OPENED_PORTAL 7) legs
 -- (portal-entry Talk — no bridgeable combat event), the
 -- portal SetRespawnTime(30000) leg — no summon / cast /
--- creature-search / GO-respawn bridges);
+-- GO-respawn bridges (creature-search IS bridged —
+-- lua_creature_events.go:1204 — but the arm is GO-gated);
 -- the UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_HATCH_EGGS 30s); UpdateAI EVENT_HATCH_EGGS ->
 -- OpenPortal (obsidian_sanctum.cpp:451-453) — the timer bridge is
 -- live (CreateLuaEvent), but the payload is OpenPortal only:
 -- instance-gated egg summons (no summon / GO-grid-search /
--- instance bridges), so the timer arm stays out (the stale
+-- instance bridges — GO grid search genuinely absent from the GO
+-- surface; creature GetCreaturesInGrid is bridged but the arm is
+-- GO-gated), so the timer arm stays out (the stale
 -- "no timer bridge" claim is re-keyed: payload-unbridged, not
 -- timer-unbridged).
 -- npc_shadron — Reset (base + the self HasAura-gated aura strips

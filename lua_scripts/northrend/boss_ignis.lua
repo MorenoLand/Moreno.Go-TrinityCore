@@ -59,7 +59,10 @@
 -- (consumer: achievement_ignis_shattered below).
 -- JustSummoned — NPC_IRON_CONSTRUCT faction/react-state/flag/
 -- immune/root legs + AttackStart/DoZoneInCombat + summons.Summon
--- — no faction / react-state / summon bridges.
+-- — the faction / react-state legs have bridges now (SetFaction +
+-- SetReactState live, 2026-10-21) but the summoned constructs never
+-- materialize (no SPELL_EFFECT_SUMMON bridge) and AttackStart /
+-- DoZoneInCombat have no creature-side bridges — stays out.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
 -- npc_iron_construct DamageTaken) — no DoAction / aura-stack

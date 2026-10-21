@@ -60,7 +60,10 @@
 -- pump (C++ DespawnOrUnsummon). The C++ Check_Timer re-arms at
 -- 500ms after the first check; the 1s pump checks every 1000ms
 -- instead (1s granularity, documented below). The Reset flag/
--- faction arms have no flag/faction bridges — unmodeled; the
+-- faction arms port to the dedicated ev23 globuleReset handler
+-- (RemoveFlag/SetFlag NOT_SELECTABLE pair + SetFaction(FACTION_
+-- MONSTER), C++-verbatim order, IsDead-gated off the death path —
+-- SetFlag(59)/SetFaction bridges live, ouro precedent); the
 -- MoveInLineOfSight aggro machine is unmodeled (CREATURE_EVENT_ON_MOVE_IN_LOS (27) exists, but the C++ arm's AttackStart relay has no creature-side bridge);
 -- the C++ do-NOT-melee arm has no no-melee bridge — engine
 -- melee applies (leotheras demon-form precedent). OnDied(4)/
@@ -77,7 +80,7 @@
 -- 38025/37850) and the globule-summon player-side triggered
 -- casts (37854/37858/37860/37861) unmodeled (the C++ target-
 -- pick loops with dedup collapse with the unbridgeable casts);
--- no flag/faction/no-melee bridges for the globule (above; LOS event 27 exists but the AttackStart relay is unbridged);
+-- no no-melee bridge for the globule (above; LOS event 27 exists but the AttackStart relay is unbridged);
 -- the globule Check_Timer runs at 1s pump granularity instead
 -- of the C++ 500ms re-arm; no SpellScript/AuraScript scripts
 -- in this file.
@@ -99,6 +102,15 @@ local ENTRY_MOROGRIM = 21213
 local ENTRY_WATER_GLOBULE = 21913
 
 local GLOBULE_EXPLOSION_RANGE = 5
+
+-- UNIT_FIELD_FLAGS (UpdateFields.h:117: OBJECT_END+0x35 = 59);
+-- UNIT_FLAG_NOT_SELECTABLE (SharedDefines.h); FACTION_MONSTER = 14.
+-- The SetFlag(59)/SetFaction bridges are live (ouro precedent); the
+-- old "Reset flag/faction arms have no flag/faction bridges" claim is
+-- retracted 2026-10-21.
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local FACTION_MONSTER = 14
 
 local morogrimTimers = {}
 local morogrimState = {}
@@ -269,7 +281,22 @@ local function globuleCleanup(event, creature)
     cancelPump(globuleTimers, creature:GetGUID())
 end
 
+-- C++ npc_water_globuleAI::Reset (boss_morogrim_tidewalker.cpp:319-326):
+-- Initialize() (the Check_Timer=1000 leg is the 1s pump above) then the
+-- RemoveFlag/SetFlag NOT_SELECTABLE pair (a net set regardless of
+-- template state) + SetFaction(FACTION_MONSTER), C++-verbatim order.
+-- The IsDead gate keeps it off the death path (C++ Reset never runs on
+-- death; the twins' spark_overgrind IsDead-gate precedent).
+local function globuleReset(event, creature)
+    if not creature:IsDead() then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetFaction(FACTION_MONSTER)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_WATER_GLOBULE, 1, globuleEnterCombat)
 RegisterCreatureEvent(ENTRY_WATER_GLOBULE, 2, globuleCleanup)
 RegisterCreatureEvent(ENTRY_WATER_GLOBULE, 4, globuleCleanup)
 RegisterCreatureEvent(ENTRY_WATER_GLOBULE, 23, globuleCleanup)
+RegisterCreatureEvent(ENTRY_WATER_GLOBULE, 23, globuleReset)

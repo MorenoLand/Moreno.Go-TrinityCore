@@ -69,15 +69,18 @@
 -- npc_amanitar_mushrooms — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (30391 NPC_HEALTHY_MUSHROOM / 30435 NPC_POISONOUS_MUSHROOM —
 -- ahnkahet.h kalecgos pass): zero registration. Reset leg —
--- SetReactState(REACT_PASSIVE) (no react-state bridge —
--- drakkari_colossus precedent) + SetDisplayId(Modelid2) (display
--- bridge live 2026-10-20 — the blocker is the unbridged Modelid2
--- bearer) + DoCastSelf triplet (Putrid Mushroom 31690 /
--- Shrink 31691 triggered / Grow 57059 triggered) + the
--- healthy/poisonous visual-aura self-cast (56740 / 56741) + the
--- 800ms re-Grow scheduler: wiring the bridged self-casts without
--- the passive react-state bridge would leave the creature
--- engaging players — fails the C++-exact port bar. The
+-- SetReactState(REACT_PASSIVE) (SetReactState IS bridged —
+-- frozen_core precedent, lua_creature_events.go:524) +
+-- SetDisplayId(Modelid2) (display bridge live 2026-10-20 — the
+-- blocker is the unbridged Modelid2 VALUE bearer: no
+-- GetCreatureTemplate().Modelid2 in Lua) + DoCastSelf triplet
+-- (Putrid Mushroom 31690 / Shrink 31691 triggered / Grow 57059
+-- triggered) + the healthy/poisonous visual-aura self-cast
+-- (56740 / 56741) + the 800ms re-Grow scheduler (CreateLuaEvent
+-- one-shot): the Reset leg stays out — the mushroom entries
+-- (30391/30435) have no summon source (the boss EVENT_SPAWN leg
+-- rides the summon STRAND), so the whole arm would be dead code
+-- until the strand exists. The
 -- MoveInLineOfSight player-proximity poison leg (2.0f, _active
 -- latch): target RemoveAurasDueToSpell(Potent Fungus 56648)
 -- (player:RemoveAura IS bridged — engine/world/lua_player.go:219; the

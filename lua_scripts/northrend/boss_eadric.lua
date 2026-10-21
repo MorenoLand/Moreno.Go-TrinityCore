@@ -43,8 +43,13 @@
 -- is the in-tree bridge — anomalus spark port).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_eadric constructor — SetReactState(REACT_PASSIVE) +
--- SetFlag(UNIT_FLAG_NON_ATTACKABLE) — no react-state / flag
--- bridges (drakkari_colossus precedent).
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) (SetReactState
+-- IS bridged — lua_creature_events.go:524, frozen_core precedent;
+-- SetFlag(59) IS bridged — lua_creature_events.go:968) — but the ctor
+-- legs ride the unported announcer intro machine: the un-gating
+-- (RemoveFlag(NON_ATTACKABLE) + REACT_AGGRESSIVE + AddThreat,
+-- trial_of_the_champion.cpp:385-386) has no bearer, so a one-sided
+-- port would leave the boss permanently passive/non-attackable.
 -- boss_eadric DamageTaken — PORTED: damage >= health -> damage =
 -- 0 + EnterEvadeMode (AttackStop + ClearThreatList approximation —
 -- no evade bridge; the MotionMaster MovePoint home leg stays out)
@@ -64,7 +69,10 @@
 -- leg — no motion-master bridge.
 -- boss_paletress — zero registration. Constructor legs
 -- (SetReactState(REACT_PASSIVE) + SetFlag(NON_ATTACKABLE) +
--- RestoreFaction) — no react/flag/faction bridges; Reset's
+-- RestoreFaction) — SetReactState + SetFlag(59) + SetFaction ALL
+-- IS bridged (lua_creature_events.go:524/:968; eadric:51) — same
+-- intro-machine grounding as boss_eadric above: the announcer
+-- un-gating has no bearer; Reset's
 -- RemoveAllAuras + ObjectAccessor::GetCreature(MemoryGUID)
 -- RemoveFromWorld — no aura-removal (aeranas precedent) +
 -- cross-AI ObjectAccessor + despawn bridges; SetData(1) ->

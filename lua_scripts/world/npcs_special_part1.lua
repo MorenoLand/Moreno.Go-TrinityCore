@@ -29,8 +29,10 @@
 -- flag + FACTION_FRIENDLY + Talk hello; TEXT_EMOTE_CHEER 21: quest COMPLETE
 -- -> questgiver flag + Talk); OnQuestAccept :262-266 / OnQuestReward :268-272.
 -- Missing: no entry consts in the C++ tree (DB-side scriptname binding;
--- cannot register); no SetFaction bridge (FACTION_PREY<->FRIENDLY legs are
--- load-bearing, not cosmetic); no precise GetQuestStatus — only
+-- cannot register); the FACTION_PREY<->FRIENDLY legs are load-bearing,
+-- not cosmetic, and the arms ride the unbridgeable quest-status gate
+-- (SetFaction itself is bridged — lua_creature_events.go:1125); no
+-- precise GetQuestStatus — only
 -- player:HasQuest bool (lua_player.go:303), which cannot distinguish
 -- COMPLETE (the cheer leg) from other states.
 

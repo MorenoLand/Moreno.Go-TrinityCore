@@ -106,7 +106,10 @@ end
 -- C++ Reset()/LeaveCombat/JustDied event machinery — cancel/re-arm on
 -- combat events (the maiden convention). C++ Reset() also respawns the
 -- entry-gated guard list (GetCreatureListWithEntryInGrid + Respawn) —
--- no grid-search/Respawn bridge (documented-only).
+-- GetCreaturesInGrid IS bridged (lua_creature_events.go:1204) but
+-- creature:Respawn() has no bridge (the only Lua Respawn is the
+-- GameObject hide/unhide at lua_objects.go:1151) — the guard-respawn
+-- leg stays out (documented-only).
 local function iocBossLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end

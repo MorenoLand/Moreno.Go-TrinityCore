@@ -37,7 +37,9 @@
 -- bridge — tharon_ja precedent; the drake-vehicle FindNearest-
 -- Creature achievement-void legs (NPC_RUBY_DRAKE_VEHICLE 27756 /
 -- NPC_EMERALD_DRAKE_VEHICLE 27692 / NPC_AMBER_DRAKE_VEHICLE
--- 27755, 500.0f) have no instance / creature-search bridge —
+-- 27755, 500.0f) — creature-search IS bridged
+-- (lua_creature_events.go:1154) but the legs feed achievement void
+-- booleans (no achievement bridge) + instance GetData —
 -- documented-only; GetData for the void booleans is consumed by
 -- the achievement scripts below, also documented-only).
 -- KilledUnit — Talk(SAY_KILL 3) (event 3 — C++-GATED

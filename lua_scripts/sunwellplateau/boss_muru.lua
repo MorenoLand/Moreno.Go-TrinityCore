@@ -91,9 +91,12 @@
 -- the blocker is the unbridged Modelid2 bearer) (the react
 -- bridge exists — creature:SetReactState — but the REACT_PASSIVE arm
 -- rides that unported constructor). The 2s arm (REACT_AGGRESSIVE
--- + RemoveFlag(NOT_SELECTABLE) + summoner-GUID random-target
--- AttackStart) has no react/flag/cross-creature/movement bridges
--- — skipped; the 3s 500ms-repeat proximity arm (victim within
+-- + RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) — both IS bridged
+-- (lua_creature_events.go:524/:968) — + summoner-GUID random-target
+-- AttackStart) stays out: the IsSummonedBy GUID capture has no
+-- cross-creature bridge and AttackStart has no bridge (the fiend
+-- entries ride the summon STRAND in any case) — skipped; the 3s
+-- 500ms-repeat proximity arm (victim within
 -- 5yd + HasAura(45934) -> non-triggered DoCastAOE(DARKFIEND_
 -- DAMAGE 45944) + DisappearAndDie) is unmodeled as a whole — the
 -- kill/despawn arm has no bridge and a cast without the despawn

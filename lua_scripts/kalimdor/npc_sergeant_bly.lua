@@ -39,7 +39,8 @@
 --   Talk(SAY_1=0) / Talk(SAY_2=1) bridgeable but the whole machine's
 --   driver is the blocked gossip path; case 3 SetFaction(FACTION_MONSTER)
 --   + AttackStart(target) + switchFactionIfAlive(ENTRY_RAVEN/ORO/MURTA)
---   (no SetFaction bridge).
+--   (SetFaction IS bridged — lua_creature_events.go:1125 — but the
+--   gossip driver / cross-creature DoAction / AttackStart legs are not).
 -- - OnGossipHello/OnGossipSelect: instance->GetData(EVENT_PYRAMID)
 --   pyramid-phase gating — instance-model gossip blocked (standing).
 -- - DoAction(0) (sets postGossipStep=1): no DoAction bridge.

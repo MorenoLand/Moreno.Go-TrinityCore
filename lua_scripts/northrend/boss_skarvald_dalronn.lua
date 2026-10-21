@@ -91,7 +91,7 @@
 -- one-shot 5s.
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries
 -- 24200 / 24201):
--- generic_boss_controllerAI::JustDied (lines 121-137) — when the other
+-- generic_boss_controllerAI::JustDied (lines 119-137) — when the other
 -- boss is alive: Talk(SAY_DIED_FIRST 2) + RemoveFlag(UNIT_DYNFLAG_LOOTABLE)
 -- + cross-creature DoAction(ACTION_OTHER_JUST_DIED) + TRIGGERED
 -- DoCast(me, SPELL_SUMMON_SKARVALD_GHOST 48613 / SPELL_SUMMON_DALRONN_GHOST
@@ -244,7 +244,7 @@ end
 
 local function skarvaldDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    -- C++ generic_boss_controllerAI::JustDied (lines 121-137): first death
+    -- C++ generic_boss_controllerAI::JustDied (lines 119-137): first death
     -- of the pull takes the other-alive branch — Talk(SAY_DIED_FIRST),
     -- then RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE); second
     -- death takes the both-dead branch — Talk(SAY_DEATH). The cross-AI

@@ -60,8 +60,11 @@
 -- with no player gate (C++-exact). OnDied(4): Talk(SAY_DIE)
 -- + cleanup (the _JustDied arm is instance-blocked). OnLeave
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID
--- state (the Reset() NON_ATTACKABLE re-flag arm has no flag
--- bridge; the _Reset arm is instance-blocked).
+-- state (the Reset() NON_ATTACKABLE re-flag arm stays out on the
+-- paired-arm rule — its removal rides the unported peon-relay /
+-- intro-timer machine and porting SetFlag alone would strand the bit
+-- (thespia/kalithresh precedent); SetFlag(59) itself is bridged; the
+-- _Reset arm is instance-blocked).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_shattered_halls.cpp stays blocked on the

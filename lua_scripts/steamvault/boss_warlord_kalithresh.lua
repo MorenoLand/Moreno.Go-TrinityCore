@@ -68,10 +68,16 @@
 -- (the DATA_WARLORD_KALITHRESH NOT_STARTED/IN_PROGRESS/DONE
 -- bookkeeping in Reset/JustEngagedWith/JustDied and the DATA_
 -- DISTILLER state machine in StartRageGen/DamageTaken/SpellHit
--- skipped); no FindNearestCreature/cross-creature bridge — the
+-- skipped); FindNearestCreature IS bridged
+-- (lua_creature_events.go:1154) but no cross-creature bridge — the
 -- rage Talk(SAY_REGEN) + self-cast of SPELL_WARLORDS_RAGE
--- 37081 + the distiller StartRageGen relay unmodeled (timer
--- bookkeeping only); the distiller's NOT_SELECTABLE/
+-- 37081 + the distiller StartRageGen relay stay unmodeled (timer
+-- bookkeeping only): StartRageGen (RemoveFlag pair + triggered
+-- SPELL_WARLORDS_RAGE_NAGA self-cast + instance DATA_DISTILLER
+-- state machine, boss_warlord_kalithresh.cpp:81-89) has no bearer,
+-- and porting the boss-side legs alone would fabricate the rage
+-- without its kill-the-distiller counterplay; the distiller's
+-- NOT_SELECTABLE/
 -- NON_ATTACKABLE setup stays unmodeled (unregistered creature); no
 -- SpellScript/AuraScript scripts in this file.
 

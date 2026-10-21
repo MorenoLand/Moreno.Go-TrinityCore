@@ -27,13 +27,18 @@
 -- Talk(SAY_SWARM 3), 5s init, no repeat (C++ does not reschedule;
 -- one-shot timer).
 -- Unmodeled (no bridges — documented, not wired):
--- The passive pre-fight model — ctor Reset leg SetReactState(REACT_PASSIVE)
--- (no react-state bridge — drakkari_colossus precedent); JustAppeared
--- -> SummonAdds() (instance->GetBossState(DATA_KRIKTHIR)==DONE gate +
+-- The passive pre-fight model — Reset leg SetReactState(REACT_PASSIVE)
+-- (SetReactState IS bridged — frozen_core precedent,
+-- lua_creature_events.go:524); JustAppeared -> SummonAdds()
+-- (instance->GetBossState(DATA_KRIKTHIR)==DONE gate +
 -- SummonCreatureGroup(1..3) with DATA_PET_GROUP stamping — the summon
 -- STRAND is absent, standing) — so nothing below is emulated.
--- MoveInLineOfSight passive-engage leg (JustEngagedWith(who) when passive
--- and within attack distance) — behind the absent react-state bridge.
+-- MoveInLineOfSight passive-engage leg (JustEngagedWith(who) when
+-- passive and within attack distance,
+-- boss_krikthir_the_gatewatcher.cpp:192-202) is fused to the
+-- Reset-passive leg: Go's ev27 fires only at the aggro-engage branch
+-- (lua_creature_events.go:1447), unreachable for a REACT_PASSIVE
+-- creature — a one-sided Reset port would freeze the boss passive.
 -- EVENT_SEND_GROUP (DoCastAOE(SUBBOSS_AGGRO_TRIGGER 52343, triggered),
 -- 70s repeat) — stays out: triggered cast behind the unbridged
 -- DoAction(ACTION_PET_ENGAGED) watcher machine, and the trigger's

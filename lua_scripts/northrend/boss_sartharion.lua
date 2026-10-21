@@ -80,8 +80,11 @@
 -- bridge; joins the unmodeled-achievement queue.
 -- CastLavaStrikeOnTarget — Cell::VisitAllObjects fire-cyclone
 -- search (NPC_FIRE_CYCLONE 30648) + random-cyclone CastSpell
--- (SPELL_LAVA_STRIKE 57571) on target — no creature-search /
--- cast bridges.
+-- (SPELL_LAVA_STRIKE 57571) on target (GetCreaturesInGrid IS
+-- bridged — lua_creature_events.go:1204 — but the arm stays out:
+-- NPC_FIRE_CYCLONE has no script summon site and SPELL_EFFECT_SUMMON
+-- has no Go case, so the cyclones never materialize; EVENT_LAVA_STRIKE
+-- rides the unported nine-event machine).
 -- UpdateAI — the nine-event machine's remaining legs:
 -- EVENT_HARD_ENRAGE SPELL_PYROBUFFET 56916 triggered (dead arm —
 -- declared but never scheduled; porting would fabricate casts);

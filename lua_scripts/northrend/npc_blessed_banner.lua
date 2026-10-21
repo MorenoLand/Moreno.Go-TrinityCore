@@ -51,7 +51,9 @@
 -- player-self-cast / faction / despawn bridges; the ctor
 -- MovePoint + SetFaction(FACTION_FRIENDLY) arm and the
 -- MovementInform POINT_MOTION_TYPE -> SetFaction(FACTION_
--- MONSTER) flip sit behind the movement / faction bridges —
+-- MONSTER) flip sit behind the movement bridge (SetFaction IS
+-- bridged — lua_creature_events.go:1125 — but the MovePoint /
+-- MovementInform machine that drives the flip is not) —
 -- documented-only. 63010/65147/63049 verifiable.
 -- npc_guardian_pavilion — the trespasser machine is entirely
 -- MoveInLineOfSight-driven (no proximity hook — Smeed /

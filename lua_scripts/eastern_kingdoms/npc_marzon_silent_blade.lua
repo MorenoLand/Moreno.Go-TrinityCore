@@ -23,8 +23,9 @@
 -- convention: DisappearAndDie -> immediate creature:Despawn());
 -- the summoner-DisappearAndDie leg stays out behind the
 -- no-summoner-access bridge. The
--- C++ Reset RestoreFaction arm has no faction bridge —
--- unmodeled. The C++ MovementInform POINT_MOTION_TYPE cross-AI
+-- C++ Reset RestoreFaction arm stays out behind the summon/escort/
+-- quest machines that gate the whole unit (SetFaction itself is
+-- bridged — lua_creature_events.go:1125). The C++ MovementInform POINT_MOTION_TYPE cross-AI
 -- latch (CAST_AI into the lescovar AI's uiTimer/uiPhase) has no
 -- movement bridge — unmodeled. Melee is engine-driven.
 -- npc_tyrion (quest-434 OnQuestAccept -> FindNearestCreature(
@@ -39,8 +40,8 @@
 -- npc_lord_gregor_lescovar (escort AI: waypoint 14/16 chains;
 -- SummonCreature(NPC_MARZON_BLADE 1755) behind the no-summon
 -- bridge; phase-5/7 Marzon/lescovar cross-creature Talk + the
--- SetFaction(FACTION_MONSTER) traitor flip behind the no-
--- faction bridge; guards' GetCreatureListWithEntryInGrid +
+-- SetFaction(FACTION_MONSTER) traitor flip ride the unbridged escort/
+-- quest machines (SetFaction itself is bridged); guards' GetCreatureListWithEntryInGrid +
 -- DisappearAndDie behind the world-search / despawn bridges;
 -- AreaExploredOrEventHappens(QUEST_THE_ATTACK 434) quest credit
 -- behind the no-quest bridge) — documented only.

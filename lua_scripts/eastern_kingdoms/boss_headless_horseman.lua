@@ -81,9 +81,12 @@
 -- - Reset/JustReachedHome/InitializeAI legs: SetDisableGravity/SetHover
 --   (no bridge), _summons.DespawnAll (moot — zero summons are modeled
 --   in this file; the stale "no despawn bridge" parenthetical is
---   retracted, supremus precedent), SetReactState
---   (no react-state bridge — koltira precedent), SetImmuneToPC (no
---   bridge). HandleInitialSetup's DoCastSelf(42413/43877) self-casts were
+--   retracted, supremus precedent), SetReactState (SetReactState
+--   IS bridged — frozen_core precedent, lua_creature_events.go:524;
+--   the JustReachedHome REACT_AGGRESSIVE leg is a no-op in the Lua
+--   model since the REACT_PASSIVE phase-machine leg is unported),
+--   SetImmuneToPC (no bridge). HandleInitialSetup's
+--   DoCastSelf(42413/43877) self-casts were
 --   "stranded halves" (rageclaw/phoenix_tk precedent) only before the ev5
 --   spawn bridge landed; they now port on event 5 below, which fires at the
 --   exact C++ JustAppeared moments (fireCreatureSpawned, initial + respawn).
