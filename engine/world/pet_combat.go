@@ -4586,6 +4586,27 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2535): the
+	// IsImmunedToDamage check is the FIRST arm of the damage block -
+	// ahead of CalculateSpellDamageTaken (Spell.cpp:2538), so ahead of
+	// the block, resilience, resist and absorb legs below. On immune the
+	// damage zeroes and NO damage-log packet is sent ("no packet found
+	// in sniffs"); DealSpellDamage never runs, so no hooks, strips,
+	// leech or shield consumption fire. C++ gates the check on
+	// m_damage > 0 - a miss never consults immunity.
+	if damage > 0 && petSpellKnown {
+		immuneToDmg := false
+		if isPlayerVictim {
+			if vs := s.server.findSessionByGUID(target.GUID); vs != nil && vs.player != nil {
+				immuneToDmg = vs.isImmuneToDamageSpell(petSpell, uint32(schoolMask))
+			}
+		} else if s.findCreatureMotion(target.GUID) != nil {
+			immuneToDmg = creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), petSpell, uint32(schoolMask))
+		}
+		if immuneToDmg {
+			return
+		}
+	}
 	// Unit::CalculateSpellDamageTaken block arm (Unit.cpp:1013-1062) with
 	// Unit::isSpellBlocked (Unit.cpp:2412-2430): melee/ranged-DmgClass
 	// physical-school spells can be blocked from a pet caster — the block
@@ -4688,27 +4709,6 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// (Spell.cpp:2909), ahead of DealDamage's CHEAT_GOD return
 	// (Unit.cpp:735-737), so a god-cheat victim still feeds the heal —
 	// the damage log below likewise carries the pre-negation amount.
-	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2530): the
-	// IsImmunedToDamage arm zeroes the damage and sends NO damage-log packet
-	// ("no packet found in sniffs") — immunity shows only via the miss path;
-	// DealSpellDamage never runs, so no hooks, strips, or leech fire. The
-	// check sits after the taken legs like C++ (post-CalculateSpellDamageTaken)
-	// and ahead of the log send.
-	immuneToDmg := false
-	if s.server != nil && s.server.Data != nil {
-		if dmgSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
-			if isPlayerVictim {
-				if vs := s.server.findSessionByGUID(target.GUID); vs != nil && vs.player != nil {
-					immuneToDmg = vs.isImmuneToDamageSpell(dmgSpell, uint32(schoolMask))
-				}
-			} else if s.findCreatureMotion(target.GUID) != nil {
-				immuneToDmg = creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), dmgSpell, uint32(schoolMask))
-			}
-		}
-	}
-	if immuneToDmg {
-		return
-	}
 	leechDealt := damage - overkill
 	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
