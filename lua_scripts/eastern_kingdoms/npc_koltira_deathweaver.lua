@@ -30,10 +30,11 @@
 --   Talk(SAY_KOLTIRA_0); then 5s EVENT_INTRO_1 ->
 --   Talk(SAY_KOLTIRA_1) (C++-exact schedule legs).
 -- - OnGossipHello: if the event-gossip state is set, send
---   C++-exact gossip menu TEXT_ID_EVENT (13425); otherwise do
---   nothing — the Go server loads the default (quest) menu when
---   the hook leaves s.gossip unset (gossip.go:82), which matches
---   C++ returning false from OnGossipHello.
+--   C++-exact gossip menu TEXT_ID_EVENT (13425); otherwise return
+--   false — the Go hook vetoes the default menu when registered
+--   unless a hook returns boolean false (gossip.go:138-150), so the
+--   explicit false is the twin of C++ returning false from
+--   OnGossipHello.
 -- - OnReset (23): cancel timers + clear the event-gossip state
 --   (the C++ Reset's _events.Reset() / _eventGossip=false residue;
 --   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) (chapter2.cpp:142)
@@ -167,9 +168,13 @@ local function onQuestAccept(event, player, creature, quest)
 end
 
 local function onGossipHello(event, player, creature)
-    if eventGossip[creature:GetGUID()] then
-        player:GossipSendMenu(0, creature, TEXT_ID_EVENT)
+    -- chapter2.cpp:112-126 — the non-event branch returns false (the
+    -- default menu loads); a nil return would veto it in Go
+    -- (gossip.go:138-150), so the C++-false arm must return false here.
+    if not eventGossip[creature:GetGUID()] then
+        return false
     end
+    player:GossipSendMenu(0, creature, TEXT_ID_EVENT)
 end
 
 local function onReset(_, creature)

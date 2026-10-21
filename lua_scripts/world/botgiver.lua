@@ -125,13 +125,13 @@ local function costString(cost)
     local copper = rem % 100
     local str = ""
     if gold ~= 0 then
-        str = str .. gold .. " |TInterface\\Icons\\INV_Misc_Coin_01:8|t"
+        str = str .. gold .. " |TInterface\\\\Icons\\\\INV_Misc_Coin_01:8|t"
     end
     if silver ~= 0 then
-        str = str .. silver .. " |TInterface\\Icons\\INV_Misc_Coin_03:8|t"
+        str = str .. silver .. " |TInterface\\\\Icons\\\\INV_Misc_Coin_03:8|t"
     end
     if copper ~= 0 then
-        str = str .. copper .. " |TInterface\\Icons\\INV_Misc_Coin_05:8|t"
+        str = str .. copper .. " |TInterface\\\\Icons\\\\INV_Misc_Coin_05:8|t"
     end
     return str
 end
