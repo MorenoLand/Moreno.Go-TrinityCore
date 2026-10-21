@@ -115,14 +115,18 @@
 -- despawn bridge" parenthetical was stale, creature:Despawn() is
 -- bridged, lua_creature_events.go:236); else cross-AI
 -- jaraxxus->AI()->JustSummoned
--- (no cross-AI bridge) + SetReactState(REACT_PASSIVE) (no react
--- bridge) + DoCastSelf(Legion Flame Effect 66201) — self-cast
--- bridged in isolation but instance-gated in C++: ungated emulation
--- would fire outside the encounter window (jedoga over-cast bar) —
+-- (no cross-AI bridge) + SetReactState(REACT_PASSIVE)
+-- (SetReactState IS bridged — frozen_core precedent; the arm stays
+-- out on the instance gate + cross-AI JustSummoned) +
+-- DoCastSelf(Legion Flame Effect 66201) — self-cast bridged in
+-- isolation but instance-gated in C++: ungated emulation would fire
+-- outside the encounter window (jedoga over-cast bar) —
 -- documented-only; joins the entry-verifiable-but-bridge-blocked
 -- queue.
 -- npc_infernal_volcano (34813): Reset — SetReactState(REACT_PASSIVE)
--- (no react bridge) + DoCastSelf(Infernal Eruption Effect 66252) +
+-- (SetReactState IS bridged — frozen_core precedent; the arm stays
+-- out behind the unbridged summon gate) +
+-- DoCastSelf(Infernal Eruption Effect 66252) +
 -- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (flag bridge exists
 -- (IsHeroic() is bridged — the "no difficulty bridge" leg of the
 -- kelidan precedent is STALE) but the arm still rides the unbridged
@@ -141,9 +145,10 @@
 -- interrupt, etc.)
 -- npc_nether_portal (34825): Reset — SetReactState(REACT_PASSIVE) +
 -- DoCastSelf(Nether Portal Effect 66263) + heroic RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE) — no react bridge (the flag bridge
--- exists and the "no difficulty bridge" claim is STALE — IsHeroic()
--- is bridged) but the arm rides the unbridged summon gate (burrower
+-- UNIT_FLAG_NOT_SELECTABLE) — SetReactState IS bridged
+-- (frozen_core precedent; the flag bridge exists and the
+-- "no difficulty bridge" claim is STALE — IsHeroic() is bridged)
+-- but the arm rides the unbridged summon gate (burrower
 -- precedent) — documented-only; joins the
 -- entry-verifiable-but-bridge-blocked queue.
 -- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:

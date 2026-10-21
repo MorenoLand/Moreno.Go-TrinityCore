@@ -91,16 +91,18 @@
 -- one-shot 5s.
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries
 -- 24200 / 24201):
--- generic_boss_controllerAI::JustDied (lines 124-142) — when the other
+-- generic_boss_controllerAI::JustDied (lines 121-137) — when the other
 -- boss is alive: Talk(SAY_DIED_FIRST 2) + RemoveFlag(UNIT_DYNFLAG_LOOTABLE)
 -- + cross-creature DoAction(ACTION_OTHER_JUST_DIED) + TRIGGERED
 -- DoCast(me, SPELL_SUMMON_SKARVALD_GHOST 48613 / SPELL_SUMMON_DALRONN_GHOST
--- 48612, true) (line 134); when both are dead: Talk(SAY_DEATH 1) +
+-- 48612, true) (line 128); when both are dead: Talk(SAY_DEATH 1) +
 -- cross-creature DoAction(ACTION_DESPAWN_SUMMONS) + _JustDied().
--- BLOCKED: the whole arm rides instance->GetGuidData(OtherBossData)
--- (no instance-GuidData bridge) and cross-creature DoAction
--- (no DoAction bridge); the triggered ghost summon is a summon leg.
--- Event 4 deliberately NOT registered (neither Talk is unconditional).
+-- PORTED 2026-10-21: the Talk + RemoveFlag legs are C++-exact under the
+-- twin_valkyr per-pull death-counter model (first ev4 of the pull takes
+-- the other-alive branch, second the both-dead branch; counter reset on
+-- engage since ev23 fires ahead of ev4 on the death path). STILL OUT:
+-- the cross-creature DoAction legs (no DoAction bridge), the triggered
+-- ghost summon (summon leg), the summons-despawn leg, and _JustDied().
 -- DoAction(ACTION_OTHER_JUST_DIED) (lines 144-157) — schedules
 -- EVENT_DEATH_RESPONSE (2s) -> Talk(SAY_DEATH_RESPONSE 4) (lines
 -- 159-163); DoAction-gated, no bridge. ACTION_DESPAWN_SUMMONS
@@ -115,6 +117,8 @@ local ENTRY_SKARVALD = 24200
 local ENTRY_DALRONN = 24201
 
 local SAY_AGGRO = 0
+local SAY_DEATH = 1
+local SAY_DIED_FIRST = 2
 local SAY_KILL = 3
 
 local SPELL_CHARGE = 43651
@@ -125,6 +129,18 @@ local SPELL_DEBILITATE = 43650
 
 local timers = {}
 local enraged = {}
+
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79);
+-- UNIT_DYNFLAG_LOOTABLE (SharedDefines.h:3128).
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
+-- Both bosses share this module scope, so the C++ otherBoss->IsAlive()
+-- liveness check is modeled as a per-pull death count: the first death of
+-- a pull takes the other-alive branch, the second the both-dead branch
+-- (twin_valkyr precedent). Reset on engage — ev23 also fires on the death
+-- path (ahead of ev4), so the counter cannot live in reset().
+local bossDeaths = 0
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -216,6 +232,7 @@ end
 local function skarvaldEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    bossDeaths = 0
     creature:Talk(SAY_AGGRO)
     schedule(guid, "charge", 5000, function() chargeTick(creature, guid) end)
     schedule(guid, "stonestrike", 10000, function() stoneStrikeTick(creature, guid) end)
@@ -227,6 +244,19 @@ end
 
 local function skarvaldDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ generic_boss_controllerAI::JustDied (lines 121-137): first death
+    -- of the pull takes the other-alive branch — Talk(SAY_DIED_FIRST),
+    -- then RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE); second
+    -- death takes the both-dead branch — Talk(SAY_DEATH). The cross-AI
+    -- DoAction legs, the ghost-summon DoCast and the summons-despawn leg
+    -- stay out (no DoAction/summon bridges).
+    bossDeaths = bossDeaths + 1
+    if bossDeaths >= 2 then
+        creature:Talk(SAY_DEATH)
+    else
+        creature:Talk(SAY_DIED_FIRST)
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+    end
 end
 
 local function skarvaldReset(event, creature)
@@ -288,6 +318,7 @@ end
 local function dalronnEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    bossDeaths = 0
     schedule(guid, "shadowbolt", 1000, function() shadowBoltTick(creature, guid) end)
     schedule(guid, "debilitate", 5000, function() debilitateTick(creature, guid) end)
     -- C++ EVENT_DELAYED_AGGRO_SAY (lines 276-278): Talk(SAY_AGGRO), init 5s
@@ -301,6 +332,16 @@ end
 
 local function dalronnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- Same C++ generic_boss_controllerAI::JustDied model as skarvaldDied:
+    -- first death of the pull takes the other-alive branch, second the
+    -- both-dead branch; cross-AI DoAction / summon legs stay out.
+    bossDeaths = bossDeaths + 1
+    if bossDeaths >= 2 then
+        creature:Talk(SAY_DEATH)
+    else
+        creature:Talk(SAY_DIED_FIRST)
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+    end
 end
 
 local function dalronnReset(event, creature)

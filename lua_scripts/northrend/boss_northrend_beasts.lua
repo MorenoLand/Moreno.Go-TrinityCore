@@ -112,7 +112,9 @@
 -- AttackStart / AttackStartCaster movement legs (no motion bridges).
 -- npc_beasts_combat_stalker (36549 — kalecgos pass; instance binds
 -- NPC_BEASTS_COMBAT_STALKER -> DATA_BEASTS_COMBAT_STALKER): Reset —
--- SetReactState(REACT_PASSIVE) (no react bridge) + EVENT_BERSERK
+-- SetReactState(REACT_PASSIVE) (SetReactState IS bridged —
+-- frozen_core precedent; the arm stays out behind the
+-- instance / combat-stalker model) + EVENT_BERSERK
 -- IsHeroic() ? 9min : 15min (stale "no difficulty bridge" retracted:
 -- IsHeroic() IS bridged, lua_creature_events.go:260 — the arm stays
 -- out behind the instance/combat-stalker model, not difficulty);

@@ -93,7 +93,9 @@
 -- boss_ionar.cpp — the acolyte_of_shadron / stormforged_lieutenant
 -- local-enum precedent) — entry-verifiable but bridge-blocked, no
 -- registration (the stormforged_lieutenant no-bridgeable-arms
--- precedent): Reset (REACT_PASSIVE — no react bridge);
+-- precedent): Reset (REACT_PASSIVE — SetReactState IS bridged,
+-- frozen_core precedent; the arm stays out behind the unbridged
+-- summon / movement machines);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
 -- DespawnOrUnsummon — no motion bridge; DamageTaken uiDamage = 0 —
 -- REGISTERED 2026-10-19 (event 9, return false, 0 — halazzi

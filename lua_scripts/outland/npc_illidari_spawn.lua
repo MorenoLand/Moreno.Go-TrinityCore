@@ -22,9 +22,11 @@
 -- 38467 every 5s) but no NPC_ entry constant anywhere in the C++
 -- sources — the drake's own entry lives DB-side only — documented-only
 -- (standing rule: no invented identifiers).
--- npc_enslaved_netherwing_drake: the Tapped arm sits behind SpellHit
--- (event 14 — no SpellHit bridge) and the faction/move/fly arms behind
--- the no-faction / movement / gravity bridges — documented-only.
+-- npc_enslaved_netherwing_drake: the Tapped arm's SpellHit gate
+-- (event 14 — ev14 IS bridged, nagrand_banner precedent) but the
+-- arm's EFFECT legs — SetFaction / movement / gravity — stay
+-- unbridged, and the drake has no verifiable entry to register —
+-- documented-only.
 -- npc_earthmender_wilda: EscortAI (no escort bridge) + OnQuestAccept
 -- (no quest-accept bridge) — documented-only (omor precedent).
 -- npc_torloth_the_magnificent (22076, verifiable from WavesInfo): the

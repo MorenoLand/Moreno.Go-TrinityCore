@@ -81,7 +81,9 @@
 -- periodic arms run through VehicleAI::UpdateAI (the base is
 -- unmodeled — wyrmrest_defender precedent); SpellHit 59335 ->
 -- self-cast 54690 / 59319 -> DoCastAOE(59375) + EVENT_FLY_AWAY
--- 100ms (no SpellHit bridge — fizzule precedent); IsSummonedBy
+-- 100ms (ev14 IS bridged — nagrand_banner precedent; the arms stay
+-- out behind the unmodeled VehicleAI base and movement / summon
+-- bridges); IsSummonedBy
 -- MovePoint(POINT_GRAB_DECOY) + MovementInform -> DoCast(
 -- summoner, 59318) behind the movement / summon bridges —
 -- documented-only. No NPC_ entry constant in the C++ sources;
