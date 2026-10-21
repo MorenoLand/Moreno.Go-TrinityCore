@@ -238,6 +238,12 @@ end
 -- C++ boss_professor_putricide::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 local function putricideJustDied(event, creature, killer)
+    -- C++ _JustDied() resets the EventMap (boss_professor_putricide.cpp:
+    -- JustDied opens with it): cancel the CreateLuaEvent timers — they
+    -- have no death auto-cancel, so the self-re-arming slime-puddle leg
+    -- would keep firing on the corpse (festergut/rotface death-cancel
+    -- precedent).
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     -- C++ :302 — DoCast(SPELL_MUTATED_PLAGUE_CLEAR), single-arg DoCast
     -- resolves via AISpellInfo, which defaults to AITARGET_SELF

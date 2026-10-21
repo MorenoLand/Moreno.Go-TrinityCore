@@ -286,6 +286,15 @@ end
 -- C++ boss_sindragosa::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 local function sindragosaJustDied(event, creature, killer)
+    -- C++ _JustDied() resets the EventMap (boss_sindragosa.cpp:260):
+    -- cancel the CreateLuaEvent timers — they have no death
+    -- auto-cancel, so the self-re-arming ice-tomb / third-phase-check
+    -- legs would keep firing on the corpse (festergut/rotface
+    -- death-cancel precedent); drop the per-GUID third-phase latch
+    -- like Reset does.
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    sindragosaThirdPhase[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 
