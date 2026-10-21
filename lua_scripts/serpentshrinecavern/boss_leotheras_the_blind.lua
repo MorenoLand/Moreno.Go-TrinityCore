@@ -40,8 +40,9 @@
 -- unmodeled, below; needThreatReset arm (fires when the
 -- whirlwind aura lapses or a form switches): demonForm ->
 -- innerDemons=30000, else whirlwind=15000, needThreatReset=false
--- (the ResetThreatList + MotionMaster Clear/MoveChase arms have
--- no threat/movement bridges — unmodeled, below). Berserk
+-- (the MotionMaster Clear/MoveChase half has no movement bridge —
+-- unmodeled; the ResetThreatList half is PORTED below via
+-- creature:ClearThreatList). Berserk
 -- 26662 600s one-shot (EnrageUsed-guarded): non-triggered self-
 -- cast (C++-exact; the InterruptNonMeleeSpells arm has no
 -- interrupt bridge — krosh convention). Nightelf form: whirlwind
@@ -151,8 +152,9 @@
 -- Spellbinder (21806) CheckChannelers summons, the inner-demon
 -- (21857) summon arms and the final-form demon-copy (21875)
 -- spawn unmodeled (firesworn/hydross convention); no movement/
--- threat bridge — the whirlwind target-switch MovePoint, the
--- NeedThreatReset ResetThreatList/MoveChase arms, the chaos-
+-- threat bridge beyond ClearThreatList — the whirlwind target-switch
+-- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
+-- half is PORTED below via creature:ClearThreatList), the chaos-
 -- blast StopMoving arm and the leotheras MoveInLineOfSight
 -- intro/aggro machine unmodeled; the switch-to-demon + Reset
 -- MODEL_DEMON(20125)/MODEL_NIGHTELF(20514) SetDisplayId swaps and

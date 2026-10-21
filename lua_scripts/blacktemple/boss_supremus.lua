@@ -19,7 +19,8 @@
 -- STRIKE phase: hateful strike 41926 2s then 5s, non-triggered on
 -- the highest-health melee-range threat target (see deviations) +
 -- the snare aura 41922 is removed and the taunt immunes drop (the
--- immune arms have no bridge). CHASE phase: volcanic summon 40276
+-- drops are no-op removes of rows the raises never inserted; the
+-- bridge exists: creature:ApplySpellImmune). CHASE phase: volcanic summon 40276
 -- 5s then 10s, triggered cast at the boss's own location (C++
 -- DoCastAOE) + Talk(EMOTE_GROUND_CRACK) / charge 41581 10s then 10s,
 -- non-triggered on a random alive player within 100 yd excluding
@@ -235,13 +236,13 @@ local function onSwitchTarget(creature, guid)
 end
 
 -- C++ ChangePhase: STRIKE from INITIAL or CHASE (removes the snare
--- aura; the taunt-immune drops and the volcano summons' DoAction
--- have no bridges); CHASE otherwise (arms volcano/switch-target,
--- non-triggered self-cast snare; the taunt-immune raise has no
--- bridge). The ResetThreatList/DoZoneInCombat arms are skipped:
--- ClearThreatList is bridged but DoZoneInCombat has no bridge, and the
--- C++-exact threat result is unknowable without one (the GO table
--- would otherwise be emptied with no re-target).
+-- aura; the taunt-immune drops are no-op removes of un-inserted rows
+-- and the volcano summons' DoAction has no bearer); CHASE otherwise
+-- (arms volcano/switch-target, non-triggered self-cast snare; the
+-- taunt-immune raise stays out — the Go taunt path doesn't consult
+-- the immunity rows). The ResetThreatList arm is PORTED below; the
+-- DoZoneInCombat re-engage has no bridge — Go keeps the stale victim
+-- while the table rebuilds from damage.
 -- EVENT_SWITCH_PHASE is re-armed 60s unconditional (C++-exact).
 -- NOTE (2026-10-13): the opposite-phase timer cancels above are
 -- LOCAL-TREE-exact. Stock TC's EventMap keeps phase-mismatched
@@ -271,7 +272,8 @@ local function changePhase(creature, guid)
         end)
     end
     -- C++ ChangePhase tail (supremus.cpp:113): ResetThreatList() before the
-    -- 60s re-arm (DoZoneInCombat is already the Go combat state).
+    -- 60s re-arm (the DoZoneInCombat re-engage has no bridge — Go keeps
+    -- the stale victim while the table rebuilds from damage).
     creature:ClearThreatList()
     schedule(guid, "switchphase", 60000, function()
         changePhase(creature, guid)

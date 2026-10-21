@@ -238,8 +238,9 @@ end
 -- (vaelastrasz convention: CastSpell(creature, spell) = DoCastSelf).
 -- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg needs the absent flag
 -- bridge; the flag is only set by the unported SpellHitTarget
--- insanity machine (event 15 never fires), so it never fires in
--- Lua. Event 9 fires pre-damage carrying damage (eck precedent),
+-- insanity machine (stays out on reachability/payload grounds — see
+-- header), so it never fires in Lua. Event 9 fires pre-damage
+-- carrying damage (eck precedent),
 -- so pre/post pct are C++-exact. No once-latch in C++: a re-cross
 -- after a heal re-fires.
 local function volazjDamageTaken(event, creature, attacker, damage)

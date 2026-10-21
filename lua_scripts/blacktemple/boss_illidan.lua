@@ -1035,8 +1035,8 @@ local function flameEnterCombat(event, creature)
 end
 
 -- C++ Reset: triggered self-cast 39856 (C++-exact; the boss-state
--- despawn check is blocked on the instance-script model, REACT_
--- PASSIVE has no bridge). The Reset timer arming is redundant
+-- despawn check is blocked on the instance-script model). The Reset
+-- timer arming is redundant
 -- with the EnterCombat arming — modeled on combat only.
 local function flameReset(event, creature)
     local guid = creature:GetGUID()

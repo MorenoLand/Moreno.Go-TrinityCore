@@ -2873,6 +2873,7 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 	} else {
 		motion := &creatureMotion{
 			GUID:       target.GUID,
+			DisplayID:  st.Model, // native template display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
 			LootMode:   lootModeDefault,
 			Entry:      uint32(entry),
 			Map:        target.Map,
