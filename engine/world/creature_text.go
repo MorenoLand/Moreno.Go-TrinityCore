@@ -23,6 +23,10 @@ type CreatureText struct {
 	Emote       uint32
 	Duration    uint32
 	Sound       uint32
+	// TextRange is the row's broadcast range (CreatureTextEntry.TextRange,
+	// CreatureTextMgr.h:55; TEXT_RANGE_NORMAL=0, AREA=1, ZONE=2, MAP=3,
+	// WORLD=4 at :33-40). DB default 0.
+	TextRange uint8
 }
 
 type creatureTextMgr struct {
@@ -40,7 +44,15 @@ func (s *Server) loadCreatureTexts(ctx context.Context, creatureID uint32) map[u
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || creatureID == 0 {
 		return nil
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound FROM creature_text WHERE CreatureID = ? ORDER BY GroupID, ID", creatureID)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound, TextRange FROM creature_text WHERE CreatureID = ? ORDER BY GroupID, ID", creatureID)
+	withRange := true
+	if err != nil && isMissingColumn(err) {
+		// DBs missing the TextRange column (CreatureTextEntry.TextRange,
+		// CreatureTextMgr.h:55): fall back to the range-less load; rows keep
+		// TextRange 0 (TEXT_RANGE_NORMAL, the DB default).
+		rows, err = s.WorldStore.DB.QueryContext(ctx, "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound FROM creature_text WHERE CreatureID = ? ORDER BY GroupID, ID", creatureID)
+		withRange = false
+	}
 	if err != nil {
 		return nil
 	}
@@ -50,7 +62,13 @@ func (s *Server) loadCreatureTexts(ctx context.Context, creatureID uint32) map[u
 	for rows.Next() {
 		var t CreatureText
 		var p float64
-		if err := rows.Scan(&t.CreatureID, &t.GroupID, &t.ID, &t.Text, &t.Type, &t.Language, &p, &t.Emote, &t.Duration, &t.Sound); err == nil {
+		var scanErr error
+		if withRange {
+			scanErr = rows.Scan(&t.CreatureID, &t.GroupID, &t.ID, &t.Text, &t.Type, &t.Language, &p, &t.Emote, &t.Duration, &t.Sound, &t.TextRange)
+		} else {
+			scanErr = rows.Scan(&t.CreatureID, &t.GroupID, &t.ID, &t.Text, &t.Type, &t.Language, &p, &t.Emote, &t.Duration, &t.Sound)
+		}
+		if scanErr == nil {
 			t.Probability = float32(p)
 			groups[t.GroupID] = append(groups[t.GroupID], t)
 		}
@@ -110,16 +128,17 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 	// (0x2A) with TEXT_RANGE_NORMAL the chat packet and the sound go to the
 	// whisper target only (CreatureTextMgrImpl.h:87, CreatureTextMgr.cpp:306).
 	// Non-player whisper targets drop the message, like C++.
-	whispered := chatType == 0x0F || chatType == 0x2A
+	// The whisper drop applies only when the row's effective range is
+	// TEXT_RANGE_NORMAL: SendChat replaces the passed range with the row's
+	// TextRange (CreatureTextMgr.cpp:253-254; CreatureAI::Talk always passes
+	// TEXT_RANGE_NORMAL, CreatureAI.cpp:48-51), and both the sound leg
+	// (CreatureTextMgr.cpp:322-331) and the chat leg
+	// (CreatureTextMgrImpl.h:107-117) drop a null/non-player whisper target
+	// only under TEXT_RANGE_NORMAL. A whisper row with AREA/ZONE/MAP/WORLD
+	// range falls through to the range broadcast like any other row.
+	whispered := (chatType == 0x0F || chatType == 0x2A) && chosen.TextRange == 0
 	var whisperSess *session
 	if whispered {
-		// CreatureTextMgr::SendNonChatPacket (CreatureTextMgr.cpp:322-331):
-		// for whisper rows with TEXT_RANGE_NORMAL — the only range
-		// CreatureAI::Talk ever passes (CreatureAI.cpp:48-51) — a null or
-		// non-player whisper target silently drops the chat message AND its
-		// sound; they are never broadcast. The emote leg is gated separately
-		// below (CreatureTextMgr::SendEmote has no whisper target, so the
-		// emote still broadcasts to nearby).
 		if whisperTarget != 0 {
 			whisperSess = s.findSessionByGUID(whisperTarget)
 		}
