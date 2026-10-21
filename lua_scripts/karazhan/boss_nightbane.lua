@@ -23,9 +23,10 @@
 -- / DoAction) and the whole fly-phase waypoint choreography are
 -- compressed into timer chains — the pre-fly waypoint choice (nearest of
 -- the three fly positions) fires 1ms after liftoff, the fly-to-landing
--- spline travel is approximated as two 5s delays, and liftoff/land
--- emotes, gravity flips, react-state flips, AttackStop, and
--- InterruptNonMeleeSpells have no bridge. No gameobject event dispatch
+-- spline travel is approximated as two 5s delays; liftoff/land emotes
+-- port via creature:PerformEmote (254/293), while gravity flips,
+-- react-state flips, AttackStop, and InterruptNonMeleeSpells have
+-- no bridge. No gameobject event dispatch
 -- exists in the engine, so the go_blackened_urn gossip arm (entry 194092)
 -- and the intro (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
 -- are not modeled: the port starts directly at the landing combat state.
@@ -225,6 +226,11 @@ local function onEndPhaseTwo(creature, guid)
     if nightbaneState[guid] == nil then
         return
     end
+    -- C++ MovementInform POINT_PHASE_TWO_LANDING arrival
+    -- (boss_nightbane.cpp:228):
+    -- me->HandleEmoteCommand(EMOTE_ONESHOT_LAND) (SharedDefines.h:2007,
+    -- value 293), before the 3s EVENT_LANDED schedule.
+    creature:PerformEmote(293)
     -- C++ MoveAlongSplineChain(POINT_PHASE_TWO_LANDING, ...) arrival —
     -- 5s approximates the descent with no movement model.
     schedule(guid, "f_landed", 5000, function() onLanded(creature, guid) end)
@@ -266,11 +272,16 @@ local function startPhaseFly(creature, guid)
     end
     -- C++ StartPhaseFly: ++_flyCount, Talk(YELL_FLY_PHASE), cancel the
     -- ground group, interrupt non-melee casts, liftoff emote, gravity on,
-    -- react passive, AttackStop — the last five have no bridge.
+    -- react passive, AttackStop — the liftoff emote ports via
+    -- creature:PerformEmote (below); the other four have no bridge.
     st.flyCount = st.flyCount + 1
     st.phase = PHASE_FLY
     creature:Talk(YELL_FLY_PHASE)
     cancelPrefix(guid, "g_")
+    -- C++ StartPhaseFly (boss_nightbane.cpp:258):
+    -- me->HandleEmoteCommand(EMOTE_ONESHOT_LIFTOFF) (SharedDefines.h:2003,
+    -- value 254), between the interrupt and the gravity legs.
+    creature:PerformEmote(254)
     -- The MovePoint to the nearest pre-fly/fly position has no movement
     -- model; the arrival fires 1ms later exactly like C++'s
     -- EVENT_PRE_FLY_END -> MovePoint(POINT_PHASE_TWO_FLY) chain.

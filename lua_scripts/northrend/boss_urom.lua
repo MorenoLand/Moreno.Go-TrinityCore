@@ -50,9 +50,10 @@
 -- tionally would be C++-inexact, so both are documented-only here
 -- (no _platform / random-shuffle-group state bridge, no summon
 -- bridge (summon STRAND absent)).
--- Reset — SetControlled(false, UNIT_STATE_ROOT) + SetDisableGravity
--- (false) + SetReactState(REACT_AGGRESSIVE) — no react-state /
--- gravity / control / instance bridges; the ungated DoCastSelf(
+-- Reset — SetControlled(false, UNIT_STATE_ROOT) ports via
+-- creature:SetRooted(false) (uromReset); SetDisableGravity(false) has
+-- no bridge and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua
+-- never sets REACT_PASSIVE); the ungated DoCastSelf(
 -- SPELL_EVOCATE 51602) leg is ported on OnReset(23) (the Reset bullet's
 -- earlier "no cast bridge" line was stale — creature:CastSpell is
 -- established in-tree); _Reset() has no bridge.

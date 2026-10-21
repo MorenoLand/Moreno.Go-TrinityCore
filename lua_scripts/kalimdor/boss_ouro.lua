@@ -156,13 +156,18 @@ local function onBack(creature, guid)
     end)
 end
 
--- C++ Submerge_Timer (!Submerged): emote/flag/faction legs are
--- no-bridge (documented-only); the Dirt Mound Passive 26092
--- self-cast is the ported submerge visual. Latched in st(guid);
+-- C++ Submerge_Timer (!Submerged): flag/faction legs are no-bridge
+-- (documented-only); the submerge emote ports via
+-- creature:PerformEmote(374) and the Dirt Mound Passive 26092 self-cast
+-- is the ported submerge visual. Latched in st(guid);
 -- Back_Timer = urand(30000,45000), C++-verbatim.
 onSubmerge = function(creature, guid)
     local s = st(guid)
     s.submerged = true
+    -- C++ boss_ouro.cpp:114:
+    -- me->HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE) (SharedDefines.h:2012,
+    -- value 374), before the flag/faction/cast legs.
+    creature:PerformEmote(374)
     creature:CastSpell(creature, SPELL_DIRTMOUND_PASSIVE)
     schedule(guid, "back", math.random(30000, 45000), function()
         onBack(creature, guid)
