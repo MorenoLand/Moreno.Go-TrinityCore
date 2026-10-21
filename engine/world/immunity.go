@@ -1043,8 +1043,10 @@ func canSpellProvideImmunityAgainstAura(spell, auraSpell wotlk.Spell) bool {
 // that grants the target its immunity. The DISPEL_AURAS_ON_IMMUNITY arm is
 // the full CanSpellProvideImmunityAgainstAura form (SpellInfo.cpp:2923-2998).
 func canSpellPierceImmuneAura(spell, immuneSpell wotlk.Spell) bool {
-	// Aura can't be pierced.
-	if immuneSpell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+	// Aura can't be pierced. The zero-value immune spell is the Go twin
+	// of a nil auraSpellInfo (SpellInfo.cpp:1339): an unresolvable
+	// immunity grant cannot be pierced.
+	if immuneSpell.ID == 0 || immuneSpell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
 		return false
 	}
 	// These spells pierce all available spells (Resurrection Sickness for example).

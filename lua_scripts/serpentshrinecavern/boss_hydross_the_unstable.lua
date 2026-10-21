@@ -63,8 +63,10 @@
 -- (the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the Reset-side
 -- DeSummonBeams + Summons.DespawnAll are summon-blocked; the
--- instance SetData(NOT_STARTED), SetMeleeDamageSchool, ApplySpell
--- Immune arms have no bridges; the SetDisplayId arm is ported).
+-- instance SetData(NOT_STARTED) and SetMeleeDamageSchool have no
+-- bridges; the ApplySpellImmune Reset/tick arms are PORTED 2026-10-20
+-- (creature:ApplySpellImmune bridge, lua_creature_events.go); the
+-- SetDisplayId arm is ported).
 -- Deliberate deviations (all await engine bridges): no summon
 -- bridge — the first-UpdateAI-tick SummonBeams pair (ENTRY_BEAM_
 -- DUMMY 21934 + triggered SPELL_BLUE_BEAM 38015), the 4x pure/
@@ -80,8 +82,10 @@
 -- 2026-10-20 (handler-surface creature:SetDisplayId bridge,
 -- lua_creature_events.go — C++ arm order, first at both switches
 -- and at Reset); no school bridge — SetMeleeDamageSchool
--- and the ApplySpellImmune frost/nature immunity arms unmodeled
--- (karazhan mana-feeder convention); no instance-script model —
+-- unmodeled, and the JustSummoned elemental ApplySpellImmune arms
+-- stay summon-blocked; the Reset + both form-switch ApplySpellImmune
+-- frost/nature arms are PORTED 2026-10-20 (the karazhan mana-feeder
+-- convention); no instance-script model —
 -- boss admission via the luaBossAI shim (DATA_HYDROSSTHEUNSTABLE
 -- EVENT NOT_STARTED/IN_PROGRESS/DONE bookkeeping skipped).
 
