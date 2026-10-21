@@ -21,8 +21,10 @@
 -- bridge), instance GetGameObject/SetData arms (no instance-script
 -- model), and GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
--- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, while the
--- engine's event 14 fires only for player casts.
+-- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, which has
+-- zero casters anywhere in the C++/Go trees (trigger-absence), so the arm
+-- never fires. (ev14 fires on creature-cast hits too, boss_ai.go:2125-2134;
+-- the earlier "ev14 fires only for player casts" rationale was stale.)
 
 local HOSTAGE_ENTRIES = {23790, 23999, 24024, 24001}
 

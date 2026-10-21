@@ -487,14 +487,23 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         return 0, 0
     end
     if st.quillWait then
-        -- C++ DamageTaken !WaitEvent guard: during the 10s
-        -- post-quill WE_DUMMY wait lethal hits are absorbed
-        -- without starting the rebirth sequence (C++-exact).
-        return 0, 0
+        -- boss_alar.cpp:198-203 — the damage=0 zeroing fires only on
+        -- lethal/overkill hits (damage >= health) during phase 1;
+        -- non-lethal hits apply normally during WE_DUMMY. The rebirth
+        -- sequence is still not started while WaitEvent is set (the C++
+        -- !WaitEvent guard), and Phase1 stays true through WE_DUMMY
+        -- (:304 flips it only at WE_REVIVE), so no phase gate is needed.
+        if damage >= creature:GetHealth() then
+            return 0, 0
+        end
+        return
     end
     if st.phase == 1 and damage >= creature:GetHealth() then
         st.dying = true
         st.revive = 5000
+        -- boss_alar.cpp:206 — SetHealth(0) before the flag arm; the
+        -- Interrupt(:207)/RemoveAllAuras(:208) legs stay unbridged.
+        creature:SetHealth(0)
         -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         -- boss_alar.cpp:212 — C++ arm order after SetFlag(:210) /
