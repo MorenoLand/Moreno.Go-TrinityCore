@@ -37,7 +37,10 @@
 -- DoCastSelf(SPELL_BERSERK2 47008) non-triggered.
 -- PORTED (2026-10-14): EVENT_INHALE_BLIGHT — lua-local counter
 -- machine 0->3 (rotface-hasten precedent); non-3rd DoCastSelf(
--- SPELL_INHALE_BLIGHT 69165) non-triggered; 3rd inhale Talk(
+-- SPELL_INHALE_BLIGHT 69165) non-triggered, then ++counter, then a
+-- non-triggered self-cast of gaseousBlight[counter] (69162/69164 —
+-- the real inhale stack aura, :199-203; ported 2026-10-21); 3rd
+-- inhale Talk(
 -- EMOTE_WARN_PUNGENT_BLIGHT 5) + Talk(SAY_PUNGENT_BLIGHT 4) +
 -- DoCastSelf(SPELL_PUNGENT_BLIGHT 69195) non-triggered, counter
 -- reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s); init
@@ -237,6 +240,16 @@ local function onInhaleBlight(creature, guid)
     else
         creature:CastSpell(creature, SPELL_INHALE_BLIGHT)
         inhale[guid] = count + 1
+        -- C++ :199-203: DoCastSelf(SPELL_INHALE_BLIGHT) first, then
+        -- ++_inhaleCounter, then (if the new counter < 3) a non-triggered
+        -- self-cast of gaseousBlight[_inhaleCounter] — the real inhale
+        -- stack aura. _inhaleCounter is 1/2 here (3 takes the pungent
+        -- branch), so the 0-indexed gaseousBlight[1/2] = Lua
+        -- GASEOUS_BLIGHT[count+1] (69162/69164). The 3rd CastSpell arg
+        -- (orig caster = self) is a no-op here.
+        if count + 1 < 3 then
+            creature:CastSpell(creature, GASEOUS_BLIGHT[count + 1])
+        end
     end
     schedule(guid, "inhale_blight", {33500, 35000}, function() onInhaleBlight(creature, guid) end)
 end
