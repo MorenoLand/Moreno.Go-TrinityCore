@@ -67,8 +67,9 @@
 -- so the modeled LOCUST timer emulates unhindered (documented); the
 -- LOCUST_ENDS re-scheduling of IMPALE/SCARABS has no modeled content;
 -- KilledUnit player-gated arm — victim->CastSpell(victim,
--- SPELL_SUMMON_CORPSE_SCARABS_PLR 29105, me->GetGUID()) — summon
--- STRAND absent; JustDied — instance->DoStartTimedAchievement(
+-- SPELL_SUMMON_CORPSE_SCARABS_PLR 29105, me->GetGUID()) — ported to the
+-- event-3 handler below (moroes convention: creature casts on the victim,
+-- TRIGGERED_FULL_MASK via the C++ ctor); JustDied — instance->DoStartTimedAchievement(
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_TIMED_START_EVENT 9891, kill
 -- Maexxna within 20 min) — no achievement bridge (instance model
 -- absent). NPC_CRYPT_GUARD 16573 (naxxramas.h — kalecgos pass; no
@@ -150,12 +151,23 @@ local function anubrekhanLeaveCombat(event, creature)
 end
 
 -- C++ KilledUnit (boss_anubrekhan.cpp:143-149): TYPEID_PLAYER-gated
--- victim->CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR, me)
--- + unconditional Talk(SAY_SLAY 2). The original-caster GUID 3rd
--- arg has no Lua bridge (the cast itself is C++-exact).
+-- victim->CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR,
+-- me->GetGUID()) + unconditional Talk(SAY_SLAY 2). victim:CastSpell
+-- has no bridge (player object), so the boss casts on the victim
+-- instead (moroes convention); the original-caster GUID attribution
+-- of the 3rd arg is unbridgeable.
 local function anubrekhanTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
-        victim:CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR)
+        -- C++ boss_anubrekhan.cpp:146: victim->CastSpell(victim,
+        -- SPELL_SUMMON_CORPSE_SCARABS_PLR, me->GetGUID()) — but
+        -- player:CastSpell has no bridge (CastSpell is registered for
+        -- creature objects only, engine/world/lua_creature_events.go:65),
+        -- so the victim-self-cast would nil-call on the first player
+        -- kill; the boss casts on the victim instead (caster deviates
+        -- from C++; the original-caster GUID attribution is unbridgeable).
+        -- The C++ CastSpellExtraArgs(origCaster) ctor sets
+        -- TRIGGERED_FULL_MASK (SpellDefines.h:167), so triggered=true.
+        creature:CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR, true)
     end
     creature:Talk(SAY_SLAY)
 end

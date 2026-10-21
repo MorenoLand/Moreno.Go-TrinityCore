@@ -27,19 +27,25 @@
 --   -> stomp (DoCastAOE 6432 ~ creature:CastSpell(creature, 6432)) +
 --   Talk(SAY_PHASE_1 = 2); 33% crossing -> stomp + Talk(SAY_PHASE_2 = 3).
 --   One-shot per stage via the per-guid phaseStage latch.
--- Deviations from C++: the !uiIsMoving ability-halt leg of the phase
--- transition (SetCombatMovement(false)/AttackStop/
--- InterruptNonMeleeSpells/REACT_PASSIVE) has no bridges, so Trash/Slam
--- keep their timers through the phase crossings; no UNIT_STATE_CASTING
--- model in Go (creature casts are packet-visual), so timers fire
--- unconditionally (maiden precedent).
+-- Deviations from C++: of the phase-transition ability-halt leg
+-- (boss_mr_smite.cpp:141-144), AttackStop IS ported (bridge
+-- lua_creature_events.go:180); SetCombatMovement(false) +
+-- InterruptNonMeleeSpells(false) have no bridges. SetReactState(
+-- REACT_PASSIVE) is deliberately OMITTED, not unbridgeable: its restore
+-- (phase 4's SetReactState(REACT_AGGRESSIVE)) rides the unbridged
+-- MovePoint/kneel/equip/stand chain, so a one-sided passive port would
+-- freeze the boss passive forever; Trash/Slam timers keep running
+-- through the phase crossings (no !uiIsMoving gate). No
+-- UNIT_STATE_CASTING model in Go (creature casts are packet-visual), so
+-- timers fire unconditionally (maiden precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Reset's SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge —
---   koltira precedent) + SetReactState(REACT_AGGRESSIVE) (no react-state
---   bridge — eye_of_acherus precedent) + SetNoCallAssistance(true)
---   (no bridge). The Reset SetEquipmentSlots arm IS ported (onSpawn /
---   onReset via the EQUIP_NO_CHANGE sentinel).
--- - The phase/equip event machine: phase 1's instance chest lookup
+--   koltira precedent) + SetNoCallAssistance(true) (no bridge). The Reset
+--   SetEquipmentSlots arm IS ported (onSpawn / onReset via the
+--   EQUIP_NO_CHANGE sentinel), as is SetReactState(REACT_AGGRESSIVE).
+-- - The SetReactState(REACT_AGGRESSIVE) restore (phase 4 of the transition
+--   machine; see Deviations above) + the phase/equip event machine: phase 1's
+--   instance chest lookup
 --   (instance->GetGuidData(DATA_SMITE_CHEST), GO 144111) through
 --   ObjectAccessor (instance-script model blocked; no ObjectAccessor
 --   bridge — dark-rider precedent) + GetMotionMaster()->MovePoint(1)
@@ -67,6 +73,10 @@ local ENTRY_MR_SMITE = 646
 local EQUIP_SWORD = 5191
 local EQUIP_UNEQUIP = 0
 local EQUIP_NO_CHANGE = 0xFFFFFFFF
+
+-- UnitDefines.h react states (engine/world/lua_creature_events.go:524):
+-- REACT_PASSIVE = 0 / REACT_DEFENSIVE = 1 / REACT_AGGRESSIVE = 2.
+local REACT_AGGRESSIVE = 2
 
 local timers = {}
 local phaseStage = {}
@@ -140,10 +150,15 @@ local function onDamageTaken(_, creature, _, damage)
     if stage == 0 and health <= math.floor(maxHealth * 66 / 100) then
         phaseStage[guid] = 1
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
+        -- C++ boss_mr_smite.cpp:142: me->AttackStop() (bridge:
+        -- lua_creature_events.go:180; drops the current swing, threat
+        -- untouched, re-engagement rides the assist/aggro paths).
+        creature:AttackStop()
         creature:Talk(SAY_PHASE_1)
     elseif stage == 1 and health <= math.floor(maxHealth * 33 / 100) then
         phaseStage[guid] = 2
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
+        creature:AttackStop()
         creature:Talk(SAY_PHASE_2)
     end
 end
@@ -163,15 +178,19 @@ end
 local function onSpawn(_, creature)
     initState(creature:GetGUID())
     creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    -- C++ Reset (boss_mr_smite.cpp:101): Creature::Respawn calls
+    -- AI()->Reset() (Creature.cpp:2198), so spawn gets the same arm.
+    creature:SetReactState(REACT_AGGRESSIVE)
 end
 
 local function onReset(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     initState(guid)
-    -- C++ Reset arm (boss_mr_smite.cpp:99); Creature::Respawn calls
-    -- AI()->Reset(), so spawn gets the same arm (Creature.cpp:2198).
+    -- C++ Reset arms (boss_mr_smite.cpp:99-103): equipment (see
+    -- onSpawn) + SetReactState(REACT_AGGRESSIVE).
     creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    creature:SetReactState(REACT_AGGRESSIVE)
 end
 
 RegisterCreatureEvent(ENTRY_MR_SMITE, 1, onEnterCombat)
