@@ -92,8 +92,9 @@
 --   NPC_EXPLODING_ORB triggered self-casts (SPELL_EXPLODING_ORB 69017,
 --   SPELL_AUTO_GROW 69020): no summon-list bridge.
 -- boss_krick Reset (:315-322) — SetReactState(REACT_PASSIVE) +
---   SetFlag(UNIT_FLAG_NON_ATTACKABLE): no bridge (the intro-outro machine
---   rides it).
+--   SetFlag(UNIT_FLAG_NON_ATTACKABLE): PORTED via creature:SetReactState /
+--   creature:SetFlag(59, ...) (2026-10-21; the intro-outro machine does NOT
+--   restore them — no RemoveFlag / REACT_AGGRESSIVE anywhere in the C++).
 -- boss_krick DoAction(ACTION_OUTRO) (:342-367) — tyrannus NearTeleportTo /
 --   SummonCreature choreography + MovePoint(POINT_KRICK_INTRO): no instance /
 --   motion bridges.
@@ -136,6 +137,11 @@
 
 local ENTRY_ICK = 36476
 local ENTRY_KRICK = 36477
+
+-- UnitDefines.h:125/:340; UNIT_FIELD_FLAGS = 59 (UpdateFields.h:117).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
+local REACT_PASSIVE = 0
 
 local SAY_KRICK_SLAY = 1
 local SAY_ICK_POISON_NOVA = 0
@@ -305,4 +311,15 @@ RegisterCreatureEvent(ENTRY_ICK, 2, ickCancelCombat)
 RegisterCreatureEvent(ENTRY_ICK, 4, ickCancelCombat)
 RegisterCreatureEvent(ENTRY_ICK, 23, ickCancelCombat)
 
+-- C++ boss_krickAI::Reset (boss_krickandick.cpp:315-322): unconditional
+-- me->SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NON_ATTACKABLE). The C++ never clears either (no RemoveFlag /
+-- REACT_AGGRESSIVE in the file — krick is the scripted outro NPC riding
+-- Ick), so the one-sided port is C++-verbatim, not fabricated.
+local function krickReset(event, creature)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+end
+
 RegisterCreatureEvent(ENTRY_KRICK, 3, krickKilledUnit)
+RegisterCreatureEvent(ENTRY_KRICK, 23, krickReset)

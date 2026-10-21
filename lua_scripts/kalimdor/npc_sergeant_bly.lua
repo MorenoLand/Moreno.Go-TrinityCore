@@ -28,8 +28,11 @@
 --   itself casts it unconditionally, and this port mirrors the code, not
 --   the comment.)
 -- Unmodeled (documented-only, no bridges):
--- - Reset: me->SetFaction(FACTION_FRIENDLY) — no SetFaction bridge
---   (the same block as boss_zum_rah's Reset arm).
+-- - Reset: me->SetFaction(FACTION_FRIENDLY) — SetFaction IS bridged
+--   (lua_creature_events.go), but the only runtime flip (case 3's
+--   FACTION_MONSTER) is gossip-blocked, so the restore stays
+--   documented-only (spark_overgrind precedent); it would restore
+--   the template's own faction.
 -- - postGossipStep 1..3 event machine in UpdateAI: case 1 drives
 --   weegli->AI()->DoAction(0) via instance->GetGuidData(ENTRY_WEEGLI)
 --   (no instance GUID-lookup / cross-creature DoAction bridges);

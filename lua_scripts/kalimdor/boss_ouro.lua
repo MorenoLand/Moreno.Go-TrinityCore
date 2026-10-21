@@ -27,16 +27,16 @@
 --   urand(20000,35000) -> urand(20000,35000).
 -- - Submerge (urand(90000,150000) init -> urand(60000,120000)
 --   repeat): self-cast Dirt Mound Passive 26092 as the submerge
---   visual. The EMOTE_ONESHOT_SUBMERGE /
---   SetFlag(UNIT_FLAG_NOT_SELECTABLE) / SetFaction(FACTION_FRIENDLY)
---   legs have no Lua bridges (SetFlag/SetFaction zero Lua usage)
---   — documented-only; timers approximate the intended
---   unhittable window.
+--   visual. The EMOTE_ONESHOT_SUBMERGE / SetFlag(UNIT_FLAG_NOT_SELECTABLE)
+--   / SetFaction(FACTION_FRIENDLY) legs port via creature:PerformEmote(374),
+--   creature:SetFlag(59, ...) and creature:SetFaction(...) — the stale
+--   "no SetFlag/SetFaction bridge" claim was retracted 2026-10-21
+--   (both bridged on the handler surface; stalagg/feugen precedent).
 -- - Back from submerge (urand(30000,45000) after submerge):
---   RemoveFlag/SetFaction(FACTION_MONSTER) legs are no-bridge —
---   documented-only; ported as the victim Ground Rupture 26100
---   (DoCastVictim, C++-verbatim) + submerged flag cleared +
---   Submerge re-armed.
+--   RemoveFlag/SetFaction(FACTION_MONSTER) port via
+--   creature:RemoveFlag(59, ...) and creature:SetFaction(...) before
+--   the victim Ground Rupture 26100 (DoCastVictim, C++-verbatim) +
+--   submerged flag cleared + Submerge re-armed.
 -- Unmodeled (documented-only, no bridges):
 -- - ChangeTarget while submerged (urand(5000,8000) init ->
 --   urand(10000,20000)): SelectTarget Random + DoTeleportTo —
@@ -57,6 +57,10 @@ local SPELL_SANDBLAST = 26102
 local SPELL_GROUND_RUPTURE = 26100
 local SPELL_BIRTH = 26262
 local SPELL_DIRTMOUND_PASSIVE = 26092
+-- UnitDefines.h:149; SharedDefines.h:226/231.
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local FACTION_MONSTER = 14
+local FACTION_FRIENDLY = 35
 
 local timers = {}
 local flags = {}
@@ -140,13 +144,15 @@ local function onSandBlast(creature, guid)
     end
 end
 
--- C++ Back_Timer (Submerged): RemoveFlag/SetFaction legs are
--- no-bridge (documented-only); ported as the DoCastVictim
--- Ground Rupture 26100 + submerged cleared + Submerge re-armed
--- to urand(60000,120000), C++-verbatim.
+-- C++ Back_Timer (Submerged): RemoveFlag/SetFaction legs port via
+-- creature:RemoveFlag(59, ...) and creature:SetFaction(...) ahead of
+-- the DoCastVictim Ground Rupture 26100 + submerged cleared +
+-- Submerge re-armed to urand(60000,120000), C++-verbatim.
 local function onBack(creature, guid)
     local s = st(guid)
     s.submerged = false
+    creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetFaction(FACTION_MONSTER)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_GROUND_RUPTURE)
@@ -156,18 +162,21 @@ local function onBack(creature, guid)
     end)
 end
 
--- C++ Submerge_Timer (!Submerged): flag/faction legs are no-bridge
--- (documented-only); the submerge emote ports via
--- creature:PerformEmote(374) and the Dirt Mound Passive 26092 self-cast
--- is the ported submerge visual. Latched in st(guid);
--- Back_Timer = urand(30000,45000), C++-verbatim.
+-- C++ Submerge_Timer (!Submerged): emote + SetFlag(UNIT_FLAG_NOT_SELECTABLE)
+-- + SetFaction(FACTION_FRIENDLY) port via creature:PerformEmote(374),
+-- creature:SetFlag(59, ...) and creature:SetFaction(...); the Dirt Mound
+-- Passive 26092 self-cast is the ported submerge visual. Latched in
+-- st(guid); Back_Timer = urand(30000,45000), C++-verbatim.
 onSubmerge = function(creature, guid)
     local s = st(guid)
     s.submerged = true
     -- C++ boss_ouro.cpp:114:
     -- me->HandleEmoteCommand(EMOTE_ONESHOT_SUBMERGE) (SharedDefines.h:2012,
-    -- value 374), before the flag/faction/cast legs.
+    -- value 374), then the flag/faction legs (C++-verbatim order),
+    -- before the Dirt Mound Passive cast.
     creature:PerformEmote(374)
+    creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetFaction(FACTION_FRIENDLY)
     creature:CastSpell(creature, SPELL_DIRTMOUND_PASSIVE)
     schedule(guid, "back", math.random(30000, 45000), function()
         onBack(creature, guid)
