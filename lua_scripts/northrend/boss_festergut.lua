@@ -42,10 +42,13 @@
 -- DoCastSelf(SPELL_PUNGENT_BLIGHT 69195) non-triggered, counter
 -- reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s); init
 -- {25000,30000}, re-arm {33500,35000} both branches (:184-207).
--- OUT legs inside the arm: RemoveBlight() aura-removal (stays out on the
--- gas-dummy ObjectAccessor leg, not the aura removal — RemoveAura IS
--- bridged: the Reset() berserk removal below uses it), gaseous-blight
--- visual triggered casts (:202, aura legs without the removal bridge), DoAction(
+-- RemoveBlight() PORTED (2026-10-21): nearest alive NPC_GAS_DUMMY
+-- (36659) within 100yd via GetCreaturesInGrid (the FindNearestCreature
+-- twin; RemoveAura bridged, lua_creature_events.go:158) — strips
+-- gaseousBlight[3] from the boss + gaseousBlightVisual[3] from the
+-- dummy, wired into Reset (:101-110) and JustDied (:113-119).
+-- OUT legs inside the arm: gaseous-blight visual triggered casts
+-- (:202, aura legs without the removal bridge), DoAction(
 -- ACTION_FESTERGUT_GAS) cross-AI (:193-194).
 -- PORTED (2026-10-14): EVENT_GAS_SPORE — Talk(
 -- EMOTE_WARN_GAS_SPORE 3) + Talk(EMOTE_GAS_SPORE 2) + CastSpell(
@@ -119,6 +122,13 @@ local SAY_PUNGENT_BLIGHT = 4
 local EMOTE_WARN_GAS_SPORE = 3
 local EMOTE_GAS_SPORE = 2
 
+local NPC_GAS_DUMMY = 36659
+
+-- gaseousBlight[3] / gaseousBlightVisual[3] (boss_festergut.cpp:64-65):
+-- the inhale stack auras on Festergut and their gas-dummy visuals.
+local GASEOUS_BLIGHT = {69157, 69162, 69164}
+local GASEOUS_BLIGHT_VISUAL = {69126, 69152, 69154}
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -128,6 +138,32 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+-- C++ RemoveBlight() (boss_festergut.cpp:113-119; Reset :101-110
+-- inlines the same loop): if an alive NPC_GAS_DUMMY is within 100yd,
+-- strip the gaseous-blight auras from the boss and the visual auras
+-- from the dummy. FindNearestCreature's nearest-alive twin: the
+-- nearest GetCreaturesInGrid match (the mandokir IsAlive() precedent);
+-- RemoveAura is bridged (lua_creature_events.go:158).
+local function removeBlight(creature)
+    local nearest, nearestDist
+    for _, dummy in ipairs(creature:GetCreaturesInGrid(NPC_GAS_DUMMY, 100)) do
+        if dummy:IsAlive() then
+            local dist = creature:GetDistance(dummy)
+            if not nearest or dist < nearestDist then
+                nearest, nearestDist = dummy, dist
+            end
+        end
+    end
+    if nearest then
+        for _, spell in ipairs(GASEOUS_BLIGHT) do
+            creature:RemoveAura(spell)
+        end
+        for _, spell in ipairs(GASEOUS_BLIGHT_VISUAL) do
+            nearest:RemoveAura(spell)
+        end
     end
 end
 
@@ -273,9 +309,11 @@ local function festergutReset(event, creature)
     cancelTimers(guid)
     inhale[guid] = nil
     -- C++ Reset() (:92-110): me->RemoveAurasDueToSpell(SPELL_BERSERK2) —
-    -- the RemoveAura bridge (the drakkari / falric idiom); the gas-dummy
-    -- RemoveBlight legs stay out on the ObjectAccessor bridge.
+    -- the RemoveAura bridge (the drakkari / falric idiom); then the
+    -- RemoveBlight() loop (nearest alive gas dummy within 100yd gates
+    -- both halves, exactly like C++ :102).
     creature:RemoveAura(SPELL_BERSERK2)
+    removeBlight(creature)
 end
 
 -- C++ boss_festergut::KilledUnit:
@@ -298,6 +336,8 @@ local function festergutJustDied(event, creature, killer)
     cancelTimers(guid)
     inhale[guid] = nil
     creature:Talk(SAY_DEATH)
+    -- C++ order (:130-136): Talk(SAY_DEATH), then RemoveBlight().
+    removeBlight(creature)
 end
 
 -- C++ boss_festergut::SpellHitTarget (boss_festergut.cpp:160-168):
