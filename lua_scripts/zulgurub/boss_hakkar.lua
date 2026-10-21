@@ -26,7 +26,7 @@
 -- modeled; the aspect timers' instance GetBossState(DATA_X) != DONE
 -- gates have no bridge (no instance-script model) — all five aspects
 -- are armed unconditionally; the UpdateAI UNIT_STATE_CASTING gate (skip
--- the rest of the event queue while casting) has no UNIT_STATE bridge
+-- the rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- — timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms

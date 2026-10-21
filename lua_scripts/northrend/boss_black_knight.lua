@@ -67,7 +67,7 @@
 -- boss_black_knight PHASE_SKELETON legs — phase never arrives (the
 -- DamageTaken-driven machine is unbridged): bSummonArmy one-shot
 -- AddUnitState(ROOT | STUNNED) + DoCastSelf(Army of the Dead 67761)
--- (no unit-state bridge) + uiDeathArmyCheckTimer's ClearUnitState;
+-- (no unit-state bridge — only UNIT_STATE_CASTING has the constant-false IsCasting twin; ROOT|STUNNED have none) + uiDeathArmyCheckTimer's ClearUnitState;
 -- uiDesecration — SelectTarget(Random, 0, 100, true) ->
 -- DoCast(Desecration 67778), urand(15000,16000) (random-target bridge
 -- absent); uiGhoulExplodeTimer — DoCastSelf(Ghoul Explode 67751),
@@ -84,8 +84,7 @@
 -- + ClearUnitState(ROOT | STUNNED) — no summon / display / unit-state
 -- bridges; JustSummoned — summons.Summon + cross-AI AttackStart(me->
 -- GetVictim()) (summon STRAND absent, standing). Melee gated on
--- !HasUnitState(ROOT) && !HealthBelowPct(1) — no unit-state bridge +
--- no health-pct bridge (doomwalker precedent); melee plays
+-- !HasUnitState(ROOT) && !HealthBelowPct(1) — the ROOT leg has no unit-state bridge (GetHealthPct() IS bridged, object.go:107 — but the arm is conjunctive on unbridged !HasUnitState(ROOT)); melee plays
 -- engine-driven unconditionally in this port.
 -- npc_risen_ghoul — zero registration: ENTRY UNVERIFIABLE (no NPC
 -- constant for the ghoul in trial_of_the_champion.h or anywhere in the

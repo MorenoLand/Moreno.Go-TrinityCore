@@ -39,7 +39,7 @@
 -- every 2s on the victim (non-triggered DoCastVictim, C++-exact); nil-victim
 -- ticks cast nothing but keep the schedule.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
--- rest of the event queue while casting) has no UNIT_STATE bridge —
+-- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms

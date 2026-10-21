@@ -68,7 +68,7 @@
 -- for it. Nil-victim ticks cast nothing but keep the schedule (jeklik
 -- convention).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate (thekal,
--- lorkhan) has no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- lorkhan) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the luaBossAI
 -- shim (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI
 -- bookkeeping and the DATA_THEKAL/LORKHAN/ZATH encounter-state arms

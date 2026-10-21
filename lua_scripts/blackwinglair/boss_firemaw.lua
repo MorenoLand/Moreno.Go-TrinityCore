@@ -14,7 +14,7 @@
 -- (jeklik convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel
 -- timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers fire
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the DATA_FIREMAW bookkeeping arms skipped); the wingbuffet-arm

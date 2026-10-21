@@ -48,7 +48,7 @@
 -- nil pick casts nothing, non-triggered DoCast on the target
 -- (C++-exact), re-arm {12s,20s} regardless (C++-exact). The
 -- C++ UNIT_STATE_CASTING early-return gates (before and after
--- the event switch) have no cast-state bridge — the arms fire
+-- the event switch) have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arms fire
 -- unconditionally (netherspite precedent). Melee is
 -- engine-driven.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++ talks unconditionally —

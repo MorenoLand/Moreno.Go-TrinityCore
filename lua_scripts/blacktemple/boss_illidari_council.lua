@@ -128,7 +128,7 @@
 -- seal (41469/41459 remove -> the other seal), dampen_magic
 -- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction).
 -- Deliberate deviations: the UpdateAI UNIT_STATE_CASTING queue
--- gate and the post-event casting check have no UNIT_STATE bridge
+-- gate and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- — timers fire unconditionally (jeklik convention); no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith/JustDied/Reset, the DATA_ILLIDARI_

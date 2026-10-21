@@ -70,7 +70,7 @@
 -- rain_of_fire {14s,18s}, shadow_volley {8s,10s}).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset's _Reset() — instance bookkeeping, no bridge; UpdateAI
--- HasUnitState skips — no unit-state bridge (moroes precedent); spell_tharon_ja_clear_gift_of_
+-- HasUnitState skips — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (moroes precedent); spell_tharon_ja_clear_gift_of_
 -- tharon_ja SpellScript (53242 EFFECT_0 SCRIPT_EFFECT ->
 -- RemoveAura(52509)) — no SpellScript binding bridge (razelikh
 -- precedent); achievement criteria script — no achievement bridge

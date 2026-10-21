@@ -134,7 +134,7 @@
 -- triggered 44032 mind exhaustion) and spell_magtheridon_
 -- shadow_grasp_visual (30166-apply x5 -> triggered 30168
 -- shadow cage; -remove -> remove 30168) unmodeled (standing
--- gap); no UNIT_STATE bridge (jeklik convention, above). go_
+-- gap); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (jeklik convention, above). go_
 -- manticron_cube (181713) not registered: the GO gossip bridge
 -- exists (RegisterGameObjectGossipEvent) but the cube's only
 -- functional arms — the FindNearestCreature(17376, 10yd)

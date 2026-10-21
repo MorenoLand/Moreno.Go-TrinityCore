@@ -48,7 +48,7 @@
 -- is emulated (jedoga precedent — an ungated bubbled model would
 -- diverge from C++ combat behavior).
 -- UpdateAI: the !_bubbled gate (see above) + HasUnitState(
--- UNIT_STATE_CASTING) skip — no unit-state bridge.
+-- UNIT_STATE_CASTING) skip — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 -- EVENT_ATTACK (3s repeat, scheduled only after the crystal-handler
 -- DoAction machine clears the bubble) — SelectTarget(Random) ->
 -- DoCast(victim, RAND(SPELL_ARCANE_BLAST 49198 / SPELL_BLIZZARD

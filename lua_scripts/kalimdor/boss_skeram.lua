@@ -38,6 +38,10 @@
 --   (fankriss GetVictim convention).
 -- - Split at 75/50/25% (latched, event 9 projected-health check,
 --   sartura convention): Talk SAY_SPLIT + BLINK re-armed to 2s.
+--   postDamage idiom 2026-10-21: the C++ UpdateAI GetHealthPct() < _hpct
+--   arm reads post-damage health and never fires on the killing blow,
+--   so the port projects (health - damage) clamped at 0 with a
+--   postDamage > 0 guard (nefarian rule).
 --   The DoCastAOE SPELL_SUMMON_IMAGES 747 leg is no-bridge
 --   (SummonCreature zero Lua usage) and SetVisible(false) has no
 --   bridge — documented-only.
@@ -194,7 +198,12 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (health - damage) * 100 < s.splitHpct * maxHealth then
+    -- nefarian rule: the C++ UpdateAI GetHealthPct() < _hpct arm reads
+    -- post-damage health every tick and never fires on the killing
+    -- blow, so the event-9 port projects post-damage health (clamped)
+    -- and guards the killing blow.
+    local postDamage = math.max(health - damage, 0)
+    if postDamage > 0 and postDamage < math.floor(maxHealth * s.splitHpct / 100) then
         s.splitHpct = s.splitHpct - 25
         creature:Talk(SAY_SPLIT)
         schedule(guid, "blink", 2000, function()

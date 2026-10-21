@@ -112,7 +112,7 @@
 -- curse_of_boundless_agony (standing SpellScript/AuraScript gaps).
 -- Deliberate deviations (documented in the file): the UpdateAI
 -- UNIT_STATE_CASTING queue gate and the post-event casting check
--- have no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the
 -- luaBossAI shim (BossAI::JustEngagedWith/JustDied/Reset and the
 -- DATA_KALECGOS/DATA_KALECGOS_DRAGON/DATA_KALECGOS_HUMAN/DATA_

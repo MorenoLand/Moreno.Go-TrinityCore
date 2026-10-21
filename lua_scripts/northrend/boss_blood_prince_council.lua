@@ -164,7 +164,7 @@
 -- ride movement informs and scheduler DoActions — no bridge, NOT
 -- registered.
 -- UpdateAI UNIT_STATE_CASTING gates (:366/:401, :651/:675,
--- :807/:844) — no unit-state bridge; timers fire unconditionally
+-- :807/:844) — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); timers fire unconditionally
 -- (the maiden precedent).
 -- Heroic-gated engage casts: keleseth :628-629
 -- DoCastSelf(SPELL_SHADOW_PRISON 72998, true) +

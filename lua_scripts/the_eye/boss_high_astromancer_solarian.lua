@@ -76,7 +76,7 @@
 --    non-triggered DoCast(target, SPELL_ARCANE_MISSILES
 --    33031) (C++-exact), re-arm 3000 regardless (C++-exact).
 -- 4. Wrath-of-the-astromancer arm — 15000 init: InterruptNon
---    MeleeSpells unmodeled (no cast-state bridge); target =
+--    MeleeSpells unmodeled (no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)); target =
 --    SelectTarget(Random, 1) — random alive player in the
 --    instance excluding the current victim; the C++ re-arms
 --    1000 for non-player (pet) picks — the threat list has no

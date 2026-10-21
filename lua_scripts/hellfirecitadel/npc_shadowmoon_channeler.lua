@@ -20,7 +20,7 @@
 -- Initialize() values (shadowBolt 1000+rand32()%1000 /
 -- markOfShadow 5000+rand32()%2000 — the C++ JustEngagedWith's
 -- ChannelerEngaged relay is cross-creature blocked, the
--- InterruptNonMeleeSpells arm has no unit-state bridge and the
+-- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
 -- DoStartMovement arm has no movement bridge) + 1s scheduler
 -- pump (a port of UpdateAI — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the

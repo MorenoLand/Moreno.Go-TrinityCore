@@ -42,7 +42,7 @@
 -- DoCast(me), re-arm {14s,25s} (C++-exact); lightning bolt
 -- 35010 {14s,19s} then {14s,25s} — triggered DoCastVictim
 -- (the C++ true arg), re-arm {14s,25s} (C++-exact). The
--- UNIT_STATE_CASTING early returns have no unit-state bridge
+-- UNIT_STATE_CASTING early returns have no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- (thespia elemental precedent). OnTargetDied(3): Talk(SAY_
 -- SLAY) (no TYPEID gate, C++-exact). OnDied(4): Talk(SAY_
 -- DEATH) + cleanup (the _JustDied/SetBossState DONE arm is
@@ -55,7 +55,7 @@
 -- IN_PROGRESS/DONE bookkeeping in Reset/JustEngagedWith/
 -- JustDied skipped; instance_the_slave_pens.cpp is a
 -- placeholder and stays blocked on the instance-script model);
--- no unit-state bridge — the UNIT_STATE_CASTING early returns
+-- no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UNIT_STATE_CASTING early returns
 -- in UpdateAI unmodeled (timer bookkeeping exact); no
 -- SpellScript/AuraScript scripts in this file.
 

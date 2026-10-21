@@ -122,7 +122,7 @@
 -- is ported via creature:PlayDirectSound. C++-exact on cast gating:
 -- boss_fathomlord_karathressAI::UpdateAI uses plain uint32 timers
 -- (CataclysmicBolt_Timer <= diff) with no UNIT_STATE_CASTING gate —
--- unconditional firing matches C++ (the old "no UNIT_STATE bridge"
+-- unconditional firing matches C++ (the old "no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)"
 -- claim was stale).
 
 local SPELL_CATACLYSMIC_BOLT = 38441

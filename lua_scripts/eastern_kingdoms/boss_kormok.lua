@@ -23,7 +23,7 @@
 -- (C++ bool Mages, cleared on 2/4/23). Zero Talk lines in C++ (no
 -- _SAY enum).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention); the DamageTaken latch
 -- fires on the damage hook rather than the script's UpdateAI tick
 -- (timing documented). Documented-only (no bridges): JustSummoned

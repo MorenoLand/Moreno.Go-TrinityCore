@@ -64,7 +64,7 @@
 -- the instance-script model); difficulty is bridged —
 -- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
 -- drives the heroic second casts of lightning cloud (25033) and
--- enveloping winds (31718); no unit-state bridge —
+-- enveloping winds (31718); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- the elemental's UNIT_STATE_CASTING skip arm unmodeled (timer
 -- bookkeeping exact); no SpellScript/AuraScript scripts in this
 -- file.

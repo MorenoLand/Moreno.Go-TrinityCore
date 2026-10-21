@@ -38,7 +38,7 @@
 -- 1. Pounding 34162: 15s init then 15s — non-triggered
 --    DoCastVictim (C++-exact) + Talk(SAY_POUNDING), re-arm 15s
 --    regardless (C++-exact). The C++ UNIT_STATE_CASTING
---    early-return gates have no cast-state bridge — the arm
+--    early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
 --    fires unconditionally (zereketh precedent).
 -- 2. Arcane orb 34172: 3s init then 3s — me->CastSpell(target)
 --    (non-triggered, C++-exact), re-arm 3s regardless
@@ -134,7 +134,7 @@ local function bossTick(creature, guid)
     -- Pounding 34162: 15s init then 15s — non-triggered
     -- DoCastVictim + Talk(SAY_POUNDING) (C++-exact), re-arm
     -- 15s regardless (C++-exact). The C++ UNIT_STATE_CASTING
-    -- gates have no cast-state bridge — fires unconditionally.
+    -- gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — fires unconditionally.
     if st.pounding <= 1000 then
         creature:CastSpell(nil, SPELL_POUNDING)
         creature:Talk(SAY_POUNDING)

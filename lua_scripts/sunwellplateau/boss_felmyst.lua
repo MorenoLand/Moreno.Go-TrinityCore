@@ -83,7 +83,7 @@
 -- note is retracted). The AttackStart/MoveInLineOfSight PHASE_
 -- FLIGHT gates have no bridge (melee/aggro gating is engine-
 -- side). The UpdateAI UNIT_STATE_CASTING queue gate and the
--- UpdateVictim evade-side arm have no UNIT_STATE bridge — timers
+-- UpdateVictim evade-side arm have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention) and evade-side cleanup
 -- is engine-side.
 

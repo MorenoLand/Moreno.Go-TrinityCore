@@ -41,7 +41,7 @@
 -- (nil-victim ticks cast nothing but keep the schedule, jeklik
 -- convention). OnDied: Talk(SAY_DEATH=3). The UPDATEAI
 -- UNIT_STATE_CASTING queue gate and the post-switch casting check have
--- no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention). Spawn of Mar'li (15041): non-triggered self-cast 24312
 -- (level up) every 3s while in combat (C++-exact); melee is
 -- engine-driven; never spawns in this build (no summon model) but is

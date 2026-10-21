@@ -16,7 +16,7 @@
 -- DoCastSelf drop journal 26096. Zero Talk lines in C++ (no _SAY
 -- enum).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
 -- bridges): JustSummoned arms (illusion AttackStart on a random
 -- target, ApplySpellImmune(0, IMMUNITY_DAMAGE, MAGIC, true) — no

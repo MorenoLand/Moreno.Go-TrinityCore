@@ -19,9 +19,9 @@
 -- casts enrage 44779, sets enraged, and re-arms 300s, and whose later
 -- fires Talk(SAY_BERSERK=4) + triggered berserk 45078 + re-arm 300s
 -- (C++-exact); the sub-25% early trigger (C++: EnrageTimer = 0 when
--- HealthBelowPct(25)) runs in the event-9 hook on pre-damage health
--- (malchezaar convention), canceling the pending timer and firing the
--- same handler. Kills: Talk SAY_SLAY (C++ KilledUnit has no player gate);
+-- HealthBelowPct(25)) runs in the event-9 hook on projected
+-- post-damage health (nefarian rule), canceling the pending timer
+-- and firing the same handler. Kills: Talk SAY_SLAY (C++ KilledUnit has no player gate);
 -- death: Talk SAY_DEATH.
 -- Deviations from C++: the entire bomb phase has no bridge — no summon
 -- model (the 40 fire bombs + fire wall never exist), no creature teleport
@@ -47,7 +47,10 @@
 -- hatchling 23598 flame-buffet AI and the egg 23817 SpellHit arm
 -- (42471 -> self-cast 42493) are registered for the same reason; the
 -- pre-fight trash gauntlet's SAY_EVENT_STRANGERS/FRIENDS lines belong to
--- zulaman.cpp, not this file's AI.
+-- zulaman.cpp, not this file's AI; the sub-25% enrage arm is a C++
+-- UpdateAI HealthBelowPct, so the event-9 port tests projected
+-- post-damage health (postDamage > 0 and postDamage < floor
+-- threshold — nefarian rule) rather than pre-damage health.
 
 local ENTRY_JANALAI = 23578
 local ENTRY_FIRE_BOMB = 23920
@@ -170,11 +173,12 @@ local function janalaiEnterCombat(event, creature, target)
 end
 
 -- C++ UpdateAI: if !enraged and HealthBelowPct(25) -> EnrageTimer = 0
--- (fires immediately). Modeled on pre-damage health via the event-9 hook
--- (malchezaar convention), canceling the pending 5min timer.
--- C++ is UpdateAI post-damage, so it never fires on the killing blow;
--- the (health - damage) > 0 guard (nefarian rule) keeps the port from
--- enraging while dying.
+-- (fires immediately). Modeled in the event-9 hook on projected
+-- post-damage health (nefarian rule: postDamage = max(health -
+-- damage, 0); fires when 0 < postDamage < floor(max*25/100)),
+-- canceling the pending 5min timer. C++ is UpdateAI post-damage,
+-- so it never fires on the killing blow; the postDamage > 0 guard
+-- keeps the port from enraging while dying.
 local function janalaiDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = janalaiState(guid)
@@ -185,7 +189,8 @@ local function janalaiDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if health < math.floor(maxHealth * 25 / 100) and (health - damage) > 0 then
+    local postDamage = math.max(health - damage, 0)
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 25 / 100) then
         local per = timers[guid]
         if per and per["enrage"] then
             RemoveEventById(per["enrage"])

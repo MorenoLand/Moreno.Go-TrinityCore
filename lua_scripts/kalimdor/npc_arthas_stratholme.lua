@@ -38,7 +38,7 @@
 --   - Exorcism 52445: _exorcismCooldown urand(7,14)s in the ctor; on
 --     expiry SelectTarget(Random, 0) with no range cap -> DoCast, then
 --     re-arm urand(7,14)s. The C++ "still casting -> _exorcismCooldown =
---     0 (retry next tick)" leg has no casting-state bridge (the aeonus
+--     0 (retry next tick)" leg has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (the aeonus
 --     casting-gate case) — the pump retries next tick anyway, which
 --     matches. The no-range-cap SelectTarget resolves to an unbounded
 --     random alive player (nefarian randomAlivePlayer convention, deja);
@@ -122,7 +122,7 @@ end
 -- expiry -> DoCast(SelectTarget(Random, 0), 52445), then re-arm
 -- urand(7,14)s. 1s per-GUID pump (sironas convention); C++'s per-tick
 -- checks make this an approximation (like old_hillsbrad). The C++
--- "still casting -> retry next tick" leg has no casting-state bridge
+-- "still casting -> retry next tick" leg has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- (aeonus case) — the pump's next tick is the retry.
 local function startCombatPump(creature, guid)
     local exorcism = math.random(7, 14)

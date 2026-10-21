@@ -48,10 +48,11 @@
 -- EVENT_SWARM (DoCastAOE(SPELL_SWARM 52440) + Talk(SAY_SWARM 3), 5s
 -- EVENT_FRENZY (HealthBelowPct(10) _hadFrenzy latch -> DoCastSelf(Frenzy
 -- 28747) + DoCastAOE(CURSE_OF_FATIGUE 52592), 1s init, 15s repeat) —
--- PORTED (2026-10-16): the latch lives in creature:GetHealth()-based
--- post-damage math inside krikThirDamageTaken (event 9; the halion
--- HealthBelowPctDamaged precedent); DoCastAOE leg rendered as
--- self-cast per convention.
+-- PORTED (2026-10-21): the latch lives in postDamage math inside
+-- krikThirDamageTaken (event 9). The C++ arm is UpdateAI:258
+-- HealthBelowPct(10), not DamageTaken HealthBelowPctDamaged, so the
+-- nefarian postDamage>0 guard keeps it from firing on the killing blow.
+-- DoCastAOE leg rendered as self-cast per convention.
 -- The DoAction machine (no DoAction bridge — drakkari_colossus standing
 -- precedent — and the payload is instance-model anyway):
 -- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
@@ -209,12 +210,15 @@ local function krikThirDamageTaken(event, creature, attacker, damage)
     if hadFrenzy[guid] then
         return
     end
-    local health = creature:GetHealth()
-    local postHealth = 0
-    if health > damage then
-        postHealth = health - damage
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
     end
-    if postHealth * 100 < creature:GetMaxHealth() * 10 then
+    -- UpdateAI arm (boss_krikthir_the_gatewatcher.cpp:258): HealthBelowPct(10)
+    -- reads post-damage health per tick and never fires on the killing blow;
+    -- project post-damage health and guard lethal hits (nefarian form).
+    local postDamage = math.max(health - damage, 0)
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 10 / 100) then
         hadFrenzy[guid] = true
         schedule(guid, "frenzy", 1000, function()
             frenzyTick(creature, guid)

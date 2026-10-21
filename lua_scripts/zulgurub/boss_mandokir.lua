@@ -34,7 +34,7 @@
 -- DoCast(me), C++-exact) / cleave 15284 {5s,8s} after Reset then
 -- {6s,9s} on the victim (triggered DoCastVictim, C++-exact).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has
--- no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the
 -- luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith, the
 -- GetZulGurubAI bookkeeping, and the DATA_MANDOKIR encounter-state

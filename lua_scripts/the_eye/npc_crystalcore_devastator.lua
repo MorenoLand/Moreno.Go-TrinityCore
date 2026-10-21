@@ -29,7 +29,7 @@
 -- 2. Countercharge 35035: 9s init then 45s — non-triggered
 --    DoCast(me) self-cast (C++-exact); re-arm 45s
 --    regardless (C++-exact). The C++ UNIT_STATE_CASTING
---    early-return gates have no cast-state bridge — the arms
+--    early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arms
 --    fire unconditionally (zereketh precedent).
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() re-latches the ctor / Initialize() values;

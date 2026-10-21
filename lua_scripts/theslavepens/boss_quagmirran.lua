@@ -45,7 +45,7 @@
 -- convention), nil pick casts nothing, re-arm 22000 regardless
 -- (C++-exact); poison bolt volley 34780 31s then 24s — DoCast
 -- (me) non-triggered self-cast, re-arm 24000 (C++-exact). The
--- UNIT_STATE_CASTING early returns have no unit-state bridge
+-- UNIT_STATE_CASTING early returns have no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- (mennu/thespia precedent). OnDied(4): cleanup (the _JustDied
 -- arm is instance-blocked). OnLeaveCombat(2)/OnReset(23):
 -- cancel the pump, drop per-GUID state (the _Reset arm is
@@ -55,7 +55,7 @@
 -- (the DATA_QUAGMIRRAN NOT_STARTED/IN_PROGRESS/DONE
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped;
 -- instance_the_slave_pens.cpp is a placeholder and stays
--- blocked on the instance-script model); no unit-state bridge
+-- blocked on the instance-script model); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- — the UNIT_STATE_CASTING early returns in UpdateAI unmodeled
 -- (timer bookkeeping exact); no SpellScript/AuraScript scripts
 -- in this file. SPELL_POISON_BOLT_VOLLEY carries the upstream

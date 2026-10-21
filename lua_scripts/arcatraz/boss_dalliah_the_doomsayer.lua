@@ -145,7 +145,7 @@ local function bossTick(creature, guid)
     -- Gift of the doomsayer 36173: {1s,4s} init then {16s,21s}
     -- — TRIGGERED DoCastVictim (C++-exact), re-arm {16s,21s}
     -- regardless (C++-exact). The C++ UNIT_STATE_CASTING
-    -- early-return gates have no cast-state bridge — the arm
+    -- early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
     -- fires unconditionally (netherspite precedent).
     if st.gift <= 1000 then
         creature:CastSpell(nil, SPELL_GIFT_OF_THE_DOOMSAYER, true)

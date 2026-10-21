@@ -39,7 +39,7 @@
 -- guard would wrongly re-arm the bubble on dispel), cleared on 2/4/23.
 -- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers fire
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); the below-50% latch fires on
 -- the damage hook rather than the next UpdateAI tick (tick timing
 -- deviation, documented); BossAI::JustEngagedWith and the

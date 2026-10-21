@@ -89,7 +89,7 @@
 -- precedent); no SpellScript bridge — spell_commander_
 -- sarannis_summon_reinforcements (HandleCast dummy-effect
 -- summons, heroic fourth summon at position [3]) documented
--- only, not bridged; no cast-state bridge — the UpdateAI
+-- only, not bridged; no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UpdateAI
 -- UNIT_STATE_CASTING early-return gates unmodeled, the arms
 -- fire unconditionally (netherspite precedent).
 
@@ -129,7 +129,7 @@ end
 -- C++ UpdateAI in event arm order — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
 -- collapses into the pump; the UNIT_STATE_CASTING gates
--- have no cast-state bridge, so the arms fire
+-- have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the arms fire
 -- unconditionally (netherspite precedent).
 local function combatTick(creature, guid)
     local st = combatStates[guid]

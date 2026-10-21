@@ -39,7 +39,7 @@
 -- The systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
 -- Shutout achievement flag have no bridges — documented. The
 -- ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT) line in EVENT_REPAIR
--- (:435) is likewise unmodeled — no unit-state bridge.
+-- (:435) is likewise unmodeled — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 -- JustDied — Talk(SAY_DEATH 2) (event 4; :331; the _JustDied() passthrough
 -- and the flag/dynflag/npcflag cosmetics have no bridges).
 -- DOCUMENTED-ONLY (no registration beyond entry 33113):

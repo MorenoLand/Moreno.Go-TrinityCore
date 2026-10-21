@@ -77,7 +77,7 @@
 -- arms unmodeled; no threat bridge — the hurtful-strike MaxThreat
 -- pick is a random alive player (curator convention) and the
 -- IsWithinMeleeRange gate is a 5-yd GetDistance stand-in
--- (venoxis convention); no UNIT_STATE bridge — the
+-- (venoxis convention); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- IsNonMeleeSpellCast queue gate unmodeled, timers fire
 -- unconditionally (jeklik convention); no SpellScript bridge —
 -- the shatter/shatter-effect scripts unmodeled (standing gap).

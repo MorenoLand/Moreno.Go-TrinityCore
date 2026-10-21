@@ -28,7 +28,7 @@
 -- creature HasAura bridge, engine/world/lua_objects.go).
 -- OnDied/OnLeaveCombat/OnReset: cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers fire
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the BOSS_GOLEMAGG_THE_INCINERATOR bookkeeping arms skipped); the

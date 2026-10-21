@@ -67,7 +67,7 @@
 -- precedent); pyroblast 33975 — 1s init then 40s, Talk(SAY_
 -- PYRO), DoCastVictim (felmyst convention), re-arm 40000
 -- (C++-exact; the C++ !IsNonMeleeSpellCast(false) early-
--- return gate has no cast-state bridge — netherspite
+-- return gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — netherspite
 -- precedent — so the arm fires unconditionally); fireball
 -- 14034 — 2.5s init then 4s, DoCastVictim (felmyst
 -- convention), re-arm 4000 (C++-exact). Melee is
@@ -128,7 +128,7 @@
 -- instance gate (the phase-7 arm is PORTED via the bridged
 -- unit-flags surface — see introTick); no movement bridge —
 -- the AttackStart MoveChase(who, 25.0f) arm unmodeled (omor
--- SetCombatMovement precedent); no cast-state bridge — the
+-- SetCombatMovement precedent); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- pyroblast IsNonMeleeSpellCast(false) early-return gate
 -- unmodeled (netherspite precedent); the unused C++ spells
 -- (ARCANE_MISSILES 33833 / CONE_OF_COLD 12611 / FIRE_BLAST

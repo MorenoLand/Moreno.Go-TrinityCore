@@ -22,7 +22,7 @@
 -- OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. The C++ HasUnitState(UNIT_STATE_CASTING)
--- early-return gates have no casting-state bridge (mal_ganis
+-- early-return gates have no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (mal_ganis
 -- precedent).
 -- Ported arms:
 -- - Reset (C++ Reset, event 23): refresh the two self-buff auras —
@@ -48,7 +48,7 @@
 --   _Reset / _JustDied instance-state bookkeeping) — no instance /
 --   BossAI-Reset bridges (standing).
 -- - The C++ UpdateAI me->HasUnitState(UNIT_STATE_CASTING) gates —
---   mal_ganis precedent, no casting-state bridge.
+--   mal_ganis precedent, no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 
 local ENTRY = 7355
 

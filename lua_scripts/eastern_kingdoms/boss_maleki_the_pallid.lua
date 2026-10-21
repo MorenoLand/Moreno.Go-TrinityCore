@@ -31,7 +31,7 @@
 -- - EVENT_DRAIN_MANA / SPELL_DRAIN_MANA 17243: declared in the C++
 --   enums but NEVER scheduled in the file — dead event, nothing to arm.
 -- - UpdateAI's `if (me->HasUnitState(UNIT_STATE_CASTING)) return` gate:
---   no casting-state bridge, so the Lua timers run on the Eluna event
+--   no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the Lua timers run on the Eluna event
 --   pump without the casting tick-slip (barthilas precedent).
 -- - GetStratholmeAI wrapper: plain AI factory template, no logic.
 -- Verifiable numbers (file's own enums): SPELL_FROSTBOLT = 17503,

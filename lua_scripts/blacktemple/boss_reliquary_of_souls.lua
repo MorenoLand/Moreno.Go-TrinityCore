@@ -120,7 +120,7 @@
 -- on the target), spell_reliquary_of_souls_frenzy (41305 —
 -- after-cast Talk(SUFF_EMOTE_ENRAGE)).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- has no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the
 -- luaBossAI shim (BossAI::JustEngagedWith/JustDied and the
 -- DATA_RELIQUARY_OF_SOULS / DATA_ESSENCE_OF_*/DATA_RELIQUARY_

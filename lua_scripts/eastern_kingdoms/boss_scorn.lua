@@ -21,7 +21,7 @@
 -- Frostbolt Volley and Mind Flay re-arm at 20s, Frost Nova re-arms at
 -- 15s (events.Repeat legs — no rescheduling jitter in C++).
 -- No Talk lines exist in the C++ (no SAY enum); the UpdateAI
--- UNIT_STATE_CASTING queue gate has no UNIT_STATE bridge.
+-- UNIT_STATE_CASTING queue gate has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 
 local ENTRY_SCORN = 14693
 

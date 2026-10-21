@@ -34,7 +34,7 @@
 -- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
 --   instance bridge (standing).
 -- - The C++ UNIT_STATE_CASTING early-return gates in UpdateAI —
---   mal_ganis precedent, no casting-state bridge.
+--   mal_ganis precedent, no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
 
 local ENTRY = 7357
 

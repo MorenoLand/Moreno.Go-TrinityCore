@@ -29,7 +29,7 @@
 -- booleans; modeled on the pre-damage hook (event 9), cleared on
 -- 2/4/23.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has
--- no UNIT_STATE bridge — timers fire unconditionally (jeklik
+-- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); the DamageTaken _yellCount staircase is C++-exact —
 -- the C++ arm lives in DamageTaken itself (boss_interrogator_vishas.
 -- cpp:83-96), not the UpdateAI tick; JustDied's

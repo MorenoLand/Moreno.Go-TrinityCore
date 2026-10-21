@@ -49,7 +49,7 @@
 --    precedent) — the frayers never exist in this model, so
 --    the cast itself is skipped and only the talk is
 --    modeled. The IsNonMeleeSpellCast/InterruptNonMeleeSpells
---    gate has no cast-state bridge — the arm fires
+--    gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm fires
 --    unconditionally (netherspite precedent); the
 --    RemoveAllAuras arm is bridged (creature:RemoveAllAuras —
 --    this run); the MoveIdle() arm has no movement bridge
@@ -101,7 +101,7 @@
 -- bridged (creature:RemoveAllAuras — this run); no movement
 -- bridge — the
 -- tree-form MoveIdle() arm and the exit MoveChase(victim)
--- arm unmodeled (omor precedent); no cast-state bridge —
+-- arm unmodeled (omor precedent); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells
 -- arms unmodeled (netherspite precedent); the unused say
 -- enums SAY_SUMMON = 3 / SAY_OOC_RANDOM = 5 never fire in
@@ -181,7 +181,7 @@ local function combatTick(creature, guid)
         -- precedent); the tranquility / tree-form casts are
         -- TRIGGERED in the C++ (C++-exact) — bridged with the
         -- triggered flag. The IsNonMeleeSpellCast gate /
-        -- InterruptNonMeleeSpells have no cast-state bridge,
+        -- InterruptNonMeleeSpells have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget),
         -- the MoveIdle() arm has no movement bridge; the
         -- RemoveAllAuras arm is bridged this run (C++ arm
         -- order: strip before the casts).

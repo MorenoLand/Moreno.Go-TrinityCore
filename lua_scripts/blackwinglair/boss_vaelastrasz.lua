@@ -47,7 +47,7 @@
 -- timers, clear combat state; the gossip-flag one-shot survives Reset
 -- C++-exact (C++ never re-adds UNIT_NPC_FLAG_GOSSIP).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers fire
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (_Reset/BossAI::
 -- JustEngagedWith and the DATA_VAELASTRAZ_THE_CORRUPT bookkeeping

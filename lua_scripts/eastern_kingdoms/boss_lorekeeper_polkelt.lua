@@ -18,7 +18,7 @@
 -- nothing but keep the schedule (moroes/maiden convention). Zero
 -- Talk lines in C++ (no _SAY enum).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
 -- bridges): BossAI::JustEngagedWith + DATA_LOREKEEPERPOLKELT=4
 -- bookkeeping (scholomance.h:34) (luaBossAI shim).

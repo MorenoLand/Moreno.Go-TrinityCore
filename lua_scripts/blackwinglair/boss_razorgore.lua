@@ -28,7 +28,7 @@
 -- is exactly what C++ phase one does in combat. Reset cancels timers
 -- and clears the phase flag.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
--- rest of the event queue while casting) has no UNIT_STATE bridge —
+-- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- modeled arms would fire unconditionally (jeklik convention); no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (_Reset/_JustDied/BossAI::JustEngagedWith and the

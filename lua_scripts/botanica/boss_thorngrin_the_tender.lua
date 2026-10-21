@@ -45,7 +45,7 @@
 -- order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump; the
 -- UNIT_STATE_CASTING early-return gates before and after
--- the event loop have no cast-state bridge — the arms fire
+-- the event loop have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arms fire
 -- unconditionally, netherspite precedent). Pump:
 -- 1. Sacrifice arm — 5.7s init then 29.4s: target =
 --    SelectTarget(Random, 1) — random alive player excluding
@@ -163,7 +163,7 @@ end
 -- C++ UpdateAI in event arm order — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
 -- collapses into the pump; the UNIT_STATE_CASTING gates
--- have no cast-state bridge, so the arms fire
+-- have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the arms fire
 -- unconditionally (netherspite precedent).
 local function combatTick(creature, guid)
     local st = combatStates[guid]

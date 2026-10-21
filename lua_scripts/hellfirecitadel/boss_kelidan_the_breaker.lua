@@ -24,7 +24,7 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize() values
 -- (shadowVolley 1000 / burningNova 15000 / corruption 5000 / firenova
 -- false — the C++ JustEngagedWith does not schedule anything; the
--- InterruptNonMeleeSpells arm has no unit-state bridge and the
+-- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
 -- DoStartMovement arm has no movement bridge) + Talk(SAY_WAKE) + 1s
 -- scheduler pump (a port of UpdateAI — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into the
@@ -41,7 +41,7 @@
 -- (C++ {30s,50s}) — non-triggered DoCastSelf (C++-exact), re-arm
 -- {30s,50s} regardless (C++-exact); burning nova: 15s init then
 -- 20000+rand32()%8000 (C++ {20s,28s}) — the InterruptNonMeleeSpells
--- arm has no unit-state bridge; Talk(SAY_NOVA); the AddAura(SPELL_
+-- arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); Talk(SAY_NOVA); the AddAura(SPELL_
 -- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
 -- bridge" claim retracted — creature AddAura is bridged); the
 -- IsHeroic() DoTeleportAll arm is ported below (stale "no teleport
@@ -75,7 +75,7 @@
 -- pre-fight passive/non-attackable/immune channeling state
 -- unmodeled, and with it the !UpdateVictim evocation (SPELL_
 -- EVOCATION 30935) check_Timer arm, which only fires in that
--- state; no unit-state bridge — the JustEngagedWith and burning-
+-- state; no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the JustEngagedWith and burning-
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
 -- precedent); the burning-nova AddAura(30940) arm is ported
 -- (stale "no aura bridge" claim retracted); the heroic DoTeleportAll

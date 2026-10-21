@@ -82,7 +82,7 @@
 -- exact); fear 39415 — 15s init then 25s, Talk(SAY_FEAR), same
 -- targeting (C++-exact), non-triggered, re-arm 25000 (C++-
 -- exact; the IsNonMeleeSpellCast(false) early-return gate
--- has no cast-state bridge — the arm fires unconditionally,
+-- has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm fires unconditionally,
 -- netherspite precedent); domination 37162 — 30s init then
 -- {16s,32s}, Talk(SAY_MIND), same targeting (C++-exact),
 -- non-triggered, re-arm {16s,32s} (C++-exact; same cast-state
@@ -330,7 +330,7 @@ local function combatTick(creature, guid)
     -- Fear 39415: 15s init then 25s — Talk(SAY_FEAR), same
     -- targeting (C++-exact), non-triggered, re-arm 25000
     -- (C++-exact). The C++ IsNonMeleeSpellCast(false)
-    -- early-return gate has no cast-state bridge — the arm
+    -- early-return gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
     -- fires unconditionally (netherspite precedent).
     if st.fear <= 1000 then
         creature:Talk(SAY_FEAR)

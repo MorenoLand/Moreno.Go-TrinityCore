@@ -92,7 +92,7 @@
 -- unmodeled; no data-set bridge — the SetData(1) / EVENT_
 -- DALLIAH_DEATH machine (6s later Talk(SAY_DALLIAH_DEATH))
 -- unmodeled — no SetData bridge exists on the shim (see
--- engine/world/lua_creature_events.go); no cast-state bridge
+-- engine/world/lua_creature_events.go); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- — the UNIT_STATE_CASTING early-return gates unmodeled
 -- (netherspite precedent); the unused spell enums (SPELL_
 -- FELFIRE_LINE_UP 35770 / SPELL_CHARGE_TARGETING 36038 /
@@ -150,7 +150,7 @@ local function bossTick(creature, guid)
     -- Felfire shock 35759: {12s,14s} init then {12s,14s} —
     -- TRIGGERED DoCastVictim (C++-exact), re-arm {12s,14s}
     -- regardless (C++-exact). The C++ UNIT_STATE_CASTING
-    -- early-return gates have no cast-state bridge — the arm
+    -- early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
     -- fires unconditionally (netherspite precedent).
     if st.felfireShock <= 1000 then
         creature:CastSpell(nil, SPELL_FELFIRE_SHOCK, true)

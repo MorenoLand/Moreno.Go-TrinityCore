@@ -87,8 +87,10 @@
 -- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —
 -- SummonCreatureGroup(_guardianGroups) — no summon bridge;
 -- phase-three UpdateAI leg — HealthBelowPct(45) Talk(SAY_REQUEST_AID
--- 12) + transition scheduling — no health-pct bridge
--- (doomwalker/shadow-labyrinth precedents) + summon bridge;
+-- 12) + transition scheduling — the health-pct read IS bridgeable
+-- (creature:GetHealthPct(), object.go:107) but the transition arm rides
+-- the unported summon machine (gothik phase-gating precedent — Talk +
+-- transition stay out together);
 -- UpdateAI frostbolt filler — DoCastVictim(SPELL_FROSTBOLT_SINGLE
 -- 28478) — phase-gated on !PHASE_ONE and the UNIT_STATE_CASTING check
 -- — no phase / unit-state bridges; DamageTaken — damage = 0 in

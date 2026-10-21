@@ -86,7 +86,7 @@
 --   ACHIEV_TIMED_START_EVENT 6601) — no instance / achievement /
 --   BossAI-Reset bridges.
 -- - The C++ HasUnitState(UNIT_STATE_CASTING) early-return gates in
---   UpdateAI — no casting-state bridge (mal_ganis precedent).
+--   UpdateAI — no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (mal_ganis precedent).
 -- - The instance script itself (AddSC_instance_onyxias_lair: boss
 --   boundaries, OnCreatureCreate GUID bind, OnGameObjectCreate /
 --   OnGameObjectRemove floor-trap tracking, FloorEruption BFS,

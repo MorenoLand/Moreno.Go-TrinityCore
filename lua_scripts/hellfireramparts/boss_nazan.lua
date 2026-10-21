@@ -68,7 +68,7 @@
 -- HERALD, Vazruden alive and above 20% health) unmodeled,
 -- so only the 45s Fly_Timer timeout lands in this model
 -- (the GUID latch from IsSummonedBy has no bridge either);
--- no unit-state bridge — the C++ flight phase never calls
+-- no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the C++ flight phase never calls
 -- DoMeleeAttackIfReady but engine melee is always on in
 -- this model (kargath in-blade precedent); the heroic-only
 -- bellowing roar 39427 arm is ported below (IsHeroic() is

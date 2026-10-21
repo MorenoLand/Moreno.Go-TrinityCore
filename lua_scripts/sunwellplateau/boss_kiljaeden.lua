@@ -59,7 +59,7 @@
 -- phase checks (one transition per tick, blocked while in
 -- darkness — C++-exact). Fires:
 -- * soul flay: non-triggered DoCastVictim(47106 slow + 45442)
---   (the IsNonMeleeSpellCast queue gate has no UNIT_STATE bridge
+--   (the IsNonMeleeSpellCast queue gate has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 --   — timers fire unconditionally, jeklik convention); repeat 3.5s.
 -- * legion lightning: RemoveAura(45442) + non-triggered cast
 --   45664 on a random alive player in the instance within 100 yd
@@ -175,7 +175,7 @@
 -- despawn/flag/react/gravity bridges — the fiend KillSelf, the
 -- armageddon DespawnOrUnsummon, the kalecgos-kj/controller flag/
 -- gravity/faction/GO-type arms and the reflection dual-wield
--- arms are unmodeled; no UNIT_STATE bridge — the soul-flay/
+-- arms are unmodeled; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the soul-flay/
 -- lightning/fire-bloom/shadow-spike/darkness IsNonMeleeSpellCast
 -- queue gates are unmodeled (timers fire unconditionally, jeklik
 -- convention); the SPELLVALUE/aura-filter targeting nuances have

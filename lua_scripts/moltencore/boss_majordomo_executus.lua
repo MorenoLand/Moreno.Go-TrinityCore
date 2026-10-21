@@ -45,7 +45,7 @@
 -- script is blocked on the instance-script model); SPELL_SUMMON_
 -- RAGNAROS 19774 is declared but unused by the AI.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention); no instance-script model
 -- — boss admission via the luaBossAI shim (BossAI::JustEngagedWith
 -- and the BOSS_MAJORDOMO_EXECUTUS bookkeeping arms skipped).

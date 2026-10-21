@@ -18,7 +18,7 @@
 -- nothing but keep the schedule, jeklik convention). Reset cancels
 -- timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
--- rest of the event queue while casting) has no UNIT_STATE bridge —
+-- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms

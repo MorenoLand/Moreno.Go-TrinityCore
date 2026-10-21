@@ -41,7 +41,7 @@
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the _Reset arm is instance-blocked). Melee
 -- is engine-driven. The ctor's SetControlled(true,
--- UNIT_STATE_ROOT) has no unit-state bridge (mennu/thespia
+-- UNIT_STATE_ROOT) has no unit-state bridge at all (only UNIT_STATE_CASTING has the constant-false IsCasting twin) (mennu/thespia
 -- precedent). EnterEvadeMode is instance/cross-creature/
 -- summon gated (ahuneBunny DoAction STOP_EVENT,
 -- summons.DespawnAll, DespawnOrUnsummon) — unmodeled.
@@ -70,7 +70,7 @@
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
 -- documented only — the Emerge NOT_SELECTABLE flip stays
 -- unmodeled (its trigger rides the unregistered bunny phase
--- machine); no unit-state bridge; no SpellScript/
+-- machine); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); no SpellScript/
 -- AuraScript bridges — the nine script classes in this file
 -- (spell_ahune_synch_health, spell_summoning_rhyme_aura,
 -- spell_summon_ice_spear_delayer, spell_ice_spear_control_

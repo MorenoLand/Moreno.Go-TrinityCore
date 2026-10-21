@@ -15,7 +15,7 @@
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- The C++ while(ExecuteEvent()) + HasUnitState(UNIT_STATE_CASTING) gate
--- has no casting-state bridge in the Lua API (aeonus precedent —
+-- has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) in the Lua API (aeonus precedent —
 -- unmodeled).
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: arm each timer at its C++ ScheduleEvent cooldown (no Talk

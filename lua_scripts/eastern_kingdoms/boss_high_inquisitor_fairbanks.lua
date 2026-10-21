@@ -45,7 +45,7 @@
 -- sub-25% dip, then locked for 30s — modeled by clearing the
 -- cooldown via a one-shot timer; per-GUID state is cleared on
 -- 2/4/23). C++ also gates the heal on !IsNonMeleeSpellCast(false);
--- the Lua has no casting-state bridge, so the heal fires
+-- the Lua has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the heal fires
 -- unconditionally (UpdateAI UNIT_STATE_CASTING-gate precedent).
 -- The latch is modeled on the pre-damage hook (event 9) rather than
 -- the DamageTaken call inside DealDamage (documented timing

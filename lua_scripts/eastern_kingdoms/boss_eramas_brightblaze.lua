@@ -35,6 +35,10 @@
 -- post-damage health check (gyth convention), reset on
 -- OnEnterCombat(1) (C++ Initialize runs in the constructor and
 -- Reset — per-engagement reset is the gyth/vaelastrasz convention).
+-- postDamage idiom 2026-10-21: projected (health - damage) clamped at
+-- 0 plus a postDamage > 0 killing-blow guard (nefarian rule), since
+-- the C++ UpdateAI HealthBelowPct(25) arm never fires on the killing
+-- blow.
 -- Timers start on OnEnterCombat(1), cancelled on OnLeaveCombat(2)/
 -- OnDied(4)/OnReset(23) (maiden convention).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
@@ -123,7 +127,16 @@ local function onDamageTaken(_, creature, _, damage)
     if usedPotion[guid] then
         return
     end
-    if creature:GetHealth() - damage < math.floor(creature:GetMaxHealth() * 25 / 100) then
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    -- nefarian rule: the C++ common-AI UpdateAI HealthBelowPct(25) arm
+    -- reads post-damage health every tick and never fires on the
+    -- killing blow, so the event-9 port projects post-damage health
+    -- (clamped) and guards the killing blow.
+    local postDamage = math.max(health - damage, 0)
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 25 / 100) then
         usedPotion[guid] = true
         creature:CastSpell(creature, SPELL_HEALING_POTION)
     end

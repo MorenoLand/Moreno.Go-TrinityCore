@@ -13,7 +13,7 @@
 -- magma shackles 19496 15s then {8s,12s}, non-triggered self-cast.
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no UNIT_STATE bridge — timers fire
+-- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the BOSS_GARR bookkeeping arms skipped); the npc_firesworn AI in the
