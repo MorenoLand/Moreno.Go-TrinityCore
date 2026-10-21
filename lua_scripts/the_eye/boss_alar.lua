@@ -172,6 +172,12 @@ local ENTRY_ALAR = 19514
 
 local alarState = {}
 local alarPump = {}
+-- Native-display capture for the Reset()/WE_SUMMON restore arms
+-- (boss_alar.cpp:164/:340 SetDisplayId(GetNativeDisplayId()) —
+-- the black-knight nativeDisplay idiom).
+local alarNative = {}
+
+local MODEL_INVISIBLE = 11686 -- boss_alar.cpp:224 (dive-bomb visual)
 
 local function cancelPump(guid)
     local id = alarPump[guid]
@@ -250,6 +256,11 @@ local function advanceDive(creature, guid)
         creature:ApplySpellImmune(0, 2, 4, false)
         creature:CastSpell(creature, SPELL_DIVE_BOMB_VISUAL)
         creature:AddAura(SPELL_DIVE_BOMB_VISUAL)
+        -- C++ SpellHit(SPELL_DIVE_BOMB_VISUAL) (boss_alar.cpp:223-224):
+        -- SetDisplayId(11686) — the stale "no display bridge" claim
+        -- retracted (creature:SetDisplayId is bridged,
+        -- lua_creature_events.go:643).
+        creature:SetDisplayId(MODEL_INVISIBLE)
         st.dive = { step = "dive", wait = 4000 }
     elseif step == "dive" then
         -- WE_DIVE: TRIGGERED dive bomb on a random target
@@ -271,7 +282,12 @@ local function advanceDive(creature, guid)
     elseif step == "summon" then
         -- WE_SUMMON: the two ember summons have no summon
         -- bridge (steamrigger precedent) — only the TRIGGERED
-        -- rebirth cast is bridged (C++-exact).
+        -- rebirth cast is bridged (C++-exact). The native-display
+        -- restore (boss_alar.cpp:340, before the rebirth cast) is
+        -- ported via the alarNative capture.
+        if alarNative[guid] ~= nil then
+            creature:SetDisplayId(alarNative[guid])
+        end
         creature:CastSpell(creature, SPELL_REBIRTH_2, true)
         st.dive = nil
     end
@@ -404,6 +420,11 @@ end
 RegisterCreatureEvent(ENTRY_ALAR, 1, function(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
+    -- Native-display capture for the Reset()/WE_SUMMON restore arms
+    -- (boss_alar.cpp:164/:340 — the black-knight idiom).
+    if alarNative[guid] == nil then
+        alarNative[guid] = creature:GetDisplayId()
+    end
     alarState[guid] = {
         phase = 1,
         berserk = 1200000,
@@ -420,16 +441,27 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_ALAR, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    local guid = creature:GetGUID()
+    fullReset(guid)
     -- boss_alar.cpp:170 — evade runs C++ Reset
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    -- C++ Reset() :164: SetDisplayId(GetNativeDisplayId()) — ported
+    -- via the alarNative capture (the stale "no display bridge"
+    -- claim retracted; creature:SetDisplayId is bridged,
+    -- lua_creature_events.go:643).
+    if alarNative[guid] ~= nil then
+        creature:SetDisplayId(alarNative[guid])
+        alarNative[guid] = nil
+    end
 end)
 
 -- C++ JustDied: cleanup (the _JustDied arm is instance-
 -- blocked; the C++ does not override KilledUnit, so no
 -- event 3 — laj precedent).
 RegisterCreatureEvent(ENTRY_ALAR, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    local guid = creature:GetGUID()
+    fullReset(guid)
+    alarNative[guid] = nil
 end)
 
 -- C++ DamageTaken: the phase-1 lethal latch — damage >=
@@ -472,7 +504,14 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    local guid = creature:GetGUID()
+    fullReset(guid)
+    -- C++ Reset() :164: SetDisplayId(GetNativeDisplayId()) — ported
+    -- via the alarNative capture.
+    if alarNative[guid] ~= nil then
+        creature:SetDisplayId(alarNative[guid])
+        alarNative[guid] = nil
+    end
     -- C++ Reset() :165: SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate) —
     -- the template rate captured in the AI constructor (:117); rate <= 0
     -- clears the script override, restoring it.

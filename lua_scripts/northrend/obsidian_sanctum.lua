@@ -135,9 +135,10 @@
 -- + SetFlag(NON_ATTACKABLE | NOT_SELECTABLE) PORTED (bridged);
 -- EVENT_TSUNAMI_BUFF (nearest live NPC_LAVA_BLAZE 30643 within 10yd
 -- self-casts SPELL_FLAME_TSUNAMI_BUFF 60430, triggered, 1s/1s)
--- PORTED via the FindNearestCreature bridge; the ctor (SetDisplayId
--- 11686 + aura SPELL_FLAME_TSUNAMI 57494) has no spawn / display
--- bridges — documented-only.
+-- PORTED via the FindNearestCreature bridge; the ctor legs
+-- (SetDisplayId 11686 + aura SPELL_FLAME_TSUNAMI 57494) are PORTED
+-- via event 5 (OnSpawn) — the stale "no spawn / display bridges"
+-- claim retracted 2026-10-21.
 -- npc_twilight_fissure — entry UNVERIFIABLE from C++ (no local
 -- NPC enum; the fissure is spawned by SPELL_SHADOW_FISSURE
 -- 57579, entry not named in the C++ tree) — joins the
@@ -409,6 +410,7 @@ end
 local SPELL_TWILIGHT_SHIFT_ENTER = 57620
 local SPELL_TWILIGHT_TORMENT_VESP_ACO = 58853
 local SPELL_FLAME_TSUNAMI_DMG_AURA = 57491
+local SPELL_FLAME_TSUNAMI = 57494 -- obsidian_sanctum.cpp:78 (visual dummy)
 local SPELL_FLAME_TSUNAMI_BUFF = 60430
 local NPC_LAVA_BLAZE = 30643
 local REACT_PASSIVE = 0
@@ -496,9 +498,10 @@ end
 -- OnRemove (event 37); EVENT_TSUNAMI_BUFF (1s init / 1s re-arm) —
 -- the nearest live lava blaze within 10yd self-casts
 -- SPELL_FLAME_TSUNAMI_BUFF (triggered) via the FindNearestCreature
--- bridge — ported. The ctor (SetDisplayId 11686 + AddAura
--- SPELL_FLAME_TSUNAMI 57494) stays out: no spawn hook / display
--- bridge for that leg.
+-- bridge — ported. The ctor legs (SetDisplayId 11686 + AddAura
+-- SPELL_FLAME_TSUNAMI 57494) are ported via tsunamiSpawn (event 5)
+-- below — the stale "no spawn hook / display bridge" claim
+-- retracted.
 local function tsunamiTick(creature, guid)
     creature:CastSpell(creature, SPELL_FLAME_TSUNAMI_DMG_AURA)
     schedule(guid, "tsunami", 500, function()
@@ -535,3 +538,16 @@ local function tsunamiRemove(event, creature)
 end
 RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 23, tsunamiReset)
 RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 37, tsunamiRemove)
+
+-- C++ npc_flame_tsunamiAI ctor (obsidian_sanctum.cpp:868-872):
+-- SetDisplayId(11686) + AddAura(SPELL_FLAME_TSUNAMI 57494, me).
+-- The stale "no spawn / display bridges" claim is retracted —
+-- creature:SetDisplayId (lua_creature_events.go:643) and
+-- creature:AddAura (self-only, lua_creature_events.go:249) are
+-- bridged; event 5 (OnSpawn) is the ctor-equivalent hook
+-- (the felmyst YELL_BIRTH precedent).
+local function tsunamiSpawn(event, creature)
+    creature:SetDisplayId(11686)
+    creature:AddAura(SPELL_FLAME_TSUNAMI)
+end
+RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 5, tsunamiSpawn)

@@ -91,9 +91,10 @@
 -- creature gated, documented only, not registered), the shield-
 -- generator-channel magic-barrier upkeep (npc_shield_generator_
 -- channel, 19870: DoCast(vashj, SPELL_MAGIC_BARRIER 38112, true)
--- via instance GUID, SetDisplayId(11686) invisible + NOT_
--- SELECTABLE flag — no cross-creature bridge (display/flag
--- bridges live 2026-10-20), documented only, not registered),
+-- via instance GUID — no cross-creature bridge, stays out; the
+-- Reset() self-local arms — SetDisplayId(11686) invisible +
+-- NOT_SELECTABLE flag — are PORTED below via a new ev23
+-- registration (display/flag bridges live 2026-10-20)),
 -- and the tainted-elemental
 -- JustDied -> EventTaintedElementalDeath relay (unmodeled); no
 -- threat bridge — the melee-range check is the 5-yd player
@@ -140,7 +141,9 @@ local ENTRY_LADY_VASHJ = 21212
 -- bridged (engine/world/lua_creature_events.go:690/725).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 local ENTRY_TAINTED_ELEMENTAL = 22009
+local ENTRY_SHIELD_GENERATOR_CHANNEL = 19870 -- boss_lady_vashj.cpp:60 (C++ spells it SHIED_GENERATOR_CHANNEL)
 
 local MELEE_RANGE = 5
 local STATIC_CHARGE_RANGE = 200
@@ -460,3 +463,18 @@ RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 1, elementalEnterCombat)
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 2, elementalCleanup)
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 4, elementalCleanup)
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 23, elementalCleanup)
+
+-- C++ npc_shield_generator_channel::Reset (boss_lady_vashj.cpp:853-859):
+-- SetDisplayId(11686) // invisible + SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE). Both arms are self-local and bridged
+-- (creature:SetDisplayId, lua_creature_events.go:643; creature:SetFlag,
+-- lua_creature_events.go:968) — the stale "no cross-creature bridge"
+-- framing retracted for the Reset arm (it never touches vashj). The
+-- UpdateAI barrier upkeep (DoCast(vashj, SPELL_MAGIC_BARRIER 38112,
+-- true) via instance GUID) rides the unbridged cross-creature bridge
+-- and stays out.
+local function shieldGeneratorReset(event, creature)
+    creature:SetDisplayId(11686)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+RegisterCreatureEvent(ENTRY_SHIELD_GENERATOR_CHANNEL, 23, shieldGeneratorReset)

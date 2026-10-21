@@ -92,25 +92,15 @@
 -- / gettingColdInHere / cheeseTheFreeze /
 -- iHaveTheCoolestFriends / iCouldSayThatThisCacheWasRare,
 -- lines 373-377) — DoAction/SetData-gated, no bridges.
--- DamageTaken lethal companion legs — RemoveAllAuras /
--- RemoveAllAttackers / AttackStop / SetReactState
--- REACT_PASSIVE / SetFlag UNIT_FLAG_NON_ATTACKABLE /
--- SetControlled root (creature:SetRooted IS bridged, lua_creature_events.go —
--- the root leg alone stays out: the arm is a coupled machine) /
--- InterruptNonMeleeSpells / StopMoving / MoveIdle / SetControlled stun /
--- CombatStop — no bridges; DoCastAOE SPELL_KILL_CREDIT
--- 64899 + SetFaction FACTION_FRIENDLY — the kill-credit
--- must precede the faction change in one coupled machine
--- (SetFaction unbridged); DespawnOrUnsummon(10s) and
--- RemoveAllAuras ARE bridged, but the arm stays out —
--- porting the tail legs without the machine would
--- fabricate behavior. _JustDied() passthrough — never
--- reachable in Go since the boss cannot actually die
--- while the damage=0 rewrite holds (consequence of the
--- rewrite without the despawn leg: every subsequent hit
--- still satisfies damage >= health, so the death Talk
--- re-fires on each hit — verbatim C++ behavior, which in
--- C++ is bounded by the 10s despawn).
+-- DamageTaken lethal companion legs — RemoveAllAttackers /
+-- InterruptNonMeleeSpells / StopMoving / MoveIdle / SetControlled
+-- stun / CombatStop / instance->SetData(DATA_HODIR_RARE_CACHE)
+-- (line 400) — no bridges; documented-only. The rest of the
+-- machine is ported in hodirDamageTaken (2026-10-21): the stale
+-- "SetFaction unbridged" claim that used to gate it is retracted
+-- (creature:SetFaction is bridged, lua_creature_events.go:1091),
+-- so the arm now terminates C++-exact — kill-credit, friendly
+-- faction, 10s despawn — instead of leaving an unkillable boss.
 -- DamageTaken lethal instance->SetData(DATA_HODIR_RARE_CACHE,
 -- 1) (line 400) — no instance SetData bridge; joins the
 -- no-SetData-bridge queue.
@@ -207,6 +197,12 @@ local SPELL_FREEZE = 62469
 local SPELL_FROZEN_BLOWS = 62478
 local SPELL_BERSERK = 47008
 local SPELL_ICICLE = 62234
+
+local SPELL_KILL_CREDIT = 64899 -- boss_hodir.cpp:73
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h:125
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
 local timers = {}
 
@@ -350,17 +346,38 @@ local function hodirTargetDied(event, creature, victim)
     end
 end
 
--- C++ DamageTaken (lines 396-399): damage >= me->GetHealth()
--- -> damage = 0 + Talk(SAY_DEATH) — only the Talk arm and
--- the damage rewrite are bridgeable; the numeric second return
--- performs the C++-exact damage=0 rewrite (the moroes
--- damage-rewrite precedent). The companion legs
--- (RemoveAllAuras / ... / DoCastAOE SPELL_KILL_CREDIT /
--- SetFaction / DespawnOrUnsummon / _JustDied /
--- instance->SetData) have no bridges — see DOCUMENTED-ONLY.
+-- C++ DamageTaken (lines 393-421): damage >= me->GetHealth()
+-- -> damage = 0 + Talk(SAY_DEATH) + the full cheat-death machine,
+-- ported in C++ order with the live bridges: RemoveAllAuras,
+-- AttackStop, SetReactState(REACT_PASSIVE),
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE),
+-- SetRooted(true) for the UNIT_STATE_ROOT leg (the black-knight
+-- root-half approximation), DoCastAOE SPELL_KILL_CREDIT 64899 as
+-- creature:CastSpell(creature, spell, true) BEFORE the faction
+-- change (the C++ comment: the credit targets enemies only),
+-- SetFaction(FACTION_FRIENDLY), DespawnOrUnsummon(10s) as a
+-- fire-and-forget 10s one-shot (the freyaDamageTaken precedent;
+-- C++ re-arms the despawn per hit, unreachable here — the machine
+-- leaves nothing able to land another hit), and _JustDied() as
+-- cancelTimers. The numeric second return performs the C++-exact
+-- damage=0 rewrite (the moroes damage-rewrite precedent). No
+-- bridges: RemoveAllAttackers, InterruptNonMeleeSpells,
+-- StopMoving/MoveIdle, the SetControlled stun leg, CombatStop,
+-- instance SetData(DATA_HODIR_RARE_CACHE) — documented-only.
 local function hodirDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
+        creature:RemoveAllAuras()
+        creature:AttackStop()
+        creature:SetReactState(REACT_PASSIVE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetRooted(true)
+        creature:CastSpell(creature, SPELL_KILL_CREDIT, true)
+        creature:SetFaction(FACTION_FRIENDLY)
+        CreateLuaEvent(function()
+            creature:Despawn()
+        end, 10000)
+        cancelTimers(creature:GetGUID())
         return false, 0
     end
 end

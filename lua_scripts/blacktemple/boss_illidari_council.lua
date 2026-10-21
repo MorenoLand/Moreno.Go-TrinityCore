@@ -35,16 +35,17 @@
 -- (cleared on Reset — C++-exact), triggered self-cast empyreal
 -- balance 41499 (C++ DoCastSelf(..., true)) / empyreal
 -- equivalency 41333 2s then 2s, triggered self-cast / berserk
--- 45078 15min, one-shot — the per-member triggered casts and the
--- Talk(SAY_COUNCIL_ENRAGE) arms target the four other members and
--- have no cross-creature bridge, so the arm fires empty
--- (documented); the random-member Talk(SAY_COUNCIL_AGRO) has no
--- cross-creature bridge — skipped. The SendEncounterUnit engage/
+-- 45078 15min one-shot — the per-member triggered casts and the
+-- Talk(SAY_COUNCIL_ENRAGE) arms target all four members (no
+-- exclusion) and are PORTED via GetCreaturesInGrid (the stale "no
+-- cross-creature bridge" claim retracted, 2026-10-21);
+-- the random-member Talk(SAY_COUNCIL_AGRO) is ported the same way.
+-- The SendEncounterUnit engage/
 -- disengage, DoZoneInCombat, SetBoundary and SummonCreatureGroup
 -- arms have no instance/summon bridges. OnDied: the four members'
--- LowerPlayerDamageReq + quiet-suicide 3617 casts have no cross-
--- creature bridge — skipped; the SetBossState(DONE) arm is
--- blocked on the instance-script model. OnLeaveCombat/OnReset:
+-- quiet-suicide 3617 casts are PORTED via GetCreaturesInGrid;
+-- LowerPlayerDamageReq has no bridge — skipped; the
+-- SetBossState(DONE) arm is blocked on the instance-script model. OnLeaveCombat/OnReset:
 -- cancel timers, drop per-GUID state; the summons.DespawnAll and
 -- _DespawnAtEvade arms have no bridges (evade-side cleanup is
 -- engine-side).
@@ -303,10 +304,20 @@ local function councilEnterCombat(event, creature, target)
         schedule(guid, "council_equivalency", 2000, onEquivalency)
     end
     schedule(guid, "council_equivalency", 2000, onEquivalency)
-    -- C++ EVENT_BERSERK: per-member triggered 45078 casts +
-    -- Talk(SAY_COUNCIL_ENRAGE) on each of the four members — no
-    -- cross-creature bridge, so the one-shot fires empty.
-    schedule(guid, "council_berserk", 900000, function() end)
+    -- C++ EVENT_BERSERK (boss_illidari_council.cpp:221-226): per-member
+    -- triggered SPELL_BERSERK 45078 self-casts + Talk(SAY_COUNCIL_ENRAGE)
+    -- on each of the four members (no exclusion — the firing member
+    -- is included, unlike the slay leg). The stale "no cross-creature
+    -- bridge" claim is retracted (memberTargetDied precedent in this
+    -- file); members gathered via GetCreaturesInGrid.
+    schedule(guid, "council_berserk", 900000, function()
+        for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
+            for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+                member:CastSpell(member, SPELL_BERSERK, true)
+                member:Talk(SAY_COUNCIL_ENRAGE)
+            end
+        end
+    end)
 end
 
 local function councilResetState(guid)
@@ -317,11 +328,18 @@ local function councilResetState(guid)
     end
 end
 
--- C++ JustDied: the members' LowerPlayerDamageReq + triggered
--- quiet-suicide 3617 casts have no cross-creature bridge —
--- skipped; the SetBossState(DONE) arm is blocked on the
+-- C++ JustDied (boss_illidari_council.cpp:190-196): each member gets a
+-- triggered SPELL_QUIET_SUICIDE 3617 self-cast — ported via the
+-- GetCreaturesInGrid idiom (the stale "no cross-creature bridge"
+-- claim retracted). The LowerPlayerDamageReq leg has no bridge and
+-- stays out; the SetBossState(DONE) arm is blocked on the
 -- instance-script model.
 local function councilDied(event, creature, killer)
+    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
+        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+            member:CastSpell(member, SPELL_QUIET_SUICIDE, true)
+        end
+    end
     councilResetState(creature:GetGUID())
 end
 

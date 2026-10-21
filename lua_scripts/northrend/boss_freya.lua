@@ -179,16 +179,18 @@
 -- Freya JustDied companion legs (:602-~640) — chest summon
 -- (summonSpell[2][4]: 62950/62952/62953/62954 10-man,
 -- 62955/62956/62957/62958 25-man, indexed by
--- difficulty/elderCount), SetReactState REACT_PASSIVE,
--- InterruptNonMeleeSpells, RemoveAllAttackers, AttackStop,
--- SetFaction FRIENDLY, DespawnOrUnsummon(7.5s), CastSpell
--- SPELL_KNOCK_ON_WOOD_CREDIT, _JustDied(), live-elder
--- shutdown sweep (RemoveAllAuras / AttackStop / CombatStop
--- / EngagementOver / DoAction(ACTION_ELDER_FREYA_KILLED))
--- — no cast / react-state / faction / DoAction bridges; the 7.5s
--- DespawnOrUnsummon IS ported in freyaDamageTaken below (stale
--- "no despawn bridge" retracted; creature:Despawn() is bridged,
--- lua_objects.go). Talk(SAY_DEATH) itself is ported via event 9.
+-- difficulty/elderCount) BLOCKED on the difficulty index (no
+-- 10/25 raid-size bridge; creature:IsHeroic is heroic-only),
+-- InterruptNonMeleeSpells, RemoveAllAttackers — no bridges;
+-- the live-elder shutdown sweep (RemoveAllAuras / AttackStop /
+-- CombatStop / EngagementOver / DoAction(ACTION_ELDER_FREYA_KILLED))
+-- — no GetData / DoAction bridges. PORTED 2026-10-21 into
+-- freyaDamageTaken (the stale "no cast / react-state / faction
+-- bridges" retraction): SetReactState REACT_PASSIVE, AttackStop,
+-- SetFaction FRIENDLY, CastSpell SPELL_KNOCK_ON_WOOD_CREDIT 65074,
+-- DespawnOrUnsummon(7.5s) (stale "no despawn bridge" already
+-- retracted; creature:Despawn() is bridged, lua_objects.go).
+-- Talk(SAY_DEATH) itself is ported via event 9.
 -- Freya UpdateAI body legs — Touch-of-Eonar aura
 -- maintenance (every-tick, not timer-driven); attuned-stack
 -- achievement sampling; elemental 12s revive / trio-defeated
@@ -269,6 +271,10 @@ local EMOTE_LIFEBINDERS_GIFT = 8
 local SAY_ELDER_AGGRO = 0
 local SAY_ELDER_SLAY = 1
 local SAY_ELDER_DEATH = 2
+
+local SPELL_KNOCK_ON_WOOD_CREDIT = 65074 -- boss_freya.cpp:92
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
 -- GUID-keyed timer harness (the maiden_of_virtue precedent):
 -- CreateLuaEvent ids per creature GUID, cancelled on
@@ -410,24 +416,36 @@ end
 -- C++ DamageTaken: damage >= me->GetHealth() -> damage = 0
 -- + manual JustDied(who) call; the manual JustDied's bridgeable
 -- arms are Talk(SAY_DEATH) + DespawnOrUnsummon(7500ms)
--- (boss_freya.cpp:626) — the numeric second return performs the
--- C++-exact damage=0 rewrite (the moroes damage-rewrite
--- precedent; the hodir consequence applies). cancelTimers
--- models the C++ post-lethal stop (no victim after
--- RemoveAllAttackers/AttackStop; without the cancel the Lua
--- timers would fire forever on the unkillable body). The 7.5s
--- despawn is a fire-and-forget one-shot CreateLuaEvent —
+-- (boss_freya.cpp:626) + the 2026-10-21 completion: SetReactState
+-- REACT_PASSIVE, AttackStop, SetFaction(FACTION_FRIENDLY), and
+-- CastSpell(me, SPELL_KNOCK_ON_WOOD_CREDIT 65074, true) as
+-- creature:CastSpell(creature, spell, true) — the stale "no cast /
+-- react-state / faction bridges" header claim retracted. The
+-- numeric second return performs the C++-exact damage=0 rewrite
+-- (the moroes damage-rewrite precedent; the hodir consequence
+-- applies). cancelTimers models the C++ post-lethal stop (no
+-- victim after RemoveAllAttackers/AttackStop; without the cancel
+-- the Lua timers would fire forever on the unkillable body). The
+-- 7.5s despawn is a fire-and-forget one-shot CreateLuaEvent —
 -- C++-exact: C++ DespawnOrUnsummon rides the creature's own
 -- despawn timer, not the EventMap, so it is deliberately NOT
 -- tracked in the timers table (leave-combat/reset must not
--- cancel it, which C++ never does either).
+-- cancel it, which C++ never does either). Still out: the chest
+-- summon (summonSpell indexed by GetMap()->GetDifficulty() —
+-- no 10/25 raid-size bridge; creature:IsHeroic is heroic-only),
+-- InterruptNonMeleeSpells, RemoveAllAttackers, and the live-elder
+-- shutdown sweep (instance GuidData / DoAction — no bridges).
 local function freyaDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:SetFaction(FACTION_FRIENDLY)
         cancelTimers(creature:GetGUID())
         CreateLuaEvent(function()
             creature:Despawn()
         end, 7500)
+        creature:CastSpell(creature, SPELL_KNOCK_ON_WOOD_CREDIT, true)
         return false, 0
     end
 end

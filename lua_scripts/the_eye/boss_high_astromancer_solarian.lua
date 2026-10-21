@@ -103,9 +103,10 @@
 -- without visibility would fabricate a state C++ never exhibits); the
 -- SetArmor(31000) arm has no armor bridge — unmodeled
 -- (netherspite precedent); the
--- SetDisplayId(MODEL_VOIDWALKER 18988) arm is display-bridgeable
--- but stays out paired with the unbridged reveal legs (a morph
--- without the reveal would fabricate a state C++ never exhibits);
+-- SetDisplayId(MODEL_VOIDWALKER 18988) arm IS ported (the stale
+-- "paired with the reveal" rationale retracted 2026-10-21 — the Lua
+-- model never goes invisible, so the phase-4 reveal is vacuous,
+-- exactly like the already-ported scale arm);
 -- the SetObjectScale(x2.5) arm is ported below via
 -- creature:SetScale (scale bridge now exists).
 -- Phase 4 arms (C++ arm order): fear — 20s: non-triggered
@@ -161,6 +162,9 @@ local SPELL_FEAR = 34322
 local SPELL_VOID_BOLT = 39329
 
 local ENTRY_SOLARIAN = 18805
+
+local MODEL_HUMAN = 18239 -- boss_astromancer.cpp:72
+local MODEL_VOIDWALKER = 18988 -- boss_astromancer.cpp:73
 
 local SAY_AGGRO = 0
 local SAY_KILL = 3
@@ -323,11 +327,13 @@ local function combatTick(creature, guid)
     -- Phase 4 latch (C++ arm order — after the phase
     -- branches): HealthBelowPct(20) while not already phase
     -- 4 — Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
-    -- visibility/armor arms have no bridges and the display arm stays
-    -- out paired with the reveal legs — unmodeled, see header (the
-    -- RemoveFlag(NOT_SELECTABLE) leg is flag-bridgeable but stays out
-    -- paired with the unbridged reveal legs); the scale arm is ported
-    -- below via creature:SetScale.
+    -- visibility/armor arms have no bridges and the RemoveFlag
+    -- (NOT_SELECTABLE) leg stays out paired with the unbridged
+    -- SetVisible(true) (visibility has no bridge at all); the
+    -- display arm (MODEL_VOIDWALKER) is ported below — the stale
+    -- "paired with the reveal" rationale retracted (Lua model never
+    -- goes invisible); the scale arm is ported below via
+    -- creature:SetScale.
     if st.phase ~= 4 then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
@@ -335,6 +341,9 @@ local function combatTick(creature, guid)
             st.phase = 4
             creature:Talk(SAY_VOIDA)
             creature:Talk(SAY_VOIDB)
+            -- C++ arm order: SetDisplayId(MODEL_VOIDWALKER) before
+            -- SetObjectScale(defaultsize*2.5f).
+            creature:SetDisplayId(MODEL_VOIDWALKER)
             -- C++: me->SetObjectScale(defaultsize*2.5f) — GetScale()
             -- reads the template base (the C++ defaultsize capture)
             -- while no script scale is known.
@@ -383,10 +392,13 @@ end)
 
 -- C++ JustDied: Talk(SAY_DEATH) + cleanup (the _JustDied arm
 -- is instance-blocked); the SetObjectScale(defaultsize) restore
--- arm is ported as a scale clear (the SetDisplayId arm stays out
--- with the unbridged reveal legs).
+-- arm is ported as a scale clear and the SetDisplayId(MODEL_HUMAN)
+-- restore as SetDisplayId(MODEL_HUMAN) (the stale "paired with the
+-- unbridged reveal legs" rationale retracted — the Lua model never
+-- goes invisible, so the reveal is vacuous).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 4, function(_, creature)
     creature:SetScale(0)
+    creature:SetDisplayId(MODEL_HUMAN)
     creature:Talk(SAY_DEATH)
     fullReset(creature:GetGUID())
 end)
@@ -394,10 +406,13 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook; the C++
 -- Reset SetObjectScale(defaultsize) restore arm ports as a scale
--- clear (SetArmor/SetVisible arms stay unbridged; the
--- RemoveFlag(NOT_SELECTABLE) leg stays out paired with the unbridged
--- reveal; the SetDisplayId arm stays out with them).
+-- clear and the SetDisplayId(MODEL_HUMAN) restore as
+-- SetDisplayId(MODEL_HUMAN) (SetArmor/SetVisible arms stay
+-- unbridged; the RemoveFlag(NOT_SELECTABLE) leg stays out paired
+-- with the unbridged reveal — visibility, unlike display, has no
+-- bridge at all).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
     creature:SetScale(0)
+    creature:SetDisplayId(MODEL_HUMAN)
     fullReset(creature:GetGUID())
 end)

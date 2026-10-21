@@ -26,12 +26,15 @@
 -- - The invisible/adds phase: C++ every 19s init -> 40s re-arm
 --   (AddsTimer only ticks while visible; the invisible 15s window
 --   freezes ALL timers including toxic volley / uppercut) —
---   InterruptNonMeleeSpells, SetFaction(FRIENDLY), UNIT_FLAG_NOT_SELECTABLE,
---   SetDisplayId(11686) / restore SetDisplayId(11172) + FACTION_MONSTER,
---   and the 5x DoSpawnCreature(13456, irand(-7,7) offsets,
+--   InterruptNonMeleeSpells, UNIT_FLAG_NOT_SELECTABLE,
+--   the 5x DoSpawnCreature(13456, irand(-7,7) offsets,
 --   TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 90s) with AttackStart(victim)
---   all have no faction / flag / display / summon / threat bridges
---   (standing) — so the lua timers keep their 9s/12s cadence straight
+--   have no interrupt / flag / summon / threat bridges (standing).
+--   SetFaction and SetDisplayId ARE now bridged
+--   (lua_creature_events.go) but the flip stays out: the adds are
+--   the point of the phase, and an invisible add-less noxxion
+--   would fabricate behavior (the gothik phase-gating precedent).
+--   So the lua timers keep their 9s/12s cadence straight
 --   through the C++ invisible windows. The C++ file declares zero Talk
 --   lines and no KilledUnit override — no event-3 registration.
 

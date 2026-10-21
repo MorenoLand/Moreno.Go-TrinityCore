@@ -31,9 +31,10 @@
 -- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
 -- but there is no handle to the attumen creature from the midnight kill arm,
 -- so it broadcasts untargeted. Attumen's JustDied Talk(SAY_DEATH) is kept; midnight->KillSelf
--- has no bridge. The EMOTE_MOUNT_UP (cpp:309) mount-emote arm is skipped:
--- no GUID->creature bridge to direct the attumen mount's Talk/emote, so
--- it is named here rather than rediscovered. EnterEvadeMode despawns now
+-- has no bridge. The EMOTE_MOUNT_UP mount-emote arm is PORTED in
+-- attumenSpellHit below (2026-10-21): the stale "no GUID->creature
+-- bridge" claim is retracted — event 14 passes the midnight creature
+-- as the caster arg. EnterEvadeMode despawns now
 -- has no bridge. EnterEvadeMode despawns now ported: midnight's
 -- _DespawnAtEvade(Seconds(10)) as a 10s event-2 schedule (jedoga
 -- precedent, re-engage cancels); attumen's me->DespawnOrUnsummon()
@@ -314,7 +315,10 @@ local function attumenSpellHit(event, creature, caster, spellId)
     -- C++ SpellHit(SPELL_MOUNT): cancel the scheduler, both creatures walk
     -- toward each other, then DoCastAOE(SPELL_SUMMON_ATTUMEN_MOUNTED).
     -- Movement/visibility/summon have no Lua bridge; keep the timer cancel
-    -- and the mount talk.
+    -- and the mount talk. The midnight->AI()->Talk(EMOTE_MOUNT_UP=1) arm
+    -- (boss_midnight.cpp:241) rides the event-14 caster arg — the stale
+    -- "no GUID->creature bridge" claim is retracted: the caster IS the
+    -- midnight creature that cast SPELL_MOUNT.
     if spellId == SPELL_MOUNT then
         local state = attumenState[creature:GetGUID()]
         if state ~= nil then
@@ -322,6 +326,9 @@ local function attumenSpellHit(event, creature, caster, spellId)
         end
         cancelTimers(creature:GetGUID())
         creature:Talk(SAY_MOUNT)
+        if caster ~= nil then
+            caster:Talk(EMOTE_MOUNT_UP)
+        end
     end
 end
 
