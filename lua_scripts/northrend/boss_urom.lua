@@ -122,13 +122,18 @@ local function uromDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ Reset (boss_urom.cpp:132-140): the root/gravity/react legs have
--- no bridges, but the DoCastSelf(SPELL_EVOCATE) leg is ungated and
+-- C++ Reset (boss_urom.cpp:132-140): SetDisableGravity has no bridge
+-- and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua never sets
+-- REACT_PASSIVE), but the DoCastSelf(SPELL_EVOCATE) leg is ungated and
 -- port-pattern-ready — self-cast on the reset path (halion
--- twilightHalionReset precedent).
+-- twilightHalionReset precedent). The root leg ports via
+-- creature:SetRooted(false) (lua_creature_events.go).
 local function uromReset(event, creature)
     -- C++ boss_uromAI::Reset(): DoCastSelf(SPELL_EVOCATE) is Reset-only
     -- (boss_urom.cpp). Alive-gated; the death-leg ev23 fire is phantom.
+    -- me->SetControlled(false, UNIT_STATE_ROOT) (boss_urom.cpp:135)
+    -- ports via creature:SetRooted(false).
+    creature:SetRooted(false)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_EVOCATE)
     end

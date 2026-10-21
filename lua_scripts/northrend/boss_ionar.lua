@@ -41,9 +41,11 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28546):
 -- boss_ionar Reset / Initialize — lSparkList.DespawnAll() +
--- Initialize() flag/timer clears, RemoveFlag / SetControlled /
--- SetVisible legs, instance->SetBossState(DATA_IONAR, NOT_STARTED)
--- — no summon-list / flag / visibility / instance bridges.
+-- Initialize() flag/timer clears, RemoveFlag / SetVisible legs,
+-- instance->SetBossState(DATA_IONAR, NOT_STARTED) — no summon-list /
+-- flag / visibility / instance bridges. The SetControlled(false,
+-- UNIT_STATE_ROOT) leg ports via creature:SetRooted(false)
+-- (lua_creature_events.go) in ionarCombatEnd.
 -- SpellHit — the SPELL_DISPERSE 52770 split machine (five
 -- SPELL_SUMMON_SPARK 52746 casts, AttackStop, SetVisible(false),
 -- NON_ATTACKABLE+NOT_SELECTABLE flags, UNIT_STATE_ROOT, motion
@@ -187,6 +189,10 @@ local function ionarEnterCombat(event, creature, target)
 end
 
 local function ionarCombatEnd(event, creature)
+    -- C++ Reset: me->SetControlled(false, UNIT_STATE_ROOT)
+    -- (boss_ionar.cpp:119); both ev2 (EnterEvadeMode -> Reset) and ev23
+    -- (Reset) clear the root state.
+    creature:SetRooted(false)
     cancelTimers(creature:GetGUID())
 end
 

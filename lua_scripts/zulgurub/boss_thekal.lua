@@ -499,6 +499,9 @@ local function thekalDamageTaken(event, creature, attacker, damage)
 end
 
 local function thekalLeaveCombat(event, creature)
+    -- C++ EnterEvadeMode -> Reset: me->SetControlled(false,
+    -- UNIT_STATE_ROOT) (boss_thekal.cpp:132).
+    creature:SetRooted(false)
     thekalResetEncounter(encounterState(creature), creature)
 end
 
@@ -511,9 +514,10 @@ local function thekalDied(event, creature, killer)
 end
 
 local function thekalReset(event, creature)
-    -- C++ Reset's phase-two damage-decrease modifier and SetControlled
-    -- root clear have no bridge — the event reset, feign-death aura
-    -- removal, immune-flag removal and encounter-state clear are modeled.
+    -- C++ Reset's phase-two damage-decrease modifier has no stat-modifier
+    -- bridge; the SetControlled(false, UNIT_STATE_ROOT) root clear ports
+    -- (boss_thekal.cpp:132, lua_creature_events.go SetRooted).
+    creature:SetRooted(false)
     thekalResetEncounter(encounterState(creature), creature)
 end
 
