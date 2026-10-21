@@ -262,6 +262,8 @@ local SPELL_CONSERVATOR_GRIP = 62532
 local SAY_SLAY = 2
 local SAY_DEATH = 3
 local SAY_BERSERK = 4
+local SAY_AGGRO = 0 -- boss_freya.cpp:32
+local SAY_AGGRO_WITH_ELDER = 1 -- boss_freya.cpp:33
 local EMOTE_LIFEBINDERS_GIFT = 8
 
 local SAY_ELDER_AGGRO = 0
@@ -336,10 +338,12 @@ local function onEonarGift(creature, guid)
     schedule(guid, "eonar_gift", {40000, 50000}, function() onEonarGift(creature, guid) end)
 end
 
--- C++ JustEngagedWith (:388-391) schedules the timers; the
--- aggro Talk choice (SAY_AGGRO vs SAY_AGGRO_WITH_ELDER)
--- needs elderCount from instance GuidData — no bridge, not
--- ported. Only the unconditional timer arms register here.
+-- C++ JustEngagedWith (:388-391) schedules the timers, and the aggro
+-- Talk choice (SAY_AGGRO vs SAY_AGGRO_WITH_ELDER, :379-382) IS ported
+-- below: elderCount (alive elders via instance GuidData — no bridge)
+-- is reconstructed via GetCreaturesInGrid + IsAlive over the three
+-- elder entries (the C++ counts Elder[n] && Elder[n]->IsAlive(),
+-- :357). Only the unconditional timer arms register here otherwise.
 -- C++ EVENT_SUNBEAM (boss_freya.cpp:425-429): random player
 -- 100y, DoCast(target, SPELL_SUNBEAM), 2-arg = non-triggered;
 -- init 5s-15s (:391), repeat 10s-15s.
@@ -354,6 +358,23 @@ end
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith (boss_freya.cpp:379-382): elderCount == 0 ->
+    -- Talk(SAY_AGGRO), else Talk(SAY_AGGRO_WITH_ELDER); elderCount is
+    -- the alive-elder count (C++: Elder[n] && Elder[n]->IsAlive(),
+    -- :357) reconstructed via GetCreaturesInGrid + IsAlive.
+    local eldersAlive = 0
+    for _, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
+        for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+            if elder:IsAlive() then
+                eldersAlive = eldersAlive + 1
+            end
+        end
+    end
+    if eldersAlive == 0 then
+        creature:Talk(SAY_AGGRO)
+    else
+        creature:Talk(SAY_AGGRO_WITH_ELDER)
+    end
     -- C++ EVENT_ENRAGE (:421-424): one-shot 10min (:390);
     -- Talk(SAY_BERSERK) + DoCast(me, SPELL_ENRAGE),
     -- non-triggered self-cast; no re-arm in C++.

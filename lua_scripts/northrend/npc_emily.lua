@@ -37,8 +37,11 @@
 -- + Mrfloppy MoveFollow legs stay out (no bridges).
 -- npc_mrfloppy: JustEngagedWith Talk arms are all cross-creature
 -- (Emily->AI()->Talk SAY_WORGHAGGRO2 1 / SAY_WORGRAGGRO4 3 /
--- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — no cross-creature
--- Talk bridge; no JustDied / KilledUnit arms.
+-- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — PORTED below via
+-- the cross-creature Talk bridge (FindNearestCreature returns the
+-- Emily creature object; Talk is called on it — the illidari-council
+-- memberTargetDied precedent); the stale "no cross-creature Talk
+-- bridge" claim is retracted. No JustDied / KilledUnit arms.
 -- npc_outhouse_bunny (Doing Your Duty 12227): PORTED in
 -- npc_outhouse_bunny.lua (entry 27326, go_scripts.cpp:585) — SpellHit
 -- SPELL_OUTHOUSE_GROANS 48382 -> counter arm -> DoCast(caster,
@@ -91,6 +94,11 @@
 -- (sindragosa ice_tomb_target precedent).
 
 local ENTRY_EMILY = 26588
+local ENTRY_MRFLOPPY = 26589 -- zone_grizzly_hills.cpp:36 (NPC_MRFLOPPY)
+local NPC_HUNGRY_WORG = 26586 -- zone_grizzly_hills.cpp:37
+local NPC_RAVENOUS_WORG = 26590 -- zone_grizzly_hills.cpp:38
+local SAY_WORGHAGGRO2 = 1 -- He's going for Mr. Floppy!
+local SAY_WORGRAGGRO4 = 3 -- He's gonna eat Mr. Floppy! You gotta help Mr. Floppy! You just gotta!
 local SAY_RANDOMAGGRO = 4 -- There's a big meanie attacking Mr. Floppy! Help!
 local SAY_QUEST_ACCEPT = 11 -- Are you ready, Mr. Floppy? Stay close to me and watch out for those wolves!
 
@@ -113,6 +121,35 @@ end
 
 RegisterCreatureEvent(ENTRY_EMILY, 1, emilyEnterCombat)
 RegisterCreatureEvent(ENTRY_EMILY, 31, emilyQuestAccept)
+
+-- C++ npc_mrfloppyAI::JustEngagedWith (zone_grizzly_hills.cpp:223-235):
+-- GetClosestCreatureWithEntry(me, NPC_EMILY 26588, 50.0f); switch on
+-- the attacker's entry: HUNGRY_WORG 26586 -> Emily Talks
+-- SAY_WORGHAGGRO2 (1); RAVENOUS_WORG 26590 -> SAY_WORGRAGGRO4 (3);
+-- default -> SAY_RANDOMAGGRO (4). The Talk is Emily's (the found
+-- creature object talks); the nil-guard mirrors C++'s
+-- `if (Creature* Emily = ...)` (twin-emperors FindNearestCreature
+-- precedent).
+local function mrfloppyEnterCombat(event, creature, target)
+    local emily = creature:FindNearestCreature(ENTRY_EMILY, 50.0)
+    if emily == nil then
+        return
+    end
+    if target == nil then
+        emily:Talk(SAY_RANDOMAGGRO)
+        return
+    end
+    local attackerEntry = target:GetEntry()
+    if attackerEntry == NPC_HUNGRY_WORG then
+        emily:Talk(SAY_WORGHAGGRO2)
+    elseif attackerEntry == NPC_RAVENOUS_WORG then
+        emily:Talk(SAY_WORGRAGGRO4)
+    else
+        emily:Talk(SAY_RANDOMAGGRO)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MRFLOPPY, 1, mrfloppyEnterCombat)
 
 -- npc_lake_frog gossip (zone_grizzly_hills.cpp:777-781) — entry
 -- NPC_LAKE_FROG 33211 (zone_grizzly_hills.cpp:658).

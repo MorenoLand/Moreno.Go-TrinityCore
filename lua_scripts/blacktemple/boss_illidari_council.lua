@@ -270,7 +270,10 @@ end
 -- no bridge. Arms: triggered self-cast 41499, the equivalency
 -- cycle, the 15min berserk one-shot (its member casts have no
 -- cross-creature bridge — the arm fires empty), and the random-
--- member Talk(SAY_COUNCIL_AGRO), skipped for the same reason.
+-- member Talk(SAY_COUNCIL_AGRO) — PORTED below (the stale "no
+-- cross-creature bridge" claim is retracted: the memberTargetDied
+-- arm in this file already Talks through creature objects gathered
+-- via GetCreaturesInGrid).
 local function councilEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -280,6 +283,21 @@ local function councilEnterCombat(event, creature, target)
     end
     st.inCombat = true
     creature:CastSpell(creature, SPELL_EMPYREAL_BALANCE, true)
+    -- C++ JustEngagedWith (boss_illidari_council.cpp:163-164): a random
+    -- one of the four council members Talks SAY_COUNCIL_AGRO (the C++
+    -- instance->GetCreature(CouncilData[urand(0,3)]) is nil-guarded;
+    -- Lua gathers the members via GetCreaturesInGrid — the
+    -- memberTargetDied cross-creature Talk precedent in this file;
+    -- unlike the slay leg, C++ does NOT exclude the engaging member).
+    local members = {}
+    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
+        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+            members[#members + 1] = member
+        end
+    end
+    if #members > 0 then
+        members[math.random(#members)]:Talk(SAY_COUNCIL_AGRO)
+    end
     local function onEquivalency()
         creature:CastSpell(creature, SPELL_EMPYREAL_EQUIVALENCY, true)
         schedule(guid, "council_equivalency", 2000, onEquivalency)

@@ -558,6 +558,7 @@ local ENTRY_KEEPER_MIMIRON = 33412
 local ENTRY_KEEPER_THORIM = 33413
 
 local SPELL_SANITY_PERIODIC = 63786
+local SPELL_SUMMON_GUARDIAN_2 = 62978
 local SPELL_INSANE_PERIODIC = 64554
 local SPELL_TENTACLE_VOID_ZONE_2 = 64384
 local SPELL_NONDESCRIPT_1 = 64013
@@ -576,17 +577,30 @@ local SPELL_SPEED_OF_INVENTION = 62671
 
 -- C++ boss_voice_of_yogg_saronAI::JustEngagedWith (:518-529):
 -- DoCast(me, SPELL_SANITY_PERIODIC 63786) (2-arg self, non-triggered,
--- ungated, :525) + events.ScheduleEvent(EVENT_LOCK_DOOR, 15s) (no
--- phase arg, :525). The SetInCombatWith keeper machine (:518-519),
--- the DoCastAOE(SPELL_SUMMON_GUARDIAN_2, spellvalue) leg, and the
--- EVENT_EXTINGUISH_ALL_LIFE / EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON
--- schedules ride unbridged instance/summon/phase machines
--- (assembly_of_iron / gothik precedents) — documented-only.
+-- ungated, :523) + DoCastAOE(SPELL_SUMMON_GUARDIAN_2 62978,
+-- {SPELLVALUE_MAX_TARGETS, 1}, :522) + events.ScheduleEvent(
+-- EVENT_LOCK_DOOR, 15s) (no phase arg, :525). The SetInCombatWith
+-- keeper machine (:518-519) and the EVENT_EXTINGUISH_ALL_LIFE /
+-- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON schedules ride unbridged
+-- instance/summon/phase machines (assembly_of_iron / gothik
+-- precedents) — documented-only. DoCastAOE(62978) is a plain
+-- straight-line arm (no machine state consumed), so the cast ports
+-- as self-cast (DoCastAOE convention); the max-targets clamp has
+-- no bridge and is dropped. Non-triggered: the SpellValueMod-only
+-- CastSpellExtraArgs ctor leaves TriggerFlags at TRIGGERED_NONE
+-- (SpellDefines.h:178).
 local function voiceEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith: DoCastAOE(SPELL_SUMMON_GUARDIAN_2 62978,
+    -- {SPELLVALUE_MAX_TARGETS, 1}) (boss_yogg_saron.cpp:522) — plain
+    -- self-cast arm (DoCastAOE convention), non-triggered; the
+    -- max-targets clamp has no bridge and is dropped.
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_SUMMON_GUARDIAN_2)
+    end
     -- C++ JustEngagedWith: DoCast(me, SPELL_SANITY_PERIODIC)
-    -- (boss_yogg_saron.cpp:525). Alive-gated.
+    -- (boss_yogg_saron.cpp:523). Alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SANITY_PERIODIC)
     end

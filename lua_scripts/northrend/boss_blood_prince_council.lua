@@ -190,6 +190,7 @@
 local ENTRY_KELESETH = 37972
 local ENTRY_TALDARAM = 37973
 local ENTRY_VALANAR = 37970
+local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
 
 -- Texts enum: SAY_KELESETH_SPECIAL = 2, EMOTE_KELESETH_BERSERK = 4,
 -- EMOTE_TALDARAM_BERSERK = 5, SAY_TALDARAM_SPECIAL = 2,
@@ -210,6 +211,7 @@ local SAY_VALANAR_BERSERK = 5
 local SPELL_BERSERK = 26662
 local SPELL_SHADOW_RESONANCE = 71943
 local SPELL_SHADOW_RESONANCE_RESIST = 71822
+local SPELL_SHADOW_RESONANCE_AURA = 72980
 local SPELL_SHADOW_LANCE = 71405
 local SPELL_GLITTERING_SPARKS = 71806
 local SPELL_CONJURE_FLAME = 71718
@@ -410,21 +412,49 @@ end
 -- EVENT_BERSERK 600000ms, EVENT_KINETIC_BOMB {18000,24000}ms,
 -- EVENT_SHOCK_VORTEX {15000,20000}ms + the IsHeroic-gated
 -- shadow-prison leg :767 (creature:IsHeroic() now bridged).
--- C++ boss_prince_valanar_icc::JustEngagedWith :1050-1061 — the
--- targetAuraCheck scheduler: 1000ms seed, targetAuraCheck.Repeat()
--- 1000ms; if the victim is within 15.0f and lacks Valanar's Shadow
--- Resonance Resist aura (71822), DoCast(victim, 71822) non-triggered.
--- The else-leg MoveInLineOfSight(victim) has no bridge (movement
--- machine) and is dropped; the C++ caster-GUID leg of HasAura is
--- unrepresentable (bridged HasAura takes only the spell id) — only
--- Valanar applies 71822, so the plain check is exact.
-local function onValanarAuraCheck(creature, guid)
+-- C++ npc_dark_nucleus::JustEngagedWith :1050-1069 (NOT valanar —
+-- the prior header misattributed this arm): the targetAuraCheck
+-- scheduler: 1000ms seed, targetAuraCheck.Repeat() 1000ms; if the
+-- victim is within 15.0f and lacks the nucleus's Shadow Resonance
+-- Resist aura (71822), DoCast(victim, 71822) non-triggered; plus the
+-- immediate leg — distance(who) >= 15 -> DoStartMovement (no
+-- movement bridge, dropped), else immediate DoCast(who, 71822).
+-- The scheduler else-leg MoveInLineOfSight(victim) has no bridge
+-- (movement machine) and is dropped; the C++ caster-GUID leg of
+-- HasAura is unrepresentable (bridged HasAura takes only the spell
+-- id) — only the nucleus applies 71822, so the plain check is exact.
+-- C++ npc_dark_nucleus::Reset :1043-1048: SetReactState(
+-- REACT_DEFENSIVE) + triggered DoCastSelf(SPELL_SHADOW_RESONANCE_AURA
+-- 72980).
+local function onNucleusAuraCheck(creature, guid)
     local victim = creature:GetVictim()
     if victim ~= nil and creature:GetDistance(victim) < 15.0
             and not victim:HasAura(SPELL_SHADOW_RESONANCE_RESIST) then
         creature:CastSpell(victim, SPELL_SHADOW_RESONANCE_RESIST)
     end
-    schedule(guid, "auracheck", 1000, function() onValanarAuraCheck(creature, guid) end)
+    schedule(guid, "auracheck", 1000, function() onNucleusAuraCheck(creature, guid) end)
+end
+
+local function nucleusEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ npc_dark_nucleus::JustEngagedWith immediate leg
+    -- (boss_blood_prince_council.cpp:1061-1066): >= 15.0f ->
+    -- DoStartMovement (no bridge, dropped); else immediate
+    -- DoCast(who, 71822), non-triggered.
+    if target ~= nil and creature:GetDistance(target) < 15.0 then
+        creature:CastSpell(target, SPELL_SHADOW_RESONANCE_RESIST)
+    end
+    schedule(guid, "auracheck", 1000, function() onNucleusAuraCheck(creature, guid) end)
+end
+
+local function nucleusReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ npc_dark_nucleus::Reset (boss_blood_prince_council.cpp:
+    -- 1045-1048): REACT_DEFENSIVE = 1 (lua_creature_events.go:524)
+    -- + triggered self-cast 72980.
+    creature:SetReactState(1)
+    creature:CastSpell(creature, SPELL_SHADOW_RESONANCE_AURA, true)
 end
 
 local function valanarEnterCombat(event, creature)
@@ -436,7 +466,6 @@ local function valanarEnterCombat(event, creature)
     schedule(guid, "berserk", 600000, function() onValanarBerserk(creature) end)
     schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
     schedule(guid, "shockvortex", {15000, 20000}, function() onValanarShockVortex(creature, guid) end)
-    schedule(guid, "auracheck", 1000, function() onValanarAuraCheck(creature, guid) end)
 end
 
 -- C++ BloodPrincesBossAI::KilledUnit :505-521:
@@ -483,3 +512,5 @@ RegisterCreatureEvent(ENTRY_VALANAR, 4, princesJustDied)
 RegisterCreatureEvent(ENTRY_KELESETH, 23, princesReset)
 RegisterCreatureEvent(ENTRY_TALDARAM, 23, princesReset)
 RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
+RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
+RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
