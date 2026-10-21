@@ -39,8 +39,10 @@
 -- UNIT_STATE_CASTING model in Go (creature casts are packet-visual), so
 -- timers fire unconditionally (maiden precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Reset's SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge —
---   koltira precedent) + SetNoCallAssistance(true) (no bridge). The Reset
+-- - Reset's SetStandState(UNIT_STAND_STATE_STAND) PORTED via
+--   creature:SetStandState(0) (bridge landed 2026-10-21,
+--   lua_creature_events.go:568; koltira precedent) +
+--   SetNoCallAssistance(true) (no bridge). The Reset
 --   SetEquipmentSlots arm IS ported (onSpawn / onReset via the
 --   EQUIP_NO_CHANGE sentinel), as is SetReactState(REACT_AGGRESSIVE).
 -- - The SetReactState(REACT_AGGRESSIVE) restore (phase 4 of the transition
@@ -188,8 +190,10 @@ local function onReset(_, creature)
     cancelTimers(guid)
     initState(guid)
     -- C++ Reset arms (boss_mr_smite.cpp:99-103): equipment (see
-    -- onSpawn) + SetReactState(REACT_AGGRESSIVE).
+    -- onSpawn) + SetStandState(STAND) + SetReactState(REACT_AGGRESSIVE),
+    -- C++ order.
     creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    creature:SetStandState(0)
     creature:SetReactState(REACT_AGGRESSIVE)
 end
 

@@ -69,7 +69,10 @@
 --   PHASE_TO_EQUIP's EventStart trigger chain (fires only from
 --   go_acherus_soul_prison's OnGossipHello via the anchor — no
 --   gameobject-gossip bridge; razorgore precedent) with its
---   SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge),
+--   SetStandState(UNIT_STAND_STATE_STAND) (stand-state bridge exists
+--   since 2026-10-21, but the arm stays out — its only trigger is the
+--   unbridged GO-gossip -> cross-AI EventStart chain, so a one-sided
+--   port would be wrong),
 --   RemoveAurasDueToSpell(54612) (stale "no bridge" wording:
 --   creature:RemoveAura is bridged — but its only trigger is the
 --   unbridged GO-gossip -> cross-AI EventStart chain, so a one-sided

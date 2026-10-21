@@ -109,10 +109,15 @@ local function armPump(creature)
     hanesPump[guid] = CreateLuaEvent(function()
         potionTick(creature, guid)
     end, 1000, 0)
+    -- zone_howling_fjord.cpp:93 — Initialize() stands the apothecary in
+    -- KNEEL; the emote / despawn-at-far arms stay unmodeled (no emote /
+    -- despawn bridges). SetStandState bridged 2026-10-21
+    -- (lua_creature_events.go:568).
+    creature:SetStandState(8)
 end
 
--- C++ ctor/Reset Initialize(): PotTimer = 10000 (kneel / emote /
--- despawn-at-far arms unmodeled — no stand-state / emote bridges).
+-- C++ ctor/Reset Initialize(): PotTimer = 10000 (emote /
+-- despawn-at-far arms unmodeled — no emote bridges).
 -- The arm ticks outside combat too, so the pump survives evade:
 -- OnLeaveCombat(2)/OnReset(23) only re-arm the timer (C++ Reset
 -- does exactly that).

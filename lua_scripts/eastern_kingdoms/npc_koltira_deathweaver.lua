@@ -51,17 +51,17 @@
 -- - OnGossipHello's PrepareQuestMenu leg (no quest-menu bridge —
 --   kalecgos precedent; IsQuestGiver() is creature_template data).
 -- - Reset's SetFlag(UNIT_FLAG_IMMUNE_TO_NPC) PORTED (2026-10-20);
---   SetByteValue stand-state legs (no
---   stand-state bridge), _summons.DespawnAll (no summon/
+--   SetByteValue(DEAD) stand-state leg PORTED via creature:SetStandState(7)
+--   (bridge landed 2026-10-21, lua_creature_events.go:568),
+--   _summons.DespawnAll (no summon/
 --   despawn bridge — dark-rider precedent). The Reset
 --   SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) arm (chapter2.cpp:142)
 --   and RemoveAllAuras arm (chapter2.cpp:144) are PORTED (see above) —
 --   the old "no flag bridges" and "no aura-removal bridge
 --   (eye_of_acherus precedent)" header claims were stale.
 -- - EVENT_INTRO_0's SetByteValue(SIT) arm and EVENT_INTRO_1's
---   SetByteValue(STAND) arm (no stand-state bridge) — only the Talk
---   legs plus EVENT_INTRO_0's RemoveFlag(GOSSIP) arm (ported, above)
---   are modeled.
+--   SetByteValue(STAND) arm PORTED via creature:SetStandState (2026-10-21) —
+--   alongside the Talk legs and EVENT_INTRO_0's RemoveFlag(GOSSIP) arm.
 -- - EVENT_INTRO_2's MoveJump + EVENT_INTRO_3's MovePoint (no
 --   MotionMaster bridge — selin_fireheart precedent); the intro
 --   chain stalls here in the port — the timers are NOT ported
@@ -141,14 +141,17 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onIntro1(creature)
+    -- chapter2.cpp:174 — EVENT_INTRO_1 arm order: SetStandState(STAND)
+    -- before Talk(SAY_KOLTIRA_1); bridged (lua_creature_events.go:568)
+    creature:SetStandState(0)
     creature:Talk(SAY_KOLTIRA_1)
 end
 
 local function onIntro0(creature, guid)
-    -- chapter2.cpp:166 — EVENT_INTRO_0 arm order: RemoveFlag(UNIT_NPC_FLAGS,
-    -- UNIT_NPC_FLAG_GOSSIP) before Talk(SAY_KOLTIRA_0) (the SetByteValue SIT
-    -- leg has no stand-state bridge); via creature:SetNPCFlags()
-    -- (engine/world/lua_objects.go:657)
+    -- chapter2.cpp:166-168 — EVENT_INTRO_0 arm order: SetStandState(SIT)
+    -- first, then RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP), then
+    -- Talk(SAY_KOLTIRA_0); bridged (lua_creature_events.go:568)
+    creature:SetStandState(1)
     creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
     creature:Talk(SAY_KOLTIRA_0)
     schedule(guid, "intro1", 5000, function() onIntro1(creature) end)
@@ -170,11 +173,13 @@ local function onGossipHello(event, player, creature)
 end
 
 local function onReset(_, creature)
-    -- chapter2.cpp:139-144, C++ arm order: SetFlag(UNIT_FIELD_FLAGS,
+    -- chapter2.cpp:141-144, C++ arm order: SetFlag(UNIT_FIELD_FLAGS,
     -- UNIT_FLAG_IMMUNE_TO_NPC) first, then SetFlag(UNIT_NPC_FLAGS,
-    -- UNIT_NPC_FLAG_GOSSIP), then RemoveAllAuras
+    -- UNIT_NPC_FLAG_GOSSIP), then SetStandState(DEAD), then RemoveAllAuras;
+    -- SetStandState bridged (lua_creature_events.go:568)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC)
     creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(), UNIT_NPC_FLAG_GOSSIP))
+    creature:SetStandState(7)
     creature:RemoveAllAuras() -- chapter2.cpp:144, C++ arm order (before
                                -- _events.Reset()); the "no aura-removal
                                -- bridge" header claim was stale —

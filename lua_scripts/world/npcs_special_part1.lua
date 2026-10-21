@@ -103,9 +103,11 @@
 -- SPELL_FORTITUDE_R1 1243 (IsHealed -> Talk SAY_THANKS 0, CanRun latch ->
 -- quest credit via TalkedToCreature :1031). The Talk legs are shape-portable
 -- (event 14 args (event, creature, player, spellId); Talk(textId, target) is
--- bridged with whisper target), but SetStandState has no bridge and the
--- functional core — TalkedToCreature quest credit :1031 and the EscortAI
--- runaway in UpdateAI :1037-1068 (EscortAI::Start — no bridge) — has none.
+-- bridged with whisper target), but SetStandState stays out with the
+-- rest (bridged 2026-10-21 — the arm is strand-bound, not bridge-bound):
+-- the functional core — TalkedToCreature quest credit :1031 and the
+-- EscortAI runaway in UpdateAI :1037-1068 (EscortAI::Start — no bridge)
+-- — has none.
 -- A talk-only partial would be cosmetic with no quest function, so it fails
 -- the self-contained rule.
 

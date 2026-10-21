@@ -52,8 +52,9 @@
 -- deviation — the engine hook is the only DamageTaken-visible leg).
 -- Deviations from C++: SetStandState(UNIT_STAND_STATE_DEAD) in Reset
 -- and SetStandState(UNIT_STAND_STATE_STAND) in JustEngagedWith
--- (the secret-chamber corpse visual) have no stand-state bridge
--- (npc_barnes precedent) — documented-only; BossAI::JustEngagedWith
+-- (the secret-chamber corpse visual) are PORTED via
+-- creature:SetStandState (bridge landed 2026-10-21,
+-- lua_creature_events.go:568); BossAI::JustEngagedWith
 -- and the DATA_HIGH_INQUISITOR_FAIRBANKS encounter bookkeeping have
 -- no instance-script bridge — boss admission via the luaBossAI shim.
 
@@ -187,6 +188,9 @@ local function fairbanksEnterCombat(event, creature, target)
     schedule(guid, "sleep", 25000, function()
         onSleep(creature, guid)
     end)
+    -- boss_high_inquisitor_fairbanks.cpp:83 — JustEngagedWith ends with
+    -- SetStandState(STAND), C++ order (after the event schedules).
+    creature:SetStandState(0)
 end
 
 local function fairbanksLeaveCombat(event, creature)
@@ -199,6 +203,9 @@ end
 
 local function fairbanksReset(event, creature)
     fairbanksResetState(creature:GetGUID())
+    -- boss_high_inquisitor_fairbanks.cpp:73 — Reset ends with
+    -- SetStandState(DEAD), the secret-chamber corpse visual.
+    creature:SetStandState(7)
 end
 
 -- C++ DamageTaken latch (damaged class): when post-damage health is

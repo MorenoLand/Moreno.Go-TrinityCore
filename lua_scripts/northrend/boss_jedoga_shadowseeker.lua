@@ -106,8 +106,9 @@
 -- Lua surface (drakkari_colossus standing precedent) —
 -- documented-only.
 -- JustSummoned (NPC_TWILIGHT_WORSHIPPER 30111 SetStandState(
--- UNIT_STAND_STATE_KNEEL) + summons.Summon — no stand-state / cross-
--- AI bridges), SummonedCreatureDies (initiate _initiatesKilled == 15
+-- UNIT_STAND_STATE_KNEEL) + summons.Summon — stand-state bridge exists
+-- since 2026-10-21, but the arm stays out on the unported summon machine
+-- / cross-AI bridges), SummonedCreatureDies (initiate _initiatesKilled == 15
 -- latch -> SPELL_HOVER_FALL_1 56100 + EVENT_START_FIGHT_1 1s
 -- (RemoveAurasDueToSpell(SPELL_BEAM_VISUAL_JEDOGA 56312) then
 -- summons.DespawnEntry(controller) + SetDisableGravity(false) +
