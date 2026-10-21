@@ -188,7 +188,7 @@ RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     if victim:GetEntry() == NPC_RISEN_ZOMBIE then
-        creature:Talk(LINE_SLAY_ZOMBIE)
+        creature:Talk(LINE_SLAY_ZOMBIE, victim)
     end
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)

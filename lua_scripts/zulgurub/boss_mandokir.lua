@@ -52,8 +52,8 @@
 -- Ohgan and chained-spirit summon arms have no bearer (no summon
 -- model) — neither ever spawns; SummonedCreatureDies' Ohgan frenzy
 -- 24318 + Talk(SAY_OHGAN_DEAD=4) arm therefore never fires; the
--- KilledUnit jindo Talk(SAY_GRATS_JINDO) arm has no bearer (no
--- instance-script model); the mortal strike HealthBelowPct(50) check
+-- KilledUnit jindo Talk(SAY_GRATS_JINDO) arm rides GetCreaturesInGrid
+-- (11380 is unique in Zul'Gurub); the mortal strike HealthBelowPct(50) check
 -- uses post-damage GetHealthPct (no pre-damage health bridge);
 -- spell_threatening_gaze (the 24314 -> 24315/24316 AuraScript OnRemove
 -- chain) is an AuraScript — not modeled (standing gap); the speaker's
@@ -61,6 +61,7 @@
 -- instance-script model).
 
 local ENTRY_MANDOKIR = 11382
+local ENTRY_JINDO = 11380 -- NPC_JINDO_THE_HEXXER (zulgurub.h:56)
 local ENTRY_OHGAN = 14988
 local ENTRY_SPEAKER = 11391
 
@@ -76,6 +77,7 @@ local SPELL_CLEAVE = 15284
 
 local SAY_AGGRO = 0
 local SAY_DING_KILL = 1
+local SAY_GRATS_JINDO = 0 -- boss_mandokir.cpp:36
 local SAY_WATCH = 2
 
 local timers = {}
@@ -241,6 +243,14 @@ local function mandokirTargetDied(event, creature, victim)
     st.killCount = st.killCount + 1
     if st.killCount >= 3 then
         creature:Talk(SAY_DING_KILL)
+        -- C++ KilledUnit (boss_mandokir.cpp:173-176): instance->GetCreature
+        -- (DATA_JINDO) approximated by entry search — NPC_JINDO_THE_HEXXER
+        -- (11380) is unique in Zul'Gurub, so any match is Jin'do.
+        for _, jindo in ipairs(creature:GetCreaturesInGrid(ENTRY_JINDO, 5000)) do
+            if jindo:IsAlive() then
+                jindo:Talk(SAY_GRATS_JINDO)
+            end
+        end
         creature:CastSpell(creature, SPELL_LEVEL_UP, true)
         st.killCount = 0
     end

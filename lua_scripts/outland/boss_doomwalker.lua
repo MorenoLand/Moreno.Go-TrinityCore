@@ -14,9 +14,10 @@
 -- C++ DoMeleeAttackIfReady.
 -- Deviations from C++ (documented-only legs):
 -- * KilledUnit's victim->CastSpell(victim, SPELL_MARK_DEATH
---   37128, true) (cpp:83) — no player-side CastSpell bridge
---   (boss_ai.go:4247/4389/5330/5395 precedent) — documented
---   only; the 20% SAY_SLAY talk IS ported (event 3).
+--   37128, true) (cpp:80): ported for creature victims; the
+--   player-victim leg stays out — no player-side CastSpell bridge
+--   (boss_ai.go:4247/4389/5330/5395 precedent). The 20% SAY_SLAY
+--   talk IS ported (event 3).
 -- * MoveInLineOfSight's mark->aura conversion (cpp:100-106:
 --   who->CastSpell(who, SPELL_AURA_DEATH 37131, triggered)) —
 --   same missing player-cast bridge; Go's event 27 is also
@@ -54,6 +55,7 @@
 local ENTRY = 17711
 
 local SAY_AGGRO, SAY_EARTHQUAKE, SAY_OVERRUN, SAY_SLAY, SAY_DEATH = 0, 1, 2, 3, 4
+local SPELL_MARK_DEATH = 37128 -- boss_doomwalker.cpp:37
 
 local SPELL_EARTHQUAKE      = 32686
 local SPELL_SUNDER_ARMOR    = 33661
@@ -163,6 +165,11 @@ local function onReset(event, creature)
 end
 
 local function onTargetDied(event, creature, victim)
+    -- C++: ungated victim self-cast SPELL_MARK_DEATH first (cpp:80);
+    -- only creature victims can cast (no player-side CastSpell bridge).
+    if victim:GetObjectType() == "Creature" then
+        victim:CastSpell(victim, SPELL_MARK_DEATH, true)
+    end
     -- C++: urand(0,4) nonzero -> skip; talk only on roll 0
     -- (cpp:82).
     if math.random(0, 4) == 0 then

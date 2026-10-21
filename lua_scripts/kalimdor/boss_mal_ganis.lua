@@ -61,9 +61,9 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates
 --   on !_defeated && victim->GetTypeId() == TYPEID_PLAYER before Talk
 --   SAY_SLAY (4) (terestian_illhoof victim:GetObjectType() ==
---   "Player" convention); the !_defeated gate now rides the
---   DamageTaken latch ported above (clamp + latch); the UpdateAI
---   _defeated evade/immune legs stay out (no bridges).
+--   "Player" convention); the !_defeated gate reads defeated[guid]
+--   in the event-3 handler itself (the DamageTaken latch sets it);
+--   the UpdateAI _defeated evade/immune legs stay out (no bridges).
 -- - Death (no JustDied override in C++ — the defeated machine
 --   short-circuits it): cancel only.
 -- Unmodeled (documented-only, no bridges):
@@ -320,7 +320,9 @@ end
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
+    -- C++ KilledUnit (boss_mal_ganis.cpp:181): !_defeated gate reads the
+    -- per-GUID latch set by malganisDamageTaken.
+    if victim:GetObjectType() == "Player" and not defeated[creature:GetGUID()] then
         creature:Talk(SAY_SLAY)
     end
 end)
