@@ -223,6 +223,9 @@ local onGasSpore
 -- counter reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s)
 -- (:195). The :206 re-arm (33500ms..35s) applies to both branches.
 local function onInhaleBlight(creature, guid)
+    -- C++ :185-186: RemoveBlight() fires at the top of EVERY inhale
+    -- tick, before the counter check.
+    removeBlight(creature)
     local count = inhale[guid] or 0
     if count == 3 then
         creature:Talk(EMOTE_WARN_PUNGENT_BLIGHT)
