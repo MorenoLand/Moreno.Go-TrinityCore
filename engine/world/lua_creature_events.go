@@ -1244,6 +1244,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{hx, hy, hz, ho}, nil
 	}
+	// GetCombatReach is Creature::GetCombatReach (Unit.h): the creature's
+	// own combat reach (creature_model_info CombatReach, 1.5 default via
+	// combatReachOrDefault), so Lua ports can twin C++ WorldObject::GetDistance
+	// semantics (Object.cpp:1175-1179: GetExactDist - reach, clamped >= 0).
+	methods["GetCombatReach"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		reach := motion.combatReachOrDefault()
+		s.motionMu.Unlock()
+		return []any{float64(reach)}, nil
+	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o)
 	// (Creature.h:294) relocates m_homePosition ONLY — the live

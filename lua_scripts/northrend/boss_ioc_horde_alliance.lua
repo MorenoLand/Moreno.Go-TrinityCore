@@ -97,17 +97,21 @@ end
 -- C++ :108-113 EVENT_CHECK_RANGE: init 1s / unconditional re-arm 1s;
 -- home-distance > 25.0f -> DoCast(me, SPELL_RAGE 66776) else
 -- RemoveAurasDueToSpell(66776), 2-arg (non-triggered). The distance gate
--- uses the handler-surface GetHomePosition bridge (3D, squared compare
--- is C++-exact for the strict >: dx*dx+dy*dy+dz*dz > 625 <=> dist > 25)
--- via the stalagg tesla home-distance idiom. The 2026-10-21 header note
--- claiming "no home-position accessor" was stale: creature:GetHomePosition
--- is bridged at lua_creature_events.go:1241.
+-- is C++ me->GetDistance(me->GetHomePosition()) — WorldObject::GetDistance
+-- (Object.cpp:1175-1179) subtracts the boss's own combat reach from the
+-- exact 3D distance (clamped >= 0), so the Lua compares
+-- exactDist - creature:GetCombatReach() > 25.0 (the clamp is unobservable:
+-- 25.0 > 0, so dist > 25.0 is false exactly when clamped-dist > 25.0f is).
+-- The 2026-10-21 header note claiming "no home-position accessor" was stale:
+-- creature:GetHomePosition is bridged at lua_creature_events.go:1241;
+-- creature:GetCombatReach at lua_creature_events.go (Object.cpp:1175 twin).
 local function onCheckRange(creature, guid)
     local hx, hy, hz = creature:GetHomePosition()
     local dx = creature:GetX() - hx
     local dy = creature:GetY() - hy
     local dz = creature:GetZ() - hz
-    if dx * dx + dy * dy + dz * dz > 25.0 * 25.0 then
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz) - creature:GetCombatReach()
+    if dist > 25.0 then
         creature:CastSpell(creature, SPELL_RAGE)
     else
         creature:RemoveAura(SPELL_RAGE)
@@ -152,9 +156,10 @@ end
 -- head, the netherspite/curator offset-1 precedent generalized to
 -- the whole threat list since playerOnly defaults FALSE).
 -- EVENT_CHECK_RANGE (:108-113): PORTED above (onCheckRange) via the
--- handler-surface GetHomePosition bridge — the "no home-position
--- accessor" rationale recorded here 2026-10-21 is stale
--- (lua_creature_events.go:1241).
+-- handler-surface GetHomePosition bridge + GetCombatReach bridge — the
+-- "no home-position accessor" rationale recorded here 2026-10-21 is stale
+-- (lua_creature_events.go:1241), and the C++ compare is on the
+-- reach-adjusted distance (Object.cpp:1175-1179).
 -- SpellHit (:80-88): unitCaster->IsVehicle() -> Unit::Kill(me, unitCaster)
 -- — stale "no-SpellHit bridge" retracted (2026-10-21): ev14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
