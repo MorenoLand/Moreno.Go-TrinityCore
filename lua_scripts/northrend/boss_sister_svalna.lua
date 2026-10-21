@@ -65,9 +65,7 @@
 --   (:358) -> Talk(SAY_SVALNA_AGGRO 3) (:499-502; the SetReactState
 --   leg has no bridge) modeled as a 9000ms one-shot.
 --   The crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) leg (:355-356)
---   is cross-AI Talk (no bridge); me->SetHomePosition(*me) is
---   ported in svalnaEnterCombat (event-surface SetHomePosition +
---   Orientation field bridged for it).
+--   is cross-AI Talk (no bridge).
 -- boss_sister_svalna::KilledUnit (:364-388) — victim->GetTypeId()
 --   == TYPEID_PLAYER -> Talk(SAY_SVALNA_KILL 4); TYPEID_UNIT with
 --   a captain entry (37122-37125) -> Talk(SAY_SVALNA_KILL_CAPTAIN
@@ -110,6 +108,10 @@
 --   HealthBelowPct(20) gate) and the IsUndead random-target legs
 --   (EVENT_BRANDON_HAMMER_OF_BETRAYAL, EVENT_GRONDEL_CONFLAGRATION)
 --   stay parked (not in the docast-missing scan set).
+-- npc_crok_scourgebane::JustEngagedWith (:859-863) —
+--   me->SetHomePosition(*me) (:861) ported in crokEnterCombat
+--   (event-surface SetHomePosition); the if (IsUndead)
+--   DoZoneInCombat() leg (:862-863) has no bridge — documented-only.
 -- npc_crok_scourgebane::Reset (:544-551) + UpdateEscortAI
 --   (:754-761) — Reset-seeded timers re-keyed to event 1:
 --   EVENT_SCOURGE_STRIKE {7500,12500}ms -> DoCastVictim(
@@ -383,7 +385,6 @@ end
 local function svalnaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:CastSpell(creature, SPELL_DIVINE_SURGE, true)
     schedule(guid, "combat", 9000, function() onSvalnaCombat(creature) end)
     schedule(guid, "impaling", {40000, 50000},
@@ -479,6 +480,7 @@ end
 local function crokEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     schedule(guid, "scourge", {7500, 12500},
         function() onCrokScourgeStrike(creature, guid) end)
     schedule(guid, "death", {25000, 30000},

@@ -518,7 +518,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SetReactState is CreatureMethods::SetReactState: Creature::SetReactState
 	// (UnitDefines.h: REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 —
 	// matches creatureReact* in creaturemotion.go). The engine honors it in
-	// isCreaturePassive (creaturemotion.go:586) and help-call filtering, so
+	// isCreaturePassive (creaturemotion.go:617) and help-call filtering, so
 	// phase/intro react arms (midnight, baltharus clone, ...) port with
 	// real effect instead of a Lua-side latch.
 	methods["SetReactState"] = func(_ context.Context, args []any) ([]any, error) {
@@ -1110,11 +1110,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return motion.Faction
 	})
 	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
-	// GetClosestCreatureWithEntry (ObjectAccessor): the nearest live creature
-	// of entry within dist yards (3D, the C++ IsWithinDistInMap metric) in the
-	// same map+instance, excluding self; nil when none. Backs the
-	// creature-search arms (flame-tsunami lava-blaze buff, anubarak
-	// sphere/burrower cleanup) that headers documented as bridge-blocked.
+	// GetClosestCreatureWithEntry (ScriptedCreature.h): the nearest live
+	// creature of entry within dist yards (3D, both combat reaches added —
+	// the C++ IsWithinDistInMap metric) in the same map+instance, excluding
+	// self; nil when none. Backs the creature-search arms (flame-tsunami
+	// lava-blaze buff) that headers documented as bridge-blocked.
 	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
 		entry, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -1125,6 +1125,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		dist := float64(dist32)
+		srcReach := float64(motion.combatReachOrDefault())
 		s.motionMu.Lock()
 		var best *creatureMotion
 		bestD := dist
@@ -1135,7 +1136,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			dx := float64(m.X - motion.X)
 			dy := float64(m.Y - motion.Y)
 			dz := float64(m.Z - motion.Z)
-			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist && (best == nil || d < bestD) {
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+srcReach+float64(m.combatReachOrDefault()) && (best == nil || d < bestD) {
 				best, bestD = m, d
 			}
 		}
@@ -1147,10 +1148,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// GetCreaturesInGrid(entry, dist) is
 	// WorldObject::GetCreatureListWithEntryInGrid: every creature of entry
-	// within dist yards (3D) in the same map+instance, excluding self, as a
-	// Lua array of creature objects (GUID-sorted for determinism; the C++
-	// grid-visit order is unspecified). Backs mass-despawn arms such as
-	// anubarak's frost-sphere/burrower cleanup.
+	// within dist yards (2D, both combat reaches added — the C++
+	// AllCreaturesOfEntryInRange metric is IsWithinDist(unit, range,
+	// is3D=false), GridNotifiers.h) in the same map+instance, including
+	// self (the C++ checker has no self exclusion), as a Lua array of
+	// creature objects (GUID-sorted for determinism; the C++ grid-visit
+	// order is unspecified). Backs mass-despawn arms such as anubarak's
+	// frost-sphere/burrower cleanup.
 	methods["GetCreaturesInGrid"] = func(_ context.Context, args []any) ([]any, error) {
 		entry, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -1161,16 +1165,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		dist := float64(dist32)
+		srcReach := float64(motion.combatReachOrDefault())
 		s.motionMu.Lock()
 		var matches []*creatureMotion
-		for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
-			if guid == motion.GUID || m.Entry != entry {
+		for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+			if m.Entry != entry {
 				continue
 			}
 			dx := float64(m.X - motion.X)
 			dy := float64(m.Y - motion.Y)
-			dz := float64(m.Z - motion.Z)
-			if math.Sqrt(dx*dx+dy*dy+dz*dz) <= dist {
+			if d := math.Sqrt(dx*dx + dy*dy); d <= dist+srcReach+float64(m.combatReachOrDefault()) {
 				matches = append(matches, m)
 			}
 		}

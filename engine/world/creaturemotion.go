@@ -1126,7 +1126,7 @@ func canCreatureAssistTo(s *Server, assistant, caller *creatureMotion, enemy pla
 	}
 	// UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE ||
 	// IsImmuneToNPC (Creature.cpp:2477). UNIT_FLAG_NOT_SELECTABLE is
-	// 0x02000000 (UnitDefines.h:137).
+	// 0x02000000 (UnitDefines.h:149).
 	if assistant.UnitFlags&(unitFlagNonAttackable|0x02000000|unitFlagImmuneToNPC) != 0 {
 		return false
 	}
