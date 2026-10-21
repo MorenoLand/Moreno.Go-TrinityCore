@@ -39,7 +39,11 @@
 --   ignores the victim).
 -- - SpellHit (event 14, midnight convention): weakness spell ID ->
 --   RemoveAura(SUPREME 25176) (netherspite RemoveAura convention).
---   The crystal despawn + SpawnNextCrystal have no bridge.
+--   The crystal despawn + SpawnNextCrystal have no bridge — GO Delete
+--   and the summon-machine SpawnNextCrystal are the true blockers
+--   (stale "no despawn bridge" wording: creature:Despawn() IS bridged,
+--   but the trigger-creature bearer exists only via the unbridged
+--   SummonCreature machine, so the leg is stranded).
 -- Unmodeled (documented-only, no bridges):
 -- - Weather (WEATHER_STATE_HEAVY_SANDSTORM): no bridge.
 -- - Tornado summons (NPC_SAND_VORTEX): SummonCreature no bridge

@@ -154,7 +154,9 @@
 -- ASSASSIN_VISUAL) (RemoveAura bridged — precedent stale) + DoZoneInCombat;
 -- impale_target InitializeAI DoCastSelf(IMPALE_VISUAL 53455) +
 -- DespawnOrUnsummon(6s) + cross-AI SetGUID(GUID_TYPE_IMPALE)
--- (no despawn / SetGUID bridges).
+-- (stale "no despawn bridge" wording: creature:Despawn() IS bridged,
+-- but the arm rides the unbridged instance-model + cross-AI SetGUID
+-- machine on a zero-registration bearer with no InitializeAI hook).
 -- spell_anubarak_pound (AuraScript 59433: AfterApply SPELL_AURA_FLY
 -- EFFECT_2 -> caster CastSpell(target, SPELL_POUND_DAMAGE 59432,
 -- triggered)) / spell_anubarak_carrion_beetles (AuraScript 53520:

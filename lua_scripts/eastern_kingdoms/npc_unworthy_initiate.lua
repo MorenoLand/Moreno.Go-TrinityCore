@@ -70,7 +70,10 @@
 --   go_acherus_soul_prison's OnGossipHello via the anchor — no
 --   gameobject-gossip bridge; razorgore precedent) with its
 --   SetStandState(UNIT_STAND_STATE_STAND) (no stand-state bridge),
---   RemoveAurasDueToSpell(54612) (no bridge), and Talk(SAY_EVENT_
+--   RemoveAurasDueToSpell(54612) (stale "no bridge" wording:
+--   creature:RemoveAura is bridged — but its only trigger is the
+--   unbridged GO-gossip -> cross-AI EventStart chain, so a one-sided
+--   port on any bridged event would be wrong), and Talk(SAY_EVENT_
 --   START 0) (Talk exists on the surface but its only trigger is
 --   the unbridged event start); the 5s wait -> MovePoint(1, ...)
 --   (no MotionMaster bridge); MovementInform(POINT_ID 1)'s

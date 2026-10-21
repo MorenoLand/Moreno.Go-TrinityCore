@@ -137,8 +137,11 @@
 -- POINT_SACRIFICE) choreography (no motion bridges), the sacrifice
 -- payload (instance->GetCreature(DATA_JEDOGA_SHADOWSEEKER) +
 -- cross-AI DoAction(ACTION_SACRIFICE) — instance-script model and
--- DoAction bridges absent), and DespawnOrUnsummon(5s) (no despawn
--- bridge — terestian precedent). Joins the entry-verifiable-but-
+-- DoAction bridges absent), and DespawnOrUnsummon(5s) (stale "no
+-- despawn bridge" wording: creature:Despawn() IS bridged, but the
+-- arm rides the unbridged MovementInform/sacrifice choreography
+-- machine on a zero-registration bearer — terestian precedent).
+-- Joins the entry-verifiable-but-
 -- bridge-blocked queue (amanitar mushrooms precedent).
 -- spell_random_lightning_visual_effect (SpellScript 56328 — On
 -- DestinationTargetSelect EFFECT_0 relocate -19z): no SpellScript

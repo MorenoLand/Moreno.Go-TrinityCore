@@ -98,9 +98,10 @@
 -- entries ride the summon STRAND in any case) — skipped; the 3s
 -- 500ms-repeat proximity arm (victim within
 -- 5yd + HasAura(45934) -> non-triggered DoCastAOE(DARKFIEND_
--- DAMAGE 45944) + DisappearAndDie) is unmodeled as a whole — the
--- kill/despawn arm has no bridge and a cast without the despawn
--- would not be C++-exact. The IsSummonedBy summoner-GUID capture
+-- DAMAGE 45944) + DisappearAndDie): PORTED as darkFiendProximity
+-- (stale "no despawn bridge" retracted — creature:Despawn() is
+-- C++-exact for DisappearAndDie on this summon bearer).
+-- The IsSummonedBy summoner-GUID capture
 -- is summon-blocked; the CanAIAttack aura gate is engine-side.
 -- Void Sentinel (25772). OnEnterCombat(1): triggered self-cast
 -- shadow pulse periodic 46086 (C++ DoCast(me, ..., true),
@@ -166,6 +167,7 @@ local SPELL_OPEN_PORTAL_2 = 45976
 local SPELL_SUMMON_VOID_SENTINEL_SUMMONER = 45978
 local SPELL_TRANSFORM_VISUAL_MISSILE = 46205
 local SPELL_DARKFIEND_SKIN = 45934
+local SPELL_DARKFIEND_DAMAGE = 45944
 local SPELL_SHADOW_PULSE_PERIODIC = 46086
 local SPELL_VOID_BLAST = 46161
 local SPELL_SUMMON_VOID_SPAWN = 46071
@@ -347,15 +349,39 @@ RegisterCreatureEvent(ENTRY_PORTAL, 23, portalReset)
 
 -- ================= Dark Fiend (25744) =================
 
+-- C++ npc_dark_fiendAI constructor scheduler (boss_muru.cpp:421-430):
+-- 3s one-shot then 500ms repeat — victim within 5yd + HasAura(
+-- SPELL_DARKFIEND_SKIN) -> non-triggered DoCastAOE(SPELL_DARKFIEND_
+-- DAMAGE) + DisappearAndDie. DisappearAndDie is ForcedDespawn(0) on a
+-- summon bearer with no JustDied arm — creature:Despawn() is
+-- C++-exact (stale "no despawn bridge" retracted).
+local function darkFiendProximity(creature, guid)
+    local victim = creature:GetVictim()
+    if creature:IsAlive() and victim and creature:GetDistance(victim) <= 5
+            and creature:HasAura(SPELL_DARKFIEND_SKIN) then
+        creature:CastSpell(creature, SPELL_DARKFIEND_DAMAGE)
+        cancelTimers(guid)
+        creature:Despawn()
+    elseif creature:IsAlive() then
+        schedule(guid, "proximity", 500,
+            function() darkFiendProximity(creature, guid) end)
+    else
+        cancelTimers(guid) -- dead fiend: C++ TaskScheduler dies with it
+    end
+end
+
 -- C++ constructor (Initialize): triggered self-cast 45934.
 local function darkFiendSpawn(event, creature)
     -- C++ npc_dark_fiendAI constructor (Initialize): triggered self-cast
     -- SPELL_DARKFIEND_SKIN (boss_muru.cpp:407) — spawn-only ctor arm
     -- (no Reset() override: never re-cast on evade), so bound to event
     -- 5. Alive-gated; cancelTimers rides the death leg deliberately.
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
+        schedule(guid, "proximity", 3000,
+            function() darkFiendProximity(creature, guid) end)
     end
 end
 

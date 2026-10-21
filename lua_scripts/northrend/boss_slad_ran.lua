@@ -49,9 +49,12 @@
 -- (a player-side self-cast with no player-cast path from creature AI,
 -- corastrasza precedent — the old "no victim CastSpell bridge"
 -- misnamed the blocker), the TempSummon -> summoner SetGUID
--- cross-AI hop, and DespawnOrUnsummon all have no bridges
--- (terestian despawn precedent) — so only the Grip cast rides the
--- timer; the wrap/achievement-fail payload is documented-only.
+-- cross-AI hop (stale "no despawn bridge" wording: creature:Despawn()
+-- IS bridged, but the despawn is one leg of the unbridged stack-5
+-- aura-stack gate + cross-AI SetGUID wrap-latch machine — terestian
+-- precedent — so a one-sided port would fabricate despawns; so only
+-- the Grip cast rides the timer; the wrap/achievement-fail payload is
+-- documented-only.
 -- Viper Reset cancels its scheduler; the boss Reset (BossAI _Reset +
 -- _wrappedPlayers.clear) lands as per-GUID timer/state drop on
 -- OnLeaveCombat(2)/OnReset(23), gargolmar precedent.

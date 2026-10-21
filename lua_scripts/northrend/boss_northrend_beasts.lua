@@ -169,8 +169,10 @@
 -- bridge); JustDied — instance->SetData(TYPE_NORTHREND_BEASTS,
 -- SNAKES_DONE / SNAKES_SPECIAL) + DespawnOrUnsummon(x2) +
 -- cross-AI otherWorm DoAction(ACTION_ENRAGE) + cross-AI combatStalker
--- DoAction(ACTION_JORMUNGARS_DEAD) (instance model + no despawn /
--- cross-AI bridges); DoAction ACTION_ENRAGE — DoCastSelf(
+-- DoAction(ACTION_JORMUNGARS_DEAD) (stale "no despawn" wording:
+-- creature:Despawn() IS bridged, but both despawns ride the
+-- instance-GUID machine paired with cross-AI DoAction arms —
+-- paired-arm rule); DoAction ACTION_ENRAGE — DoCastSelf(
 -- SPELL_ENRAGE 68335, triggered) + Talk(EMOTE_ENRAGE 0) +
 -- RescheduleEvent(EVENT_EMERGE) — cross-AI DoAction-gated (no bridge);
 -- UpdateAI stationary leg DoCastVictim(spitSpell: 66796 Fire Spit /

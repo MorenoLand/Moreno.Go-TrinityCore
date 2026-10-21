@@ -37,7 +37,10 @@
 -- C++-exact, buff leg stays out (documented-only below);
 -- EVENT_CORPSE_EXPLODE Talk(SAY_EXPLODE 3) + DoCastAOE(Corpse Explode
 -- 49555), self-cast, 3s init / 15-19s repeat — damage (49618) +
--- despawn are AuraScript-delivered (no bridge); yell + cast cadence
+-- despawn are AuraScript-delivered (stale "no bridge" wording:
+-- creature:Despawn() IS bridged, but delivery is the unbridged
+-- AuraScript AfterEffectRemove machine on a script-only bearer —
+-- razelikh precedent); yell + cast cadence
 -- ported C++-exact, damage leg stays out (documented-only below);
 -- EVENT_SPAWN 30-40s (invader-summoner trigger casts — ObjectAccessor
 -- ::GetCreature(*me, instance->GetGuidData(DATA_TROLLGORE_INVADER_

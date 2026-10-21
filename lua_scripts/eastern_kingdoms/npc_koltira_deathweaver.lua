@@ -83,8 +83,11 @@
 --   SummonedCreatureDespawn's EVENT_OUTRO_1 trigger has no
 --   bridge).
 -- - EVENT_OUTRO_1..4 (RemoveAurasDueToSpell 52894 / gossip flag /
---   MovePath(NPC_KOLTIRA) — no aura-removal / flag / MotionMaster
---   bridges; DoCastSelf 53627's trigger is stranded).
+--   MovePath(NPC_KOLTIRA) — no flag / MotionMaster bridges; the
+--   "no aura-removal" wording is stale (creature:RemoveAura is
+--   bridged) but the whole OUTRO chain rides the unbridged
+--   SummonedCreatureDespawn trigger, so the leg stays stranded;
+--   DoCastSelf 53627's trigger is stranded).
 -- - EVENT_CHECK_PLAYER (quest-accept _playerGUID capture +
 --   ObjectAccessor::GetPlayer + player alive/distance check
 --   + player->FailQuest(QUEST_BLOODY_BREAKOUT) — no bridges;

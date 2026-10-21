@@ -74,10 +74,17 @@
 -- intro-machine grounding as boss_eadric above: the announcer
 -- un-gating has no bearer; Reset's
 -- RemoveAllAuras + ObjectAccessor::GetCreature(MemoryGUID)
--- RemoveFromWorld — no aura-removal (aeranas precedent) +
--- cross-AI ObjectAccessor + despawn bridges; SetData(1) ->
--- RemoveAura(SPELL_SHIELD 66515) — no SetData / aura-removal
--- bridges; DamageTaken / MovementInform — same bridges absent as
+-- RemoveFromWorld — the "no aura-removal (aeranas precedent)"
+-- wording is stale (creature:RemoveAllAuras() is bridged,
+-- lua_creature_events.go:169), but the paired leg is cross-AI
+-- ObjectAccessor -> RemoveFromWorld with no creature bridge
+-- (gameobject-only) on an unregistered npc_memory bearer;
+-- SetData(1) ->
+-- RemoveAura(SPELL_SHIELD 66515) — the "no aura-removal" wording
+-- is stale (creature:RemoveAura is bridged), but the arm is
+-- triggered cross-AI via SetData (no bridge) from unregistered
+-- npc_memory JustDied; DamageTaken / MovementInform — same bridges
+-- absent as
 -- boss_eadric; uiHolyFireTimer — SelectTarget(Random, 0, 250,
 -- true) -> DoCast(Holy Fire 66538), 9-12s init, 13s shielded /
 -- 9-12s unshielded repeat; uiHolySmiteTimer — SelectTarget(Random,

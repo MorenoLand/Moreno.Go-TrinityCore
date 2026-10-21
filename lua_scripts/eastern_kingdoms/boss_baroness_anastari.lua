@@ -43,7 +43,10 @@
 --   creature:RemoveAura(17250) (kirtonos precedent).
 -- Unmodeled (documented-only, no bridges):
 -- - Reset's instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_POSSESS)
---   and (SPELL_POSSESSED): no instance-aura bridge.
+--   and (SPELL_POSSESSED): PORTED in onReset below via
+--   GetPlayersInWorld() + mapId/instanceId filter (stale
+--   "no instance-aura bridge" retracted — player:RemoveAura is
+--   bridged, lua_player.go:219).
 -- - JustDied instance->SetData(TYPE_BARONESS 2, IN_PROGRESS): no
 --   instance-script bridge (nerubenkan precedent; IN_PROGRESS-not-DONE
 --   is a C++ quirk — needed until crystals are implemented, see
@@ -214,11 +217,20 @@ end
 
 -- C++ Reset(): latch clear (timer-state wipe) +
 -- me->RemoveAurasDueToSpell(SPELL_POSSESS_INV); the instance-wide
--- DoRemoveAurasDueToSpellOnPlayers legs have no bridge (documented in
--- the header).
+-- DoRemoveAurasDueToSpellOnPlayers legs are ported below (stale
+-- "no instance-aura bridge" retracted: player:RemoveAura is bridged,
+-- lua_player.go:219; GetPlayersInWorld + mapId/instanceId filter
+-- reproduces the instance-player set, C++-exact — no alive gate).
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:RemoveAura(SPELL_POSSESS_INV)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_POSSESS)
+            p:RemoveAura(SPELL_POSSESSED)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BARONESS_ANASTARI, 1, onEnterCombat)
