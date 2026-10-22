@@ -295,8 +295,10 @@ local function onDamageTaken(_, creature, attacker, damage)
         -- the outro phase is set.
         outroFired[guid] = true
         cancelTimers(guid)
-        -- C++ boss_felblood_kaelthas.cpp:182: me->SetReactState(REACT_PASSIVE)
-        -- (outro arm order: AttackStop -> flip -> InterruptNonMeleeSpells).
+        -- C++ boss_felblood_kaelthas.cpp:181-182: me->AttackStop() then
+        -- me->SetReactState(REACT_PASSIVE) (outro arm order: AttackStop ->
+        -- flip -> InterruptNonMeleeSpells, interrupt unbridged).
+        creature:AttackStop()
         creature:SetReactState(0) -- REACT_PASSIVE
         creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)

@@ -304,6 +304,11 @@ local function onForgeJump(creature, guid)
     if not st then
         return
     end
+    -- C++ boss_forgemaster_garfrost.cpp:227: me->AttackStop() on
+    -- EVENT_FORGE_JUMP (the MoveJump leg has no motion bridge; the
+    -- 5s resume models the jump landing, AttackStart re-arm rides
+    -- the engine per the EVENT_RESUME_ATTACK note below).
+    creature:AttackStop()
     schedule(guid, "resume", 5000, function() onResumeAttack(creature, guid) end)
 end
 

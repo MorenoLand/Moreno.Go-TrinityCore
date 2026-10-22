@@ -341,6 +341,11 @@ local function magtheridonDamageTaken(event, creature, attacker, damage)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0 and health - damage < math.floor(maxHealth * 30 / 100) then
         st.phase = "collapsed"
+        -- C++ boss_magtheridon.cpp:199: me->AttackStop() (arm order
+        -- REACT_PASSIVE flip -> AttackStop -> Talk; the stop is a
+        -- one-shot, melee re-arms on the post-collapse flip via the
+        -- Go combat tick).
+        creature:AttackStop()
         creature:Talk(SAY_COLLAPSE)
         creature:CastSpell(creature, SPELL_CAMERA_SHAKE)
         schedule(guid, "collapse", 6000, function()

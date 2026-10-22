@@ -224,6 +224,9 @@ local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
 local SPELL_DARK_TRANSFORMATION_T = 70895 -- :71 (boss trigger)
 local SPELL_DARK_TRANSFORMATION = 70900 -- :86
 local SPELL_FULL_HEAL = 17683 -- :82 (fanatic self-cast :627)
+local SPELL_DARK_MARTYRDOM_T = 70897 -- :73 (fanatic SpellHit :630)
+local SPELL_DARK_MARTYRDOM_FANATIC = 71236 -- :92 (fanatic self-cast :634)
+local REACT_PASSIVE = 0
 local SPELL_VAMPIRIC_MIGHT = 70674
 local SPELL_SHADOW_CLEAVE = 70670
 local SPELL_NECROTIC_STRIKE = 70659
@@ -548,7 +551,8 @@ end
 -- BLOCKED arms in the same switch: the :626-629 UpdateEntry
 -- (NPC_DEFORMED_FANATIC) leg stays out (no UpdateEntry bridge) while
 -- the FULL_HEAL self-cast is PORTED (above); :631-635
--- DARK_MARTYRDOM rides SetReactState/AttackStop — no bridges; the
+-- DARK_MARTYRDOM rides SetReactState/AttackStop — AttackStop bridged
+-- 2026-10-22 (PORTED below); the
 -- :640-660 2s/6s reanimate scheduler legs ride UpdateEntry +
 -- SetFlag(UNIT_FIELD_FLAGS) + the instance-legged
 -- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) (no instance bridge).
@@ -563,6 +567,14 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- out (no UpdateEntry bridge), so the creature heals without
         -- changing form.
         creature:CastSpell(creature, SPELL_FULL_HEAL)
+    elseif spellId == SPELL_DARK_MARTYRDOM_T then
+        -- C++ :630-634 — me->SetReactState(REACT_PASSIVE) ->
+        -- InterruptNonMeleeSpells(true) (no bridge; Go creature casts are
+        -- packet-only, the interrupt is a net no-op) -> me->AttackStop()
+        -- -> DoCastSelf(SPELL_DARK_MARTYRDOM_FANATIC) non-triggered.
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_FANATIC)
     end
 end
 

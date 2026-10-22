@@ -12,7 +12,7 @@
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
 -- Fight shape: flame breath 43140 on a random player at 8s, repeat 8s
--- (C++ AttackStop + motion-master clear + StopMoving have no bridge — the
+-- (C++ motion-master clear + StopMoving have no bridge — the
 -- cast is not interrupted here, and the DamageDealt 30-degree arc gate
 -- has no bridge, so the isFlameBreathing arm never runs); enrage arm —
 -- a 5min one-shot (EnrageTimer = 5*60*1000) whose first fire triggered-
@@ -128,6 +128,9 @@ end
 local function onFlameBreath(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
+        -- C++ boss_janalai.cpp:417: me->AttackStop() before the flame
+        -- breath cast (motion Clear / StopMoving legs unbridged).
+        creature:AttackStop()
         creature:CastSpell(target, SPELL_FLAME_BREATH)
     end
     schedule(timers, guid, "flamebreath", 8000, function()

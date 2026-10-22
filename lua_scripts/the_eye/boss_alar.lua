@@ -421,6 +421,10 @@ local function combatTick(creature, guid)
         -- Dive bomb arm — 40000+rand()%5000: starts the dive
         -- chain, re-arm 40000+rand()%5000 (C++-exact).
         if st.diveBomb <= 1000 then
+            -- C++ boss_alar.cpp:420: me->AttackStop() first in the
+            -- dive-bomb arm (MovePoint / NOT_SELECTABLE / bounding-radius
+            -- legs unbridged; the 5s meteor wait models the ascent).
+            creature:AttackStop()
             st.dive = { step = "meteor", wait = 5000 }
             st.diveBomb = 40000 + math.random(0, 4999)
         else

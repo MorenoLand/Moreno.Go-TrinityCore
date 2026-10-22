@@ -258,6 +258,9 @@ local function golemDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:SetHealth(1)
         creature:RemoveAllAuras()
+        -- C++ boss_volkhan.cpp:433: me->AttackStop() (C++ order
+        -- RemoveAllAuras -> AttackStop; UpdateEntry morph unbridged).
+        creature:AttackStop()
         golemFrozen[guid] = true
         golemCancelTimers(guid)
         return false, 0

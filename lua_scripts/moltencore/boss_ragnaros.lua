@@ -302,9 +302,12 @@ onSubmerge = function(creature, guid)
     creature:EmoteState(373)
     creature:PerformEmote(374)
     -- C++ EVENT_SUBMERGE: ResetThreatList() (bridged lua_objects.go:389,
-    -- PORTED 2026-10-19). The sibling AttackStop arm stays out: the emerge
-    -- AttackStart leg has no bridge, so stopping attacks here would leave
-    -- the boss passive after emerge.
+    -- PORTED 2026-10-19) + AttackStop (:251, arm order AttackStop first).
+    -- The emerge AttackStart resume rides the emerge REACT_AGGRESSIVE flip
+    -- (ported 2026-10-20): the Go combat tick re-arms melee on the flip
+    -- with TargetGUID intact, so the one-shot stop here is faithful.
+    -- C++ boss_ragnaros.cpp:251: me->AttackStop()
+    creature:AttackStop()
     creature:ClearThreatList()
     -- C++ boss_ragnaros.cpp:252: me->SetReactState(REACT_PASSIVE)
     -- (submerge arm order: ResetThreatList -> flip -> InterruptNonMeleeSpells).
