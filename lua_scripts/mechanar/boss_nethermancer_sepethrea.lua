@@ -61,7 +61,10 @@
 -- no SpellScript, not a skipped cast); fire tail 35278:
 -- 500ms init and re-arm — non-triggered DoCast(me)
 -- self-cast (C++-exact). The rest of the C++ has no bridges:
--- Reset()'s ApplySpellImmune legs stay unbridged (the SetSpeedRate(
+-- Reset()'s ApplySpellImmune legs PORTED 2026-10-22 (0, IMMUNITY_
+-- DAMAGE=3, SPELL_SCHOOL_MASK_MAGIC=126 / NORMAL=1, true — C++ :181-182,
+-- creature:ApplySpellImmune bridge, lua_creature_events.go:860;
+-- the stale "stay unbridged" claim is retracted); the SetSpeedRate(
 -- MOVE_RUN, DUNGEON_MODE(0.5f,0.7f)) arm is ported via
 -- creature:SetSpeedRate), the Check_Timer
 -- instance-boss-state despawn check is instance-blocked, and

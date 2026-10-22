@@ -85,10 +85,13 @@
 -- SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state, restore the
 -- nightelf model + zeroed weapon slots (PORTED 2026-10-20, C++
--- Reset :253-255 arm order); the CheckChannelers summon, dual-
--- wield/2.0f speed/corpse-delay setup, SPELL_DUAL_WIELD 42459
--- triggered self-cast and SetData(NOT_STARTED) arms stay out —
--- summon/flag/speed/instance blocked.
+-- Reset :253-255 arm order; SetSpeedRate(MOVE_RUN, 2.0f) :252 PORTED
+-- 2026-10-22 (creature:SetSpeedRate bridge, lua_creature_events.go:735;
+-- the stale "speed blocked" claim is retracted — the speed leg is
+-- separable from the unported dual-wield/corpse-delay/instance arms);
+-- the CheckChannelers summon, dual-wield/corpse-delay setup,
+-- SPELL_DUAL_WIELD 42459 triggered self-cast and
+-- SetData(NOT_STARTED) arms stay out — summon/item/instance blocked.
 -- boss_leotheras_the_blind_demonform (21875): OnEnterCombat(1):
 -- per-GUID reset (chaosBlast 1000) + Talk(SAY_FREE) (the C++
 -- JustEngagedWith -> StartEvent arm) + 1s pump. Pump: chaos
@@ -163,9 +166,11 @@
 -- order); the switch-to-human + final-form SetDisplayId arms are
 -- likewise PORTED 2026-10-20 (LoadEquipment/DespawnDemon-paired
 -- legs stay out — no item/summon bridges); the banish-check
--- (LoadEquipment-paired) swap, the dual-wield/speed/corpse-delay
+-- (LoadEquipment-paired) swap, the dual-wield/corpse-delay
 -- setup and the SPELL_DUAL_WIELD 42459 cast stay unmodeled —
--- summon/item/flag bridges missing; no cross-creature bridge —
+-- summon/item/instance blocked (the 2.0f speed arm is PORTED
+-- above in leotherasReset — stale "speed blocked" retracted); no
+-- cross-creature bridge —
 -- the spell-
 -- binder leotherasGUID relay, the inner-demon victim binding,
 -- the ConsumingMadness 37749 demon casts and the demon-copy
@@ -430,10 +435,11 @@ end
 
 local function leotherasReset(event, creature)
     resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
-    -- C++ Reset() :253-255 runs on evade: restore the nightelf model +
-    -- zeroed weapon slots (C++ arm order: display first, then the item
-    -- slots); the dual-wield/speed/corpse-delay/instance arms stay
+    -- C++ Reset() :252-255 runs on evade: 2.0x run speed (C++ arm order:
+    -- speed first), nightelf model, zeroed weapon slots (display then the
+    -- item slots); the dual-wield/corpse-delay/instance arms stay
     -- unmodeled, header.
+    creature:SetSpeedRate(1, 2.0) -- MOVE_RUN, boss_leotheras_the_blind.cpp:252
     creature:SetDisplayId(MODEL_NIGHTELF)
     creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
 end

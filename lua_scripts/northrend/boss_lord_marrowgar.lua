@@ -81,9 +81,12 @@
 -- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
 -- stay out (see UpdateAI). The RemoveAurasDueToSpell(SPELL_BONE_STORM
 -- 69076 / SPELL_BERSERK 26662) legs (:145-146) PORT (creature:RemoveAura
--- on event 23, C++ order kept); only the SetSpeedRate legs have no
--- bridge — consistent with the other berserk ports
--- (sindragosa/festergut/rotface/putricide).
+-- on event 23, C++ order kept); the SetSpeedRate legs ride the
+-- unbridged bone-storm motion machine (3x speed :226 accompanies the
+-- unported MovePoint chase; the :252 _baseSpeed restore rides the
+-- unported MoveChase return) — stays out, verdict unchanged (the
+-- old "no SetSpeedRate bridge" claim is stale: the bridge is live,
+-- lua_creature_events.go:735 — the motion machine is the blocker).
 -- boss_lord_marrowgar UpdateAI — the EventMap machine: arms with
 -- unbridged phase/machine legs stay out (the gothik precedent).
 -- EVENT_WARN_BONE_STORM legs carry Talk(EMOTE_BONE_STORM 7)
