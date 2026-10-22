@@ -90,6 +90,11 @@
 --   SetFaction(FACTION_MONSTER) / SetImmuneToPC(false) /
 --   SetReactState(REACT_AGGRESSIVE) (no faction/immune/react-state
 --   bridges) + AttackStart(player) (no bridge).
+--   The ctor SetReactState(REACT_PASSIVE) (chapter1.cpp:108) stays
+--   out too: no OnSpawn(36) handler is registered, and a one-sided
+--   spawn-passive port would freeze the initiate passive — the only
+--   fight starter is the unported GO-gossip -> anchor -> EventStart
+--   chain, so the ported PHASE_ATTACKING rotation would never fire.
 -- - npc_unworthy_initiate_anchor (PassiveAI SetGUID/GetGUID
 --   prisoner-GUID holder) is ported nowhere: a GUID store with no
 --   bridgeable behavior (never mark stubs as completed).

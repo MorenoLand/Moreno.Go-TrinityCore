@@ -300,7 +300,9 @@ end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + the three combat arms
 -- and the phase-2 poller; the DoZoneInCombat and
--- SetBossState(IN_PROGRESS) arms are blocked.
+-- SetBossState(IN_PROGRESS) arms are blocked. The AttackStart mutual
+-- SetInCombatWith pairing (boss_high_king_maulgar.cpp:250-251) has no
+-- bridge — engine triggerCreatureAggro converges the engage.
 local function maulgarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     maulgarResetState(guid)

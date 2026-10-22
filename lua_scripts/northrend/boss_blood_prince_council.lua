@@ -111,7 +111,12 @@
 -- ACTION_CAST_INVOCATION, which arrives via SpellHit (:535-539) from the
 -- controller's unbridged invocation cast (no bridge); the
 -- ACTION_REMOVE_INVOCATION health/aura reset rides the controller's
--- cross-AI DoAction (no bridge).
+-- cross-AI DoAction (no bridge). ACTION_STAND_UP (:552-563) rides the
+-- same no-DoAction bridge: its 1s StandUpEvent (HandleEmoteCommand +
+-- SetReactState(REACT_AGGRESSIVE), :177-189) is the un-gating of the
+-- unported feign-death intro machine (JustAppeared :488), so the
+-- AGGRESSIVE arm is vacuous in the Lua model too — nothing ever sets
+-- the princes passive here.
 -- BloodPrincesBossAI::JustAppeared (:488) — instance DATA_INTRO gate
 -- (feign-death 71598 self-cast while the intro is not done) + SetHealth
 -- (_spawnHealth) has no instance bridge; NOT registered (the intro

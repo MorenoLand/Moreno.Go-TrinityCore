@@ -24,9 +24,12 @@
 -- compressed into timer chains — the pre-fly waypoint choice (nearest of
 -- the three fly positions) fires 1ms after liftoff, the fly-to-landing
 -- spline travel is approximated as two 5s delays; liftoff/land emotes
--- port via creature:PerformEmote (254/293), while gravity flips,
--- react-state flips, AttackStop, and InterruptNonMeleeSpells have
--- no bridge. No gameobject event dispatch
+-- port via creature:PerformEmote (254/293), and the react-state flips
+-- port via the bridged creature:SetReactState (startPhaseFly ->
+-- REACT_PASSIVE, onLanded -> REACT_AGGRESSIVE) — suppressing engine
+-- melee during the fly-phase timer chain exactly like C++ (no melee
+-- while airborne); gravity flips, AttackStop, and
+-- InterruptNonMeleeSpells have no bridge. No gameobject event dispatch
 -- exists in the engine, so the go_blackened_urn gossip arm (entry 194092)
 -- and the intro (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
 -- are not modeled: the port starts directly at the landing combat state.
@@ -242,8 +245,10 @@ local function onSmokingBlastT(creature, guid)
 end
 
 local function onLanded(creature, guid)
-    -- C++ EVENT_LANDED: SetupGroundPhase + SetReactState(AGGRESSIVE).
+    -- C++ EVENT_LANDED (boss_nightbane.cpp:310-313): SetupGroundPhase()
+    -- then SetReactState(REACT_AGGRESSIVE) — C++ arm order kept.
     setupGroundPhase(creature, guid)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 
 local function onEndPhaseTwo(creature, guid)
@@ -306,6 +311,14 @@ local function startPhaseFly(creature, guid)
     -- me->HandleEmoteCommand(EMOTE_ONESHOT_LIFTOFF) (SharedDefines.h:2003,
     -- value 254), between the interrupt and the gravity legs.
     creature:PerformEmote(254)
+    -- C++ StartPhaseFly (boss_nightbane.cpp:252-270): ++_flyCount,
+    -- Talk(YELL_FLY_PHASE), cancel ground group, interrupt casts,
+    -- liftoff emote, gravity on, SetReactState(REACT_PASSIVE) (:260),
+    -- AttackStop, MovePoint — C++ arm order kept for the modeled legs
+    -- (gravity / AttackStop / MovePoint have no bridge). PASSIVE while
+    -- airborne: the engine's isCreaturePassive gate suppresses melee
+    -- during the fly-phase timer chain, matching C++ (no melee mid-air).
+    creature:SetReactState(0) -- REACT_PASSIVE
     -- The MovePoint to the nearest pre-fly/fly position has no movement
     -- model; the arrival fires 1ms later exactly like C++'s
     -- EVENT_PRE_FLY_END -> MovePoint(POINT_PHASE_TWO_FLY) chain.

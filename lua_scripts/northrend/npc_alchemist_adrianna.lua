@@ -11,6 +11,10 @@
 -- DB default menu shows).
 -- Documented-only: the FindCurrentSpellBySpellId recast gate
 -- (icecrown_citadel.cpp:553) — no spell-state lookup bridge.
+-- Also in this C++ file but unrelated to Adrianna: spell_icc_stoneform
+-- (icecrown_citadel.cpp:1306-1335) — AuraScript whose OnApply/OnRemove
+-- set REACT_PASSIVE/REACT_AGGRESSIVE + NOT_SELECTABLE/ImmuneToPC/emote
+-- legs on the aura target; no AuraScript bridge — stays out.
 
 local ENTRY_ALCHEMIST_ADRIANNA = 38501
 

@@ -98,6 +98,11 @@
 -- TRANSFORM 54268 self-cast would never merge; the
 -- DamageTaken SPLASH 59516 arm IS bridged (event 9, registered
 -- 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
+-- The npc_ichor_globule ctor SetReactState(REACT_PASSIVE)
+-- (boss_ichoron.cpp:248) stays out: globules spawn only from the unported
+-- spell_ichoron_splatter AuraScript, and this runtime's event-5 spawn hook
+-- never fires for temp summons — no construction-time hook (halion
+-- precedent).
 -- spell_ichoron_drained (59820 AuraScript: expire -> DoAction
 -- ACTION_DRAINED :332), spell_ichoron_merge (54269 SpellScript:
 -- shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370),

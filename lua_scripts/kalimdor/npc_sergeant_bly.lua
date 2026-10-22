@@ -44,6 +44,11 @@
 -- - OnGossipHello/OnGossipSelect: instance->GetData(EVENT_PYRAMID)
 --   pyramid-phase gating — instance-model gossip blocked (standing).
 -- - DoAction(0) (sets postGossipStep=1): no DoAction bridge.
+-- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
+--   initBlyCrewMember per crew member — instance GUID-lookup +
+--   SetReactState(REACT_AGGRESSIVE) + SetWalk + SetHomePosition +
+--   MovePoint + SetFaction(FACTION_ESCORTEE_N_NEUTRAL_ACTIVE). The GO
+--   script is unregistered (no Lua); cross-creature legs have no bridges.
 
 local ENTRY = 7604
 

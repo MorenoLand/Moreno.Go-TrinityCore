@@ -28,7 +28,9 @@
 -- instance bridge. DoAction: phase-gated DespawnOrUnsummon
 -- (PHASE_TWO -> 6s despawn; phase 0 -> immediate; the phase-machine
 -- GetData DATA_PHASE gate rides with it) — no phase / despawn
--- bridges. Constructor _instance NULL-check leg is C++-only.
+-- bridges. Constructor _instance NULL-check leg is C++-only;
+-- the ctor's unconditional SetReactState(REACT_PASSIVE) (:1453) IS
+-- ported via the overloadSpawn OnSpawn(5) handler below.
 
 local ENTRY_ARCANE_OVERLOAD = 30282
 
@@ -47,6 +49,15 @@ local function overloadHitBySpell(event, creature, caster, spellid)
     end
 end
 
+-- C++ npc_arcane_overloadAI ctor (boss_malygos.cpp :1450-:1454):
+-- me->SetReactState(REACT_PASSIVE), unconditional (the _instance leg
+-- is C++-only). OnSpawn (event 5) is the ctor's lifecycle twin: the
+-- overload is a stationary bomb that never melees or aggros.
+local function overloadSpawn(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+end
+
+RegisterCreatureEvent(ENTRY_ARCANE_OVERLOAD, 5, overloadSpawn)
 RegisterCreatureEvent(ENTRY_ARCANE_OVERLOAD, 14, overloadHitBySpell)
 RegisterCreatureEvent(ENTRY_ARCANE_OVERLOAD, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_malygos.cpp:1462: empty UpdateAI in C++ (never melees)

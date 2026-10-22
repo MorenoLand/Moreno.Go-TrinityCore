@@ -121,7 +121,9 @@
 -- ::DoAction / CombatStartEvent BasicEvent), the miniboss JustDied ->
 -- DoAction(ACTION_NEXT_PHASE) cross-creature cascade, the
 -- EnterEvadeMode cross-creature cascade, the jormungar JustSummoned
--- worm machine (WormAttackEvent + MoveRandom 5.0f), and the
+-- worm machine (WormAttackEvent + MoveRandom 5.0f; WormAttackEvent::
+-- Execute's SetReactState(REACT_AGGRESSIVE) (:118) rides the unbridged
+-- BasicEvent), and the
 -- go_palehoof_sphere OnGossipHello -> DoAction(ACTION_START_ENCOUNTER)
 -- GameObject leg — timers therefore schedule on combat start (event 1)
 -- rather than after the 8.5s awaken preamble; the kits themselves are

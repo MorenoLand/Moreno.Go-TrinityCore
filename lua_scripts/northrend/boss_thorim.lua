@@ -62,6 +62,12 @@
 -- (events.SetPhase(PHASE_2) at phase 2) has no bridge; porting on
 -- combat-start timers would fabricate phase-2 casts — gothik precedent.
 -- boss_thorimAI EVENT_SUMMON_ADDS (lines 716-718) — SummonWave() summon leg.
+-- The SummonWave summon-time SetReactState arms ride the same unported
+-- leg: JustSummoned -> summon->SetReactState(REACT_PASSIVE) (lines 651
+-- lightning orb / 670 dark-rune trash / 674 Sif) and the TrashJumpEvent
+-- re-arm to REACT_AGGRESSIVE (line 401 — m_Events BasicEvent, no bridge);
+-- no summon bridge, and SetReactState IS bridged (frozen_core precedent)
+-- so the blocker is the summon machine, not the call.
 -- boss_thorimAI EVENT_BERSERK (lines 750+) — phase-conditional Talk(SAY_WIPE
 -- 6 / SAY_BERSERK 5) + triggered casts; DoAction(ACTION_BERSERK)-gated
 -- reschedule; no DoAction / berserk bridge.

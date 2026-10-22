@@ -51,6 +51,12 @@
 --   leg); SPELL_GOBLIN_LAND_MINE 21688 and SPELL_WEEGLIS_BARREL 10772
 --   are dead enum entries (never cast). Reset and JustDied are
 --   commented-out in C++ — nothing to port.
+-- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
+--   initBlyCrewMember per crew member (incl. weegli) — instance
+--   GUID-lookup + SetReactState(REACT_AGGRESSIVE) + SetWalk +
+--   SetHomePosition + MovePoint + SetFaction(FACTION_ESCORTEE_N_NEUTRAL_ACTIVE).
+--   The GO script is unregistered (no Lua); cross-creature legs have no
+--   bridges.
 
 local ENTRY = 7607
 

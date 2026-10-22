@@ -10,7 +10,10 @@
 -- victim (2s init -> 10s repeat per C++ HamstringTimer reset —
 -- the giant claw's repeat is 10s, unlike the claw tentacle's
 -- 5s). The EvadeTimer leg
--- has no Lua bridge — documented, not wired.
+-- has no Lua bridge — documented, not wired. The ctor and evade-leg
+-- pPortal->SetReactState(REACT_PASSIVE) arms (boss_cthun.cpp :1097,
+-- :1157) ride the same unbridged portal-summon machinery: cross-
+-- creature arms on the summoned NPC_GIANT_PORTAL.
 local ENTRY = 15728
 local SPELL_GROUND_RUPTURE = 26139
 local SPELL_THRASH = 3391

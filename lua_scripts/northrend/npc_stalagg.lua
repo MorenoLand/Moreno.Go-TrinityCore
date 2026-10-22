@@ -78,6 +78,9 @@
 -- casts SPELL_STALAGG_TESLA_PERIODIC 28098 (whole-src grep finds
 -- only the enum decl and the SpellHit check; the tesla coil's
 -- UpdateAI is empty), so the arm is faithful but currently unfired;
+-- myCoil() (boss_thaddius.cpp:671): first resolution sets the tesla
+-- coil REACT_PASSIVE — cross-creature on NPC_TESLA, helper-gated behind
+-- the unported DoAction coil legs — documented-only;
 -- UpdateAI's isFeignDeath powerSurge hold is modeled via the Lua
 -- latch (see powerSurgeTick).
 

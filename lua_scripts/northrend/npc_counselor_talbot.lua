@@ -47,6 +47,15 @@
 --   RewardPlayerAndGroupAtEvent — no ObjectAccessor, motion,
 --   reward, or unit-state bridges (kalecgos / death_knight_initiate
 --   precedents).
+-- - npc_thassarian escort-scene react arms (zone_borean_tundra.cpp
+--   :509/:566/:604/:667/:675: arthas->SetReactState(PASSIVE) on
+--   WaypointReached(3), talbot->SetReactState(PASSIVE) at scene phase
+--   2, leryssa->SetReactState(PASSIVE) at phase 6, talbot->
+--   SetReactState(AGGRESSIVE) at phase 14, Thassarian himself
+--   SetReactState(AGGRESSIVE)+AttackStart(talbot) at phase 15) —
+--   cross-creature arms written by the unported npc_thassarian
+--   escort/phase machine (no WaypointReached / escort / phase
+--   bridges); Talbot's own AI never writes its react state.
 -- Verifiable numbers (file's own enums): SPELL_SHADOW_BOLT = 15537
 -- (:410), SPELL_DEFLECTION = 51009 (:827), SPELL_SOUL_BLAST = 50992
 -- (:828), NPC_COUNSELOR_TALBOT = 25301 (:413).

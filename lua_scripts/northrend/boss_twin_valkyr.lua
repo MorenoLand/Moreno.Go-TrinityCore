@@ -86,8 +86,12 @@
 -- DATA_MAIN_GATE) (no MovementInform / immune / react / door
 -- bridges — fjola only, "avoid call twice"); Reset:
 -- SetReactState(REACT_PASSIVE) + ModifyAuraState(AURA_STATE_UNKNOWN22/
--- UNKNOWN19, true) + summons.DespawnAll (no react / aura-state /
--- despawn bridges) + DoStopTimedAchievement(EVENT_START_TWINS_FIGHT)
+-- UNKNOWN19, true) + summons.DespawnAll (no aura-state / despawn
+-- bridges; react-state IS bridged — lua_creature_events.go — but both
+-- ReactState arms (:191 Reset-PASSIVE / :216 MovementInform-AGGRESSIVE)
+-- ride the unbridged intro/MovementInform machine, so the PASSIVE arm
+-- alone would strand the twins passive) +
+-- DoStopTimedAchievement(EVENT_START_TWINS_FIGHT)
 -- (no achievement bridge — fjola only); JustReachedHome:
 -- instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL) + HandleRemoveAuras
 -- + summons.DespawnAll + DespawnOrUnsummon + DoUseDoorOrButton(

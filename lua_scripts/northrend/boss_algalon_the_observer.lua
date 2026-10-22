@@ -40,13 +40,18 @@
 -- vs Talk(SAY_ALGALON_AGGRO 4) + 8s intro (later pulls, :370-376); mirrored
 -- as a per-GUID Lua latch (script-lifetime, NOT wiped by event 23 —
 -- C++-exact). First pull also schedules EVENT_START_COMBAT (16s, :554-559)
--- -> Talk(SAY_ALGALON_AGGRO 4) (the PlayDirectMusic +
--- instance->SetBossState(IN_PROGRESS) companion legs have no bridges).
+-- -> Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID 15878)
+-- (ported as creature:PlayMusic — the bridged SMSG_PLAY_MUSIC twin;
+-- the instance->SetBossState(IN_PROGRESS) companion leg has no bridge).
 -- The remaining JustEngagedWith legs (SetFlag NOT_SELECTABLE,
 -- SetImmuneToNPC, DoZoneInCombat, summons.DespawnEntry(NPC_AZEROTH),
--- instance->SetData, PlayDirectMusic, BossAI::JustEngagedWith passthrough)
+-- instance->SetData, BossAI::JustEngagedWith passthrough)
 -- have no bridges; InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
 -- is an explicit no-op for creatures (lua_objects.go:332).
+-- (CORRECTION 2026-10-22: the old "PlayDirectMusic has no bridge" claims
+-- were stale — creature:PlayMusic IS bridged (lua_creature_events.go:118);
+-- both engage music arms (:373 later pulls, :557 EVENT_START_COMBAT) are
+-- ported below.)
 -- KilledUnit — player-gated Talk(SAY_ALGALON_KILL 20) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious player-gated
 -- variant precedent — at least the fortieth player-gated variant ported
@@ -88,7 +93,9 @@
 -- pre-combat) — pre-combat roleplay, porting on combat-start timers would
 -- fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
 -- arm (header correction this run) — pure machinery (SetPhase(NORMAL),
--- constellation summons); Talk(AGGRO 4) fires in JustEngagedWith
+-- constellation summons) except the SetReactState(REACT_DEFENSIVE) (:566)
+-- leg, which IS ported on the introDelay timer in algalonTimersStart;
+-- Talk(AGGRO 4) fires in JustEngagedWith
 -- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull
 -- only) — both now ported via the _firstPull latch above.
 -- Outro machine: Talk 12..16 (:664-682, EVENT_OUTRO_6..10) chained from the
@@ -114,6 +121,12 @@
 -- npc_living_constellation / npc_black_hole — no Talk arms; no
 -- registrations (NPC_LIVING_CONSTELLATION 33052 / NPC_BLACK_HOLE 32953
 -- entry-verifiable, ulduar.h lines 232 / 235).
+-- npc_living_constellation DoAction(ACTION_ACTIVATE_STAR) (:745-750):
+-- SetReactState(REACT_AGGRESSIVE) + RemoveFlag(NOT_SELECTABLE) +
+-- AttackStart + DoZoneInCombat — fired by the
+-- spell_algalon_trigger_3_adds SpellScript (:1106-1112); no DoAction /
+-- SpellScript bridges, so the constellation's react flip stays out
+-- (its Arcane Barrage enter-combat timer above is the only modeled arm).
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
 -- The ten spell scripts (spell_algalon_phase_punch /
@@ -134,6 +147,11 @@ local SAY_ALGALON_START_TIMER = 3
 local SAY_ALGALON_AGGRO = 4
 local SAY_ALGALON_PHASE_TWO = 11
 local SAY_ALGALON_KILL = 20
+-- C++ ENGAGE_MUSIC_ID (boss_algalon_the_observer.cpp:64) — engage music,
+-- played via PlayDirectMusic on every engage (:373 later pulls, :557
+-- first-pull EVENT_START_COMBAT); creature:PlayMusic is the bridged twin
+-- (SMSG_PLAY_MUSIC, lua_creature_events.go:118).
+local ENGAGE_MUSIC_ID = 15878
 
 -- Per-creature latch mirroring the AI members: _phaseTwo (one-shot at the
 -- 20% threshold) and _hasYelled (the 1s kill-yell rate limit). C++
@@ -328,17 +346,32 @@ local function algalonTimersStart(event, creature)
         creature:Talk(SAY_ALGALON_START_TIMER)
         introDelay = 26500
         -- C++ EVENT_START_COMBAT (:554-559, first-pull only, 16s):
-        -- Talk(SAY_ALGALON_AGGRO 4) (the PlayDirectMusic +
-        -- instance->SetBossState(IN_PROGRESS) legs have no bridges).
+        -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)
+        -- (the instance->SetBossState(IN_PROGRESS) leg has no bridge).
         -- cancelTimers above mirrors the C++ events.Reset() (:366),
         -- which also wipes a pending START_COMBAT on re-pull.
         schedule(guid, "startcombat", 16000, function()
             creature:Talk(SAY_ALGALON_AGGRO)
+            creature:PlayMusic(ENGAGE_MUSIC_ID)
         end)
     else
+        -- C++ JustEngagedWith later-pull leg (:370-376):
+        -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID).
         creature:Talk(SAY_ALGALON_AGGRO)
+        creature:PlayMusic(ENGAGE_MUSIC_ID)
         introDelay = INTRO_DELAY
     end
+    -- C++ EVENT_INTRO_TIMER_DONE (:560-584): SetPhase(PHASE_NORMAL),
+    -- SetSheath(SHEATH_STATE_MELEE), RemoveFlag(NOT_SELECTABLE),
+    -- SetImmuneToNPC(false), SetReactState(REACT_DEFENSIVE) (:566),
+    -- DoCastAOE(SUPERMASSIVE_FAIL) + the AttackStart workaround +
+    -- the REACT_PASSIVE constellation summons. Only the react flip is
+    -- modeled — the rest rides the unported intro machinery. Without
+    -- it the boss keeps the algalonReset REACT_PASSIVE while engaged
+    -- and the engine's isCreaturePassive gate never lets it attack.
+    schedule(guid, "introdefensive", introDelay, function()
+        creature:SetReactState(1) -- REACT_DEFENSIVE
+    end)
     schedule(guid, "quantumstrike", 3500 + introDelay, function()
         quantumStrikeTick(creature, guid)
     end)

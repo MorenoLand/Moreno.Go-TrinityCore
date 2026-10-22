@@ -34,8 +34,10 @@
 -- (caster->GetAuraCount(45634) / GetAuraCount(48252)+7, :1250-1255)
 -- + Talk(step, caster) + KilledMonsterCredit(25478) (:1260/:1258) —
 -- no quest-status / aura-count / kill-credit bridges; the JustEngagedWith
--- empty override; Reset's REACT_PASSIVE leg (no react-state bridge —
--- the creature is passive in DB anyway).
+-- empty override; Reset's REACT_PASSIVE leg (zone_borean_tundra.cpp
+-- :1204-:1209) IS ported via berylSorcererSpawnOrReset below — the C++
+-- != REACT_PASSIVE gate has no GetReactState bridge; the set itself is
+-- a no-op when already passive.
 -- Go: RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478) — the
 -- no-op AI neutralizes the default combat behavior for this passive
 -- NPC (storm_cloud / blessed_banner zone-script precedent).
@@ -92,6 +94,12 @@ local function berylSorcererSpawnOrReset(event, creature)
     if event == 23 and creature:IsDead() then
         return
     end
+    -- C++ npc_imprisoned_beryl_sorcererAI::Reset
+    -- (zone_borean_tundra.cpp :1204-:1209): SetReactState(REACT_PASSIVE)
+    -- (the != REACT_PASSIVE gate has no bridge — the set itself is a
+    -- no-op when already passive); arm order matches C++ (passive leg
+    -- before the rebuff Initialize).
+    creature:SetReactState(0) -- REACT_PASSIVE
     local guid = creature:GetGUID()
     cancelTimers(guid)
     onRebuff(creature, guid)

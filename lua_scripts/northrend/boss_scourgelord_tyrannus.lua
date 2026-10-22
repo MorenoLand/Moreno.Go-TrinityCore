@@ -260,6 +260,10 @@ end
 local function tyrannusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    -- C++ :247 EVENT_COMBAT_START: me->SetReactState(REACT_AGGRESSIVE)
+    -- (bridged, lua_creature_events.go:524); in C++ arm order it precedes
+    -- the DoZoneInCombat (:249) that fires this handler, so it leads.
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:Talk(SAY_AGGRO)
     schedule(guid, "brand", {5000, 7000}, function() overlordBrandTick(creature, guid) end)
     schedule(guid, "smash", {14000, 16000}, function() forcefulSmashTick(creature, guid) end)

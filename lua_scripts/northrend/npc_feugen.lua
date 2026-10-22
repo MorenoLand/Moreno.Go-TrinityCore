@@ -88,6 +88,9 @@
 -- SPELL_FEUGEN_TESLA_PERIODIC 28110 (whole-src grep finds only the
 -- enum decl and the SpellHit check; the tesla coil's UpdateAI is
 -- empty), so the arm is faithful but currently unfired;
+-- myCoil() (boss_thaddius.cpp:924): first resolution sets the tesla
+-- coil REACT_PASSIVE — cross-creature on NPC_TESLA, helper-gated behind
+-- the unported DoAction coil legs — documented-only;
 -- UpdateAI's isFeignDeath early-return is modeled via the Lua latch
 -- (see staticFieldTick).
 

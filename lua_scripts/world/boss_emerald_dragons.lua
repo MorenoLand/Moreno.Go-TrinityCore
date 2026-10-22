@@ -373,6 +373,11 @@ local function dragonReset(event, creature)
     -- RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE|NON_ATTACKABLE)
     -- (ported 2026-10-20); the banish-machine SetFlag pair (:638) is
     -- unported, so this is the only flag leg at a registered site.
+    -- C++ :101's SetReactState(REACT_AGGRESSIVE) stays out: nothing in
+    -- the ported model ever sets the dragons non-aggressive (the
+    -- 25%-stage banish machine's REACT_PASSIVE :639 and its
+    -- UpdateAI-timeout AGGRESSIVE restore :677 are both unported),
+    -- and spawn default is AGGRESSIVE.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
 end
 

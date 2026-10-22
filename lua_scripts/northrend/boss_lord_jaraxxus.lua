@@ -64,8 +64,9 @@
 -- (SetReactState(REACT_PASSIVE) + events.SetPhase(PHASE_INTRO) +
 -- EVENT_INTRO 1s); FAIL -> DoCastSelf(SPELL_JARAXXUS_CHAINS 67924,
 -- trial_of_the_crusader.h) + SetImmuneToPC(true) +
--- SetReactState(REACT_PASSIVE) (instance model absent, standing; no
--- react / immune bridges); EVENT_INTRO: DoCastSelf(Lord Jaraxxus'
+-- SetReactState(REACT_PASSIVE) (instance model absent, standing — the
+-- FAIL gate has no bridge; SetReactState/SetImmuneToPC bridges exist);
+-- EVENT_INTRO: DoCastSelf(Lord Jaraxxus'
 -- Hittin' Ya 66327) + MoveAlongSplineChain(POINT_SUMMONED,
 -- SPLINE_INITIAL_MOVEMENT) (no motion bridge — the self-cast is
 -- port-pattern-ready in isolation (phase_hunter precedent) but rides
@@ -81,7 +82,8 @@
 -- 4.729842f) (SetFacingTo is bridged — lua_creature_events.go:711 —
 -- but the arm rides the unported intro machine); EVENT_START_COMBAT:
 -- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE) +
--- DoZoneInCombat (no immune / react / zone-in-combat bridges);
+-- DoZoneInCombat (bridges exist; the arm rides the unported intro
+-- machine — no MovementInform / intro-event hook);
 -- DoAction(ACTION_JARAXXUS_ENGAGE): RemoveAurasDueToSpell(
 -- SPELL_JARAXXUS_CHAINS) + SetImmuneToPC(false) +
 -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (no cross-AI

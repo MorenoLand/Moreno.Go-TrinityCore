@@ -216,6 +216,36 @@
 -- 0..2 (3, terenas scheduler) + SAY_TERENAS_OUTRO_1..2 0..1 (2,
 -- terenas scheduler)).
 
+-- REACTSTATE TRIAGE (2026-10-22; C++ cites from
+-- boss_the_lich_king.cpp) — all 21 hunt flags:
+-- PORTED: npc_raging_spirit Reset REACT_PASSIVE (:1365) +
+-- EVENT_SET_AGRESSIVE 2s -> REACT_AGGRESSIVE (:1424) — see the
+-- ragingSpiritJustEngagedWith comment above; the DoAction
+-- ACTION_DISABLE_RAGING REACT_PASSIVE leg (:1377-1386) stays out (no
+-- DoAction bridge, documented above).
+-- STAYS OUT (no new bridges built):
+-- LK Reset REACT_PASSIVE (:529-532) — pairs with EVENT_FINISH_INTRO
+-- REACT_AGGRESSIVE (:941-946); the intro machine (SetImmuneToPC,
+-- DoZoneInCombat, phase SetPhase, MovementInform-driven) is unported,
+-- so Reset PASSIVE alone would strand the boss passive permanently.
+-- LK DamageTaken REACT_PASSIVE legs (:690/:700/:709, 70%/40%/10%
+-- phase transitions) — gated on the unported phase machine and paired
+-- with MovePoint/AttackStop movement legs (no MovementInform bridge).
+-- LK EVENT_HARVEST_SOULS REACT_PASSIVE (:1044) + EVENT_START_ATTACK
+-- REACT_AGGRESSIVE (:1028-1031) — unported PHASE_FROSTMOURNE/PHASE_THREE
+-- machine + unported Harvest Souls cast.
+-- JustSummoned REACT_PASSIVE + LichKingStartMovementEvent 5s ->
+-- REACT_AGGRESSIVE + AttackStart (:739-741/:447-466, shambling horror /
+-- drudge ghoul): cross-creature timed BasicEvent machine;
+-- AttackStart/SelectTarget have no bridge. (VileSpiritActivateEvent
+-- REACT_AGGRESSIVE (:472-484) + JustSummoned legs :750/:761/:777/1059
+-- and the ice-sphere :750 / defile :761 legs act on unregistered adds;
+-- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
+-- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
+-- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
+-- SpellScript bridge; both add AIs unregistered (restore_soul also
+-- rides the no-DoAction-bridge ACTION_TELEPORT_BACK).
+
 local ENTRY_THE_LICH_KING = 36597
 local ENTRY_SHAMBLING_HORROR = 37698
 local ENTRY_RAGING_SPIRIT = 36701
@@ -236,6 +266,10 @@ local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
 local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
 local SPELL_PLAY_MOVIE = 73159
+
+-- creature:SetReactState is bridged (REACT_PASSIVE=0, REACT_AGGRESSIVE=2).
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
 
 local timers = {}
 
@@ -374,7 +408,8 @@ end
 -- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) +
 -- DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, true) one-shots,
 -- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1374/:1420-1421); the
--- REACT_PASSIVE -> EVENT_SET_AGRESSIVE 2s leg has no bridge.
+-- Reset REACT_PASSIVE (:1365) -> EVENT_SET_AGRESSIVE 2s (:1424) leg is
+-- PORTED (2026-10-22) via the file's CreateLuaEvent pump.
 -- C++ DoAction(ACTION_DISABLE_RAGING) (:1377-1386, _events.Reset() on
 -- Frostmourne-phase entry, issued by the boss AI :1066) has no bridge —
 -- the cross-AI DoAction rides the unbridged phase machine, so the Soul
@@ -387,6 +422,8 @@ end
 local function ragingSpiritJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetReactState(REACT_PASSIVE)
+    schedule(guid, "raging_aggressive", 2000, function() creature:SetReactState(REACT_AGGRESSIVE) end)
     creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
     creature:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL, true)
     creature:CastSpell(creature, SPELL_BOSS_HITTIN_YA, true)

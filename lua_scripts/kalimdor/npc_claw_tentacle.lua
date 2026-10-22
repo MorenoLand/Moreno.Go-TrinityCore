@@ -7,7 +7,10 @@
 -- Hamstring 26141 on victim (2s init -> 5s repeat per C++
 -- HamstringTimer reset; the giant-claw port (C++ repeat 10s) is
 -- a different AI — not copied here). The EvadeTimer leg (5s
--- bridge — documented, not wired.
+-- bridge — documented, not wired. The ctor and evade-leg
+-- pPortal->SetReactState(REACT_PASSIVE) arms (boss_cthun.cpp :982,
+-- :1040) ride the same unbridged portal-summon machinery: cross-
+-- creature arms on the summoned NPC_SMALL_PORTAL.
 local ENTRY = 15725
 local SPELL_GROUND_RUPTURE = 26139
 local SPELL_HAMSTRING = 26141

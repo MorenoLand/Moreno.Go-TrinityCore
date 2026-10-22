@@ -54,7 +54,11 @@
 -- "SpellHit never fires in the Lua surface" ruling was stale —
 -- event 14 fires from the Go spell path). EVENT_SKELETON /
 -- EVENT_BANSHEE / EVENT_ABOMINATION — SummonCreature (summon STRAND
--- absent); EVENT_DESPAWN_MINIONS — summons DespawnOrUnsummon +
+-- absent); EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
+-- (*it)->SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat on the
+-- pre-existing room skeleton — cross-creature, rides the unported
+-- phase-one DoAction machine (same EVENT_SKELETON gate) — documented-only;
+-- EVENT_DESPAWN_MINIONS — summons DespawnOrUnsummon +
 -- Talk(SAY_AGGRO 7) — summon/despawn bridges absent (Talk not ported
 -- orphaned — vortex precedent); EVENT_PHASE_TWO — CastStop +
 -- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList

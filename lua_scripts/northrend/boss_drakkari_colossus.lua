@@ -36,6 +36,10 @@
 -- machine, so they stay out), and
 -- the damage=0 leg must not fire without the phase machine behind
 -- it).
+-- Constructor SetReactState(REACT_PASSIVE) (:90) — the AI
+-- constructor has no Lua lifecycle equivalent (no ctor hook), so it
+-- cannot ride an event; the passive-until-unfreeze story is the same
+-- unported DoAction freeze machine documented below.
 -- DoAction legs: ACTION_SUMMON_ELEMENTAL — DoCastSelf(Emerge
 -- 54850) is bridged but has no Lua fire site (no DoAction bridge,
 -- standing); ACTION_FREEZE_COLOSSUS — Clear/MoveIdle motion,
@@ -80,7 +84,8 @@
 -- slad_ran RegisterCreatureEvent 1/2/23 pattern. The rest is
 -- unbridgeable anyway: MoveMojos MovePoint choreography (movement
 -- bridge absent), AttackStart home-proximity passive flip
--- (SetReactState bridge absent), MovementInform id-1 ->
+-- (SetReactState IS bridged — stays out on the entry-blocked /
+-- no-registration ground like the rest), MovementInform id-1 ->
 -- cross-AI DoAction(UNFREEZE) + SetData(DATA_INTRO_DONE) +
 -- DoZoneInCombat + DespawnOrUnsummon (bridges absent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler

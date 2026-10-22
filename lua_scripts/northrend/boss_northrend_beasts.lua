@@ -63,6 +63,11 @@
 -- anubarak_trial precedent) + HandleInitialMovement
 -- MoveAlongSplineChain(POINT_INITIAL_MOVEMENT, SPLINE_INITIAL_MOVEMENT)
 -- (no motion bridge); MovementInform SPLINE_CHAIN ->
+-- boss_northrend_beastsAI::Reset SetReactState(REACT_PASSIVE) (boss_northrend_beasts.cpp:217)
+-- also stays out: SetReactState IS bridged (frozen_core precedent), but the
+-- paired re-arm (EVENT_ENGAGE -> SetReactState(REACT_AGGRESSIVE), :358) rides the
+-- unbridged MovementInform intro machine — porting PASSIVE alone would leave the
+-- boss passive forever (paired-arm rule).
 -- ScheduleEvent(EVENT_ENGAGE, 7s) (no MovementInform hook); EVENT_ENGAGE
 -- — DoUseDoorOrButton(DATA_MAIN_GATE) + SetImmuneToPC(false) +
 -- SetReactState(REACT_AGGRESSIVE) + SummonCreature(

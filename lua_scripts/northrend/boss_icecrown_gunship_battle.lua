@@ -78,7 +78,13 @@
 -- (:1370-1377, no cast arms). MovementInform SetControlled(UNIT_STATE_
 -- ROOT) legs — boarding_add (:1590), rocketeer (:1616), mage (:1667),
 -- all POINT_MOTION_TYPE EVENT_CHARGE_PREPATH — no MovementInform
--- bridge; cannon (:1712-1713) PassengerBoarded !apply -> SetControlled
+-- bridge; the slot-machine react arms ride the same unbridged
+-- hooks — gunship_npc_AI::SetData ACTION_SET_SLOT
+-- SetReactState(REACT_PASSIVE) (:560), boarding_addAI::SetData
+-- (:1390) PASSIVE, MovementInform EVENT_CHARGE_PREPATH
+-- SetReactState(REACT_AGGRESSIVE) (:604 / :1450) — no SetData /
+-- MovementInform bridges (SetReactState itself IS bridged).
+-- cannon (:1712-1713) PassengerBoarded !apply -> SetControlled
 -- (false) then SetControlled(true) (the "cannon root flags") — no
 -- PassengerBoarded bridge: all stay out.
 -- The 17 spell_igb_* SpellScripts join the no-SpellScript-bridge queue;

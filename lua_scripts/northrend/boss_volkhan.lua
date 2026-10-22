@@ -92,7 +92,8 @@
 -- phase 1 Talk(EMOTE_TO_ANVIL 5) + MovePoint(home position) ->
 -- phase 2; phase 3 anvil TEMPER 52238 / TEMPER_DUMMY 52654 casts
 -- (NPC_VOLKHAN_ANVIL 28823, 1000.0f) -> delay timer -> phase 4;
--- phase 4 SelectTarget(MaxThreat) MoveFollow -> phase 5; phase 5
+-- phase 4 SelectTarget(MaxThreat) + SetReactState(REACT_AGGRESSIVE) (:336)
+-- + SetInCombatWith + MoveFollow -> phase 5; phase 5
 -- MAX_GOLEM 2 triggered SPELL_SUMMON_MOLTEN_GOLEM 52405 casts on
 -- the anvil + m_bIsStriking = true -> phase 0 — the forge-strike
 -- sequence is a motion/target-selection machine (MovePoint :312,

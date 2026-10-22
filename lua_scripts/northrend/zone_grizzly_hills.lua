@@ -30,6 +30,13 @@
 -- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, SetEntry 33220, maiden
 -- Talk SAY_MAIDEN_0/1, gossip-flag windows) — the gossip flag can never be
 -- re-set without it.
+-- npc_venture_co_straggler (zone_grizzly_hills.cpp:562-651) — NOT
+-- registered: Reset (RemoveFlag NON_ATTACKABLE + SetImmuneToPC(false) +
+-- SetReactState(REACT_AGGRESSIVE)) and SpellHit (SMOKE_BOMB ->
+-- NON_ATTACKABLE + ImmuneToPC + SetReactState(REACT_PASSIVE) +
+-- CombatStop + the EVENT_STRAGGLER_1..4 chain) ride the MovePoint
+-- waypoint machine — no movement bridge; the react flips stay out
+-- with the rest of the AI.
 local ENTRY_LAKE_FROG = 33211
 local ENTRY_LAKE_FROG_QUEST = 33224
 local UNIT_NPC_FLAGS_FIELD = 82

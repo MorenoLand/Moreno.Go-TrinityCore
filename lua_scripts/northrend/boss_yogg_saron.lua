@@ -73,6 +73,16 @@
 -- Go (event 15 itself is live — boss_ai.go:1904).
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on
 -- NPC_DEATH_ORB summon — no JustSummoned bridge.
+-- Sara Reset SetReactState(REACT_PASSIVE) (:783-787) stays out: Sara
+-- has no event-23 handler (no reset registration) and the rest of the
+-- Reset machine (RemoveAllAuras / faction-friendly / phase reset)
+-- is unmodeled — the react arm rides the unported handler.
+-- Voice JustSummoned summon->REACT_PASSIVE (:660-665, crusher/
+-- corruptor tentacles) + StartAttackEvent::Execute owner->REACT_
+-- AGGRESSIVE (:430-439, 1s/5s delayed BasicEvent attack kick) stay
+-- out: cross-creature arms with no summon-bridge / BasicEvent
+-- bridge (GUID-latched summon, random target picked from the
+-- summoner's AI).
 -- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on
 -- combat-start timers; all six are phase-gated with unbridged schedule
 -- legs (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a
@@ -183,6 +193,8 @@ local SPELL_KNOCK_AWAY = 64022
 local SPELL_IN_THE_MAWS_OF_THE_OLD_GOD = 64184
 local SPELL_SANITY = 63050
 local SPELL_INSANE = 63120
+
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
 -- Talk(SAY_SARA_AGGRO) + three ScheduleEvent legs — only
@@ -712,11 +724,16 @@ end
 
 -- C++ npc_yogg_saron_keeperAI::Reset (:1605-1612): DoCast(
 -- SPELL_KEEPER_ACTIVE 62647) (1-arg self, non-triggered, ungated)
--- — event 23. The _events Reset/SetPhase, SetReactState legs and
--- the Freya sanity-well GetCreatureList cleanup ride unbridged
--- machines (RemoveAllAuras ported 2026-10-19).
+-- — event 23. The _events Reset/SetPhase and the Freya
+-- sanity-well GetCreatureList cleanup ride unbridged machines; the
+-- SetReactState(REACT_PASSIVE) leg (ungated, :1607) IS ported below
+-- (react-state bridge retraction; RemoveAllAuras ported 2026-10-19,
+-- passive ported this run).
 local function yoggKeeperReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_yogg_saron_keeperAI::Reset (boss_yogg_saron.cpp:1607):
+    -- me->SetReactState(REACT_PASSIVE), ungated, before RemoveAllAuras.
+    creature:SetReactState(REACT_PASSIVE)
     creature:RemoveAllAuras()
     -- C++ Reset: DoCast(KEEPER_ACTIVE)
     -- (boss_yogg_saron.cpp:1610). Alive-gated.

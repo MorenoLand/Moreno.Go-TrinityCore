@@ -92,6 +92,11 @@
 -- 50228) — fire ONLY inside the ACTION_GAUNTLET_END leg, which rides
 -- the vehicle dismount (PassengerBoarded !apply on npc_grauf) — an
 -- unbridged vehicle/DoAction machine (the gothik precedent). Stay out.
+-- The SetReactState(REACT_AGGRESSIVE) (:270) rides the same unbridged
+-- ACTION_GAUNTLET_END leg; boss_skadi Reset's SetReactState(REACT_
+-- PASSIVE) (:170) stays out with Skadi's unported Reset (the whole
+-- combat-entry phase machine is DoAction/vehicle-gated; event 23 not
+-- registered for Skadi this run).
 -- Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (area-trigger
 -- DoAction machine) — event 1 deliberately NOT registered (registering
 -- it would deviate from C++: ground-phase combat entry yells nothing
@@ -106,7 +111,9 @@
 -- spline / vehicle bridges. Stay out; only the JustDied
 -- DespawnOrUnsummon(Seconds(6)) leg ports (event 4, below — the freya
 -- delayed-despawn idiom), the paired skadi->ExitVehicle() leg having
--- no cross-creature bridge.
+-- no cross-creature bridge. npc_grauf Reset's SetReactState(REACT_
+-- PASSIVE) (:344) stays out with the unported spline-chain movement
+-- machine (event 23 not registered for Grauf this run).
 -- npc_ymirjar_harpooner JustDied — DoCast(SPELL_SUMMON_HARPOON 56789)
 -- is a pure summon leg (no bridge — the zarithrian precedent). Stay
 -- out.

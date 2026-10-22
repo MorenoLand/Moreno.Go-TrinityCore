@@ -93,6 +93,13 @@
 -- SetPhase(PHASE_AIR) / MoveTakeoff / engineer
 -- ACTION_FIX_HARPOONS DoAction — phase machine + motion +
 -- DoAction; no bridges.
+-- Boss-side SetReactState arms (SetReactState IS bridged — frozen_core
+-- precedent): MovementInform POINT_RAZORSCALE_FLIGHT_2 ->
+-- SetReactState(REACT_AGGRESSIVE) (:448, no MovementInform hook) and
+-- EVENT_RESUME_AIR_PHASE -> SetReactState(REACT_PASSIVE) (:628, phase
+-- machine) both stay out behind the unbridged phase/motion machine.
+-- DamageTaken (:552) -> SetReactState(REACT_AGGRESSIVE) is vacuous: she is
+-- already AGGRESSIVE since :448, and the Lua port never sets PASSIVE.
 -- EVENT_FIREBOLT (:636-638) — DoCastSelf(SPELL_FIREBOLT 62669)
 -- one-shot rides the unbridgeable WING_BUFFET phase leg.
 -- EVENT_FUSE_ARMOR (:639-643) — GetVictim + !HasAura

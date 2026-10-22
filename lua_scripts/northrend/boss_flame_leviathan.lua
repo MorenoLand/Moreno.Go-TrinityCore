@@ -68,6 +68,10 @@
 -- early-4s shutdown (ScheduleEvent(EVENT_SHUTDOWN, 4s) +
 -- InterruptNonMeleeSpells, unbridged), so the counter alone is dead
 -- state.
+-- MovementInform (boss_flame_leviathan.cpp:570-576) — the
+-- ACTION_MOVE_TO_CENTER_POSITION arrival leg (SetReactState(REACT_AGGRESSIVE)
+-- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE | STUNNED)) rides the
+-- unbridged MovementInform hook; the boss stays REACT_DEFENSIVE in Lua.
 -- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS) /
 -- SetData(DATA_UNBROKEN) / DoAction tower-destruction loot-mode ladder —
 -- no GetData/SetData/DoAction bridges.
