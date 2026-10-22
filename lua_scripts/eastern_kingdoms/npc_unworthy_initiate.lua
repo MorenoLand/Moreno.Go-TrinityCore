@@ -87,9 +87,13 @@
 --   LoadEquipment(1) (no bridge), triggered CastSpell(DK_INITIATE_
 --   VISUAL 51519) + Talk(SAY_EVENT_ATTACK 1) (stranded on the
 --   MovementInform leg), and PHASE_TO_ATTACK's 5s wait ->
---   SetFaction(FACTION_MONSTER) / SetImmuneToPC(false) /
---   SetReactState(REACT_AGGRESSIVE) (no faction/immune/react-state
---   bridges) + AttackStart(player) (no bridge).
+--   SetFaction(FACTION_MONSTER) (bridged) / SetImmuneToPC(false)
+--   (= RemoveFlag(59, 0x100), bridged) / SetReactState(REACT_AGGRESSIVE)
+--   (bridged) + AttackStart(player) (no bridge) — the "no faction /
+--   immune / react-state bridge" wording was stale, but the arm stays
+--   out on other grounds: its only trigger is the unbridged GO-gossip
+--   -> cross-AI EventStart chain, so a one-sided port on any bridged
+--   event would be wrong.
 --   The ctor SetReactState(REACT_PASSIVE) (chapter1.cpp:108) stays
 --   out too: no OnSpawn(36) handler is registered, and a one-sided
 --   spawn-passive port would freeze the initiate passive — the only

@@ -62,9 +62,14 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — Initialize() (_enrage=false, _intenseCold=true) + _intense_
 -- ColdList.clear() + RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED) +
--- RemovePrison(CheckContainmentSpheres()) + _Reset() — no instance /
--- GO-state / flag bridges (the containment-sphere prison machine is
--- documented-only; see containment_sphere below).
+-- RemovePrison(CheckContainmentSpheres()) + _Reset() — the STUNNED
+-- RemoveFlag is unconditional and PORTED below on event 23 (flag
+-- bridges are live — the Oct-12 "no flag bridge" wording was stale);
+-- Initialize() rides the enraged-latch reset, _intenseColdList.clear()
+-- has no achievement bridge, and RemovePrison(CheckContainmentSpheres())
+-- + _Reset() stay out (instance / GO-state gates — the
+-- containment-sphere prison machine is documented-only; see
+-- containment_sphere below).
 -- (the Oct-12 "no timer-event / random-target / cast bridge" and
 -- "no IsHeroic bridge" claims were wrong, retracted — the heroic
 -- crystallize leg is ported above.)
@@ -255,6 +260,10 @@ end
 
 local function keristraszaReset(event, creature)
     keristraszaLeaveCombat(event, creature)
+    -- C++ Reset (line 89): RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+    -- is unconditional — ported (the containment-sphere prison machine
+    -- around it stays documented-only, instance/GO-gated).
+    creature:RemoveFlag(59, 0x40000)
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no

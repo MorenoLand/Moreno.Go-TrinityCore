@@ -39,8 +39,10 @@
 -- instance leg rides the no-instance bridge — documented-only).
 -- DOCUMENTED-ONLY (in this header; only entry 18667 registered):
 -- boss_blackheart_the_inciter::Reset — me->SetReactState
--- (REACT_AGGRESSIVE) + _Reset() — no-instance / no-react-state
--- bridges — documented-only.
+-- (REACT_AGGRESSIVE) is PORTED below on event 23 (the Oct-18
+-- "no-react-state bridge" note was stale — the bridge is live,
+-- lua_creature_events.go); the _Reset() instance leg stays
+-- documented-only (no instance bridge).
 -- boss_blackheart_the_inciter::SetData — charm-count machine (++
 -- on charmed, sanity-check EnterEvadeMode(EVADE_REASON_OTHER) when
 -- -- on zero, REACT_PASSIVE while any charmed player) driven from
@@ -188,11 +190,18 @@ local function blackheartEnterCombat(event, creature, target)
     end)
 end
 
--- Events 2 (OnLeaveCombat) and 23 (OnReset) share one handler: both
--- are cancelTimers only (C++ Reset's SetReactState(REACT_AGGRESSIVE)
--- leg rides the no-react-state bridge, header above — documented-only).
-local function blackheartLeaveCombatOrReset(event, creature)
+-- Events 2 (OnLeaveCombat): cancelTimers only.
+local function blackheartLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_blackheart_the_inciter::Reset (lines 76-80):
+-- me->SetReactState(REACT_AGGRESSIVE) (bridged — lua_creature_events.go;
+-- REACT_AGGRESSIVE = 2, UnitDefines.h) + _Reset() (no instance bridge —
+-- documented-only). cancelTimers mirrors _Reset()'s events.Reset().
+local function blackheartReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetReactState(2)
 end
 
 -- C++ boss_blackheart_the_inciter::KilledUnit:
@@ -215,7 +224,7 @@ local function blackheartDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 1, blackheartEnterCombat)
-RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombatOrReset)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 3, blackheartTargetDied)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 4, blackheartDied)
-RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartLeaveCombatOrReset)
+RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartReset)

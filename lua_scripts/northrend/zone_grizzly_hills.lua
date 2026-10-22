@@ -31,12 +31,19 @@
 -- Talk SAY_MAIDEN_0/1, gossip-flag windows) — the gossip flag can never be
 -- re-set without it.
 -- npc_venture_co_straggler (zone_grizzly_hills.cpp:562-651) — NOT
--- registered: Reset (RemoveFlag NON_ATTACKABLE + SetImmuneToPC(false) +
--- SetReactState(REACT_AGGRESSIVE)) and SpellHit (SMOKE_BOMB ->
--- NON_ATTACKABLE + ImmuneToPC + SetReactState(REACT_PASSIVE) +
--- CombatStop + the EVENT_STRAGGLER_1..4 chain) ride the MovePoint
--- waypoint machine — no movement bridge; the react flips stay out
--- with the rest of the AI.
+-- registered: no entry constant anywhere in the C++ tree (DB ScriptName
+-- binding only, unverifiable — wounded-skirmisher precedent), so no
+-- entry-verifiable registration can be wired. The arms themselves are
+-- mostly bridgeable now (Reset's RemoveFlag NON_ATTACKABLE +
+-- SetImmuneToPC(false) (= RemoveFlag(59, 0x100)) + SetReactState
+-- (REACT_AGGRESSIVE); the SpellHit SMOKE_BOMB 49075 arm rides event 14
+-- (live fire sites: boss_ai.go:2125/2134, spells.go:11765) with the
+-- caster available for the _playerGUID credit leg; SetFlag
+-- NON_ATTACKABLE + SetFlag(59, 0x100) + SetReactState(REACT_PASSIVE) +
+-- Talk(SAY_SEO) + the EVENT_STRAGGLER_1..4 CreateLuaEvent chain) — but
+-- CombatStop + the three MovePoint legs + DisappearAndDie have no
+-- bridges, and without an entry the separable CHOP/Reset arms can't be
+-- registered either. Revisit only if an entry becomes C++-verifiable.
 -- Documented-only (nearest-creature axis): npc_amberpine_woodsman
 -- (zone_grizzly_hills.cpp:409-457): Reset's
 -- FindNearestCreature(NPC_TALLHORN_STAG 26363, 0.2f) emote-state gate

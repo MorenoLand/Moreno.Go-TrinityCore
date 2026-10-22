@@ -65,10 +65,13 @@
 -- PHASE_HUMAN (the feign-death yell) (event 9, human entry only); the
 -- feignDead latch mirrors the PHASE_HUMAN -> PHASE_EVENT transition so
 -- the yell fires exactly once (the moroes threshold+latch precedent);
--- the latch also cancels the human timers (the phase gate above) — the
--- RemoveAllAuras / DoCast SPELL_INGVAR_FEIGN_DEATH 42795 /
--- non-attackable/immune flags have no bridges, but the PHASE_EVENT
--- damage = 0 rewrite IS bridged (numeric second return,
+-- the latch also cancels the human timers (the phase gate above) and
+-- ports the DamageTaken transition legs: RemoveAllAuras + triggered
+-- self-cast SPELL_INGVAR_FEIGN_DEATH 42795 + SetFlag(NON_ATTACKABLE |
+-- NOT_SELECTABLE) + SetImmuneToPC(true) (= SetFlag(59, 0x100)) — the
+-- StopMoving / EVENT_SUMMON_BANSHEE summon legs stay out (no movement /
+-- summon bridges); Reset re-arms the flags (kologarn precedent). The
+-- PHASE_EVENT damage = 0 rewrite IS bridged (numeric second return,
 -- fireCreatureDamageTaken; the anubarak-spike / halazzi precedent) —
 -- the latch returns false, 0 and any further PHASE_EVENT damage is
 -- zeroed too (C++ boss_ingvar_the_plunderer.cpp:139).
@@ -144,6 +147,12 @@ local SPELL_CLEAVE = 42724
 local SPELL_SMASH = 42669
 local SPELL_STAGGERING_ROAR = 42708
 local SPELL_ENRAGE = 42705
+local SPELL_INGVAR_FEIGN_DEATH = 42795 -- boss_ingvar_the_plunderer.cpp (DamageTaken, triggered self-cast)
+
+local UNIT_FIELD_FLAGS = 59 -- UnitDefines.h
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h (Unit.cpp SetImmuneToPC)
 
 local timers = {}
 
@@ -243,8 +252,10 @@ local function ingvarEnterCombat(event, creature, target)
 end
 
 -- C++ DamageTaken (lines 122-140): if (damage >= me->GetHealth() &&
--- events.IsInPhase(PHASE_HUMAN)) { RemoveAllAuras (ported 2026-10-19)
--- + unbridgeable feign-death legs; Talk(SAY_DEATH); } — the engaged gate mirrors the PHASE_HUMAN
+-- events.IsInPhase(PHASE_HUMAN)) { RemoveAllAuras + triggered
+-- feign-death self-cast 42795 + SetFlag(NON_ATTACKABLE | NOT_SELECTABLE)
+-- + SetFlag(0x100) (all ported below; StopMoving / summon legs
+-- unbridged); Talk(SAY_DEATH); } — the engaged gate mirrors the PHASE_HUMAN
 -- requirement, the feignDead latch the one-shot transition (the moroes
 -- threshold+latch precedent); cancelTimers mirrors the EventMap phase
 -- gate — the human timers never fire again once PHASE_EVENT starts.
@@ -265,6 +276,15 @@ local function ingvarDamageTaken(event, creature, attacker, damage)
         state.feignDead = true
         cancelTimers(creature:GetGUID())
         creature:RemoveAllAuras()
+        -- C++ DamageTaken transition legs (lines 127-136): triggered
+        -- feign-death self-cast + SetFlag(NON_ATTACKABLE |
+        -- NOT_SELECTABLE) + SetImmuneToPC(true) (= SetFlag(59, 0x100),
+        -- Unit.cpp:8455-8463; StopMoving / EVENT_SUMMON_BANSHEE legs
+        -- stay out — no movement / summon bridges).
+        creature:CastSpell(creature, SPELL_INGVAR_FEIGN_DEATH, true)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
         creature:Talk(SAY_DEATH)
         -- C++ DamageTaken zeroes the killing blow in the same call
         -- (PHASE_EVENT rewrite) — without the rewrite Go applies the
@@ -298,6 +318,13 @@ end
 local function ingvarReset(event, creature)
     cancelTimers(creature:GetGUID())
     ingvarState[creature:GetGUID()] = nil
+    -- C++ Reset (lines 113-118): RemoveFlag(NON_ATTACKABLE |
+    -- NOT_SELECTABLE) + SetImmuneToPC(false) (= RemoveFlag(59, 0x100))
+    -- re-arms the feign-death flags so a post-feign wipe re-engages
+    -- clean (kologarn evade re-arm precedent).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
 end
 
 RegisterCreatureEvent(ENTRY_INGVAR, 1, ingvarEnterCombat)
