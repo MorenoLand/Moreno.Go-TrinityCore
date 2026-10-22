@@ -34,7 +34,12 @@
 -- (70 yd, player-only, boundary-gated) that delivers it has no
 -- MoveInLineOfSight bridge, so the fight starts on pull instead
 -- (ragnaros-intro convention); the UNIT_STAND_STATE_STAND
--- SetByteValue arm has no bridge. Arms the 10s EVENT_SUBMERGE
+-- SetByteValue arm (boss_reliquary_of_souls.cpp:193, DoAction
+-- ACTION_START_COMBAT) stays OUT as a vacuous no-op restore — the
+-- creature spawns standing and nothing changes its stand state
+-- before combat (kaelthas precedent). creature:SetStandState IS
+-- bridged (lua_creature_events.go:568, 2026-10-21); this claim is
+-- re-keyed 2026-10-22. Arms the 10s EVENT_SUBMERGE
 -- (one-shot, C++-exact): triggered self-cast submerge visual
 -- 28819, non-triggered self-cast of the phase's summon spell
 -- (41488 suffering / 41493 desire / 41496 anger — the picker

@@ -52,8 +52,10 @@
 -- instance-script model — boss admission via the luaBossAI shim, and
 -- the EnterEvadeMode gong-flag arm is skipped (the 4s despawn has no
 -- bridge); no threat model — mark-of-arlokk target is a random alive
--- player (victim fallback), ResetThreatList skipped; no equipment
--- bridge — the UNIT_VIRTUAL_ITEM_SLOT_ID dagger arms skipped; no
+-- player (victim fallback), ResetThreatList skipped; equipment PORTED
+-- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
+-- the Reset dagger restore + EVENT_TRANSFORM unequip +
+-- EVENT_TRANSFORM_BACK re-equip arms; no
 -- flag bridge — the NON_ATTACKABLE/NOT_SELECTABLE arms skipped
 -- (the phase stays damageable); the REACT_PASSIVE arm is PORTED
 -- (creature:SetReactState, 2026-10-20); no stat-modifier
@@ -77,6 +79,7 @@ local SPELL_MARK_OF_ARLOKK = 24210
 local SPELL_RAVAGE = 24213
 local SPELL_PANTHER_TRANSFORM = 24190
 local SPELL_VANISH_VISUAL = 24222
+local WEAPON_DAGGER = 10616 -- boss_arlokk.cpp:72 (dagger item id)
 local SPELL_VANISH = 24223
 local SPELL_SUPER_INVIS = 24235
 local SPELL_SNEAK_1 = 22766
@@ -208,7 +211,8 @@ local onTransformBack
 -- C++ panther transform: self-cast 24190 (non-triggered), vanish
 -- visual 24222, vanish 24223; ResetThreatList PORTED 2026-10-19 via
 -- creature:ClearThreatList (bridged lua_creature_events.go); the passive /
--- flag / equipment / movement arms still have no bridge. The C++
+-- flag / movement arms still have no bridge (equipment PORTED below via
+-- creature:SetEquipmentSlots). The C++
 -- EVENT_TRANSFORM was scheduled with
 -- phase PHASE_ONE, so the 1s vanish chain only runs in troll form.
 local function onVanish2(creature, guid)
@@ -260,10 +264,15 @@ local function onTransform(creature, guid)
     -- C++ does not cancel the troll timers here: with _phase still 0
     -- they keep firing through the vanish chain (see cancelKeys note).
     creature:CastSpell(creature, SPELL_PANTHER_TRANSFORM)
+    -- C++ boss_arlokk.cpp:235-236: me->SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID
+    -- + 0/1, EQUIP_UNEQUIP) — unequip for the panther form (equipment bridged
+    -- 2026-10-22 via creature:SetEquipmentSlots, lua_creature_events.go:451;
+    -- ranged slot skipped, C++ never writes it).
+    creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
     -- C++ EVENT_TRANSFORM: ResetThreatList() between the transform and
     -- vanish casts (bridged lua_creature_events.go); the AttackStop /
-    -- flag / equipment arms still have no bridge (the REACT_PASSIVE
-    -- arm is PORTED 2026-10-20 — creature:SetReactState).
+    -- flag arms still have no bridge (the REACT_PASSIVE arm is PORTED
+    -- 2026-10-20 — creature:SetReactState; equipment PORTED above).
     creature:ClearThreatList()
     -- C++ boss_arlokk.cpp:245: me->SetReactState(REACT_PASSIVE)
     -- (EVENT_TRANSFORM: ResetThreatList -> flip).
@@ -291,7 +300,8 @@ onRavage = function(creature, guid)
 end
 
 -- C++ transform back: RemoveAura(24190), vanish visual; the weapon
--- damage-reset/equipment arms have no bridge. Troll timers are re-
+-- damage-reset arm has no bridge (stat modifier), equipment PORTED below.
+-- Troll timers are re-
 -- armed fresh; the panther timers are dropped.
 onTransformBack = function(creature, guid)
     local st = arlokkState(guid)
@@ -305,6 +315,10 @@ onTransformBack = function(creature, guid)
     cancelKeys(timers, guid, { "ravage", "transformback" })
     creature:RemoveAura(SPELL_PANTHER_TRANSFORM)
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
+    -- C++ boss_arlokk.cpp:283-284: UNIT_VIRTUAL_ITEM_SLOT_ID + 0/1 =
+    -- WEAPON_DAGGER — re-equip for troll form (bridged via
+    -- creature:SetEquipmentSlots; ranged slot skipped, C++ never writes it).
+    creature:SetEquipmentSlots(WEAPON_DAGGER, WEAPON_DAGGER, 0xFFFFFFFF)
     schedule(timers, guid, "swp", math.random(4000, 7000), function()
         onShadowWordPain(creature, guid)
     end)
@@ -353,8 +367,12 @@ local function arlokkDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ Reset (boss_arlokk.cpp:115-116): UNIT_VIRTUAL_ITEM_SLOT_ID + 0/1 =
+-- WEAPON_DAGGER — the unconditional restore (SetWalk/MovePoint legs stay
+-- out: no movement bridge; IsInPhase(PHASE_TWO) stat hack stays out).
 local function arlokkReset(event, creature)
     arlokkResetState(creature:GetGUID())
+    creature:SetEquipmentSlots(WEAPON_DAGGER, WEAPON_DAGGER, 0xFFFFFFFF)
 end
 
 RegisterCreatureEvent(ENTRY_ARLOKK, 1, arlokkEnterCombat)
