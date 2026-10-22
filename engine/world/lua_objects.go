@@ -641,8 +641,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// = mustBeDead) (Unit.cpp:8504-8516) — alive, no NON_ATTACKABLE
 	// (0x2) / NOT_SELECTABLE flag, no UNIT_STATE_UNATTACKABLE, and when
 	// mustBeDead no UNIT_STATE_DIED (Go: the feign-death flag twin).
-	// The NOT_SELECTABLE unit flag and UNIT_STATE_UNATTACKABLE have no Go
-	// model, so those arms are vacuous here.
+	// UNIT_STATE_UNATTACKABLE has no Go model, so that arm is vacuous here.
+	// NOT_SELECTABLE (0x02000000) is modeled live (vehicle.go:818 sets it on
+	// players; creaturemotion.go:4031 consults creature unitFlags), but this
+	// binding reads NON_ATTACKABLE only.
 	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
 		mustBeDead := false
 		if len(args) > 0 {

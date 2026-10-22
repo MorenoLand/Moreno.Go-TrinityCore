@@ -309,7 +309,7 @@ end
 -- at 3000, DoCast(me, SPELL_WAILING_SOULS) self-cast, re-arm 1000 until 15
 -- casts land (:319), then the phase ends and EVENT_WAILING_SOULS
 -- re-arms at {60000,70000} (:326). The beamAngle
--- Forward-declared: the 60-70s re-arm closure in wailingSoulTick below
+-- Forward-declared: the 60-70s re-arm closure in wailingSoulsTick below
 -- fires after this chunk loads, and the local def lands later in the file.
 -- The wailing pair is cyclic (the EVENT arm starts the tick chain; the
 -- chain's phase-end re-arms the event), so both names are forward-declared
@@ -338,7 +338,7 @@ wailingSoulsTick = function(creature, guid, remaining)
     creature:CastSpell(creature, SPELL_WAILING_SOULS)
     if remaining > 1 then
         schedule(guid, "wailingtick", 1000, function()
-            wailingSoulTick(creature, guid, remaining - 1)
+            wailingSoulsTick(creature, guid, remaining - 1)
         end)
     else
         -- C++ phase-end (:320-326): SetReactState(REACT_AGGRESSIVE) first
@@ -417,7 +417,7 @@ wailingSoulsEvent = function(creature, guid)
     -- scheduled after, so it is not delayed.
     delayTimers(guid, 18000)
     schedule(guid, "wailingtick", 3000, function()
-        wailingSoulTick(creature, guid, 15)
+        wailingSoulsTick(creature, guid, 15)
     end)
 end
 

@@ -120,6 +120,11 @@
 --   me->SetHomePosition(*me) (:861) ported in crokEnterCombat
 --   (event-surface SetHomePosition); the if (IsUndead)
 --   DoZoneInCombat() leg (:862-863) has no bridge — documented-only.
+-- npc_crok_scourgebane::CanAIAttack x2 (:792-796, :866-870) — the
+--   Y > 2660 Frostwing-Halls gate ("do not see targets inside
+--   Frostwing Halls when we are not there") stays out: creature:GetY
+--   is bridged (object.go fallback) but the CanAIAttack hook itself
+--   has no Lua bridge — documented-only.
 -- npc_crok_scourgebane::Reset (:544-551) + UpdateEscortAI
 --   (:754-761) — Reset-seeded timers re-keyed to event 1:
 --   EVENT_SCOURGE_STRIKE {7500,12500}ms -> DoCastVictim(

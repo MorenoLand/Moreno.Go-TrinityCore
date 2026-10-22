@@ -8,9 +8,13 @@
 -- loader call). Whole-server-tree grep confirms chapter1.cpp +
 -- its loader reference as the only sources of "npc_unworthy_
 -- initiate" (the anchor class npc_unworthy_initiate_anchor line
--- 298, the go_acherus_soul_prison gameobject script line 325, and
--- spell_death_knight_initiate_visual line 349 are separate scripts
--- in the same file, not this class).
+-- 298, the go_acherus_soul_prison gameobject script line 325,
+-- spell_death_knight_initiate_visual line 349, and the
+-- npc_death_knight_initiate duel machine (line 540) are separate
+-- scripts in the same file, not this class — the duel machine is
+-- unported: SpellHit/RemoveGameObject/AttackStop/RestoreFaction/
+-- EnterEvadeMode all unbridged, and the DamageTaken arm is dead
+-- without the SpellHit latch).
 -- Entries (verifiable from the C++ sources): the file's own
 -- acherus_unworthy_initiate[5] array (lines 89-96) names the five
 -- initiate entries 29519, 29520, 29565, 29566, 29567. The creature_

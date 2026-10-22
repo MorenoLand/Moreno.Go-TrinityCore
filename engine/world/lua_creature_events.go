@@ -139,8 +139,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// Unit.cpp): alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE (0x02000000)
 	// unit flags, and when checkFakeDeath (C++ default true) no feign-death
 	// (UNIT_STATE_DIED; Go's unitFlag2FeignDeath twin). UNIT_STATE_UNATTACKABLE
-	// has no Go model, so that arm is vacuous here. Twin of the session binding
-	// (lua_objects.go:646); zuljin's claw-rage chain calls it on the victim.
+	// has no Go model, so that arm is vacuous here. Not an exact twin of the
+	// session binding (lua_objects.go:646): that one defaults mustBeDead=false
+	// (Eluna CreatureMethods.h) and checks NON_ATTACKABLE only, while this one
+	// defaults checkFakeDeath=true (C++ Unit.h:1077) and checks 0x02000000 too.
+	// Zuljin's claw-rage chain calls this handler twin on the victim.
 	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
 		checkFakeDeath := true
 		if len(args) > 0 {
