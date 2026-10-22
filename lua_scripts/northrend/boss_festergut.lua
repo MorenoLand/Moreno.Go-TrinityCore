@@ -244,11 +244,13 @@ local function onInhaleBlight(creature, guid)
         -- ++_inhaleCounter, then (if the new counter < 3) a non-triggered
         -- self-cast of gaseousBlight[_inhaleCounter] — the real inhale
         -- stack aura. _inhaleCounter is 1/2 here (3 takes the pungent
-        -- branch), so the 0-indexed gaseousBlight[1/2] = Lua
-        -- GASEOUS_BLIGHT[count+1] (69162/69164). The 3rd CastSpell arg
-        -- (orig caster = self) is a no-op here.
+        -- branch); C++ gaseousBlight[3] is 0-indexed ({69157, 69162,
+        -- 69164}), Lua GASEOUS_BLIGHT is 1-indexed, so the C++
+        -- gaseousBlight[_inhaleCounter] = GASEOUS_BLIGHT[count+2]
+        -- (69162/69164). The 3rd CastSpell arg (orig caster = self) is a
+        -- no-op here.
         if count + 1 < 3 then
-            creature:CastSpell(creature, GASEOUS_BLIGHT[count + 1])
+            creature:CastSpell(creature, GASEOUS_BLIGHT[count + 2])
         end
     end
     schedule(guid, "inhale_blight", {33500, 35000}, function() onInhaleBlight(creature, guid) end)

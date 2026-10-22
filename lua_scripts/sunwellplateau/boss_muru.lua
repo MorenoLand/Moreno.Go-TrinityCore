@@ -247,8 +247,12 @@ end
 
 -- C++ DamageTaken: lethal -> damage = health - 1; PHASE_ONE only:
 -- phase=PHASE_TWO, RemoveAllAuras (bridged), triggered 46177,
--- 6s-delayed triggered 46217. The UNIT_FLAG_NOT_SELECTABLE arm has no
--- flag bridge (standing gap).
+-- 6s-delayed triggered 46217. The UNIT_FLAG_NOT_SELECTABLE arm is
+-- deliberately unported (not a flag-bridge gap — SetFlag IS bridged):
+-- it is one-sided co-dependent with the delayed DoCast(46217) entropius
+-- summon, whose SPELL_EFFECT_SUMMON never resolves on the Go
+-- creature-cast path; the flag alone would leave muru permanently
+-- unselectable at 1 HP (soft-lock).
 local function muruDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
