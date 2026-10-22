@@ -67,7 +67,8 @@
 --   "no bridge" note was stale, retracted; lana'thel precedent)
 --   modeled as a 9000ms one-shot.
 --   The crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) leg (:355-356)
---   is cross-AI Talk (no bridge).
+--   is PORTED in svalnaEnterCombat (cross-creature Talk bridge, the
+--   mrfloppy/emily precedent — the "no bridge" note below is stale).
 -- boss_sister_svalna::JustReachedHome (:389-395) — _JustReachedHome()
 --   then SetReactState(REACT_PASSIVE 0); the SetDisableGravity /
 --   SetHover legs have no bridge and stay out. Ported as event-24
@@ -272,6 +273,7 @@ local SAY_SVALNA_KILL_CAPTAIN = 1
 local SAY_SVALNA_AGGRO = 3
 local SAY_SVALNA_KILL = 4
 local SAY_SVALNA_DEATH = 6
+local SAY_CROK_COMBAT_SVALNA = 5 -- boss_sister_svalna.cpp:58
 
 local SAY_CAPTAIN_DEATH = 0
 local SAY_CAPTAIN_SECOND_DEATH = 3
@@ -395,6 +397,15 @@ end
 local function svalnaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith (boss_sister_svalna.cpp:355-356):
+    -- crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA) — cross-creature Talk
+    -- bridged via FindNearestCreature (mrfloppy/emily precedent); the
+    -- stale "cross-AI Talk (no bridge)" header note is retracted for
+    -- this arm (crok IS registered, ENTRY_CROK_SCOURGEBANE 37129).
+    local crok = creature:FindNearestCreature(ENTRY_CROK_SCOURGEBANE, 40.0)
+    if crok ~= nil then
+        crok:Talk(SAY_CROK_COMBAT_SVALNA)
+    end
     creature:CastSpell(creature, SPELL_DIVINE_SURGE, true)
     schedule(guid, "combat", 9000, function() onSvalnaCombat(creature) end)
     schedule(guid, "impaling", {40000, 50000},

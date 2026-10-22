@@ -12,6 +12,8 @@
 -- 5 OnSpawn, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick).
 -- Ported arms (C++-exact for all modeled arms):
+-- Engage (base boss_faction_championsAI::JustEngagedWith) — DoCast(me,
+-- SPELL_ANTI_AOE 68595, true) triggered (boss_faction_champions.cpp:643).
 -- EVENT_HEAL_BARKSKIN — HealthBelowPct(30) -> DoCastSelf(Barkskin
 -- 65860) + 60s re-arm, else 3s re-arm; 15-25s init
 -- (boss_faction_champions.cpp:771/816-824).
@@ -20,6 +22,7 @@ local ENTRY_DRUID_ALLIANCE = 34469 -- trial_of_the_crusader.h:183
 local ENTRY_DRUID_HORDE = 34459 -- trial_of_the_crusader.h:197
 
 local SPELL_BARKSKIN = 65860 -- boss_faction_champions.cpp:51
+local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
 local timers = {}
 
@@ -60,9 +63,15 @@ local function onBarkskin(creature, guid)
     end
 end
 
+-- C++ base boss_faction_championsAI::JustEngagedWith
+-- (boss_faction_champions.cpp:643-646): DoCast(me, SPELL_ANTI_AOE, true)
+-- triggered — applies to every champion subclass including this druid
+-- AI (npc_toc_druidAI : public boss_faction_championsAI, :759); the
+-- npc_toc_boomkin.lua precedent.
 local function druidEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     schedule(guid, "barkskin", {15000, 25000}, function() onBarkskin(creature, guid) end)
 end
 

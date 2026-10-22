@@ -144,6 +144,7 @@ local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
 local REACT_PASSIVE = 0
 
 local SAY_KRICK_SLAY = 1
+local SAY_KRICK_AGGRO = 0 -- boss_krickandick.cpp:56
 local SAY_ICK_POISON_NOVA = 0
 
 local SPELL_MIGHTY_KICK = 69021
@@ -277,13 +278,21 @@ local function onSpecial(creature, guid)
 end
 
 -- C++ boss_ickAI::JustEngagedWith (:163-173): seeds EVENT_MIGHTY_KICK 20s
--- (:170) and EVENT_SPECIAL {30s,35s} (:173). The BossAI::JustEngagedWith
--- passthrough and the krick->AI()->Talk(SAY_KRICK_AGGRO) leg (:167-168) have
--- no bridge; the EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds (:171-172)
--- belong to krick-cast arms with no cross-creature bridge.
+-- (:170) and EVENT_SPECIAL {30s,35s} (:173). The krick->AI()->Talk(
+-- SAY_KRICK_AGGRO 0) leg (:167-168) is PORTED below — cross-creature
+-- Talk bridged via FindNearestCreature (the mrfloppy/emily precedent,
+-- nil-guard mirrors GetKrick()); the stale "no bridge" note is
+-- retracted. The BossAI::JustEngagedWith passthrough and the
+-- EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds (:171-172)
+-- stay out — they belong to krick-cast arms with no cross-creature
+-- cast bridge.
 local function ickEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        krick:Talk(SAY_KRICK_AGGRO)
+    end
     schedule(guid, "mightykick", 20000, function() onMightyKick(creature, guid) end)
     schedule(guid, "special", {30000, 35000}, function() onSpecial(creature, guid) end)
 end
