@@ -69,7 +69,7 @@
 -- target, SPELL_BANISH 38791), 15s cycle) — PORTED as
 -- banishTick, the scheduler seeded only when creature:IsHeroic()
 -- (the earlier "no heroic bridge" claim was stale — IsHeroic is
--- bridged, engine/world/lua_creature_events.go:260; the lavanthor
+-- bridged, engine/world/lua_creature_events.go:409-417; the lavanthor
 -- precedent). Documented deviations: the C++ SelectTarget defaults
 -- playerOnly=FALSE (EXPLICIT false here), so the pool can include
 -- pets/totems — the threat-list pick via GetAITargets carries that
@@ -206,7 +206,7 @@ local function vorpilEnterCombat(event, creature, target)
     -- C++ :144-145: the EVENT_BANISH scheduler seeds only when
     -- IsHeroic() (the earlier "no heroic bridge" claim was stale —
     -- creature:IsHeroic() is bridged,
-    -- engine/world/lua_creature_events.go:260; the lavanthor
+    -- engine/world/lua_creature_events.go:409-417; the lavanthor
     -- precedent).
     if creature:IsHeroic() then
         schedule(guid, "banish", 15000, function()

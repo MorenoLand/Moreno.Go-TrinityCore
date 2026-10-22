@@ -87,7 +87,8 @@
 -- old "no aura-removal bridge (aeranas precedent)" claim is stale),
 -- DoCastAOE(Poisonous
 -- Mushroom Poison Cloud 57061) (stays out: summon STRAND absent),
--- SetObjectScale(0.1f) (no scale bridge), DespawnOrUnsummon(4s)
+-- SetObjectScale(0.1f) (stays out: summon STRAND absent — the
+-- scale bridge itself exists, creature:SetScale), DespawnOrUnsummon(4s)
 -- (stale "no despawn bridge" retracted — creature:Despawn() is
 -- bridged, lua_creature_events.go:214; the proximity + summon legs
 -- are the true blockers). JustDied healthy

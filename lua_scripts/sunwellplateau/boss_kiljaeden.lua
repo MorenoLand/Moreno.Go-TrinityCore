@@ -43,10 +43,13 @@
 -- (see below). OnTargetDied(3): Talk(SAY_KJ_SLAY), no TYPEID gate
 -- (C++-exact — the C++ KilledUnit Talk has no victim gate).
 -- OnDied(4): Talk(SAY_KJ_DEATH) + the summons.DespawnAll arm — PORTED
--- 2026-10-22 for the two entries the boss's own list latches (sinister
--- reflections 25708 + armageddon targets 25735, GetCreaturesInGrid 150yd
--- + Despawn, anubarak precedent); the SetBossState(DONE) arm is blocked
--- on the instance-script model.
+-- 2026-10-22 for the three entries the boss's own list latches (sinister
+-- reflections 25708 + armageddon targets 25735 + shield orbs 25502,
+-- GetCreaturesInGrid 150yd + Despawn, anubarak precedent; shield orbs
+-- are boss-latched too — boss_kiljaeden.cpp:786-794 TIMER_SUMMON_
+-- SHILEDORB summons NPC_SHIELD_ORB via me, and JustSummoned latches
+-- every summon unconditionally (:625-630)); the SetBossState(DONE)
+-- arm is blocked on the instance-script model.
 -- OnReset(23)/OnLeaveCombat(2): timer/state cleanup (the evade-
 -- side controller Reset relay and the RemoveDynObject ring arm
 -- have no cross-creature/GO bridges; the SetBossState arms are
@@ -165,11 +168,12 @@
 -- Reset relays, the KJ->kalecgos EmpowerOrb/ResetOrbs/
 -- SetRingOfBlueFlames calls and the reflection summon-side
 -- AttackStart/JustSummoned setup are unmodeled; no summon bridge
--- — the controller's deceiver/anveena/KJ spawns, the shield-orb
--- summons, the felfire-portal/fiend spawns are unmodeled (their AIs'
--- lists, not KJ's); the armageddon-target and sinister-reflection
--- summons ARE KJ-latched and their JustDied DespawnAll is PORTED in
--- kjDied (2026-10-22); no GameObjectAI bridge
+-- — the controller's deceiver/anveena/KJ spawns and the felfire-
+-- portal/fiend spawns are unmodeled (their AIs' lists, not KJ's);
+-- the armageddon-target, sinister-reflection and shield-orb summons
+-- ARE KJ-latched (JustSummoned :625-630 latches every boss summon)
+-- and their JustDied DespawnAll is PORTED in kjDied (2026-10-22);
+-- no GameObjectAI bridge
 -- — go_orb_of_the_blue_flight (gossip summon + vengeance cast)
 -- is not registered; no movement/teleport bridge — the shield-
 -- orb circle-movement/MovementInform/DoTeleportTo arms and the
@@ -199,6 +203,7 @@ local ENTRY_DECEIVER = 25588
 local ENTRY_FELFIRE_FIEND = 25598
 local ENTRY_ARMAGEDDON_TARGET = 25735
 local ENTRY_SINISTER_REFLECTION = 25708
+local ENTRY_SHIELD_ORB = 25502
 
 -- Yells (boss_kiljaeden.cpp Yells enum, KJ block)
 local SAY_KJ_DEATH = 0
@@ -562,19 +567,26 @@ end
 local function kjDied(event, creature, killer)
     creature:Talk(SAY_KJ_DEATH)
     -- C++ JustDied (boss_kiljaeden.cpp:633-638): summons.DespawnAll().
-    -- The boss's own summon list latches only what IT summons: the
-    -- sinister reflections (:681, TEMPSUMMON_CORPSE_DESPAWN) and the
-    -- armageddon targets (:861, TEMPSUMMON_TIMED_DESPAWN) — the
-    -- deceivers/anveena (:494, npc_kiljaeden_controller) and the shield
-    -- orbs (:790, controller) and felfire fiends (:1058,
-    -- npc_felfire_portal) are latched by other AIs and linger in C++
-    -- too. PORTED via the GetCreaturesInGrid + Despawn idiom (anubarak
-    -- frost-sphere precedent, 150yd); the stale "no summon bridge"
-    -- header claim is retracted for these two entries.
+    -- The boss's own summon list latches everything IT summons: the
+    -- sinister reflections (:681, TEMPSUMMON_CORPSE_DESPAWN), the
+    -- armageddon targets (:861, TEMPSUMMON_TIMED_DESPAWN) AND the
+    -- shield orbs (boss_kiljaeden.cpp:786-794 TIMER_SUMMON_SHILEDORB,
+    -- me->SummonCreature(NPC_SHIELD_ORB 25502), TEMPSUMMON_TIMED_OR_
+    -- CORPSE_DESPAWN 45s) — JustSummoned latches every summon
+    -- unconditionally (:625-630), so all three despawn here in C++.
+    -- Only the deceivers/anveena (:494, npc_kiljaeden_controller) and
+    -- felfire fiends (:1058, npc_felfire_portal) are latched by other
+    -- AIs and linger in C++ too. PORTED via the GetCreaturesInGrid +
+    -- Despawn idiom (anubarak frost-sphere precedent, 150yd); the
+    -- stale "no summon bridge" header claim is retracted for these
+    -- three entries.
     for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SINISTER_REFLECTION, 150)) do
         add:Despawn()
     end
     for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_ARMAGEDDON_TARGET, 150)) do
+        add:Despawn()
+    end
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SHIELD_ORB, 150)) do
         add:Despawn()
     end
     kjCleanup(event, creature)

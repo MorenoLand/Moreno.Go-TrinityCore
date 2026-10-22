@@ -147,7 +147,10 @@
 -- 57579, entry not named in the C++ tree) — joins the
 -- entry-unverifiable queue (the npc_image_belgaristrasz precedent);
 -- Reset / UpdateAI (DoCastAOE(SPELL_VOID_BLAST 57581) +
--- RemoveAllAuras + KillSelf) — no aura / cast bridges regardless.
+-- RemoveAllAuras + KillSelf): AddAura / RemoveAllAuras / CastSpell
+-- are bridged (stale "no aura / cast bridges" claim retracted),
+-- but the AI cannot register without a verifiable entry, so all
+-- legs stay out on the entry gate.
 -- npc_twilight_whelp — PORTED 2026-10-16: the EVENT_FADE_ARMOR
 -- timer leg is bridgeable (CreateLuaEvent; see whelpEnterCombat /
 -- fadeArmorTick below); Reset's RemoveAllAuras leg ported
