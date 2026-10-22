@@ -258,6 +258,9 @@ local function onTargetDied(_, creature, victim)
     end
 end
 
+-- C++ boss_priestess_delrissaAI::JustDied :417 instance->SetData(DATA_DELRISSA_DEATH_COUNT, SPECIAL):
+-- the only readers are the unported lackey AIs (boss_priestess_lackey_commonAI :242/:409) — no
+-- instance SetData/GetData bridge, and no cross-AI bridge to the unported lackeys. Dropped, documented.
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)

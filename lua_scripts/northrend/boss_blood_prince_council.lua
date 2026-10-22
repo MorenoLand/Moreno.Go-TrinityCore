@@ -480,6 +480,10 @@ end
 -- C++ BloodPrincesBossAI::JustDied :466-486:
 -- switch (me->GetEntry()) Talk(death text) — the sjonnir
 -- JustDied-Talk precedent.
+-- C++ BloodPrincesBossAI SetData legs: Reset :452 instance->SetData(DATA_ORB_WHISPERER_ACHIEVEMENT, true)
+-- and DamageDealt :549/:965 set it false — achievement criteria, no achievement bridge. JustReachedHome :533
+-- controller->AI()->SetData(DATA_PRINCE_EVADE, 1) — cross-AI write into the unported BloodPrinceController;
+-- no cross-AI SetData bridge. All three dropped, documented.
 local function princesJustDied(event, creature)
     cancelTimers(creature:GetGUID())
     creature:Talk(DEATH_TEXT[creature:GetEntry()])

@@ -42,9 +42,11 @@
 -- first combat tick — C++-exact) + start the 100ms scheduler pump
 -- (see below). OnTargetDied(3): Talk(SAY_KJ_SLAY), no TYPEID gate
 -- (C++-exact — the C++ KilledUnit Talk has no victim gate).
--- OnDied(4): Talk(SAY_KJ_DEATH); timer/state cleanup only (the
--- summons.DespawnAll arm has no summon bridge; the SetBossState(
--- DONE) arm is blocked on the instance-script model).
+-- OnDied(4): Talk(SAY_KJ_DEATH) + the summons.DespawnAll arm — PORTED
+-- 2026-10-22 for the two entries the boss's own list latches (sinister
+-- reflections 25708 + armageddon targets 25735, GetCreaturesInGrid 150yd
+-- + Despawn, anubarak precedent); the SetBossState(DONE) arm is blocked
+-- on the instance-script model.
 -- OnReset(23)/OnLeaveCombat(2): timer/state cleanup (the evade-
 -- side controller Reset relay and the RemoveDynObject ring arm
 -- have no cross-creature/GO bridges; the SetBossState arms are
@@ -164,9 +166,10 @@
 -- SetRingOfBlueFlames calls and the reflection summon-side
 -- AttackStart/JustSummoned setup are unmodeled; no summon bridge
 -- — the controller's deceiver/anveena/KJ spawns, the shield-orb
--- summons, the armageddon-target summons, the sinister-reflection
--- summons, the felfire-portal/fiend spawns and the KJ/JustDied
--- summons.DespawnAll arms are unmodeled; no GameObjectAI bridge
+-- summons, the felfire-portal/fiend spawns are unmodeled (their AIs'
+-- lists, not KJ's); the armageddon-target and sinister-reflection
+-- summons ARE KJ-latched and their JustDied DespawnAll is PORTED in
+-- kjDied (2026-10-22); no GameObjectAI bridge
 -- — go_orb_of_the_blue_flight (gossip summon + vengeance cast)
 -- is not registered; no movement/teleport bridge — the shield-
 -- orb circle-movement/MovementInform/DoTeleportTo arms and the
@@ -558,6 +561,22 @@ end
 
 local function kjDied(event, creature, killer)
     creature:Talk(SAY_KJ_DEATH)
+    -- C++ JustDied (boss_kiljaeden.cpp:633-638): summons.DespawnAll().
+    -- The boss's own summon list latches only what IT summons: the
+    -- sinister reflections (:681, TEMPSUMMON_CORPSE_DESPAWN) and the
+    -- armageddon targets (:861, TEMPSUMMON_TIMED_DESPAWN) — the
+    -- deceivers/anveena (:494, npc_kiljaeden_controller) and the shield
+    -- orbs (:790, controller) and felfire fiends (:1058,
+    -- npc_felfire_portal) are latched by other AIs and linger in C++
+    -- too. PORTED via the GetCreaturesInGrid + Despawn idiom (anubarak
+    -- frost-sphere precedent, 150yd); the stale "no summon bridge"
+    -- header claim is retracted for these two entries.
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SINISTER_REFLECTION, 150)) do
+        add:Despawn()
+    end
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_ARMAGEDDON_TARGET, 150)) do
+        add:Despawn()
+    end
     kjCleanup(event, creature)
 end
 

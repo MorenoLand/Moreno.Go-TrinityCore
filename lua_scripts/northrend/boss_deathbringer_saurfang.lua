@@ -347,6 +347,9 @@ end
 -- the fight-won leg the whole engage sequence (Talk, seeds, reset
 -- casts) is skipped. The check must come BEFORE initState, which
 -- would otherwise reset dead=false.
+-- C++ npc_high_overlord_saurfang_icc/npc_muradin_bronzebeard_icc DoAction(ACTION_START_EVENT) :662/:863
+-- (*itr)->AI()->SetData(0, x): sort-index write into the unported npc_saurfang_event guard AIs (whose
+-- SetData override is :963). No cross-AI SetData bridge, targets unported — dropped, documented.
 local function saurfangJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     local st = saurfangState[guid]

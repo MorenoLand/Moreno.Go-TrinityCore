@@ -185,6 +185,9 @@ end
 -- modes, drake init MovePoints, non-attackable flags) +
 -- ScheduleEvent x9 — the Talk and the three timer casts are
 -- bridgeable; the rest are machine legs with no bridges.
+-- C++ DrakeRespawn :237/:257/:277 tenebron/shadron/vesperon->AI()->SetData(DATA_CAN_LOOT, 0):
+-- cross-AI write into the unported drake AIs (obsidian_sanctum.cpp dummy_dragonAI, :326 _canLoot gate).
+-- No cross-AI SetData bridge and the target AIs are unported — dropped, documented.
 local function sartharionEnterCombat(event, creature, target)
     creature:Talk(SAY_SARTHARION_AGGRO)
     local guid = creature:GetGUID()

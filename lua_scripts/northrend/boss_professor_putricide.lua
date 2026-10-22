@@ -219,6 +219,10 @@ local function putricideLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true) and ExtraEffect :1382 set it false:
+-- achievement criteria, no achievement bridge (the lich-king no-achievement-criteria-bridge precedent).
+-- DATA_EXPERIMENT_STAGE (:971-972) toggles inside the unbridged spell_putricide_unstable_experiment
+-- SpellScript and is only read there — the whole chain joins the no-SpellScript-bridge queue. Dropped, documented.
 local function putricideReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
