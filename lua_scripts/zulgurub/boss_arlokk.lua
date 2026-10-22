@@ -210,9 +210,9 @@ local onTransformBack
 
 -- C++ panther transform: self-cast 24190 (non-triggered), vanish
 -- visual 24222, vanish 24223; ResetThreatList PORTED 2026-10-19 via
--- creature:ClearThreatList (bridged lua_creature_events.go); the passive /
--- flag / movement arms still have no bridge (equipment PORTED below via
--- creature:SetEquipmentSlots). The C++
+-- creature:ClearThreatList (bridged lua_creature_events.go); AttackStop /
+-- SetFlag / REACT_PASSIVE arms PORTED 2026-10-22 (equipment PORTED via
+-- creature:SetEquipmentSlots); the movement legs still have no bridge. The C++
 -- EVENT_TRANSFORM was scheduled with
 -- phase PHASE_ONE, so the 1s vanish chain only runs in troll form.
 local function onVanish2(creature, guid)
@@ -230,6 +230,11 @@ local function onVanish2(creature, guid)
         -- C++ boss_arlokk.cpp:264: me->SetReactState(REACT_AGGRESSIVE)
         -- (EVENT_VISIBLE: flip is the first arm).
         creature:SetReactState(2) -- REACT_AGGRESSIVE
+        -- C++ boss_arlokk.cpp:267-268: me->RemoveFlag(UNIT_FIELD_FLAGS,
+        -- UNIT_FLAG_NON_ATTACKABLE|UNIT_FLAG_NOT_SELECTABLE) — the ported
+        -- EVENT_TRANSFORM SetFlag pair's removal; AttackStart rides the
+        -- unbridged attack machine.
+        creature:RemoveFlag(59, 0x02000002)
         -- C++ EVENT_VISIBLE: SetPhase(PHASE_TWO) discards the pending
         -- phase-one timers (shadow word pain / gouge / transform).
         cancelKeys(timers, guid, { "swp", "gouge", "transform" })
@@ -269,14 +274,17 @@ local function onTransform(creature, guid)
     -- 2026-10-22 via creature:SetEquipmentSlots, lua_creature_events.go:451;
     -- ranged slot skipped, C++ never writes it).
     creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
-    -- C++ EVENT_TRANSFORM: ResetThreatList() between the transform and
-    -- vanish casts (bridged lua_creature_events.go); the AttackStop /
-    -- flag arms still have no bridge (the REACT_PASSIVE arm is PORTED
-    -- 2026-10-20 — creature:SetReactState; equipment PORTED above).
+    -- C++ boss_arlokk.cpp:241-245 order: AttackStop -> ResetThreatList ->
+    -- REACT_PASSIVE -> SetFlag(59, NON_ATTACKABLE|NOT_SELECTABLE).
+    creature:AttackStop()
+    -- C++ EVENT_TRANSFORM: ResetThreatList() between the unequip and the
+    -- vanish casts (bridged lua_creature_events.go); the movement arms
+    -- still have no bridge (the REACT_PASSIVE arm is PORTED 2026-10-20 —
+    -- creature:SetReactState; equipment PORTED above; AttackStop/flag
+    -- PORTED 2026-10-22 — bridged lua_creature_events.go:180/:968).
     creature:ClearThreatList()
-    -- C++ boss_arlokk.cpp:245: me->SetReactState(REACT_PASSIVE)
-    -- (EVENT_TRANSFORM: ResetThreatList -> flip).
     creature:SetReactState(0) -- REACT_PASSIVE
+    creature:SetFlag(59, 0x02000002) -- UNIT_FLAG_NON_ATTACKABLE|UNIT_FLAG_NOT_SELECTABLE
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     creature:CastSpell(creature, SPELL_VANISH)
     schedule(timers, guid, "vanish", 1000, function()
