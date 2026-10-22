@@ -388,6 +388,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldMaxPower1 + int(powerType): value})
 		return nil, nil
 	}
+	// AttackStop is Unit::AttackStop (Unit.cpp:5763-5787): when the
+	// creature has a current target it drops the attack — SMSG_ATTACK_STOP
+	// for the (attacker, victim) pair, the visual target
+	// (UNIT_FIELD_TARGET) cleared, and the no-call-assistance flag reset.
+	// Threat, TargetGUID and InCombat are untouched (that teardown is
+	// Unit::CombatStop, Unit.cpp:5809 — no Lua bridge). The
+	// InterruptSpell(CURRENT_MELEE_SPELL) leg is vacuous in Go (melee
+	// swings carry no cast state); the victim-side _removeAttacker leg
+	// rides the packet, matching the evade path's broadcast-only
+	// treatment. No-op when no target is set (the !m_attacking early-out).
+	methods["AttackStop"] = func(ctx context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		target := motion.TargetGUID
+		if target == 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		motion.AlreadyCallAssistance = false
+		s.motionMu.Unlock()
+		stopPkt := buildAttackStop(guid, target, false)
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.clearCreatureVisualTarget(motion)
+		return nil, nil
+	}
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
 	// creature leaves the world immediately — motion removed, a
 	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,
