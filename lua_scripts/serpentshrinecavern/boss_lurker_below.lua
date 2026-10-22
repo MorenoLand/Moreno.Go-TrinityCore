@@ -261,7 +261,7 @@ local function lurkerTick(creature, guid)
         -- submerged (the InterruptNonMeleeSpells arm has no
         -- interrupt bridge — krosh convention).
         if st.phase <= 1000 then
-            creature:CastSpell(nil, SPELL_SUBMERGE)
+            creature:CastSpell(creature, SPELL_SUBMERGE)
             st.phase = 60000
             st.submerged = true
         else
@@ -284,7 +284,7 @@ local function lurkerTick(creature, guid)
         -- Whirl 18s (20s right after a spout): self-cast
         -- 37660, re-arm 18s.
         if st.whirl <= 1000 then
-            creature:CastSpell(nil, SPELL_WHIRL)
+            creature:CastSpell(creature, SPELL_WHIRL)
             st.whirl = 18000
         else
             st.whirl = st.whirl - 1000
@@ -366,7 +366,7 @@ local function lurkerTick(creature, guid)
             creature:RemoveAllAuras()
             -- boss_lurker_below.cpp:351 — SetImmuneToPC(false)
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
-            creature:CastSpell(nil, SPELL_EMERGE, true)
+            creature:CastSpell(creature, SPELL_EMERGE, true)
             st.spawned = false
             st.spout = 3000
             st.phase = 120000
