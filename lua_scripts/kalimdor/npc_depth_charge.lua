@@ -44,6 +44,9 @@ local function onMoveInLOS(event, creature, player)
 end
 
 RegisterCreatureEvent(ENTRY, 27, onMoveInLOS)
+RegisterCreatureEvent(ENTRY, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- zone_azshara.cpp:361: custom UpdateAI never calls DoMeleeAttackIfReady (despawn-timer UpdateAI in C++, never melees)
+end)
 
 -- npc_rizzle_sprysprocket gossip (zone_azshara.cpp) — entry NPC_RIZZLE
 -- 23002 (go_scripts.cpp:268).

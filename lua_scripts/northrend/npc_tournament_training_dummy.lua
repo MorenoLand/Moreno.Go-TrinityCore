@@ -193,6 +193,11 @@ RegisterCreatureEvent(ENTRY_RANGED_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 9, dummyDamageTaken)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 2, dummyLeaveCombat)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 4, dummyLeaveCombat)
+for _, entry in ipairs({ ENTRY_CHARGE_TARGET, ENTRY_MELEE_TARGET, ENTRY_RANGED_TARGET }) do
+    RegisterCreatureEvent(entry, 1, function(_, creature)
+        creature:SetMeleeAttack(false) -- zone_icecrown.cpp:271: custom UpdateAI never calls DoMeleeAttackIfReady (defend/stun machine in C++, never melees)
+    end)
+end
 
 -- C++ npc_tournament_training_dummyAI::MoveInLineOfSight
 -- (zone_icecrown.cpp:313) is an EMPTY override — it suppresses the default

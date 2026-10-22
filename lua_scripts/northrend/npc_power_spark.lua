@@ -32,3 +32,6 @@ local function powerSparkDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_POWER_SPARK, 4, powerSparkDied)
+RegisterCreatureEvent(ENTRY_POWER_SPARK, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_malygos.cpp:1087: custom UpdateAI never calls DoMeleeAttackIfReady (movement-only UpdateAI in C++, never melees)
+end)

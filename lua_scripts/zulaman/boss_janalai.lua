@@ -237,6 +237,9 @@ local function firebombSpellHit(event, creature, caster, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_FIRE_BOMB, 14, firebombSpellHit)
+RegisterCreatureEvent(ENTRY_FIRE_BOMB, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_janalai.cpp:459: empty UpdateAI in C++ (never melees)
+end)
 
 -- C++ npc_janalai_firebombAI::MoveInLineOfSight (boss_janalai.cpp:457) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
@@ -297,3 +300,6 @@ local function eggSpellHit(event, creature, caster, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_EGG, 14, eggSpellHit)
+RegisterCreatureEvent(ENTRY_EGG, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_janalai.cpp:671: empty UpdateAI in C++ (never melees)
+end)

@@ -48,3 +48,6 @@ local function overloadHitBySpell(event, creature, caster, spellid)
 end
 
 RegisterCreatureEvent(ENTRY_ARCANE_OVERLOAD, 14, overloadHitBySpell)
+RegisterCreatureEvent(ENTRY_ARCANE_OVERLOAD, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_malygos.cpp:1462: empty UpdateAI in C++ (never melees)
+end)

@@ -80,6 +80,7 @@ end
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 1,
     function(_, creature)
+        creature:SetMeleeAttack(false) -- boss_vazruden_the_herald.cpp:402: custom UpdateAI never calls DoMeleeAttackIfReady (phase machine in C++, never melees)
         local guid = creature:GetGUID()
         resetHerald(guid)
         local st = freshState()

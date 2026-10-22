@@ -139,3 +139,6 @@ local function onMoveInLOS(event, creature, unit)
 end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 27, onMoveInLOS)
+RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- zone_icecrown.cpp:461: custom UpdateAI never calls DoMeleeAttackIfReady (summon event machine in C++, never melees)
+end)

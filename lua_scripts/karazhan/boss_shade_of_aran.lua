@@ -395,6 +395,7 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 23, aranReset)
 local onWaterbolt
 
 local function elementalEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_shade_of_aran.cpp:536: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(elementalTimers, guid)
     -- C++ water_elementalAI Reset: CastTimer = 2000 + rand32() % 3000

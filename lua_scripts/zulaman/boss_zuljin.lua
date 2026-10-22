@@ -555,3 +555,6 @@ local function vortexSpellHit(event, creature, caster, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_VORTEX, 14, vortexSpellHit)
+RegisterCreatureEvent(ENTRY_VORTEX, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_zuljin.cpp:595: custom UpdateAI never calls DoMeleeAttackIfReady (re-target only in C++, never melees)
+end)

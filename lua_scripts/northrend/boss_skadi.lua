@@ -286,3 +286,6 @@ local function graufJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_GRAUF, 4, graufJustDied)
+RegisterCreatureEvent(ENTRY_GRAUF, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_skadi.cpp:454: custom UpdateAI never calls DoMeleeAttackIfReady (scheduler-only UpdateAI in C++, never melees)
+end)

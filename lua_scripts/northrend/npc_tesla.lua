@@ -39,3 +39,6 @@ local function teslaDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_TESLA, 9, teslaDamageTaken)
+RegisterCreatureEvent(ENTRY_TESLA, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_thaddius.cpp:972: empty UpdateAI in C++ (never melees)
+end)

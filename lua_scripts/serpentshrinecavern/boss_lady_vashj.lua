@@ -447,6 +447,7 @@ local function elementalTick(creature, guid)
 end
 
 local function elementalEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_lady_vashj.cpp:694: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     resetElemental(guid)
     elementalState[guid] = freshElementalState()
@@ -478,3 +479,6 @@ local function shieldGeneratorReset(event, creature)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 RegisterCreatureEvent(ENTRY_SHIELD_GENERATOR_CHANNEL, 23, shieldGeneratorReset)
+RegisterCreatureEvent(ENTRY_SHIELD_GENERATOR_CHANNEL, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_lady_vashj.cpp:864: custom UpdateAI never calls DoMeleeAttackIfReady (barrier-upkeep machine in C++, never melees)
+end)

@@ -379,6 +379,7 @@ end
 -- MoveChase(CAPERNIAN_DISTANCE) arm has no movement bridge
 -- — unmodeled). No melee in C++ (no DoMeleeAttackIfReady).
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_kaelthas.cpp:1109: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelCombatPump(guid)
     combatStates[guid] = {

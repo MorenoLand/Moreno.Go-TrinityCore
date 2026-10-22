@@ -494,6 +494,11 @@ end
 for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
     RegisterCreatureEvent(entry, 23, twilightEggReset)
 end
+for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
+    RegisterCreatureEvent(entry, 1, function(_, creature)
+        creature:SetMeleeAttack(false) -- obsidian_sanctum.cpp:827: custom UpdateAI never calls DoMeleeAttackIfReady (whelp-spawn event machine in C++, never melees)
+    end)
+end
 
 -- C++ npc_flame_tsunami (obsidian_sanctum.cpp:866-916): Reset —
 -- SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,
@@ -557,3 +562,6 @@ local function tsunamiSpawn(event, creature)
     creature:AddAura(SPELL_FLAME_TSUNAMI)
 end
 RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 5, tsunamiSpawn)
+RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- obsidian_sanctum.cpp:882: custom UpdateAI never calls DoMeleeAttackIfReady (aura-upkeep event machine in C++, never melees)
+end)

@@ -259,6 +259,9 @@ RegisterCreatureEvent(NPC_FELMYST, 3, felmystTargetDied)
 RegisterCreatureEvent(NPC_FELMYST, 4, felmystDied)
 RegisterCreatureEvent(NPC_FELMYST, 23, felmystResetState)
 RegisterCreatureEvent(NPC_VAPOR_TRAIL, 5, trailSpawn)
+RegisterCreatureEvent(NPC_VAPOR_TRAIL, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_felmyst.cpp:576: empty UpdateAI in C++ (never melees)
+end)
 
 -- C++ npc_felmyst_trailAI::MoveInLineOfSight (boss_felmyst.cpp:574) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight

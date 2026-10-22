@@ -282,6 +282,7 @@ local function onWardHeal(creature, guid)
 end
 
 local function wardEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_jindo.cpp:199: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "heal", 2000, function()

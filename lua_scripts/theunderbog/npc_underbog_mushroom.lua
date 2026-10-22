@@ -131,3 +131,7 @@ end)
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 23, function(_, creature)
     resetMushroom(creature:GetGUID())
 end)
+
+RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_hungarfen.cpp:156: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
+end)

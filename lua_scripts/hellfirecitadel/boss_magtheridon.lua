@@ -492,3 +492,6 @@ local function roomReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_MAGTHERIDON_ROOM, 23, roomReset)
+RegisterCreatureEvent(ENTRY_MAGTHERIDON_ROOM, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_magtheridon.cpp:454: custom UpdateAI never calls DoMeleeAttackIfReady (scheduler-only UpdateAI in C++, never melees)
+end)

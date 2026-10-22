@@ -480,6 +480,7 @@ local function demonTick(creature, guid)
 end
 
 local function demonEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_leotheras_the_blind.cpp:660: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "Do NOT deal any melee damage to the target")
     local guid = creature:GetGUID()
     resetCreature(demonTimers, demonState, guid)
     demonState[guid] = freshDemonState()

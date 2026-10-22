@@ -46,3 +46,6 @@ local function utherDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_UTHER, 9, utherDamageTaken)
+RegisterCreatureEvent(ENTRY_UTHER, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- halls_of_reflection.cpp:2514: custom UpdateAI never calls DoMeleeAttackIfReady (RP event machine in C++, never melees)
+end)

@@ -694,6 +694,7 @@ local function fiendProximity(creature, guid)
 end
 
 local function fiendEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_kiljaeden.cpp:1105: custom UpdateAI never calls DoMeleeAttackIfReady (explode machine in C++, never melees)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     fiendState[guid] = { armed = false }

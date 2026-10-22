@@ -46,6 +46,7 @@ local function onGreenBeam(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_cthun.cpp:1243: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     timers[guid] = {}

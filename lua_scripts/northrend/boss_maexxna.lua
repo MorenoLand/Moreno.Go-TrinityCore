@@ -174,3 +174,6 @@ local function webWrapJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_WEB_WRAP, 4, webWrapJustDied)
+RegisterCreatureEvent(ENTRY_WEB_WRAP, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_maexxna.cpp:228: custom UpdateAI never calls DoMeleeAttackIfReady (visibility-timer UpdateAI in C++, never melees)
+end)

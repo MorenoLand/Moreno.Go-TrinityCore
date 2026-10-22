@@ -85,6 +85,7 @@ local function onSmite(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetMeleeAttack(false) -- boss_moira_bronzebeard.cpp:62: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "mindblast", 16000, function() onMindBlast(creature, guid) end)

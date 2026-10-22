@@ -229,3 +229,6 @@ local function sparkDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 9, sparkDamageTaken)
+RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_ionar.cpp:344: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "No melee attack at all!")
+end)

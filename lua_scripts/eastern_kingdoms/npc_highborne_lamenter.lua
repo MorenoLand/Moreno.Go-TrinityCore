@@ -102,6 +102,10 @@ RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 2, function(_, creature)
     fullReset(creature:GetGUID())
 end)
 
+RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- zone_undercity.cpp:300: custom UpdateAI never calls DoMeleeAttackIfReady (RP event machine in C++, never melees)
+end)
+
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 4, function(_, creature)
     fullReset(creature:GetGUID())
 end)

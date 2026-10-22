@@ -131,6 +131,7 @@ RegisterCreatureEvent(ENTRY_EMILY, 31, emilyQuestAccept)
 -- `if (Creature* Emily = ...)` (twin-emperors FindNearestCreature
 -- precedent).
 local function mrfloppyEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- zone_grizzly_hills.cpp:245: custom UpdateAI never calls DoMeleeAttackIfReady (victim-check only in C++, never melees)
     local emily = creature:FindNearestCreature(ENTRY_EMILY, 50.0)
     if emily == nil then
         return

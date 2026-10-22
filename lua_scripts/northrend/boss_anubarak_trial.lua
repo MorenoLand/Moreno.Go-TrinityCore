@@ -321,3 +321,6 @@ local function spikeDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_SPIKE, 9, spikeDamageTaken)
+RegisterCreatureEvent(ENTRY_SPIKE, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- boss_anubarak_trial.cpp:734: custom UpdateAI never calls DoMeleeAttackIfReady (chase/self-cast machine in C++, never melees)
+end)

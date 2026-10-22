@@ -270,6 +270,7 @@ local function globuleTick(creature, guid)
 end
 
 local function globuleEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_morogrim_tidewalker.cpp:344: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "do NOT deal any melee damage to the target")
     local guid = creature:GetGUID()
     cancelPump(globuleTimers, guid)
     globuleTimers[guid] = CreateLuaEvent(function()

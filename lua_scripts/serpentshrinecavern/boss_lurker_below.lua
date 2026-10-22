@@ -466,6 +466,7 @@ local function ambusherTick(creature, guid)
 end
 
 local function ambusherEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_lurker_below.cpp:427: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:400 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     resetAmbusher(guid)
