@@ -252,6 +252,7 @@ local function onShockBarrier(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetMeleeAttack(false) -- boss_felblood_kaelthas.cpp:131: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     phaseTwo[guid] = nil

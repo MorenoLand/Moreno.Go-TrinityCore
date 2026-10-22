@@ -209,6 +209,7 @@ end
 -- pull (ragnaros-intro convention). The STAND stand-state arm has
 -- no bridge.
 local function reliquaryEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_reliquary_of_souls.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     reliquaryState[guid] = { phase = PHASE_SUFFERING }

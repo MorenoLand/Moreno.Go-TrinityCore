@@ -488,6 +488,7 @@ end
 -- self-cast seal of blood 41459 one-time (C++ DoCastSelf literal
 -- form = TRIGGERED_NONE); the five cycle arms.
 local function gathiosEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:312: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_SEAL_OF_BLOOD)
@@ -580,6 +581,7 @@ end
 -- REFRESH_DAMPEN), which has no bearer (the dampen-magic
 -- AuraScript has no bridge).
 local function zerevorEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:368: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossState(guid).canUseArcaneExplosion = true
@@ -658,6 +660,7 @@ end
 -- The HealReceived -> shared-rule arm and the DoSpellAttackIfReady
 -- (41471) filler have no bridges — unmodeled.
 local function malandeEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:451: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "malande_circle", 20000, function()
@@ -698,6 +701,7 @@ end
 -- C++ JustEngagedWith + ScheduleEvents: the vanish cycle. The
 -- CanSeeAlways vanish-vision arm has no bridge — unmodeled.
 local function verasEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:511: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "veras_vanish", 18000, function()
