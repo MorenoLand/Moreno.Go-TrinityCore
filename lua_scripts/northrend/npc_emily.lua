@@ -151,20 +151,6 @@ end
 
 RegisterCreatureEvent(ENTRY_MRFLOPPY, 1, mrfloppyEnterCombat)
 
--- npc_lake_frog gossip (zone_grizzly_hills.cpp:777-781) — entry
--- NPC_LAKE_FROG 33211 (zone_grizzly_hills.cpp:658).
-local NPC_LAKE_FROG = 33211
-local SPELL_SUMMON_ASHWOOD_BRAND = 62554
-
--- C++ OnGossipSelect: DoCast(player, SPELL_SUMMON_ASHWOOD_BRAND) with
--- no menuId/gossipListId gate — the Lua port likewise gates on
--- nothing (exact). Non-triggered DoCast, matching UnitAI::DoCast.
-local function lakeFrogGossipSelect(event, player, creature, sender, action)
-    creature:CastSpell(player, SPELL_SUMMON_ASHWOOD_BRAND)
-    -- C++ OnGossipSelect returns false: the AI/native select arms
-    -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
-    -- proceed; true/nothing would veto them).
-    return false
-end
-
-RegisterCreatureGossipEvent(NPC_LAKE_FROG, 2, lakeFrogGossipSelect)
+-- (npc_lake_frog gossip-select for 33211 was a duplicate of the canonical
+-- port in zone_grizzly_hills.lua; removed 2026-10-22 — both handlers fired and
+-- cast SPELL_SUMMON_ASHWOOD_BRAND 62554 twice per gossip select.)

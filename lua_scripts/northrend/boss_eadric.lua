@@ -276,6 +276,10 @@ end
 
 local function eadricReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_eadricAI::Reset (boss_argent_challenge.cpp:305): ungated
+    -- me->RemoveAllAuras(). The paired MemoryGUID RemoveFromWorld leg
+    -- stays out (cross-AI ObjectAccessor, no creature bridge).
+    creature:RemoveAllAuras()
 end
 
 -- C++ boss_eadricAI::DamageTaken (boss_argent_challenge.cpp:192-200)
