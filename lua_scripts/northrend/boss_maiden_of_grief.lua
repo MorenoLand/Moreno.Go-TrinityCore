@@ -142,16 +142,22 @@ end
 -- UpdateAI runs with a victim, so engage-seeding is
 -- behavior-identical (the krystallus precedent).
 -- random alive player in the instance (anyAlivePlayer / vezax
--- precedent); C++ SelectTarget(Random, 1, 0.0f, true) — the offset-1
--- top-threat skip has no threat-list bridge (ioc dagger-throw
--- precedent), so the tank stays in the pool; the else-leg DoCastVictim
--- (:127) becomes the nil-target cast below.
-local function randomPlayerTarget(creature)
+-- precedent); C++ SelectTarget(Random, 1, 0.0f, true) excludes top
+-- threat; the malchezaar randomAlivePlayer idiom emulates the offset-1
+-- skip by excluding the current victim's GUID (no threat-list bridge,
+-- victim is top threat here); the else-leg DoCastVictim (:127) is the
+-- nil-target fallback.
+local function randomPlayerTarget(creature, excludeVictim)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victimGuid = nil
+    if excludeVictim then
+        local victim = creature:GetVictim()
+        victimGuid = victim ~= nil and victim:GetGUID() or nil
+    end
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = plr
         end
     end
@@ -182,7 +188,7 @@ end
 -- non-triggered; init {5s,15s} (:69), unconditional re-arm {5s,25s}
 -- (:128).
 local function pillarTick(creature, guid)
-    local target = randomPlayerTarget(creature)
+    local target = randomPlayerTarget(creature, true)
     if target then
         creature:CastSpell(target, SPELL_PILLAR_OF_WOE)
     else
