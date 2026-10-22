@@ -42,8 +42,9 @@
 -- - Reset (event 23): clears the LowHp latch (C++ Initialize() leg); the
 --   re-mount-if-HadMount, virtual-item-slot clear, and
 --   SetDisplayId(THRALL_MODEL_UNEQUIPPED 17292) legs ride the
---   unported escort machine (display bridge live 2026-10-20;
---   no mount bridge); the Talk SAY_TH_LEAVE_COMBAT (15) leg is
+--   unported escort machine (display bridge live 2026-10-20; Mount bridge live
+--   lua_creature_events.go — the legs ride the unported escort machine); the Talk
+--   SAY_TH_LEAVE_COMBAT (15) leg is
 --   conditioned
 --   on HasEscortState(STATE_ESCORT_ESCORTING) — unmodeled escort state.
 -- Unmodeled (documented-only — display bridge live 2026-10-20,

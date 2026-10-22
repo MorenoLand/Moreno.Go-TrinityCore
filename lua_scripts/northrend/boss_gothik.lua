@@ -173,6 +173,7 @@ end
 -- EVENT_DOORS_UNLOCK / EVENT_PHASE_TWO scheduling legs are unbridged
 -- (summon / phase bridges absent) — documented, not wired.
 local function gothikEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_gothik.cpp:416: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_INTRO_1)
     local guid = creature:GetGUID()
     cancelTimers(guid)

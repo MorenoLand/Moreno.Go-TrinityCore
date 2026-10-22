@@ -110,7 +110,8 @@
 --   tyrannus->AI()->Talk(SAY_TYRANNUS_OUTRO_7/9) legs are instance-driven
 --   Talk on other creatures' AI; the SummonCreature / MovePoint /
 --   MOVEMENTFLAG_FLYING / SPELL_STRANGULATING / SPELL_KRICK_KILL_CREDIT /
---   SetStandState(dead) legs have no bridges.
+--   SetStandState(dead) legs ride the unbridged outro machine (SetStandState
+--   bridge live — the machine keeps them out).
 -- The six SpellScript / AuraScript hooks (spell_krick_explosive_barrage,
 --   spell_ick_explosive_barrage, spell_exploding_orb_hasty_grow,
 --   spell_krick_pursuit + spell_krick_pursuit_AuraScript,

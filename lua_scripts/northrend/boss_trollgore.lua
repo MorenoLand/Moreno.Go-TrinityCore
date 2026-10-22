@@ -83,7 +83,8 @@
 -- kalecgos pass): zero registration. The whole AI is MovementInform(
 -- POINT_MOTION_TYPE, POINT_LANDING) -> me->Dismount() +
 -- SetImmuneToAll(false) + DoCastAOE(SPELL_INVADER_TAUNT 49405) —
--- motion-master bridge absent; dismount/immune-all bridges absent;
+-- motion-master bridge absent; Dismount bridge live (lua_creature_events.go) —
+-- the arm rides the unbridged MovementInform, so it stays out; immune-all bridge absent;
 -- the taunt effect is SpellScript-delivered anyway
 -- (spell_trollgore_invader_taunt). Joins the
 -- entry-verifiable-but-bridge-blocked queue.

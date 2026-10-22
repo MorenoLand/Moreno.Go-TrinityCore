@@ -101,6 +101,7 @@ type creatureMotion struct {
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
+	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / julianne / krosh / flame-leviathan / kalecgos-kj cast-only like C++; zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
@@ -3063,8 +3064,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// band (already gated above) — so a turret never swings.
 		// CasterAI::UpdateAI (CombatAI.cpp:167-186) likewise never calls
 		// DoMeleeAttackIfReady — a CasterAI creature casts only, and never
-		// melee-swings, even in melee range.
-		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" {
+		// melee-swings, even in melee range. motion.NoMeleeAttack covers the
+		// boss-class custom UpdateAIs (muru, twins, gothik, novos, sara,
+		// voice-of-yogg, rimefang, julianne, krosh, flame-leviathan,
+		// kalecgos-kj): Lua CreatureMethods::SetMeleeAttack declares the
+		// C++ omission of the DoMeleeAttackIfReady arm, suppressing the
+		// engine-driven swing with real effect.
+		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" || motion.NoMeleeAttack {
 			return
 		}
 		motion.Moving = false

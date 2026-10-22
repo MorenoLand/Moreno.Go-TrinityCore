@@ -223,6 +223,7 @@ end
 -- tower-condition aggro talk, the shutdown early path and EVENT_SUMMON
 -- are documented-only.
 local function flameLeviathanEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_flame_leviathan.cpp:372: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ boss_flame_leviathan.cpp:278: me->SetReactState(REACT_PASSIVE)

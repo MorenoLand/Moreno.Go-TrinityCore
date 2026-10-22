@@ -226,6 +226,7 @@ end
 -- 10s one-shot triggered 46050 + 46041; 10min one-shot
 -- non-triggered enrage 26662.
 local function muruEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_muru.cpp:320: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_muru.cpp:237 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)

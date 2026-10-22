@@ -650,6 +650,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetMeleeAttack declares that the creature's C++ AI never melee-swings:
+	// boss-class custom UpdateAIs (muru, eredar twins, gothik, novos, sara,
+	// voice-of-yogg, rimefang, julianne, krosh firehand, flame leviathan,
+	// kalecgos-kj) pump the scheduler / cast without the trailing
+	// DoMeleeAttackIfReady arm (UnitAI.cpp:61-83), while the base UpdateAIs
+	// of ScriptedAI (ScriptedCreature.cpp:150), BossAI (:571), SmartAI
+	// (SmartAI.cpp:284), CombatAI (:89), AggressorAI (:43) and ArcherAI
+	// (:219) all end in DoMeleeAttackIfReady. There is no C++ setter to
+	// twin — the behavior is the UpdateAI's omission of the call — so the
+	// Lua twin stores the inverted flag on motion and the engine honors
+	// motion.NoMeleeAttack in the combat-tick swing gate, restoring the
+	// cast-only behavior with real effect. Zero value = swing allowed (the
+	// ScriptedAI/BossAI default). Ports call it at OnEnterCombat (the
+	// ctor-equivalent point, SetCombatMovement precedent); the flag is
+	// structural and persists across the fight.
+	methods["SetMeleeAttack"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetMeleeAttack requires a bool, got no args")
+		}
+		allow, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetMeleeAttack requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.NoMeleeAttack = !allow
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
 	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
 	// Creature::SetDisplayId (Creature.cpp:3210-3218) bounding-radius /

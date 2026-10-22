@@ -189,6 +189,7 @@ local SPELL_INSANE = 63120
 -- the Talk arm is bridgeable; the auriaya engage-port
 -- precedent.
 local function saraEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_yogg_saron.cpp:792: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_SARA_AGGRO)
 end
 
@@ -591,6 +592,7 @@ local SPELL_SPEED_OF_INVENTION = 62671
 -- CastSpellExtraArgs ctor leaves TriggerFlags at TRIGGERED_NONE
 -- (SpellDefines.h:178).
 local function voiceEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_yogg_saron.cpp:539: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_yogg_saron.cpp:452 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)

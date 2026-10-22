@@ -302,6 +302,7 @@ end
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
 local function sacrolashEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "shadowblades", 10000, function()
@@ -418,6 +419,7 @@ end
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
 local function alythessEnterCombat(event, creature)
+    creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     alythessState[guid] = { enraged = false, sisterDeath = false }

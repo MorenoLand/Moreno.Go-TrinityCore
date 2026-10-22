@@ -19,8 +19,9 @@
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
 -- No timers are scheduled: every C++ scheduled arm rides an absent
 -- bridge (see below), so the cancel/schedule machinery has nothing to
--- drive. Melee is engine-driven in Go (creature combat tick), like
--- C++ DoMeleeAttackIfReady. BossAI _Reset/_JustDied instance
+-- drive. Novos never melees in C++ (boss_novos.cpp:140 UpdateAI has
+-- no DoMeleeAttackIfReady arm) — creature:SetMeleeAttack(false) at event 1
+-- suppresses the engine-driven swing. BossAI _Reset/_JustDied instance
 -- bookkeeping has no bridge.
 -- Ported arms (C++-exact for the modeled arms — the three wired
 -- hooks fire unconditionally in C++ and are independent of the
@@ -108,6 +109,7 @@ local SAY_KILL = 1
 local SAY_DEATH = 2
 
 local function novosEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_novos.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_AGGRO)
 end
 

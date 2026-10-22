@@ -629,6 +629,7 @@ local function kroshResetState(guid)
 end
 
 local function kroshEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_high_king_maulgar.cpp:533: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     kroshResetState(guid)
     schedule(guid, "fireball", 1000, function()

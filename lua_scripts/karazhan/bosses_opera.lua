@@ -993,6 +993,7 @@ local function juliannePretendDie(creature, guid)
 end
 
 local function julianneEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- bosses_opera.cpp:1161: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     raj.julianne = creature

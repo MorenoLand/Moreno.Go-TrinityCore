@@ -56,8 +56,9 @@
 --   phase 2 (no MovementInform bridge — kalecgos precedent); phase 2's
 --   SetEquipmentSlots(EQUIP_AXE x2 / EQUIP_MACE) arms fire inside the
 --   same unmodeled phase machine (the bridge exists — see onReset);
---   phase 3's SetStandState(STAND) (no bridge); phase 4's
---   SetCombatMovement(true) + MoveChase (no bridges). JustEngagedWith
+--   phase 3's SetStandState(STAND) (bridge live — phase machine keeps it out);
+--   phase 4's SetCombatMovement(true) (bridged 06:45 — phase machine keeps it out)
+--   + MoveChase (no bridge). JustEngagedWith
 --   is empty in C++ — nothing to port.
 
 local SPELL_TRASH = 3391

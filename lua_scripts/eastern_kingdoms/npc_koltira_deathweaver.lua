@@ -94,7 +94,8 @@
 --   + player->FailQuest(QUEST_BLOODY_BREAKOUT) — no bridges;
 --   dark-rider / death_knight_initiate precedents).
 -- - MovementInform's POINT_ID_6 Mount(NPC_KOLTIRA_MOUNT 25445)
---   arm (no MovementInform / mount bridge).
+--   arm (no MovementInform bridge; Mount bridge live — the arm rides the
+--   unbridged MovementInform, so it stays out).
 -- Documented deviations: _eventGossip is set true only by the
 -- stranded EVENT_INTRO_6, so the OnGossipHello 13425 branch never
 -- fires on the current surface — it is the genuine C++ arm (not a

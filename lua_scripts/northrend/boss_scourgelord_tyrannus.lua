@@ -312,6 +312,7 @@ end
 -- seed (15s) lands on Rimefang's own Eluna event 1 — DoZoneInCombat() (:333)
 -- puts Rimefang in combat at the same moment.
 local function rimefangEnterCombat(event, creature, target)
+    creature:SetMeleeAttack(false) -- boss_scourgelord_tyrannus.cpp:350: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     initState(guid)
     schedule(guid, "icyblast", 15000, function() icyBlastTick(creature, guid) end)
