@@ -198,12 +198,14 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    -- nefarian rule: the C++ UpdateAI GetHealthPct() < _hpct arm reads
-    -- post-damage health every tick and never fires on the killing
-    -- blow, so the event-9 port projects post-damage health (clamped)
-    -- and guards the killing blow.
+    -- C++ boss_skeram.cpp:184 is the FLOAT form: me->GetHealthPct() < _hpct
+    -- (100.f*health/maxHealth), NOT HealthBelowPct's floored CalculatePct
+    -- (Unit.h:872). The 2690b455 floor port deviated up to 1 HP at
+    -- non-divisible thresholds; postDamage*100 < maxHealth*_hpct is the
+    -- integer-exact twin of the float compare. UpdateAI never runs dead,
+    -- so the port guards the killing blow with postDamage > 0.
     local postDamage = math.max(health - damage, 0)
-    if postDamage > 0 and postDamage < math.floor(maxHealth * s.splitHpct / 100) then
+    if postDamage > 0 and postDamage * 100 < maxHealth * s.splitHpct then
         s.splitHpct = s.splitHpct - 25
         creature:Talk(SAY_SPLIT)
         schedule(guid, "blink", 2000, function()
