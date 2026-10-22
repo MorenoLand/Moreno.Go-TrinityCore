@@ -75,15 +75,11 @@
 -- pets/totems — the threat-list pick via GetAITargets carries that
 -- (no Player filter); the UNIT_STATE_CASTING pre-check has no bridge —
 -- casts fire unconditionally on their timers (the hodir precedent);
--- EVENT_DRAW_SHADOWS (teleports every alive
--- non-banished player to VorpilPosition + me->UpdatePosition() —
--- no Teleport/UpdatePosition bridge in engine/scripting/object.go and
--- the teleport IS the mechanic; DoCast(me, SPELL_DRAW_SHADOWS 33563,
--- triggered) + DoCast(me, SPELL_RAIN_OF_FIRE 33617) —
--- H_SPELL_RAIN_OF_FIRE 39363 is a dead constant, no IsHeroic branch
--- exists in this arm — 45s init / 30s cycle; this leg also
--- reschedules EVENT_SHADOWBOLT_VOLLEY at 6s (:198), unreachable while
--- it stays out); EVENT_SUMMON_TRAVELER (spawnVoidTraveler →
+-- EVENT_DRAW_SHADOWS — PORTED as drawShadowsTick (45s init / 30s
+-- cycle; player teleports via player:TeleportNear, boss reposition via
+-- creature:Teleport, triggered draw-shadows + rain-of-fire casts, 6s
+-- volley reschedule — see the port note above JustEngagedWith);
+-- EVENT_SUMMON_TRAVELER (spawnVoidTraveler →
 -- SummonCreature(NPC_VOID_TRAVELER 19226, TEMPSUMMON_CORPSE_TIMED_DESPAWN,
 -- 5s) — no Summon binding; effective first traveler ~5s
 -- (SummonPortals() schedules EVENT_SUMMON_TRAVELER at 5s —
@@ -115,6 +111,11 @@ local SAY_DEATH = 4
 
 local SPELL_SHADOWBOLT_VOLLEY = 33841
 local SPELL_BANISH = 38791
+local SPELL_DRAW_SHADOWS = 33563
+local SPELL_RAIN_OF_FIRE = 33617
+
+-- VorpilPosition (boss_grandmaster_vorpil.cpp:65).
+local VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O = -252.8820, -264.3030, 17.1, 0.0
 
 local timers = {}
 local introSeen = {} -- per-GUID _intro latch (C++ _intro, :159)
@@ -185,6 +186,34 @@ local function banishTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_DRAW_SHADOWS (:187-200): every alive non-banished player
+-- teleports to VorpilPosition (player:TeleportNear — same-map, combat
+-- kept, the TELE_TO_NOT_LEAVE_COMBAT twin); the boss repositions via
+-- creature:Teleport (C++ me->UpdatePosition sends no packet, but Go
+-- clients only learn the reposition from the MSG_MOVE_TELEPORT
+-- broadcast — the draw-shadows visual covers the pop); triggered
+-- self-cast SPELL_DRAW_SHADOWS 33563 + non-triggered
+-- SPELL_RAIN_OF_FIRE 33617 (H_SPELL_RAIN_OF_FIRE 39363 is a dead
+-- constant, no IsHeroic branch exists in this arm);
+-- EVENT_SHADOWBOLT_VOLLEY rescheduled at 6s (:198 — overwrites the
+-- pending volley, EventMap overwrite semantics); 45s init / 30s cycle.
+local function drawShadowsTick(creature, guid)
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:IsAlive() and not plr:HasAura(SPELL_BANISH) then
+            plr:TeleportNear(VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O)
+        end
+    end
+    creature:Teleport(VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O)
+    creature:CastSpell(creature, SPELL_DRAW_SHADOWS, true)
+    creature:CastSpell(creature, SPELL_RAIN_OF_FIRE)
+    schedule(guid, "volley", 6000, function()
+        shadowboltVolleyTick(creature, guid)
+    end)
+    schedule(guid, "shadows", 30000, function()
+        drawShadowsTick(creature, guid)
+    end)
+end
+
 -- C++ boss_grandmaster_vorpilAI::JustEngagedWith:
 -- events.ScheduleEvent(EVENT_SHADOWBOLT_VOLLEY, 7s, 14s);
 -- if (IsHeroic()) events.ScheduleEvent(EVENT_BANISH, 15s);
@@ -194,7 +223,7 @@ end
 -- (event 1; the EVENT_SHADOWBOLT_VOLLEY leg is ported above and the
 -- heroic-only EVENT_BANISH leg is ported as banishTick seeded under
 -- creature:IsHeroic(); the remaining ScheduleEvent legs
--- (draw_shadows / summon_traveler) + SummonPortals() ride the
+-- (summon_traveler) + SummonPortals() ride the
 -- documented-only bridges — see the header).
 local function vorpilEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
@@ -213,6 +242,10 @@ local function vorpilEnterCombat(event, creature, target)
             banishTick(creature, guid)
         end)
     end
+    -- C++ :143: events.ScheduleEvent(EVENT_DRAW_SHADOWS, 45s).
+    schedule(guid, "shadows", 45000, function()
+        drawShadowsTick(creature, guid)
+    end)
 end
 
 local function vorpilLeaveCombat(event, creature)

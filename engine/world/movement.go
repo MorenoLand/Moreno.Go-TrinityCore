@@ -125,6 +125,36 @@ func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
 	}
 }
 
+// broadcastCreatureTeleportMovement pushes a prebuilt MSG_MOVE_TELEPORT
+// payload for a creature (packed GUID + raw movement info, the
+// Unit::SendTeleportPacket shape, Unit.cpp:13348) to every session whose
+// player shares the creature's map/instance and stands within visibility
+// distance of the destination. It is the creature twin of
+// broadcastTeleportMovement, which centers on a player session.
+func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, y float32, payload []byte) {
+	if s == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	distance := s.Config.VisibilityDistanceContinents
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if math.Hypot(float64(target.player.X-x), float64(target.player.Y-y)) > distance {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if err := target.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
+			target.debug("creature teleport movement broadcast failed", "account", target.accountName, "error", err)
+		}
+	}
+}
+
 // nearTeleportMove performs a server-initiated same-map near teleport: it
 // stages the destination for the client's MSG_MOVE_TELEPORT ack (which
 // applies the position, mirroring handleMoveTeleportAck) and pushes the

@@ -436,6 +436,49 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
+	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
+	// SendTeleportPacket (MSG_MOVE_TELEPORT carrying the creature GUID to
+	// nearby players, Unit.cpp:13348) + UpdatePosition (motion X/Y/Z/
+	// Orientation under motionMu). UpdateObjectVisibility has no Go twin —
+	// visibility is evaluated per broadcast from the motion table. The
+	// orientation argument is optional and defaults to the current facing.
+	methods["Teleport"] = func(ctx context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+		m, ok := motions[motion.GUID]
+		if !ok {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		o := m.Orientation
+		if len(args) > 3 {
+			o, err = luaFloat32Arg(args, 3)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		m.X, m.Y, m.Z, m.Orientation = x, y, z, o
+		m.Moving = false
+		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		s.motionMu.Unlock()
+		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby)
+		return nil, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id
