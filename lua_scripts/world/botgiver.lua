@@ -147,7 +147,7 @@ local function onBotGiverHello(event, player, creature)
         SENDER_HIRE, GOSSIP_ACTION_INFO_DEF + 1)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, TEXT_NEVERMIND,
         0, GOSSIP_ACTION_INFO_DEF + 2)
-    player:GossipSendMenu(0, creature, TEXT_GREET)
+    player:GossipSendMenu(TEXT_GREET, creature)
 end
 
 -- C++ OnGossipSelect HIRE arm: too-many-bots whisper at the cap, else
@@ -256,7 +256,7 @@ local function onBotGiverSelect(event, player, creature, sender, action)
     end
     -- sender 0 (exit) falls through with subMenu false == C++ break.
     if subMenu then
-        player:GossipSendMenu(0, creature, textId)
+        player:GossipSendMenu(textId, creature)
     else
         player:GossipComplete()
     end

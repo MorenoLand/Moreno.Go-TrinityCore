@@ -45,7 +45,8 @@
 -- AddGossipItemFor overload (ScriptedGossip.cpp:49-53): hello adds menu
 -- 1947 item 0, select adds menu 1828 item 1 — that overload has no Go
 -- bridge, so icon/message stay the inline approximation (icon 0, chat).
--- The npc_text ids 2601/2605 are C++-exact (SendGossipMenuFor).
+-- The npc_text ids 2601/2605 ride the title slot (packet TitleID,
+-- visualweapon convention) — C++-exact (SendGossipMenuFor).
 -- Ported arms (C++ JustEngagedWith schedule + UpdateAI event machine):
 -- EVENT_IMMOLATE: random-player IMMOLATE 12742 — SelectTarget(Random,
 -- 0, 100.0f, true) playerOnly, ported via the keleseth/beast
@@ -227,7 +228,7 @@ end
 
 local function onGossipHello(event, player, creature)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_CHALLENGE_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(0, creature, MENU_ID_CHALLENGE)
+    player:GossipSendMenu(MENU_ID_CHALLENGE, creature)
 end
 
 local function onGossipSelect(event, player, creature, sender, action)
@@ -237,7 +238,7 @@ local function onGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipClearMenu()
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_CONFIRM_TEXT, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
-        player:GossipSendMenu(0, creature, MENU_ID_CONFIRM)
+        player:GossipSendMenu(MENU_ID_CONFIRM, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipClearMenu()
         player:GossipComplete()

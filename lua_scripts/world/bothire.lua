@@ -251,7 +251,7 @@ local function onBotHireHello(event, player, creature)
         player:GossipMenuAddItem(GOSSIP_ICON_TAXI, option,
             SENDER_HIRE, GOSSIP_ACTION_INFO_DEF + reason)
     end
-    player:GossipSendMenu(0, creature, textId)
+    player:GossipSendMenu(textId, creature)
 end
 
 -- C++ deny-then-hire select path for reason 0: the whisper/emote +

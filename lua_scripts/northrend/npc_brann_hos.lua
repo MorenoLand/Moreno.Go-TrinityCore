@@ -24,7 +24,7 @@ local TEXT_ID_START = 13100
 local function brannGossipHello(event, player, creature)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_START,
         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(0, creature, TEXT_ID_START)
+    player:GossipSendMenu(TEXT_ID_START, creature)
 end
 
 local function brannGossipSelect(event, player, creature, sender, action)

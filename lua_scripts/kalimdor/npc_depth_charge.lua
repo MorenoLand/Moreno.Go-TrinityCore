@@ -65,7 +65,7 @@ local RIZZLE_DESPAWN_DELAY_MS = 3000
 local function rizzleGossipHello(event, player, creature)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_GET_MOONSTONE,
         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(0, creature, GOSSIP_MENU_MOONSTONE)
+    player:GossipSendMenu(GOSSIP_MENU_MOONSTONE, creature)
 end
 
 -- C++ OnGossipSelect (zone_azshara.cpp:164-171): CloseGossipMenuFor +

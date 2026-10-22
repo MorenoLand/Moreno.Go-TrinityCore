@@ -32,8 +32,8 @@
 -- Ported arms (C++ OnGossipHello / OnGossipSelect, nefarian
 -- convention):
 -- OnGossipHello: GossipMenuAddItem(0, "Who are you?", 1, 1000);
---   GossipSendMenu(0, creature, 12498) (C++-exact item text, menu
---   id, sender, action).
+--   GossipSendMenu(12498, creature) (C++-exact npc_text id in the
+--   title slot; item text, sender, action C++-exact).
 -- OnGossipSelect: GossipClearMenu() (C++-exact
 --   ClearGossipMenuFor), then per action:
 --   1000 -> add "What can we do to assist you?" (1, 1001), send
@@ -87,7 +87,7 @@ local GOSSIP_ITEM_KAEL_5 = "What would Kil'jaeden want with a mortal woman?"
 local function onKalecgosGossipHello(event, player, creature)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_KAEL_1,
         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF)
-    player:GossipSendMenu(0, creature, 12498)
+    player:GossipSendMenu(12498, creature)
 end
 
 -- C++ OnGossipSelect: ClearGossipMenuFor, then the five-item
@@ -99,21 +99,21 @@ local function onKalecgosGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_KAEL_2,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-        player:GossipSendMenu(0, creature, 12500)
+        player:GossipSendMenu(12500, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_KAEL_3,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
-        player:GossipSendMenu(0, creature, 12502)
+        player:GossipSendMenu(12502, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_KAEL_4,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3)
-        player:GossipSendMenu(0, creature, 12606)
+        player:GossipSendMenu(12606, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 3 then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_KAEL_5,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4)
-        player:GossipSendMenu(0, creature, 12607)
+        player:GossipSendMenu(12607, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 4 then
-        player:GossipSendMenu(0, creature, 12608)
+        player:GossipSendMenu(12608, creature)
     end
 end
 

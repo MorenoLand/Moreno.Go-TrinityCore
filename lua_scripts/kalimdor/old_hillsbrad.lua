@@ -231,7 +231,7 @@ local GOSSIP_MENU_EPOCH2 = 9613
 local function tarethaGossipHello(event, player, creature)
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_EPOCH1,
         GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(0, creature, GOSSIP_MENU_EPOCH1)
+    player:GossipSendMenu(GOSSIP_MENU_EPOCH1, creature)
 end
 
 -- C++ OnGossipSelect (old_hillsbrad.cpp:597-620): action 1001 ->
@@ -245,7 +245,7 @@ local function tarethaGossipSelect(event, player, creature, sender, action)
         player:GossipClearMenu()
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_EPOCH2,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
-        player:GossipSendMenu(0, creature, GOSSIP_MENU_EPOCH2)
+        player:GossipSendMenu(GOSSIP_MENU_EPOCH2, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipComplete()
     end

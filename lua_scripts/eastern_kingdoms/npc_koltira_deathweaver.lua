@@ -13,7 +13,7 @@
 -- stringified class name (RegisterCreatureAIWithFactory,
 -- ScriptMgr.h:1234 — felblood precedent).
 -- Verifiable numbers (file's own enums): SAY_KOLTIRA_0 = 0 /
--- SAY_KOLTIRA_1 = 1; TEXT_ID_EVENT = 13425 (gossip menu);
+-- SAY_KOLTIRA_1 = 1; TEXT_ID_EVENT = 13425 (npc_text — packet title slot);
 -- QUEST_BLOODY_BREAKOUT = 12727; EVENT_INTRO_0/EVENT_INTRO_1
 -- schedule legs: 500ms then 5s.
 -- Bridges used: creature Talk(textId) (nefarian precedent);
@@ -21,8 +21,8 @@
 -- (quest_details.go -> fireCreatureQuestHook; handler args
 -- (event, player, creature, quest), quest.ID field); OnGossipHello
 -- (RegisterCreatureGossipEvent, event 1 — handler args (event,
--- player, creature)); GossipSendMenu(0, creature, 13425) with the
--- C++-exact menu id (kalecgos convention); CreateLuaEvent /
+-- player, creature)); GossipSendMenu(13425, creature) with the
+-- C++-exact npc_text id in the title slot (visualweapon convention); CreateLuaEvent /
 -- RemoveEventById timers (unworthy_initiate convention); onReset
 -- (23, maiden convention).
 -- Ported arms:
@@ -174,7 +174,7 @@ local function onGossipHello(event, player, creature)
     if not eventGossip[creature:GetGUID()] then
         return false
     end
-    player:GossipSendMenu(0, creature, TEXT_ID_EVENT)
+    player:GossipSendMenu(TEXT_ID_EVENT, creature)
 end
 
 local function onReset(_, creature)
