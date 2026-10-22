@@ -14,6 +14,22 @@
 -- (ITEM_ARCANE_DISRUPTOR) leg (no item-grant bridge), and the GM
 -- instance-control arms (SetData / SetGuidData — no instance
 -- bridge).
+-- Documented-only (nearest-creature axis): npc_hearthsinger_forresten_cot
+-- (entry 30551 — inn cinematic, culling_of_stratholme.cpp:118/153/166):
+-- FindNearestCreature(talkerEntry, 80.0f, true) (:153) and
+-- FindNearestCreature(NPC_BELFAST, 80.0f, true) (:118) both ride
+-- npc_hearthsinger_forresten_cotAI::UpdateAI's EventMap, whose events
+-- are scheduled from MoveInLineOfSight / SetData (:166 is the
+-- unbridged SetGUID hook) — and the :118 arm ends in a cross-creature
+-- DoAction leg. The AI is not registered in boss_ai.go; stays out as
+-- unregistered AI.
+-- Documented-only (nearest-creature axis): npc_malcolm_moore (entry
+-- 27891 — crate event #3 cinematic, culling_of_stratholme.cpp:1042-1081):
+-- the FindNearestCreature(NPC_SCRUFFY, 100.0f, true) arms sit in
+-- npc_malcolm_mooreAI::UpdateAI event cases that only fire from
+-- MovementInform spline-chain events (InitializeAI ->
+-- MoveAlongSplineChain — no movement bridge). The AI is not registered
+-- in boss_ai.go; stays out as unregistered AI.
 
 local ENTRY_CHROMIE_START = 26527
 

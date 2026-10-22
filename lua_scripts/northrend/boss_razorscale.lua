@@ -176,7 +176,19 @@
 -- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
 -- timer-driven; no registration.
 -- go_razorscale_harpoon / go_razorscale_mole_machine —
--- GameObjectScripts — no GO bridge; no registrations.
+-- GameObjectScripts — no registrations; no creature-event
+-- handlers fire for GOs. The harpoon arms stay out: Reset
+-- (boss_razorscale.cpp:1488-1498, FindNearestCreature(
+-- NPC_RAZORSCALE_CONTROLLER, 5.0f) -> controller->AI()->Talk(
+-- EMOTE_HARPOON) + FindNearestGameObject(GO_RAZOR_BROKEN_HARPOON,
+-- 5.0f) -> RemoveFromWorld) and OnGossipHello (:1504-1523,
+-- FindNearestCreature(NPC_RAZORSCALE_CONTROLLER, 5.0f) +
+-- HasUnitState(CASTING) gate + controller->CastSpell(nullptr,
+-- harpoon spell, true)): the GO Lua object (engine/world/
+-- lua_objects.go) has no FindNearestCreature /
+-- FindNearestGameObject, and nothing fires GameObjectEventOnSpawn
+-- (only OnUse / OnAdd / OnRemove / OnGOStateChange + quest hooks
+-- fire — gameobjects.go:1291 is the OnUse/OnGossipHello twin).
 -- spell_razorscale_flame_breath (63317/64021),
 -- spell_razorscale_summon_iron_dwarves (63968/63970/63969),
 -- spell_razorscale_fuse_armor (64821), spell_razorscale_firebolt

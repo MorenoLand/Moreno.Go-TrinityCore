@@ -34,14 +34,16 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 1) (event 1; the
 -- BossAI::JustEngagedWith instance-bookkeeping leg has no
--- bridge — tharon_ja precedent; the drake-vehicle FindNearest-
--- Creature achievement-void legs (NPC_RUBY_DRAKE_VEHICLE 27756 /
+-- bridge — tharon_ja precedent) + the drake-vehicle
+-- FindNearestCreature achievement-void legs
+-- (boss_eregos.cpp:124-128; NPC_RUBY_DRAKE_VEHICLE 27756 /
 -- NPC_EMERALD_DRAKE_VEHICLE 27692 / NPC_AMBER_DRAKE_VEHICLE
 -- 27755, 500.0f) — creature-search IS bridged
--- (lua_creature_events.go:1154) but the legs feed achievement void
--- booleans (no achievement bridge) + instance GetData —
--- documented-only; GetData for the void booleans is consumed by
--- the achievement scripts below, also documented-only).
+-- (lua_creature_events.go:1237); the latches are kept C++-exact
+-- (reseeded true per engage, cleared to false where a vehicle is
+-- found — the bridge returns nil when none), and the
+-- achievement GetData consumers below stay documented-only (no
+-- achievement bridge).
 -- KilledUnit — Talk(SAY_KILL 3) (event 3 — C++-GATED
 -- who->GetTypeId() == TYPEID_PLAYER; the nalorakk / kelthuzad
 -- player-gate variant — tenth ported variant overall, seventh
@@ -137,6 +139,10 @@ local SPELL_ARCANE_BARRAGE = 50804
 local SPELL_ARCANE_VOLLEY = 51153
 local SPELL_ENRAGED_ASSAULT = 51170
 
+local NPC_RUBY_DRAKE_VEHICLE = 27756
+local NPC_EMERALD_DRAKE_VEHICLE = 27692
+local NPC_AMBER_DRAKE_VEHICLE = 27755
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -160,6 +166,15 @@ local function schedule(guid, key, delay, fn)
     end
     per[key] = CreateLuaEvent(fn, delay)
 end
+
+-- C++ boss_eregosAI: the three achievement-void booleans are
+-- latched true on Initialize() and only ever cleared on
+-- JustEngagedWith; the Lua port re-seeds them true at the top of
+-- every OnEnterCombat (Reset always precedes engage), kept
+-- C++-exact in per-GUID tables.
+local voidRuby = {}
+local voidEmerald = {}
+local voidAmber = {}
 
 -- C++ EVENT_ARCANE_BARRAGE (:215-218): DoCastVictim(50804)
 -- non-triggered, 3s/10s init -> 3s/10s loop.
@@ -190,12 +205,25 @@ local function enragedAssaultTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith(who) +
--- Talk(SAY_AGGRO) + drake-vehicle achievement-void legs (no
--- bridges) — the Talk arm is unconditional.
+-- C++ boss_eregos.cpp:111-128 boss_eregosAI::JustEngagedWith:
+-- Talk(SAY_AGGRO) unconditional + the drake-vehicle
+-- FindNearestCreature achievement-void legs (:124-128; bridged —
+-- lua_creature_events.go:1237), ported below.
 local function eregosEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
+    voidRuby[guid] = true
+    voidEmerald[guid] = true
+    voidAmber[guid] = true
+    if creature:FindNearestCreature(NPC_RUBY_DRAKE_VEHICLE, 500) then
+        voidRuby[guid] = false
+    end
+    if creature:FindNearestCreature(NPC_EMERALD_DRAKE_VEHICLE, 500) then
+        voidEmerald[guid] = false
+    end
+    if creature:FindNearestCreature(NPC_AMBER_DRAKE_VEHICLE, 500) then
+        voidAmber[guid] = false
+    end
     cancelTimers(guid)
     schedule(guid, "barrage", {3000, 10000}, function()
         arcaneBarrageTick(creature, guid)

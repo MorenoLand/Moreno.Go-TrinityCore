@@ -64,7 +64,13 @@
 -- DOCUMENTED-ONLY (no registration beyond the 8 entries above):
 -- npc_gunship (the ship itself): JustDied / DamageTaken victory legs,
 -- cross-creature DoAction mage summon (:698), instance machine — no
--- instance bridge (the instance_ulduar precedent).
+-- instance bridge (the instance_ulduar precedent). The :780
+-- FindNearestCreature enemy-ship leg (HORDE ?
+-- NPC_ORGRIMS_HAMMER : NPC_THE_SKYBREAKER, 200.0f ->
+-- SPELL_TELEPORT_PLAYERS_ON_VICTORY + achievement/reputation
+-- cross-creature casts) rides the same instance/transport machine,
+-- and the ship entries have no Lua registration at all —
+-- documented-only.
 -- Captains' intro Talk chains (:989-1009 / :1243-1266) + OnGossipSelect
 -- (:956-967) — intro Talk machine, out. EVENT_KEEP_PLAYER_IN_COMBAT
 -- (instance DoCastSpellOnPlayers — no instance bridge),
@@ -84,6 +90,13 @@
 -- (:1390) PASSIVE, MovementInform EVENT_CHARGE_PREPATH
 -- SetReactState(REACT_AGGRESSIVE) (:604 / :1450) — no SetData /
 -- MovementInform bridges (SetReactState itself IS bridged).
+-- gunship_npc_AI::JustDied (:587-591): Slot-gated
+-- FindNearestCreature captain (HORDE ? 36948 Muradin : 36939
+-- Saurfang, 200.0f) -> captain->AI()->SetData(
+-- ACTION_CLEAR_SLOT, Index) — cross-creature AI SetData has no
+-- bridge, and Slot only ever comes from the unbridged
+-- ACTION_SET_SLOT machine above; none of the 6 derived entries
+-- registers event 4 (OnDied) either — documented-only.
 -- cannon (:1712-1713) PassengerBoarded !apply -> SetControlled
 -- (false) then SetControlled(true) (the "cannon root flags") — no
 -- PassengerBoarded bridge: all stay out.

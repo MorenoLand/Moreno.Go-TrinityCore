@@ -37,6 +37,14 @@
 -- CombatStop + the EVENT_STRAGGLER_1..4 chain) ride the MovePoint
 -- waypoint machine — no movement bridge; the react flips stay out
 -- with the rest of the AI.
+-- Documented-only (nearest-creature axis): npc_amberpine_woodsman
+-- (zone_grizzly_hills.cpp:409-457): Reset's
+-- FindNearestCreature(NPC_TALLHORN_STAG 26363, 0.2f) emote-state gate
+-- (:420 — EMOTE_STATE_USE_STANDING vs. the EVENT_WOODSMAN_1/2
+-- loot/attack emote loop) has a live bridge twin, but the AI is not
+-- registered in boss_ai.go and carries no NPC_ entry constant anywhere
+-- in the C++ tree (DB ScriptName binding only, unverifiable —
+-- wounded-skirmisher precedent); stays out as unregistered AI.
 local ENTRY_LAKE_FROG = 33211
 local ENTRY_LAKE_FROG_QUEST = 33224
 local UNIT_NPC_FLAGS_FIELD = 82

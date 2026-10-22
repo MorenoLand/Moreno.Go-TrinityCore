@@ -75,9 +75,13 @@
 -- the creature lacks aura 38184, non-triggered self-cast
 -- (C++-exact HasAura poll); frost shock 38234 25s then {25s,30s
 -- }, DoCastVictim (C++-exact); spitfire totem 38236 60s then
--- 60s, non-triggered self-cast (the FindNearestCreature(
--- 22091, 100yd) AttackStart relay has no nearest-creature/
--- cross-creature bridge); poison cleansing totem 38306 30s
+-- 60s, non-triggered self-cast (the FindNearestCreature(22091,
+-- 100.0f) leg is bridged — lua_creature_events.go:1237 — but the
+-- arm stays out: the consumer is the cross-creature SpitfireTotem-
+-- >AI()->AttackStart(me->GetVictim()) leg (boss_fathomlord_
+-- karathress.cpp:534-535) and the totem itself is summon-blocked;
+-- stale "no nearest-creature bridge" claim corrected 2026-10-22);
+-- poison cleansing totem 38306 30s
 -- then 30s, non-triggered self-cast; earthbind totem 38304 45s
 -- then 45s, non-triggered self-cast (cast despite the C++
 -- "Spell obsolete" comment — C++-exact). OnDied(4): cleanup
@@ -114,7 +118,7 @@
 -- 38452 / CARIBDIS 38451) unmodeled; no summon bridge — the
 -- sharkkis pet spawns, the caribdis cyclone summon chain and
 -- the Seer Olum quest-10944 summon unmodeled; no movement/
--- threat/nearest-creature bridges — the spitfire-totem target
+-- threat/cross-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
 -- alive non-victim player pick); no raw-yell bridge — the

@@ -69,7 +69,7 @@
 -- bookkeeping in Reset/JustEngagedWith/JustDied and the DATA_
 -- DISTILLER state machine in StartRageGen/DamageTaken/SpellHit
 -- skipped); FindNearestCreature IS bridged
--- (lua_creature_events.go:1154) but no cross-creature bridge — the
+-- (lua_creature_events.go:1237) but no cross-creature bridge — the
 -- rage Talk(SAY_REGEN) + self-cast of SPELL_WARLORDS_RAGE
 -- 37081 + the distiller StartRageGen relay stay unmodeled (timer
 -- bookkeeping only): StartRageGen (RemoveFlag pair + triggered
@@ -149,8 +149,10 @@ local function bossTick(creature, guid)
     -- Warlord's rage 37081: 45s then 3000+rand32()%15000. The
     -- whole fire arm is FindNearestCreature(17954, 100.0f) +
     -- cross-creature gated (Talk(SAY_REGEN) + DoCast(me, 37081)
-    -- + distiller StartRageGen) — no bridges, so timer
-    -- bookkeeping only (C++-exact).
+    -- + distiller StartRageGen) — the gate and boss-side legs are
+    -- bridged but the counterplay leg (distiller StartRageGen) is
+    -- cross-creature blocked and the distiller is unregistered,
+    -- so timer bookkeeping only (C++-exact).
     if st.rage <= 1000 then
         st.rage = 3000 + math.random(0, 14999)
     else

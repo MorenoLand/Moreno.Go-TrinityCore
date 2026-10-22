@@ -34,9 +34,15 @@
 -- SAY_ENTRANCE=4 / SAY_PROTECT_ALTAR=3 / SAY_MINION_DESTROY=2 Talk arms
 -- on trigger IDs 3957/3958/3960, gated on DATA_HAKKAR != DONE and
 -- instance->GetCreature) stays unregistered: the area-trigger bridge
--- exists (RegisterServerEvent 24), but the DATA_HAKKAR instance gate and
--- FindNearestCreature (to reach hakkar 14834 for the Talk) have no
--- bridge — registering it would fire the Talks under wrong gates;
+-- exists (RegisterServerEvent 24), but the arm is doubly
+-- instance-model blocked — the DATA_HAKKAR != DONE gate and the
+-- hakkar resolution itself (boss_hakkar.cpp:186-216 resolves via
+-- instance->GetCreature(DATA_HAKKAR), not via a nearest-creature
+-- search; the stale "no FindNearestCreature bridge" claim named a
+-- consumer that does not exist in the C++). The creature
+-- FindNearestCreature bridge exists (lua_creature_events.go:1237)
+-- but is irrelevant here — registering the trigger would fire
+-- the Talks under wrong gates;
 -- SAY_FLEEING=1 is defined in the C++ enum but never used by the AI —
 -- not modeled.
 

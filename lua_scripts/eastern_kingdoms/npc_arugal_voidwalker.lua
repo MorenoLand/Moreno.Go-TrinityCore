@@ -16,11 +16,12 @@
 -- Verifiable numbers (file's own enums): SPELL_DARK_OFFERING = 7154.
 -- Ported arm (C++ UpdateAI combat machine):
 -- - SPELL_DARK_OFFERING: {200, 1000} init -> {4400, 12500} re-arm.
---   The C++ arm casts on the nearest same-entry creature within 25y
---   and falls back to a self-cast when none is found; there is no
---   FindNearestCreature bridge on the Lua surface (nefarian
---   precedent), so the friend-selection leg is skipped and the
---   self-cast fallback always fires.
+--   The C++ arm casts on the nearest same-entry live creature within
+--   25y (shadowfang_keep.cpp:181 npc_arugal_voidwalkerAI::UpdateAI)
+--   and falls back to a self-cast when none is found;
+--   creature:FindNearestCreature (lua_creature_events.go:1237,
+--   live-only, excludes self) backs the friend-selection leg,
+--   nil -> self-cast fallback.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - JustDied: instance->SetData(TYPE_FENRUS, instance->GetData(
 --   TYPE_FENRUS) + 1) (instance-script model blocked, standing).
@@ -56,7 +57,8 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onDarkOffering(creature, guid)
-    creature:CastSpell(creature, SPELL_DARK_OFFERING)
+    local friend = creature:FindNearestCreature(ENTRY_ARUGAL_VOIDWALKER, 25.0)
+    creature:CastSpell(friend or creature, SPELL_DARK_OFFERING)
     schedule(guid, "darkoffering", math.random(4400, 12500), function() onDarkOffering(creature, guid) end)
 end
 

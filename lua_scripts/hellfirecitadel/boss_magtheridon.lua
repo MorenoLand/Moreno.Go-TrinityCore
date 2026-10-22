@@ -137,12 +137,17 @@
 -- gap); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (jeklik convention, above). go_
 -- manticron_cube (181713) not registered: the GO gossip bridge
 -- exists (RegisterGameObjectGossipEvent) but the cube's only
--- functional arms — the FindNearestCreature(17376, 10yd)
--- trigger cast of 30166 (no nearest-creature bridge) and the
--- player's triggered self-cast of 30410 (no player CastSpell
--- bridge) — are unbridgeable; registering the gossip for the
--- aura gates alone would be a stub (firesworn convention, cf.
--- the karazhan barnes note).
+-- functional arms — the player->FindNearestCreature(17376, 10yd)
+-- trigger cast of 30166 and the player's triggered self-cast of
+-- 30410 (boss_magtheridon.cpp:469-491, go_manticron_cubeAI::
+-- OnGossipHello) — stay unbridgeable: the nearest-creature bridge
+-- exists only on the creature handler surface (lua_creature_events.
+-- go:1237; player->FindNearestCreature has no bridge), player->
+-- CastSpell has no bridge, and the GO AI itself has no registered
+-- handler; registering the gossip for the aura gates alone would
+-- be a stub (firesworn convention, cf. the karazhan barnes note).
+-- Corrected 2026-10-22 (stale "no nearest-creature bridge" claim
+-- retracted — the bridge exists, this arm just can't reach it).
 
 local ENTRY_MAGTHERIDON = 17257
 local ENTRY_CHANNELER = 17256

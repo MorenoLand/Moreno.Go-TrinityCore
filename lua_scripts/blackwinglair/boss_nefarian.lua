@@ -77,9 +77,17 @@
 -- skipped (nefarian fights from where it stands); no SetData
 -- bearer and no path/gameobject bridges — the UBRS-only arms
 -- (EVENT_PATH_2/EVENT_PATH_3 MovePath, EVENT_CHAOS_1/2 gyth-facing
--- 16337, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
--- DespawnOrUnsummon, FindNearestCreature/FindNearestGameObject)
--- are not modeled; the EVENT_SHADOW_BOLT ResetThreatList arm IS
+-- 10339, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
+-- DespawnOrUnsummon, FindNearestGameObject) are not modeled.
+-- FindNearestCreature IS bridged (lua_creature_events.go:1237) — the
+-- stale claim lumped it with FindNearestGameObject — but its two
+-- consuming arms stay out: Reset()'s FindNearestCreature(NPC_
+-- NEFARIAN 11583, 1000.0f, true) gates only the instance _Reset()
+-- bookkeeping call (boss_nefarian.cpp:188, instance-blocked), and
+-- EVENT_CHAOS_1's FindNearestCreature(NPC_GYTH 10339, 75.0f, true)
+-- + SetFacingToObject leg (boss_nefarian.cpp:263-267) is
+-- unreachable — no SetData bearer, no MovePath bridge. FindNearest_
+-- GameObject still has no bridge, so the portcullis arms stay out; the EVENT_SHADOW_BOLT ResetThreatList arm IS
 -- ported (:223 — ClearThreatList bridged, lua_objects.go:389); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
 -- + bone-construct grid despawn) is blocked on the instance-script

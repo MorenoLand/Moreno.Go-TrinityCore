@@ -160,7 +160,15 @@
 -- Talks (SAY_CHAMBER_ROLEPLAY_1-5 / SAY_ICECROWN_ROLEPLAY_1-6 /
 -- SAY_STORMWIND_ROLEPLAY_1-7) fire from IsSummonedBy /
 -- the illusion UpdateAI timer machine on instance
--- DATA_ILLUSION — no bridges; no registrations. (Turned
+-- DATA_ILLUSION — no bridges; no registrations (no RegisterLuaBoss
+-- for 33437 / 33441 / 33442 / 33495 / 33523 / 33535 / 33962;
+-- creature:FindNearestCreature is live (lua_creature_events.go:1237)
+-- but has no handler to attach to). The FindNearestCreature legs
+-- stay out on those grounds: boss_yogg_saron.cpp:1783-1818
+-- (immolated-champion -> Lich King DeathGrasp relay, Lich King /
+-- Llane roleplay Talks) and :1877-1882 (garona FindNearestCreature(
+-- NPC_KING_LLANE, 50.0f) + DoCast(SPELL_ASSASSINATE) +
+-- llane->CastSpell(llane, SPELL_PERMANENT_FEIGN_DEATH)). (Turned
 -- champion's Reset DoCast(SPELL_VERTEX_COLOR_BLACK 39662)
 -- one-shot is PORTED below — event 23 — not roleplay-gated.)
 -- Tentacle / cloud / guardian creatures (33136 / 33292 /
