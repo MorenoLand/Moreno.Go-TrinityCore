@@ -62,7 +62,8 @@
 -- faithful.
 -- PORTED (2026-10-21): EVENT_VILE_GAS (:209-233, first fire from the
 -- gas-spore arm's RescheduleEvent :240) — alive-player pools split by
--- 5.0yd, melee top-up to 10-man minTargets 3 (25-man 8 has no bridge,
+-- reach-adjusted 5.0yd (raw dist minus boss combat reach), melee top-up
+-- to 10-man minTargets 3 (25-man 8 has no bridge,
 -- hodir precedent), 1 random target (25-man 3), DoCast 69240
 -- non-triggered, re-arm {28s,35s} unconditional; GetAITargets +
 -- GetDistance bridges (putricide/moroes precedents).
@@ -260,8 +261,10 @@ end
 -- Random, 0, -5.0f, playerOnly) + SelectTargetList(melee, 25, Random,
 -- 0, 5.0f, playerOnly) — DefaultTargetSelector excludes dist>0
 -- outside-range and dist<0 inside-range (UnitAI.cpp:271-274), so
--- ranged = alive players at distance >= 5.0yd, melee = alive players
--- < 5.0yd; top ranged up from melee to RAID_MODE minTargets(3,8,3,8)
+-- ranged = alive players OUTSIDE IsWithinCombatRange(5.0f) — raw distance
+-- minus the boss's combat reach >= 5.0 (the target's own reach has no
+-- bridge, ~1.5yd C++-only band) — melee = inside; top ranged up from
+-- melee to RAID_MODE minTargets(3,8,3,8)
 -- -> 10-man 3 (no 10/25-man bridge — the hodir icicle precedent;
 -- 25-man 8 documented in header); RandomResize(ranged,
 -- RAID_MODE(1,3,1,3) -> 10-man 1) -> DoCast(target, SPELL_VILE_GAS)
@@ -271,9 +274,16 @@ end
 -- (the putricide slime-puddle precedent).
 local function vileGasTick(creature, guid)
     local ranged, melee = {}, {}
+    -- C++ pool split is on IsWithinCombatRange(target, 5.0f) (Unit.cpp:583-595):
+    -- raw 3D distance < 5.0 + bossReach + playerReach. Lua GetDistance is raw
+    -- center distance (engine/scripting/object.go:285-293), so the boss's own
+    -- reach is subtracted explicitly (the f07d8c52 GetCombatReach bridge
+    -- idiom); the target's own reach has no unit-surface bridge — a ~1.5yd
+    -- C++-only band remains, documented here.
+    local reach = creature:GetCombatReach()
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead() then
-            if creature:GetDistance(unit) >= 5.0 then
+            if creature:GetDistance(unit) - reach >= 5.0 then
                 ranged[#ranged + 1] = unit
             else
                 melee[#melee + 1] = unit
