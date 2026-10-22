@@ -74,8 +74,13 @@
 -- bridge), MovementInform casts (Battle Experience :603,
 -- teleport/experience/melee-targeting :1404-1410, mage
 -- BELOW_ZERO/SHADOW_CHANNELING :1657-1661), TriggerBurningPitch
--- conditional (:653), gunner DoSpellAttackIfReady / cannon root flags /
--- zafod gossip (:1370-1377, no cast arms).
+-- conditional (:653), gunner DoSpellAttackIfReady / zafod gossip
+-- (:1370-1377, no cast arms). MovementInform SetControlled(UNIT_STATE_
+-- ROOT) legs — boarding_add (:1590), rocketeer (:1616), mage (:1667),
+-- all POINT_MOTION_TYPE EVENT_CHARGE_PREPATH — no MovementInform
+-- bridge; cannon (:1712-1713) PassengerBoarded !apply -> SetControlled
+-- (false) then SetControlled(true) (the "cannon root flags") — no
+-- PassengerBoarded bridge: all stay out.
 -- The 17 spell_igb_* SpellScripts join the no-SpellScript-bridge queue;
 -- achievement_im_on_a_boat has no achievement bridge.
 

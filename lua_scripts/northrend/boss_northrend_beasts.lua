@@ -160,7 +160,9 @@
 -- modelStationary/modelMobile) + DoCastSelf(GROUND_VISUAL_1 68302)
 -- (63984's effect is the spell_yogg_saron_hate_to_zero SpellScript —
 -- shazzrah precedent; the rest rides the unbridged submerge-machine
--- legs); EVENT_ENGAGE — DoCloseDoorOrButton(DATA_MAIN_GATE)
+-- legs); SetControlled(true, UNIT_STATE_ROOT) at
+-- boss_northrend_beasts.cpp:779 (Emerge()'s wasMobile leg) rides the
+-- same machine: stays out. EVENT_ENGAGE — DoCloseDoorOrButton(DATA_MAIN_GATE)
 -- + SetImmuneToPC(false) + SetPhase(PHASE_MOBILE) +
 -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (dreadscale, via
 -- MovementInform — no hook; no door / immune / phase / react / zone

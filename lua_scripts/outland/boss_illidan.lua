@@ -116,6 +116,12 @@
 -- summons.DespawnIf instance-GUID) — no bridges.
 -- EVENT_MINIONS_WEAVE (:845-849, SummonMinions() — no summon bridge;
 -- ACTION_START_MINIONS_WEAVE-gated) — no bridges.
+-- SetControlled(ROOT) legs (:464 Reset; :738 DamageTaken 30% demon-exit;
+-- :761 EVENT_CANCEL_DEMON_FORM special-events; :947 EVENT_DEMON demon
+-- machine) all ride unported hooks/machines in this audit record: stay
+-- out — every root arm ports via creature:SetRooted in
+-- blacktemple/boss_illidan.lua (illidanCleanup / 30%-demon branch /
+-- onCancelDemon / onDemon).
 -- boss_illidan_stormrageAI::MovementInform — POINT_THROW_GLAIVE /
 -- POINT_RANDOM_PILLAR / POINT_ILLIDAN_MIDDLE (glaive-returns leg) —
 -- no-motion / no-cast bridges — documented-only.

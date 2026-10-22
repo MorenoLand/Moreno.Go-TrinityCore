@@ -85,7 +85,9 @@
 -- all gated on MotionMaster / instance GUIDs / timed events) —
 -- no DoAction / motion / instance bridges. MovementInform
 -- (POINT_LAND_P_ONE / vortex takeoff-land / cyclic movement
--- points) — no motion bridge. DamageTaken (surge-of-power and
+-- points) — no motion bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
+-- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
+-- MovementInform: stays out. DamageTaken (surge-of-power and
 -- destroy-platform health gates, immune flag flips) — no
 -- health / timer-event bridges. UpdateAI (phase-one arcane
 -- event machine, vortex handling, power-spark handling,

@@ -182,7 +182,13 @@ local function thorimLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_thorimAI::Reset (boss_thorim.cpp:461): me->SetControlled(true,
+-- UNIT_STATE_ROOT) — the balcony-phase root (lifted only by the unported
+-- EVENT_JUMPDOWN). The companion Reset legs (SetReactState(REACT_PASSIVE),
+-- SetDisableGravity(true), SetImmuneToPC(true), the phase machine, mini-boss
+-- respawn, pre-phase-add summons) have no bridges and stay out.
 local function thorimReset(event, creature)
+    creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
 end
 

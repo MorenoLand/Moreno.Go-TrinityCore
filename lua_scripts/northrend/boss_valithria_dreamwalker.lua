@@ -47,7 +47,8 @@
 -- all on unbridged legs:
 -- Talk(SAY_VALITHRIA_SUCCESS 7) rides the HealReceived 100%-heal leg with
 -- the _done flag (no HealReceived bridge; the DoCastSelf/DoCastAOE /
--- instance->SendEncounterUnit / RemoveAuras legs have no bridges);
+-- instance->SendEncounterUnit / RemoveAuras / hasLootRecipient +
+-- SetLootRecipient(healer) legs have no bridges);
 -- Talk(SAY_VALITHRIA_75_PERCENT 2) rides the HealReceived 75%-threshold leg
 -- with the _over75PercentTalkDone flag (no HealReceived bridge);
 -- PORTED (2026-10-13): Talk(SAY_VALITHRIA_25_PERCENT 3) — the

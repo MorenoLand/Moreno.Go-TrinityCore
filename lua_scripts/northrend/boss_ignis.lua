@@ -110,7 +110,9 @@
 -- claim is stale; the real blocker is the spawn: SummonCreature has no
 -- bridge, so the entry never exists in Lua and no event-23 registration is
 -- needed. Reset DoCast(me, SPELL_GROUND 62548) would be bridgeable alone;
--- no Talk arms anywhere.
+-- no Talk arms anywhere. The constructor's SetControlled(true, ROOT) /
+-- UNIT_FLAG_NOT_SELECTABLE / PACIFIED / SetDisplayId(16925) legs
+-- (boss_ignis.cpp:387) ride the same unspawned entry — stay out.
 -- spell_ignis_slag_pot (62717) — periodic-dummy AuraScript
 -- (SPELL_SLAG_POT_DAMAGE 65722 on tick; OnRemove casts SPELL_
 -- SLAG_IMBUED 62836 when target alive) — no AuraScript bridge;
