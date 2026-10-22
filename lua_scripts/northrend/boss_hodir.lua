@@ -104,10 +104,11 @@
 -- DamageTaken lethal instance->SetData(DATA_HODIR_RARE_CACHE,
 -- 1) (line 400) — no instance SetData bridge; joins the
 -- no-SetData-bridge queue.
--- DamageTaken else-leg (lines 421-426:
--- REACT_AGGRESSIVE / DoZoneInCombat / AttackStart) —
--- zone-in / MotionMaster legs, no bridges (unreachable in
--- Go: combat already started on event 1).
+-- DamageTaken else-leg (lines 421-426): the REACT_AGGRESSIVE
+-- arm is PORTED in hodirDamageTaken (!IsInCombat gate; ev9 fires
+-- pre-aggro so the gate is reachable); DoZoneInCombat /
+-- AttackStart(who) have no bridges — the engine converges on the
+-- same tick via triggerCreatureAggro.
 -- gettingColdInHere UpdateAI leg (lines 491-499:
 -- PvE-combat-ref iteration, SPELL_BITING_COLD_TRIGGERED
 -- 62039 aura-stack check, SetData(DATA_GETTING_COLD_IN_HERE))
@@ -116,12 +117,11 @@
 -- ACTION_I_HAVE_THE_COOLEST_FRIENDS /
 -- ACTION_CHEESE_THE_FREEZE) — DoAction-gated achievement
 -- flags, no bridge.
--- Reset — _Reset() + SetReactState REACT_PASSIVE (lines
--- 362-366) + the frozen-helper SummonCreature loop (lines
--- 368-373: FRIENDS_COUNT summons from the Entry /
--- SummonPositions tables, each CastSpell(FrozenHelper,
--- SPELL_SUMMON_FLASH_FREEZE_HELPER 61989, true)) —
--- summon legs, no bridges.
+-- Reset (lines 359-366): _Reset() + SetReactState REACT_PASSIVE
+-- are PORTED in hodirReset (the passive leg is separable from the
+-- frozen-helper SummonCreature loop, lines 368-373 — summon legs,
+-- no bridge); the ctor's SetReactState(REACT_PASSIVE) (line 336)
+-- rides the same ev23 hook (Eluna On_Reset fires at spawn).
 -- npc_hodir_priest / npc_hodir_shaman / npc_hodir_druid /
 -- npc_hodir_mage — adds legs, BLOCKED: EVENT_HEAL
 -- DoCastAOE(SPELL_GREATER_HEAL 62809) (lines 696-698,
@@ -206,6 +206,7 @@ local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
 local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h:125
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
 
 local timers = {}
 
@@ -336,8 +337,12 @@ local function hodirDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (lines 359-366): _Reset() (cancelTimers twin) +
+-- SetReactState(REACT_PASSIVE); the frozen-helper SummonCreature
+-- loop (lines 368-373) stays out — no summon bridge.
 local function hodirReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:SetReactState(REACT_PASSIVE)
 end
 
 -- C++ KilledUnit (lines 389-391): who->GetTypeId() ==
@@ -382,6 +387,15 @@ local function hodirDamageTaken(event, creature, attacker, damage)
         end, 10000)
         cancelTimers(creature:GetGUID())
         return false, 0
+    elseif not creature:IsInCombat() then
+        -- C++ DamageTaken else-leg (lines 421-426): the out-of-combat
+        -- first hit flips REACT_PASSIVE -> REACT_AGGRESSIVE (the ctor/
+        -- Reset passive is what the boss carries until first damage);
+        -- ev9 fires pre-aggro (combat.go), so the !IsInCombat gate is
+        -- reachable here. DoZoneInCombat + AttackStart(who) have no
+        -- bridges — the engine converges on the same tick
+        -- (triggerCreatureAggro starts combat with the attacker).
+        creature:SetReactState(REACT_AGGRESSIVE)
     end
 end
 

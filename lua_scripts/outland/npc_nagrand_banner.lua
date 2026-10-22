@@ -59,8 +59,10 @@
 -- casts nothing, C++-exact), re-arm 20000+rand()%5000.
 -- The interrupt arm (victim UNIT_STATE_CASTING &&
 -- interrupt_cooldown > 25000 -> TRIGGERED DoCastVictim
--- SPELL_COUNTERSPELL 31999) has no victim cast-state
--- bridge — unmodeled (netherspite precedent); the
+-- SPELL_COUNTERSPELL 31999): the victim is a player, so the
+-- cast-state check itself is bridgeable via player IsCasting
+-- (see below — not a no-bridge case); the arm stays
+-- unmodeled pending a port decision. The
 -- DamageTaken flee latch (me->DoFleeToGetAssistance at 15%
 -- — HealthBelowPctDamaged(15)) has no flee bridge —
 -- unmodeled, the latch lands nowhere.
