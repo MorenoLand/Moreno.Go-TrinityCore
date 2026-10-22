@@ -625,6 +625,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetCombatMovement is ScriptedAI::SetCombatMovement
+	// (ScriptedCreature.h:228-233): controls whether MoveChase() is used in
+	// AttackStart — ranged AIs stand and cast instead of chasing the
+	// victim. C++ NOTE: in-combat calls do NOTHING (the flag only affects
+	// AttackStart), and the value is not reset at Reset(). The Lua twin
+	// stores the inverted flag on motion; the engine honors
+	// motion.NoCombatMovement in the combat-tick chase gate
+	// (ChaseMovementGenerator.cpp:98-106), so ctor/Reset-time arms port
+	// with real effect when called at OnEnterCombat (the ctor-equivalent
+	// point — the first chase can only happen after combat starts).
+	// Mid-combat Lua calls apply at the next tick (C++ would wait for the
+	// next AttackStart) — ports only call it pre-combat per the C++ NOTE.
+	methods["SetCombatMovement"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetCombatMovement requires a bool, got no args")
+		}
+		allow, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetCombatMovement requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.NoCombatMovement = !allow
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
 	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
 	// Creature::SetDisplayId (Creature.cpp:3210-3218) bounding-radius /

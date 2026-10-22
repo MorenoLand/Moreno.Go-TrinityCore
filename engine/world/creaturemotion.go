@@ -100,6 +100,7 @@ type creatureMotion struct {
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
+	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
@@ -3013,7 +3014,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// not paused here. The melee swing below still fires while
 				// stunned or rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
 				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
-				if !motion.ScriptRooted && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+				if !motion.ScriptRooted && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
 					// ChaseMovementGenerator re-paths whenever the target moves
 					// (_lastTargetPosition, ChaseMovementGenerator.cpp:157-159):
 					// relaunch the spline when the victim left the launch

@@ -92,8 +92,9 @@
 -- npc_coilfang_ambusher (21865): OnEnterCombat(1): per-GUID
 -- reset (multishot 10000 / shootbow 4000, C++ Initialize()) +
 -- 1s pump (a port of UpdateAI — 1s granularity exact; the C++
--- has no UpdateVictim call in this UpdateAI; SetCombatMovement
--- (false) has no movement bridge — engine melee applies).
+-- has no UpdateVictim call in this UpdateAI; the SetCombatMovement
+-- (false) ctor arm PORTED 2026-10-22 (creature:SetCombatMovement,
+-- lua_creature_events.go — C++ boss_lurker_below.cpp:99).
 -- Pump: multishot fires -> if the victim exists -> DoCastVictim
 -- 37790 triggered (C++-exact), re-arm 10000 + rand32()%10000,
 -- shootbow += 1500 (the GCD arm, C++-exact). Shootbow fires ->
@@ -388,6 +389,7 @@ local function lurkerTick(creature, guid)
 end
 
 local function lurkerEnterCombat(event, creature)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:99 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     resetLurker(guid)
     lurkerState[guid] = freshLurkerState()
@@ -464,6 +466,7 @@ local function ambusherTick(creature, guid)
 end
 
 local function ambusherEnterCombat(event, creature)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:400 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     resetAmbusher(guid)
     ambusherState[guid] = freshAmbusherState()

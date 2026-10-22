@@ -322,6 +322,7 @@ onSubmerge = function(creature, guid)
 end
 
 local function ragnarosEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- BossAI ctor arm, boss_ragnaros.cpp:91 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }

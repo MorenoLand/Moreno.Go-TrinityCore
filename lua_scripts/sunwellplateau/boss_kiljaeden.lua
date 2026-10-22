@@ -549,6 +549,7 @@ end
 -- ================= Kil'jaeden (25315) =================
 
 local function kjEnterCombat(event, creature)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kiljaeden.cpp:525 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     kjState[guid] = newKjState()

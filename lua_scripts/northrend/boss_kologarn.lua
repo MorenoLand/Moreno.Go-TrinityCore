@@ -249,6 +249,7 @@ end
 -- and the BossAI::JustEngagedWith passthrough have no
 -- bridges.
 local function kologarnEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kologarn.cpp:114 (ranged AI stands and casts)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

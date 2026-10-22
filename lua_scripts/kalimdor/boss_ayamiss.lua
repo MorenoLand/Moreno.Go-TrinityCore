@@ -32,8 +32,10 @@
 -- - Ground phase (event 9 damage leg, C++ UpdateAI's per-tick
 --   GetHealthPct() < 70 check): phase AIR -> GROUND, cancel
 --   POISON_STINGER, schedule LASH (5-8s) + TRASH (3-6s). The motion
---   legs (MovePoint to victim, SetCanFly/SetCombatMovement) have no
---   bridge — documented below. ResetThreatList PORTED 2026-10-19
+--   legs (MovePoint to victim, SetCanFly) have no bridge — documented
+--   below; the SetCombatMovement(false) Reset arm PORTED 2026-10-22
+--   (creature:SetCombatMovement, lua_creature_events.go — C++
+--   boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
 --   (creature:ClearThreatList, bridged lua_objects.go:389).
 -- - EVENT_LASH: DoCastVictim 25852, reschedule 8-15s.
 -- - EVENT_TRASH: DoCastVictim 3391 (kurinnaxx convention),
@@ -44,7 +46,7 @@
 -- Unmodeled (documented-only, no bridges):
 -- - Motion: SetCanFly/SetDisableGravity/MovePoint(POINT_AIR) on
 --   engage, MovePoint(POINT_GROUND) at phase change,
---   SetCombatMovement, UNIT_STATE_ROOT via MovementInform — no Lua
+--   UNIT_STATE_ROOT via MovementInform — no Lua
 --   bridge for motion or unit states.
 -- - SummonCreature (NPC_SWARMER 15546, NPC_LARVA 15555): no bridge.
 -- - EVENT_SWARMER_ATTACK's cross-AI AttackStart on swarmers: no
@@ -219,6 +221,7 @@ local function checkFrenzy(creature, guid, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- Reset arm, boss_ayamiss.cpp:98 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ayamissState[guid] = { phase = PHASE_AIR, enraged = false }

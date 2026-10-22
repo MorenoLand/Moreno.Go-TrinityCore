@@ -66,7 +66,9 @@
 -- ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE — no DoAction
 -- bridge), MovementInform (POINT_RAZORSCALE_FLIGHT /
 -- POINT_RAZORSCALE_GROUND / POINT_RAZORSCALE_TAKEOFF /
--- POINT_RAZORSCALE_LAND — no MovementInform bridge),
+-- POINT_RAZORSCALE_LAND — no MovementInform bridge; the ground-phase
+-- SetCombatMovement(true) :646 stays out — in-combat no-op per the
+-- ScriptedAI NOTE, only affects AttackStart),
 -- MoveSplineInit / MovePoint / MoveLand / MoveTakeoff legs — no
 -- MotionMaster / spline bridges; SetPhase(PHASE_AIR /
 -- PHASE_GROUND / PHASE_PERMA_GROUND) gates every other timer arm.
@@ -223,6 +225,7 @@ end
 -- machine) + summons DoAction + HandleMusic — only the
 -- EVENT_BERSERK timer leg is bridgeable.
 local function razorscaleEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- Reset arm, boss_razorscale.cpp:329 (no AttackStart chase in air phase)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ HandleMusic(true) (JustEngagedWith :363) — encounter music on.

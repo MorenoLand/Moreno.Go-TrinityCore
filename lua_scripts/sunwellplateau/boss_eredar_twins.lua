@@ -418,6 +418,7 @@ end
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
 local function alythessEnterCombat(event, creature)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     alythessState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "conflagration", 45000, function()

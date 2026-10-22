@@ -58,8 +58,12 @@
 -- player-cast path (spells.go:9427) fire it (re-audit 2026-10-15:
 -- the 22:34 "trigger live in Go" claim was wrong);
 -- JustEngagedWith EVENT_ATTACK (7s) — SetCombatMovement(true) +
--- MoveChase — no motion bridges;
--- Reset — SetCombatMovement(false) + _Reset() — no bridges;
+-- MoveChase — no motion bridges (in-combat no-op per the ScriptedAI
+-- NOTE: only affects AttackStart, so the Lua twin never calls it
+-- mid-combat);
+-- Reset — SetCombatMovement(false) + _Reset() — PORTED 2026-10-22
+-- (creature:SetCombatMovement, lua_creature_events.go — C++
+-- boss_razuvious.cpp:169);
 -- InitializeAI / JustReachedHome — SummonAdds: SummonCreatureGroup(
 -- SUMMON_GROUP_10MAN 1) + 25-man SUMMON_GROUP_25MAN 2 — no summon
 -- bridge (standing; the old "no difficulty bridge" parenthetical was
@@ -175,6 +179,7 @@ local function shoutTick(creature, guid)
 end
 
 local function razyviousEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- Reset arm, boss_razuvious.cpp:169 (ranged AI stands and casts)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

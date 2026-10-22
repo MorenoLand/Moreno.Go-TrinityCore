@@ -427,7 +427,8 @@ end
 -- SPELL_TENTACLE_VOID_ZONE 64017), DoCast(me, SPELL_DIMINSH_POWER 64148),
 -- DoCast(me, SPELL_FOCUSED_ANGER 57688), DoCastAOE(SPELL_ERUPT 64144) —
 -- ride event 23 (halion Reset one-shot precedent); the SetCombatMovement
--- leg has no bridge.
+-- (false) ctor arm PORTED 2026-10-22 (creature:SetCombatMovement,
+-- lua_creature_events.go — C++ boss_yogg_saron.cpp:452).
 local function crusherReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ npc_crusher_tentacleAI::Reset(): DoCast(me, CRUSH/TENTACLE_VOID_ZONE/
@@ -590,6 +591,7 @@ local SPELL_SPEED_OF_INVENTION = 62671
 -- CastSpellExtraArgs ctor leaves TriggerFlags at TRIGGERED_NONE
 -- (SpellDefines.h:178).
 local function voiceEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_yogg_saron.cpp:452 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ JustEngagedWith: DoCastAOE(SPELL_SUMMON_GUARDIAN_2 62978,

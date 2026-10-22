@@ -104,7 +104,9 @@
 -- documented, not bridged); the IsWithinMeleeRange gate on
 -- orbital strike is approximated with GetDistance <= 5 (no
 -- IsWithinMeleeRange bridge, zuljin precedent); no movement
--- bridge — the SetCombatMovement(false) arm unmodeled; the
+-- bridge — the SetCombatMovement(false) arm PORTED 2026-10-22
+-- (creature:SetCombatMovement, lua_creature_events.go — C++
+-- boss_omor_the_unscarred.cpp:64 ctor); the
 -- H_SPELL_ variants 37566/39297 are unused C++ enum members
 -- (both casts are unconditional); no
 -- SpellScript/AuraScript scripts in this file.
@@ -304,6 +306,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_OMOR, 1, function(_, creature)
+    creature:SetCombatMovement(false) -- BossAI ctor arm, boss_omor_the_unscarred.cpp:64 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()

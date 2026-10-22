@@ -254,6 +254,7 @@ local function murmurReset(event, creature)
 end
 
 local function murmurEnterCombat(event, creature, target)
+    creature:SetCombatMovement(false) -- BossAI ctor arm, boss_murmur.cpp:64 (ranged AI stands and casts)
     scheduleReset(creature)
 end
 
