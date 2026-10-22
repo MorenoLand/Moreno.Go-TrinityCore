@@ -58,11 +58,19 @@
 -- SelectTarget(Random, 0), thespia precedent; nil pick
 -- casts nothing, C++-exact), re-arm 20000+rand()%5000.
 -- The interrupt arm (victim UNIT_STATE_CASTING &&
--- interrupt_cooldown > 25000 -> TRIGGERED DoCastVictim
--- SPELL_COUNTERSPELL 31999): the victim is a player, so the
--- cast-state check itself is bridgeable via player IsCasting
--- (see below — not a no-bridge case); the arm stays
--- unmodeled pending a port decision. The
+-- interrupt_cooldown > 25000 -> non-triggered DoCastVictim
+-- SPELL_COUNTERSPELL 31999; DoCastVictim defaults to
+-- CastSpellExtraArgs{} = non-triggered, UnitAI.h:321):
+-- the victim is a player, so the cast-state check rides the
+-- live player:IsCasting bridge (lua_player.go:648, s.activeCast;
+-- GetVictim returns the player object for player victims, and the
+-- handler-surface IsCasting twin answers false for creature victims
+-- per the halazzi precedent, so the call never nil-calls).
+-- interrupt_cooldown accrues 1000/tick from the 20000 engage latch;
+-- the C++ self-cast early-return (me->HasUnitState(CASTING)) is
+-- vacuous under the fire-and-forget axiom (handler IsCasting is
+-- constant false, lua_creature_events.go:242); C++ arm order kept
+-- (accrual -> interrupt arm -> scheduler arms). The
 -- DamageTaken flee latch (me->DoFleeToGetAssistance at 15%
 -- — HealthBelowPctDamaged(15)) has no flee bridge —
 -- unmodeled, the latch lands nowhere.
@@ -130,6 +138,7 @@ local ENTRY_WARMAUL_SHAMAN         = 18064
 
 local SPELL_ARCANE_MISSILES        = 34447
 local SPELL_CHAINS_OF_ICE          = 22744
+local SPELL_COUNTERSPELL           = 31999
 local SPELL_MIND_SEAR              = 32000
 local SPELL_BLOODTHIRST            = 31996
 local SPELL_GISELDA_TRANSFORM_DND  = 33316
@@ -185,6 +194,20 @@ local function spellbinderTick(creature, guid)
     local st = states[guid]
     if not st then
         return
+    end
+
+    -- Interrupt arm (C++ UpdateAI order: accrual first, then the arm,
+    -- then the scheduler): interrupt_cooldown += diff every tick.
+    st.interrupt = st.interrupt + 1000
+    -- C++ me->HasUnitState(UNIT_STATE_CASTING) early-return is vacuous
+    -- (handler IsCasting constant false). Victim cast-state via the
+    -- player:IsCasting bridge; non-triggered DoCastVictim(31999).
+    if st.interrupt > 25000 then
+        local victim = creature:GetVictim()
+        if victim and victim:IsCasting() then
+            creature:CastSpell(victim, SPELL_COUNTERSPELL)
+            st.interrupt = 0
+        end
     end
 
     -- Arcane missiles arm: 0s init then 2400-3800ms,
@@ -273,6 +296,7 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 1, function(_, creature)
     states[guid] = {
         missiles = 0,
         chains = 3000 + math.random(0, 3000),
+        interrupt = 20000,
     }
     startPump(guid, creature, spellbinderTick)
 end)

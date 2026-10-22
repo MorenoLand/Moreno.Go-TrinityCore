@@ -112,10 +112,11 @@
 -- then {10s,15s}: CastSpell(random alive player, 37531) (C++
 -- SelectTarget(Random, 0) — no player-only gate, teron/krosh
 -- convention; nil pick casts nothing, re-arm regardless —
--- C++-exact). The earthshock arm is unmodeled: the C++ scans
--- every player for a non-null GetCurrentSpell (cast detection)
--- and no cast-Spell bridge exists (standing gap) — a random
--- cast would break the anti-caster intent. The out-of-combat
+-- C++-exact). The earthshock arm is PORTED (2026-10-22): the C++
+-- scans every player for a non-null GetCurrentSpell (cast
+-- detection) — bridged via player:IsCasting (lua_player.go:648) —
+-- and DoCasts 39076 on the first casting player, re-arming
+-- {8s,15s} regardless. The out-of-combat
 -- CastChanneling arm (BANISH_BEAM 38909 on leotheras via the
 -- instance DATA_LEOTHERAS GUID) and the no-event-starter evade
 -- arm are instance/cross-creature blocked (hydross precedent —
@@ -176,14 +177,16 @@
 -- the ConsumingMadness 37749 demon casts and the demon-copy
 -- despawn unmodeled; no interrupt bridge (krosh convention) —
 -- the berserk InterruptNonMeleeSpells and the spellbinder
--- JustEngagedWith interrupt unmodeled; no cast-detection/player-
--- aura bridges — the earthshock caster scan, the whisper
--- AddAura(37676) and the cube-note player-CastSpell gap.
+-- JustEngagedWith interrupt unmodeled; no player-aura bridges —
+-- the whisper AddAura(37676) and the cube-note player-CastSpell
+-- gap (the earthshock caster scan is PORTED above via
+-- player:IsCasting).
 
 local SPELL_WHIRLWIND = 37640
 local SPELL_CHAOS_BLAST = 37674
 local SPELL_BERSERK = 26662
 local SPELL_MINDBLAST = 37531
+local SPELL_EARTHSHOCK = 39076
 local SPELL_SOUL_LINK = 38007
 local SPELL_SHADOWBOLT = 39309
 local SPELL_DEMONIC_ALIGNMENT = 37713
@@ -537,11 +540,24 @@ local function binderTick(creature, guid)
         st.mindblast = st.mindblast - 1000
     end
 
-    -- Earthshock arm: the C++ scans every player for a non-null
-    -- GetCurrentSpell (cast detection) and no cast-Spell bridge
-    -- exists — unmodeled, header. Timer bookkeeping kept so the
-    -- schedule stays C++-shaped if a bridge lands.
+    -- Earthshock arm (boss_leotheras_the_blind.cpp:786-804): the C++
+    -- scans the map player list for the first player with any
+    -- non-null GetCurrentSpell (cast detection) and DoCasts 39076
+    -- on it (non-triggered, UnitAI.h:319 default args), then re-arms
+    -- {8s,15s} regardless. Ported via the live player:IsCasting
+    -- bridge (lua_player.go:648, s.activeCast); the scan rides the
+    -- file's playersInInstance helper (alive, same map+instance —
+    -- a corpse holds no in-flight cast, so the alive filter is
+    -- unobservable vs the C++ no-alive-gate scan; list order is
+    -- the world's, not the map's internal order — first-caster
+    -- pick keeps the anti-caster intent).
     if st.earthshock <= 1000 then
+        for _, p in ipairs(playersInInstance(creature)) do
+            if p:IsCasting() then
+                creature:CastSpell(p, SPELL_EARTHSHOCK)
+                break
+            end
+        end
         st.earthshock = math.random(8000, 15000)
     else
         st.earthshock = st.earthshock - 1000

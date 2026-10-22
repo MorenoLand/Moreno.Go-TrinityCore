@@ -88,7 +88,10 @@
 -- filter bridged via player:GetPowerType() — moroes.lua:294 precedent,
 -- dist>15.0f kept, threat head excluded via victim GUID);
 -- COLUMN_OF_FROST 70704 random-player {10s,20s}/{15s,25s},
--- dist>10.0f (:646-648/:705-721); npc_blazing_skeleton (36791) —
+-- dist>10.0f (:646-648/:705-721); the pre-combat SPELL_CORRUPTION
+-- 70602 self-channel (:695) stays out — gated on _isInitialArchmage,
+-- set only via the unbridged ACTION_SETUP_ARCHMAGES DoAction relay,
+-- and re-cast by the out-of-combat UpdateAI poll (no re-arm twin); npc_blazing_skeleton (36791) —
 -- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
 -- gated (5-yd check, the venoxis precedent); LEY_WASTE 69325
 -- self-cast {15s,20s}/{15s,20s} (:745-749/:760-773).
