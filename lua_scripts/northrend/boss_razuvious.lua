@@ -57,10 +57,14 @@
 -- site — only the creature-cast path (boss_ai.go:1885) and the
 -- player-cast path (spells.go:9427) fire it (re-audit 2026-10-15:
 -- the 22:34 "trigger live in Go" claim was wrong);
--- JustEngagedWith EVENT_ATTACK (7s) — SetCombatMovement(true) +
--- MoveChase — no motion bridges (in-combat no-op per the ScriptedAI
--- NOTE: only affects AttackStart, so the Lua twin never calls it
--- mid-combat);
+-- JustEngagedWith EVENT_ATTACK (7s, one-shot, boss_razuvious.cpp:140-146)
+-- — SetCombatMovement(true) is a mid-combat flag no-op per the
+-- ScriptedAI NOTE, but the paired MoveChase(victim) IS the real
+-- effect: the chase generator persists for the rest of the fight.
+-- PORTED 2026-10-22 as a 7s one-shot Lua timer flipping the per-tick
+-- pursuit gate (lua_creature_events.go) — the same net behavior
+-- (05453b0f dropped this arm, misreading the flag no-op as the
+-- whole arm).
 -- Reset — SetCombatMovement(false) + _Reset() — PORTED 2026-10-22
 -- (creature:SetCombatMovement, lua_creature_events.go — C++
 -- boss_razuvious.cpp:169);
@@ -183,6 +187,14 @@ local function razyviousEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "attack", 7000, function()
+        -- C++ EVENT_ATTACK (7s, one-shot): SetCombatMovement(true) is a
+        -- mid-combat flag no-op, but the paired MoveChase(victim) is the
+        -- real effect — chase persists for the rest of the fight. The
+        -- Lua twin flips the per-tick pursuit gate
+        -- (lua_creature_events.go), the same net behavior.
+        creature:SetCombatMovement(true)
+    end)
     schedule(guid, "strike", 21000, function()
         strikeTick(creature, guid)
     end)
