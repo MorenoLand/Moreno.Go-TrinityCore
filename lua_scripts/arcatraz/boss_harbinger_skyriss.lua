@@ -198,7 +198,7 @@ end
 -- (boss_harbinger_skyriss.cpp:103) — the immune legs ride the bridged
 -- unit-flags surface (SetImmuneToAll = Set/RemoveFlag(UNIT_FIELD_FLAGS
 -- = 59, UNIT_FLAG_IMMUNE_TO_PC 0x100 | UNIT_FLAG_IMMUNE_TO_NPC 0x200;
--- Unit.cpp:8440-8450); ValidateAttackersAndOwnTarget / EndAllCombat are
+-- Unit.cpp:8440-8451); ValidateAttackersAndOwnTarget / EndAllCombat are
 -- engine-combat legs with no Lua bridge). The JustSummoned
 -- summon->SetImmuneToAll(false) arm (:136) stays out — cross-creature,
 -- the illusions are unregistered (see file header).

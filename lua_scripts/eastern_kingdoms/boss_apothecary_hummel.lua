@@ -111,7 +111,7 @@
 local ENTRY_HUMMEL = 36296
 
 -- UnitDefines.h:149/153; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
--- is bridged (engine/world/lua_creature_events.go:690).
+-- is bridged (engine/world/lua_creature_events.go:968).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_UNK_29 = 0x20000000
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000

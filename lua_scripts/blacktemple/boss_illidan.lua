@@ -246,7 +246,7 @@
 local ENTRY_ILLIDAN = 22917
 
 -- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
--- bridged (engine/world/lua_creature_events.go:690).
+-- bridged (engine/world/lua_creature_events.go:968).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local ENTRY_AKAMA = 23089

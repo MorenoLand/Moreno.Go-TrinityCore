@@ -70,6 +70,11 @@ func (s *Server) loadCreatureTexts(ctx context.Context, creatureID uint32) map[u
 		}
 		if scanErr == nil {
 			t.Probability = float32(p)
+			// CreatureTextMgr.cpp:160-163 clamps rows with an out-of-range
+			// TextRange back to TEXT_RANGE_NORMAL at DB load (TEXT_RANGE_WORLD=4).
+			if t.TextRange > 4 {
+				t.TextRange = 0
+			}
 			groups[t.GroupID] = append(groups[t.GroupID], t)
 		}
 	}
@@ -130,10 +135,10 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 	// Non-player whisper targets drop the message, like C++.
 	// The whisper drop applies only when the row's effective range is
 	// TEXT_RANGE_NORMAL: SendChat replaces the passed range with the row's
-	// TextRange (CreatureTextMgr.cpp:253-254; CreatureAI::Talk always passes
+	// TextRange (CreatureTextMgr.cpp:251-252; CreatureAI::Talk always passes
 	// TEXT_RANGE_NORMAL, CreatureAI.cpp:48-51), and both the sound leg
 	// (CreatureTextMgr.cpp:322-331) and the chat leg
-	// (CreatureTextMgrImpl.h:107-117) drop a null/non-player whisper target
+	// (CreatureTextMgrImpl.h:106-115) drop a null/non-player whisper target
 	// only under TEXT_RANGE_NORMAL. A whisper row with AREA/ZONE/MAP/WORLD
 	// range falls through to the range broadcast like any other row.
 	whispered := (chatType == 0x0F || chatType == 0x2A) && chosen.TextRange == 0
