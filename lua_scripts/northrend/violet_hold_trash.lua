@@ -350,7 +350,10 @@ local function trashEnterCombat(event, creature)
         schedule(guid, "whirlwindofsteel", 8000, function() whirlwindOfSteelTick(creature, guid) end)
     elseif entry == ENTRY_SORCEROR_1 then
         schedule(guid, "arcanestream", 4000, function() arcaneStreamTick(creature, guid) end)
-        schedule(guid, "manadetonation", 0, function() manaDetonationTick(creature, guid) end)
+        -- C++ ScheduledTasks: _scheduler.Schedule(0s, ...) = next-tick
+        -- fire; direct fire (CreateLuaEvent rejects delay 0,
+        -- magmus/abomination precedent); re-arms {2s,6s} itself.
+        manaDetonationTick(creature, guid)
     end
     -- _3 variants (31007/31008/31009/31010) and 30665: C++-exact
     -- fall-through — no timer arms, melee only.

@@ -266,12 +266,11 @@ local function maulgarPhaseCheck(creature, guid)
         -- main-hand/off-hand display slots, slot 2 untouched (lua_creature_
         -- events.go SetEquipmentSlots; 0xFFFFFFFF = EQUIP_NO_CHANGE skip).
         creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
-        schedule(guid, "charging", 0, function()
-            maulgarCharging(creature, guid)
-        end)
-        schedule(guid, "roar", 0, function()
-            maulgarRoar(creature, guid)
-        end)
+        -- C++ phase-2 transition: Charging_Timer = 0, Roar_Timer = 0
+        -- (next-tick fire; direct fire — CreateLuaEvent rejects delay 0,
+        -- magmus/abomination precedent); both arms re-arm themselves.
+        maulgarCharging(creature, guid)
+        maulgarRoar(creature, guid)
         return
     end
     schedule(guid, "phasecheck", 1000, function()

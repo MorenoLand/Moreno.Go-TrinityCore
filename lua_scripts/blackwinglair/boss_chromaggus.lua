@@ -235,9 +235,10 @@ local function chromaggusEnterCombat(event, creature, target)
     cancelTimers(guid)
     state(guid).enraged = false
     state(guid).currentVuln = 0
-    schedule(guid, "shimmer", 0, function()
-        onShimmer(creature, guid)
-    end)
+    -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_SHIMMER, 0s) =
+    -- next-tick fire; direct fire (CreateLuaEvent rejects delay 0 —
+    -- magmus/abomination precedent); onShimmer re-arms 45s itself.
+    onShimmer(creature, guid)
     schedule(guid, "breath1", 30000, function()
         onBreath1(creature, guid)
     end)
