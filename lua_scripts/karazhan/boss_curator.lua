@@ -172,11 +172,10 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
     -- C++ DamageTaken reads !HealthAbovePct(15) on current health; the
     -- engine fires event 9 pre-damage, so `health` is already the C++
-    -- value: latch when health < floor(maxHealth*15/100), the integer form
-    -- of !HealthAbovePct(15) (strict <; at exactly floor(max*15/100) the
-    -- C++ does not fire).
+    -- value: latch when health <= floor(maxHealth*15/100), the integer
+    -- form of !HealthAbovePct(15) (C++ fires at exactly the threshold).
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
-    if maxHealth ~= 0 and not st.infused and health < math.floor(maxHealth * 15 / 100) then
+    if maxHealth ~= 0 and not st.infused and health <= math.floor(maxHealth * 15 / 100) then
         st.infused = true
         cancelKey(guid, "astralflare")
         schedule(guid, "infusion", 1, function() onArcaneInfusion(creature) end)
