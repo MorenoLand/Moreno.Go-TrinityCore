@@ -29,8 +29,11 @@
 --   One-shot per stage via the per-guid phaseStage latch.
 -- Deviations from C++: of the phase-transition ability-halt leg
 -- (boss_mr_smite.cpp:141-144), AttackStop IS ported (bridge
--- lua_creature_events.go:180); SetCombatMovement(false) +
--- InterruptNonMeleeSpells(false) have no bridges. SetReactState(
+-- lua_creature_events.go:180); SetCombatMovement(false) has a bridge
+-- (lua_creature_events.go:670) but the mid-combat arm is a C++ no-op
+-- (only AttackStart reads the flag) and porting it would diverge via
+-- the per-tick gate (10:19); InterruptNonMeleeSpells(false) has no
+-- bridge. SetReactState(
 -- REACT_PASSIVE) is deliberately OMITTED, not unbridgeable: its restore
 -- (phase 4's SetReactState(REACT_AGGRESSIVE)) rides the unbridged
 -- MovePoint/kneel/equip/stand chain, so a one-sided passive port would

@@ -232,9 +232,10 @@ end
 -- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
 -- SPELL_KOLOGARN_REDUCE_PARRY 64651) non-triggered, in C++ arm order;
--- SetCombatMovement(false) has no bridge — the root arm alone keeps
--- him stationary (Go's chase-pause NOT_MOVE gate,
--- creaturemotion.go), the documented turret deviation. Go event 5
+-- SetCombatMovement(false) is bridged (lua_creature_events.go:670) and
+-- PORTED in kologarnEnterCombat below (event 1); the root arm (SetRooted,
+-- bridged) would alone keep him stationary (Go's chase-pause NOT_MOVE
+-- gate, creaturemotion.go), the documented turret deviation. Go event 5
 -- fires once per spawn (grid/respawn funnel, creaturemotion.go:713) —
 -- the ctor analog (felmyst trail-spawn precedent).
 local function kologarnSpawn(event, creature)

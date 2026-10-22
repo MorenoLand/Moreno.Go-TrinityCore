@@ -336,7 +336,9 @@ end
 -- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
 -- SetPower(MANA, 0), RemoveAurasDueToSpell(MANA_BARRIER),
 -- CancelGroup(GROUP_ONE), seed GROUP_TWO. Dropped leg: DoStartMovement
--- (no motion bridge). SetPower(MANA, 0) rides the creature:SetPower
+-- (mid-combat SetCombatMovement(true) would diverge — Go gates the flag
+-- per-tick while C++ chases only on the next AttackStart; 10:19 rule).
+-- SetPower(MANA, 0) rides the creature:SetPower
 -- bridge (lua_creature_events.go), C++ order (drain, zero, strip aura).
 -- FIDELITY CAVEAT: the mana_barrier AuraScript is unbridged, so in Go
 -- mana never drains and damage > mana fires only on a single hit
@@ -378,7 +380,8 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         creature:RemoveAura(SPELL_MANA_BARRIER)
         -- C++ DamageTaken phase-2: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no threat bridge" header claim was
-        -- stale). DoStartMovement has no motion bridge.
+        -- stale). DoStartMovement stays out (mid-combat true-leg diverges
+        -- via the per-tick gate; 10:19 setcombatmovement rule).
         creature:ClearThreatList()
         -- C++ CancelGroup(GROUP_ONE) (:419): the shadowbolt arm dies at
         -- the phase transition; deathanddecay is phase-independent and
@@ -426,6 +429,11 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
     creature:Talk(SAY_AGGRO)
+    -- C++ :338 DoStartNoMovement(who) — engage-stationary; phase-1 exact.
+    -- The phase-2 DoStartMovement leg stays out: mid-combat
+    -- SetCombatMovement(true) would diverge (Go gates the flag per-tick,
+    -- C++ only chases on the next AttackStart), 10:19 setcombatmovement rule.
+    creature:SetCombatMovement(false)
     -- C++ :339 — the channeling aura is stripped on engage (re-cast on
     -- Reset, :226; the RemoveAura bridge).
     creature:RemoveAura(SPELL_SHADOW_CHANNELING)

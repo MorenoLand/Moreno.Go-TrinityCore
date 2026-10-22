@@ -36,9 +36,10 @@
 -- who->GetTypeId() == TYPEID_PLAYER — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
 -- bookkeeping has no bridge).
+-- AttackStart — DoStartNoMovement (novos never moves) — PORTED
+-- 2026-10-22 via creature:SetCombatMovement(false) at OnEnterCombat
+-- (lua_creature_events.go:670; per-tick gate holds all fight).
 -- Unmodeled (no bridges — documented, not wired):
--- AttackStart — DoStartNoMovement melee-without-movement model —
--- no movement bridge; Go melee stays engine-driven.
 -- Reset's SetCrystalsStatus(false) / SetSummonerStatus(false) /
 -- SetBubbled(false) legs — instance GetGuidData + ObjectAccessor
 -- cross-AI bridges absent; instance model absent (standing).
@@ -110,6 +111,10 @@ local SAY_DEATH = 2
 
 local function novosEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_novos.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
+    -- boss_novos.cpp:124-125 AttackStart — DoStartNoMovement on every
+    -- AttackStart (novos never moves); modeled engage-time via the
+    -- SetCombatMovement bridge (per-tick gate — flag stays false all fight).
+    creature:SetCombatMovement(false)
     creature:Talk(SAY_AGGRO)
 end
 

@@ -48,7 +48,10 @@
 -- ride the unbridged EVENT_SHIFT leg (vortex precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_thaddius: InitializeAI SetPhase(PHASE_NOT_ENGAGED) +
--- SetCombatMovement(false) — no phase / combat-movement bridges;
+-- SetCombatMovement(false) — SetPhase has no bridge; the combat-movement
+-- bridge EXISTS (lua_creature_events.go:670) but the arm stays out per the
+-- 10:19 triage: pre-transition Thaddius never engages and the whole phase
+-- machine is unported;
 -- Reset() — empty in C++; EnterEvadeMode — ballLightningEnabled /
 -- PHASE_TRANSITION/PHASE_THADDIUS legs + BeginResetEncounter — no
 -- phase / instance bridges; CanAIAttack — the

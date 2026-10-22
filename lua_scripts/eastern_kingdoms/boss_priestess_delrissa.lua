@@ -96,8 +96,10 @@
 --   the C++ — the enum entry is never referenced (SD "No Heroic
 --   support yet"), so the "dropped (no difficulty bridge)" claim was
 --   stale and is retracted.
--- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) — no
---   evade/home bridge on the Lua surface (the_beast evade precedent).
+-- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) —
+--   GetHomePosition IS bridged (lua_objects.go:350) but EnterEvadeMode
+--   has no bridge (boss_ai.go:5753-5754 explicit) — the check stays out
+--   (the_beast evade precedent).
 -- - The eight lackey CreatureScript classes + commented-out
 --   npc_high_explosive_sheep: each lackey inherits
 --   boss_priestess_lackey_commonAI (AcquireGUIDs / threat-reset timer
