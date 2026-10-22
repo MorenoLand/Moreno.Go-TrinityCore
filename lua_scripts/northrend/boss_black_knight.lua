@@ -54,7 +54,14 @@
 -- machine (4s one-shot: SetFullHealth + triggered DoCastSelf(Black
 -- Knight Res 67693) + phase advance + root clear). The stale "no
 -- DamageTaken hook / no display bridge" note is retracted (event 9
--- fires pre-damage; SetDisplayId/SetRooted bridged). The bEventInProgress
+-- fires pre-damage; SetDisplayId/SetRooted bridged). The UpdateAI
+-- !HasUnitState(ROOT) && !HealthBelowPct(1) melee gate
+-- (boss_black_knight.cpp:264) suppresses the swing for the whole
+-- fake-death window; Go's engine tick swings while rooted
+-- (creaturemotion.go:3016-3017: DoMeleeAttackIfReady gates CASTING
+-- only), so SetMeleeAttack(false) rides the fake-death arm and
+-- SetMeleeAttack(true) rides the resurrect + evade/reset restores.
+-- The bEventInProgress
 -- latch is modeled as the Lua-side resurrecting flag so repeat
 -- lethal hits in the fake-death window re-run the idempotent legs
 -- without re-arming the timer (C++ never re-arms uiResurrectTimer
@@ -214,6 +221,7 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
     if st.phase <= PHASE_SKELETON and damage > creature:GetHealth() then
         creature:SetHealth(0)
         creature:SetRooted(true)
+        creature:SetMeleeAttack(false)
         if st.phase == PHASE_UNDEAD then
             creature:SetDisplayId(MODEL_SKELETON)
         else
@@ -227,6 +235,7 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                 st.phase = st.phase + 1
                 st.resurrecting = false
                 creature:SetRooted(false)
+                creature:SetMeleeAttack(true)
             end)
         end
         return false, 0
@@ -237,6 +246,7 @@ local function blackKnightLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bkState[guid] = nil
+    creature:SetMeleeAttack(true)
 end
 
 -- C++ JustDied: DoCastSelf(Kill Credit 68663) (the
@@ -253,6 +263,7 @@ local function blackKnightReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bkState[guid] = nil
+    creature:SetMeleeAttack(true)
     -- C++ Reset: SetDisplayId(GetNativeDisplayId()) — no native-display
     -- bridge, so the tharon_ja idiom: the display captured at first
     -- combat is restored (an evade mid-fake-death would otherwise leave
