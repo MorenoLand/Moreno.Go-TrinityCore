@@ -71,8 +71,9 @@
 -- SelectTarget(Random, 0, 100, true) -> DoCast(Death's Respite 67745),
 -- urand(15000,16000) — random-target SelectTarget bridge absent
 -- (cairne/kazzak precedent).
--- boss_black_knight PHASE_SKELETON legs — phase never arrives (the
--- DamageTaken-driven machine is unbridged): bSummonArmy one-shot
+-- boss_black_knight PHASE_SKELETON legs — phase now arrives via the
+-- ported DamageTaken/resurrect machine; the legs stay out: bSummonArmy
+-- one-shot
 -- AddUnitState(ROOT | STUNNED) + DoCastSelf(Army of the Dead 67761)
 -- (no unit-state bridge — only UNIT_STATE_CASTING has the constant-false IsCasting twin; ROOT|STUNNED have none) + uiDeathArmyCheckTimer's ClearUnitState;
 -- uiDesecration — SelectTarget(Random, 0, 100, true) ->
@@ -80,10 +81,10 @@
 -- absent); uiGhoulExplodeTimer — DoCastSelf(Ghoul Explode 67751),
 -- 8000 repeat (self-cast bridged in isolation, but phase-gated —
 -- jedoga bar).
--- boss_black_knight PHASE_GHOST legs — phase never arrives:
+-- boss_black_knight PHASE_GHOST legs — phase now arrives via the
+-- ported resurrect machine; the legs stay out:
 -- uiDeathBiteTimer — DoCastAOE(Death's Bite 67808),
--- urand(2000,4000) — stays out: PHASE_GHOST-gated behind the
--- unbridged DamageTaken resurrect machine (gothik precedent);
+-- urand(2000,4000) — stays out: PHASE_GHOST-gated (gothik precedent);
 -- uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
 -- -> DoCast(Marked for Death 67882), urand(5000,7000) — random-target
 -- bridge absent.
@@ -146,11 +147,30 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local bkState = {}
+local nativeDisplay = {}
+
+local function getBlackKnightState(guid)
+    local st = bkState[guid]
+    if not st then
+        st = { phase = PHASE_UNDEAD, resurrecting = false }
+        bkState[guid] = st
+    end
+    return st
+end
+
 -- C++ uiIcyTouchTimer: DoCastVictim(Icy Touch), urand(5000,9000) init,
--- urand(5000,7000) repeat; independent of the unbridged DamageTaken /
--- phase machine (fires identically in PHASE_UNDEAD and PHASE_SKELETON).
+-- urand(5000,7000) repeat; independent of the DamageTaken / phase
+-- machine (fires identically in PHASE_UNDEAD and PHASE_SKELETON).
+-- C++-exact: the phase timers keep running through the 4s fake-death
+-- window (UpdateAI never early-returns on bEventInProgress), but each cast
+-- attempt fails on UNIT_STATE_STUNNED (Spell::CheckCast); the STUNNED half
+-- has no bridge, so the resurrecting latch gates the cast while the re-arm
+-- continues.
 local function icyTouchTick(creature, guid)
-    creature:CastSpell(nil, SPELL_ICY_TOUCH)
+    if not getBlackKnightState(guid).resurrecting then
+        creature:CastSpell(nil, SPELL_ICY_TOUCH)
+    end
     local next = math.random(5000, 7000)
     schedule(guid, "icy_touch", next, function()
         icyTouchTick(creature, guid)
@@ -161,8 +181,15 @@ end
 -- names the timer Plague Strike but casts Icy Touch (apparent C++
 -- bug); replicated C++-exact. urand(10000,13000) init,
 -- urand(12000,15000) repeat.
+-- C++-exact: the phase timers keep running through the 4s fake-death
+-- window (UpdateAI never early-returns on bEventInProgress), but each cast
+-- attempt fails on UNIT_STATE_STUNNED (Spell::CheckCast); the STUNNED half
+-- has no bridge, so the resurrecting latch gates the cast while the re-arm
+-- continues.
 local function plagueStrikeTick(creature, guid)
-    creature:CastSpell(nil, SPELL_ICY_TOUCH)
+    if not getBlackKnightState(guid).resurrecting then
+        creature:CastSpell(nil, SPELL_ICY_TOUCH)
+    end
     local next = math.random(12000, 15000)
     schedule(guid, "plague_strike", next, function()
         plagueStrikeTick(creature, guid)
@@ -171,16 +198,20 @@ end
 
 -- C++ uiObliterateTimer: DoCastVictim(Obliterate), urand(17000,19000)
 -- init, urand(17000,19000) repeat.
+-- C++-exact: the phase timers keep running through the 4s fake-death
+-- window (UpdateAI never early-returns on bEventInProgress), but each cast
+-- attempt fails on UNIT_STATE_STUNNED (Spell::CheckCast); the STUNNED half
+-- has no bridge, so the resurrecting latch gates the cast while the re-arm
+-- continues.
 local function obliterateTick(creature, guid)
-    creature:CastSpell(nil, SPELL_OBLITERATE)
+    if not getBlackKnightState(guid).resurrecting then
+        creature:CastSpell(nil, SPELL_OBLITERATE)
+    end
     local next = math.random(17000, 19000)
     schedule(guid, "obliterate", next, function()
         obliterateTick(creature, guid)
     end)
 end
-
-local bkState = {}
-local nativeDisplay = {}
 
 local function blackKnightEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
@@ -197,15 +228,6 @@ local function blackKnightEnterCombat(event, creature, target)
     schedule(guid, "obliterate", math.random(17000, 19000), function()
         obliterateTick(creature, guid)
     end)
-end
-
-local function getBlackKnightState(guid)
-    local st = bkState[guid]
-    if not st then
-        st = { phase = PHASE_UNDEAD, resurrecting = false }
-        bkState[guid] = st
-    end
-    return st
 end
 
 -- C++ boss_black_knight::DamageTaken (boss_black_knight.cpp:268-290)
