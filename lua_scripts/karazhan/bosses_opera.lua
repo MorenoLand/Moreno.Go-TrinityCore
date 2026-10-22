@@ -993,7 +993,12 @@ local function juliannePretendDie(creature, guid)
 end
 
 local function julianneEnterCombat(event, creature, target)
-    creature:SetMeleeAttack(false) -- bosses_opera.cpp:1161: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
+    -- NO SetMeleeAttack: boss_julianneAI::UpdateAI (bosses_opera.cpp:1368, out-of-line
+    -- definition — the :1161 line is a body-less declaration) ENDS with
+    -- DoMeleeAttackIfReady(); julianne swings in C++. A 2026-10-22 port added
+    -- SetMeleeAttack(false) citing the declaration; removed — it suppressed a real
+    -- C++ swing (romulo's UpdateAI also swings; neither gets the no-melee flag).
+    local guid = creature:GetGUID()
     local guid = creature:GetGUID()
     cancelTimers(guid)
     raj.julianne = creature
