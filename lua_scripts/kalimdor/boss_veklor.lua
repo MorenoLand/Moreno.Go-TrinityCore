@@ -66,6 +66,13 @@
 local ENTRY = 15276
 local ENTRY_VEKNILASH = 15275 -- temple_of_ahnqiraj.h:75
 
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79);
+-- UNIT_DYNFLAG_LOOTABLE (SharedDefines.h:3128); the field-79 flag bridge
+-- is live (lua_creature_events.go; opera + eredar-twins precedents) —
+-- the old "no bridge" claim on the mirror-kill leg is retracted 2026-10-22.
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
 local SPELL_SHADOWBOLT = 26006
 local SPELL_BLIZZARD = 26607
 local SPELL_BERSERK = 26662
@@ -228,9 +235,12 @@ end
 -- the struck twin mirrors a health-proportional share of the hit onto
 -- the other twin (dPercent from own max health, odmg from the twin's max
 -- health, (int) truncation); fires on every hit incl. the killing blow,
--- so no postDamage guard. The setDeathState(JUST_DIED) +
--- UNIT_DYNFLAG_LOOTABLE legs on the 0-hp twin have no bridge
--- (engine-side death handling) and stay out.
+-- so no postDamage guard. The setDeathState(JUST_DIED) leg has no
+-- bridge (engine-side death handling) and stays out; the
+-- UNIT_DYNFLAG_LOOTABLE leg on the mirror-killed twin PORTS via
+-- other:SetFlag(79, 0x0001) (field 79 honored, lua_creature_events.go;
+-- opera + eredar-twins precedents) — old "no bridge" claim retracted
+-- 2026-10-22.
 local function onDamageTaken(event, creature, attacker, damage)
     local other = creature:FindNearestCreature(ENTRY_VEKNILASH, 150.0)
     if other == nil then
@@ -242,10 +252,16 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
     local odmg = math.floor(damage / maxHealth * other:GetMaxHealth())
     local ohealth = other:GetHealth() - odmg
+    local mirrorKilled = ohealth <= 0 -- unclamped, C++ :122
     if ohealth < 0 then
         ohealth = 0
     end
     other:SetHealth(ohealth)
+    -- C++ boss_twinemperors.cpp:124-128: the mirror-killed twin gets
+    -- UNIT_DYNFLAG_LOOTABLE (the setDeathState leg has no bridge).
+    if mirrorKilled then
+        other:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
