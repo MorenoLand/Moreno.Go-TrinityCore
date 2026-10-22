@@ -24,7 +24,8 @@
 -- machine needs an EscortAI + instance bridge and has none — see below):
 -- - npc_giant_infernal: Immolation 37059 self-cast once on the first combat
 --   tick (C++ imol flag, non-triggered); Flame Buffet 31724 on victim init
---   2s -> repeat 7s, triggered in C++ (DoCastVictim(..., true)).
+--   2s -> repeat 7s, triggered in C++ (DoCastVictim(..., true)); both gated
+--   on the meteor choreography's CanMove latch (hyjal_trash.cpp:503).
 -- - npc_abomination: Disease Cloud 31607 self-cast refresh — C++ re-casts
 --   whenever the aura is missing (no timer; modeled as a 1s poll, jeklik
 --   convention), non-triggered; Knockdown 31610 on victim init 10s ->
@@ -69,16 +70,21 @@
 --   isolation via a per-GUID event-9 accumulator + creature:IsWorldBoss())
 --   never fires for the registered trash entries (none carries the
 --   BOSS_MOB type flag), so it would be inert code.
--- - npc_giant_infernal: the meteor spawn choreography (MODEL_INVIS 11686,
---   UNIT_FLAG_NOT_SELECTABLE / NON_ATTACKABLE flags, Delay, world-trigger
---   21987 summon + SPELL_METEOR 33814 visual) — flag set/clear is bridged
---   but the meteor clear leg rides the unported summon/movement/model
---   machine (set-without-clear hazard); model swap and summon have no
---   bridges (maiden/jeklik precedent); the IsEvent waypoint
---   leg (HordeWPs[7] in front of Thrall) — no escort bridge. Timing: C++
---   runs the infernal arms only after the meteor leg sets CanMove
---   (hyjal_trash.cpp:503); here they arm at combat-enter, the unmodeled
---   choreography's practical equivalent.
+-- - npc_giant_infernal: the meteor spawn choreography PORTED
+--   (hyjal_trash.cpp:418-530): spawn captures the native display, sets
+--   UNIT_FLAG_NOT_SELECTABLE + MODEL_INVIS 11686 (Delay = rand32()%30000,
+--   1ms floor — CreateLuaEvent rejects 0, magmus precedent); after Delay
+--   the SPELL_METEOR 33814 visual fires as a triggered self-cast (the
+--   world-trigger 21987 summon has no summon bridge — the cast is the
+--   DoCast(me, spell, true) twin); 2000ms later the reveal clears
+--   NOT_SELECTABLE and restores the native display (the RestoreDisplayId
+--   idiom: SetDisplayId(GetDisplayId-at-spawn)), setting CanMove. The
+--   ctor's RemoveFlag(NON_ATTACKABLE) is a no-op here (no escort machine
+--   ever sets it); the MotionMaster()->Clear() and instance thrall-threat
+--   legs (GetData/GetGuidData) have no bridges — skipped. The IsEvent
+--   waypoint leg (HordeWPs[7] in front of Thrall) — no escort bridge.
+--   Evade keeps the Delay/meteor machine running (C++ Reset only re-inits
+--   spawnTimer/FlameBuffetTimer/imol — the reveal re-arms at 2000ms).
 -- - npc_frost_wyrm: Reset SetDisableGravity(true), the chase/StopMoving/
 --   Clear movement legs, JustDied ground-position despawn visuals —
 --   no bridges.
@@ -245,41 +251,140 @@ local function onRefresh(creature, guid, name, idx)
     end)
 end
 
-local function onEnterCombat(name)
-    return function(event, creature, target)
-        local guid = creature:GetGUID()
-        cancelTimers(guid)
-        for i, spec in ipairs(SPELLS[name]) do
-            local n, id = name, i
-            if spec.once then
-                local t = resolveTarget(creature, spec)
-                if t then
-                    creature:CastSpell(t, spec.spell)
-                end
-            elseif spec.refresh then
-                schedule(guid, "spell" .. i, 0, function()
-                    onRefresh(creature, guid, n, id)
-                end)
-            else
-                schedule(guid, "spell" .. i, math.random(spec.lo, spec.hi),
-                    function()
-                        onSpell(creature, guid, n, id)
-                    end)
+-- npc_giant_infernal meteor spawn choreography (hyjal_trash.cpp:418-530).
+local MODEL_INVIS = 11686
+local SPELL_METEOR = 33814
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+local infernalState = {}
+
+local function cancelInfernalCombat(guid)
+    local per = timers[guid]
+    if per then
+        for key, id in pairs(per) do
+            if key:match("^spell") then
+                RemoveEventById(id)
+                per[key] = nil
             end
         end
     end
 end
 
+local function armCombatSpells(name, creature, guid)
+    for i, spec in ipairs(SPELLS[name]) do
+        local n, id = name, i
+        if spec.once then
+            local t = resolveTarget(creature, spec)
+            if t then
+                creature:CastSpell(t, spec.spell)
+            end
+        elseif spec.refresh then
+            -- C++ ScheduleEvent(0s) = next tick; CreateLuaEvent rejects
+            -- delay 0 (magmus precedent) — fire the refresh directly, it
+            -- re-arms its own 1s poll.
+            onRefresh(creature, guid, n, id)
+        else
+            schedule(guid, "spell" .. i, math.random(spec.lo, spec.hi),
+                function()
+                    onSpell(creature, guid, n, id)
+                end)
+        end
+    end
+end
+
+local function infernalReveal(creature, guid)
+    local st = infernalState[guid]
+    if not st then
+        return
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetDisplayId(st.nativeDisplay)
+    st.canMove = true
+    if st.inCombat then
+        armCombatSpells("npc_giant_infernal", creature, guid)
+    end
+end
+
+local function onInfernalSpawn(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infernalState[guid] = {
+        nativeDisplay = creature:GetDisplayId(),
+        canMove = false,
+        meteor = false,
+        inCombat = false,
+    }
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetDisplayId(MODEL_INVIS)
+    -- C++ Delay = rand32() % 30000; CreateLuaEvent needs delay >= 1.
+    schedule(guid, "meteor", math.max(1, math.random(0, 29999)), function()
+        local st = infernalState[guid]
+        if not st then
+            return
+        end
+        -- The world-trigger summon has no bridge: the meteor visual ports
+        -- as the triggered self-cast twin (DoCast(me, SPELL_METEOR, true)).
+        creature:CastSpell(creature, SPELL_METEOR, true)
+        st.meteor = true
+        schedule(guid, "reveal", 2000, function()
+            infernalReveal(creature, guid)
+        end)
+    end)
+end
+
+local function onEnterCombat(name)
+    return function(event, creature, target)
+        local guid = creature:GetGUID()
+        local st = infernalState[guid]
+        if st then
+            -- C++ combat arms run only post-CanMove (hyjal_trash.cpp:503).
+            st.inCombat = true
+            cancelInfernalCombat(guid)
+            if st.canMove then
+                armCombatSpells(name, creature, guid)
+            end
+            return
+        end
+        cancelTimers(guid)
+        armCombatSpells(name, creature, guid)
+    end
+end
+
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    local st = infernalState[guid]
+    if st then
+        -- Evade: the Delay/meteor machine keeps running in C++ (Reset
+        -- only re-inits the combat timers) — cancel combat spells only.
+        st.inCombat = false
+        cancelInfernalCombat(guid)
+    else
+        cancelTimers(guid)
+    end
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    local st = infernalState[guid]
+    if st then
+        cancelInfernalCombat(guid)
+        -- C++ Initialize() re-inits spawnTimer: a mid-reveal evade
+        -- restarts the 2000ms reveal; Delay/meteor untouched.
+        if st.meteor and not st.canMove then
+            schedule(guid, "reveal", 2000, function()
+                infernalReveal(creature, guid)
+            end)
+        end
+    else
+        cancelTimers(guid)
+    end
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    infernalState[guid] = nil
 end
 
 -- C++ legs ahead of the UpdateVictim gate (abomination disease-cloud
@@ -288,14 +393,17 @@ end
 -- legs hand off cleanly at engage.
 local function onSpawn(name)
     return function(event, creature)
+        if name == "npc_giant_infernal" then
+            onInfernalSpawn(event, creature)
+            return
+        end
         local guid = creature:GetGUID()
         for i, spec in ipairs(SPELLS[name]) do
             if spec.spawn then
                 local n, id = name, i
                 if spec.refresh then
-                    schedule(guid, "spell" .. i, 0, function()
-                        onRefresh(creature, guid, n, id)
-                    end)
+                    -- 0-delay fix (magmus precedent): fire directly.
+                    onRefresh(creature, guid, n, id)
                 else
                     schedule(guid, "spell" .. i, math.random(spec.lo, spec.hi),
                         function()
@@ -321,7 +429,7 @@ for name, entry in pairs(MOB) do
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
     RegisterCreatureEvent(entry, 4, onDied)
     RegisterCreatureEvent(entry, 23, onReset)
-    if hasSpawnArm(name) then
+    if hasSpawnArm(name) or name == "npc_giant_infernal" then
         RegisterCreatureEvent(entry, 5, onSpawn(name))
     end
 end
