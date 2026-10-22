@@ -44,18 +44,21 @@
 -- boss_razorscale.cpp):
 -- JustEngagedWith (:356-365) — the BossAI::JustEngagedWith
 -- passthrough, the SendEncounterUnit engage leg, the
--- ScheduleAirPhaseEvents leg (phase machine), the
--- summons.DoAction(ACTION_START_FIGHT) leg and the HandleMusic
--- leg have no bridges — event 1 models only the EVENT_BERSERK
--- timer leg (the auriaya engage-port precedent).
+-- ScheduleAirPhaseEvents leg (phase machine) and the
+-- summons.DoAction(ACTION_START_FIGHT) leg have no bridges —
+-- event 1 models the EVENT_BERSERK timer leg (the auriaya
+-- engage-port precedent) plus the HandleMusic(true) leg
+-- (boss_razorscale.cpp:363) via the new creature:UpdateWorldState
+-- bridge (2026-10-22).
 -- EVENT_BERSERK (:572-575) — DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(EMOTE_BERSERK 2, me), 900s init (:362), no
 -- re-arm, no phase gate (scheduled bare in JustEngagedWith, never
 -- canceled — the auriaya/ignis triggered-berserk precedent;
 -- cast-before-Talk order kept).
 -- JustDied (:526-531) — _JustDied() + SendEncounterUnit disengage
--- + HandleMusic(false); no Talk arms; event 4 models only the
--- timer wipe (the auriaya JustDied-wipe precedent).
+-- + HandleMusic(false); no Talk arms; event 4 models the timer
+-- wipe plus the HandleMusic(false) leg via
+-- creature:UpdateWorldState (2026-10-22).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33186):
 -- The whole air/ground/perma-ground phase machine — DoAction
@@ -106,7 +109,9 @@
 -- machine; a ported counter with no downstream would be an inert
 -- no-op.
 -- CanAIAttack / JustSummoned / SummonedCreatureDies /
--- EnterEvadeMode / HandleMusic / SummonMinions — no bridges.
+-- EnterEvadeMode / SummonMinions — no bridges (the HandleMusic
+-- legs are ported; the BOUNDARY-evade early-return nuance in
+-- EnterEvadeMode (:516-518) has no evade bridge).
 -- npc_expedition_commander (33210 ulduar.h:90 — entry-verifiable
 -- but bridge-blocked): OnGossipSelect -> DoAction
 -- (ACTION_START_FIGHT) — gossip bridged (stale 'no gossip bridge' retracted — RegisterCreatureGossipEvent, engine/scripting/runtime.go:902), no DoAction bridge;
@@ -178,6 +183,9 @@ local EMOTE_BERSERK = 2
 
 local SPELL_BERSERK = 47008
 
+-- boss_razorscale.cpp:177
+local WORLD_STATE_RAZORSCALE_MUSIC = 4162
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -217,19 +225,29 @@ end
 local function razorscaleEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ HandleMusic(true) (JustEngagedWith :363) — encounter music on.
+    creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 1)
     schedule(guid, "berserk", 900000, function()
         berserkTick(creature)
     end)
 end
 
--- Shared timer wipe for events 2/4/23 (razorscale JustDied
--- :526-531 carries no Talk arms, so event 4 models only the
--- wipe).
+-- Shared timer wipe for events 2/4/23. Events 2 (leave
+-- combat / EnterEvadeMode :515-524) and 4 (JustDied :526-531)
+-- also model the HandleMusic(false) leg via
+-- creature:UpdateWorldState; event 23 (Reset :317-329) never
+-- calls HandleMusic, so it wipes timers only.
 local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+local function leaveCombatOrDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ HandleMusic(false) (EnterEvadeMode :521, JustDied :530).
+    creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
+end
+
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
-RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombatOrDied)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)

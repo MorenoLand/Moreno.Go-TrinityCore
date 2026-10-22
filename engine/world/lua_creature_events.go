@@ -1282,6 +1282,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// UpdateWorldState(fieldId, value) bridges InstanceScript::DoUpdateWorldState
+	// (InstanceScript.cpp:555-567): it pushes SMSG_UPDATE_WORLD_STATE to every
+	// player in the creature's instance. It does NOT touch the global persisted
+	// worldstates map (worldstates.go) — that is World::setWorldState, a
+	// different, server-wide store.
+	methods["UpdateWorldState"] = func(_ context.Context, args []any) ([]any, error) {
+		fieldID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		s.updateInstanceWorldState(mapID, instanceID, fieldID, value)
+		return nil, nil
+	}
 	motionPowerType := motion.PowerType
 	if motionPowerType >= uint32(len(motion.Powers)) {
 		motionPowerType = 0

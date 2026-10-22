@@ -648,6 +648,28 @@ func (s *Server) broadcastWorldState(mapID uint32, variableID, value uint32) {
 	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_UPDATE_WORLD_STATE), buf.Bytes())
 }
 
+// updateInstanceWorldState is the instance-scoped twin of broadcastWorldState:
+// it mirrors InstanceScript::DoUpdateWorldState (InstanceScript.cpp:555-567),
+// which sends SMSG_UPDATE_WORLD_STATE only to the players of that instance,
+// not to the whole map.
+func (s *Server) updateInstanceWorldState(mapID, instanceID, variableID, value uint32) {
+	if s == nil {
+		return
+	}
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(variableID)
+	buf.WriteU32(value)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_UPDATE_WORLD_STATE), buf.Bytes(), true)
+	}
+}
+
 // wsgUpdateFlagState mirrors BattlegroundWS::UpdateFlagState
 // (BattlegroundWS.cpp:602-608): the flag worldstates 2338/2339 are indexed by
 // the ACTING player's team (2339 Alliance, 2338 Horde), NOT by the flag's own
