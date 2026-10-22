@@ -44,11 +44,12 @@
 -- flag/combat-reach/active/creature-enumeration bridges and the
 -- SetBossState(NOT_STARTED) arm is blocked on the instance-script
 -- model. OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Trail (25267): OnSpawn(5): triggered self-cast trail trigger
--- 45399 + SetTarget(self) (C++ constructor arms, C++-exact — the
--- constructor runs once at AI creation; C++ Reset() is empty, so
--- OnReset(23) would wrongly re-fire on evade); the NOT_SELECTABLE
--- flag and 0.01 bounding-radius arms have no flag/combat-reach bridges.
+-- Trail (25267): OnSpawn(5): NOT_SELECTABLE SetFlag + triggered
+-- self-cast trail trigger 45399 + SetTarget(self) (C++ constructor
+-- arms, C++-exact — the constructor runs once at AI creation; C++
+-- Reset() is empty, so OnReset(23) would wrongly re-fire on evade;
+-- stale "no flag bridge" retracted — SetFlag(59, x) is bridged);
+-- the 0.01 bounding-radius arm has no combat-reach bridge.
 -- Vapor (25265, "npc_felmyst_vapor") is not registered: its only
 -- C++ arms are the NOT_SELECTABLE flag, the 0.8 run-speed arm and
 -- the no-victim random-target AttackStart selection, none of which
@@ -241,10 +242,14 @@ end
 -- Reset() is empty, so ev23 would wrongly re-fire on evade; ev5
 -- fires once per spawn (grid/respawn funnel, C++-exact).
 local function trailSpawn(event, creature)
+    -- C++ npc_felmyst_trailAI ctor arm order: SetFlag(UNIT_FIELD_FLAGS,
+    -- UNIT_FLAG_NOT_SELECTABLE) -> DoCast(me, 45399, true) ->
+    -- SetTarget(self) (boss_felmyst.cpp:563-567); stale "no flag
+    -- bridge" retracted — creature:SetFlag(59, x) is bridged
+    -- (lua_creature_events.go:968) with real targeting effect. The
+    -- SetFloatValue(BOUNDINGRADIUS) leg stays unbridged.
+    creature:SetFlag(59, 0x2000000) -- UNIT_FLAG_NOT_SELECTABLE
     creature:CastSpell(creature, SPELL_TRAIL_TRIGGER, true)
-    -- C++ arm order: DoCast(me, 45399, true) -> SetTarget(me->GetGUID())
-    -- (boss_felmyst.cpp:564-567); the SetFloatValue(BOUNDINGRADIUS) leg
-    -- stays unbridged.
     creature:SetTarget(creature:GetGUID())
 end
 

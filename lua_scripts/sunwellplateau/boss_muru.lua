@@ -40,25 +40,32 @@
 -- cross-creature cast has no cross-creature bridge — below).
 -- OnDamageTaken(9, pre-damage hook): lethal from any source ->
 -- damage rewritten to health-1 (C++-exact); additionally, in
--- PHASE_ONE only: phase=PHASE_TWO, triggered self-cast open all
--- portals 46177, then 6s later triggered self-cast summon
--- entropius 46217 (C++-exact ordering; the RemoveAllAuras and
--- NOT_SELECTABLE-flag arms have no bridges — below). OnDied(4):
+-- PHASE_ONE only: phase=PHASE_TWO, RemoveAllAuras (bridged,
+-- ported), triggered self-cast open all portals 46177, then 6s later
+-- triggered self-cast summon entropius 46217 (C++-exact ordering).
+-- The SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) arm stays
+-- out deliberately: SetFlag(59, x) IS bridged, but the co-dependent
+-- entropius summon (46217) never resolves on the Go creature-cast
+-- path (only the InstaKill/Transmitted effect arms are bridged
+-- there), so the flag alone would leave muru unselectable at 1 HP
+-- with no entropius — a soft-lock (one-sided-port class). OnDied(4):
 -- timer/state cleanup only (the _JustDied arm is blocked on the
 -- instance-script model). OnReset(23)/OnLeaveCombat(2): timer/
--- state cleanup (the RemoveFlag(NOT_SELECTABLE)/SetVisible(true)
--- arms have no flag/visibility bridges; the _Reset instance
--- bookkeeping and the EnterEvadeMode entropius relay are blocked
--- on the instance-script/cross-creature bridges). The
+-- state cleanup (the RemoveFlag(NOT_SELECTABLE) arm is vacuous —
+-- the set side stays out, above; SetVisible(true) has no visibility
+-- bridge; the _Reset instance bookkeeping and the EnterEvadeMode
+-- entropius relay are blocked on the instance-script/cross-creature
+-- bridges). The
 -- SetCombatMovement(false) constructor arm has no movement
 -- bridge — Muru never moves in this model (C++-exact, since it
 -- never schedules movement). Entropius (25840). OnReset(23):
 -- triggered self-cast entropius cosmetic spawn 46223 (C++-exact;
 -- the _Reset instance bookkeeping is blocked). OnEnterCombat(1):
--- 2s one-shot: triggered self-cast (DoCastAOE self-position,
--- kalecgos convention) negative energy periodic E 46284 (the
--- DoResetPortals 100yd grid scan of entry 25770 -> RemoveAllAuras
--- has no creature-enumeration bridge — skipped); 15s repeat:
+-- 2s one-shot: DoResetPortals (100yd grid scan of entry 25770 ->
+-- RemoveAllAuras, C++-exact arm order — stale "no creature-
+-- enumeration bridge" retracted, GetCreaturesInGrid is bridged) +
+-- triggered self-cast (DoCastAOE self-position, kalecgos convention)
+-- negative energy periodic E 46284; 15s repeat:
 -- triggered self-cast darkness E 46269 + triggered self-cast
 -- blackhole 46282 (the dark-fiend summon arm of 46269 lives in
 -- the unmodeled spell_muru_darkness SpellScript — below).
@@ -89,8 +96,11 @@
 -- class never re-casts it on evade); the SetDisplayId arm rides the
 -- unported constructor machine (display bridge live 2026-10-20 —
 -- the blocker is the unbridged Modelid2 bearer) (the react
--- bridge exists — creature:SetReactState — but the REACT_PASSIVE arm
--- rides that unported constructor). The 2s arm (REACT_AGGRESSIVE
+-- bridge exists — creature:SetReactState — but the REACT_PASSIVE half
+-- stays out: its 2s co-arm (REACT_AGGRESSIVE + summoner-GUID
+-- AttackStart) has no cross-creature/AttackStart bridge, and porting
+-- PASSIVE alone would strand the fiend passive and starve the
+-- proximity arm of victims — one-sided-port class). The 2s arm (REACT_AGGRESSIVE
 -- + RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) — both IS bridged
 -- (lua_creature_events.go:524/:968) — + summoner-GUID random-target
 -- AttackStart) stays out: the IsSummonedBy GUID capture has no
@@ -143,12 +153,14 @@
 -- missile) and spell_summon_blood_elves_periodic (periodic 46050
 -- re-cast) unmodeled (standing gaps); no aura-enumeration/kill/
 -- despawn bridges (flag/visibility/react bridges exist — the arms
--- below stay out on unported-machine grounds) — the muru
--- phase-two RemoveAllAuras arm is bridged and ported in
--- muruDamageTaken; the NOT_SELECTABLE arm, the portal DoResetPortals
--- grid scan, the dark-fiend display/react/proximity-despawn arms, the
--- black-hole 15s despawn and the entropius evade despawn-all arms stay
--- unmodeled.
+-- below stay out on unported-machine or soft-lock-avoidance grounds)
+-- — the muru phase-two RemoveAllAuras arm and the entropius 2s
+-- DoResetPortals grid scan are bridged and ported; the muru
+-- NOT_SELECTABLE set stays out (summon-resolution ground, above)
+-- with the Reset RemoveFlag vacuous; the dark-fiend display/react
+-- arms stay out (Modelid2 bearer unbridged; PASSIVE half would strand
+-- the fiend); the black-hole 15s despawn is ported; the entropius
+-- evade despawn-all arms stay unmodeled.
 
 local SPELL_OPEN_PORTAL_PERIODIC = 45994
 local SPELL_DARKNESS_PERIODIC = 45998
@@ -279,9 +291,14 @@ RegisterCreatureEvent(ENTRY_MURU, 23, muruReset)
 
 -- ================= Entropius (25840) =================
 
--- C++ ScheduleTasks: 2s one-shot triggered 46284; 15s repeat
--- triggered 46269 + triggered 46282.
+-- C++ ScheduleTasks 2s one-shot arm order: DoResetPortals() ->
+-- DoCastAOE(46284, true) (boss_muru.cpp:151-156); stale "no
+-- creature-enumeration bridge" retracted — creature:
+-- GetCreaturesInGrid(entry, dist) is bridged (auriaya precedent).
 local function entropiusNegativeEnergy(creature, guid)
+    for _, portal in ipairs(creature:GetCreaturesInGrid(ENTRY_PORTAL, 100)) do
+        portal:RemoveAllAuras()
+    end
     creature:CastSpell(creature, SPELL_NEGATIVE_ENERGY_PERIODIC_E, true)
 end
 
