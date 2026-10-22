@@ -394,6 +394,11 @@ end
 
 local function jaraxxusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_jaraxxus::Reset FAIL branch (boss_lord_jaraxxus.cpp:115-116):
+    -- DoCastSelf(SPELL_JARAXXUS_CHAINS 67924) + SetImmuneToPC(true) +
+    -- SetReactState(REACT_PASSIVE) is gated on instance->GetBossState(
+    -- DATA_JARAXXUS) == FAIL — the instance boss-state read has no Lua
+    -- bridge (same blocker as mistressReset below), so the arms stay out.
 end
 
 RegisterCreatureEvent(ENTRY_JARAXXUS, 1, jaraxxusEnterCombat)

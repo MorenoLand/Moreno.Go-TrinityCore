@@ -135,6 +135,9 @@
 --   vehicle), DoAction legs (:328-340: ACTION_START_RIMEFANG /
 --   ACTION_END_COMBAT) — no movement/vehicle/flag bridges (the
 --   REACT_PASSIVE arm is PORTED 2026-10-20 — creature:SetReactState).
+--   The :319 SetFlag(NON_ATTACKABLE) is never cleared live anywhere in
+--   the rimefang AI (permanent vehicle-dragon property; flags re-affirm
+--   to template on the creature sweep) — VACUOUS, not ported.
 -- spell_tyrannus_rimefang_icy_blast SpellScript (:507-539: EFFECT_1
 --   SPELL_EFFECT_TRIGGER_MISSILE -> SummonCreature(NPC_ICY_BLAST 36731) +
 --   triggered SPELL_ICY_BLAST_AURA 69238) — no SpellScript / summon bridge.

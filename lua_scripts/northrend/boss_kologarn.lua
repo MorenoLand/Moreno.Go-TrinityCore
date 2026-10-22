@@ -268,6 +268,11 @@ end
 
 local function kologarnReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_kologarn.cpp:142: me->RemoveFlag(UNIT_FIELD_FLAGS,
+    -- UNIT_FLAG_NOT_SELECTABLE) (Reset: flip follows _Reset); JustDied
+    -- sets the flag live (boss_kologarn.cpp:151), so the reset clear is
+    -- a real re-arm, not a template no-op.
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk

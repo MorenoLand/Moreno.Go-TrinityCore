@@ -228,6 +228,9 @@ local function putricideReset(event, creature)
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset: flip follows events.Reset).
     creature:SetReactState(1) -- REACT_DEFENSIVE
+    -- C++ :246-249: the RemoveFlag(NOT_SELECTABLE) + SetImmuneToPC(false)
+    -- arms ride the Rotface+Festergut DONE instance boss-state gate, which
+    -- has no bridge, so they stay out with it.
 end
 
 -- C++ boss_professor_putricide::KilledUnit:
