@@ -367,14 +367,14 @@ RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
 
 -- C++ boss_twin_baseAI::JustReachedHome (boss_twin_valkyr.cpp:203-208,
 -- shared by both twins): instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL)
--- has no instance bridge; summons.DespawnAll() is vacuous (no summon model,
--- adds unregistered); the separable bridgeable arms are HandleRemoveAuras()
--- -> creature:RemoveAllAuras() and me->DespawnOrUnsummon() ->
--- creature:Despawn() (respawns DB-spawned creatures on their normal
--- spawntimesecs, opera precedent), in C++ arm order. Event 24 fires at the
--- home-move completion.
+-- has no instance bridge; HandleRemoveAuras() (:228-235) strips the helper
+-- essences from PLAYERS via the instance (no bridge) and never touches the
+-- boss's own auras, so it has no separable bridgeable arm; summons.DespawnAll()
+-- is vacuous (no summon model, adds unregistered). The only bridgeable arm is
+-- me->DespawnOrUnsummon() -> creature:Despawn() (respawns DB-spawned
+-- creatures on their normal spawntimesecs, opera precedent). Event 24 fires
+-- at the home-move completion.
 local function reachHome(event, creature)
-    creature:RemoveAllAuras()
     creature:Despawn()
 end
 
