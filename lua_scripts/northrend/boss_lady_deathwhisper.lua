@@ -335,9 +335,13 @@ end
 -- _phase == PHASE_ONE && damage > me->GetPower(POWER_MANA); then
 -- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
 -- SetPower(MANA, 0), RemoveAurasDueToSpell(MANA_BARRIER),
--- CancelGroup(GROUP_ONE), seed GROUP_TWO. Dropped leg: DoStartMovement
--- (mid-combat SetCombatMovement(true) would diverge — Go gates the flag
--- per-tick while C++ chases only on the next AttackStart; 10:19 rule).
+-- CancelGroup(GROUP_ONE), seed GROUP_TWO. Ported leg: DoStartMovement
+-- (:414) issues MoveChase directly (ScriptedCreature.cpp:159-163, no flag
+-- leg); the Lua twin flips the per-tick pursuit gate back on at the
+-- transition (it was flipped off at engage for the DoStartNoMovement leg)
+-- — chase resumes in phase 2, net-identical to C++ (razuvious 7s
+-- EVENT_ATTACK precedent; the 10:19 "mid-combat true-leg diverges"
+-- doctrine misread the flag no-op as the whole arm).
 -- SetPower(MANA, 0) rides the creature:SetPower
 -- bridge (lua_creature_events.go), C++ order (drain, zero, strip aura).
 -- FIDELITY CAVEAT: the mana_barrier AuraScript is unbridged, so in Go
@@ -373,15 +377,19 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         deathwhisperPhase[guid] = 3
         creature:Talk(SAY_PHASE_2)
         creature:Talk(EMOTE_PHASE_2)
-        -- C++ :412-413: damage -= me->GetPower(POWER_MANA);
+        -- C++ :414 DoStartMovement(me->GetVictim()) — direct MoveChase
+        -- (ScriptedCreature.cpp:159-163); the Lua twin re-enables the
+        -- per-tick pursuit gate (C++-exact position: before
+        -- ResetThreatList).
+        creature:SetCombatMovement(true)
+        -- C++ :416-417: damage -= me->GetPower(POWER_MANA);
         -- me->SetPower(POWER_MANA, 0) — drain then zero, before the aura
         -- strip.
         creature:SetPower(POWER_MANA, 0)
         creature:RemoveAura(SPELL_MANA_BARRIER)
         -- C++ DamageTaken phase-2: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no threat bridge" header claim was
-        -- stale). DoStartMovement stays out (mid-combat true-leg diverges
-        -- via the per-tick gate; 10:19 setcombatmovement rule).
+        -- stale).
         creature:ClearThreatList()
         -- C++ CancelGroup(GROUP_ONE) (:419): the shadowbolt arm dies at
         -- the phase transition; deathanddecay is phase-independent and
@@ -430,9 +438,8 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
     creature:Talk(SAY_AGGRO)
     -- C++ :338 DoStartNoMovement(who) — engage-stationary; phase-1 exact.
-    -- The phase-2 DoStartMovement leg stays out: mid-combat
-    -- SetCombatMovement(true) would diverge (Go gates the flag per-tick,
-    -- C++ only chases on the next AttackStart), 10:19 setcombatmovement rule.
+    -- The phase-2 DoStartMovement leg is ported in the DamageTaken
+    -- transition arm above (gate flip back on, C++ :414 position).
     creature:SetCombatMovement(false)
     -- C++ :339 — the channeling aura is stripped on engage (re-cast on
     -- Reset, :226; the RemoveAura bridge).
