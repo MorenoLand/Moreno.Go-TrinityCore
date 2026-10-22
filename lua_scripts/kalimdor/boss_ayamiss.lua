@@ -178,7 +178,10 @@ local function checkGroundPhase(creature, guid, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) * 100 / maxHealth < 70 then
+    -- C++ :162 arm is in UpdateAI (post-damage), so it never fires on
+    -- the killing blow; the ev9 port needs the nefarian lethal guard.
+    local postHealth = creature:GetHealth() - damage
+    if postHealth > 0 and postHealth * 100 / maxHealth < 70 then
         state.phase = PHASE_GROUND
         -- C++ ground-phase leg: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no bridge" header claims were

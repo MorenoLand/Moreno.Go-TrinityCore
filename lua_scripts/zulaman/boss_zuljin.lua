@@ -528,7 +528,9 @@ local function zuljinDamageTaken(event, creature, attacker, damage)
     -- does NOT apply here — their latches live in DamageTaken itself).
     local postHealth = health - (damage or 0)
     local health20 = math.floor(maxHealth * 20 / 100)
-    if postHealth < health20 * (4 - st.phase) then
+    -- C++ arm lives in UpdateAI, which never runs on the killing blow
+    -- (nefarian form: UpdateAI health latches need the postDamage > 0 guard).
+    if postHealth > 0 and postHealth < health20 * (4 - st.phase) then
         enterPhase(creature, guid, st.phase + 1)
     end
     return false, damage

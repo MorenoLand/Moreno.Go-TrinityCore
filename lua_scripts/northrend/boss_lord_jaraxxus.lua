@@ -463,6 +463,12 @@ end
 
 local function mistressReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_mistress_of_pain::Reset (boss_lord_jaraxxus.cpp:394-406):
+    -- instance->GetBossState(DATA_JARAXXUS) != IN_PROGRESS ->
+    -- DespawnOrUnsummon. The instance boss-state read has no Lua bridge
+    -- (setdata_write axis 2026-10-22: no instance:SetData/GetData bridge),
+    -- and no Lua-side jaraxxus IN_PROGRESS latch exists, so the gated
+    -- despawn stays out (same as npc_legion_flame, header :117-118).
 end
 
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 1, mistressEnterCombat)

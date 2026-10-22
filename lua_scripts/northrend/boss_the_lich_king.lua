@@ -247,6 +247,7 @@
 -- rides the no-DoAction-bridge ACTION_TELEPORT_BACK).
 
 local ENTRY_THE_LICH_KING = 36597
+local NPC_FROSTMOURNE_TRIGGER = 38584 -- boss_the_lich_king.h:331
 local ENTRY_SHAMBLING_HORROR = 37698
 local ENTRY_RAGING_SPIRIT = 36701
 local ENTRY_SPIRIT_WARDEN = 36824
@@ -331,12 +332,18 @@ end
 -- _JustDied() (instance boss-state machine, unported) then
 -- DoCastAOE(SPELL_PLAY_MOVIE 73159, false). DoCastAOE is self-cast
 -- per UnitAI.h:322, so creature:CastSpell(creature, SPELL_PLAY_MOVIE).
--- The SetDisableGravity/MoveFall, FindNearestCreature(FROSTMOURNE_TRIGGER)
--- despawn, zone light/weather, and 25-man quest-credit legs ride
--- unbridged machines.
+-- The SetDisableGravity/MoveFall, zone light/weather, and 25-man
+-- quest-credit legs ride unbridged machines.
 local function lichKingJustDied(event, creature)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_PLAY_MOVIE)
+    -- C++ :555-556: FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0f)
+    -- -> DespawnOrUnsummon (FindNearestCreature and Despawn both bridged;
+    -- stale "unbridged machines" claim retracted).
+    local frostmourne = creature:FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0)
+    if frostmourne then
+        frostmourne:Despawn()
+    end
 end
 
 -- C++ boss_the_lich_king::KilledUnit:

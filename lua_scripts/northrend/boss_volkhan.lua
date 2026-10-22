@@ -130,6 +130,7 @@
 -- 5 — no GetData / achievement bridges; joins the
 -- unmodeled-achievement queue).
 
+local ENTRY_MOLTEN_GOLEM = 28695
 local ENTRY_VOLKHAN = 28587
 
 local SAY_AGGRO = 0
@@ -155,14 +156,22 @@ end
 -- the Talk arm is bridgeable.
 local function volkhanDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ boss_volkhan::JustDied (boss_volkhan.cpp:146-152): DespawnGolem.
+    -- The GUID-list loop has no bridge, so sweep the forge arena for his
+    -- molten golems (ENTRY_MOLTEN_GOLEM 28695, the only such creatures in
+    -- the instance) via GetCreaturesInGrid and Despawn the living.
+    local golems = creature:GetCreaturesInGrid(ENTRY_MOLTEN_GOLEM, 100)
+    for _, golem in pairs(golems) do
+        if golem:IsAlive() then
+            golem:Despawn()
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_VOLKHAN, 1, volkhanEnterCombat)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 3, volkhanTargetDied)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 4, volkhanDied)
 
--- npc_molten_golem (28695) — PORTED timer arms (boss_volkhan.cpp:391-479).
-local ENTRY_MOLTEN_GOLEM = 28695
 local SPELL_BLAST_WAVE = 23113
 local SPELL_IMMOLATION_STRIKE = 52433
 
