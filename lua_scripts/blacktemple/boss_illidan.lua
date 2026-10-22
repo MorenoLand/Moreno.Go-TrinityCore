@@ -133,9 +133,10 @@
 -- and equipment arms have no bridges)). OnTargetDied(3):
 -- Talk(SAY_ILLIDAN_KILL), GetObjectType() == "Player" gate (terestian convention).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers, drop
--- per-GUID state (the Reset summon-group/equipment/sheath/gravity
+-- per-GUID state (the Reset summon-group/equipment/gravity
 -- arms and the akama-intro DoAction have no bridges; the root
--- arm ports via creature:SetRooted, 2026-10-21; the
+-- arm ports via creature:SetRooted (2026-10-21) and the sheath arm
+-- via creature:SetSheath(0) (2026-10-22); the
 -- JustDied instance SetBossState arm is blocked on the
 -- instance-script model).
 -- Akama (23089): OnEnterCombat arms the healing-potion loop 1s:
@@ -235,8 +236,10 @@
 -- UNIT_FIELD_FLAGS (59) is honored, lua_creature_events.go:968 —
 -- retracted 2026-10-20 for the field-59 arms; react bridge exists —
 -- react arms stay out, documented per-arm; the throw-glaive-2 sheath
--- arm IS ported via the creature:SetSheath bridge; the Reset/intro/
--- air-finalize sheath arms ride unported machines); the air-phase
+-- arm IS ported via the creature:SetSheath bridge; the Reset
+-- sheath arm IS ported too (illidanCleanup, events 2/23 — 2026-10-22);
+-- the intro/air-finalize sheath arms ride unported machines); the
+-- air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,
 -- phase 3) has no bearer, so the air phase loops on the pillar
 -- timer and phase 3 only ever starts via the resume-demon path;
@@ -943,6 +946,7 @@ local function illidanCleanup(event, creature)
         -- precedent). Gated off event 4: C++ JustDied (:649) never
         -- calls Reset, so the death path leaves root alone.
         creature:SetRooted(false)
+        creature:SetSheath(0) -- SHEATH_STATE_UNARMED (boss_illidan.cpp:478)
     end
     if event == 4 then
         -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649):
