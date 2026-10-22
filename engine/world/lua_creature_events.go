@@ -135,6 +135,33 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{evading}, nil
 	}
+	// IsTargetableForAttack is Unit::isTargetableForAttack (Unit.h:1077,
+	// Unit.cpp): alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE (0x02000000)
+	// unit flags, and when checkFakeDeath (C++ default true) no feign-death
+	// (UNIT_STATE_DIED; Go's unitFlag2FeignDeath twin). UNIT_STATE_UNATTACKABLE
+	// has no Go model, so that arm is vacuous here. Twin of the session binding
+	// (lua_objects.go:646); zuljin's claw-rage chain calls it on the victim.
+	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
+		checkFakeDeath := true
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				checkFakeDeath = b
+			}
+		}
+		s.motionMu.Lock()
+		health, flags, flags2 := motion.Health, motion.UnitFlags, motion.UnitFlags2
+		s.motionMu.Unlock()
+		if health == 0 {
+			return []any{false}, nil
+		}
+		if flags&(unitFlagNonAttackable|0x02000000) != 0 {
+			return []any{false}, nil
+		}
+		if checkFakeDeath && flags2&unitFlag2FeignDeath != 0 {
+			return []any{false}, nil
+		}
+		return []any{true}, nil
+	}
 	auraKey := func() creatureAuraKey {
 		return creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
 	}

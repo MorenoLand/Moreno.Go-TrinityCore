@@ -122,6 +122,35 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// IsTargetableForAttack is Unit::isTargetableForAttack (Unit.h:1077,
+	// Unit.cpp) for players: alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE
+	// (0x02000000) unit flags, not a GM, and when checkFakeDeath (C++ default
+	// true) no feign-death (UNIT_STATE_DIED; Go's unitFlag2FeignDeath twin,
+	// set on hunter feign at spells.go:25872). UNIT_STATE_UNATTACKABLE has no
+	// Go model, so that arm is vacuous here. Twin of the session creature
+	// binding (lua_objects.go:646); zuljin's claw-rage chain calls it on
+	// player targets, where the alive-only fallback missed feigning hunters.
+	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
+		checkFakeDeath := true
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				checkFakeDeath = b
+			}
+		}
+		if state.Health == 0 {
+			return []any{false}, nil
+		}
+		if state.UnitFlags&(unitFlagNonAttackable|0x02000000) != 0 {
+			return []any{false}, nil
+		}
+		if s.security > 0 {
+			return []any{false}, nil
+		}
+		if checkFakeDeath && state.UnitFlags2&unitFlag2FeignDeath != 0 {
+			return []any{false}, nil
+		}
+		return []any{true}, nil
+	}
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })

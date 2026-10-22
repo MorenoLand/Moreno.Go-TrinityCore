@@ -57,8 +57,9 @@
 -- ends, then starts immediately);
 -- the C++ melee-range gate on each sequence hit is approximated with
 -- GetDistance <= 5 (no IsWithinMeleeRange bridge); the claw-loop
--- isTargetableForAttack chain is ported (creature bridge; player leg
--- falls back to the alive check); the no-target EnterEvadeMode arm has no
+-- isTargetableForAttack chain is ported (bridged on the player and
+-- handler-creature surfaces; C++ checkFakeDeath default true); the no-target
+-- EnterEvadeMode arm has no
 -- bridge — the sequence ends and the starter re-arms instead; the bear
 -- overpower arm has no bridge — it keys off a dodged melee swing
 -- (AttackerStateUpdate health-unchanged check) with no per-swing Lua
@@ -170,15 +171,13 @@ local function randomPlayer(creature, maxDist)
     return candidates[math.random(#candidates)]
 end
 
--- isTargetableForAttack is a creature-method bridge; player targets
--- have no such method (nil would be a call hazard), so they fall back
--- to the bridge's alive leg.
+-- isTargetableForAttack: Unit::isTargetableForAttack (Unit.h:1077, Unit.cpp)
+-- bridged on both the player and handler-creature surfaces (alive, no
+-- NON_ATTACKABLE/NOT_SELECTABLE flags, non-GM, and with checkFakeDeath's
+-- C++ default true no feign-death) — a feigning hunter is correctly
+-- untargetable now.
 local function isTargetableForAttack(target)
-    local f = target.IsTargetableForAttack
-    if f ~= nil then
-        return target:IsTargetableForAttack()
-    end
-    return not target:IsDead()
+    return target:IsTargetableForAttack()
 end
 
 -- C++ berserk: one-shot 600s, Talk, triggered self-cast 45078; the C++
