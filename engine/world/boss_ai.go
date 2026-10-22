@@ -11634,6 +11634,45 @@ func init() {
 	// no-achievement-criteria-bridge queue — documented in the lua
 	// header. Thirteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_the_lich_king", 36597)
+
+	// npc_rotting_frost_giant (Icecrown Citadel instance script):
+	// Reset() three-timer seed + UpdateAI combat rotation — death
+	// plague (selector: player, <= 100.0f, non-victim, no 72865 /
+	// 72884 aura; Talk EMOTE 0 + cast 72865; 15s re-arm), stomp
+	// 64652 DoCastVictim (5-8s engage / 15-18s re-arm), arctic
+	// breath 72848 DoCastVictim (10-15s engage / 26-33s re-arm);
+	// JustDied instance-player aura removal 72865 via
+	// map/instance-filtered RemoveAura. Entries 38490/38494
+	// verifiable from icecrown_citadel.h:158-159 — see
+	// lua_scripts/northrend/npc_rotting_frost_giant.lua.
+	// Fourteenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_rotting_frost_giant", 38490)
+	RegisterLuaBoss("npc_rotting_frost_giant", 38494)
+
+	// npc_darkfallen_icc (Icecrown Citadel instance script):
+	// DarkFallenAI base + 5 subclass ScheduleSpells — blood knight
+	// (37595): vampiric aura 71736 one-shot, unholy strike 70437
+	// victim / blood mirror 70450 self-cast; noble (37663): chains of
+	// shadow 72960 random non-aura target one-shot (fiend summon has no
+	// summon bridge); archmage (37664): amplify magic 70408 / blast
+	// wave 70407 self / polymorph 70410 (noble+archmage
+	// DoSpellAttackIfReady filler unmodeled, melee disabled
+	// C++-exact); advisor (37571): lich slap 72057 victim / shroud
+	// 72066 lowest-HP darkfallen ally in 40y; tactician (37666):
+	// unholy strike victim / shadowstep 70431 + blood sap 70432
+	// random target; vampiric fiend (37901): disease cloud 41290
+	// self, leeching root 70671 victim one-shot, 38s self-despawn;
+	// out-of-combat emote machine (polymorph-ally 72106 + random
+	// DarkFallensEmotes) on spawn/evade.
+	// Entries verifiable from icecrown_citadel.h:257-262 — see
+	// lua_scripts/northrend/npc_darkfallen_icc.lua.
+	// Fifteenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_darkfallen_icc", 37595)
+	RegisterLuaBoss("npc_darkfallen_icc", 37663)
+	RegisterLuaBoss("npc_darkfallen_icc", 37664)
+	RegisterLuaBoss("npc_darkfallen_icc", 37571)
+	RegisterLuaBoss("npc_darkfallen_icc", 37666)
+	RegisterLuaBoss("npc_darkfallen_icc", 37901)
 }
 
 func init() {
