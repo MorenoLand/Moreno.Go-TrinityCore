@@ -52,13 +52,16 @@
 -- boss admission via the luaBossAI shim (_Reset/BossAI::
 -- JustEngagedWith and the DATA_VAELASTRAZ_THE_CORRUPT bookkeeping
 -- arms skipped); the
--- SetFaction(FACTION_FRIENDLY)/SetFaction(FACTION_DRAGONFLIGHT_BLACK)
--- arms have no bridges; the Reset SetStandState(DEAD) and speech_1
+-- SetFaction(FACTION_DRAGONFLIGHT_BLACK) at speech_4 is ported (bridge:
+-- lua_creature_events.go:1208; the old "no bridge" claim was stale); the
+-- ctor SetFaction(FACTION_FRIENDLY) spawn-state leg is DB-template-driven
+-- and unmodeled. The Reset SetStandState(DEAD) and speech_1
 -- SetStandState(STAND) + all three HandleEmoteCommand(EMOTE_ONESHOT_TALK)
 -- arms are ported via creature:SetStandState/:PerformEmote;
 -- speech_4's AttackStart on the gossip player
 -- has no bearer (no movement/attack bridge on a non-combat target) —
--- the speech simply ends and the fight starts when a player pulls;
+-- the faction flip makes Vael hostile and the fight starts when a
+-- player pulls or proximity aggro fires;
 -- the DB gossip menu text (gossip_menu 6101) is approximated in the
 -- hello handler — the real option text lives in the DB, not in C++;
 -- PlayerGUID (ObjectGuid) has no bridge — the gossiping player is not
@@ -93,6 +96,10 @@ local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
 local GOSSIP_BEGIN_TEXT = "Begin the fight against Vaelastrasz."
+
+-- Faction ids (SharedDefines.h): ctor sets FRIENDLY (35), speech_4 sets
+-- DRAGONFLIGHT_BLACK (103).
+local FACTION_DRAGONFLIGHT_BLACK = 103
 
 -- UNIT_NPC_FLAG_GOSSIP (UnitDefines.h:186) — the engine runs the gossip
 -- hooks only while this flag is set (gossip.go helloCreatureNPC /
@@ -225,9 +232,12 @@ local function armSpeech(creature, guid)
                 creature:PerformEmote(1) -- C++ speech_3: EMOTE_ONESHOT_TALK
                 schedule(guid, "speech4", 16000, function()
                     -- C++ speech_4: SetFaction(FACTION_DRAGONFLIGHT_BLACK)
-                    -- + AttackStart on the gossip player — both have no
-                    -- bridge; the speech simply ends here and the fight
-                    -- starts when a player pulls.
+                    -- (boss_vaelastrasz.cpp:156) — bridged
+                    -- (lua_creature_events.go:1208). The AttackStart leg on
+                    -- the gossip player has no bridge (no movement/attack
+                    -- bearer on a non-combat target); the fight starts when
+                    -- a player pulls or proximity aggro fires.
+                    creature:SetFaction(FACTION_DRAGONFLIGHT_BLACK)
                 end)
             end)
         end)

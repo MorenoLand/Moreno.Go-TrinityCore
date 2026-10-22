@@ -42,7 +42,14 @@
 -- itself rides DoAction(ACTION_INTRO_BALTHARUS) issued by
 -- at_baltharus_plateau — no cross-AI-DoAction bridge; the
 -- EVENT_SUMMONS_ATTACK leg (summons.DoZoneInCombat
--- (NPC_BALTHARUS_THE_WARBORN_CLONE), no summon bridge)). EVENT_CLEAVE
+-- (NPC_BALTHARUS_THE_WARBORN_CLONE), no summon bridge); the
+-- JustSummoned clone-health arm (boss_baltharus_the_warborn.cpp:139:
+-- summon->SetHealth(me->GetHealth())) has no bearer either — event 19
+-- (CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE) fires only from the
+-- vancleef 50%-arm hook and event 22 (OnSummoned) only from the player
+-- pet funnel, so no summon hook reaches the clone. The clone spawns
+-- with template health instead of the boss's current health;
+-- documented-only. EVENT_CLEAVE
 -- / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported 2026-10-13 on
 -- the maiden CreateLuaEvent convention (see below); EVENT_CLONE
 -- ported 2026-10-14 via the DamageTaken latch below; the clone's own

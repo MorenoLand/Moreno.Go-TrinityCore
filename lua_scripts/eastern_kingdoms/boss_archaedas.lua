@@ -86,10 +86,17 @@
 -- - Archaedas Reset's instance->SetData(0, 5) respawn-minions
 --   leg + FACTION_FRIENDLY / NOT_SELECTABLE / ROOT legs +
 --   AddAura(16245) freeze leg: instance-model blocked; the
---   freeze-aura self-cast is deferred with the stranded-half
---   convention (npc_captured_rageclaw / npc_phoenix_tk).
--- - JustEngagedWith's faction/flag/root legs: no flag/faction
---   bridges.
+--   FRIENDLY leg additionally rides the unported altar-awaken
+--   machine (faction IS bridged — lua_creature_events.go:1208 —
+--   but a FRIENDLY-at-reset port with no awaken path would brick
+--   the fight after the first evade). The freeze-aura self-cast
+--   is deferred with the stranded-half convention
+--   (npc_captured_rageclaw / npc_phoenix_tk).
+-- - JustEngagedWith's faction/flag/root legs: SetFaction is bridged
+--   (lua_creature_events.go:1208) but the MONSTER flip rides the
+--   unported altar-awaken machine — without the awaken path the
+--   FRIENDLY/MONSTER cycle has no re-trigger, so both faction
+--   legs stay documented-only (flag/root still bridgeless).
 -- - SpellHit(10347) on boss and minions (the whole awaken
 --   sequence: Talk(SAY_AGGRO), 4s/5s waking-up timers,
 --   AttackStart(instance->GetGuidData(0))): stays out — the
@@ -105,7 +112,9 @@
 --   every leg runs through instance->GetGuidData(5..10 /
 --   1..4) and ActivateMinion's DoCast(minion, 10258/10252) /
 --   self-cast(10347) / flag/faction/aura legs — instance-model
---   blocked plus no flag/faction/aurastrip bridges.
+--   blocked (faction IS bridged — lua_creature_events.go:1208 —
+--   but the legs ride the unported awaken machine; flag/aura-strip
+--   still bridgeless).
 -- - JustDied's SetData(DATA_ANCIENT_DOOR, DONE) /
 --   SetData(DATA_MINIONS, SPECIAL) legs: instance-model
 --   blocked (standing).
@@ -113,13 +122,16 @@
 --   blocked (standing).
 -- - npc_archaedas_minions (7309/7077/7076/10120): no bridgeable
 --   arms at all — Reset/JustEngagedWith are faction/flag/root/
---   freeze-aura state legs with no bridges, the SpellHit(10347)
+--   freeze-aura state legs (faction IS bridged now —
+--   lua_creature_events.go:1208 — but the legs ride the unported
+--   awaken machine; flag/root still bridgeless), the SpellHit(10347)
 --   awaken sequence never fires, and the remainder is engine-
 --   driven melee. Unregistered (registering a hook with zero
 --   bridgeable arms would be a firesworn stub), documented
 --   here.
 -- - npc_stonekeepers Reset/JustEngagedWith faction/flag/root
---   legs: no bridges; JustDied's instance->SetData(DATA_
+--   legs: faction bridged but machine-coupled (see above),
+--   flag/root bridgeless; JustDied's instance->SetData(DATA_
 --   STONE_KEEPERS, IN_PROGRESS) leg: instance-model blocked.
 -- - go_altar_of_archaedas: entry-unverifiable (no GO entry for
 --   the altar is named anywhere in src/server — fails the
