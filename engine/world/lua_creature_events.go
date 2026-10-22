@@ -680,6 +680,25 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetRegenerateHealth is Creature::SetRegenerateHealth (Creature.h:286):
+	// C++ flips only _regenerateHealthLock, so false disables the 2s
+	// RegenerateHealth tick and true restores the default-enabled state.
+	// The Lua twin stores the inverted flag on motion; the regen tick
+	// honors motion.RegenHealthDisabled. Zero value = enabled (the C++
+	// default, Creature.cpp:261).
+	methods["SetRegenerateHealth"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetRegenerateHealth requires a bool, got no args")
+		}
+		regen, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetRegenerateHealth requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.RegenHealthDisabled = !regen
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetMeleeAttack declares that the creature's C++ AI never melee-swings:
 	// boss-class custom UpdateAIs (muru, eredar twins, gothik, novos, sara,
 	// voice-of-yogg, rimefang, julianne, krosh firehand, flame leviathan,

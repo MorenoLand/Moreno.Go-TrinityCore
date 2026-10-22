@@ -20,10 +20,10 @@
 -- Fight shape (C++-exact for all modeled arms): npc_frozen_
 -- core (25865): OnSpawn(5): the ctor Initialize() — SetReactState
 -- (REACT_PASSIVE) PORTED (stale "no react bridge" retracted — bridged
--- lua_creature_events.go:524, arlokk precedent) + the two self casts
--- DoCastSelf(SPELL_FROZEN_CORE_GETS_HIT 46810), DoCastSelf
--- (SPELL_ICE_SPEAR_AURA 46371) (the SetRegenerateHealth(false)
--- arm still has no bridge). OnDied(4):
+-- lua_creature_events.go:524, arlokk precedent) + SetRegenerateHealth
+-- (false) PORTED (bridge added 2026-10-22, lua_creature_events.go) + the
+-- two self casts DoCastSelf(SPELL_FROZEN_CORE_GETS_HIT 46810),
+-- DoCastSelf(SPELL_ICE_SPEAR_AURA 46371). OnDied(4):
 -- DoCastSelf(SPELL_SUMMON_LOOT_MISSILE 45941), DoCastSelf
 -- (SPELL_MINION_DESPAWNER 46843) — C++-exact arm order
 -- (the Unit::Kill(me, ahune) arm is cross-creature blocked —
@@ -55,10 +55,11 @@ local SPELL_MINION_DESPAWNER = 46843
 local ENTRY_FROZEN_CORE = 25865
 
 -- C++ ctor Initialize() (boss_ahune.cpp:282-287): SetReactState(
--- REACT_PASSIVE) first, then the two self casts; the
--- SetRegenerateHealth(false) arm still has no bridge.
+-- REACT_PASSIVE) first, then SetRegenerateHealth(false), then the two
+-- self casts — C++ arm order.
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 5, function(_, creature)
     creature:SetReactState(0) -- REACT_PASSIVE
+    creature:SetRegenerateHealth(false)
     creature:CastSpell(creature, SPELL_FROZEN_CORE_GETS_HIT)
     creature:CastSpell(creature, SPELL_ICE_SPEAR_AURA)
 end)

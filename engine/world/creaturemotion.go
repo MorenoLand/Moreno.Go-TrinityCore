@@ -102,6 +102,7 @@ type creatureMotion struct {
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / krosh / flame-leviathan / kalecgos-kj cast-only like C++ (julianne excluded: she swings via boss_julianneAI::UpdateAI); zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
+	RegenHealthDisabled   bool                // inverted Creature::_regenerateHealthLock (Creature.h:520): Lua CreatureMethods::SetRegenerateHealth; zero value = regen enabled (the C++ default), honored by the regen tick
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
@@ -151,6 +152,7 @@ type creatureMotion struct {
 	UnitFlags2         uint32
 	FocusRegenTimer    time.Duration
 	PowerRegenTimer    time.Duration
+	RegenTimer         time.Duration // Creature::m_regenTimer (Creature.cpp:263): 2s regen cadence; zero = unseeded, seeded lazily on first step
 	LastManaUse        time.Time
 	HappinessTimer     time.Duration
 	Happiness          uint32
@@ -2477,6 +2479,97 @@ func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion
 		motion.WaitUntil = at.Add(time.Duration(point.Delay) * time.Millisecond)
 	}
 }
+
+// stepCreatureRegen runs the Creature::Update regen arm (Creature.cpp:887-921):
+// every CREATURE_REGEN_INTERVAL (2s, CreatureData.h:137) an alive,
+// non-evading creature regens health while not engaged or polymorphed, then
+// regens its current power. Only the health leg is modeled: the power leg is
+// gated on UNIT_FIELD_FLAGS_2 UNIT_FLAG2_REGENERATE_POWER, which C++ sets only
+// on pets (Pet.cpp:1868) and players (Player.cpp:544) — pets are covered by
+// advancePetRuntime (pet_runtime.go) and non-pet creatures never carry the
+// flag. The CanNotReachTarget leg has no Go twin (the flag can never be set,
+// see the no-path evade note in the combat tick below), so engaged creatures
+// never regen here. Placed after the AI-update hook, mirroring C++ where the
+// regen block follows UpdateAI; tickDiff is the sweep's fixed 100ms cadence.
+func (s *Server) stepCreatureRegen(motion *creatureMotion) {
+	const creatureRegenInterval = 2 * time.Second
+	const tickDiff = 100 * time.Millisecond
+	if motion.RegenTimer <= 0 {
+		motion.RegenTimer = creatureRegenInterval
+	}
+	if tickDiff >= motion.RegenTimer {
+		motion.RegenTimer = 0
+	} else {
+		motion.RegenTimer -= tickDiff
+	}
+	if motion.RegenTimer != 0 {
+		return
+	}
+	motion.RegenTimer = creatureRegenInterval
+	if motion.Evading {
+		return
+	}
+	if !motion.InCombat || s.creatureIsPolymorphed(motion) {
+		s.regenerateCreatureHealth(motion)
+	}
+}
+
+// regenerateCreatureHealth is Creature::RegenerateHealth (Creature.cpp:996-1029).
+// CanRegenerateHealth is always true here: _regenerateHealth defaults true
+// (Creature.cpp:261) and SetRegenerateHealth has no Lua bridge, so the lock
+// is unreachable. Controlled creatures (pet/charmed) use the spirit formula
+// with RATE_HEALTH = 1.0 (Go models no rate config — the player_regen.go:51
+// default); everyone else regens a third of max health per interval.
+// Documented deltas: the SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) multiplier
+// and SPELL_AURA_MOD_REGEN (84) flat folds are unmodeled — Go tracks creature
+// auras but evaluates neither modifier for creatures.
+func (s *Server) regenerateCreatureHealth(motion *creatureMotion) {
+	if motion.RegenHealthDisabled {
+		return
+	}
+	if motion.Health >= motion.MaxHealth {
+		return
+	}
+	var addvalue uint32
+	if (motion.OwnerGUID != 0 || motion.CharmerGUID != 0) && !s.creatureIsPolymorphed(motion) {
+		spirit := float64(motion.Stats[4])
+		if motion.Powers[0] > 0 {
+			addvalue = uint32(spirit * 0.25)
+		} else {
+			addvalue = uint32(spirit * 0.80)
+		}
+	} else {
+		addvalue = motion.MaxHealth / 3
+	}
+	if addvalue == 0 {
+		return
+	}
+	newHealth := motion.Health + addvalue
+	if newHealth > motion.MaxHealth {
+		newHealth = motion.MaxHealth
+	}
+	motion.Health = newHealth
+	s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: newHealth})
+}
+
+// creatureIsPolymorphed is the Unit::IsPolymorphed gate (Unit.cpp:10572): a
+// live SPELL_AURA_TRANSFORM (56) aura. Go records auras only for known spells,
+// subsuming the C++ GetSpellInfo null leg.
+func (s *Server) creatureIsPolymorphed(motion *creatureMotion) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(motion)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura != nil && !aura.Stopped && aura.AuraType == spellAuraTransform {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
 	if motion == nil {
 		return
@@ -2555,6 +2648,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		}
 	}
+
+	s.stepCreatureRegen(motion)
 
 	// Pet AI handling if this creature is a player pet
 	if motion.OwnerGUID != 0 {
