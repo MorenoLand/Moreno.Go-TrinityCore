@@ -596,8 +596,16 @@ local function elderLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ elder Reset (:709-713 / :812-816 / :921-925): if
+-- (me->HasAura(SPELL_DRAINED_OF_POWER)) me->
+-- RemoveAurasDueToSpell(SPELL_DRAINED_OF_POWER) — creature:HasAura
+-- + creature:RemoveAura (moorabi precedent); shared by all three
+-- elders (one handler, three registrations).
 local function elderReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:HasAura(SPELL_DRAINED_OF_POWER) then
+        creature:RemoveAura(SPELL_DRAINED_OF_POWER)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then
