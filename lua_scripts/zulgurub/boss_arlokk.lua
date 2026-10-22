@@ -52,7 +52,8 @@
 -- instance-script model — boss admission via the luaBossAI shim, and
 -- the EnterEvadeMode gong-flag arm is skipped (the 4s despawn has no
 -- bridge); no threat model — mark-of-arlokk target is a random alive
--- player (victim fallback), ResetThreatList skipped; equipment PORTED
+-- player (victim fallback); the vanish ResetThreatList arm IS
+-- ported (:285 — ClearThreatList bridged); equipment PORTED
 -- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
 -- the Reset dagger restore + EVENT_TRANSFORM unequip +
 -- EVENT_TRANSFORM_BACK re-equip arms; no

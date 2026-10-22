@@ -28,8 +28,9 @@
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_SHAZZRAH bookkeeping arms skipped); ResetThreatList has no
--- bridge (no threat model); the spell_shazzrah_gate_dummy SpellScript
+-- the BOSS_SHAZZRAH bookkeeping arms skipped); the EVENT_SHAZZRAH_GATE
+-- ResetThreatList arm IS ported (:154 — ClearThreatList bridged,
+-- lua_objects.go:389); the spell_shazzrah_gate_dummy SpellScript
 -- (picks a random area target, that target casts 23139 teleporting
 -- Shazzrah to it, then AttackStart on the target) has no SpellScript
 -- bridge — the teleport never happens and the AttackStart has no

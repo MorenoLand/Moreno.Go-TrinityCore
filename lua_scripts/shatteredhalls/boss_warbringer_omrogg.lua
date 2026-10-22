@@ -49,8 +49,10 @@
 -- C++-exact), re-arm 40000, blastWave = 16000, blastCount = 1
 -- (C++-exact); reset threat 30s init then {25s,40s} —
 -- bookkeeping only (the C++ arm's DoYellForThreat head-talk
--- sequence and the ResetThreatList/AddThreat calls have no
--- bridges, so the pick-and-reset is unmodeled), re-arm
+-- sequence and AddThreat have no bridges — ResetThreatList's
+-- ClearThreatList twin IS bridged (lua_creature_events.go:202)
+-- but the arm stays out on the unbridged legs — so the
+-- pick-and-reset is unmodeled), re-arm
 -- regardless (C++-exact); fear 30584: 8s init then {15s,35s}
 -- — non-triggered self-cast (C++ DoCast(me), C++-exact),
 -- re-arm {15s,35s} regardless (C++-exact); thunderclap
@@ -90,9 +92,11 @@
 -- EVENT_DEATH_YELL -> Talk(YELL_DIE_R) + setDeathState arm
 -- is reachable only via the boss JustDied ObjectAccessor
 -- relay, and its Reset/JustEngagedWith overrides are empty
--- (ahune bunny / nethekurse fissure precedent); no threat
--- bridge — the ResetThreatList/AddThreat arms unmodeled
--- (timer bookkeeping exact); H_SPELL_BURNING_MAUL 36056 is an
+-- (ahune bunny / nethekurse fissure precedent); the
+-- ResetThreatList/AddThreat arms unmodeled (timer bookkeeping
+-- exact) — AddThreat has no bridge; ResetThreatList's
+-- ClearThreatList twin is bridged (lua_creature_events.go:202)
+-- but the arm stays out on the unbridged legs; H_SPELL_BURNING_MAUL 36056 is an
 -- unused C++ enum member (the cast is unconditional, C++-
 -- exact); the ScriptData "Heroic enabled. Spell timing
 -- may need additional tweaks" (SD%Complete: 85) is an

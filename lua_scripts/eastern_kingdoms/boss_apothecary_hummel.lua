@@ -265,6 +265,12 @@ local function onGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipClearMenu()
         player:GossipComplete()
+        -- C++ OnGossipSelect: me->RemoveFlag(UNIT_NPC_FLAGS,
+        -- UNIT_NPC_FLAG_GOSSIP) (boss_apothecary_hummel.cpp:109) — the
+        -- start option goes away once the event begins. RemoveFlag(82, 1)
+        -- is bridged (lua_creature_events.go:1086); field 82 =
+        -- UNIT_NPC_FLAGS (UpdateFields.h:139), flag 1 = GOSSIP.
+        creature:RemoveFlag(82, 1)
         startEvent(creature)
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms

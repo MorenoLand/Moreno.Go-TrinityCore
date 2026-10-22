@@ -38,8 +38,9 @@
 -- no-flamewaker defeat trigger (no nearest-creature lookup — healer
 -- 11663 / elite 11664), the SetFaction(FACTION_FRIENDLY) arm, the
 -- EnterEvadeMode + _JustDied defeat sequence, EVENT_OUTRO_1's
--- NearTeleportTo(RagnarosTelePos) + gossip-flag arm (no teleport/
--- flag bridges), EVENT_OUTRO_2's SummonCreature(NPC_RAGNAROS 11502)
+-- NearTeleportTo(RagnarosTelePos) + gossip-flag arm (no teleport
+-- bridge; the flag leg IS bridged — SetNPCFlags — but the arm rides
+-- the unported teleport, so it stays out), EVENT_OUTRO_2's SummonCreature(NPC_RAGNAROS 11502)
 -- arm (no summon bridge), and the DoAction(ACTION_START_RAGNAROS /
 -- ACTION_START_RAGNAROS_ALT) arms (no DoAction bearer — the instance
 -- script is blocked on the instance-script model); SPELL_SUMMON_

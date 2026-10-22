@@ -33,7 +33,8 @@
 -- Rain of Bones (37098) is cast on the random target only — its
 -- AuraScript periodic skeleton-summon arm (SPELL_SUMMON_SKELETON 30170,
 -- every 5th tick) has no bridge; AuraScript check handlers are a standing
--- unmodeled area. No threat model, so ResetThreatList is skipped. Tail
+-- unmodeled area. The EVENT_RAIN_OF_BONES ResetThreatList arm IS
+-- ported (:205 — ClearThreatList bridged). Tail
 -- Sweep's HasInArc(PI) behind-target gate is PORTED via the inArc twin
 -- (GetX/GetY/GetO are bridged). No UNIT_STATE_CASTING model, so timers
 -- fire unconditionally.

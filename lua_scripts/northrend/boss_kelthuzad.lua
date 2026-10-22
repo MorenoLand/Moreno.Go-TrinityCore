@@ -59,7 +59,9 @@
 -- orphaned — vortex precedent); EVENT_PHASE_TWO — CastStop +
 -- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList
 -- legs + Talk(EMOTE_PHASE_TWO 13) + the five phase-two event schedules
--- — no phase / react-state / threat bridges; EVENT_FROSTBOLT_VOLLEY —
+-- — no phase / react-state bridges (the threat leg IS bridged —
+-- ClearThreatList, lua_creature_events.go:202 — but the whole
+-- EVENT_PHASE_TWO machine stays out, gothik precedent); EVENT_FROSTBOLT_VOLLEY —
 -- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) single-arg (triggered=false is the default),
 -- randtime(24s,28s) init, randtime(16s,18s) repeat — stays OUT:
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO (:441/:449-452);

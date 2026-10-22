@@ -32,12 +32,16 @@
 -- - OnTargetDied (event 3, C++ KilledUnit): player victim ->
 --   ChaseNewVictim's bridgeable legs — if phase EGG, RemoveAura
 --   FULL_SPEED + GATHERING_SPEED and reschedule both (9s / 60s).
---   The SelectTarget/ResetThreatList/AttackStart/Talk legs have no
---   Lua bridge (no usage anywhere in lua_scripts) — documented below.
+--   The SelectTarget/AttackStart/Talk legs have no Lua bridge; the
+--   ResetThreatList leg's ClearThreatList twin IS bridged
+--   (lua_creature_events.go:202, lua_objects.go:401) but the
+--   ChaseNewVictim switch stays unported on the unbridged legs —
+--   documented below.
 -- Unmodeled (documented-only, no bridges):
 -- - ChaseNewVictim's target switch (SelectTarget Random +
---   ResetThreatList + AttackStart + Talk): no Lua bridge for any of
---   the three calls.
+--   ResetThreatList + AttackStart + Talk): no Lua bridge for the
+--   SelectTarget/AttackStart/Talk legs (ResetThreatList's ClearThreatList
+--   twin is bridged, but the switch stays out on the other legs).
 -- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
 --   buru retargeting via instance GetGuidData(DATA_BURU);
 --   JustDied's ManageRespawn via dynamic_cast to boss_buruAI):

@@ -79,7 +79,8 @@
 -- (EVENT_PATH_2/EVENT_PATH_3 MovePath, EVENT_CHAOS_1/2 gyth-facing
 -- 16337, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
 -- DespawnOrUnsummon, FindNearestCreature/FindNearestGameObject)
--- are not modeled; no threat model — ResetThreatList skipped; the
+-- are not modeled; the EVENT_SHADOW_BOLT ResetThreatList arm IS
+-- ported (:223 — ClearThreatList bridged, lua_objects.go:389); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
 -- + bone-construct grid despawn) is blocked on the instance-script
 -- model; the mind-control event (30-35s) is commented out upstream
