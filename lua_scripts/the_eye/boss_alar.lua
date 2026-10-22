@@ -147,14 +147,13 @@
 -- no-op (skyriss-illusion precedent); no SpellScript/
 -- AuraScript bridge — spell_alar_flame_quills (the 24 flame-
 -- quill sub-spells 34269-34289 / 34314-34316 PeriodicTick)
--- documented only, not bridged (standing blocker); no
--- display/immune/flag/stand-state/attack-state bridges —
--- the Reset() and phase arms touching SetDisplayId/
--- ApplySpellImmune/SetDisableGravity/UNIT_FLAG_NOT_SELECTABLE
--- (dive-bomb machine)/SetStandState/IsNonMeleeSpellCast stay
--- unmodeled (netherspite precedent); the Reset()
--- UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20), as is the
--- Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
+-- documented only, not bridged (standing blocker); the
+-- SetDisplayId/ApplySpellImmune/SetFlag/RemoveFlag/SetStandState
+-- bridges exist and the Reset/rebirth/dive-bomb-machine arms touching
+-- them are PORTED below; SetDisableGravity, UNIT_FLAG_NOT_SELECTABLE
+-- and IsNonMeleeSpellCast stay unmodeled (netherspite precedent);
+-- the Reset() UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20),
+-- as is the Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
 -- template-rate restore arm via creature:SetSpeedRate
 -- (boss_alar.cpp:165).
 
@@ -261,9 +260,9 @@ local function advanceDive(creature, guid)
         creature:CastSpell(creature, SPELL_DIVE_BOMB_VISUAL)
         creature:AddAura(SPELL_DIVE_BOMB_VISUAL)
         -- C++ SpellHit(SPELL_DIVE_BOMB_VISUAL) (boss_alar.cpp:223-224):
-        -- SetDisplayId(11686) — the stale "no display bridge" claim
-        -- retracted (creature:SetDisplayId is bridged,
-        -- lua_creature_events.go:643).
+        -- ApplySpellImmune(0, IMMUNITY_SCHOOL, FIRE, true) then
+        -- SetDisplayId(11686) (C++ arm order).
+        creature:ApplySpellImmune(0, 2, 4, true)
         creature:SetDisplayId(MODEL_INVISIBLE)
         st.dive = { step = "dive", wait = 4000 }
     elseif step == "dive" then
