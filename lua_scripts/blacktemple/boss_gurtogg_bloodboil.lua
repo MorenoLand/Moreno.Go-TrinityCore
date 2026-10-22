@@ -86,9 +86,9 @@
 -- (BossAI::JustEngagedWith/JustDied/Reset and the
 -- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); no threat
 -- model — the GetThreat/ModifyThreatByPercent/AddThreat and
--- AttackStart(oldTarget) arms have no bridge; no flag/immune
--- model — the ApplySpellImmune taunt/attack-me arms have no
--- bridge.
+-- AttackStart(oldTarget) arms have no bridge; the ApplySpellImmune
+-- taunt/attack-me arms ARE bridged (lua_creature_events.go:860) and
+-- ported in onStartPhase2, onChangePhase, and gurtoggReset above.
 
 local ENTRY_GURTOGG_BLOODBOIL = 22948
 

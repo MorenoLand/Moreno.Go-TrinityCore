@@ -56,6 +56,7 @@
 -- blocked on the instance-script model (standing gaps), so the
 -- fight starts on pull, ragnaros-intro convention. The
 -- EnterEvadeMode arms: summons.DespawnAll has no summon bridge; the
+-- DoCast(41999) self-cast arm is ported (teronDied precedent); the
 -- _DespawnAtEvade() -> DespawnOrUnsummon(0s,30s) arm rides
 -- creature:Despawn in teronLeaveCombat (stale 'no bridge' retracted). The npc_doom_blossom
 -- AI (NPC_DOOM_BLOSSOM 23123 per black_temple companion enum: hover
@@ -248,10 +249,12 @@ end
 
 local function teronLeaveCombat(event, creature)
     teronResetState(creature:GetGUID())
-    -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon(0s, 30s)
-    -- (ScriptedCreature.cpp:596-614; najentus/supremus precedent); the
-    -- DoCast(SPELL_SHADOW_OF_DEATH_REMOVE) and summons.DespawnAll()
-    -- arms have no cross-creature/summon bridges.
+    -- C++ EnterEvadeMode arm order: DoCast(SPELL_SHADOW_OF_DEATH_
+    -- REMOVE 41999) self-cast (same AITARGET_SELF bridge as teronDied)
+    -- -> summons.DespawnAll() (no summon bridge) -> _DespawnAtEvade()
+    -- -> DespawnOrUnsummon(0s, 30s) (ScriptedCreature.cpp:596-614;
+    -- najentus/supremus precedent).
+    creature:CastSpell(creature, SPELL_SHADOW_OF_DEATH_REMOVE, false)
     creature:Despawn()
 end
 

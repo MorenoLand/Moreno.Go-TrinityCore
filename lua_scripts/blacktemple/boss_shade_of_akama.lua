@@ -79,25 +79,27 @@ local SPELL_AKAMA_SOUL_CHANNEL = 40447
 local SPELL_AKAMA_SOUL_RETRIEVE = 40902
 local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
 
--- C++ DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when HealthBelowPct(20)
--- (boss_shade_of_akama.cpp:403-407; _hasYelledOnce cleared in
--- Initialize()/Reset()). DamageTaken arms fire on lethal hits (C++
+-- C++ npc_akama_shade::DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when
+-- HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407; _hasYelledOnce
+-- cleared in Initialize()/Reset(), so akamaShadeReset clears the Lua
+-- flag below). DamageTaken arms fire on lethal hits (C++
 -- HealthBelowPctDamaged semantics — yazzai/nefarian convention), so no
--- post-damage guard. The SAY_BROKEN_FREE_*/SAY_DEAD lines (0,1,2,4) are
--- npc_akama_shade's, not this AI's.
-local shadeYelledOnce = {}
+-- post-damage guard. This arm belongs to npc_akama_shade (entry 23191),
+-- NOT to the boss AI. The SAY_BROKEN_FREE_*/SAY_DEAD lines (0,1,2,4) are
+-- also npc_akama_shade's.
+local akamaYelledOnce = {}
 
-local function shadeDamageTaken(event, creature, attacker, damage)
+local function akamaShadeDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    -- C++ DamageTaken HealthBelowPct(20) (boss_shade_of_akama.cpp:403,
+    -- C++ DamageTaken HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407,
     -- pre-damage): strict-< against the floored integer threshold (the
     -- old GetHealthPct() < 20 fired up to 1 HP early — maulgar/ironaya
     -- precedent). DamageTaken arms fire on lethal hits (no post-damage
     -- guard — yazzai/nefarian convention).
     local maxHealth = creature:GetMaxHealth()
-    if not shadeYelledOnce[guid] and maxHealth > 0
+    if not akamaYelledOnce[guid] and maxHealth > 0
         and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
-        shadeYelledOnce[guid] = true
+        akamaYelledOnce[guid] = true
         creature:Talk(SAY_LOW_HEALTH)
     end
 end
@@ -123,13 +125,6 @@ local function shadeSpellHit(event, creature, caster, spellId)
     end
 end
 
--- C++ EnterEvadeMode arms (events.Reset / summons.DespawnAll /
--- spawner DoActions / _DespawnAtEvade) have no bridges -- the Reset
--- flag/emotestate legs live in shadeReset below.
-local function shadeLeaveCombat(event, creature)
-    shadeYelledOnce[creature:GetGUID()] = nil
-end
-
 local function shadeReset(event, creature)
     -- C++ boss_shade_of_akama.cpp:221: SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_STUN=64)
     creature:EmoteState(64)
@@ -145,12 +140,9 @@ local function shadeReset(event, creature)
         creature:SetFlag(59, 0x100)
         creature:SetFlag(59, 0x2000000)
     end
-    shadeYelledOnce[creature:GetGUID()] = nil
 end
 
-RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 2, shadeLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 4, shadeDied)
-RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 9, shadeDamageTaken)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 14, shadeSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 
@@ -181,10 +173,18 @@ local function akamaShadeDied(event, creature, killer)
 end
 
 local function akamaShadeReset(event, creature)
+    -- C++ npc_akama_shade::Reset (boss_shade_of_akama.cpp:364-371):
+    -- Initialize() clears _hasYelledOnce, then SetFaction(FACTION_
+    -- ASHTONGUE_DEATHSWORN 1820) before the stealth self-cast (the
+    -- gossip-flag leg rides the instance boss-state read — no bridge).
+    -- SetFaction is bridged (lua_creature_events.go:1125).
+    akamaYelledOnce[creature:GetGUID()] = nil
     if creature:IsAlive() then
+        creature:SetFaction(1820)
         creature:CastSpell(creature, SPELL_STEALTH)
     end
 end
 
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
