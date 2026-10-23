@@ -28,7 +28,8 @@
 -- (SAY_DING_KILL=1), triggered self-cast 24312 (level up), kill count
 -- reset. Ohgan (14988): sunder armor 24317 5s after Reset then
 -- {10s,15s} on the victim (triggered DoCastVictim, C++-exact);
--- summoned at engage via the live SummonCreature bridge (arm above).
+-- summoned at engage via the live SummonCreature bridge + DoZoneInCombat
+-- tail (arm above).
 -- Vilebranch Speaker (11391): demoralizing shout
 -- 13730 {2s,4s} after Reset then {22s,30s} self-cast (non-triggered
 -- DoCast(me), C++-exact) / cleave 15284 {5s,8s} after Reset then
@@ -249,6 +250,8 @@ local function mandokirEnterCombat(event, creature, target)
     for _, pos in ipairs(POS_CHAINED_SPIRITS) do
         creature:SummonCreature(ENTRY_CHAINED_SPIRT, pos[1], pos[2], pos[3], pos[4], 4)
     end
+    creature:DoZoneInCombat() -- C++ JustEngagedWith tail: engage every
+    -- player on the dungeon map (DoZoneInCombat bridge live 2026-10-23).
     schedule(guid, "overpower", math.random(7000, 9000), function()
         onOverpower(creature, guid)
     end)
