@@ -625,8 +625,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// into combat (only fires on dungeon maps). The C++ setter stores the
 	// delay and re-seeds m_combatPulseTime when it is 0 or larger than the
 	// new delay; the Go twin keeps the same two fields on the motion and
-	// the same seeding rule. The pulse itself runs in stepCreatureCombatPulse
-	// (creaturemotion.go). There is no client broadcast — C++ sends none.
+	// the same seeding rule. Note the C++ quirk (Creature.h:270-275):
+	// m_combatPulseTime is MILLISECONDS but the setter writes the raw
+	// SECONDS value into it, so the first pulse fires on the next update
+	// tick after SetCombatPulseDelay(5) — the Go timer seeds the same raw
+	// numeric value as milliseconds, then re-arms at delay*1000ms after
+	// each pulse (Creature.cpp:866). The pulse itself runs in
+	// stepCreatureCombatPulse (creaturemotion.go). There is no client
+	// broadcast — C++ sends none.
 	methods["SetCombatPulseDelay"] = func(_ context.Context, args []any) ([]any, error) {
 		delay, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -634,9 +640,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.CombatPulseDelaySecs = delay
-		delayDur := time.Duration(delay) * time.Second
-		if motion.CombatPulseTimer == 0 || motion.CombatPulseTimer > delayDur {
-			motion.CombatPulseTimer = delayDur
+		delayMs := time.Duration(delay) * time.Millisecond
+		if motion.CombatPulseTimer == 0 || motion.CombatPulseTimer > delayMs {
+			motion.CombatPulseTimer = delayMs
 		}
 		s.motionMu.Unlock()
 		return nil, nil

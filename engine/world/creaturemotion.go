@@ -108,7 +108,7 @@ type creatureMotion struct {
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
 	CombatPulseDelaySecs  uint32              // Creature::m_combatPulseDelay (Creature.h:270): Lua CreatureMethods::SetCombatPulseDelay; zero = pulse disabled (the C++ default), delay in seconds
-	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining; seeded per the setter rule (timer==0 or timer>delay -> timer=delay)
+	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining (ms); the C++ setter writes the raw secs value into this ms timer, so the first pulse fires on the next tick
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
