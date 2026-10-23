@@ -13,20 +13,23 @@
 -- {4s,10s} then {8s,16s} on the victim (triggered DoCastVictim,
 -- C++-exact) / sleep 24664 at {10s,18s} then {12s,20s} on the victim
 -- (triggered DoCastVictim, C++-exact) / illusions at {10s,18s} then
--- {15s,25s} (re-arm only; no summon model — the three nightmare
--- illusions 15163 never exist, jeklik six-bat convention). The re-arms
--- are unconditional (nil-victim ticks cast nothing but keep the
--- schedule, jeklik convention). Reset cancels timers.
+-- {15s,25s}: 3x nightmare illusion 15163, each summoned at its own
+-- freshly-picked random alive player's live position (C++ re-selects per
+-- illusion; PORTED 2026-10-23; AttackStart has no bridge, documented gap
+-- below). The re-arms are unconditional (nil-victim ticks
+-- cast nothing but keep the schedule, jeklik convention). Reset cancels
+-- timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the illusion summon-and-AttackStart arm has no bearer (no
--- summon model, no movement model) — only the 15-25s re-arm is modeled;
--- no Talk lines exist in the C++ AI.
+-- skipped); the illusion AttackStart leg has no bridge (jeklik:258
+-- convention — the summoned illusions idle until the engine engages
+-- them); no Talk lines exist in the C++ AI.
 
 local ENTRY_HAZZARAH = 15083
+local ENTRY_NIGHTMARE_ILLUSION = 15163
 
 local SPELL_MANABURN = 26046
 local SPELL_SLEEP = 24664
@@ -77,10 +80,42 @@ local function onSleep(creature, guid)
     end)
 end
 
--- C++ EVENT_ILLUSIONS: summon 3 NPC_NIGHTMARE_ILLUSION (15163) on
--- random players with AttackStart. No summon model — only the {15s,25s}
--- re-arm is modeled (jeklik six-bat convention).
+-- C++ EVENT_ILLUSIONS (boss_hazzarah.cpp:86-93): summon 3
+-- NPC_NIGHTMARE_ILLUSION (15163); each loop pass re-picks a random alive
+-- player (SelectTarget Random, 0, 0.f, playerOnly TRUE — no range cap) and
+-- summons at that target's live position,
+-- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN (bridge type 1), 30s, o = the
+-- target's orientation (C++ target->GetPosition()). The
+-- illusion->AI()->AttackStart(target) leg has no bridge (the batrider
+-- AI convention — jeklik:258), so the illusions idle until the engine
+-- engages them (documented gap). Re-arm {15s,25s}, unconditional
+-- (nil-target ticks summon nothing but keep the schedule, jeklik
+-- convention). PORTED 2026-10-23 (position-leg axis).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
 local function onIllusions(creature, guid)
+    -- C++ re-picks the random target per illusion (the SelectTarget call
+    -- is inside the loop), so each summon gets its own fresh pick.
+    for _ = 1, 3 do
+        local target = randomPlayer(creature)
+        if target then
+            creature:SummonCreature(ENTRY_NIGHTMARE_ILLUSION, target:GetX(),
+                target:GetY(), target:GetZ(), target:GetO(), 1, 30000)
+        end
+    end
     schedule(guid, "illusions", math.random(15000, 25000), function()
         onIllusions(creature, guid)
     end)

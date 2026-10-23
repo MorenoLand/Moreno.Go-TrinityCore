@@ -20,30 +20,41 @@
 -- Ported arms (the self-contained in-combat legs):
 -- - Mortal Wound 28467 on the victim (C++ DoCastVictim, non-triggered),
 --   init urand(10000,15000) -> urand(10000,20000).
+-- - SpawnHatchlings_Timer (init urand(6000,12000) -> urand(45000,60000),
+--   gated on HealthAbovePct(3), PORTED 2026-10-23 — position-leg axis):
+--   random alive player (SelectTarget Random, 0, 0.0f, playerOnly TRUE,
+--   no range cap) -> DoCast(target, SPELL_ROOT 28858) non-triggered ->
+--   DoTeleportPlayer(target) to one of the three tunnel coords (player:
+--   TeleportNear) -> 4x SummonCreature(15962 at the target's live
+--   post-teleport position -3/-3, -3/+3, -5/-5, -5/+5 z,
+--   TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT = bridge type 3, 15s, o=0 ->
+--   summoner-orientation fallback), C++-verbatim offsets and
+--   tunnel coords (boss_fankriss.cpp:139-206). The summoned hatchlings'
+--   AttackStart(target) has no bridge (documented gap — they idle until
+--   the engine engages them), and ModifyThreatByPercent(target, -100)
+--   has no threat bridge (documented gap). Re-arm {45000,60000} is
+--   unconditional on fire (C++ sets it inside the <=diff branch even
+--   with no target); the health gate drops the key when below 3%
+--   (C++ outer HealthAbovePct(3) arm).
 -- Unmodeled (documented-only, no bridges):
 -- - SpawnSpawns_Timer (urand 15000-45000 init -> urand 30000-60000):
 --   SummonSpawn(random target via SelectTarget Random) 1-3 times —
 --   DoSpawnCreature(15630, offset coords, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT)
---   has zero Lua usage (cthun precedent — no bridge), and SelectTarget
---   Random has none either; random-player-via-GetPlayersInWorld is
---   unused without a working summon.
+--   has zero Lua usage (cthun precedent — no bridge); random player
+--   selection goes through randomPlayerAnywhere above.
 -- - SpawnHatchlings_Timer (urand 6000-12000 init -> urand 45000-60000,
---   gated by HealthAbovePct(3)): DoCast(target, SPELL_ROOT 28858) +
---   DoTeleportPlayer to one of three tunnel coords (stale 'no
---   DoTeleportPlayer bridge' retracted — player:TeleportNear is bridged,
---   engine/world/lua_player.go:366) + ModifyThreatByPercent(target, -100)
---   (no threat bridge) +
---   me->SummonCreature(15962 x4, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT
---   15s) with AttackStart(target) (SummonCreature zero Lua usage,
---   AttackStart cross-AI unbridgeable). Casting Root alone without the
---   teleport/summon legs would misrepresent the mechanic.
+--   gated by HealthAbovePct(3)): PORTED 2026-10-23 (onSpawnHatchlings
+--   above; stale "SummonCreature zero Lua usage" claims retracted — the
+--   summon bridge is live, jeklik/mandokir precedent).
 -- - SOUND_SENTENCE_YOU/LAWS/TRESPASS/WILL_BE/SERVE_TO 8588-8592:
 --   zero Talk() calls in C++ ("sound not implemented").
 -- - BossAI ctor leg DATA_FRANKRIS (temple_of_ahnqiraj.h:32 = 2) and
 --   _Reset() — instance bridge, standing.
 local ENTRY = 15510
+local ENTRY_HATCHLING = 15962
 
 local SPELL_MORTAL_WOUND = 28467
+local SPELL_ROOT = 28858
 
 local timers = {}
 
@@ -81,11 +92,68 @@ local function onMortalWound(creature, guid)
     end)
 end
 
+-- C++ SpawnHatchlings_Timer (boss_fankriss.cpp:139-206): gated on
+-- HealthAbovePct(3); on fire pick a random alive player (SelectTarget
+-- Random, 0, 0.0f, playerOnly TRUE — no range cap), DoCast(target,
+-- SPELL_ROOT 28858) non-triggered, ModifyThreatByPercent(target, -100)
+-- (no threat bridge — documented gap), DoTeleportPlayer(target) to one
+-- of three tunnel coords, then 4x SummonCreature(15962) at the target's
+-- LIVE post-teleport position with the C++-verbatim offsets
+-- (-3,-3 / -3,+3 / -5,-5 / -5,+5, z = target z), o = 0 (bridge falls
+-- back to the summoner's orientation, Object.cpp:2061-2062 twin),
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 3), 15s =
+-- 15000ms. The hatchlings' AttackStart(target) has no bridge
+-- (documented gap — they idle until the engine engages them).
+-- Re-arm {45000,60000} unconditionally on fire; below-3% health drops
+-- the key (C++ outer HealthAbovePct arm).
+local TUNNEL_SPOTS = {
+    { -8106.0142, 1289.2900, -74.419533, 5.112 },
+    { -7990.135354, 1155.1907, -78.849319, 2.608 },
+    { -8159.7753, 1127.9064, -76.868660, 0.675 },
+}
+
+local function randomPlayerAnywhere(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
+local function onSpawnHatchlings(creature, guid)
+    if creature:GetHealthPct() > 3 then
+        local target = randomPlayerAnywhere(creature)
+        if target then
+            creature:CastSpell(target, SPELL_ROOT)
+            local spot = TUNNEL_SPOTS[math.random(#TUNNEL_SPOTS)]
+            target:TeleportNear(spot[1], spot[2], spot[3], spot[4])
+            local tx, ty, tz = target:GetX(), target:GetY(), target:GetZ()
+            for _, off in ipairs({ { -3, -3 }, { -3, 3 }, { -5, -5 }, { -5, 5 } }) do
+                creature:SummonCreature(ENTRY_HATCHLING, tx + off[1],
+                    ty + off[2], tz, 0, 3, 15000)
+            end
+        end
+        schedule(guid, "hatchlings", math.random(45000, 60000), function()
+            onSpawnHatchlings(creature, guid)
+        end)
+    end
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "mortalwound", math.random(10000, 15000), function()
         onMortalWound(creature, guid)
+    end)
+    schedule(guid, "hatchlings", math.random(6000, 12000), function()
+        onSpawnHatchlings(creature, guid)
     end)
 end
 

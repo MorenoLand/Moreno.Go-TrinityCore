@@ -28,10 +28,13 @@
 -- The timers schedule from OnEnterCombat(1) here; C++ schedules them
 -- from DoAction(ACTION_START_FIGHT) which is only reachable through
 -- the gossip fight option — see gossip notes below.
--- DamageTaken (C++-exact documented-only): 66% phase-two latch ->
--- SummonCreature(NPC_ILSA_DIREBREW 26764) once; 33% phase-three latch
--- -> SummonCreature(NPC_URSULA_DIREBREW 26822) once — no summon
--- bridge on the Lua surface (flamelash precedent), documented-only.
+-- DamageTaken (PORTED below): 66% phase-two latch ->
+-- SummonSister(NPC_ILSA_DIREBREW 26764) at the live position;
+-- 33% phase-three latch -> SummonSister(NPC_URSULA_DIREBREW 26822)
+-- — the SummonCreature + DoZoneInCombat bridges went live 2026-10-23
+-- (retiring the old "no summon bridge" claim). The phase machine
+-- collapses to per-guid one-shot flags (phases advance only through
+-- these arms) with the C++ else-if ordering.
 -- SummonedCreatureDies 1s sister-respawn re-arms are likewise
 -- summon-machine arms (no bridge), documented-only.
 -- Gossip (vael precedent — RegisterCreatureGossipEvent exists and
@@ -91,6 +94,13 @@ local FACTION_GOBLIN_DARK_IRON_BAR_PATRON = 736 -- SharedDefines.h:249
 local SPELL_MOLE_MACHINE_TARGET_PICKER = 47691
 local SPELL_DIREBREW_DISARM_PRE_CAST = 47407
 
+local NPC_ILSA_DIREBREW = 26764 -- boss_coren_direbrew.cpp:55
+local NPC_URSULA_DIREBREW = 26822 -- boss_coren_direbrew.cpp:56
+-- Lua SummonCreature summonType numbering is the C++ TempSummonType
+-- minus 1 (mandokir precedent: C++ TEMPSUMMON_TIMED_DESPAWN_OUT_OF_
+-- COMBAT 4 -> Lua 3), so C++ TEMPSUMMON_DEAD_DESPAWN 7 -> Lua 6.
+local TEMPSUMMON_DEAD_DESPAWN = 6
+
 local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
@@ -98,6 +108,7 @@ local GOSSIP_FIGHT_TEXT = "I'll take that challenge!"
 local GOSSIP_APOLOGIZE_TEXT = "Sorry, I'm too busy to fight."
 
 local timers = {}
+local sisterFlags = {} -- per-guid one-shot latches for the DamageTaken sister summons
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -139,6 +150,7 @@ end
 
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
+    sisterFlags[guid] = nil
     schedule(guid, "molemachine", 15000, function()
         onSummonMoleMachine(creature, guid)
     end)
@@ -148,7 +160,9 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    sisterFlags[guid] = nil
+    cancelTimers(guid)
     -- C++ EnterEvadeMode: _EnterEvadeMode() + summons.DespawnAll() (moot —
     -- mole machines are GO AI, unmodeled) + _DespawnAtEvade(Seconds(10))
     -- (boss_coren_direbrew.cpp:150-152); the 10s is respawn-side, the
@@ -157,19 +171,55 @@ local function onLeaveCombat(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    sisterFlags[guid] = nil
+    cancelTimers(guid)
+end
+
+-- C++ SummonSister (boss_coren_direbrew.cpp:217-220): SummonCreature at
+-- me->GetPosition() with TEMPSUMMON_DEAD_DESPAWN, then DoZoneInCombat
+-- on the sister. Both bridges live (2026-10-23); creature:GetX()/GetY()/
+-- GetZ()/GetO() read the live position via the object.go fallback.
+local function summonSister(creature, entry)
+    local sister = creature:SummonCreature(entry, creature:GetX(),
+        creature:GetY(), creature:GetZ(), creature:GetO(),
+        TEMPSUMMON_DEAD_DESPAWN)
+    if sister then
+        sister:DoZoneInCombat()
+    end
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    -- C++ DamageTaken: 66% one-shot phase-two latch -> SummonCreature
-    -- NPC_ILSA_DIREBREW 26764; 33% one-shot phase-three latch ->
-    -- SummonCreature NPC_URSULA_DIREBREW 26822 — both behind the absent
-    -- summon bridge (flamelash precedent); documented-only here.
+    -- C++ DamageTaken (boss_coren_direbrew.cpp:181-191): 66% one-shot
+    -- phase-two latch -> SummonSister(NPC_ILSA_DIREBREW 26764); 33%
+    -- one-shot phase-three latch -> SummonSister(NPC_URSULA_DIREBREW
+    -- 26822). The C++ gates are HealthBelowPctDamaged(pct, damage) +
+    -- IsInPhase (PHASE_ONE / PHASE_TWO); the phases advance only through
+    -- these two arms, so per-guid one-shot flags are C++-exact, and the
+    -- elseif preserves the C++ else-if ordering (one blow fires at most
+    -- one latch). The SummonedCreatureDies 1s sister-respawn re-arms stay
+    -- documented-only (no DoAction/event-16 bridge).
     -- Damage is never modified (thekal convention returns nothing when
     -- the hook does not alter it).
+    local guid = creature:GetGUID()
+    local flags = sisterFlags[guid]
+    if not flags then
+        flags = {}
+        sisterFlags[guid] = flags
+    end
+    local health = creature:GetHealth()
+    local maxHealth = creature:GetMaxHealth()
+    if not flags.ilsa and health - damage < math.floor(maxHealth * 66 / 100) then
+        flags.ilsa = true
+        summonSister(creature, NPC_ILSA_DIREBREW)
+    elseif not flags.ursula and health - damage < math.floor(maxHealth * 33 / 100) then
+        flags.ursula = true
+        summonSister(creature, NPC_URSULA_DIREBREW)
+    end
 end
 
 local function onReset(event, creature)
+    sisterFlags[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
     -- C++ Reset() (boss_coren_direbrew.cpp:138-141): SetImmuneToPC(true) +
     -- SetFaction(FACTION_FRIENDLY) — both bridged (ingvar precedent).
