@@ -413,6 +413,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.clearCreatureVisualTarget(motion)
 		return nil, nil
 	}
+	// StopMoving is Unit::StopMoving (Unit.cpp:10499-10511): the moving
+	// state is cleared and the stop is broadcast (MoveSplineInit::Stop's
+	// MonsterMoveStop), so clients halt the creature at its current
+	// position. Threat, TargetGUID and InCombat are untouched — unlike
+	// stopCreatureMotion, which is the evade-path teardown, not this
+	// twin. No-op when the creature is not moving (the movespline
+	// Finalized early-out).
+	methods["StopMoving"] = func(ctx context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		if !motion.Moving {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		motion.Moving = false
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+		return nil, nil
+	}
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
 	// creature leaves the world immediately — motion removed, a
 	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,

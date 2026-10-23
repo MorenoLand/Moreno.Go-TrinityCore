@@ -88,14 +88,18 @@
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
 -- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-
--- OUT, decided 2026-10-14: the arm's LeaveCombat-teardown purpose is
--- unbridged (no leave-combat / aura-application bridges on the Lua
--- creature object; the creature cast path has no
--- spellEffectApplyAura delivery leg — SetHomePosition IS bridged,
--- lua_creature_events.go, but a lone home-position write without the
--- teardown would strand the add in combat), and the trigger path
--- (StartAttack's self-cast of the menagerie spells) is itself
--- unported, so event 14 could never fire these IDs.
+-- OUT, decided 2026-10-14, re-keyed 2026-10-22: the arm's
+-- LeaveCombat-teardown purpose is unbridged. creature:AttackStop()
+-- was bridged 2026-10-22 (8feec4cd) but is NOT a substitute — the C++
+-- arm needs full CombatStop (TargetGUID + ThreatMgr + InCombat clear,
+-- Unit.cpp:5809; AttackStop stops the swing only) plus the
+-- EngagementOver evade machine, both still unbridged (19:29 demand
+-- verdict: zero clean CombatStop callers, bridge not built). No
+-- aura-application bridge on the Lua creature object, and the trigger
+-- path (StartAttack's self-cast of the menagerie spells) is itself
+-- unported, so event 14 could never fire these IDs. SetHomePosition
+-- IS bridged (lua_creature_events.go) but a lone home-position write
+-- without the teardown would strand the add in combat.
 -- spell_urom_frostbomb — AuraScript OnPeriodic (EFFECT_1 SPELL_AURA_
 -- PERIODIC_DAMAGE): heroic + IsInCombat gate -> caster CastSpell(
 -- target, SPELL_FROST_BUFFET 58025) — no AuraScript bridge (the

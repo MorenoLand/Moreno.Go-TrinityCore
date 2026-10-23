@@ -9508,32 +9508,36 @@ func init() {
 	// NPC_HEIGAN — kalecgos pass; the GetNaxxramasAI ScriptName binding
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arms in lua_scripts/northrend/boss_heigan.lua:
-	// JustEngagedWith Talk(SAY_AGGRO 0) (event 1; BossAI instance
-	// bookkeeping + GO eruption-tile enumeration + the four event
-	// schedules have no bridge — tharon_ja precedent), KilledUnit
-	// Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk/kelthuzad
+	// JustEngagedWith Talk(SAY_AGGRO 0) + the four event seeds (event 1;
+	// BossAI instance bookkeeping + GO eruption-tile enumeration have no
+	// bridge — tharon_ja precedent; erupt's seed is GO-based, stays out),
+	// KilledUnit Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk/kelthuzad
 	// precedent; the _safetyDance latch has no GetData bridge),
 	// JustDied Talk(SAY_DEATH 3) (event 4; _JustDied instance
-	// bookkeeping has no bridge). No timers are scheduled: every C++
-	// scheduled arm rides an unbridged leg — EVENT_DISRUPT
-	// DoCastAOE(29310) 15-20s->11s and EVENT_FEVER DoCastAOE(29998)
-	// 10-20s->20-25s (no DoCastAOE bridge — terestian/shazzrah
-	// precedent), EVENT_DANCE (90s PHASE_FIGHT-only: SetPhase(DANCE) +
-	// SetReactState(REACT_PASSIVE) + AttackStop/StopMoving + DoCast(
-	// TELEPORT_SELF 30211) + DoCastAOE(PLAGUE_CLOUD 29350) — no
-	// react/motion/DoCastAOE bridges, so its Talk(SAY_TAUNT 2) and
-	// Talk(EMOTE_DANCE 4) stay documented-only — king_dred
-	// genuinely-bridgeable bar), EVENT_DANCE_END (45s: EMOTE_DANCE_END
-	// rides the same unbridged phase machine), EVENT_ERUPT (whole arm
-	// rides GO bridges: TeleportCheaters, GO-by-spawnId tile store
-	// firstEruptionDBGUID 84980 sections 15/25/23/13, ObjectAccessor GO
-	// lookup + tile CastSpell). Documented in the lua file, not wired:
-	// Reset's SetReactState(REACT_AGGRESSIVE) + _Reset(), GetData(
-	// DATA_SAFETY_DANCE 19962139) (no GetData bridge),
-	// spell_heigan_eruption (no SpellScript binding bridge — razelikh
-	// precedent), achievement_safety_dance (no achievement-criteria
-	// bridge — snakes precedent). The Naxxramas block stays OPEN
-	// (13/17 closed; next: gothik — lua exists, audit-and-close).
+	// bookkeeping has no bridge), Reset SetReactState(REACT_AGGRESSIVE)
+	// (event 23; _Reset() instance leg unbridged), leave-combat/death
+	// timer teardown (events 2/4). EVENT_DISRUPT (15-20s->11s) +
+	// EVENT_FEVER (10-20s->20-25s) ported as non-triggered self-casts
+	// (29310/29998; DoCastAOE self-cast convention). EVENT_DANCE (90s,
+	// PHASE_FIGHT-only) ported 2026-10-22: per-GUID dancing latch as the
+	// SetPhase twin (tharon_ja idiom) + Talk(SAY_TAUNT 2) +
+	// Talk(EMOTE_DANCE 4) + SetReactState(REACT_PASSIVE) +
+	// creature:AttackStop() + creature:StopMoving() (bridged this tick) +
+	// self-casts TELEPORT_SELF 30211 / PLAGUE_CLOUD 29350, 45s
+	// DANCE_END seed; the king_dred genuinely-bridgeable-bar objection
+	// is lifted by the SetReactState/AttackStop/StopMoving bridges.
+	// EVENT_DANCE_END ported: Talk(EMOTE_DANCE_END 5) + disrupt/fever/dance
+	// re-seeds + SetReactState(REACT_AGGRESSIVE) (CastStop vacuous —
+	// instant casts only; DoZoneInCombat unbridged, documented).
+	// EVENT_ERUPT stays out — whole arm rides GO bridges: TeleportCheaters,
+	// GO-by-spawnId tile store firstEruptionDBGUID 84980 sections
+	// 15/25/23/13, ObjectAccessor GO lookup + tile CastSpell. Documented
+	// in the lua file, not wired: GetData(DATA_SAFETY_DANCE 19962139)
+	// (no GetData bridge), spell_heigan_eruption (no SpellScript binding
+	// bridge — razelikh precedent), achievement_safety_dance (no
+	// achievement-criteria bridge — snakes precedent). The Naxxramas
+	// block stays OPEN (13/17 closed; next: gothik — lua exists,
+	// audit-and-close).
 	RegisterLuaBoss("boss_heigan", 15936)
 
 	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
