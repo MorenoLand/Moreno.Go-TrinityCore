@@ -38,9 +38,8 @@
 --   bridge (epoch_hunter / maiden precedent) — the cast still fires.
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's SummonCreature(13716, death position, 0,
---   TEMPSUMMON_TIMED_DESPAWN, 10min) — the redeemed-NPC spawn is
---   summon work with no summon bridge (standing); no Talk arm exists
---   in C++ to wire.
+--   TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 10min) — PORTED in onDied;
+--   no Talk arm exists in C++ to wire.
 -- - The C++ file declares zero Talk lines and no KilledUnit override
 --   — no event-3 registration.
 
@@ -143,7 +142,14 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_celebras_the_cursed.cpp:71-74): the whole body is
+-- SummonCreature(13716, death position, o=0, TEMPSUMMON_TIMED_DESPAWN
+-- Eluna type 2, 10min) — the stale "no summon bridge" claim is
+-- retracted; o=0 falls back to the summoner's orientation in both
+-- C++ (Object.cpp:2061) and the Go bridge.
 local function onDied(event, creature, killer)
+    creature:SummonCreature(13716, creature:GetX(), creature:GetY(),
+        creature:GetZ(), 0, 2, 600000)
     cancelTimers(creature:GetGUID())
 end
 

@@ -68,7 +68,7 @@
 -- PORTED: EVENT_SUMMON health-tier (75/50/25%) PipeLocations summon
 -- machine (FORGED_IRON_DWARF 27982 / FORGED_IRON_TROGG 27979 /
 -- MALFORMED_OOZE 27981 / EARTHEN_DWARF 27980,
--- TEMPSUMMON_CORPSE_TIMED_DESPAWN type 6, 30s, 20s re-arm) — 5s seed
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN Eluna type 5, 30s, 20s re-arm) — 5s seed
 -- in sjonnirEnterCombat + summonTick (the stale "no SummonCreature
 -- bridge" claim is retracted — the bridge is creature:SummonCreature
 -- + creature:GetHealthPct() for the tier latch);
@@ -208,10 +208,13 @@ end
 -- unconditional loop; health-tier entry via HealthAbovePct(75/50/25)
 -- (creature:GetHealthPct() is bridged — engine/scripting/object.go
 -- generic fallback, the sindragosa precedent); urand(0,1) pipe;
--- TEMPSUMMON_CORPSE_TIMED_DESPAWN (type 6), 30s.
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN (Eluna type 5; the bridge numbers
+-- the C++ enum 0-based), 30s.
 -- Deviations: C++ JustSummoned moves the summon to CenterPoint
 -- (no MovePoint bridge); the add AIs (27982/27979/27981/27980) are
--- unported/unregistered, so summons are inert until those land.
+-- unported/unregistered, so summons are inert until those land; the
+-- 30s death-timer leg is unmodeled (corpse/dead family 4/5/6 starts
+-- its timer at death — documented engine delta).
 local function summonTick(creature, guid)
     local pipe = PIPE_LOCS[math.random(1, 2)]
     local hp = creature:GetHealthPct()
@@ -223,7 +226,7 @@ local function summonTick(creature, guid)
     elseif hp > 25 then
         entry = NPC_MALFORMED_OOZE
     end
-    creature:SummonCreature(entry, pipe[1], pipe[2], pipe[3], pipe[4], 6, 30000)
+    creature:SummonCreature(entry, pipe[1], pipe[2], pipe[3], pipe[4], 5, 30000)
     schedule(guid, "summon", 20000, function()
         summonTick(creature, guid)
     end)

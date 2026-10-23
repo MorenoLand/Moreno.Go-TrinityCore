@@ -34,9 +34,9 @@
 -- convention), Enraged=true. OnTargetDied(3): Talk(YELL_KILL),
 -- no TYPEID gate (C++-exact — the C++ KilledUnit Talk has no
 -- victim gate). OnDied(4): Talk(YELL_DEATH); the SetBossState(
--- DONE) arm is blocked on the instance-script model and the
--- SummonCreature(NPC_FELMYST) arm has no summon bridge —
--- unmodeled (gurtogg convention). OnLeaveCombat(2)/OnReset(23):
+-- DONE) arm is blocked on the instance-script model; the
+-- SummonCreature(NPC_FELMYST) arm is PORTED (Eluna type 7).
+-- OnLeaveCombat(2)/OnReset(23):
 -- cancel timers, drop per-GUID state (the EnterEvadeMode
 -- !Intro gate has no bridge — evade-side cleanup is engine-side).
 -- The intro chain is unmodeled: StartIntro/DoIntro's Madrigosa
@@ -181,11 +181,15 @@ local function brutallusTargetDied(event, creature, victim)
     creature:Talk(YELL_KILL)
 end
 
--- C++ JustDied: Talk(YELL_DEATH); the SetBossState(DONE) arm is
--- blocked on the instance-script model and the Felmyst summon arm
--- has no summon bridge (gurtogg convention).
+-- C++ JustDied (boss_brutallus.cpp:130-139): Talk(YELL_DEATH);
+-- the SetBossState(DONE) arm is blocked on the instance-script model;
+-- then SummonCreature(NPC_FELMYST 25038, death pos +30z, GetOrientation(),
+-- TEMPSUMMON_MANUAL_DESPAWN Eluna type 7) — the stale "no summon bridge"
+-- claim is retracted (gurtogg convention superseded).
 local function brutallusDied(event, creature, killer)
     creature:Talk(YELL_DEATH)
+    creature:SummonCreature(25038, creature:GetX(), creature:GetY(),
+        creature:GetZ() + 30, creature:GetO(), 7, 0)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     brutallusState[guid] = nil

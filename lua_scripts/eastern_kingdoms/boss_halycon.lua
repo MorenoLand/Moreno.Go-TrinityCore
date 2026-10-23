@@ -27,7 +27,8 @@
 -- DoCast(me, spell) path, boss_twilight_corrupter convention).
 -- JustDied: me->SummonCreature(NPC_GIZRUL_THE_SLAVENER = 10268,
 -- SummonLocation {-167.9561,-411.7844,76.23057,1.53589},
--- TEMPSUMMON_TIMED_DESPAWN, 5min) then Talk(EMOTE_DEATH = 0), C++ arm
+-- TEMPSUMMON_TIMED_DESPAWN (Eluna type 2 — the bridge numbers the C++
+-- enum 0-based), 5min) then Talk(EMOTE_DEATH = 0), C++ arm
 -- order (boss_halycon.cpp:71-74; najentus precedent for the talk leg).
 -- The Summoned member is write-only in C++ (Initialize sets false,
 -- JustDied sets true, never read) — no Lua state needed.
@@ -94,7 +95,7 @@ end
 
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
-    creature:SummonCreature(ENTRY_GIZRUL_THE_SLAVENER, -167.9561, -411.7844, 76.23057, 1.53589, 0, 300000)
+    creature:SummonCreature(ENTRY_GIZRUL_THE_SLAVENER, -167.9561, -411.7844, 76.23057, 1.53589, 2, 300000)
     creature:Talk(EMOTE_DEATH)
 end
 

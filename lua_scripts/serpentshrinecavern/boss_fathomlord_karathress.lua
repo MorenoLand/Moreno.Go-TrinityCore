@@ -51,7 +51,8 @@
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++-exact — no TYPEID gate).
 -- OnDied(4): Talk(SAY_DEATH) + cleanup (the SetData(FATHOMLORD_
 -- KARATHRESSEVENT, DONE) arm is instance-blocked; the Seer Olum
--- 22820 quest-10944 summon arm is summon-blocked). OnLeaveCombat
+-- 22820 quest-10944 summon arm is PORTED below — the stale "no summon
+-- bridge" claim is retracted). OnLeaveCombat
 -- (2)/OnReset(23): cancel the pump, drop per-GUID state (the
 -- evade-side advisor respawn + MoveTargetedHome + SetData(NOT_
 -- STARTED) arms are instance/movement blocked).
@@ -116,8 +117,9 @@
 -- relays (EventSharkkis/Tidalvess/CaribdisDeath: Talk(SAY_GAIN_
 -- ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455 / TIDALVESS
 -- 38452 / CARIBDIS 38451) unmodeled; no summon bridge — the
--- sharkkis pet spawns, the caribdis cyclone summon chain and
--- the Seer Olum quest-10944 summon unmodeled; no movement/
+-- sharkkis pet spawns and the caribdis cyclone summon chain stay
+-- unmodeled (the Seer Olum quest-10944 summon is PORTED in
+-- karathressDied); no movement/
 -- threat/cross-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
@@ -281,8 +283,13 @@ local function karathressTargetDied(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
+-- C++ JustDied (boss_fathomlord_karathress.cpp:205-213): Talk(SAY_DEATH),
+-- SetData(FATHOMLORDKARATHRESSEVENT, DONE) [instance-blocked, stays out],
+-- then SummonCreature(SEER_OLUM 22820, OLUM_X/Y/Z/O, TEMPSUMMON_TIMED_DESPAWN
+-- Eluna type 2, 1h) — quest-10944 support.
 local function karathressDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SummonCreature(22820, 446.78, -542.76, -7.54773, 0.401581, 2, 3600000)
     resetState(karathressState, creature:GetGUID())
 end
 

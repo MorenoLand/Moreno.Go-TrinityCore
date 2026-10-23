@@ -49,8 +49,8 @@
 --   (false)` gate and me->UpdateEntry(NPC_BALNAZZAR) — no casting-state
 --   or entry-update bridges (jandice/barthilas display-ID precedent).
 -- - JustDied: 8x SummonCreature(NPC_ZOMBIE = 10698 "probably incorrect",
---   TEMPSUMMON_TIMED_DESPAWN, 1h) at the file's m_aSummonPoint coords
---   — no summon bridge (willey/herod precedent); positions C++-exact:
+--   TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 1h) at the file's m_aSummonPoint
+--   coords — PORTED in onDied (ZOMBIE_POINTS); positions C++-exact:
 --   (3444.156, -3090.626, 135.002, 2.240) / (3449.123, -3087.009,
 --   135.002, 2.240) / (3446.246, -3093.466, 135.002, 2.240) /
 --   (3451.160, -3089.904, 135.002, 2.240) / (3457.995, -3080.916,
@@ -286,7 +286,25 @@ local function onLeaveCombat(event, creature)
     clearState(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_dathrohan_balnazzar.cpp:119-129): 8x
+-- SummonCreature(NPC_ZOMBIE = 10698, m_aSummonPoint literals,
+-- TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 1h) — the stale "no summon
+-- bridge" claim is retracted (willey/herod precedent superseded).
+local ZOMBIE_POINTS = {
+    { 3444.156, -3090.626, 135.002, 2.240 },
+    { 3449.123, -3087.009, 135.002, 2.240 },
+    { 3446.246, -3093.466, 135.002, 2.240 },
+    { 3451.160, -3089.904, 135.002, 2.240 },
+    { 3457.995, -3080.916, 135.002, 3.784 },
+    { 3454.302, -3076.330, 135.002, 3.784 },
+    { 3460.975, -3078.901, 135.002, 3.784 },
+    { 3457.338, -3073.979, 135.002, 3.784 },
+}
+
 local function onDied(event, creature)
+    for _, p in ipairs(ZOMBIE_POINTS) do
+        creature:SummonCreature(10698, p[1], p[2], p[3], p[4], 2, 3600000)
+    end
     clearState(creature:GetGUID())
 end
 

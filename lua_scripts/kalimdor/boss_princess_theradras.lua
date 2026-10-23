@@ -29,8 +29,8 @@
 --   -> 18s.
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's SummonCreature(12238, 28.067, 61.875, -123.405, 4.67,
---   TEMPSUMMON_TIMED_DESPAWN, 10min) — the quest-NPC spawn is summon
---   work with no summon bridge (standing; celebras precedent).
+--   TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 10min) — PORTED in onDied
+--   (celebras precedent).
 -- - The C++ file declares zero Talk lines and no KilledUnit override
 --   — no event-3 registration.
 
@@ -148,7 +148,12 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_princess_theradras.cpp:74-77): the whole body is
+-- SummonCreature(12238, 28.067, 61.875, -123.405, 4.67,
+-- TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 10min) — the stale "no summon
+-- bridge" claim is retracted (celebras precedent).
 local function onDied(event, creature, killer)
+    creature:SummonCreature(12238, 28.067, 61.875, -123.405, 4.67, 2, 600000)
     cancelTimers(creature:GetGUID())
 end
 
