@@ -51,8 +51,11 @@ local function selectDeathPlagueTarget(creature)
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
+        -- No IsDead leg: the custom-predicate SelectTarget path draws from
+        -- the threat list and filters only IsOffline (UnitAI.h:228-236), so
+        -- a dead player with live threat is a C++ candidate.
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and plr:GetGUID() ~= victimGuid
+                and plr:GetGUID() ~= victimGuid
                 and creature:GetDistance(plr) <= 100.0
                 and not plr:HasAura(SPELL_DEATH_PLAGUE_AURA)
                 and not plr:HasAura(SPELL_RECENTLY_INFECTED) then

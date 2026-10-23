@@ -11663,8 +11663,9 @@ func init() {
 	// DarkFallenAI base + 5 subclass ScheduleSpells — blood knight
 	// (37595): vampiric aura 71736 one-shot, unholy strike 70437
 	// victim / blood mirror 70450 self-cast; noble (37663): chains of
-	// shadow 72960 random non-aura target one-shot (fiend summon has no
-	// summon bridge); archmage (37664): amplify magic 70408 / blast
+	// shadow 72960 random non-aura target one-shot (fiend summon PORTED
+	// via the SummonCreature bridge, npc_darkfallen_icc.lua noble arm);
+	// archmage (37664): amplify magic 70408 / blast
 	// wave 70407 self / polymorph 70410 (noble+archmage
 	// DoSpellAttackIfReady filler unmodeled, melee disabled
 	// C++-exact); advisor (37571): lich slap 72057 victim / shroud

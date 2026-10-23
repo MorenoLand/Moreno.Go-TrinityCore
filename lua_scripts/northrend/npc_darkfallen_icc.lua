@@ -92,7 +92,10 @@ local function emoteTick(creature, guid)
         for _, entry in ipairs(DARKFALLEN_ENTRIES) do
             local near = creature:GetCreaturesInGrid(entry, 10.0)
             for _, c in pairs(near) do
-                if c:IsAlive() and c:GetGUID() ~= guid then
+                -- No self-exclusion: ICCOrbControllerMinionSearch has none
+                -- (icecrown_citadel.cpp:628-644) and the grid visit includes
+                -- the reference, so the minion can polymorph itself.
+                if c:IsAlive() then
                     friends[#friends + 1] = c
                 end
             end
@@ -124,15 +127,20 @@ local function stopEmoteMachine(guid)
     cancelTimers(guid)
 end
 
--- SelectTarget(Random, 0, 0.0f, true, false[, -auraId]) twin: random alive
--- player in the map/instance, optionally excluding auras (the
--- maiden-of-grief randomPlayerTarget idiom).
-local function randomDarkfallenTarget(creature, excludeAura)
+-- SelectTarget(Random, 0, 0.0f, true[, false][, -auraId]) twin: random
+-- alive player in the map/instance, optionally excluding auras (the
+-- maiden-of-grief randomPlayerTarget idiom). Arms whose C++ passes
+-- withTank=false (DefaultTargetSelector drops GetLastVictim(),
+-- UnitAI.cpp:254-257) pass excludeVictim=true.
+local function randomDarkfallenTarget(creature, excludeAura, excludeVictim)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
                 and not plr:IsDead()
+                and (excludeVictim ~= true or plr:GetGUID() ~= victimGuid)
                 and (excludeAura == nil or not plr:HasAura(excludeAura)) then
             candidates[#candidates + 1] = plr
         end
@@ -179,7 +187,7 @@ local function darkfallenEngage(entry, creature)
         -- 72960 aura (the -SPELL_CHAINS_OF_SHADOW selector leg).
         creature:SetMeleeAttack(false)
         schedule(guid, "chains", 500, 0, function()
-            local target = randomDarkfallenTarget(creature, SPELL_CHAINS_OF_SHADOW)
+            local target = randomDarkfallenTarget(creature, SPELL_CHAINS_OF_SHADOW, true)
             if target then
                 creature:CastSpell(target, SPELL_CHAINS_OF_SHADOW)
             end
@@ -229,7 +237,7 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "poly", 17000, 0, function()
             local function polyTick()
-                local target = randomDarkfallenTarget(creature, SPELL_POLYMORPH)
+                local target = randomDarkfallenTarget(creature, SPELL_POLYMORPH, true)
                 if target then
                     creature:CastSpell(target, SPELL_POLYMORPH)
                 end
@@ -240,9 +248,12 @@ local function darkfallenEngage(entry, creature)
     elseif entry == NPC_DARKFALLEN_ADVISOR then
         -- C++ npc_darkfallen_advisor::ScheduleSpells (:974-990): 8s
         -- DoCastVictim(LICH_SLAP 72057) then 12s; 50s shroud of spell
-        -- warding on the lowest-HP friendly within 40.0f then {20s,25s}
-        -- (DoSelectLowestHpFriendly has no bridge — approximated by the
-        -- entry sweep of darkfallen allies, all same-faction).
+        -- warding on the most-HP-missing friendly within 40.0f then
+        -- {20s,25s} (DoSelectLowestHpFriendly = MostHPMissingInRange:
+        -- alive, IN COMBAT, non-hostile, most ABSOLUTE hp missing,
+        -- GridNotifiers.h:813-832 — the pct leg below was wrong; the
+        -- non-hostile leg stays approximated by the same-faction entry
+        -- sweep since IsHostileTo has no handler bridge).
         schedule(guid, "slap", 8000, 0, function()
             local function slapTick()
                 creature:CastSpell(nil, SPELL_LICH_SLAP)
@@ -252,13 +263,13 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "shroud", 50000, 0, function()
             local function shroudTick()
-                local best, bestPct = nil, 100
+                local best, bestMissing = nil, 1
                 for _, e in ipairs(DARKFALLEN_ENTRIES) do
                     for _, c in pairs(creature:GetCreaturesInGrid(e, 40.0)) do
-                        if c:IsAlive() then
-                            local pct = c:GetHealthPct()
-                            if pct < bestPct then
-                                best, bestPct = c, pct
+                        if c:IsAlive() and c:IsInCombat() then
+                            local missing = c:GetMaxHealth() - c:GetHealth()
+                            if missing > bestMissing then
+                                best, bestMissing = c, missing
                             end
                         end
                     end
@@ -283,7 +294,7 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "shadowstep", 10000, 0, function()
             local function stepTick()
-                local target = randomDarkfallenTarget(creature, nil)
+                local target = randomDarkfallenTarget(creature, nil, true)
                 if target then
                     creature:CastSpell(target, SPELL_SHADOWSTEP)
                     creature:CastSpell(target, SPELL_BLOOD_SAP)
