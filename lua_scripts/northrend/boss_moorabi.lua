@@ -39,11 +39,15 @@
 -- DoCastAOE self-cast lowering — arugal precedent); the
 -- _transformed variant selection rides a local per-GUID latch set
 -- in transformTick, matching C++ SpellHit(55098).
+-- EVENT_PHANTOM — PORTED 2026-10-23 (phantomTick): the
+-- Reset-scheduled (event 23) 21s init -> {20s,25s} repeat,
+-- PHASE_INTRO-only pre-pull arm (boss_moorabi.cpp:85, :173-176):
+-- triggered self-cast SPELL_SUMMON_PHANTOM 55205. The phase flip
+-- (SetPhase(PHASE_COMBAT) on JustEngagedWith drops the PHASE_INTRO
+-- event) is emulated by event 1's cancelTimers — the victimless
+-- UpdateAI gate (!UpdateVictim() && !events.IsInPhase(PHASE_INTRO),
+-- :141) exists only so this arm can fire pre-pull.
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_PHANTOM (Reset-scheduled 21s -> 20-25s, PHASE_INTRO only) —
--- no phase bridge (SetPhase/IsInPhase zero hits on the Lua surface)
--- and no faithful pre-pull Reset trigger, so the pre-pull summon
--- cast is not emulated.
 -- EnterEvadeMode _DespawnAtEvade — the despawn half now rides
 -- creature:Despawn (bridged this tick); the instance
 -- SetBossState(FAIL) half rides the no-instance bridge.
@@ -73,6 +77,7 @@ local EMOTE_ACTIVATE_ALTAR = 7
 local SPELL_MOJO_FRENZY = 55163
 local SPELL_TRANSFORMATION = 55098
 local SPELL_SUMMON_PHANTOM_TRANSFORM = 55097
+local SPELL_SUMMON_PHANTOM = 55205 -- boss_moorabi.cpp:26
 local SPELL_GROUND_TREMOR = 55142
 local SPELL_QUAKE = 55101
 local SPELL_NUMBING_SHOUT = 55106
@@ -205,9 +210,33 @@ local function moorabiDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ EVENT_PHANTOM (boss_moorabi.cpp:173-176): triggered
+-- self-cast 55205 (DoCastSelf(SPELL_SUMMON_PHANTOM, true)),
+-- repeat {20s,25s} unconditional (C++-exact — the PHASE_INTRO phase
+-- group is owned by the reset/combat arms around it).
+local function phantomTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_PHANTOM, true)
+    schedule(guid, "phantom", math.random(20000, 25000), function()
+        phantomTick(creature, guid)
+    end)
+end
+
 local function moorabiReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    transformed[creature:GetGUID()] = nil
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    transformed[guid] = nil
+    -- C++ EVENT_PHANTOM (boss_moorabi.cpp:85 Reset, :173-176 UpdateAI):
+    -- Reset-scheduled 21s -> {20s,25s} repeat, triggered self-cast
+    -- 55205, phase group PHASE_INTRO only; JustEngagedWith's
+    -- SetPhase(PHASE_COMBAT) drops it. The UpdateAI victim gate
+    -- (!UpdateVictim() && !events.IsInPhase(PHASE_INTRO)) exists so
+    -- this arm can fire pre-pull without a victim; the phase flip is
+    -- emulated by the phase-change arms — event 23 (fires at spawn
+    -- and evade, = C++ Reset) schedules it, event 1's cancelTimers
+    -- drops it on pull (C++-exact). PORTED 2026-10-23.
+    schedule(guid, "phantom", 21000, function()
+        phantomTick(creature, guid)
+    end)
 end
 
 -- C++ boss_moorabi::SpellHit on the SPELL_TRANSFORMATION self-cast

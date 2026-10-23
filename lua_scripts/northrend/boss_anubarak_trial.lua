@@ -22,8 +22,8 @@
 -- boss_anubarak_trial.cpp only; zero sql/ hits. No anubarak_trial
 -- lua existed (the overnight window did not outrun this one).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset, 24 OnReachHome. Timers via
--- CreateLuaEvent;
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken (phase-3 leeching-swarm
+-- one-shot), 23 OnReset, 24 OnReachHome. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. C++ DoCast default is triggered=false
 -- (vaelastrasz convention): creature:CastSpell(creature, spell) =
@@ -123,14 +123,26 @@
 -- sphere GUID walk + SummonCreature(NPC_FROST_SPHERE) +
 -- _sphereGUID latch (no ObjectAccessor / summon bridges).
 -- boss_anubarak_trial phase-3 leg (boss_anubarak_trial.cpp:420-426) —
--- HealthBelowPct(30) && IsInPhase(PHASE_MELEE) && !_reachedPhase3 ->
--- _reachedPhase3 latch + DoCastAOE(Leeching Swarm 66118) +
--- Talk(EMOTE_LEECHING_SWARM 6) + Talk(SAY_LEECHING_SWARM 5) — stays
--- out: PHASE_MELEE-gated (no phase bridge), and the whole effect is the
--- spell_anubarak_leeching_swarm AuraScript (no SpellScript/AuraScript
--- bridge — shazzrah precedent). The old "no health-pct bridge
--- (doomwalker precedent)" claim was stale — GetHealthPct is bridged
--- (engine/scripting/object.go:107); the phase + AuraScript gates block.
+-- PORTED (2026-10-23) via event 9 anubarakDamageTaken: HealthBelowPct(
+-- 30) && IsInPhase(PHASE_MELEE) && !_reachedPhase3 -> one-shot
+-- reachedPhase3 latch + DoCastAOE(Leeching Swarm 66118, non-triggered
+-- self-cast) + Talk(EMOTE_LEECHING_SWARM 6) + Talk(SAY_LEECHING_SWARM
+-- 5), C++ arm order. PHASE_MELEE is the port's permanent state (Reset
+-- :184 sets it; the submerge/emerge phase machine is unmodeled), so the
+-- phase gate reduces to the latch; the UpdateAI post-damage health
+-- semantics are kept via the postDamage > 0 guard (nefarian form).
+-- The spell_anubarak_leeching_swarm AuraScript periodic life-leech
+-- (66240 / 66125) has no AuraScript bridge — the cast ports, the
+-- scripted periodic effect is a documented deviation (gurtogg bloodboil
+-- precedent). The old "no health-pct bridge (doomwalker precedent)"
+-- and "PHASE_MELEE-gated (no phase bridge)" claims were stale —
+-- GetHealthPct is bridged (engine/scripting/object.go:107) and the
+-- default-phase gate is trivially satisfied.
+-- boss_anubarak_trial.cpp:428: `if (events.IsInPhase(PHASE_MELEE))
+-- DoMeleeAttackIfReady();` — the melee-only-in-phase gate stays out:
+-- no attack-gating bridge (gurtogg precedent — the engine keeps
+-- attacking normally), and it is moot in the port, which never leaves
+-- the melee phase (submerge/emerge unmodeled).
 -- boss_anubarak_trial JustDied's grid despawn of frost spheres
 -- and burrowers — PORTED via the GetCreaturesInGrid bridge
 -- (engine/world/lua_creature_events.go); creature:Despawn() was
@@ -219,13 +231,17 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 local UNIT_FLAG_INTRO_MASK = UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE
 
 local SAY_AGGRO = 1
+local SAY_LEECHING_SWARM = 5 -- boss_anubarak_trial.cpp:41
+local EMOTE_LEECHING_SWARM = 6 -- boss_anubarak_trial.cpp:42
 local SAY_KILL_PLAYER = 7
 local SAY_DEATH = 8
 
 local SPELL_BERSERK = 26662
+local SPELL_LEECHING_SWARM = 66118 -- boss_anubarak_trial.cpp:62
 local SPELL_TRAITOR_KING = 68186
 
 local timers = {}
+local anubarakState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -267,7 +283,9 @@ local function anubarakEnterCombat(event, creature, target)
 end
 
 local function anubarakLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    anubarakState[guid] = nil
 end
 
 local function anubarakTargetDied(event, creature, victim)
@@ -298,9 +316,43 @@ end
 -- unported submerge phase machine (tharon_ja bar).
 local function anubarakReset(event, creature)
     cancelTimers(creature:GetGUID())
+    anubarakState[creature:GetGUID()] = nil
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
     for _, sphere in ipairs(creature:GetCreaturesInGrid(NPC_FROST_SPHERE, 150)) do
         sphere:Despawn()
+    end
+end
+
+-- C++ boss_anubarak_trialAI::UpdateAI phase-3 leg
+-- (boss_anubarak_trial.cpp:420-426): HealthBelowPct(30) &&
+-- IsInPhase(PHASE_MELEE) && !_reachedPhase3 -> one-shot latch +
+-- DoCastAOE(Leeching Swarm 66118, non-triggered — C++ DoCast default)
+-- + Talk(EMOTE_LEECHING_SWARM 6) + Talk(SAY_LEECHING_SWARM 5), C++
+-- arm order kept. PHASE_MELEE is the port's permanent state (Reset
+-- :184 sets it; the submerge/emerge phase machine is unmodeled), so
+-- the phase gate reduces to the one-shot latch. UpdateAI health arms
+-- are post-damage — the nefarian onDamageTaken form: fire only when
+-- post-damage health is alive (>0) and HealthBelowPct(30) on it
+-- (C++ integer form: health*100 <= 30*max). The
+-- spell_anubarak_leeching_swarm AuraScript periodic life-leech has no
+-- AuraScript bridge — the cast ports, the scripted periodic effect is
+-- a documented deviation (gurtogg bloodboil precedent).
+local function anubarakDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = anubarakState[guid]
+    if st and st.reachedPhase3 then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage * 100 <= maxHealth * 30 then
+        anubarakState[guid] = { reachedPhase3 = true }
+        creature:CastSpell(creature, SPELL_LEECHING_SWARM)
+        creature:Talk(EMOTE_LEECHING_SWARM)
+        creature:Talk(SAY_LEECHING_SWARM)
     end
 end
 
@@ -326,6 +378,7 @@ end
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 24, anubarakReachHome)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 9, anubarakDamageTaken)
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)

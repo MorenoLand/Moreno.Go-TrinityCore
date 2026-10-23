@@ -155,12 +155,18 @@
 -- already used by the material 75% latch in this file): latch-gated
 -- DoCastSelf(SPELL_TWILIGHT_DIVISION 75063) (non-triggered) +
 -- Talk(SAY_PHASE_THREE 2), C++ arm order (cast then Talk); the
--- never-die cap above it in C++ is applied to the check only (C++
--- evaluation order — the damage rewrite stays out, else the boss is
--- unkillable without the cross-creature KillSelf legs); CastStop rides
--- the absent CastStop bridge (benign); the PHASE_THREE
--- controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN) routing leg
--- rides the no-cross-AI bridge.
+-- never-die cap (damage = health - 1 while not PHASE_THREE) is ported
+-- with C++ evaluation order (cap applied before the 50% check, so the
+-- crossing blow is capped; the cap drops in phase three so the boss is
+-- killable — the shared fightPhaseThree latch, gurtogg onChangePhase
+-- idiom); CastStop rides the absent CastStop bridge (benign); the
+-- PHASE_THREE controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN)
+-- routing leg rides the no-cross-AI bridge.
+-- boss_halion EnterEvadeMode (:236) — forwards the evade to the
+-- controller creature when why == EVADE_REASON_BOUNDARY or the phase
+-- machine is in PHASE_ONE — stays out (EnterEvadeMode has no Lua
+-- bridge, boss_ai.go:5753-5754; the cross-creature forward rides the
+-- no-cross-AI bridge).
 -- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out on the same unported-
 -- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
@@ -200,10 +206,12 @@
 -- EMOTE_CORPOREALITY_TOT/TIT/POT/PIP + EMOTE_WARN_LASER 0 +
 -- SAY_SPHERE_PULSE 1 documented above).
 -- Missing-cast audit 2026-10-16 (all 11): PORTED — 74808
--- SPELL_TWILIGHT_PHASING (:293, halionDamageTaken 75% latch). BLOCKED —
--- 75476 DUSK_SHROUD (:414, twilight ctor, no construction hook); 75063
--- TWILIGHT_DIVISION (:479, 50% transition, twilight phase machine
--- unmodeled); 74805 SUMMON_EXIT_PORTALS (:677), 76006 COSMETIC_FIRE_
+-- SPELL_TWILIGHT_PHASING (:293, halionDamageTaken 75% latch); 75063
+-- SPELL_TWILIGHT_DIVISION (:479, twilightHalionDamageTaken 50% latch —
+-- the 2026-10-16 "twilight phase machine unmodeled" claim is retracted:
+-- the transition is ported with the 50% latch + Talk). BLOCKED —
+-- 75476 DUSK_SHROUD (:414, twilight ctor, no construction hook);
+-- 74805 SUMMON_EXIT_PORTALS (:677), 76006 COSMETIC_FIRE_
 -- PILLAR (:710), 76010 FIERY_EXPLOSION (:726) — npc_halion_controller
 -- (40146, unregistered) DoAction/event arms, triggers instance-side;
 -- 74648 AOE_DAMAGE (:1006), 74713 FIRE_AURA_1 (:1007), 74641 COUNTDOWN
@@ -293,6 +301,15 @@ end
 -- pre-damage event 9; the zum_rah latch precedent).
 local phaseTwo = {}
 
+-- Encounter-wide phase-three latch (C++ boss_halion.cpp:283/:469 —
+-- the never-die damage cap drops in PHASE_THREE, i.e. the boss
+-- becomes killable). The controller SetData(DATA_FIGHT_PHASE) phase
+-- machine has no bridge, so the latch is set by the ported twilight
+-- 50% transition (twilightHalionDamageTaken below — the gurtogg
+-- onChangePhase idiom) and read by both never-die caps; cleared on
+-- every combat-end / reset / died path of both halves.
+local fightPhaseThree = false
+
 -- C++ boss_halion::JustEngagedWith :242-262:
 -- Talk(SAY_AGGRO); events.Reset(); events.SetPhase(PHASE_ONE);
 -- BossAI::JustEngagedWith(who); me->AddAura(SPELL_TWILIGHT_PRECISION, me);
@@ -311,6 +328,7 @@ local function halionEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     phaseTwo[guid] = nil
+    fightPhaseThree = false
     schedule(guid, "mat_cleave", {6000, 10000}, function()
         matCleaveTick(creature, guid)
     end)
@@ -326,44 +344,52 @@ local function halionCombatEnd(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     phaseTwo[guid] = nil
+    fightPhaseThree = false
 end
 
--- C++ boss_halion::DamageTaken :286-296:
--- HealthBelowPctDamaged(75, damage) && IsInPhase(PHASE_ONE) ->
--- events.SetPhase(PHASE_TWO); Talk(SAY_PHASE_TWO); me->CastStop();
--- UNIT_FLAG_NOT_SELECTABLE; DoCastSelf(SPELL_TWILIGHT_PHASING);
--- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_TWO). The Talk +
--- the stop of the phase-one timer arms + the DoCastSelf
--- SPELL_TWILIGHT_PHASING 74808 cast port (non-triggered ->
+-- C++ boss_halion::DamageTaken :283-296:
+-- Lethal-damage cap (damage = health - 1) applies while NOT in
+-- PHASE_THREE (C++ evaluation order: the cap is applied BEFORE the
+-- 75% check, so the latch above fires on the killing blow exactly as
+-- in C++ — DamageTaken-class, fires on lethal by design); in
+-- PHASE_THREE the cap drops and the boss is killable. The phase gate
+-- rides the shared fightPhaseThree latch (set by the twilight 50%
+-- transition below; the controller SetData(DATA_FIGHT_PHASE) phase
+-- machine has no bridge — the gurtogg onChangePhase idiom).
+-- Talk(SAY_PHASE_TWO) + the stop of the phase-one timer arms + the
+-- DoCastSelf SPELL_TWILIGHT_PHASING 74808 cast port (non-triggered ->
 -- creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) — the DoCastSelf
 -- lowering, same idiom as the BREATH self-casts); the flag / CastStop /
 -- controller SetData legs ride absent bridges (SetFlag IS bridged
 -- but no CastStop / cross-creature SetData methods — verified in
--- engine/world/lua_objects.go this run). The never-die
--- damage cap (damage = health-1 while not PHASE_THREE) rides the
--- unbridged phase machine and stays out.
+-- engine/world/lua_objects.go this run).
 local function halionDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if phaseTwo[guid] then
-        return
-    end
+    -- C++ :283 reads IsInPhase(PHASE_THREE) before the transition
+    -- checks, so the phase-crossing blow is still capped.
+    local wasPhaseThree = fightPhaseThree
     local health = creature:GetHealth()
-    local postHealth = 0
-    if health > damage then
-        postHealth = health - damage
+    local capped = damage
+    if damage >= health and not wasPhaseThree then
+        capped = health - 1
     end
-    if postHealth * 100 < creature:GetMaxHealth() * 75 then
-        phaseTwo[guid] = true
-        creature:Talk(SAY_PHASE_TWO)
-        creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
-        cancelTimers(guid)
+    if not phaseTwo[guid] then
+        local postHealth = 0
+        if health > capped then
+            postHealth = health - capped
+        end
+        if postHealth * 100 < creature:GetMaxHealth() * 75 then
+            phaseTwo[guid] = true
+            creature:Talk(SAY_PHASE_TWO)
+            creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
+            cancelTimers(guid)
+        end
     end
-    -- C++ never-die cap (boss_halion.cpp:283): lethal damage before
-    -- phase three is clamped to health - 1, evaluated before the 75%
-    -- check — the latch above fires on the killing blow exactly as in
-    -- C++ (DamageTaken-class, fires on lethal by design).
-    if damage >= health then
-        return false, health - 1
+    -- C++ never-die cap (boss_halion.cpp:283): lethal damage while not
+    -- in phase three is clamped to health - 1 (phases 1 AND 2); in
+    -- phase three the cap drops and the boss is killable.
+    if capped ~= damage then
+        return false, capped
     end
 end
 
@@ -373,6 +399,7 @@ end
 -- no bridges).
 local function halionDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    fightPhaseThree = false
     creature:Talk(SAY_DEATH)
 end
 
@@ -480,6 +507,7 @@ end
 local function twilightHalionEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    fightPhaseThree = false
     schedule(guid, "cleave", 3000, function()
         cleaveTick(creature, guid)
     end)
@@ -508,6 +536,7 @@ local function twilightHalionLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    fightPhaseThree = false
 end
 
 -- C++ boss_twilight_halion::Reset is EMPTY (boss_halion.cpp:436) —
@@ -518,6 +547,7 @@ local function twilightHalionReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    fightPhaseThree = false
 end
 
 -- C++ boss_twilight_halion::JustDied: _events.Reset() +
@@ -528,51 +558,53 @@ local function twilightHalionDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    fightPhaseThree = false
 end
 
 -- C++ boss_twilight_halion::DamageTaken :469-482 (pre-damage event 9 —
--- the zum_rah latch precedent): HealthBelowPctDamaged(50, damage) &&
+-- the zum_rah latch precedent): lethal-damage cap (damage = health -
+-- 1) while NOT in PHASE_THREE (C++ evaluation order: the cap is
+-- applied BEFORE the 50% check, so the crossing blow is capped and the
+-- boss survives it at 1 hp); HealthBelowPctDamaged(50, damage) &&
 -- IsInPhase(PHASE_TWO) -> SetPhase(PHASE_THREE); me->CastStop();
 -- DoCastSelf(SPELL_TWILIGHT_DIVISION 75063) (non-triggered);
 -- Talk(SAY_PHASE_THREE 2). The PHASE_TWO gate is entered in
 -- JustEngagedWith (twilightHalionEnterCombat below), so the latch below
--- is the faithful substitute; the never-die cap above it in C++
--- (damage = health-1 while not PHASE_THREE) is applied to the CHECK
--- only (C++ evaluation order) — the actual damage rewrite stays out,
--- since porting it without the cross-creature KillSelf legs would make
--- the boss unkillable. The CastStop leg rides the absent CastStop
--- bridge (benign: Go casts are packet-only); the PHASE_THREE
+-- is the faithful substitute; the transition also sets the shared
+-- fightPhaseThree latch that drops both halves' never-die caps (the
+-- gurtogg onChangePhase idiom). The CastStop leg rides the absent
+-- CastStop bridge (benign: Go casts are packet-only); the PHASE_THREE
 -- damage-routing leg (controller->AI()->SetData
 -- (DATA_TWILIGHT_DAMAGE_TAKEN)) rides the no-cross-AI bridge.
 local function twilightHalionDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
-    if twilightPhaseThree[guid] then
-        return
-    end
+    -- C++ :469 reads IsInPhase(PHASE_THREE) before the 50% check, so
+    -- the phase-crossing blow is still capped.
+    local wasPhaseThree = twilightPhaseThree[guid]
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 or health == 0 then
         return
     end
-    -- C++ applies the never-die cap before the 50% check; mirror the
-    -- evaluation order for the check, and rewrite the damage at the end
-    -- (boss_halion.cpp:469).
-    local effDamage = damage
-    if effDamage >= health then
-        effDamage = health - 1
+    local capped = damage
+    if damage >= health and not wasPhaseThree then
+        capped = health - 1
     end
     -- HealthBelowPctDamaged strict-<, signed, unclamped
-    -- (Unit.h:873; the zum_rah precedent).
-    if (health - effDamage) * 100 < maxHealth * 50 then
+    -- (Unit.h:873; the zum_rah precedent) — evaluated on the capped
+    -- damage, C++ :469-:475 order.
+    if not wasPhaseThree and (health - capped) * 100 < maxHealth * 50 then
         twilightPhaseThree[guid] = true
+        fightPhaseThree = true
         creature:CastSpell(creature, SPELL_TWILIGHT_DIVISION)
         creature:Talk(SAY_PHASE_THREE)
     end
-    -- C++ never-die cap (boss_halion.cpp:469): lethal damage before
-    -- phase three is clamped to health - 1 so the twilight half cannot
-    -- die early (the akama / illidan health-1 precedent).
-    if damage >= health then
-        return false, health - 1
+    -- C++ never-die cap (boss_halion.cpp:469): lethal damage while not
+    -- in phase three is clamped to health - 1 (phases 1 AND 2); in
+    -- phase three the cap drops and the boss is killable (the akama /
+    -- illidan health-1 precedent).
+    if capped ~= damage then
+        return false, capped
     end
 end
 
