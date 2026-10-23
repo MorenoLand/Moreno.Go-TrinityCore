@@ -641,6 +641,117 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// SummonCreature is Creature::SummonCreature (Creature.cpp: the
+	// TempSummon::InitSummon twin, TemporarySummon.cpp:168-244): spawns a
+	// temporary creature of the given entry at (x, y, z, o) on the
+	// summoner's map/instance and returns it. Eluna CreatureMethods::
+	// SummonCreature signature (entry, x, y, z, o, summonType,
+	// despawnTimer); summonType is the C++ TempSummonType enum (0
+	// TIMED_OR_DEAD_DESPAWN, 1 TIMED_OR_CORPSE_DESPAWN, 2 TIMED_DESPAWN,
+	// 3 TIMED_DESPAWN_OUT_OF_COMBAT, 4 CORPSE_DESPAWN, 5 CORPSE_TIMED_DESPAWN,
+	// 6 DEAD_DESPAWN, 7 MANUAL_DESPAWN) and defaults to 7; despawnTimer is
+	// milliseconds, default 0. C++ InitStats (TemporarySummon.cpp:168-183)
+	// stamps the template's level/stats — the motionFor funnel does the
+	// same from creature_template — and TempSummon::InitSummon fires
+	// Eluna::JustSummoned (CreatureHooks.cpp:165-171), twinned here as
+	// CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) on the summoner after
+	// the lock release (Lua handlers lock motionMu on demand). The summon
+	// GUID allocates from the dynamic-creature range (totem precedent) and
+	// never collides with DB rows. Unknown entries return nil (C++ logs
+	// and returns null for a missing template). The summon is NOT
+	// auto-aggroed: C++ arms call DoZoneInCombat/AttackStart explicitly,
+	// so ported arms must do the same.
+	methods["SummonCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		summonType := uint32(7)
+		if len(args) > 5 {
+			if summonType, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+			if summonType > 7 {
+				return nil, fmt.Errorf("SummonCreature summonType must be 0-7")
+			}
+		}
+		var despawnMs uint32
+		if len(args) > 6 {
+			if despawnMs, err = luaUint32Arg(args, 6); err != nil {
+				return nil, err
+			}
+		}
+		if s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{nil}, nil
+		}
+		var exists int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
+			return []any{nil}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		var walkSpeed, runSpeed float64 = 1.0, 1.14286
+		_ = s.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT COALESCE(speed_walk, 1), COALESCE(speed_run, 1) FROM creature_template WHERE entry = ?",
+			entry).Scan(&walkSpeed, &runSpeed)
+		low := s.nextDynamicCreatureLowGUID()
+		summoned := s.motionFor(ctx, low, entry, mapID, instanceID, x, y, z, o, 0, 0, float32(walkSpeed), float32(runSpeed), 0)
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		s.motionMu.Lock()
+		summoned.OwnerGUID = ownerGUID
+		summoned.TempSummonType = uint8(summonType)
+		// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
+		// the summon type: only the timed family (0/1/2/3) arms the timer
+		// at spawn. The corpse/dead family (4/5/6) starts its timer at
+		// death — unmodeled here (documented delta) — and MANUAL (7) has
+		// no timer.
+		if despawnMs > 0 && summonType <= 3 {
+			summoned.TempSummonLifetime = time.Duration(despawnMs) * time.Millisecond
+			summoned.TempSummonExpiresAt = time.Now().Add(summoned.TempSummonLifetime)
+		}
+		stats := s.loadCreatureStats(ctx, entry)
+		spawn := creatureSpawn{
+			GUID: low, RawGUID: summoned.GUID, Entry: entry, Map: mapID,
+			X: x, Y: y, Z: z, Orientation: o,
+			Model: stats.Model, Faction: summoned.Faction, NPCFlags: stats.NPCFlags,
+			UnitFlags: stats.UnitFlags, Level: stats.Level,
+			Health: stats.Health, MaxHealth: stats.MaxHealth,
+			Scale: stats.Scale, Mana: stats.Mana,
+			WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed),
+		}
+		s.motionMu.Unlock()
+		// Re-create the object client-side: the create block goes to the
+		// whole instance (respawnEvadedCreature pattern), not just nearby
+		// players — C++ AddToWorld notifies the full map.
+		s.applyCreatureMotionToSpawn(playerState{Map: mapID, InstanceID: instanceID}, &spawn)
+		updates := protocol.NewUpdateData()
+		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
+		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+			s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+		}
+		s.fireCreatureSummoned(ctx, motion, scripting.CreatureEventOnJustSummonedCreature, summoned)
+		return []any{s.luaMotionCreature(summoned)}, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id

@@ -22,7 +22,8 @@
 -- boss_anubarak_trial.cpp only; zero sql/ hits. No anubarak_trial
 -- lua existed (the overnight window did not outrun this one).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
+-- OnTargetDied, 4 OnDied, 23 OnReset, 24 OnReachHome. Timers via
+-- CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. C++ DoCast default is triggered=false
 -- (vaelastrasz convention): creature:CastSpell(creature, spell) =
@@ -52,9 +53,16 @@
 -- the old "no hook on the Lua surface" note was stale; event 27
 -- exists, depth_charge precedent — but wiring a Talk C++ never
 -- emits would fabricate behavior).
--- boss_anubarak_trial JustReachedHome — instance->SetBossState(
--- DATA_ANUBARAK, FAIL) (instance-script model absent, standing) +
--- SummonCreature(NPC_SCARAB) x10 (summon STRAND absent, standing).
+-- boss_anubarak_trial JustReachedHome — the scarab arm is PORTED this
+-- run (anubarakReachHome, event 24 — the old "summon STRAND absent"
+-- claim is re-keyed): 10x SummonCreature(NPC_SCARAB 34605,
+-- AnubarakLoc[1] (695.240051, 137.834824, 142.200000) + urand(0,50)-25
+-- x/y offsets, o 0.0f — the 4-arg C++ overload defaults
+-- TEMPSUMMON_MANUAL_DESPAWN (7), despawnMs 0) + scarab:SetFaction(
+-- FACTION_PREY 31). Documented deltas: the instance->SetBossState(
+-- DATA_ANUBARAK, FAIL) leg has no instance bridge; the
+-- GetMotionMaster()->MoveRandom(10) leg has no motion bridge — the
+-- scarabs stand at their spawn points instead of wandering.
 -- boss_anubarak_trial JustSummoned NPC_BURROW 34862 leg —
 -- SetDisplayId (display bridge live 2026-10-20) +
 -- SetReactState(REACT_PASSIVE) (react bridge exists) +
@@ -204,6 +212,7 @@ local ENTRY_SWARM_SCARAB = 34605
 local ENTRY_SPIKE = 34660
 local NPC_FROST_SPHERE = 34606
 local NPC_BURROWER = 34607
+local FACTION_PREY = 31 -- SharedDefines.h
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
@@ -295,7 +304,28 @@ local function anubarakReset(event, creature)
     end
 end
 
+-- C++ boss_anubarak_trialAI::JustReachedHome
+-- (boss_anubarak_trial.cpp:225-233): instance->SetBossState(
+-- DATA_ANUBARAK, FAIL) has no instance bridge (documented above);
+-- the scarab arm is ported: 10x SummonCreature(NPC_SCARAB 34605,
+-- AnubarakLoc[1] x/y + urand(0,50)-25, o 0.0f, TEMPSUMMON_MANUAL_DESPAWN
+-- (7), despawnMs 0) + scarab:SetFaction(FACTION_PREY). The
+-- GetMotionMaster()->MoveRandom(10) leg has no motion bridge
+-- (documented delta above).
+local function anubarakReachHome(event, creature)
+    for _ = 1, 10 do
+        local scarab = creature:SummonCreature(ENTRY_SWARM_SCARAB,
+            695.240051 + math.random(0, 50) - 25,
+            137.834824 + math.random(0, 50) - 25,
+            142.200000, 0, 7, 0)
+        if scarab then
+            scarab:SetFaction(FACTION_PREY)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 24, anubarakReachHome)
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)

@@ -91,9 +91,12 @@
 -- 2026-10-22 (creature:SetSpeedRate bridge, lua_creature_events.go:735;
 -- the stale "speed blocked" claim is retracted — the speed leg is
 -- separable from the unported dual-wield/corpse-delay/instance arms);
--- the CheckChannelers summon, dual-wield/corpse-delay setup,
+-- the CheckChannelers summon arm is PORTED 2026-10-22
+-- (creature:SummonCreature bridge; Despawn stands in for the
+-- unbridged DisappearAndDie, type-6 dead-despawn delta — see
+-- checkChannelers); the dual-wield/corpse-delay setup,
 -- SPELL_DUAL_WIELD 42459 triggered self-cast and
--- SetData(NOT_STARTED) arms stay out — summon/item/instance blocked.
+-- SetData(NOT_STARTED) arms stay out — item/instance blocked.
 -- boss_leotheras_the_blind_demonform (21875): OnEnterCombat(1):
 -- per-GUID reset (chaosBlast 1000) + Talk(SAY_FREE) (the C++
 -- JustEngagedWith -> StartEvent arm) + 1s pump. Pump: chaos
@@ -154,10 +157,14 @@
 -- AURA_BANISH 37833 apply/remove, ApplySpellImmune banish
 -- arms, LoadEquipment, starter-victim AddThreat — skipped; the
 -- banished pre-phase collapses into the pull per the
--- magtheridon convention); no summon bridge — the 3x Greyheart
--- Spellbinder (21806) CheckChannelers summons, the inner-demon
--- (21857) summon arms and the final-form demon-copy (21875)
--- spawn unmodeled (firesworn/hydross convention); no movement/
+-- magtheridon convention); the 3x Greyheart Spellbinder (21806)
+-- CheckChannelers summons are PORTED 2026-10-22
+-- (creature:SummonCreature bridge — see checkChannelers; the
+-- spellbinder-Reset re-summon relay stays cross-creature blocked);
+-- the inner-demon (21857) summon arms and the final-form
+-- demon-copy (21875) spawn stay unmodeled — threat/victim-binding
+-- and cross-creature legs unbridged (firesworn/hydross
+-- convention); no movement/
 -- threat bridge beyond ClearThreatList — the whirlwind target-switch
 -- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
 -- half is PORTED below via creature:ClearThreatList), the chaos-
@@ -265,6 +272,48 @@ local function healthBelowPct(creature, pct)
         return false
     end
     return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
+-- C++ CheckChannelers() (boss_leotheras_the_blind.cpp:261-278):
+-- per-slot x/y/o offsets from the boss's position (C++ captures
+-- x,y,z at AI construction; the Lua Reset handler reads the live
+-- position — exact on respawn, home on evade).
+local SPELLBINDER_OFFSETS = {
+    {10, -5, 2.5},
+    {-8, -7, 0.9},
+    {-3, 9, 5.0},
+}
+
+-- Summoned spellbinder objects per boss GUID (C++ SpellBinderGUID[3];
+-- objects, not GUIDs — there is no GUID-lookup bridge).
+local leotherasBinders = {}
+
+-- C++ CheckChannelers() (boss_leotheras_the_blind.cpp:249, first arm
+-- of Reset, C++ arm order): despawn the previous set, then summon 3x
+-- Greyheart Spellbinder (21806) at the offsets above,
+-- TEMPSUMMON_DEAD_DESPAWN (6), despawnMs 0 (C++ passes no despawn
+-- time). C++ DisappearAndDie has no bridge — creature:Despawn removes
+-- without a death event (documented delta); the type-6 dead-despawn is
+-- likewise a documented delta (corpses take the normal sweep).
+-- Skipped when the boss is dead: Go fires 23 on death, C++ Reset does
+-- not run on death (ScriptedAI).
+local function checkChannelers(creature, guid)
+    local old = leotherasBinders[guid]
+    if old then
+        for _, binder in ipairs(old) do
+            binder:Despawn()
+        end
+    end
+    local binders = {}
+    local hx, hy, hz = creature:GetX(), creature:GetY(), creature:GetZ()
+    for _, off in ipairs(SPELLBINDER_OFFSETS) do
+        local binder = creature:SummonCreature(ENTRY_SPELLBINDER,
+            hx + off[1], hy + off[2], hz, off[3], 6, 0)
+        if binder then
+            binders[#binders + 1] = binder
+        end
+    end
+    leotherasBinders[guid] = binders
 end
 
 -- C++ Initialize(): whirlwind 15000, chaosBlast 1000, switchToDemon
@@ -444,7 +493,13 @@ local function leotherasDied(event, creature, killer)
 end
 
 local function leotherasReset(event, creature)
-    resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
+    local guid = creature:GetGUID()
+    -- C++ Reset() :249 CheckChannelers() — first arm, before
+    -- Initialize() (C++ arm order).
+    if not creature:IsDead() then
+        checkChannelers(creature, guid)
+    end
+    resetCreature(leotherasTimers, leotherasState, guid)
     -- C++ Reset() :252-255 runs on evade: 2.0x run speed (C++ arm order:
     -- speed first), nightelf model, zeroed weapon slots (display then the
     -- item slots); the dual-wield/corpse-delay/instance arms stay

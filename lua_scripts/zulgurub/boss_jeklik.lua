@@ -30,9 +30,11 @@
 --     flay 26044 at 26s then {15s,30s} on the victim (the C++ comment
 --     says the ID is unknown/disabled, but the code schedules and casts
 --     it — modeled C++-exact); greater heal 23954 at 50s then {25s,35s}
---     self-cast; spawn flying bat 14965 at 10s then {10s,15s} (no
---     summon model — the summon never happens; the batrider AI below is
---     registered so any spawned 14965 fights correctly). The
+--     self-cast; spawn flying bat 14965 at 10s then {10s,15s} (summon
+--     bridge, 2026-10-22 — the bat spawns at the target's position +15z;
+--     its AttackStart leg has no bridge, so it idles until the engine
+--     aggros it; the batrider AI below is registered so a spawned 14965
+--     fights correctly once engaged). The
 --     InterruptNonMeleeSpells(false) arms before the chain-mind-flay and
 --     greater-heal casts have no bridge (no UNIT_STATE model — timers
 --     fire unconditionally, malchezaar convention).
@@ -45,9 +47,9 @@
 -- NOT_SELECTABLE arm is ported (2026-10-20) via
 -- creature:SetFlag(UNIT_FIELD_FLAGS, ...).
 -- Deviations from C++: SAY_RAIN_FIRE(1) is defined in the C++ Says enum
--- but never used — not modeled; no summon model — the six bloodseeker
--- bats, the per-10s frenzied bat summons, and the fixed SpawnBat
--- coordinates never exist; no instance-script model — boss admission
+-- but never used — not modeled; the six bloodseeker bats (11368) and the
+-- fixed SpawnBat coordinates never exist (no bearer); the per-10s
+-- frenzied bat (14965) summons ARE ported (2026-10-22 summon bridge); no instance-script model — boss admission
 -- via the luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith and
 -- the GetZulGurubAI bookkeeping arms skipped); no threat model — the
 -- charge and shadow-word-pain targets are random alive players with no
@@ -248,11 +250,22 @@ local function onGreaterHeal(creature, guid)
     end)
 end
 
--- C++ EVENT_SPAWN_FLYING_BATS: the 14965 summon has no bearer — only
--- the {10s,15s} re-arm is modeled (one-shot per cycle, C++-exact).
+-- C++ EVENT_SPAWN_FLYING_BATS (boss_jeklik.cpp:185-190): pick a random
+-- alive player (SelectTarget Random, 0, 0.f, playerOnly TRUE — no range
+-- cap) and summon a frenzied bat (14965) at the target's position +15z,
+-- o = 0 -> my orientation (C++ zero-o fallback, Object.cpp:2061),
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 15s = 15000ms.
+-- flyingBat->AI()->AttackStart(target) has no bridge — the batrider AI
+-- below is registered, so the bat fights once engaged (documented gap).
+-- Re-arm {10s,15s} (one-shot per cycle, C++-exact).
 local function onSpawnFlyingBats(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
         return
+    end
+    local target = randomPlayer(creature)
+    if target then
+        creature:SummonCreature(ENTRY_FRENZIED_BAT, target:GetX(),
+            target:GetY(), target:GetZ() + 15.0, creature:GetO(), 3, 15000)
     end
     schedule(guid, "flyingbat", math.random(10000, 15000), function()
         onSpawnFlyingBats(creature, guid)
@@ -363,8 +376,9 @@ RegisterCreatureEvent(ENTRY_JEKLIK, 4, jeklikDied)
 RegisterCreatureEvent(ENTRY_JEKLIK, 9, jeklikDamageTaken)
 RegisterCreatureEvent(ENTRY_JEKLIK, 23, jeklikReset)
 
--- npc_batrider (14965, frenzied bat): never spawns in this build (no
--- summon model), but is registered so any spawned 14965 drops bombs.
+-- npc_batrider (14965, frenzied bat): summoned every 10-15s in phase two
+-- (summon bridge, 2026-10-22); registered so each spawned 14965 drops
+-- bombs once engaged.
 local batTimers = {}
 
 local function batriderBomb(creature, guid)

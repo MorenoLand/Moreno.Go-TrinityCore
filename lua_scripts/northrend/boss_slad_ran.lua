@@ -28,11 +28,17 @@
 -- npc_slad_ran_viper: JustEngagedWith — Venomous Bite 54987 (victim,
 -- 2s init, 10s repeat).
 -- Unmodeled (no bridges — documented, not wired):
--- boss DamageTaken phase machine — the summon waves (3 normal / 5
--- heroic SpawnLoc entries, TEMPSUMMON_CORPSE_TIMED_DESPAWN) sit behind
--- the summon STRAND (standing), so the GROUP_SNAKES cancel never
--- fires. Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4)
--- ARE ported (below): HealthBelowPct(30/25) runs on the bridged
+-- boss DamageTaken phase machine — the summon waves are PORTED this
+-- run (snakeWaveTick / constrictorWaveTick, below): the 5s-init /
+-- 5s-repeat scheduler arms ride CreateLuaEvent under timer keys
+-- "snakes" / "constrictors" (the GROUP_SNAKES CancelGroup leg ports
+-- as a per-key cancel); DUNGEON_MODE(3, 5) rides
+-- creature:IsHeroic(); SpawnLoc[] positions literal;
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN (5) / 20s -> summonType 5 /
+-- despawnMs 20000. Documented delta: the corpse-timed despawn leg has
+-- no bridge — snake / constrictor corpses stay on the normal corpse
+-- sweep. Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4)
+-- were already ported: HealthBelowPct(30/25) runs on the bridged
 -- creature:GetHealthPct() in an event-9 handler with a per-GUID phase
 -- latch (the old "no HealthBelowPct bridge" claim was stale —
 -- sindragosa/moroes use GetHealthPct in handler context).
@@ -82,6 +88,16 @@ local SPELL_GRIP_OF_SLAD_RAN = 55093
 local SPELL_SNAKE_WRAP = 55126
 local SPELL_VENOMOUS_BITE = 54987
 
+-- C++ SpawnLoc[] (boss_slad_ran.cpp:59-66): five fixed summon
+-- positions; DUNGEON_MODE(3, 5) = first 3 on normal, all 5 on heroic.
+local SPAWN_LOCS = {
+    { 1783.81, 646.637, 133.948, 3.71755 },
+    { 1775.03, 606.586, 134.165, 1.43117 },
+    { 1717.39, 630.041, 129.282, 5.96903 },
+    { 1765.66, 646.542, 134.02,  5.11381 },
+    { 1716.76, 635.159, 129.282, 0.191986 },
+}
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -91,6 +107,15 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+-- C++ scheduler.CancelGroup(GROUP_SNAKES) twin: drop one timer key.
+local function cancelTimerKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
     end
 end
 
@@ -171,6 +196,45 @@ local function sladranReset(event, creature)
     sladranPhase[guid] = nil
 end
 
+-- C++ DamageTaken PHASE_SNAKES scheduler arm (boss_slad_ran.cpp:149-154):
+-- scheduler.Schedule(5s, GROUP_SNAKES, ...) with task.Repeat() — every
+-- 5s (initial 5s), summon DUNGEON_MODE(3, 5) vipers at SpawnLoc[i],
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN (5), 20s -> summonType 5 /
+-- despawnMs 20000. Documented delta: the corpse-timed despawn leg has
+-- no bridge — viper corpses stay on the normal corpse sweep.
+local function snakeWaveTick(creature, guid)
+    local count = 3
+    if creature:IsHeroic() then
+        count = 5
+    end
+    for i = 1, count do
+        local p = SPAWN_LOCS[i]
+        creature:SummonCreature(ENTRY_VIPER, p[1], p[2], p[3], p[4], 5, 20000)
+    end
+    schedule(guid, "snakes", 5000, function()
+        snakeWaveTick(creature, guid)
+    end)
+end
+
+-- C++ DamageTaken PHASE_CONSTRICTORS scheduler arm
+-- (boss_slad_ran.cpp:162-168): scheduler.Schedule(5s, ...) with
+-- task.Repeat() — every 5s (initial 5s), summon DUNGEON_MODE(3, 5)
+-- constrictors at SpawnLoc[i], TEMPSUMMON_CORPSE_TIMED_DESPAWN (5),
+-- 20s. Same corpse-despawn documented delta as the snake wave.
+local function constrictorWaveTick(creature, guid)
+    local count = 3
+    if creature:IsHeroic() then
+        count = 5
+    end
+    for i = 1, count do
+        local p = SPAWN_LOCS[i]
+        creature:SummonCreature(ENTRY_CONSTRICTOR, p[1], p[2], p[3], p[4], 5, 20000)
+    end
+    schedule(guid, "constrictors", 5000, function()
+        constrictorWaveTick(creature, guid)
+    end)
+end
+
 -- C++ DamageTaken phase machine (boss_slad_ran.cpp:143-160): PHASE_NONE +
 -- HealthBelowPct(30) -> Talk(SAY_SUMMON_SNAKES) + PHASE_SNAKES; then
 -- PHASE_SNAKES + HealthBelowPct(25) -> Talk(SAY_SUMMON_CONSTRICTORS) +
@@ -179,9 +243,10 @@ end
 -- strict-< against the floored integer threshold (the old
 -- GetHealthPct() < N fired up to 1 HP early — maulgar/ironaya
 -- precedent). The C++ ifs are sequential with live _phase, so a single
--- hit can cascade 0->1->2 — no elseif. The summon waves
--- (GROUP_SNAKES scheduler + SummonCreature) stay out behind the
--- summon STRAND (standing) — Talk fires without the wave. Phase latch
+-- hit can cascade 0->1->2 — no elseif. The summon-wave payloads ride
+-- snakeWaveTick / constrictorWaveTick above (the old "summon STRAND
+-- (standing)" claim is re-keyed — creature:SummonCreature is bridged);
+-- the corpse-timed despawn legs stay documented-only. Phase latch
 -- cleared on evade/reset (C++ Initialize()/Reset()).
 sladranPhase = {}
 
@@ -197,10 +262,17 @@ local function sladranDamageTaken(event, creature, attacker, damage)
         sladranPhase[guid] = 1
         phase = 1
         creature:Talk(SAY_SUMMON_SNAKES)
+        schedule(guid, "snakes", 5000, function()
+            snakeWaveTick(creature, guid)
+        end)
     end
     if phase == 1 and health < math.floor(maxHealth * 25 / 100) then
         sladranPhase[guid] = 2
         creature:Talk(SAY_SUMMON_CONSTRICTORS)
+        cancelTimerKey(guid, "snakes")
+        schedule(guid, "constrictors", 5000, function()
+            constrictorWaveTick(creature, guid)
+        end)
     end
 end
 

@@ -1246,6 +1246,10 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 				if lifetime := s.petSpellSummonLifetime(uint32(createdBySpell)); lifetime > 0 {
 					pm.TempSummonLifetime = lifetime
 					pm.TempSummonExpiresAt = time.Now().Add(lifetime)
+					// TemporarySummon.cpp:175-183: spell-duration guardians
+					// stamp m_type = TEMPSUMMON_TIMED_DESPAWN — the timer
+					// decrements unconditionally, even in combat.
+					pm.TempSummonType = 2
 				}
 			}
 		}

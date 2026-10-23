@@ -267,6 +267,15 @@ type creatureMotion struct {
 	// (TempSummon::UnSummon, TemporarySummon.cpp:250-304 — C++ TempSummons
 	// are never saved, so the character_pet row is deleted on expiry).
 	TempSummonExpiresAt time.Time
+	// TempSummonType is the TempSummon::m_type twin (TemporarySummon.h):
+	// 0 TIMED_OR_DEAD_DESPAWN, 1 TIMED_OR_CORPSE_DESPAWN, 2 TIMED_DESPAWN,
+	// 3 TIMED_DESPAWN_OUT_OF_COMBAT, 4 CORPSE_DESPAWN, 5 CORPSE_TIMED_DESPAWN,
+	// 6 DEAD_DESPAWN, 7 MANUAL_DESPAWN (the C++ default when unspecified).
+	// The Go tick honors the timer for types 0/1/2/3 only; the corpse/dead
+	// legs (4/5/6) are documented deltas — the body leaves on the normal
+	// corpse sweep instead of the C++ corpse-timed despawn. Zero value is
+	// never a live state: the summon bridge always stamps the type.
+	TempSummonType uint8
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on
@@ -2653,6 +2662,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.TargetGUID = 0
 		motion.Moving = false
 		return
+	}
+	// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
+	// script-summon bridge stamps the timer only for the timed family
+	// (0/1/2/3) — the corpse/dead legs (4/5/6) start their timer at death
+	// (documented delta) and MANUAL (7) carries no timer. A fired timer
+	// ends the motion's tick. motionMu is not held on this path.
+	if motion.TempSummonLifetime > 0 && motion.TempSummonType <= 3 {
+		if s.checkTempSummonExpiry(ctx, motion, now) {
+			return
+		}
 	}
 	if motion.Charmed && motion.OwnerGUID == 0 {
 		return

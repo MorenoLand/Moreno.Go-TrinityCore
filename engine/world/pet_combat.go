@@ -589,18 +589,34 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 	}
 }
 
-// checkTempSummonExpiry twins the TempSummon::Update TEMPSUMMON_TIMED_DESPAWN
-// arm (TemporarySummon.cpp:80-89): spell-duration guardians stamped at spawn
-// get m_type = TEMPSUMMON_TIMED_DESPAWN via InitStats (TemporarySummon.cpp:175-183),
-// whose timer decrements UNCONDITIONALLY — even in combat — and fires at
-// spawn+lifetime regardless of combat state. Only the OUT_OF_COMBAT / TIMED_OR_
-// variants freeze the timer in combat; those types are not produced by the
-// spell-summon path, so no combat-reset arm is modeled here.
+// checkTempSummonExpiry twins the TempSummon::Update timed arms
+// (TemporarySummon.cpp:66-170). TEMPSUMMON_TIMED_DESPAWN (2) decrements
+// UNCONDITIONALLY — even in combat — and fires at spawn+lifetime
+// (TemporarySummon.cpp:80-89). The TIMED_OR_DEAD (0) / TIMED_OR_CORPSE (1)
+// / TIMED_DESPAWN_OUT_OF_COMBAT (3) arms freeze the timer while the
+// summon is in combat: m_timer is reset to m_lifetime on every Update
+// tick in combat (TemporarySummon.cpp:91-106, 133-168), so the expiry
+// only runs once the summon leaves combat. The corpse/dead legs
+// (4/5/6) never reach this function — the script-summon bridge only
+// stamps the timer for the timed family, and the spell-summon path only
+// produces type 2.
 // Returns true when the timer fired and the guardian was unsummoned — the
 // caller must stop driving the motion.
 func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMotion, now time.Time) bool {
 	if s == nil || motion == nil || motion.TempSummonLifetime <= 0 {
 		return false
+	}
+	switch motion.TempSummonType {
+	case 0, 1, 3:
+		s.motionMu.Lock()
+		inCombat := motion.InCombat
+		s.motionMu.Unlock()
+		if inCombat {
+			s.motionMu.Lock()
+			motion.TempSummonExpiresAt = now.Add(motion.TempSummonLifetime)
+			s.motionMu.Unlock()
+			return false
+		}
 	}
 	if now.Before(motion.TempSummonExpiresAt) {
 		return false
@@ -651,6 +667,14 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 			buf.WriteU64(0)
 			_ = owner.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 		}
+	}
+	// TempSummon::UnSummon (TemporarySummon.cpp:274-284) fires
+	// Eluna::SummonedCreatureDespawn on the summoner creature when a timed
+	// summon expires. Player owners have no creature hook; a creature
+	// owner (the script-summon bridge path) gets event 20. motionMu is
+	// released above — fireCreatureSummoned requires that.
+	if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
+		s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, motion)
 	}
 }
 

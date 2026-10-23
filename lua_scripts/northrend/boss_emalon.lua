@@ -55,13 +55,17 @@
 -- UNIT_STATE_CASTING precedent).
 -- DOCUMENTED-ONLY (in this header; entries 33993 / 33998):
 -- EVENT_OVERCHARGE (:145-157) — random alive minion picked from the
--- boss's unbridged summons list (ObjectAccessor::GetCreature on
--- SelectRandomContainerElement); the minion->CastSpell(me,
--- SPELL_OVERCHARGED, true) + SetFullHealth() legs and the Talk
--- (EMOTE_OVERCHARGE 0) riding it all stay out.
+-- boss's BossAI summons list (ObjectAccessor::GetCreature on
+-- SelectRandomContainerElement — no summons-list bridge, even though
+-- the minions themselves now materialize on Reset); the
+-- minion->CastSpell(me, SPELL_OVERCHARGED, true) + SetFullHealth()
+-- legs and the Talk (EMOTE_OVERCHARGE 0) riding it all stay out.
 -- boss_emalonAI::Reset (:85-91) — four SummonCreature
 -- (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN) at TempestMinions[]
--- positions: no SummonCreature bridge.
+-- positions PORTED this run (emalonReset, event 23 — the old "no
+-- SummonCreature bridge" claim is re-keyed): summonType 4 /
+-- despawnMs 0; documented delta: the corpse-despawn leg has no bridge
+-- — minion corpses stay on the normal corpse sweep.
 -- boss_emalonAI::JustSummoned (:93-100) — minion AttackStart leg: no
 -- bridge.
 -- npc_tempest_minionAI::JustDied (:207-217) — instance->
@@ -72,12 +76,11 @@
 -- boolean-only), DoCast(me, SPELL_OVERCHARGED) every 2s,
 -- SPELL_OVERCHARGED_BLAST 64219 at 10 stacks: no GetAura stack-count
 -- bridge.
--- SetFullHealth (:152) and DespawnOrUnsummon (:259): both
--- legs are npc_tempest_minionAI arms behind the unbridged
--- summon machine (minions never exist in the port), and the
--- 10-stack trigger needs GetAura stack count (HasAura is
--- boolean-only) — SetHealth/Despawn bridges exist but the
--- arms stay out.
+-- SetFullHealth (:152) and DespawnOrUnsummon (:259): the minions now
+-- exist (Reset summons, above), but the 10-stack trigger needs
+-- GetAura stack count (HasAura is boolean-only) — SetHealth/Despawn
+-- bridges exist but the arms stay out behind the unbridged
+-- stack-count gate.
 -- DoZoneInCombat() (:221): no bridge.
 
 local ENTRY_EMALON = 33993
@@ -158,6 +161,30 @@ local function emalonBerserkTick(creature, guid)
     creature:Talk(EMOTE_BERSERK)
 end
 
+-- C++ TempestMinions[] (boss_emalon.cpp:63-69): the four Reset summon
+-- positions.
+local TEMPEST_MINION_SPAWNS = {
+    { -203.980103, -281.287720, 91.650223, 1.598807 },
+    { -233.489410, -281.139282, 91.652412, 1.598807 },
+    { -233.267578, -297.104645, 91.681915, 1.598807 },
+    { -203.842529, -297.097015, 91.745163, 1.598807 },
+}
+
+-- C++ boss_emalonAI::Reset (boss_emalon.cpp:85-91): _Reset() (timer
+-- clear) then four SummonCreature(NPC_TEMPEST_MINION 33998,
+-- TempestMinions[i], TEMPSUMMON_CORPSE_DESPAWN (4)) — the C++ call has
+-- no despawn-time arg, so despawnMs 0. Documented delta: the
+-- corpse-despawn leg has no bridge — minion corpses stay on the normal
+-- corpse sweep. The JustSummoned AttackStart leg has no bridge
+-- (AttackStart is unbridged); at Reset the C++ AttackStart is a
+-- nullptr-guarded no-op (no victim), so nothing is lost.
+local function emalonReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    for _, p in ipairs(TEMPEST_MINION_SPAWNS) do
+        creature:SummonCreature(ENTRY_TEMPEST_MINION, p[1], p[2], p[3], p[4], 4, 0)
+    end
+end
+
 -- C++ boss_emalonAI::JustEngagedWith (:102-120): the ScheduleEvent
 -- calls seed the combat timers below (5s / 40s / 6min; EVENT_OVERCHARGE
 -- 45s stays out — documented in the header).
@@ -184,7 +211,7 @@ end
 RegisterCreatureEvent(ENTRY_EMALON, 1, emalonEnterCombat)
 RegisterCreatureEvent(ENTRY_EMALON, 2, emalonCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EMALON, 4, emalonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_EMALON, 23, emalonCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_EMALON, 23, emalonReset)
 
 -- C++ EVENT_SHOCK (:265-268): DoCastVictim(SPELL_SHOCK), 1-arg =
 -- non-triggered; re-arm 20s.

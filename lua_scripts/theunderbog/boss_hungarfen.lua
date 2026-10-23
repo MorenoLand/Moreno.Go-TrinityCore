@@ -32,11 +32,13 @@
 -- 31673 once-guarded when GetHealthPct() <= 20 (C++
 -- !HealthAbovePct(20)) — DoCastSelf non-triggered (C++-
 -- exact), root=true after the cast. Underbog mushroom 17990:
--- 5s init then 10s — timer bookkeeping only: the whole fire
--- arm is me->SummonCreature(17990, target pos + rand32()%8
--- offsets, TEMPSUMMON_TIMED_DESPAWN 22s) and no summon/
--- position bridges exist (steamrigger mechanic precedent);
--- re-arm 10000 regardless (C++-exact). Acid geyser 38739:
+-- 5s init then 10s — the fire arm is PORTED (2026-10-22,
+-- creature:SummonCreature bridge live):
+-- me->SummonCreature(17990, target pos + rand32()%8 offsets,
+-- TEMPSUMMON_TIMED_DESPAWN (2) 22s = 22000ms), random-target leg
+-- via pickRandomPlayer (the file's SelectTarget(Random, 0)
+-- equivalent), boss-position fallback when no target
+-- (C++-exact); re-arm 10000 regardless (C++-exact). Acid geyser 38739:
 -- 10s init then 10000+rand32()%7500 — target = random alive
 -- player in the instance (C++ SelectTarget(Random, 0), thespia
 -- precedent), nil pick casts nothing, DoCast(target, 38739)
@@ -47,9 +49,10 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_the_underbog.cpp is a placeholder and stays
--- blocked on the instance-script model); no summon/position
--- bridges — the mushroom summon machine unmodeled (timer
--- bookkeeping exact; the ScriptData heroic "faster rate" note
+-- blocked on the instance-script model); the mushroom summon arm
+-- is PORTED above (creature:SummonCreature bridge live
+-- 2026-10-22; positions via the GetX/GetY/GetZ object fallback);
+-- the ScriptData heroic "faster rate" note
 -- is moot — the C++ has zero IsHeroic/DUNGEON_MODE references,
 -- no heroic arm exists; the "spell data same in both modes"
 -- uncertainty is documented, not bridged); no SpellScript/AuraScript
@@ -124,12 +127,25 @@ local function bossTick(creature, guid)
         st.root = true
     end
 
-    -- Mushroom 17990: 5s init then 10s — timer bookkeeping
-    -- only: the SummonCreature fire arm (target position +
-    -- rand32()%8 offsets, TEMPSUMMON_TIMED_DESPAWN 22s) has no
-    -- summon/position bridges (steamrigger precedent);
-    -- re-arm 10000 regardless (C++-exact).
+    -- Mushroom 17990: 5s init then 10s — SummonCreature at the
+    -- random target's position (+ rand32()%8 x/y offsets, o =
+    -- rand32()%5), TEMPSUMMON_TIMED_DESPAWN (2) 22s = 22000ms
+    -- (creature:SummonCreature bridge, PORTED 2026-10-22); the
+    -- random-target leg uses pickRandomPlayer (the file's
+    -- SelectTarget(Random, 0) equivalent), boss-position fallback
+    -- when no target (C++-exact); re-arm 10000 regardless
+    -- (C++-exact).
     if st.mushroom <= 1000 then
+        local target = pickRandomPlayer(creature)
+        local mx, my, mz
+        if target then
+            mx, my, mz = target:GetX(), target:GetY(), target:GetZ()
+        else
+            mx, my, mz = creature:GetX(), creature:GetY(), creature:GetZ()
+        end
+        creature:SummonCreature(ENTRY_UNDERBOG_MUSHROOM,
+            mx + math.random(0, 7), my + math.random(0, 7), mz,
+            math.random(0, 4), 2, 22000)
         st.mushroom = 10000
     else
         st.mushroom = st.mushroom - 1000

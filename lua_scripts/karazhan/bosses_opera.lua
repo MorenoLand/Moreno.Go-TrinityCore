@@ -19,11 +19,15 @@
 -- 4 OnDied, 9 OnDamageTaken (the Julianne/Romulo fake-death dance),
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- Deviations from C++: no summon model — Tito, the Crone
--- (SummonCroneIfReady), the cyclone, Romulo, and the wolf (grandmother
--- gossip) never spawn, so their summon casts are skipped while the
--- non-summon arms stay; npc_tito (17548) is still registered so any
--- spawned Tito fights correctly (aran-elemental convention). No
+-- Deviations from C++: Tito (17548), the Crone (SummonCroneIfReady),
+-- Romulo (17533), and the wolf (grandmother gossip, 17603) ARE summoned
+-- now (2026-10-22 summon bridge — creature:SummonCreature on the handler
+-- surface); the cyclone summon still has no bearer. The C++ aggro legs
+-- (AttackStart / DoZoneInCombat / Attack) have no bridge, so summons idle
+-- until the engine aggros them — npc_tito (17548), boss_crone (18168),
+-- boss_bigbadwolf (17521) and boss_romulo (17533) are all registered, so
+-- a spawned one fights correctly once engaged (aran-elemental
+-- convention). No
 -- instance-script model — the Oz death counter, DATA_OPERA_PERFORMANCE
 -- SetBossState(DONE), and DoZoneInCombat arms are skipped. No threat
 -- model — the wolf's chase threat juggling is skipped (chase is Talk +
@@ -43,9 +47,10 @@
 -- event 14 carries only the spell id, no school mask. The crone's
 -- RemoveFlag/SetImmuneToPC spawn hack is PORTED in croneLeaveCombat. npc_cyclone (18412)
 -- is not registered: movement-only AI, no combat hooks ever fire.
--- npc_grandmother (17603) is not registered: the gossip select's only
--- effects are the wolf summon (no bearer) and self-despawn — registering
--- it would strand the event (nightbane-urn precedent). The wolf's
+-- npc_grandmother (17603) IS registered now (2026-10-22 summon bridge):
+-- the gossip select summons the Big Bad Wolf at her position and despawns
+-- her, C++-exact; the wolf's AttackStart(player) leg has no bridge
+-- (documented gap). The wolf's
 -- death sound (9275) is ported via creature:PlayDirectSound in
 -- wolfDied (SMSG_PLAY_SOUND = WorldObject::PlayDirectSound). Julianne's and
 -- Romulo's pre-combat EntryYell/AggroYell timers have no Lua-modelable
@@ -78,6 +83,7 @@ local ENTRY_TINHEAD = 17547
 local ENTRY_ROAR = 17546
 local ENTRY_CRONE = 18168
 local ENTRY_WOLF = 17521
+local ENTRY_GRANDMOTHER = 17603
 local ENTRY_JULIANNE = 17534
 local ENTRY_ROMULO = 17533
 
@@ -108,6 +114,35 @@ local function scheduleIntroReset(guid, creature, delay)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     end, delay)
 end
+
+-- C++ SummonCroneIfReady (bosses_opera.cpp:104-114): free function called
+-- from the JustDied arms of Dorothee, Strawman, Tinhead and Roar. The
+-- instance DATA_OPERA_OZ_DEATHCOUNT counter has no Go model; a
+-- module-level counter mirrors it (single-instance convention, like the
+-- raj table below). C++ resets it only in npc_barnes' StartEvent
+-- (karazhan.cpp:179), which is unported, so the Lua counter likewise
+-- never resets. At 4 deaths the Crone (18168) is summoned at
+-- (-10891.96, -1755.95, my z, 4.64), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN
+-- (0), 2h = 7200000ms. C++ pCrone->AI()->AttackStart(victim) has no
+-- bridge — the boss_crone AI below is registered, so she fights once
+-- engaged (documented gap).
+local ozDeathCount = 0
+
+local function summonCroneIfReady(creature)
+    ozDeathCount = ozDeathCount + 1
+    if ozDeathCount == 4 then
+        creature:SummonCreature(ENTRY_CRONE, -10891.96, -1755.95,
+            creature:GetZ(), 4.64, 0, 7200000)
+    end
+end
+
+-- Tito <-> Dorothee link (C++ npc_titoAI::DorotheeGUID, written by
+-- SummonTito): titoGuid -> dorotheeGuid, plus the per-Dorothee TitoDied
+-- latch (C++ boss_dorotheeAI::TitoDied) and her creature object for the
+-- IsAlive gate in tito's JustDied.
+local titoDorothee = {}
+local dorotheeTitoDied = {}
+local dorotheeByGuid = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -192,11 +227,13 @@ local function randomPlayerInRange(creature, maxDist)
 end
 
 -- Dorothee (boss_dorothee, C++ ScriptName for 17535): water bolt 31012 on
--- a random alive player within 100 yd every 5s (first 5s); scream 31013
--- on the victim every 30s (first 15s). The Tito summon (47500ms) never
--- fires — no summon model — so SAY_SUMMON never plays and the TitoDied
--- water-bolt speedup has no trigger.
+-- a random alive player within 100 yd every 5s (first 5s; 1500ms once
+-- Tito has died — the TitoDied latch, C++-exact); scream 31013 on the
+-- victim every 30s (first 15s); Tito (17548) summoned at 47.5s with
+-- Talk(SAY_DOROTHEE_SUMMON = 1).
 local DOROTHEE_SAY_DEATH = 0
+local DOROTHEE_SAY_SUMMON = 1
+local DOROTHEE_SAY_TITO_DEATH = 2
 local DOROTHEE_SAY_AGGRO = 3
 
 local SPELL_WATERBOLT = 31012
@@ -212,7 +249,8 @@ local function dorotheeWaterbolt(creature, guid)
     if target then
         creature:CastSpell(target, SPELL_WATERBOLT)
     end
-    schedule(guid, "waterbolt", 5000, function()
+    -- C++ WaterBoltTimer = TitoDied ? 1500 : 5000 (:218).
+    schedule(guid, "waterbolt", dorotheeTitoDied[guid] and 1500 or 5000, function()
         dorotheeWaterbolt(creature, guid)
     end)
 end
@@ -227,9 +265,28 @@ local function dorotheeFear(creature, guid)
     end)
 end
 
+-- C++ boss_dorothee::boss_dorotheeAI::SummonTito
+-- (bosses_opera.cpp:300-309): summon Tito (17548) at my position (C++
+-- all-zero coords -> close point at the summoner, Object.cpp:2059),
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 30s = 30000ms, then
+-- Talk(SAY_DOROTHEE_SUMMON). The ENSURE_AI DorotheeGUID write is the
+-- titoDorothee module link above; pTito->AI()->AttackStart(victim) has
+-- no bridge (documented gap).
+local function dorotheeSummonTito(creature, guid)
+    local tito = creature:SummonCreature(ENTRY_TITO, creature:GetX(),
+        creature:GetY(), creature:GetZ(), creature:GetO(), 3, 30000)
+    if tito ~= nil then
+        creature:Talk(DOROTHEE_SAY_SUMMON)
+        titoDorothee[tito:GetGUID()] = guid
+        dorotheeTitoDied[guid] = false
+    end
+end
+
 local function dorotheeEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    dorotheeByGuid[guid] = creature
+    dorotheeTitoDied[guid] = false
     creature:Talk(DOROTHEE_SAY_AGGRO)
     schedule(guid, "waterbolt", 5000, function()
         dorotheeWaterbolt(creature, guid)
@@ -237,10 +294,18 @@ local function dorotheeEnterCombat(event, creature, target)
     schedule(guid, "fear", 15000, function()
         dorotheeFear(creature, guid)
     end)
+    -- C++ SummonTitoTimer = 47500 (Initialize, :142); the UpdateAI arm
+    -- (!SummonedTito gate) fires it once.
+    schedule(guid, "tito", 47500, function()
+        dorotheeSummonTito(creature, guid)
+    end)
 end
 
 local function dorotheeLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    dorotheeByGuid[guid] = nil
+    dorotheeTitoDied[guid] = nil
 end
 
 -- C++ boss_dorotheeAI::UpdateAI AggroTimer (bosses_opera.cpp:204-208):
@@ -249,12 +314,19 @@ end
 local function dorotheeReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ Initialize (Reset): SummonedTito = false, TitoDied = false.
+    dorotheeTitoDied[guid] = false
     scheduleIntroReset(guid, creature, 500)
 end
 
 local function dorotheeDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    dorotheeByGuid[guid] = nil
+    dorotheeTitoDied[guid] = nil
     creature:Talk(DOROTHEE_SAY_DEATH)
+    -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
+    summonCroneIfReady(creature)
 end
 
 
@@ -273,10 +345,11 @@ RegisterCreatureEvent(ENTRY_DOROTHEE, 23, dorotheeReset)
 RegisterCreatureEvent(ENTRY_DOROTHEE, 24, dorotheeReachHome)
 
 -- Tito (npc_tito, C++ ScriptName for 17548): yipping 31015 on the victim
--- every 10s. Never summoned (no summon model); registered so any spawned
--- Tito fights correctly. The JustDied → Dorothee arm (TitoDied write plus
--- Tito Talk(SAY_DOROTHEE_TITO_DEATH = 2), both gated on Dorothee being found
--- alive via ObjectAccessor) needs the cross-AI pointer, no bridge.
+-- every 10s. Summoned by Dorothee at 47.5s (summon bridge, 2026-10-22);
+-- registered so the summoned Tito fights correctly once engaged. The
+-- JustDied -> Dorothee arm (TitoDied latch plus Tito
+-- Talk(SAY_DOROTHEE_TITO_DEATH = 2), gated on the linked Dorothee being
+-- alive via the titoDorothee module link) is ported below.
 local SPELL_YIPPING = 31015
 
 local function titoYip(creature, guid)
@@ -301,9 +374,25 @@ local function titoLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_titoAI::JustDied (bosses_opera.cpp:271-281): if the linked
+-- Dorothee (DorotheeGUID via ObjectAccessor) is alive, her TitoDied
+-- latch sets — her waterbolt re-arms at 1500ms — and Tito Talks
+-- SAY_DOROTHEE_TITO_DEATH.
+local function titoDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local dorGuid = titoDorothee[guid]
+    titoDorothee[guid] = nil
+    local dorothee = dorGuid ~= nil and dorotheeByGuid[dorGuid] or nil
+    if dorothee ~= nil and not dorothee:IsDead() then
+        dorotheeTitoDied[dorGuid] = true
+        creature:Talk(DOROTHEE_SAY_TITO_DEATH)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_TITO, 1, titoEnterCombat)
 RegisterCreatureEvent(ENTRY_TITO, 2, titoLeaveCombat)
-RegisterCreatureEvent(ENTRY_TITO, 4, titoLeaveCombat)
+RegisterCreatureEvent(ENTRY_TITO, 4, titoDied)
 RegisterCreatureEvent(ENTRY_TITO, 23, titoLeaveCombat)
 
 -- Strawman (boss_strawman, C++ ScriptName for 17543): brain bash 31046 on
@@ -373,6 +462,8 @@ end
 local function strawmanDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(STRAWMAN_SAY_DEATH)
+    -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
+    summonCroneIfReady(creature)
 end
 
 
@@ -468,6 +559,8 @@ local function tinheadDied(event, creature, killer)
     cancelTimers(guid)
     tinheadState[guid] = nil
     creature:Talk(TINHEAD_SAY_DEATH)
+    -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
+    summonCroneIfReady(creature)
 end
 
 
@@ -565,6 +658,8 @@ end
 local function roarDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(ROAR_SAY_DEATH)
+    -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
+    summonCroneIfReady(creature)
 end
 
 
@@ -803,21 +898,47 @@ RegisterCreatureEvent(ENTRY_WOLF, 4, wolfDied)
 RegisterCreatureEvent(ENTRY_WOLF, 23, wolfLeaveCombat)
 RegisterCreatureEvent(ENTRY_WOLF, 24, wolfReachHome)
 
+-- Grandmother (npc_grandmother, C++ ScriptName for 17603):
+-- OnGossipSelect (bosses_opera.cpp:824-834) gates on menu 7443 option 0.
+-- The Go select hook passes the menu item's (Sender, Action), not
+-- (menuId, gossipListId); DB items carry sender 0 and this creature has
+-- no Lua hello, so sender == 0 identifies the DB menu's option
+-- (majordomo precedent). C++ arm order: CloseGossipMenuFor, summon the
+-- Big Bad Wolf (17521) at my position,
+-- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (0), 2h = 7200000ms, then
+-- self-despawn. C++ pBigBadWolf->AI()->AttackStart(player) has no
+-- bridge — the boss_bigbadwolf AI above is registered, so the wolf
+-- fights once engaged (documented gap). C++ returns false (AI/native
+-- select arms proceed — they do nothing here).
+local function grandmotherGossipSelect(event, player, creature, sender, action)
+    if sender ~= 0 then
+        return false
+    end
+    player:GossipClearMenu()
+    player:GossipComplete()
+    creature:SummonCreature(ENTRY_WOLF, creature:GetX(), creature:GetY(),
+        creature:GetZ(), creature:GetO(), 0, 7200000)
+    creature:Despawn()
+    return false
+end
+
+RegisterCreatureGossipEvent(ENTRY_GRANDMOTHER, 2, grandmotherGossipSelect)
+
 -- Romulo and Julianne (boss_julianne / boss_romulo, C++ ScriptNames for
 -- 17534 / 17533): the three-phase fake-death dance.
 -- Phase JULIANNE: Julianne fights alone — blinding passion 30890 on a
 -- random alive player within 100 yd every 30-45s, devotion 30887 on self
 -- every 15-45s, powerful attraction 30889 on a random player (any range,
 -- alive or dead — C++ SelectTarget(Random, 0) has no distance/alive
--- filter, unlike blinding passion's (Random, 0, 100, true)) every 5-30s, eternal affection 30878 on self every 45-60s (C++
--- casts it on Romulo half the time once he is up; he never spawns, so it
--- always lands on Julianne). Lethal damage in this phase is absorbed: the
+-- filter, unlike blinding passion's (Random, 0, 100, true)) every 5-30s, eternal affection 30878 every 45-60s (C++
+-- casts it on Romulo half the time once he is up and alive, else on
+-- herself — ported C++-exact). Lethal damage in this phase is absorbed: the
 -- combat arms freeze at the lethal blow (C++ IsFakingDeath), DoCast(self,
 -- drink-poison 30907, 2-arg non-triggered) then SpellHit fires
--- Talk(SAY_JULIANNE_DEATH01 = 2), and 2.5s later she fakes death; 10s
--- after that Romulo would be
--- summoned — no summon model, so the encounter stalls here unless a
--- Romulo has entered combat by other means (the link is picked up then).
+-- Talk(SAY_JULIANNE_DEATH01 = 2), and 2.5s later she fakes death and flips
+-- to phase ROMULO; 10s after that Romulo is summoned (summon bridge,
+-- 2026-10-22 — his DoZoneInCombat aggro leg has no bridge, so he stands
+-- until the engine aggros him, documented gap).
 -- Phase ROMULO: Romulo fights — backward lunge 30815 on a random alive
 -- player within 100 yd every 15-30s (C++ picks the second-threat target
 -- behind him; no threat/facing model), daring 30841 on self every 20-40s,
@@ -859,6 +980,12 @@ local SPELL_RES_VISUAL = 24171
 local PHASE_JULIANNE = 0
 local PHASE_ROMULO = 1
 local PHASE_BOTH = 2
+
+-- bosses_opera.cpp:1006-1007 (ROMULO_X/Y); SharedDefines.h:227
+-- (FACTION_MONSTER_2).
+local ROMULO_X = -10900
+local ROMULO_Y = -1758
+local FACTION_MONSTER_2 = 16
 
 local JULIANNE_COMBAT_KEYS = { "blinding", "devotion", "attraction", "affection" }
 local ROMULO_COMBAT_KEYS = { "lunge", "daring", "swathe", "thrust" }
@@ -948,7 +1075,16 @@ local function julianneAttraction(creature, guid)
 end
 
 local function julianneAffection(creature, guid)
-    creature:CastSpell(creature, SPELL_ETERNAL_AFFECTION)
+    -- C++ EVENT_ETERNAL_AFFECTION (bosses_opera.cpp:1474-1482):
+    -- urand(0,1) and SummonedRomulo with Romulo alive and not RomuloDead
+    -- -> cast on Romulo; otherwise self.
+    local romulo = raj.romulo
+    if math.random(0, 1) == 1 and raj.romuloSummoned and romulo ~= nil
+            and not raj.romuloDead and not romulo:IsDead() then
+        creature:CastSpell(romulo, SPELL_ETERNAL_AFFECTION)
+    else
+        creature:CastSpell(creature, SPELL_ETERNAL_AFFECTION)
+    end
     rajSchedule(guid, "affection", math.random(45000, 60000), function()
         julianneAffection(creature, guid)
     end)
@@ -1014,6 +1150,7 @@ local function julianneLeaveCombat(event, creature)
     if raj.julianneGuid == guid then
         raj.julianneFaking = false
         raj.romuloDead = false
+        raj.romuloSummoned = false
         raj.phase = PHASE_JULIANNE
     end
 end
@@ -1033,6 +1170,7 @@ local function julianneDied(event, creature, killer)
     creature:Talk(JULIANNE_SAY_DEATH02)
     if raj.julianneGuid == guid then
         raj.julianneFaking = false
+        raj.romuloSummoned = false
         raj.phase = PHASE_JULIANNE
     end
 end
@@ -1064,12 +1202,27 @@ local function julianneDamageTaken(event, creature, attacker, damage)
         schedule(guid, "drinkpoison", 2500, function()
             raj.phase = PHASE_ROMULO
             schedule(guid, "summonromulo", 10000, function()
-                -- No summon model: Romulo never spawns. If one has entered
-                -- combat by other means, link it so the dance continues;
-                -- otherwise the encounter stalls here (documented gap).
-                if raj.romuloGuid ~= nil and not raj.romuloFaking then
-                    raj.phase = PHASE_ROMULO
+                -- C++ boss_julianneAI::UpdateAI (bosses_opera.cpp:1404-1415):
+                -- Phase == PHASE_ROMULO and not SummonedRomulo: summon
+                -- Romulo (17533) at (ROMULO_X, ROMULO_Y, my z), o = 0 ->
+                -- my orientation (C++ zero-o fallback, Object.cpp:2061),
+                -- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (0), 2h = 7200000ms.
+                -- C++ arm order: RomuloGUID latch (raj.romulo/romuloGuid),
+                -- ENSURE_AI JulianneGUID + Phase = PHASE_ROMULO (the
+                -- shared raj table — single-instance convention),
+                -- DoZoneInCombat (NO bridge — the summon stands until
+                -- the engine aggros it, documented gap),
+                -- SetFaction(FACTION_MONSTER_2) (bridged, ported).
+                local summon = creature:SummonCreature(ENTRY_ROMULO,
+                    ROMULO_X, ROMULO_Y, creature:GetZ(), creature:GetO(),
+                    0, 7200000)
+                if summon ~= nil then
+                    summon:SetFaction(FACTION_MONSTER_2)
+                    raj.romulo = summon
+                    raj.romuloGuid = summon:GetGUID()
                 end
+                raj.romuloSummoned = true
+                raj.phase = PHASE_ROMULO
             end)
         end)
         return false, 0

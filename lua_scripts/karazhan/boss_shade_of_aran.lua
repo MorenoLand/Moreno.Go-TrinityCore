@@ -27,14 +27,18 @@
 -- berserk (Talk only). The drink/potion/pyroblast mana sequence needs
 -- mana to drain; the repo carries no Spell.dbc, so creature spell costs
 -- resolve to 0 and the mana pool never moves — see deviations.
--- Deviations from C++: no summon model — the 4 water elementals (17167),
--- the 5 shadow-of-Aran summons (18254), and the blizzard creature (17161)
--- never spawn; the elemental sub-40% arm and the 12-min berserk keep their
--- Talk/refresh structure with the SummonCreature calls skipped (blizzard
--- is approximated by casting 29951 on self, like the C++ aura the summoned
--- creature would cast on itself). The water elemental AI itself
--- ("npc_aran_elemental") is registered for entry 17167 below so elementals
--- spawned by other means cast waterbolt 31012 every 2-5s. No
+-- Deviations from C++: the 4 water elementals (17167) ARE summoned now
+-- (2026-10-22 summon bridge — creature:SummonCreature on the handler
+-- surface; type 2 TIMED_DESPAWN, 90s); unit->Attack(victim, true) has no
+-- bridge, so the elementals idle until the engine aggros them (their
+-- waterbolt AI is registered below for when they engage). The 5
+-- shadow-of-Aran summons (18254) and the blizzard creature (17161) still
+-- never spawn; the 12-min berserk keeps its Talk structure with the
+-- SummonCreature call skipped (blizzard is approximated by casting 29951
+-- on self, like the C++ aura the summoned creature would cast on
+-- itself). The water elemental AI itself ("npc_aran_elemental") is
+-- registered for entry 17167 below so the summoned elementals cast
+-- waterbolt 31012 every 2-5s once engaged. No
 -- instance-script model — the library-door open/close arms and the
 -- DATA_ARAN SetBossState calls are skipped (admission-only via the
 -- luaBossAI shim in engine/world/boss_ai.go). No threat model — the
@@ -276,8 +280,22 @@ onNormalCast = function(creature, guid)
         end
         if not st.elementalsSpawned and healthBelowPct(creature, 40) then
             st.elementalsSpawned = true
-            -- C++ summons 4 water elementals (17167) on the victim; no
-            -- summon model, so only the announcement survives.
+            -- C++ boss_shade_of_aran.cpp:419-431: 4x SummonCreature(
+            -- CREATURE_WATER_ELEMENTAL = 17167, 0,0,0,0,
+            -- TEMPSUMMON_TIMED_DESPAWN (2), 90s = 90000ms). C++ all-zero
+            -- coords fall back to a close point at the summoner
+            -- (Object.cpp:2059). unit->Attack(me->GetVictim(), true) has
+            -- no bridge (the elementals idle until the engine aggros
+            -- them — documented gap); unit->SetFaction(me->GetFaction())
+            -- is bridged and ported C++-exact.
+            for _ = 1, 4 do
+                local elemental = creature:SummonCreature(ENTRY_WATER_ELEMENTAL,
+                    creature:GetX(), creature:GetY(), creature:GetZ(),
+                    creature:GetO(), 2, 90000)
+                if elemental ~= nil then
+                    elemental:SetFaction(creature:GetFaction())
+                end
+            end
             creature:Talk(SAY_ELEMENTALS)
         end
     end
