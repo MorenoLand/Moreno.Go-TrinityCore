@@ -62,6 +62,7 @@ local ENTRY_HATCHLING = 23598
 local ENTRY_EGG = 23817
 
 local SAY_AGGRO = 0
+local SAY_ALL_EGGS = 3
 local SAY_BERSERK = 4
 local SAY_SLAY = 5
 local SAY_DEATH = 6
@@ -69,6 +70,13 @@ local SAY_DEATH = 6
 local SPELL_FLAME_BREATH = 43140
 local SPELL_ENRAGE = 44779
 local SPELL_BERSERK = 45078
+local SPELL_HATCH_ALL = 43144
+
+-- C++ JanalainPos[0] (boss_janalai.cpp:84-87): the platform center both
+-- the bomb phase and the all-eggs arm teleport Jan'alai to.
+local JANALAI_CENTER_X = -33.93
+local JANALAI_CENTER_Y = 1149.27
+local JANALAI_CENTER_Z = 19
 
 local SPELL_FIRE_BOMB_THROW = 42628
 local SPELL_FIRE_BOMB_DUMMY = 42629
@@ -106,7 +114,7 @@ end
 local function janalaiState(guid)
     local st = state[guid]
     if not st then
-        st = { enraged = false }
+        st = { enraged = false, noeggs = false }
         state[guid] = st
     end
     return st
@@ -163,7 +171,7 @@ end
 
 local function janalaiResetState(guid)
     cancelTimers(timers, guid)
-    state[guid] = { enraged = false }
+    state[guid] = { enraged = false, noeggs = false }
 end
 
 local function janalaiEnterCombat(event, creature, target)
@@ -191,14 +199,35 @@ end
 local function janalaiDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = janalaiState(guid)
-    if st.enraged then
-        return
-    end
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
     local postDamage = math.max(health - damage, 0)
+    -- C++ UpdateAI !noeggs + HealthBelowPct(35) arm (boss_janalai.cpp:
+    -- 381-397): once per fight — Talk(SAY_ALL_EGGS), teleport to the
+    -- platform center, non-triggered self-cast HATCH_ALL, then
+    -- HatchAllEggs(2): every egg within 100 yd whose display is not
+    -- 11686 self-casts HATCH_EGG (the registered egg SpellHit arm then
+    -- summons the hatchling). Modeled on projected post-damage health
+    -- (nefarian rule), independent of the enrage latch below.
+    if not st.noeggs and postDamage > 0
+            and postDamage < math.floor(maxHealth * 35 / 100) then
+        st.noeggs = true
+        creature:Talk(SAY_ALL_EGGS)
+        creature:AttackStop()
+        creature:Teleport(JANALAI_CENTER_X, JANALAI_CENTER_Y, JANALAI_CENTER_Z)
+        creature:StopMoving()
+        creature:CastSpell(creature, SPELL_HATCH_ALL)
+        for _, egg in ipairs(creature:GetCreaturesInGrid(ENTRY_EGG, 100)) do
+            if egg:GetDisplayId() ~= 11686 then
+                egg:CastSpell(egg, SPELL_HATCH_EGG)
+            end
+        end
+    end
+    if st.enraged then
+        return
+    end
     if postDamage > 0 and postDamage < math.floor(maxHealth * 25 / 100) then
         local per = timers[guid]
         if per and per["enrage"] then
@@ -224,12 +253,15 @@ end
 
 local function janalaiReset(event, creature)
     janalaiResetState(creature:GetGUID())
-    -- C++ boss_janalai::Reset (boss_janalai.cpp:618-627): Initialize()
+    -- C++ boss_janalai::Reset (boss_janalai.cpp:162-169): Initialize()
     -- -> position-gated MovePoint (no movement bridge) ->
-    -- me->SetDisableGravity(true) (:626).
+    -- me->SetDisableGravity(true).
     creature:SetDisableGravity(true)
-    -- C++ Reset's HatchAllEggs(1) display-id restore has no bearer (no
-    -- egg enumeration bridge; display bridge live 2026-10-20).
+    -- C++ HatchAllEggs(1) (:166, :234-256): restore display 10056 on
+    -- every egg within 100 yd.
+    for _, egg in ipairs(creature:GetCreaturesInGrid(ENTRY_EGG, 100)) do
+        egg:SetDisplayId(10056)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_JANALAI, 1, janalaiEnterCombat)

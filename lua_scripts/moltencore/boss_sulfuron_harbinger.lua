@@ -41,6 +41,8 @@
 -- DoCast(me, SPELL_INSPIRE) arm is kept.
 
 local ENTRY_SULFURON_HARBINGER = 12098
+local ENTRY_FLAMEWAKER_HEALER = 11663 -- molten_core.h NPC_FLAMEWAKER_HEALER
+local ENTRY_FLAMEWAKER_ELITE = 11664  -- molten_core.h NPC_FLAMEWAKER_ELITE
 
 local SPELL_DARK_STRIKE = 19777
 local SPELL_DEMORALIZING_SHOUT = 19778
@@ -93,10 +95,26 @@ local function onDemoralizingShout(creature, guid)
     end)
 end
 
--- C++ EVENT_INSPIRE: DoCast(me, 19779) — the
--- DoFindFriendlyMissingBuff arm has no bridge, so only the self-cast
--- is kept; re-arm {20s,26s}.
+-- C++ EVENT_INSPIRE: DoFindFriendlyMissingBuff(45.0f, 19779) picks a
+-- uniform-random friendly add in 45 yd missing the Inspire buff and
+-- DoCast(19779) on it, then DoCast(me, 19779); re-arm {20s,26s}.
+-- Bridges: creature:GetCreaturesInGrid (lua_creature_events.go:2164) +
+-- creature:HasAura (:335) on the event-object surface (the stale
+-- "no friendly-creature bridge" claim is retracted). Add entries are the
+-- MC flamewaker packs, molten_core.h: NPC_FLAMEWAKER_HEALER = 11663 /
+-- NPC_FLAMEWAKER_ELITE = 11664.
 local function onInspire(creature, guid)
+    local healers = {}
+    for _, entry in ipairs({ ENTRY_FLAMEWAKER_HEALER, ENTRY_FLAMEWAKER_ELITE }) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 45.0)) do
+            if not add:IsDead() and not add:HasAura(SPELL_INSPIRE) then
+                healers[#healers + 1] = add
+            end
+        end
+    end
+    if #healers > 0 then
+        creature:CastSpell(healers[math.random(#healers)], SPELL_INSPIRE)
+    end
     creature:CastSpell(creature, SPELL_INSPIRE)
     schedule(guid, "inspire", math.random(20000, 26000), function()
         onInspire(creature, guid)

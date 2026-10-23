@@ -241,10 +241,18 @@ local function felmystResetState(event, creature)
     -- C++ boss_felmyst::Reset (boss_felmyst.cpp:143-156): Initialize()
     -- -> events.Reset() (both internal; timer cancel above is the Lua
     -- twin) -> me->SetDisableGravity(true) (:149) — the
-    -- SetFloatValue(BOUNDINGRADIUS/COMBATREACH, 10), DespawnSummons,
-    -- setActive(false) and SetBossState(NOT_STARTED) legs have no
-    -- bridges (documented in the header).
+    -- SetFloatValue(BOUNDINGRADIUS/COMBATREACH, 10), setActive(false)
+    -- and SetBossState(NOT_STARTED) legs have no bridges (documented
+    -- in the header).
     creature:SetDisableGravity(true)
+    -- C++ DespawnSummons(NPC_VAPOR_TRAIL) (:153, :488-508): every
+    -- creature of the entry within 100 yd (2D) -> SetVisible(false) +
+    -- DespawnOrUnsummon; the NPC_DEAD-summon arm only fires when phase
+    -- == PHASE_FLIGHT, which is never true at Reset (phase == PHASE_NONE).
+    for _, trail in ipairs(creature:GetCreaturesInGrid(NPC_VAPOR_TRAIL, 100)) do
+        trail:SetVisible(false)
+        trail:Despawn()
+    end
 end
 
 -- C++ npc_felmyst_trailAI constructor arms: triggered self-cast
