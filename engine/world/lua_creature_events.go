@@ -1683,6 +1683,51 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{has}, nil
 	}
+	// IsWithinLOS is WorldObject::IsWithinLOSInMap (Object.cpp:1272-1284):
+	// IsInMap(target) (same map AND instance — the C++ compares Map
+	// pointers) && the eye-to-target segment clears terrain via the
+	// default (aggro/assist/melee) LOS form — hasLineOfSight, i.e.
+	// hasLineOfSightFlags(..., ignoreM2=false) (the M2-ignore form is
+	// spell-CheckCast-only, Spell.cpp:5394). C++ adds the target's
+	// collision height and shoots from the collision-height eye point
+	// (players) or the hit-sphere point (creatures); the bridge uses
+	// raw motion positions on both ends, the same shape as every other
+	// hasLineOfSight caller in the tree (chain/area/pet/item legs).
+	// The target may be a creature/player object or a raw GUID; an
+	// unknown or non-live target is false (C++ IsInMap fails).
+	methods["IsWithinLOS"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("IsWithinLOS requires a target")
+		}
+		guid := luaObjectGUID(args[0])
+		if guid == 0 {
+			return []any{false}, nil
+		}
+		s.motionMu.Lock()
+		mx, my, mz := motion.X, motion.Y, motion.Z
+		mmap, miid := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		var tx, ty, tz float32
+		var tmap, tiid uint32
+		found := false
+		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+			tx, ty, tz = sess.player.X, sess.player.Y, sess.player.Z
+			tmap, tiid = sess.player.Map, sess.player.InstanceID
+			found = true
+		} else {
+			s.motionMu.Lock()
+			if m := s.findCreatureMotionLocked(mmap, miid, guid); m != nil {
+				tx, ty, tz = m.X, m.Y, m.Z
+				tmap, tiid = m.Map, m.InstanceID
+				found = true
+			}
+			s.motionMu.Unlock()
+		}
+		if !found || tmap != mmap || tiid != miid {
+			return []any{false}, nil
+		}
+		return []any{s.hasLineOfSight(mmap, mx, my, mz, tx, ty, tz)}, nil
+	}
 	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and

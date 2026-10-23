@@ -46,8 +46,10 @@
 -- Shape-portable fragments exist (event 8 + player + textEmote, PerformEmote,
 -- creature:CastSpell(player,...), player:HasAura, IsWithinDistInMap,
 -- OnAIUpdate 7 with 100ms diff) but: no entry consts in the C++ tree
--- (cannot register), no IsWithinLOS bridge (the emote gate needs LOS, not
--- just distance), no Relocate / SetDisableGravity / heartbeat bridges.
+-- (cannot register); the IsWithinLOS bridge went live 2026-10-23
+-- (WorldObject::IsWithinLOSInMap twin) but the emote gate stays
+-- unported with the class on the no-entry-consts ground;
+-- no Relocate / SetDisableGravity / heartbeat bridges.
 -- The me->SetFacingToObject(player) leg (C++ :364) is bridgeable via
 -- the atan2 twin (devourer_of_souls precedent) — the old "no
 -- SetFacingToObject bridge" parenthetical is retracted — but the class

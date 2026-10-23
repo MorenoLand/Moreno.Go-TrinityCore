@@ -69,8 +69,10 @@
 -- no movement bridge; the Reset one-shot self-buff
 -- SPELL_STRENGHT_OF_THE_PACK 64369 (triggered, :287) is ported
 -- below on event 23 (reset arm, not a timer); EVENT_SAVAGE_POUNCE
--- (:322-330) needs the
--- CatsTargetSelector random-target leg — unbridged; JustDied (:298)
+-- (:322-330) PORTED 2026-10-23 via the bridged creature:IsWithinLOS
+-- (WorldObject::IsWithinLOSInMap twin); the CatsTargetSelector
+-- random-target leg rides creature:GetAITargets (baltharus
+-- ENERVATING_BRAND precedent); JustDied (:298)
 -- -> instance GetCreature(BOSS_AURIAYA) -> DoAction
 -- (ACTION_CRAZY_CAT_LADY 0) — no instance / DoAction bridges.
 -- DOCUMENTED-ONLY (no bridgeable arms):
@@ -138,6 +140,7 @@ local SPELL_BERSERK            = 47008
 
 local SOUND_AURIAYA_DEATH = 15476
 local SPELL_RIP_FLESH          = 64375
+local SPELL_SAVAGE_POUNCE        = 64666
 local SPELL_STRENGHT_OF_THE_PACK = 64369
 
 local timers = {}
@@ -320,14 +323,46 @@ local function ripTick(creature, guid)
     end)
 end
 
+-- npc_sanctum_sentry — C++ EVENT_SAVAGE_POUNCE (:322-330):
+-- SelectTarget(Random, 0, CatsTargetSelector(me, 10.0f, 15.0f)) —
+-- random threat-list player 10-15yd with LOS ->
+-- DoCast(target, SPELL_SAVAGE_POUNCE 64666) (2-arg = non-triggered,
+-- vaelastrasz convention); target found: 10s re-arm; none: 1s.
+-- The LOS leg ports via the bridged creature:IsWithinLOS
+-- (WorldObject::IsWithinLOSInMap twin).
+local function savagePounceTick(creature, guid)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            local d = creature:GetDistance(unit)
+            if d >= 10.0 and d < 15.0 and creature:IsWithinLOS(unit) then
+                candidates[#candidates + 1] = unit
+            end
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_SAVAGE_POUNCE)
+        schedule(guid, "pounce", 10000, function()
+            savagePounceTick(creature, guid)
+        end)
+    else
+        schedule(guid, "pounce", 1000, function()
+            savagePounceTick(creature, guid)
+        end)
+    end
+end
+
 -- C++ JustEngagedWith (:291-296): EVENT_RIP 6s +
--- EVENT_SAVAGE_POUNCE 1ms + SetWalk(false) — only the RIP timer
--- leg is bridgeable.
+-- EVENT_SAVAGE_POUNCE 1ms + SetWalk(false) — the SetWalk leg has
+-- no movement bridge (separable).
 local function sentryEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "rip", 6000, function()
         ripTick(creature, guid)
+    end)
+    schedule(guid, "pounce", 1, function()
+        savagePounceTick(creature, guid)
     end)
 end
 
