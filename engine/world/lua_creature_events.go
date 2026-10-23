@@ -184,9 +184,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
 	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420), the event-surface
 	// twin of the session bridge (lua_objects.go:477-496); Eluna's arc
-	// defaults to pi. The target is a Lua object with X/Y fields
-	// (creature:GetVictim() returns one — the backstab gate pattern) or raw
-	// x, y numbers; self is never in its own back arc.
+	// defaults to pi. The target is a Lua object with X/Y fields or raw
+	// x, y numbers; self is never in its own back arc. NOTE the direction:
+	// creature:IsInBack(victim) is victim-behind-creature; C++ gates of the
+	// form victim->isInBack(me) port as victim:IsInBack(creature) via the
+	// player-surface bridge (lua_player.go).
 	methods["IsInBack"] = func(_ context.Context, args []any) ([]any, error) {
 		tx, ty, targetGUID, ok := backArcTarget(args)
 		if !ok {

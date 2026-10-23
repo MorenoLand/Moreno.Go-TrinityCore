@@ -30,8 +30,8 @@
 -- true), SPELL_CHARGE 52538) via randomPlayer, 6-8s init, 20-25s repeat
 -- (2026-10-23: previously missed — never ported nor documented).
 -- EVENT_BACKSTAB — DoCastVictim(SPELL_BACKSTAB 52540) gated on
--- victim->isInBack(me) via the new event-surface creature:IsInBack
--- bridge (lua_creature_events.go), 7-9s init, 10-13s repeat.
+-- victim->isInBack(me) via victim:IsInBack(creature) (player-surface
+-- IsInBack bridge, lua_player.go), 7-9s init, 10-13s repeat.
 -- Unmodeled (no bridges — documented, not wired):
 -- The passive pre-fight model — Reset leg SetReactState(REACT_PASSIVE)
 -- (SetReactState IS bridged — frozen_core precedent,
@@ -267,11 +267,14 @@ local function chargeTick(creature, guid)
 end
 
 -- C++ EVENT_BACKSTAB: DoCastVictim(SPELL_BACKSTAB 52540) gated on
--- victim->isInBack(me) (creature:IsInBack bridge, event-handler surface);
+-- victim->isInBack(me) — victim-perspective, ported exactly as
+-- victim:IsInBack(creature) via the player-surface IsInBack bridge
+-- (lua_player.go; the creature-surface creature:IsInBack(victim) is the
+-- reverse gate — victim behind the creature — and was wrong here);
 -- randtime(7s,9s) init, 10-13s repeat.
 local function backstabTick(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsInBack(victim) then
+    if victim and victim:IsInBack(creature) then
         creature:CastSpell(nil, SPELL_BACKSTAB)
     end
     schedule(guid, "backstab", math.random(10000, 13000), function()

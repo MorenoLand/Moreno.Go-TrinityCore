@@ -122,6 +122,57 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
+	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420) on the player
+	// surface, twin of the creature bridge (lua_creature_events.go). Eluna's
+	// arc defaults to pi. The target is a Lua object with X/Y/GUID fields
+	// (e.g. the creature) or raw x, y numbers. Called on the victim object
+	// it ports victim-perspective gates exactly: victim:IsInBack(creature)
+	// == C++ victim->isInBack(me); the creature-surface form
+	// creature:IsInBack(victim) is the reverse (victim behind the creature).
+	methods["IsInBack"] = func(_ context.Context, args []any) ([]any, error) {
+		var tx, ty float32
+		var targetGUID uint64
+		if len(args) == 0 {
+			return nil, fmt.Errorf("target is required")
+		}
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			fx, found := objectFloat32Field(obj, "X")
+			if !found {
+				return nil, fmt.Errorf("target is required")
+			}
+			fy, found := objectFloat32Field(obj, "Y")
+			if !found {
+				return nil, fmt.Errorf("target is required")
+			}
+			tx, ty = fx, fy
+			targetGUID, _ = objectUint64Field(obj, "GUID")
+		} else if len(args) >= 2 {
+			x, err := luaFloat32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			y, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			tx, ty = x, y
+		} else {
+			return nil, fmt.Errorf("target is required")
+		}
+		if targetGUID != 0 && targetGUID == state.GUID {
+			return []any{false}, nil // self is always in the frontal arc, never behind it
+		}
+		arc := math.Pi
+		if len(args) > 1 {
+			a, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			arc = float64(a)
+		}
+		return []any{!hasInArc(state.Orientation, state.X, state.Y, tx, ty, 2*math.Pi-arc)}, nil
+	}
 	// IsTargetableForAttack is Unit::isTargetableForAttack (Unit.h:1077,
 	// Unit.cpp) for players: alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE
 	// (0x02000000) unit flags, not a GM, and when checkFakeDeath (C++ default
