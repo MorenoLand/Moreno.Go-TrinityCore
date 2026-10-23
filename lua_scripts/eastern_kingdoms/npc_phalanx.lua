@@ -111,7 +111,12 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     schedule(guid, "thunderclap", 12000, function() onThunderclap(creature, guid) end)
     fireballTimer[guid] = 0
-    schedule(guid, "fireballvolley", 1000, function() onFireballVolley(creature, guid) end)
+    -- C++ npc_phalanxAI::Initialize(): FireballVolley_Timer = 0 scalar init
+    -- means the 51%-gated volley fires on the first UpdateAI tick below
+    -- threshold. CreateLuaEvent rejects delay 0 (zero-delay rule —
+    -- hyjal_trash magmus precedent), so fire the pump arm directly; it
+    -- re-arms its own 1s poll at its tail.
+    onFireballVolley(creature, guid)
     schedule(guid, "mightyblow", 15000, function() onMightyBlow(creature, guid) end)
 end
 
