@@ -65,12 +65,13 @@
 -- periodic trigger of 50841 is spell-data-driven, no script
 -- leg). The UNIT_STATE_CASTING gates have no bridge (documented
 -- deviation); DoMeleeAttackIfReady is engine-driven.
--- STAY-OUT: EVENT_SUMMON health-tier
--- (75/50/25%) PipeLocations summon machine (FORGED_IRON_DWARF
--- 27982 / FORGED_IRON_TROGG 27979 / MALFORMED_OOZE 27981 /
--- EARTHEN_DWARF 27980, TEMPSUMMON_CORPSE_TIMED_DESPAWN 30s, 20s
--- reschedule) — no SummonCreature bridge (the health-tier
--- latch alone can’t be ported without the summon cast);
+-- PORTED: EVENT_SUMMON health-tier (75/50/25%) PipeLocations summon
+-- machine (FORGED_IRON_DWARF 27982 / FORGED_IRON_TROGG 27979 /
+-- MALFORMED_OOZE 27981 / EARTHEN_DWARF 27980,
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN type 6, 30s, 20s re-arm) — 5s seed
+-- in sjonnirEnterCombat + summonTick (the stale "no SummonCreature
+-- bridge" claim is retracted — the bridge is creature:SummonCreature
+-- + creature:GetHealthPct() for the tier latch);
 -- EVENT_FRENZY DoCast(me, SPELL_FRENZY 28747, true) — PORTED (event 1;
 -- triggered self-cast one-shot, no re-arm; the stale "no triggered-cast
 -- bridge" claim is retracted — the bridge is CastSpell(creature, spell, true).
@@ -114,6 +115,18 @@ local SPELL_STATIC_CHARGE = 50834
 local SPELL_LIGHTING_RING = 51849
 local SPELL_CHAIN_LIGHTING = 50830
 local SPELL_FRENZY = 28747
+
+local NPC_FORGED_IRON_DWARF = 27982
+local NPC_FORGED_IRON_TROGG = 27979
+local NPC_MALFORMED_OOZE = 27981
+local NPC_EARTHEN_DWARF = 27980
+
+-- C++ PipeLocations (boss_sjonnir.cpp:67-71); o=0.0f falls back to the
+-- summoner's orientation in C++ (Object.cpp:2061), same as the Go bridge.
+local PIPE_LOCS = {
+    { 1295.44, 734.07, 200.3, 0.0 },
+    { 1297.7, 595.6, 199.9, 0.0 },
+}
 
 local timers = {}
 
@@ -191,6 +204,31 @@ local function lightningRingTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON (boss_sjonnir.cpp:181-195): 5s init -> 20s
+-- unconditional loop; health-tier entry via HealthAbovePct(75/50/25)
+-- (creature:GetHealthPct() is bridged — engine/scripting/object.go
+-- generic fallback, the sindragosa precedent); urand(0,1) pipe;
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN (type 6), 30s.
+-- Deviations: C++ JustSummoned moves the summon to CenterPoint
+-- (no MovePoint bridge); the add AIs (27982/27979/27981/27980) are
+-- unported/unregistered, so summons are inert until those land.
+local function summonTick(creature, guid)
+    local pipe = PIPE_LOCS[math.random(1, 2)]
+    local hp = creature:GetHealthPct()
+    local entry = NPC_EARTHEN_DWARF
+    if hp > 75 then
+        entry = NPC_FORGED_IRON_DWARF
+    elseif hp > 50 then
+        entry = NPC_FORGED_IRON_TROGG
+    elseif hp > 25 then
+        entry = NPC_MALFORMED_OOZE
+    end
+    creature:SummonCreature(entry, pipe[1], pipe[2], pipe[3], pipe[4], 6, 30000)
+    schedule(guid, "summon", 20000, function()
+        summonTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) + required-bosses gate +
 -- BossAI passthrough + ScheduleEvent legs — only the Talk arm is
 -- bridgeable.
@@ -212,6 +250,10 @@ local function sjonnirEnterCombat(event, creature, target)
     end)
     schedule(guid, "lightningRing", {30000, 35000}, function()
         lightningRingTick(creature, guid)
+    end)
+-- C++ EVENT_SUMMON 5s seed (:113).
+    schedule(guid, "summon", 5000, function()
+        summonTick(creature, guid)
     end)
 -- C++ EVENT_FRENZY (:196-199): DoCast(me, 28747, true) triggered self-cast,
 -- single-fire (no reschedule in the case), seeded at 5min (:114).

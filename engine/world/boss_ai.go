@@ -10188,9 +10188,16 @@ func init() {
 	// Sjonnir the Ironshaper (27978), Halls of Stone —
 	// lua_scripts/northrend/boss_sjonnir.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the CheckRequiredBosses / EnterEvadeMode gate,
-	// the BossAI::JustEngagedWith passthrough and the six
-	// ScheduleEvent legs have no bridges); KilledUnit
+	// (event 1; the CheckRequiredBosses / EnterEvadeMode gate and
+	// the BossAI::JustEngagedWith passthrough have no bridges;
+	// the six ScheduleEvent legs are ported via CreateLuaEvent);
+	// timer-driven casts (maiden convention): CHAIN_LIGHTNING
+	// random-target 50830; LIGHTNING_SHIELD self 50831;
+	// STATIC_CHARGE DoCastVictim 50834; LIGHTNING_RING self 51849;
+	// SUMMON health-tier pipe summons 27982/27979/27981/27980
+	// (type 6, 30s, 20s re-arm; JustSummoned MovePoint has no
+	// bridge; add AIs unported so summons are inert); FRENZY
+	// triggered self 28747 (one-shot 5min); KilledUnit
 	// player-gated Talk(SAY_SLAY 1) (event 3 — razuvious
 	// player-gated variant precedent, twenty-first player-gated
 	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
@@ -10199,12 +10206,6 @@ func init() {
 	// abuseTheOoze = 0); DoAction(ACTION_OOZE_DEAD 1) /
 	// GetData(DATA_ABUSE_THE_OOZE 2) (no DoAction / GetData
 	// bridges; consumer: achievement_abuse_the_ooze below); the
-	// UpdateAI event machine (CHAIN_LIGHTNING random-target
-	// 50830; LIGHTNING_SHIELD self 50831; STATIC_CHARGE
-	// DoCastVictim 50834; LIGHTNING_RING self 51849; SUMMON
-	// health-tier pipe summons 27982/27979/27981/27980 30s;
-	// FRENZY triggered 28747 — no timer-event / cast /
-	// target-selection / health-pct / summon bridges);
 	// npc_malformed_ooze (27981 local enum; no Talk arms — the
 	// 10s/3s merge machine has no proximity / summon / despawn /
 	// timer bridges; npc_spark_of_ionar no-bridgeable-arms
