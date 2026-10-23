@@ -59,7 +59,10 @@
 --
 -- PORTED ARMS (C++-exact for all modeled arms):
 -- BloodPrincesBossAI::JustEngagedWith (:455) — the scheduler seeds
--- only (SetCombatPulseDelay/setActive/DoZoneInCombat have no bridge):
+-- plus the SetCombatPulseDelay(5) arm (PORTED — creature:SetCombatPulseDelay
+-- bridge, lua_creature_events.go; event 1, C++ arm order)
+-- and the Reset's SetCombatPulseDelay(0) arm (PORTED — event 23, C++ arm
+-- order); the setActive/DoZoneInCombat legs have no bridge:
 -- keleseth: EVENT_BERSERK 600000ms (:622), EVENT_SHADOW_RESONANCE
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
 -- taldaram: EVENT_BERSERK 600000ms (:689), EVENT_GLITTERING_SPARKS
@@ -357,6 +360,7 @@ end
 -- legs :628-629 (creature:IsHeroic() now bridged).
 -- JustEngagedWith (:455) otherwise has no bridgeable leg.
 local function kelesethEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -373,6 +377,7 @@ end
 -- EVENT_CONJURE_FLAME 20000ms + the IsHeroic-gated shadow-prison
 -- leg :693 (creature:IsHeroic() now bridged).
 local function taldaramEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -463,6 +468,7 @@ local function nucleusReset(event, creature)
 end
 
 local function valanarEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -500,6 +506,7 @@ end
 
 local function princesReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
 end
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)

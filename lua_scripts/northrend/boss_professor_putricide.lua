@@ -208,6 +208,7 @@ local function putricideJustEngagedWith(event, creature, target)
     -- C++ :274 — DoCast(me, SPELL_OOZE_TANK_PROTECTION, true)
     -- (triggered self-cast).
     creature:CastSpell(creature, SPELL_OOZE_TANK_PROTECTION, true)
+    creature:SetCombatPulseDelay(5) -- boss_professor_putricide.cpp:276 (JustEngagedWith arm; DoZoneInCombat leg has no bridge)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     -- C++ :267 — events.ScheduleEvent(EVENT_SLIME_PUDDLE, 10s).
     schedule(guid, "slimepuddle", 10000, function() slimePuddleTick(creature, guid) end)

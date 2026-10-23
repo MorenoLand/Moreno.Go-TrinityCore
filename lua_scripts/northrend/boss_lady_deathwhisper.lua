@@ -461,6 +461,7 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
+    creature:SetCombatPulseDelay(5) -- boss_lady_deathwhisper.cpp:291 (JustEngagedWith arm 2; setActive/DoZoneInCombat legs have no bridge)
     creature:Talk(SAY_AGGRO)
     -- C++ :338 DoStartNoMovement(who) — engage-stationary; phase-1 exact.
     -- The phase-2 DoStartMovement leg is ported in the DamageTaken

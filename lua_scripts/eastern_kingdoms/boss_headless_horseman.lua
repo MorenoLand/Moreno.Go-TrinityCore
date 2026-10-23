@@ -46,8 +46,10 @@
 -- _instance->SetData(DATA_HORSEMAN_EVENT_STATE, DONE) leg is blocked on
 -- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg has
 -- no summon bridge (dark-rider precedent); the LFG FinishDungeon leg has
--- no LFG bridge. JustEngagedWith's SetCombatPulseDelay/setActive legs
--- have no bridges; its EVENT_RANDOM_LAUGH arm is ported as the
+-- no LFG bridge. JustEngagedWith's setActive leg has no bridge;
+-- its SetCombatPulseDelay(5) arm is PORTED (creature:SetCombatPulseDelay
+-- bridge, lua_creature_events.go; event 1, C++ arm order). Its
+-- EVENT_RANDOM_LAUGH arm is ported as the
 -- onLaugh timer via creature:PlayDirectSound (SMSG_PLAY_SOUND); its
 -- head->AI()->DoZoneInCombat() leg hangs off the instance-script model.
 -- Unmodeled (documented-only — no bridges on the Lua surface):
@@ -174,6 +176,7 @@ local function onLaugh(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- boss_headless_horseman.cpp:382 (arm 1 of JustEngagedWith; setActive leg has no bridge)
     local guid = creature:GetGUID()
     schedule(guid, "cleave", 13000, function() onCleave(creature, guid) end)
     schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)

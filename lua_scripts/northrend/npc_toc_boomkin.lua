@@ -28,9 +28,10 @@
 -- SetBossBoundary (no boundary bridge), EVENT_THREAT 5s
 -- (cross-AI threat-table machine), heroic EVENT_REMOVE_CC 5s.
 -- base JustEngagedWith (event 1): DoCast(me, SPELL_ANTI_AOE 68595,
--- true) triggered self-cast — the SetCombatPulseDelay / setActive /
--- DoZoneInCombat / controller SetData(2, IN_PROGRESS) legs have no
--- bridges (tharon_ja precedent).
+-- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
+-- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
+-- the setActive / DoZoneInCombat / controller SetData(2,
+-- IN_PROGRESS) legs have no bridges (tharon_ja precedent).
 -- EVENT_CYCLONE — SelectTarget(Random, 0, NonTankTargetSelector) ->
 -- DoCast(Cyclone 65859), 10-20s init, 10-20s re-arm: randomNonTankPlayer
 -- (netherspite / blood_prince_council precedent — alive same-map
@@ -233,6 +234,7 @@ end
 -- C++ base JustEngagedWith: DoCast(me, SPELL_ANTI_AOE, true) triggered.
 local function boomkinEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
+    creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647 (base JustEngagedWith arm 2; setActive/DoZoneInCombat/SetData legs have no bridge)
 end
 
 local function boomkinLeaveCombat(event, creature)

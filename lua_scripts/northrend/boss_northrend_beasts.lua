@@ -46,9 +46,12 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_gormok: JustEngagedWith -> ScheduleTasks() (event 1; the
 -- boss_northrend_beastsAI::JustEngagedWith instance-bookkeeping leg,
--- SetCombatPulseDelay/setActive and the heroic
+-- setActive and the heroic
 -- HandleWithHeroicEvents (cross-AI combatStalker DoAction
--- ACTION_START_JORMUNGARS) have no bridge — tharon_ja precedent);
+-- ACTION_START_JORMUNGARS) have no bridge — tharon_ja precedent;
+-- the base Reset's SetCombatPulseDelay(0) arm and JustEngagedWith's
+-- SetCombatPulseDelay(5) arm are PORTED (creature:SetCombatPulseDelay
+-- bridge, lua_creature_events.go; events 23/1, C++ arm order);
 -- EVENT_IMPALE — DoCastVictim(Impale 66331), 10s init, 10s repeat
 -- (moroes precedent; gormok's ScheduleTasks carries no phase args and
 -- C++ UpdateAI runs the events whenever UpdateVictim() holds, so no
@@ -306,6 +309,7 @@ end
 -- (C++ EVENT_THROW, the third scheduled task, is vehicle-bound —
 -- documented-only above.)
 local function enterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_northrend_beasts.cpp:251 (base JustEngagedWith arm 1; setActive/HandleInstanceProgress/SendEncounterUnit legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "impale", 10000, function()
@@ -322,6 +326,7 @@ end
 
 local function reset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg has no bridge)
 end
 
 RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)

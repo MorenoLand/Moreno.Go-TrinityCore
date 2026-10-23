@@ -50,8 +50,9 @@
 -- _DespawnAtEvade arms have no bridges (evade-side cleanup is
 -- engine-side).
 -- Gathios the Shatterer (22949): OnReset: triggered self-cast
--- balance of power 41341 (the SetCombatPulseDelay(0) arm has no
--- bridge). OnEnterCombat (the SetCombatPulseDelay(5), setActive
+-- balance of power 41341 + SetCombatPulseDelay(0) PORTED
+-- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event
+-- 23, C++ arm order). OnEnterCombat (the setActive
 -- and DoZoneInCombat arms have no bridges): triggered self-cast
 -- seal of blood 41459 (C++ ScheduleEvents one-time arm) / bless
 -- {41450, 41451} 20s then {30s,45s} — the random-friendly-in-
@@ -140,8 +141,10 @@
 -- arms (instance->GetCreature(DATA_*)) have no bearer; no summon
 -- bridge — SummonCreatureGroup(SUMMON_COUNCIL_GROUP) unmodeled;
 -- the 41342 shared-rule Nil-target cast has no heal-hook bearer;
--- the boundary/SetCombatPulseDelay/setActive arms have no
--- bridges.
+-- the boundary/setActive arms have no
+-- bridges; the SetCombatPulseDelay(5) arm is PORTED
+-- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
+-- C++ arm order).
 local ENTRY_ILLIDARI_COUNCIL = 23426
 local ENTRY_GATHIOS = 22949
 local ENTRY_ZEREVOR = 22950
@@ -411,9 +414,9 @@ local function memberLeaveCombat(event, creature)
 end
 
 -- C++ IllidariCouncilBossAI::Reset: events reset (cancelTimers),
--- triggered self-cast 41341 balance of power (the SetCombatPulse
--- Delay(0) arm has no bridge).
+-- triggered self-cast 41341 balance of power.
 local function memberReset(event, creature)
+    creature:SetCombatPulseDelay(0) -- boss_illidari_council.cpp:251 (base Reset arm 1; pulse disable)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ IllidariCouncilBossAI::Reset(): DoCastSelf(BALANCE_OF_POWER,
@@ -483,11 +486,14 @@ local function gathiosAura(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith + ScheduleEvents: the SetCombatPulseDelay/
--- setActive/DoZoneInCombat arms have no bridges; non-triggered
+-- C++ JustEngagedWith + ScheduleEvents: the
+-- setActive/DoZoneInCombat arms have no bridges; the SetCombatPulseDelay(5)
+-- arm is PORTED (creature:SetCombatPulseDelay bridge, lua_creature_events.go;
+-- event 1, C++ arm order); non-triggered
 -- self-cast seal of blood 41459 one-time (C++ DoCastSelf literal
 -- form = TRIGGERED_NONE); the five cycle arms.
 local function gathiosEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:312: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -581,6 +587,7 @@ end
 -- REFRESH_DAMPEN), which has no bearer (the dampen-magic
 -- AuraScript has no bridge).
 local function zerevorEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:368: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -600,6 +607,7 @@ end
 -- C++ Reset: base Reset + _canUseArcaneExplosion=true +
 -- non-triggered self-cast 41478.
 local function zerevorReset(event, creature)
+    creature:SetCombatPulseDelay(0) -- boss_illidari_council.cpp:251 (base Reset arm 1, chained; pulse disable)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossState(guid).canUseArcaneExplosion = true
@@ -660,6 +668,7 @@ end
 -- The HealReceived -> shared-rule arm and the DoSpellAttackIfReady
 -- (41471) filler have no bridges — unmodeled.
 local function malandeEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:451: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -701,6 +710,7 @@ end
 -- C++ JustEngagedWith + ScheduleEvents: the vanish cycle. The
 -- CanSeeAlways vanish-vision arm has no bridge — unmodeled.
 local function verasEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:511: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)

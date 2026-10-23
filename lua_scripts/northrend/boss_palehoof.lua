@@ -239,6 +239,7 @@ end
 -- (event 23 fires first on the Go respawn/death/evade paths; no 23 fire
 -- at first grid spawn, so the spawn-time freeze visual stays unmodeled).
 local function minibossReset(event, creature)
+    creature:SetCombatPulseDelay(0) -- boss_palehoof.cpp:331 (base Reset arm 1; pulse disable)
     creature:CastSpell(creature, SPELL_FREEZE, true)
     cancelTimers(creature:GetGUID())
 end
@@ -309,6 +310,7 @@ end
 -- C++ boss_ravenous_furbolgAI::ScheduleTasks (:377-379) — ungated;
 -- carried here on event 1.
 local function furbolgEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ PalehoofMinionsBossAI::DoAction(ACTION_START_FIGHT) (:341-345):
@@ -335,6 +337,7 @@ end
 -- C++ boss_frenzied_worgenAI::ScheduleTasks (:421-423) — ungated;
 -- carried here on event 1.
 local function worgenEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
@@ -356,6 +359,7 @@ end
 -- C++ boss_ferocious_rhinoAI::ScheduleTasks (:464-466) — ungated;
 -- carried here on event 1.
 local function rhinoEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
@@ -382,6 +386,7 @@ end
 -- C++ boss_massive_jormungarAI::ScheduleTasks (:509-511) — ungated;
 -- carried here on event 1.
 local function jormungarEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)

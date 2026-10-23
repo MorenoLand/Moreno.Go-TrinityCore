@@ -393,6 +393,7 @@ local function jaraxxusDied(event, creature, killer)
 end
 
 local function jaraxxusReset(event, creature)
+    creature:SetCombatPulseDelay(0) -- boss_lord_jaraxxus.cpp:118 (Reset arm 1; pulse disable, ResetLootMode leg has no bridge)
     cancelTimers(creature:GetGUID())
     -- C++ boss_jaraxxus::Reset FAIL branch (boss_lord_jaraxxus.cpp:115-116):
     -- DoCastSelf(SPELL_JARAXXUS_CHAINS 67924) + SetImmuneToPC(true) +

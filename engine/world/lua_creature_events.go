@@ -620,6 +620,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
 		return nil, nil
 	}
+	// SetCombatPulseDelay is Creature::SetCombatPulseDelay (Creature.h:270):
+	// the interval in SECONDS at which the creature pulses its whole zone
+	// into combat (only fires on dungeon maps). The C++ setter stores the
+	// delay and re-seeds m_combatPulseTime when it is 0 or larger than the
+	// new delay; the Go twin keeps the same two fields on the motion and
+	// the same seeding rule. The pulse itself runs in stepCreatureCombatPulse
+	// (creaturemotion.go). There is no client broadcast — C++ sends none.
+	methods["SetCombatPulseDelay"] = func(_ context.Context, args []any) ([]any, error) {
+		delay, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.CombatPulseDelaySecs = delay
+		delayDur := time.Duration(delay) * time.Second
+		if motion.CombatPulseTimer == 0 || motion.CombatPulseTimer > delayDur {
+			motion.CombatPulseTimer = delayDur
+		}
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id

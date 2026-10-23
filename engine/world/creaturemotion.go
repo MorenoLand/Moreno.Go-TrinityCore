@@ -107,6 +107,8 @@ type creatureMotion struct {
 	GravityDisabled       bool                // MOVEMENTFLAG_DISABLE_GRAVITY live value: Lua CreatureMethods::SetDisableGravity (Creature::SetDisableGravity twin, Creature.cpp:3027); zero value = gravity enabled (the C++ default), broadcast leg only
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
+	CombatPulseDelaySecs  uint32              // Creature::m_combatPulseDelay (Creature.h:270): Lua CreatureMethods::SetCombatPulseDelay; zero = pulse disabled (the C++ default), delay in seconds
+	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining; seeded per the setter rule (timer==0 or timer>delay -> timer=delay)
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
@@ -2530,10 +2532,57 @@ func (s *Server) stepCreatureRegen(motion *creatureMotion) {
 	}
 }
 
+// stepCreatureCombatPulse runs the Creature::Update combat-pulse arm
+// (Creature.cpp:842-868): with m_combatPulseDelay > 0, while the creature is
+// engaged (IsEngaged = IsInCombat, Unit.h:1031) on a dungeon map, every
+// delay-seconds the creature engages every alive non-GM hostile player on
+// its map via Unit::EngageWithTarget (Unit.cpp:8429-8438). The Go twin is
+// triggerCreatureAggro, whose OnAggro leg only fires on the fresh-engagement
+// transition — matching C++ where the pulse never re-runs AtEngage on an
+// already-engaged creature. Players are scoped to the creature's map+instance
+// (Map::GetPlayers). tickDiff is the sweep's fixed 100ms cadence. Placed
+// after the regen step, mirroring C++ where the pulse block sits in
+// Creature::Update alongside the regen arm.
+func (s *Server) stepCreatureCombatPulse(ctx context.Context, motion *creatureMotion, players []playerPos) {
+	if motion.CombatPulseDelaySecs == 0 {
+		return
+	}
+	if !motion.InCombat {
+		return
+	}
+	if s == nil || s.Data == nil {
+		return
+	}
+	mapEntry, found, err := s.Data.Map(motion.Map)
+	if err != nil || !found || !mapEntry.IsDungeon() {
+		return
+	}
+	const tickDiff = 100 * time.Millisecond
+	if motion.CombatPulseTimer > tickDiff {
+		motion.CombatPulseTimer -= tickDiff
+		return
+	}
+	motion.CombatPulseTimer = time.Duration(motion.CombatPulseDelaySecs) * time.Second
+	faction := motion.Faction
+	for _, p := range players {
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID {
+			continue
+		}
+		if p.IsGM || p.IsDead {
+			continue
+		}
+		if !s.isHostileFaction(faction, p) {
+			continue
+		}
+		s.triggerCreatureAggro(ctx, motion.GUID, p.GUID)
+	}
+}
+
 // regenerateCreatureHealth is Creature::RegenerateHealth (Creature.cpp:996-1029).
 // CanRegenerateHealth is always true here: _regenerateHealth defaults true
-// (Creature.cpp:261) and SetRegenerateHealth has no Lua bridge, so the lock
-// is unreachable. Controlled creatures (pet/charmed) use the spirit formula
+// (Creature.cpp:261) and the SetRegenerateHealth bridge keeps the Go lock
+// inverted-false at zero value, so the lock only engages when a script
+// disables it. Controlled creatures (pet/charmed) use the spirit formula
 // with RATE_HEALTH = 1.0 (Go models no rate config — the player_regen.go:51
 // default); everyone else regens a third of max health per interval.
 // Documented deltas: the SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) multiplier
@@ -2666,6 +2715,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 
 	s.stepCreatureRegen(motion)
+	s.stepCreatureCombatPulse(ctx, motion, players)
 
 	// Pet AI handling if this creature is a player pet
 	if motion.OwnerGUID != 0 {

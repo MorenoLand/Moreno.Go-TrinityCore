@@ -21,7 +21,8 @@ import (
 // OnEvade (mirroring Reset() at the tail of CreatureAI::_EnterEvadeMode,
 // CreatureAI.cpp:237); C++ runs no Reset at first spawn either, so Go's
 // alive-only call sites match. The !IsAlive() early return is vacuous.
-// SetCombatPulseDelay(0) and ResetLootMode() have no Go models — no bridge.
+// SetCombatPulseDelay(0) is bridged (creature:SetCombatPulseDelay,
+// lua_creature_events.go); ResetLootMode() has no Go model — no bridge.
 // events.Reset() is bridged per-AI: every implementation re-arms its own
 // flags/timers in OnReset (vancleef 5 flags, mrSmite phase + 2 timers,
 // rhahkZor slamTimer, taragaman 2 timers, kresh shieldUsed); luaBossAI is a
@@ -57,7 +58,8 @@ import (
 // SetBossState(IN_PROGRESS) has no boss-state model — beginInstanceEncounter
 // is raid-gated (IsRaid) and a no-op for all five Go bosses (Deadmines and
 // Wailing Caverns are dungeons; only Lua-ported raid bosses use it);
-// SetCombatPulseDelay(5) and setActive(true) have no Go models — no bridge;
+// SetCombatPulseDelay(5) is bridged (creature:SetCombatPulseDelay,
+// lua_creature_events.go); setActive(true) has no Go model — no bridge;
 // DoZoneInCombat() has no engine analog — no bridge (the C++ vancleef
 // summons.DoZoneInCombat() arm likewise; Go's 50%-arm blackguards spawn
 // already in combat). ScheduleTasks() needs no aggro-time bridge: every

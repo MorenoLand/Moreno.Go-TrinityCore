@@ -49,8 +49,10 @@
 -- JustEngagedWith Talk(SAY_AGGRO 0) (event 1) + DoCastSelf(Surge
 -- 65766 Light / 65768 Dark) (event arms; the BossAI::JustEngagedWith
 -- instance-bookkeeping leg, DoZoneInCombat, cross-AI sister
--- AddAura/Empathy and SetCombatPulseDelay/setActive have no bridges
--- — tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER 6)
+-- AddAura/Empathy and setActive have no bridges
+-- — tharon_ja precedent; the SetCombatPulseDelay(5) arm is PORTED
+-- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
+-- C++ arm order)); KilledUnit Talk(SAY_KILL_PLAYER 6)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
 -- precedent); JustDied Talk(SAY_DEATH 8) (event 4) + the sister-gated
 -- lootable legs (boss_twin_valkyr.cpp:238-262) — PORTED via the
@@ -289,6 +291,7 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
         sisterDeaths = 0
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
+        creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; DoZoneInCombat/AddAura/sister Empathy/setActive legs have no bridge)
         local guid = creature:GetGUID()
         cancelTimers(guid)
         schedule(guid, "twinspike", 20000, function()

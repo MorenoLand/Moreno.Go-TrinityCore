@@ -308,6 +308,7 @@ end
 -- (:583); the phase-one machine arms are unbridged. No C++ Talk on
 -- engage. Event 1 registered for the berserk timer only.
 local function lichKingJustEngagedWith(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_the_lich_king.cpp:575 (JustEngagedWith arm; setActive/DoZoneInCombat legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "berserk", 900000, function() onBerserk(creature, guid) end)
