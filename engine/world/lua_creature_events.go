@@ -525,6 +525,101 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby)
 		return nil, nil
 	}
+	// SetDisableGravity is Creature::SetDisableGravity (Creature.cpp:3027):
+	// flips MOVEMENTFLAG_DISABLE_GRAVITY (and clears MOVEMENTFLAG_FALLING)
+	// with the C++ no-op-on-unchanged early-out, then broadcasts
+	// SMSG_SPLINE_MOVE_GRAVITY_DISABLE/ENABLE (packed GUID only,
+	// Creature.cpp:3040-3045). The animation-tier fold (Fly/Ground/Hover)
+	// stays out — the Go engine models no animation tiers (the waypoint
+	// LAND/TAKEOFF precedent, creaturemotion.go). The falling-flag clear is
+	// internal: the Go engine keeps no per-creature movement flags, so the
+	// bit lives on motion for idempotence and the packet is the
+	// client-visible leg (the Teleport bridge precedent). C++ skips the
+	// packet when the move spline is uninitialized; the Go movement model
+	// has no splines, so the broadcast always goes (matching the ported
+	// arms, which always pair it with a visible motion change).
+	methods["SetDisableGravity"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetDisableGravity requires a bool, got no args")
+		}
+		disable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetDisableGravity requires a bool")
+		}
+		s.motionMu.Lock()
+		if motion.GravityDisabled == disable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.GravityDisabled = disable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
+		if disable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		return nil, nil
+	}
+	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
+	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
+	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,
+	// Creature.cpp:3121-3126). The hover-height Z fold (Unit.cpp:13789-13803,
+	// GetFloatValue UNIT_FIELD_HOVERHEIGHT) stays out — the Go engine models
+	// no creature hover height; the animation-tier fold stays out with it
+	// (SetDisableGravity above).
+	methods["SetHover"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetHover requires a bool, got no args")
+		}
+		enable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetHover requires a bool")
+		}
+		s.motionMu.Lock()
+		if motion.Hovering == enable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Hovering = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		return nil, nil
+	}
+	// SetCanFly is Creature::SetCanFly (Creature.cpp:3060): flips
+	// MOVEMENTFLAG_CAN_FLY (and clears the moving-fly mask / FALLING on
+	// disable) with the C++ no-op-on-unchanged early-out, then broadcasts
+	// SMSG_SPLINE_MOVE_SET_FLYING/UNSET_FLYING (packed GUID only,
+	// Creature.cpp:3067-3071). The animation-tier fold stays out (the
+	// SetDisableGravity precedent, above).
+	methods["SetCanFly"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetCanFly requires a bool, got no args")
+		}
+		enable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetCanFly requires a bool")
+		}
+		s.motionMu.Lock()
+		if motion.Flying == enable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Flying = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		return nil, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id

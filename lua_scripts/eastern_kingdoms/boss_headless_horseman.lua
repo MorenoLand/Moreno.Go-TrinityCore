@@ -78,10 +78,14 @@
 --   PUMPKINS) leg lives in the unbridged 52236 AuraScript and the
 --   pumpkin-spawn machinery is the aura's DBC effect (no summon
 --   bridge).
--- - Reset/JustReachedHome/InitializeAI legs: SetDisableGravity/SetHover
---   (no bridge), _summons.DespawnAll (moot — zero summons are modeled
---   in this file; the stale "no despawn bridge" parenthetical is
---   retracted, supremus precedent), SetReactState (SetReactState
+-- - Reset/JustReachedHome/InitializeAI legs: the SetDisableGravity/
+--   SetHover legs port on event 5 (InitializeAI twin, both bridged —
+--   stale "no bridge" retracted); the POINT_HORSEMAN_FINISH_PATH
+--   disable legs ride the unported intro flight-path machine (DoAction
+--   ACTION_HORSEMAN_EVENT_START / MoveSmoothPath, documented above).
+-- - Reset/JustReachedHome legs: _summons.DespawnAll (moot — zero summons
+--   are modeled in this file; the stale "no despawn bridge"
+--   parenthetical is retracted, supremus precedent), SetReactState (SetReactState
 --   IS bridged — frozen_core precedent, lua_creature_events.go:524;
 --   the JustReachedHome REACT_AGGRESSIVE leg is a no-op in the Lua
 --   model since the REACT_PASSIVE phase-machine leg is unported),
@@ -194,6 +198,13 @@ end
 -- C++ boss_headless_horseman::JustAppeared -> HandleInitialSetup
 -- (boss_headless_horseman.cpp:357): two TRIGGERED self-casts.
 local function onSpawn(_, creature)
+    -- C++ boss_headless_horseman::InitializeAI
+    -- (boss_headless_horseman.cpp:344-349): me->SetDisableGravity(true),
+    -- me->SetHover(true), then ScriptedAI::InitializeAI() ->
+    -- HandleInitialSetup (the two self-casts below + SetImmuneToPC +
+    -- REACT_PASSIVE, the latter two documented-out in the header).
+    creature:SetDisableGravity(true)
+    creature:SetHover(true)
     creature:CastSpell(creature, SPELL_HEAD_VISUAL, true)
     creature:CastSpell(creature, SPELL_ONKILL_PROC, true)
 end

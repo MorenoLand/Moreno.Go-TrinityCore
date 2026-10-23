@@ -30,12 +30,13 @@
 --   reschedule 15s. The larva summon + instance SetGuidData(DATA_PARALYZED)
 --   have no bridge — documented below.
 -- - Ground phase (event 9 damage leg, C++ UpdateAI's per-tick
---   GetHealthPct() < 70 check): phase AIR -> GROUND, cancel
---   POISON_STINGER, schedule LASH (5-8s) + TRASH (3-6s). The motion
---   legs (MovePoint to victim, SetCanFly) have no bridge — documented
---   below; the SetCombatMovement(false) Reset arm PORTED 2026-10-22
---   (creature:SetCombatMovement, lua_creature_events.go — C++
---   boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
+--   GetHealthPct() < 70 check): phase AIR -> GROUND,
+--   SetCombatMovement(true) (bridged, boss_ayamiss.cpp:166),
+--   cancel POISON_STINGER, schedule LASH (5-8s) + TRASH (3-6s).
+--   The motion legs (MovePoint to victim, SetCanFly) have no bridge —
+--   documented below; the SetCombatMovement(false) Reset arm PORTED
+--   2026-10-22 (creature:SetCombatMovement, lua_creature_events.go —
+--   C++ boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
 --   (creature:ClearThreatList, bridged lua_objects.go:389).
 -- - EVENT_LASH: DoCastVictim 25852, reschedule 8-15s.
 -- - EVENT_TRASH: DoCastVictim 3391 (kurinnaxx convention),
@@ -44,10 +45,12 @@
 --   FRENZY 8269, Talk(EMOTE_FRENZY 0), latched (kurinnaxx enrage
 --   convention).
 -- Unmodeled (documented-only, no bridges):
--- - Motion: SetCanFly/SetDisableGravity/MovePoint(POINT_AIR) on
---   engage, MovePoint(POINT_GROUND) at phase change,
---   UNIT_STATE_ROOT via MovementInform — no Lua
---   bridge for motion or unit states.
+-- - Motion: SetCanFly/MovePoint(POINT_AIR) on engage, MovePoint
+--   (POINT_GROUND) at phase change, UNIT_STATE_ROOT via MovementInform
+--   — no Lua bridge for motion or unit states. Engage's
+--   SetDisableGravity(true) ports via the creature:SetDisableGravity
+--   bridge (onEnterCombat); C++ leaves gravity disabled in ground
+--   phase (no re-enable arm), so the port does too.
 -- - SummonCreature (NPC_SWARMER 15546, NPC_LARVA 15555): no bridge.
 -- - EVENT_SWARMER_ATTACK's cross-AI AttackStart on swarmers: no
 --   bridge (zero SelectTarget/AttackStart usage in lua_scripts).
@@ -183,6 +186,12 @@ local function checkGroundPhase(creature, guid, damage)
     local postHealth = creature:GetHealth() - damage
     if postHealth > 0 and postHealth * 100 / maxHealth < 70 then
         state.phase = PHASE_GROUND
+        -- C++ ground-phase arm (boss_ayamiss.cpp:162-176): _phase =
+        -- PHASE_GROUND -> SetCombatMovement(true) (:166) ->
+        -- SetCanFly(false) (no bridge) -> MovePoint(POINT_GROUND,
+        -- victim pos) (no movement bridge) -> ResetThreatList() ->
+        -- schedule LASH/TRASH -> cancel POISON_STINGER.
+        creature:SetCombatMovement(true)
         -- C++ ground-phase leg: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no bridge" header claims were
         -- stale); the motion leg has no bridge.
@@ -237,6 +246,10 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "paralyze", 15000, function()
         onParalyze(creature, guid)
     end)
+    -- C++ JustEngagedWith (boss_ayamiss.cpp:140-152): schedules (above),
+    -- SetCanFly(true) (no bridge), me->SetDisableGravity(true) (:151),
+    -- MovePoint(POINT_AIR) (no movement bridge).
+    creature:SetDisableGravity(true)
 end
 
 local function onLeaveCombat(event, creature)

@@ -38,9 +38,10 @@
 -- gate). OnDied(4): Talk(YELL_DEATH); the SetBossState(DONE) arm
 -- is blocked on the instance-script model. OnReset(23): the
 -- Initialize/events.Reset arms (phase tracking lives only in the
--- unmodeled flight sequence — see below); the DisableGravity,
--- bounding-radius/combat-reach, setActive(false) and
--- DespawnSummons(NPC_VAPOR_TRAIL) arms have no
+-- unmodeled flight sequence — see below); the DisableGravity arm
+-- ports via the creature:SetDisableGravity bridge (felmystResetState;
+-- stale "no bridge" retracted); the bounding-radius/combat-reach,
+-- setActive(false) and DespawnSummons(NPC_VAPOR_TRAIL) arms have no
 -- flag/combat-reach/active/creature-enumeration bridges and the
 -- SetBossState(NOT_STARTED) arm is blocked on the instance-script
 -- model. OnLeaveCombat(2)/OnReset(23): cancel timers.
@@ -234,6 +235,13 @@ end
 
 local function felmystResetState(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_felmyst::Reset (boss_felmyst.cpp:143-156): Initialize()
+    -- -> events.Reset() (both internal; timer cancel above is the Lua
+    -- twin) -> me->SetDisableGravity(true) (:149) — the
+    -- SetFloatValue(BOUNDINGRADIUS/COMBATREACH, 10), DespawnSummons,
+    -- setActive(false) and SetBossState(NOT_STARTED) legs have no
+    -- bridges (documented in the header).
+    creature:SetDisableGravity(true)
 end
 
 -- C++ npc_felmyst_trailAI constructor arms: triggered self-cast

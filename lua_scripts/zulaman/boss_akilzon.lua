@@ -213,6 +213,9 @@ end
 
 local function akilzonReset(event, creature)
     akilzonResetState(creature:GetGUID())
+    -- C++ boss_akilzon::Reset (boss_akilzon.cpp:403-407): Initialize()
+    -- -> me->SetDisableGravity(true) (:406).
+    creature:SetDisableGravity(true)
 end
 
 RegisterCreatureEvent(ENTRY_AKILZON, 1, akilzonEnterCombat)
@@ -227,7 +230,8 @@ RegisterCreatureEvent(ENTRY_AKILZON, 23, akilzonReset)
 -- MovementInform never fires without a movement model, so the swoop is
 -- modeled as a direct timer cast on a random alive player every {5s,10s}.
 -- MoveInLineOfSight is suppressed in C++ (empty override) and Reset's
--- SetDisableGravity has no bridge; JustEngagedWith's DoZoneInCombat has
+-- SetDisableGravity ports via the creature:SetDisableGravity bridge
+-- (akilzonReset); JustEngagedWith's DoZoneInCombat has
 -- no bridge.
 -- C++ npc_akilzon_eagle UpdateAI (boss_akilzon.cpp:439):
 -- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form) — picks from

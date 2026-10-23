@@ -85,12 +85,14 @@
 --   waypoint leg (HordeWPs[7] in front of Thrall) — no escort bridge.
 --   Evade keeps the Delay/meteor machine running (C++ Reset only re-inits
 --   spawnTimer/FlameBuffetTimer/imol — the reveal re-arms at 2000ms).
--- - npc_frost_wyrm: Reset SetDisableGravity(true), the chase/StopMoving/
---   Clear movement legs, JustDied ground-position despawn visuals —
---   no bridges.
--- - npc_gargoyle: Reset SetDisableGravity(true), the Zpos-descending
---   MovePoint approach, forcemove random-target AttackStart, JustDied
---   ground-position visuals — no bridges.
+-- - npc_frost_wyrm: Reset's SetDisableGravity(true) ports via the
+--   creature:SetDisableGravity bridge (onReset, entry-gated);
+--   the chase/StopMoving/Clear movement legs and the JustDied
+--   ground-position despawn visuals have no bridges.
+-- - npc_gargoyle: Reset's SetDisableGravity(true) ports via the same
+--   bridge (onReset, entry-gated); the Zpos-descending MovePoint
+--   approach, forcemove random-target AttackStart and the JustDied
+--   ground-position visuals have no bridges.
 -- - npc_necromancer: KilledUnit skeleton spawns 17902/17903 at +/-3
 --   offsets TEMPSUMMON_TIMED_DESPAWN 60s + SummonList bookkeeping —
 --   no summon model (jeklik precedent). Event 3 not registered.
@@ -383,6 +385,16 @@ local function onReset(event, creature)
         end
     else
         cancelTimers(guid)
+    end
+    -- C++ npc_frost_wyrm::Reset (hyjal_trash.cpp:1188-1192) and
+    -- npc_gargoyle::Reset (:1318-1322): Initialize() (combat-timer
+    -- re-init, covered by the timer cancel above) ->
+    -- me->SetDisableGravity(true). The Go evade path fires ev23 ahead
+    -- of ev2 (creaturemotion.go, the C++ EnterEvadeMode->Reset order),
+    -- so the leg lives here, not on leave-combat.
+    local entry = creature:GetEntry()
+    if entry == 17907 or entry == 17906 then -- FROST_WYRM / GARGOYLE
+        creature:SetDisableGravity(true)
     end
 end
 

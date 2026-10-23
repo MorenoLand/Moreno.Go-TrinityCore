@@ -155,6 +155,40 @@ func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, 
 	}
 }
 
+// broadcastCreatureSplineMove pushes a SMSG_SPLINE_MOVE_* packet carrying
+// only the creature's packed GUID (the Creature::SetDisableGravity /
+// Creature::SetHover shape, Creature.cpp:3040-3045/3121-3126) to every
+// session whose player shares the creature's map/instance and stands within
+// visibility distance of the creature. It is the gravity/hover twin of
+// broadcastCreatureTeleportMovement, which reuses the same targeting loop
+// for a different movement packet.
+func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y float32, guid uint64, opcode protocol.Opcode) {
+	if s == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	buf := protocol.NewBuffer(packedGUIDSize(guid))
+	buf.WritePackedGUID(guid)
+	payload := buf.Bytes()
+	distance := s.Config.VisibilityDistanceContinents
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if math.Hypot(float64(target.player.X-x), float64(target.player.Y-y)) > distance {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if err := target.write(uint16(opcode), payload, true); err != nil {
+			target.debug("creature spline-move broadcast failed", "account", target.accountName, "guid", guid, "opcode", uint32(opcode), "error", err)
+		}
+	}
+}
+
 // nearTeleportMove performs a server-initiated same-map near teleport: it
 // stages the destination for the client's MSG_MOVE_TELEPORT ack (which
 // applies the position, mirroring handleMoveTeleportAck) and pushes the

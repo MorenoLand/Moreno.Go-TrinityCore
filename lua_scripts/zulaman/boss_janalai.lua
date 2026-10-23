@@ -220,6 +220,10 @@ end
 
 local function janalaiReset(event, creature)
     janalaiResetState(creature:GetGUID())
+    -- C++ boss_janalai::Reset (boss_janalai.cpp:618-627): Initialize()
+    -- -> position-gated MovePoint (no movement bridge) ->
+    -- me->SetDisableGravity(true) (:626).
+    creature:SetDisableGravity(true)
     -- C++ Reset's HatchAllEggs(1) display-id restore has no bearer (no
     -- egg enumeration bridge; display bridge live 2026-10-20).
 end
@@ -260,8 +264,10 @@ RegisterCreatureEvent(ENTRY_FIRE_BOMB, 27, firebombMoveInLOS)
 
 -- npc_janalai_hatchling (23598, C++ ScriptName "npc_janalai_hatchling"):
 -- flame buffet 43299 on the victim, first at 7s then every 10s; melee is
--- engine-driven. The MovePoint spawn walk, SetDisableGravity, and the
--- instance-state DisappearAndDie arm have no bridge. Hatchlings never
+-- engine-driven. The MovePoint spawn walk and the instance-state
+-- DisappearAndDie arm have no bridge; Reset's SetDisableGravity ports
+-- via the creature:SetDisableGravity bridge (hatchlingReset).
+-- Hatchlings never
 -- spawn in this build (no summon model), but the AI is registered so any
 -- that exist fight correctly.
 local function onBuffet(creature, guid)
@@ -288,6 +294,10 @@ end
 
 local function hatchlingReset(event, creature)
     cancelTimers(timers, creature:GetGUID())
+    -- C++ npc_janalai_hatchlingAI::Reset (boss_janalai.cpp:618-627):
+    -- Initialize() -> position-gated MovePoint (no movement bridge) ->
+    -- me->SetDisableGravity(true) (:626).
+    creature:SetDisableGravity(true)
 end
 
 RegisterCreatureEvent(ENTRY_HATCHLING, 1, hatchlingEnterCombat)

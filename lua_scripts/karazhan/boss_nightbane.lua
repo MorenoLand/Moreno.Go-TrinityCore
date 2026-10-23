@@ -28,8 +28,10 @@
 -- port via the bridged creature:SetReactState (startPhaseFly ->
 -- REACT_PASSIVE, onLanded -> REACT_AGGRESSIVE) — suppressing engine
 -- melee during the fly-phase timer chain exactly like C++ (no melee
--- while airborne); gravity flips, AttackStop, and
--- InterruptNonMeleeSpells have no bridge. No gameobject event dispatch
+-- while airborne); the gravity flips port via the bridged
+-- creature:SetDisableGravity (liftoff on, touchdown off), while
+-- AttackStop (ported above) and the interrupt-casts leg (no bridge)
+-- split. No gameobject event dispatch
 -- exists in the engine, so the go_blackened_urn gossip arm (entry 194092)
 -- and the intro (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
 -- are not modeled: the port starts directly at the landing combat state.
@@ -256,9 +258,11 @@ local function onEndPhaseTwo(creature, guid)
         return
     end
     -- C++ MovementInform POINT_PHASE_TWO_LANDING arrival
-    -- (boss_nightbane.cpp:228):
+    -- (boss_nightbane.cpp:224-229): SetPhase(PHASE_GROUND),
+    -- me->SetDisableGravity(false) (:225), then
     -- me->HandleEmoteCommand(EMOTE_ONESHOT_LAND) (SharedDefines.h:2007,
     -- value 293), before the 3s EVENT_LANDED schedule.
+    creature:SetDisableGravity(false) -- C++ :225, before the land emote
     creature:PerformEmote(293)
     -- C++ MoveAlongSplineChain(POINT_PHASE_TWO_LANDING, ...) arrival —
     -- 5s approximates the descent with no movement model.
@@ -302,7 +306,8 @@ local function startPhaseFly(creature, guid)
     -- C++ StartPhaseFly: ++_flyCount, Talk(YELL_FLY_PHASE), cancel the
     -- ground group, interrupt non-melee casts, liftoff emote, gravity on,
     -- react passive, AttackStop — the liftoff emote ports via
-    -- creature:PerformEmote (below); the other four have no bridge.
+    -- creature:PerformEmote (below); the gravity leg ports via the
+    -- creature:SetDisableGravity bridge; only the MovePoint has no bridge.
     st.flyCount = st.flyCount + 1
     st.phase = PHASE_FLY
     creature:Talk(YELL_FLY_PHASE)
@@ -315,9 +320,11 @@ local function startPhaseFly(creature, guid)
     -- Talk(YELL_FLY_PHASE), cancel ground group, interrupt casts,
     -- liftoff emote, gravity on, SetReactState(REACT_PASSIVE) (:260),
     -- AttackStop (:261), MovePoint — C++ arm order kept for the modeled
-    -- legs (gravity / MovePoint have no bridge). PASSIVE while
+    -- legs (MovePoint has no bridge; the intro SPLINE_CHAIN still has
+    -- none). PASSIVE while
     -- airborne: the engine's isCreaturePassive gate suppresses melee
     -- during the fly-phase timer chain, matching C++ (no melee mid-air).
+    creature:SetDisableGravity(true) -- C++ :258, between emote and react
     creature:SetReactState(0) -- REACT_PASSIVE
     -- C++ boss_nightbane.cpp:261: me->AttackStop()
     creature:AttackStop()

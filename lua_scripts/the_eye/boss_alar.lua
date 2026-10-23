@@ -31,8 +31,9 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ ctor /
 -- Initialize() values (berserk 1200000 / platforms-move 0 /
 -- phase = 1 — the BossAI ctor DATA_ALAR = 1 arm is instance-
--- blocked, unbridgeable; the JustEngagedWith SetDisableGravity
--- / setActive arms have no gravity/activation bridge) + 1s
+-- blocked, unbridgeable; the JustEngagedWith SetDisableGravity arm
+-- ports via the creature:SetDisableGravity bridge (:177, below);
+-- setActive has no bridge) + 1s
 -- scheduler pump.
 -- Pump (C++ UpdateAI arm order):
 -- 1. Berserk arm — ticks in every state (C++ decrements it
@@ -150,8 +151,10 @@
 -- documented only, not bridged (standing blocker); the
 -- SetDisplayId/ApplySpellImmune/SetFlag/RemoveFlag/SetStandState
 -- bridges exist and the Reset/rebirth/dive-bomb-machine arms touching
--- them are PORTED below; SetDisableGravity, UNIT_FLAG_NOT_SELECTABLE
+-- them are PORTED below; UNIT_FLAG_NOT_SELECTABLE
 -- and IsNonMeleeSpellCast stay unmodeled (netherspite precedent);
+-- SetDisableGravity ports via the creature:SetDisableGravity bridge
+-- (Reset :169 + JustEngagedWith :177, below);
 -- the Reset() UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20),
 -- as is the Reset() SetSpeedRate(MOVE_RUN, DefaultMoveSpeedRate)
 -- template-rate restore arm via creature:SetSpeedRate
@@ -455,6 +458,11 @@ RegisterCreatureEvent(ENTRY_ALAR, 1, function(_, creature)
         dying = false,
         dive = nil,
     }
+    -- C++ JustEngagedWith (boss_alar.cpp:173-178): BossAI::JustEngagedWith
+    -- -> me->SetDisableGravity(true) (:177) -> setActive(true) (no
+    -- bridge). Ports via the creature:SetDisableGravity bridge (stale
+    -- "no gravity bridge" retracted).
+    creature:SetDisableGravity(true)
     alarPump[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
     end, 1000, 0)
@@ -556,8 +564,10 @@ RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     -- C++ Reset() :168: ApplySpellImmune(0, IMMUNITY_SCHOOL,
     -- SPELL_SCHOOL_MASK_FIRE=4, true) — fire-school immunity in phase 1
     -- (removed :307 on the phase-2 dive; flight machine unported).
-    -- The SetDisableGravity leg stays unbridged (documented above).
+    -- C++ Reset() :169: me->SetDisableGravity(true) — ports via the
+    -- creature:SetDisableGravity bridge (stale "unbridged" retracted).
     creature:ApplySpellImmune(0, 2, 4, true)
+    creature:SetDisableGravity(true)
     -- boss_alar.cpp:170 — C++ Reset arm order after ApplySpellImmune
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end)

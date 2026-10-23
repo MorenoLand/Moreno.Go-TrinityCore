@@ -54,8 +54,10 @@
 -- data DATA_SPHERE_1/2, prison flags, UNIT_FLAG_NOT_SELECTABLE removal,
 -- NPC_JEDOGA_CONTROLLER despawn, SPELL_HOVER_FALL 60425, MoveLand, GO
 -- platform DATA_PRINCE_TALDARAM_PLATFORM handling, Talk(SAY_WARNING 1))
--- and the ctor SetDisableGravity(true) — instance-script model absent
--- (standing blocker) and no gravity bridge — documented-only.
+-- — instance-script model absent (standing blocker) — documented-only.
+-- The ctor's SetDisableGravity(true) ports on ev5 (taldaramSpawn);
+-- the RemovePrison SetDisableGravity(false) (:286) rides the same
+-- unported platform/GO machine and stays out.
 -- npc_prince_taldaram_flame_sphere (30106 / 31686 / 31687 — entries
 -- verifiable from the file enums, kalecgos pass) — ENTRY-VERIFIABLE BUT
 -- BRIDGE-BLOCKED, zero registration: Reset DoCastSelf triggered (Flame
@@ -168,8 +170,18 @@ local function taldaramReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_prince_taldaramAI ctor (boss_prince_taldaram.cpp:95-100):
+-- me->SetDisableGravity(true) — the AI ctor runs once at AI creation;
+-- ev5 (JustAppeared) is the Lua twin point (horseman/felmyst-trail
+-- precedent). The _embraceTakenDamage/_initialCheckTimer inits are
+-- internal (no UpdateAI vanish check is modeled — documented above).
+local function taldaramSpawn(event, creature)
+    creature:SetDisableGravity(true)
+end
+
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 2, taldaramLeaveCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 3, taldaramTargetDied)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 4, taldaramDied)
+RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 5, taldaramSpawn)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 23, taldaramReset)

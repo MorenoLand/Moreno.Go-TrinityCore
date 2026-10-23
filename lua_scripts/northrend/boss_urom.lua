@@ -136,11 +136,15 @@ end
 -- twilightHalionReset precedent). The root leg ports via
 -- creature:SetRooted(false) (lua_creature_events.go).
 local function uromReset(event, creature)
-    -- C++ boss_uromAI::Reset(): DoCastSelf(SPELL_EVOCATE) is Reset-only
-    -- (boss_urom.cpp). Alive-gated; the death-leg ev23 fire is phantom.
-    -- me->SetControlled(false, UNIT_STATE_ROOT) (boss_urom.cpp:135)
-    -- ports via creature:SetRooted(false).
+    -- C++ boss_uromAI::Reset (boss_urom.cpp:132-139): _isInCenter=false,
+    -- me->SetControlled(false, UNIT_STATE_ROOT) (ports via
+    -- creature:SetRooted(false) below), me->SetDisableGravity(false)
+    -- (:136), SetReactState(REACT_AGGRESSIVE) (vacuous — Lua never sets
+    -- REACT_PASSIVE, documented above), DoCastSelf(SPELL_EVOCATE)
+    -- (Reset-only, alive-gated; the death-leg ev23 fire is phantom),
+    -- _Reset() bookkeeping.
     creature:SetRooted(false)
+    creature:SetDisableGravity(false)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_EVOCATE)
     end
