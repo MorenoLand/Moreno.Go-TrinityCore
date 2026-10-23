@@ -16,13 +16,18 @@
 -- at 10min. Kil'rek is summoned once 3s in (removing any broken pact
 -- debuff from the boss first); when broken pact 30065 hits the boss, the
 -- summon timer is re-armed at 32s.
--- Deviations from C++: no summon model — the kil'rek summon
--- (SPELL_SUMMON_IMP 30066), the two portal summons (SPELL_FIENDISH_PORTAL_1
--- 30171, SPELL_FIENDISH_PORTAL_2 30179), and the sacrifice's demon-chains
--- summon (SPELL_SUMMON_DEMONCHAINS 30120) never spawn their creatures, so
--- those casts are skipped while the non-summon arms (RemoveAura, Talk)
--- stay; the boss's Reset/JustDied ACTION_DESPAWN_IMPS arms and the portal
--- imps' DoZoneInCombat have no bearer. The kil'rek (17229, "npc_kilrek")
+-- Deviations from C++: the two portal summons (SPELL_FIENDISH_PORTAL_1 30171,
+-- SPELL_FIENDISH_PORTAL_2 30179) and the sacrifice's demon-chains summon
+-- (SPELL_SUMMON_DEMONCHAINS 30120) never spawn their creatures: the portals
+-- are PassiveAI with no combat events firing (unported unit) and the chains
+-- are cast by the sacrificed player (no player:CastSpell bridge) for an
+-- unported chains unit — so those casts are skipped while the non-summon
+-- arms (RemoveAura, Talk) stay; the boss's Reset/JustDied ACTION_DESPAWN_IMPS
+-- arms and the portal imps' DoZoneInCombat have no bearer. The kil'rek summon
+-- (SPELL_SUMMON_IMP 30066) IS ported: the 2026-10-23 engine gap closure
+-- (4212e3e7) executes SPELL_EFFECT_SUMMON on the creature-cast path, so the
+-- DoCastAOE self-cast spawns 17229 whose npc_kilrek AI is registered below.
+-- The kil'rek (17229, "npc_kilrek")
 -- and fiendish imp (17267, "npc_fiendish_imp") AIs are registered below so
 -- any that exist fight correctly. Demon chains (17248, "npc_demon_chain")
 -- is not registered: its IsSummonedBy arm has no firing hook (events 19/22
@@ -126,9 +131,11 @@ local function onShadowbolt(creature, guid)
 end
 
 -- C++ EVENT_SUMMON_KILREK: RemoveAurasDueToSpell(BROKEN_PACT), then
--- DoCastAOE(SUMMON_IMP, triggered) — the summon has no bearer, skipped.
+-- DoCastAOE(SUMMON_IMP, triggered) — self-cast, the summon effect spawns
+-- kil'rek 17229 (npc_kilrek AI registered below; 4212e3e7 engine gap).
 local function onSummonKilrek(creature, guid)
     creature:RemoveAura(SPELL_BROKEN_PACT)
+    creature:CastSpell(creature, SPELL_SUMMON_IMP, true)
 end
 
 -- C++ EVENT_SACRIFICE: random alive player within 100 yd; DoCast(target,

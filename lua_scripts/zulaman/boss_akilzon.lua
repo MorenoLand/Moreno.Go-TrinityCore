@@ -24,7 +24,7 @@
 -- ELECTRICAL_STORM case is missing from this tree; the only schedule is
 -- the unreachable tail of HandleStormSequence itself), so
 -- HandleStormSequence and the EVENT_SUMMON_EAGLES arm are dead code in
--- the C++: no storm zaps, no 5s eagle summon, no SAY_SUMMON. The Lua
+-- the C++ (including the storm-cloud's KillSelf at :216): no storm zaps, no 5s eagle summon, no SAY_SUMMON. The Lua
 -- matches the tree — the storm is the 43648 cast + 60s re-arm only. If
 -- the schedule is restored in the C++, the zap sequence (8s first tick,
 -- 1s ticks, zaps at counts 2..9, re-looping tail) needs re-adding here.

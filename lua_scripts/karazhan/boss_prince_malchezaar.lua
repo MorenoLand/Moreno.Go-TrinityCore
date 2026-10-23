@@ -25,7 +25,8 @@
 -- Cleanup point recycling) have no bearer — Infernals stay virtual and the
 -- InfernalTimer arm keeps the C++ cadence as Talk(SAY_SUMMON) only; the
 -- axes are never spawned, so the phase-3 AxesTargetSwitchTimer threat
--- rewiring (no threat model) is skipped entirely. No instance-script
+-- rewiring (no threat model) is skipped entirely and AxesCleanup's
+-- cross-creature KillSelf on the axes is moot. No instance-script
 -- model, so the DATA_GO_NETHER_DOOR toggles on Reset/JustEngagedWith/
 -- JustDied are skipped. The phase-2 equipment swap is ported via
 -- creature:SetEquipmentSlots (33542,33542,0xFFFFFFFF at the phase-2
