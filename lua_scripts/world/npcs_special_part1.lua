@@ -1,10 +1,11 @@
 -- npcs_special PART 1 (C++ lines 93-1153) — triage result 2026-10-18.
 -- Source: src/server/scripts/World/npcs_special.cpp.
--- VERDICT: all 9 classes are DOCUMENTED-ONLY (gap classes). Zero arms are
--- ported: every class is blocked either by missing entry constants (rule:
--- entries only from C++ NPC_ consts, never invented) or by missing method
--- bridges, verified against the CURRENT runtime this run (lua_creature_events.go,
--- lua_objects.go, lua_player.go, scripting/object.go). No handlers registered.
+-- VERDICT: 8 of 9 classes are DOCUMENTED-ONLY (gap classes); npc_injured_patient's
+-- Reset arm is PORTED below (all legs bridged). Every other class is blocked
+-- either by missing entry constants (rule: entries only from C++ NPC_ consts,
+-- never invented) or by missing method bridges, verified against the CURRENT
+-- runtime this run (lua_creature_events.go,
+-- lua_objects.go, lua_player.go, scripting/object.go).
 -- Sibling file handles C++ lines 1154+.
 
 -- npc_air_force_bots (C++ :43-188) — DOCUMENTED-ONLY.
@@ -89,9 +90,10 @@
 -- SetFlag bridge either.
 
 -- npc_injured_patient (C++ :778-890; entries 12923/12924/12925,
--- 12936/12937/12938 in-file) — DOCUMENTED-ONLY (summon-machine).
--- Arms: Reset :796-824 (75/50/25% health by entry — SetHealth IS bridged,
--- but UNIT_STAND_STATE_DEAD / UNIT_FLAG_IN_COMBAT / NOT_SELECTABLE are not);
+-- 12936/12937/12938 in-file) — Reset arm PORTED below; rest DOCUMENTED-ONLY.
+-- Arms: Reset :788-814 PORTED (75/50/25% health by entry — SetHealth,
+-- SetStandState, SetFlag/RemoveFlag all bridged; the 2026-10-18 "not bridged"
+-- note is stale);
 -- SpellHit :828-871 (spell 20804 from a player on quest 6624/6622 ->
 -- doctor->PatientSaved via DoctorGUID link, Talk SAY_DOC 0 — Talk IS bridged;
 -- NOT_SELECTABLE / IN_COMBAT flags, stand-up, SetWalk, MovePoint to
@@ -100,7 +102,47 @@
 -- SetHealth(GetHealth()-5) on OnAIUpdate 7, but setDeathState has no bridge
 -- and the PatientDied -> quest-fail chain has no bridge).
 -- The quest credit/fail legs (FailQuest, AreaExploredOrEventHappens) have no
--- bridges, so no self-contained faithful partial exists.
+-- bridges, so the doctor machine stays out; the Reset arm below is the
+-- self-contained ported fragment.
+
+-- npc_injured_patient Reset arm — PORTED (C++ npcs_special.cpp:788-814).
+-- Entries are the literal C++ switch cases (never invented): 12923/12938
+-- injured (75%), 12924/12936 badly injured (50%), 12925/12937 critically
+-- injured (25%). C++ arm order: RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) ->
+-- SetFlag(UNIT_FLAG_IN_COMBAT) -> stand-state DEAD (the SetUInt32Value
+-- UNIT_FIELD_BYTES_1 write twins to creature:SetStandState) ->
+-- SetHealth(CountPctFromMaxHealth(pct)) by entry. Registered on 5 (OnSpawn)
+-- and 23 (OnReset); C++ Reset fires on both spawn and evade-reset.
+-- (The 2026-10-18 "UNIT_STAND_STATE_DEAD / UNIT_FLAG_IN_COMBAT /
+-- NOT_SELECTABLE are not [bridged]" note is stale: SetStandState bridged
+-- 2026-10-21, SetFlag/RemoveFlag bridged 2026-10-23.)
+local INJURED_PATIENT_75 = { [12923] = true, [12938] = true }
+local INJURED_PATIENT_50 = { [12924] = true, [12936] = true }
+local INJURED_PATIENT_25 = { [12925] = true, [12937] = true }
+local INJURED_PATIENT_ENTRIES = { 12923, 12938, 12924, 12936, 12925, 12937 }
+
+local function injuredPatientReset(event, creature)
+    creature:RemoveFlag(59, 0x02000000) -- UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE
+    creature:SetFlag(59, 0x00080000) -- UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT
+    creature:SetStandState(7) -- UNIT_STAND_STATE_DEAD
+    local entry = creature:GetEntry()
+    local pct = 0
+    if INJURED_PATIENT_75[entry] then
+        pct = 75
+    elseif INJURED_PATIENT_50[entry] then
+        pct = 50
+    elseif INJURED_PATIENT_25[entry] then
+        pct = 25
+    end
+    if pct > 0 then
+        creature:SetHealth(math.floor(creature:GetMaxHealth() * pct / 100))
+    end
+end
+
+for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
+    RegisterCreatureEvent(patientEntry, 5, injuredPatientReset)
+    RegisterCreatureEvent(patientEntry, 23, injuredPatientReset)
+end
 
 -- npc_garments_of_quests (C++ :962-1123; entries 12429/12423/12427/12430/12428
 -- with quests 5621/5624/5625/5648/5650, in-file enums :940-960) — DOCUMENTED-ONLY.
