@@ -50,8 +50,8 @@ end
 
 -- C++ npc_toc_druidAI::EVENT_HEAL_BARKSKIN
 -- (boss_faction_champions.cpp:816-824): HealthBelowPct(30) ->
--- DoCast(me, SPELL_BARKSKIN) + 60s re-arm, else 3s re-arm. The
--- GetHealthPct() form matches the in-tree sindragosa precedent.
+-- DoCast(me, SPELL_BARKSKIN) + 60s re-arm, else 3s re-arm. Uses the
+-- integer strict-< form (ironaya convention).
 local function onBarkskin(creature, guid)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0

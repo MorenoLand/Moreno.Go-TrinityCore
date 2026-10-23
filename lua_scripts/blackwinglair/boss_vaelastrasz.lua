@@ -65,8 +65,7 @@
 -- the DB gossip menu text (gossip_menu 6101) is approximated in the
 -- hello handler — the real option text lives in the DB, not in C++;
 -- PlayerGUID (ObjectGuid) has no bridge — the gossiping player is not
--- tracked across the speech; GetHealthPct has no pre/post-damage
--- distinction — the 15% yell gate is pre-damage; the burning
+-- tracked across the speech; the burning
 -- adrenaline caster-arm HasAura(SPELL_BURNINGADRENALINE) no-duplicate
 -- filter is bridged via player:HasAura(18173); the non-pet
 -- SelectTarget filter drops (candidates are players only, never

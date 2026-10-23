@@ -9382,6 +9382,53 @@ func init() {
 	// documented-only (06:5x audit).
 	RegisterLuaBoss("npc_toc_boomkin", 34460)
 	RegisterLuaBoss("npc_toc_boomkin", 34451)
+	// boss_faction_champions: Trial of the Crusader Faction Champions
+	// defensive self-buff EventMap timer arms, entries
+	// trial_of_the_crusader.h:180-208 kalecgos pass. Each champion AI
+	// struct fires a recurring timer arm that checks HealthBelowPct on
+	// current health at fire time (integer strict-<, Unit.h) and
+	// self-casts the defensive spell, re-arming the long cooldown, or
+	// the short check interval otherwise. Fight logic in
+	// lua_scripts/northrend/boss_faction_champions.lua (single-arm
+	// territory; npc_toc_druid 34469/34459 and npc_toc_boomkin
+	// 34460/34451 are ported separately above).
+	// npc_toc_paladin (holy) 34465/34445: EVENT_HEAL_DIVINE_SHIELD
+	// HealthBelowPct(30) && !HasAura(FORBEARANCE 25771) -> Divine Shield
+	// 66010, 5min CD / 5s check, 20s init.
+	// npc_toc_shadow_priest 34473/34441: EVENT_DISPERSION
+	// HealthBelowPct(40) -> Dispersion 65544, 180s CD / 5s check,
+	// 20-40s init.
+	// npc_toc_mage 34468/34449: EVENT_ICE_BLOCK HealthBelowPct(30) ->
+	// Ice Block 65802, 5min CD / 5s check, 10-20s init.
+	// npc_toc_hunter 34467/34448: EVENT_DETERRENCE HealthBelowPct(30) ->
+	// Deterrence 65871, 150s CD / 10s check, 10-20s init.
+	// npc_toc_warrior 34475/34453: EVENT_RETALIATION HealthBelowPct(50) ->
+	// Retaliation 65932, 5min CD / 5s check, 5-20s init.
+	// npc_toc_dk 34461/34458: EVENT_ICEBOUND_FORTITUDE
+	// HealthBelowPct(50) -> Icebound Fortitude 66023, 60s CD / 5s
+	// check, 25-35s init.
+	// npc_toc_rogue 34472/34454: EVENT_CLOAK HealthBelowPct(50) ->
+	// Cloak 65961, 90s CD / 5s check, 20-30s init.
+	// npc_toc_retro_paladin (retribution) 34471/34456:
+	// EVENT_DPS_DIVINE_SHIELD HealthBelowPct(30) &&
+	// !HasAura(FORBEARANCE 25771) -> Divine Shield 66010, 5min CD / 5s
+	// check, 20-30s init. Trial of the Crusader block stays OPEN.
+	RegisterLuaBoss("boss_faction_champions", 34465)
+	RegisterLuaBoss("boss_faction_champions", 34445)
+	RegisterLuaBoss("boss_faction_champions", 34473)
+	RegisterLuaBoss("boss_faction_champions", 34441)
+	RegisterLuaBoss("boss_faction_champions", 34468)
+	RegisterLuaBoss("boss_faction_champions", 34449)
+	RegisterLuaBoss("boss_faction_champions", 34467)
+	RegisterLuaBoss("boss_faction_champions", 34448)
+	RegisterLuaBoss("boss_faction_champions", 34475)
+	RegisterLuaBoss("boss_faction_champions", 34453)
+	RegisterLuaBoss("boss_faction_champions", 34461)
+	RegisterLuaBoss("boss_faction_champions", 34458)
+	RegisterLuaBoss("boss_faction_champions", 34472)
+	RegisterLuaBoss("boss_faction_champions", 34454)
+	RegisterLuaBoss("boss_faction_champions", 34471)
+	RegisterLuaBoss("boss_faction_champions", 34456)
 	// boss_twin_valkyr: Trial of the Crusader dungeon boss script,
 	// entries 34497 Fjola Lightbane (trial_of_the_crusader.h
 	// NPC_FJOLA_LIGHTBANE — kalecgos pass;

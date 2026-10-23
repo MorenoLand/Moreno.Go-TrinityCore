@@ -65,6 +65,10 @@
 -- Initialize runs in the constructor and Reset — per-engagement reset
 -- is the gyth/vaelastrasz convention).
 -- JustDied: Talk(SAY_DEATH) on OnDied(4) (najentus/halycon precedent).
+-- UpdateAI's !UsedPotion && HealthBelowPct(25) -> self-cast healing
+-- potion 15503, once (boss_priestess_delrissa.cpp:452) — modeled on
+-- OnDamageTaken(9) with the postDamage > 0 guard (nefarian rule) and a
+-- per-guid latch cleared on 2/4/23 (C++-exact).
 -- Timers start on OnEnterCombat(1), cancelled on OnLeaveCombat(2)/
 -- OnDied(4)/OnReset(23) (maiden convention).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
@@ -153,6 +157,7 @@ local SPELL_RENEW_NORMAL = 44174
 local SPELL_SHIELD = 44291
 local SPELL_DISPEL_MAGIC = 27609
 local SPELL_SW_PAIN = 14032
+local SPELL_HEALING_POTION = 15503
 
 local PlayerDeath = { 5, 6, 7, 8, 9 }
 local MAX_PLAYER_DEATH_TALK = 4
@@ -161,6 +166,7 @@ local ENTRY_PRIESTESS_DELRISSA = 24560
 
 local timers = {}
 local playersKilled = {}
+local usedPotion = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -234,6 +240,7 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     playersKilled[guid] = 0
+    usedPotion[guid] = false
     creature:Talk(SAY_AGGRO)
     schedule(guid, "heal", 15000, function() onHeal(creature, guid) end)
     schedule(guid, "renew", 10000, function() onRenew(creature, guid) end)
@@ -243,7 +250,31 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    usedPotion[guid] = nil
+    playersKilled[guid] = nil
+end
+
+-- C++ UpdateAI (boss_priestess_delrissa.cpp:452): !UsedPotion &&
+-- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
+-- once. The postDamage > 0 guard (nefarian rule): the C++ UpdateAI
+-- arm never fires on the killing blow. Integer floor threshold
+-- (C++-exact), per-guid latch cleared on 2/4/23.
+local function onDamageTaken(_, creature, _, damage)
+    local guid = creature:GetGUID()
+    if usedPotion[guid] then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local postDamage = creature:GetHealth() - damage
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 25 / 100) then
+        usedPotion[guid] = true
+        creature:CastSpell(creature, SPELL_HEALING_POTION)
+    end
 end
 
 local function onTargetDied(_, creature, victim)
@@ -264,7 +295,10 @@ end
 -- the only readers are the unported lackey AIs (boss_priestess_lackey_commonAI :242/:409) — no
 -- instance SetData/GetData bridge, and no cross-AI bridge to the unported lackeys. Dropped, documented.
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    usedPotion[guid] = nil
+    playersKilled[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 
@@ -272,4 +306,5 @@ RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 4, onDied)
+RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 23, onCombatEnd)

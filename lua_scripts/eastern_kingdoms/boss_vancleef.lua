@@ -25,9 +25,9 @@
 --   leg strands on the unbridged summon surface (dark-rider precedent).
 -- - KilledUnit's Talk(SAY_KILL) with the TYPEID_PLAYER gate ->
 --   OnTargetDied (3) with a victim:GetObjectType() == "Player" gate (illidan convention).
--- - DamageTaken's health latches (balinda OnDamageTaken(9) convention —
---   the handler fires with a fresh creature object built from live motion,
---   so (health - damage) is the genuine post-hit percent): 50% crossing
+-- - DamageTaken's health latches (the C++ arms read CURRENT health —
+--   the engine's event 9 fires before damage is applied, matching C++
+--   Unit::DealDamage, so the pre-damage read below is C++-exact): 50% crossing
 --   -> Talk(SAY_SUMMON = 2) + DoCastSelf(SPELL_VANCLEEFS_ALLIES = 5200)
 --   ~ creature:CastSpell(creature, 5200) (one-shot via the per-guid
 --   guardsCalled latch); 66% crossing -> Talk(SAY_ONE = 1); 33% crossing

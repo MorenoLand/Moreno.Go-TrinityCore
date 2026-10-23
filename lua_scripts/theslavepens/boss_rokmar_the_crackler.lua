@@ -38,7 +38,9 @@
 -- {20s,30s} — DoCastAOE (self-cast, C++-exact), re-arm
 -- {20s,30s}; water spit 35008 14s then {14s,18s} — DoCastAOE
 -- (self-cast, C++-exact), re-arm {14s,18s}; once-guarded
--- GetHealthPct() < 10 (C++ HealthBelowPct(10)) -> DoCast(me)
+-- health strictly below 10% (C++ HealthBelowPct(10), floored
+-- integer threshold — the old GetHealthPct() < 10 prose fired up to
+-- 1 HP early; maulgar/ironaya convention) -> DoCast(me)
 -- SPELL_FRENZY 34970 non-triggered self-cast (C++-exact), flag
 -- set. The UNIT_STATE_CASTING early returns have no
 -- unit-state bridge (mennu/thespia precedent). OnDied(4):
@@ -132,8 +134,8 @@ local function bossTick(creature, guid)
         st.waterSpit = st.waterSpit - 1000
     end
 
-    -- Frenzy 34970: once-guarded GetHealthPct() < 10 (C++
-    -- HealthBelowPct(10)) — DoCast(me) non-triggered self-cast
+    -- Frenzy 34970: once-guarded HealthBelowPct(10) (integer strict-<,
+    -- ironaya convention) — DoCast(me) non-triggered self-cast
     -- (C++-exact).
     if not st.frenzyUsed then
         local maxHealth = creature:GetMaxHealth()

@@ -52,8 +52,8 @@
 -- 15-30s re-arm.
 -- EVENT_STARFIRE — DoCastVictim(Starfire 65854), 10-20s init,
 -- 15-30s re-arm.
--- EVENT_DPS_BARKSKIN — HealthBelowPct(30) (creature:GetHealthPct(),
--- sindragosa precedent) -> DoCastSelf(Barkskin 65860) + 60s re-arm,
+-- EVENT_DPS_BARKSKIN — HealthBelowPct(30) (integer strict-<,
+-- ironaya convention) -> DoCastSelf(Barkskin 65860) + 60s re-arm,
 -- else 5s re-arm; 20-30s init.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_faction_championsAI UpdateAI: UpdateThreat() (threat-manager
