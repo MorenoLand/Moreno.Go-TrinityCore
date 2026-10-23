@@ -415,9 +415,10 @@ local function hodirDamageTaken(event, creature, attacker, damage)
         -- first hit flips REACT_PASSIVE -> REACT_AGGRESSIVE (the ctor/
         -- Reset passive is what the boss carries until first damage);
         -- ev9 fires pre-aggro (combat.go), so the !IsInCombat gate is
-        -- reachable here. DoZoneInCombat + AttackStart(who) have no
-        -- bridges — the engine converges on the same tick
-        -- (triggerCreatureAggro starts combat with the attacker).
+        -- reachable here. AttackStart(who) has no bridge — the engine
+        -- converges on the same tick (triggerCreatureAggro starts combat
+        -- with the attacker). DoZoneInCombat (:425) PORTED 2026-10-23
+        -- below in C++ arm order.
         creature:SetReactState(REACT_AGGRESSIVE)
         -- C++ :425 — me-form DoZoneInCombat after SetReactState
         -- (C++ arm order; AttackStart(who) still has no bridge).

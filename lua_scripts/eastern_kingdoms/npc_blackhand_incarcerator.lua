@@ -43,7 +43,8 @@
 -- precedent). The JustEngagedWith grid loop (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 60.0f -> DoZoneInCombat each —
 -- "Had to do this because CallForHelp will ignore any npcs without
--- LOS") has no creature-list / zone-in-combat bridges.
+-- LOS") is PORTED in onEnterCombat below (bridge live 2026-10-23;
+-- boss_pyroguard_emberseer.cpp:318-328, first arm in C++ order).
 
 local SPELL_STRIKE = 15580
 local SPELL_ENCAGE = 16045
@@ -112,6 +113,15 @@ local function onEncage(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    -- C++ npc_blackhand_incarceratorAI::JustEngagedWith (boss_pyroguard_emberseer.cpp:318-328),
+    -- arm 1: GetCreatureListWithEntryInGrid(NPC_BLACKHAND_INCARCERATOR, 60.0f) ->
+    -- DoZoneInCombat each ("Had to do this because CallForHelp will ignore any npcs
+    -- without LOS"), before the EVENT_STRIKE / EVENT_ENCAGE schedules (C++ arm order).
+    -- Moved here 2026-10-23: 817bd0cc had misattributed this arm to the emberseer's
+    -- own JustEngagedWith (boss_pyroguard_emberseer.cpp:110-115, schedules only).
+    for _, fellow in ipairs(creature:GetCreaturesInGrid(ENTRY_BLACKHAND_INCARCERATOR, 60.0)) do
+        fellow:DoZoneInCombat()
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "strike", {8000,16000}, function() onStrike(creature, guid) end)

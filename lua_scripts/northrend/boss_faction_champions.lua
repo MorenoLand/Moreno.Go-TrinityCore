@@ -29,14 +29,15 @@
 --   unported; only the HealthBelowPct defensive arm per site fires.
 -- - boss_faction_championsAI base: EVENT_THREAT 5s + heroic
 --   EVENT_REMOVE_CC 5s (instance-gated), UpdateThreat/UpdatePower,
---   RemoveCC, JustEngagedWith: SPELL_ANTI_AOE + SetCombatPulseDelay(5)
---   + setActive legs have no bridges, but the JustEngagedWith
---   DoZoneInCombat leg is PORTED 2026-10-23
---   (creature:DoZoneInCombat, C++ arm order; the old "no bridge" claim
---   was stale — bridge live at engine/world/lua_creature_events.go);
---   the SetData(2, IN_PROGRESS) -> summons.DoZoneInCombat() leg stays
---   out (summons-container relay + instance-script model absent).
---   AttackStart model, boundary — instance/threat-motion model absent.
+--   RemoveCC, JustEngagedWith: DoCast(me, SPELL_ANTI_AOE 68595, true)
+--   (:646) + SetCombatPulseDelay(5) (:647) + DoZoneInCombat (:649) are
+--   PORTED 2026-10-23 in C++ arm order (the old "no bridges" claim was
+--   stale — triggered CastSpell and the SetCombatPulseDelay bridge at
+--   engine/world/lua_creature_events.go:902 are both live); :648
+--   setActive(true) has no bridge; the :650-651 SetData(2, IN_PROGRESS)
+--   -> summons.DoZoneInCombat() leg stays out (summons-container relay +
+--   instance-script model absent). AttackStart model, boundary —
+--   instance/threat-motion model absent.
 -- - EVENT_HEAL_HAND_OF_PROTECTION / EVENT_DPS_HAND_OF_PROTECTION
 --   (cross-target DoCast(target, ...) friendly-select arms — random-friend
 --   bridge; out of the single defensive-arm scope).
@@ -54,6 +55,7 @@ local SPELL_DETERRENCE = 65871
 local SPELL_RETALIATION = 65932
 local SPELL_ICEBOUND_FORTITUDE = 66023
 local SPELL_CLOAK = 65961
+local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42 (JustEngagedWith :646 DoCast(me, ..., true))
 
 -- cfg: pct threshold, spell self-cast id, forbearance flag (optional,
 -- blocks the cast and falls back to the short check like C++),
@@ -160,14 +162,18 @@ local function championEnterCombat(event, creature, target)
     if championCfg == nil then
         return
     end
-    -- C++ boss_faction_championsAI::JustEngagedWith (:644-651):
-    -- DoCast(me, SPELL_ANTI_AOE 68595) + SetCombatPulseDelay(5) +
-    -- setActive(true) legs have no bridges (instance/threat-motion
-    -- model absent); DoZoneInCombat() is PORTED 2026-10-23
-    -- (creature:DoZoneInCombat, C++ arm order; bridge live at
-    -- engine/world/lua_creature_events.go); the SetData(2, IN_PROGRESS)
-    -- -> summons.DoZoneInCombat() machine leg stays out (summons-container
-    -- relay + instance-script model absent).
+    -- C++ boss_faction_championsAI::JustEngagedWith (:644-651), arm order:
+    -- :646 DoCast(me, SPELL_ANTI_AOE, true) — triggered self-cast, PORTED
+    -- 2026-10-23 (the old "no bridge" claim was stale — CastSpell triggered
+    -- is live); :647 SetCombatPulseDelay(5) — PORTED 2026-10-23 (bridge live
+    -- at engine/world/lua_creature_events.go:902, same twin bpc uses; the
+    -- old "no bridge" claim was stale); :648 setActive(true) has no bridge;
+    -- :649 DoZoneInCombat() PORTED 2026-10-23 (creature:DoZoneInCombat);
+    -- the :650-651 SetData(2, IN_PROGRESS) -> summons.DoZoneInCombat()
+    -- machine leg stays out (summons-container relay + instance-script
+    -- model absent).
+    creature:CastSpell(creature, SPELL_ANTI_AOE, true) -- C++ :646
+    creature:SetCombatPulseDelay(5) -- C++ :647 (live bridge; 2026-10-23)
     creature:DoZoneInCombat()
     local guid = creature:GetGUID()
     cancelTimers(guid)

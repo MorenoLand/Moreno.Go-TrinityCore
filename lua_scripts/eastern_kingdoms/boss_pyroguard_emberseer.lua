@@ -71,7 +71,6 @@ local SPELL_FLAMEBUFFET = 23341
 local SPELL_PYROBLAST = 17274
 
 local ENTRY_PYROGAURD_EMBERSEER = 9816
-local ENTRY_BLACKHAND_INCARCERATOR = 10316 -- blackrock_spire.h:77 (BRS creatures enum)
 
 local timers = {}
 
@@ -141,12 +140,11 @@ local function onPyroblast(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    -- C++ boss_pyroguard_emberseer.cpp:318-328 (JustEngagedWith arm 1):
-    -- GetCreatureListWithEntryInGrid(NPC_BLACKHAND_INCARCERATOR, 60.0f) ->
-    -- DoZoneInCombat each (the illidari-council GetCreaturesInGrid precedent).
-    for _, incarcerator in ipairs(creature:GetCreaturesInGrid(ENTRY_BLACKHAND_INCARCERATOR, 60.0)) do
-        incarcerator:DoZoneInCombat()
-    end
+    -- C++ boss_pyroguard_emberseerAI::JustEngagedWith (boss_pyroguard_emberseer.cpp:110-115)
+    -- arms only the three event schedules — no zone-combat arm. The
+    -- incarcerator grid-loop DoZoneInCombat leg is npc_blackhand_incarceratorAI::JustEngagedWith
+    -- (boss_pyroguard_emberseer.cpp:318-328), ported in npc_blackhand_incarcerator.lua
+    -- (bridge live 2026-10-23); 817bd0cc had misattributed it to this handler — moved.
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "fireshield", 3000, function() onFireShield(creature, guid) end)
