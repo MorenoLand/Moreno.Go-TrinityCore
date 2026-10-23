@@ -82,7 +82,11 @@
 -- toggling, DespawnOrUnsummon) — the transform sequence rides
 -- EVENT_LAKEFROG timers + entry-update/gossip legs with no bridge
 -- for the sequence machine; ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
--- auras 62537/62574/62581 legs — no-emote / no-item bridges.
+-- auras 62537/62574/62581 legs are PORTED in
+-- lua_scripts/northrend/zone_grizzly_hills.lua (lakeFrogReceiveEmote,
+-- event 8 on 33211/33224, 2026-10-23) — the stale "no-emote / no-item
+-- bridge" claim is retracted; not duplicated here (two handlers would
+-- double-fire, see note at end of file).
 -- OnGossipSelect (zone_grizzly_hills.cpp:777-781: ungated DoCast(player,
 -- SPELL_SUMMON_ASHWOOD_BRAND 62554)) is PORTED below — no menuId or
 -- gossipListId gate in C++, so the Lua port gates on nothing either.

@@ -30,9 +30,12 @@
 -- 1-40 Talk/emote chain, DoCastAOE 42684 burn-crate arms,
 -- SetFaction/SetReactState, GroupEventHappens quest credit)
 -- behind the quest-accept / escort / movement / emote / faction
--- / quest bridges; the EVENT_EMOTE_BEG 25s kneel emote behind
--- the no-emote / no-stand-state bridges; the melee arm is
--- engine-driven.
+-- / quest bridges; the EVENT_EMOTE_BEG 25s beg-emote arm is PORTED
+-- below (timer-driven HandleEmoteCommand(EMOTE_ONESHOT_BEG 20) twin
+-- via CreateLuaEvent + creature:PerformEmote — the stale "no emote
+-- bridge" claim is retracted); the SetDespawnAtFar(false) Reset leg
+-- stays out (no SetDespawnAtFar bridge in the runtime — zero hits
+-- in engine/); the melee arm is engine-driven.
 -- npc_daegarn — no NPC_ entry constant anywhere in the C++
 -- sources (the creature_template ScriptName binding is DB-side,
 -- no TDB in this workspace — minigob precedent): no Lua file
@@ -60,6 +63,7 @@
 -- C++ sources either.
 
 local SPELL_HEALING_POTION = 17534
+local EMOTE_ONESHOT_BEG = 20 -- SharedDefines.h:1955
 
 local APOTHECARY_HANES_ENTRY = 23784
 
@@ -102,6 +106,42 @@ local function potionTick(creature, guid)
     end
 end
 
+local hanesEmote = {}
+
+local function cancelEmote(guid)
+    local id = hanesEmote[guid]
+    if id then
+        RemoveEventById(id)
+        hanesEmote[guid] = nil
+    end
+end
+
+-- zone_howling_fjord.cpp:138-141 — EVENT_EMOTE_BEG: HandleEmoteCommand
+-- (EMOTE_ONESHOT_BEG) then re-schedule at 25s. creature:PerformEmote
+-- is the exact HandleEmoteCommand twin (lua_creature_events.go:1053;
+-- spectral_ghostly_citizen precedent). C++ skips the EventMap update
+-- while in combat (:132-133), so the handler skips in-combat fires
+-- (documented deviation: C++ pauses the 25s countdown in combat rather
+-- than skipping the occurrence). First fire 2s after Initialize (:92),
+-- then 25s repeats.
+local function begTick(creature, guid)
+    if creature:IsInCombat() then
+        return
+    end
+    creature:PerformEmote(EMOTE_ONESHOT_BEG)
+end
+
+local function armEmote(creature)
+    local guid = creature:GetGUID()
+    cancelEmote(guid)
+    hanesEmote[guid] = CreateLuaEvent(function()
+        begTick(creature, guid)
+        hanesEmote[guid] = CreateLuaEvent(function()
+            begTick(creature, guid)
+        end, 25000, 0)
+    end, 2000)
+end
+
 local function armPump(creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
@@ -110,14 +150,16 @@ local function armPump(creature)
         potionTick(creature, guid)
     end, 1000, 0)
     -- zone_howling_fjord.cpp:93 — Initialize() stands the apothecary in
-    -- KNEEL; the emote / despawn-at-far arms stay unmodeled (no emote /
-    -- despawn bridges). SetStandState bridged 2026-10-21
-    -- (lua_creature_events.go:568).
+    -- KNEEL (SetStandState bridged 2026-10-21, lua_creature_events.go:568)
+    -- and re-arms EVENT_EMOTE_BEG at 2s (ported above); only the
+    -- SetDespawnAtFar(false) Reset leg stays unmodeled (no bridge).
     creature:SetStandState(8)
+    armEmote(creature)
 end
 
--- C++ ctor/Reset Initialize(): PotTimer = 10000 (emote /
--- despawn-at-far arms unmodeled — no emote bridges).
+-- C++ ctor/Reset Initialize(): PotTimer = 10000, EVENT_EMOTE_BEG
+-- re-armed at 2s (ported above); SetDespawnAtFar(false) unmodeled
+-- (no bridge).
 -- The arm ticks outside combat too, so the pump survives evade:
 -- OnLeaveCombat(2)/OnReset(23) only re-arm the timer (C++ Reset
 -- does exactly that).
@@ -133,15 +175,18 @@ local function onReset(_, creature)
     else
         armPump(creature)
     end
+    -- C++ Reset -> Initialize() re-schedules EVENT_EMOTE_BEG at 2s.
+    armEmote(creature)
 end
 
 -- C++ JustDied: FailQuest(QUEST_TRAIL_OF_FIRE 11241) on the
 -- escorted player — no quest bridge (documented-only). Death
--- ends the machine: cancel the pump + drop per-GUID state
--- (mushroom precedent).
+-- ends the machine: cancel the pump + emote event and drop per-GUID
+-- state (mushroom precedent).
 local function onDied(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
+    cancelEmote(guid)
     hanesState[guid] = nil
 end
 

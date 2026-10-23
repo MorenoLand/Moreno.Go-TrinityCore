@@ -119,7 +119,9 @@
 -- includePets/includeControlled legs have no pet/controlled
 -- iteration bridge.
 -- EVENT_LAND — buffet DespawnOrUnsummon (cross-AI, no bridge) +
--- hover/emote/phase legs (no hover / emote / phase bridges).
+-- hover/phase legs (no hover / phase bridges — the Talk OUTPUT emote
+-- rides the unbridged flight/phase machine, not an emote-bridge gap;
+-- creature:Talk IS bridged, see EVENT_BERSERK above).
 -- EVENT_BIRTH — visible/flag/react legs (no bridges).
 -- npc_sapphiron_blizzard (NPC_BLIZZARD 16474, C++-exact from the
 -- owner enum; ScriptedAI — no RegisterLuaBoss surface, razuvious

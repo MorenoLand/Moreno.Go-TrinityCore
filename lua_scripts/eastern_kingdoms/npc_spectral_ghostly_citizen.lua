@@ -50,7 +50,7 @@ local SPELL_HAUNTING_PHANTOM = 16336
 local SPELL_DEBILITATING_TOUCH = 16333
 
 -- C++ ReceiveEmote (stratholme.cpp:297-320, npc_spectral_ghostly_citizenAI):
--- event 8 fires in the Go engine (emote.go:210) with
+-- event 8 fires in the Go engine (emote.go:217) with
 -- (event, creature, player, textEmote). Text-emote IDs from
 -- SharedDefines.h, oneshot IDs from the same file's Emote enum;
 -- creature:PerformEmote == Unit::HandleEmoteCommand (handler twin,

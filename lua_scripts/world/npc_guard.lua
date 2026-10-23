@@ -47,7 +47,17 @@
 -- npc_guard_generic::ReceiveEmote / DoReplyToTextEmote — the
 -- Stormwind 68/1976 + Orgrimmar 3296 emote reply machine
 -- (TEXT_EMOTE_KISS/WAVE/SALUTE/SHY/RUDE/CHICKEN -> EMOTE_ONESHOT_*
--- HandleEmoteCommand, IsFriendlyTo-gated) — no-emote bridge.
+-- HandleEmoteCommand, IsFriendlyTo-gated) — STAYS OUT (not ported):
+-- the ev8 text-emote input IS bridged (grizzly_hills lakeFrog
+-- precedent; fire site engine/world/emote.go:217) and
+-- creature:PerformEmote is bridged (the HandleEmoteCommand twin,
+-- engine/world/lua_creature_events.go:1053) — but the
+-- me->IsFriendlyTo(player) gate (C++ npc_guard.cpp:106) has NO
+-- bridge: nothing on the creature event surface exposes
+-- FactionTemplateEntry::IsFriendlyTo to Lua (GetFaction/SetFaction
+-- are the raw field, not the relation check). Porting without the
+-- gate would make guards bow/point at hostile players, so the
+-- emote-reply machine stays documented-only.
 -- npc_guard_generic::JustEngagedWith _combatScheduler — the 1s melee
 -- machine (roll_chance_i(20) SELECT_TARGET_ANY_ENEMY DoCastVictim /
 -- AttackerStateUpdate) + the 5s spell machine (HealthBelowPct(30)
