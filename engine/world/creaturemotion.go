@@ -45,6 +45,7 @@ type creatureMotionSpawnKey struct {
 type creatureMotion struct {
 	GUID          uint64
 	Entry         uint32
+	EntryOverride bool // scripted Creature::UpdateEntry latch (Creature.cpp:552): motion re-seated on a new template; grid sweep must not recreate/re-affirm from the DB row while set (evade respawn clears it)
 	Map           uint32
 	InstanceID    uint32
 	TransportGUID uint64
@@ -730,7 +731,12 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 	key := creatureWorldGUID(guid, entry)
 	motion := motions[key]
 	created := false
-	if motion == nil || motion.Entry != entry || motion.Map != mapID || motion.InstanceID != instanceID {
+	// A scripted UpdateEntry transform (motion.EntryOverride) is live
+	// state: the DB row still carries the original entry, so an entry
+	// mismatch here must not recreate the motion (that would wipe the
+	// transform every time a player walks into range). Only the evade
+	// respawn path re-seats explicitly.
+	if motion == nil || motion.Map != mapID || motion.InstanceID != instanceID || (motion.Entry != entry && !motion.EntryOverride) {
 		st := s.loadCreatureStats(ctx, entry)
 		health := st.Health
 		if currentHealth > 0 {
@@ -2345,41 +2351,48 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				continue
 			}
 			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, p.InstanceID, float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), wander, float32(walkSpeed), float32(runSpeed), uint32(curHealth))
-			motion.Faction = uint32(faction)
-			motion.Level = uint32(level)
-			motion.UnitFlags = uint32(unitFlags)
-			motion.DynamicFlags = uint32(dynamicFlags)
-			motion.FlagsExtra = uint32(flagsExtra)
-			if !motion.ReactStateKnown {
-				if reactState, known, aiName := s.loadCreatureReaction(ctx, uint32(entry)); known {
-					motion.ReactState = reactState
-					motion.ReactStateKnown = true
-					motion.AIName = aiName
+			// A scripted UpdateEntry transform re-seated this motion on a
+			// new template: the DB row still carries the original entry,
+			// so the sweep must not re-affirm DB values over the live
+			// transform (C++ keeps the same AI object with its new
+			// template until respawn).
+			if !motion.EntryOverride {
+				motion.Faction = uint32(faction)
+				motion.Level = uint32(level)
+				motion.UnitFlags = uint32(unitFlags)
+				motion.DynamicFlags = uint32(dynamicFlags)
+				motion.FlagsExtra = uint32(flagsExtra)
+				if !motion.ReactStateKnown {
+					if reactState, known, aiName := s.loadCreatureReaction(ctx, uint32(entry)); known {
+						motion.ReactState = reactState
+						motion.ReactStateKnown = true
+						motion.AIName = aiName
+					}
 				}
-			}
-			motion.AttackTime = uint32(attackTime)
-			// Re-affirm absolute velocities on every sweep: motions created by
-			// older builds may still hold the raw template rate in Speed
-			// (see the motionFor rate/absolute fix) or a flat RunSpeed.
-			// Re-affirm the DB template rates on every sweep (motions from
-			// older builds may hold stale values); the aura fold then
-			// recomputes the live run speed (Unit::UpdateSpeed twin), so a
-			// snare applied since the last sweep can't be wiped by the
-			// re-affirm. Walk is re-affirmed directly — C++ UpdateSpeed
-			// returns early for MOVE_WALK, so it never changes.
-			motion.BaseRunRate = float32(runSpeed)
-			motion.Speed = creatureWalkVelocity(walkSpeed)
-			s.refreshCreatureRunSpeedMotion(motion)
-			if motion.MaxHealth == 0 {
-				health := uint32(curHealth)
-				if health == 0 {
-					health = 42
+				motion.AttackTime = uint32(attackTime)
+				// Re-affirm absolute velocities on every sweep: motions created by
+				// older builds may still hold the raw template rate in Speed
+				// (see the motionFor rate/absolute fix) or a flat RunSpeed.
+				// Re-affirm the DB template rates on every sweep (motions from
+				// older builds may hold stale values); the aura fold then
+				// recomputes the live run speed (Unit::UpdateSpeed twin), so a
+				// snare applied since the last sweep can't be wiped by the
+				// re-affirm. Walk is re-affirmed directly — C++ UpdateSpeed
+				// returns early for MOVE_WALK, so it never changes.
+				motion.BaseRunRate = float32(runSpeed)
+				motion.Speed = creatureWalkVelocity(walkSpeed)
+				s.refreshCreatureRunSpeedMotion(motion)
+				if motion.MaxHealth == 0 {
+					health := uint32(curHealth)
+					if health == 0 {
+						health = 42
+					}
+					motion.Health, motion.MaxHealth = health, health
+					motion.BaseMaxHealth = health
 				}
-				motion.Health, motion.MaxHealth = health, health
-				motion.BaseMaxHealth = health
-			}
-			if motion.MaxHealth > 0 && motion.Health > motion.MaxHealth {
-				motion.Health = motion.MaxHealth
+				if motion.MaxHealth > 0 && motion.Health > motion.MaxHealth {
+					motion.Health = motion.MaxHealth
+				}
 			}
 			if motion.Health == 0 {
 				continue

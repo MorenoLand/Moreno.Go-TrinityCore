@@ -244,6 +244,24 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+		if motion.EntryOverride && motion.Entry != spawn.Entry {
+			// A scripted UpdateEntry transform re-seated the motion on a
+			// new template (Creature::UpdateEntry, Creature.cpp:552): the
+			// create block must carry the NEW entry so late-joining
+			// clients resolve the name/model from the right template,
+			// while the raw GUID keeps the original entry embedded —
+			// C++ fixes the GUID at Object::Create and only SetEntry
+			// changes (InitEntry, Creature.cpp:486). Level/health/attack
+			// time/scale come from the new template's seated values
+			// (loadCreatureStats above used the DB row's entry).
+			spawn.Entry = motion.Entry
+			spawn.RawGUID = motion.GUID
+			spawn.Level = motion.Level
+			spawn.MaxHealth = motion.MaxHealth
+			spawn.AttackTime = motion.AttackTime
+			spawn.Scale = motion.BaseScale
+			spawn.CombatReach = motion.CombatReach
+		}
 		if motion.NPCFlagsKnown {
 			// A Lua arm overrode the live NPC flags (SetNPCFlags /
 			// SetFlag(82) / RemoveFlag(82)): the spawn must carry the live

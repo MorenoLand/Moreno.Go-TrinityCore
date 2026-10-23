@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -884,6 +885,49 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{id}, nil
 	}
+	// UpdateEntry is Creature::UpdateEntry (Creature.cpp:552-655): re-seats
+	// the creature on a new creature_template entry — the scripted
+	// transform twin (volkhan's brittle golem, the deathwhisper
+	// fanatic/adherent transforms, ingvar's undead phase, ...). Returns
+	// false when the template is missing or has no model (the C++
+	// InitEntry false legs, Creature.cpp:454-459/494-499).
+	//
+	// Seated legs, in C++ order: entry + first-valid template model
+	// (InitEntry, Creature.cpp:452-550: GetFirstValidModelId over
+	// modelid1..4, SetDisplayId/SetNativeDisplayId, default equipment
+	// when data is nil), template faction, template npcflag/unit_flags
+	// (UNIT_NPC_FLAGS/UNIT_FIELD_FLAGS, keeping UNIT_FLAG_IN_COMBAT while
+	// engaged)/unit_flags2/dynamicflags, attack time, SelectLevel
+	// (urand(min,max)), UpdateLevelDependantStats with the previous-health
+	// preservation (SetHealth clamps to the new max), armor/resistances/
+	// damage from the template, template scale (the script scale override
+	// is cleared — the C++ Reset/JustDied scale-restore precedent),
+	// RegenHealth, walk/run speeds, sheath MELEE when no creature_addon
+	// row, and InitializeReactState. The motion-map key and motion.GUID
+	// keep the ORIGINAL entry embedded — C++ fixes the GUID at
+	// Object::Create and only SetEntry changes (Creature.cpp:486) — so
+	// client references, threat, and lookups keep resolving; the new
+	// entry rides OBJECT_FIELD_ENTRY in the values-update and the spawn
+	// overlay (creatures.go) so late-joining clients resolve the right
+	// name/model. Lua ports register entry-persistent handlers (damage,
+	// SpellHit) for BOTH entries — the C++ AI object keeps receiving
+	// hooks after the transform (LastUsedScriptID leg), and Go dispatches
+	// on the live motion.Entry.
+	//
+	// Not modeled: the guardian-stats leg (the handler surface does not
+	// serve pets), the vehicle branch, trigger NOT_SELECTABLE,
+	// CREATURE_FLAG_EXTRA_NO_TAUNT immunities, IgnoringCombat, melee
+	// damage school, the faction-template PvP flag, and threat
+	// EvaluateSuppressed. The data/updateLevel parameters stay at their
+	// C++ defaults (nil/true) — every scripted call site uses them.
+	methods["UpdateEntry"] = func(ctx context.Context, args []any) ([]any, error) {
+		newEntry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		ok := s.seatCreatureEntry(ctx, motion, newEntry)
+		return []any{ok}, nil
+	}
 	// SetFacingTo is Unit::SetFacingTo (Unit.cpp:13669): an in-place
 	// MoveTo + SetFacing spline that turns the unit without moving it. The
 	// Go twin reuses the DistractMovementGenerator facing pattern — an
@@ -1506,6 +1550,203 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		"InstanceId": motion.InstanceID,
 		"InWorld":    true,
 	}, Methods: methods}
+}
+
+// seatCreatureEntry is the shared core of the Lua creature:UpdateEntry
+// bridge and the evade-respawn re-seat: Creature::UpdateEntry
+// (Creature.cpp:552-655) re-seats the creature on a new
+// creature_template entry. The motion-map key and motion.GUID keep the
+// ORIGINAL entry embedded (C++ fixes the GUID at Object::Create;
+// Creature::InitEntry only SetEntry-changes, Creature.cpp:486), so the
+// caller must hold no locks; the seating takes motionMu itself. Returns
+// false when the template is missing or defines no model (the C++
+// InitEntry false legs).
+func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, newEntry uint32) bool {
+	if s == nil || motion == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	var model1, model2, model3, model4 int64
+	var faction, npcFlag, unitFlags, unitFlags2, dynamicFlags int64
+	var minLevel, maxLevel int64
+	var templateScale, speedWalk, speedRun float64
+	var baseAttackTime, regenHealth int64
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT
+		COALESCE(modelid1, 0), COALESCE(modelid2, 0), COALESCE(modelid3, 0), COALESCE(modelid4, 0),
+		COALESCE(faction, 0), COALESCE(npcflag, 0), COALESCE(unit_flags, 0), COALESCE(unit_flags2, 0),
+		COALESCE(dynamicflags, 0), COALESCE(minlevel, 1), COALESCE(maxlevel, 1), COALESCE(scale, 1.0),
+		COALESCE(speed_walk, 0), COALESCE(speed_run, 0), COALESCE(BaseAttackTime, 2000),
+		COALESCE(RegenHealth, 0)
+		FROM creature_template WHERE entry = ?`, newEntry).Scan(
+		&model1, &model2, &model3, &model4,
+		&faction, &npcFlag, &unitFlags, &unitFlags2,
+		&dynamicFlags, &minLevel, &maxLevel, &templateScale,
+		&speedWalk, &speedRun, &baseAttackTime, &regenHealth)
+	if err != nil {
+		return false
+	}
+	// Creature::GetFirstValidModelId: first nonzero of modelid1..4.
+	var model uint32
+	for _, m := range []int64{model1, model2, model3, model4} {
+		if m > 0 {
+			model = uint32(m)
+			break
+		}
+	}
+	if model == 0 {
+		return false
+	}
+	stats := s.loadCreatureStats(ctx, newEntry)
+	// Creature::SelectLevel (Creature.cpp:1489-1498): urand(min, max).
+	minL, maxL := minLevel, maxLevel
+	if minL > maxL {
+		minL, maxL = maxL, minL
+	}
+	if minL < 1 {
+		minL = 1
+	}
+	level := uint32(minL)
+	if maxL > minL {
+		level = uint32(minL) + uint32(rand.Intn(int(maxL-minL)+1))
+	}
+	// CreatureModelInfo radius/reach for the new display (the SetDisplayId
+	// twin's Creature.cpp:3210-3218 fold).
+	var boundingRadius, combatReach float64
+	var br, cr sql.NullFloat64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", model).Scan(&br, &cr); err == nil {
+		if br.Valid && br.Float64 > 0 {
+			boundingRadius = br.Float64
+		}
+		if cr.Valid && cr.Float64 > 0 {
+			combatReach = cr.Float64
+		}
+	}
+	// Creature::UpdateEntry sheathes melee when no addon row exists
+	// (Creature.cpp:562-563).
+	lowGUID := uint32(motion.GUID & 0x00FFFFFF)
+	var addonProbe int64
+	hasAddon := s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature_addon WHERE guid = ? LIMIT 1", lowGUID).Scan(&addonProbe) == nil
+	reactState, reactKnown, _ := s.loadCreatureReaction(ctx, newEntry)
+	// Default equipment for the new entry (C++ InitEntry with data=nil
+	// calls LoadEquipment()).
+	var item1, item2, item3 sql.NullInt64
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT ItemID1, ItemID2, ItemID3 FROM creature_equip_template WHERE CreatureID = ? AND ID = 1", newEntry).Scan(&item1, &item2, &item3)
+
+	fields := make(map[int]uint32)
+	s.motionMu.Lock()
+	prevHealth := motion.Health
+	motion.Entry = newEntry
+	motion.EntryOverride = true
+	motion.DisplayID = model
+	motion.DisplayIDKnown = true
+	motion.Faction = uint32(faction)
+	// Creature.cpp:576-578: the template flags apply, but IN_COMBAT is
+	// kept while the creature is engaged.
+	flags := uint32(unitFlags) &^ unitFlagInCombat
+	if motion.InCombat {
+		flags |= unitFlagInCombat
+	}
+	motion.UnitFlags = flags
+	motion.DynamicFlags = uint32(dynamicFlags)
+	motion.NPCFlags = uint32(npcFlag)
+	motion.NPCFlagsKnown = true
+	attackTime := uint32(baseAttackTime)
+	if attackTime == 0 {
+		attackTime = 2000
+	}
+	motion.AttackTime = attackTime
+	motion.Level = level
+	// UpdateLevelDependantStats + the previous-health preservation
+	// (Creature.cpp:597-600): the new max applies, the current health
+	// carries over clamped (a dead creature stays dead).
+	motion.MaxHealth = stats.MaxHealth
+	if prevHealth > 0 {
+		if prevHealth > stats.MaxHealth {
+			prevHealth = stats.MaxHealth
+		}
+		motion.Health = prevHealth
+	} else {
+		motion.Health = 0
+	}
+	motion.Armor = stats.Armor
+	motion.Resistances = stats.Resistances
+	motion.MinDamage = stats.MinDamage
+	motion.MaxDamage = stats.MaxDamage
+	// SetObjectScale(GetNativeObjectScale()) (Creature.cpp:3195-3198 via
+	// InitEntry): the template scale replaces any script override.
+	motion.BaseScale = stats.Scale
+	motion.ScriptScaleKnown = false
+	motion.RegenHealthDisabled = regenHealth == 0
+	motion.Speed = creatureWalkVelocity(speedWalk)
+	motion.BaseRunRate = float32(speedRun)
+	if !hasAddon {
+		motion.SheathState = 1 // SHEATH_STATE_MELEE (UnitDefines.h:71-77)
+		motion.SheathStateKnown = true
+	}
+	if reactKnown {
+		motion.ReactState = reactState
+		motion.ReactStateKnown = true
+	}
+	if combatReach > 0 {
+		scale := motion.BaseScale
+		if scale <= 0 {
+			scale = 1
+		}
+		motion.CombatReach = float32(combatReach) * scale
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	newHealth := motion.Health
+	newCombatReach := motion.CombatReach
+	auraKey := creatureAuraKeyForMotion(motion)
+	s.motionMu.Unlock()
+
+	// Unit::UpdateSpeed twin: the new template run rate feeds the aura
+	// fold (the SetSpeedRate twin's refresh path).
+	s.refreshCreatureRunSpeed(auraKey, guid)
+
+	fields[objectFieldEntry] = newEntry
+	fields[unitFieldDisplayID] = model
+	fields[unitFieldNativeDisplayID] = model
+	fields[unitFieldFaction] = uint32(faction)
+	fields[unitFieldFlags] = flags
+	fields[unitFieldFlags2] = uint32(unitFlags2)
+	fields[unitFieldDynamicFlags] = uint32(dynamicFlags)
+	fields[unitFieldNPCFlags] = uint32(npcFlag)
+	fields[unitFieldLevel] = level
+	fields[unitFieldHealth] = newHealth
+	fields[unitFieldMaxHealth] = stats.MaxHealth
+	fields[unitFieldAttackTime] = attackTime
+	if boundingRadius > 0 {
+		scale := float64(stats.Scale)
+		if scale <= 0 {
+			scale = 1
+		}
+		fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius * scale))
+	}
+	if combatReach > 0 {
+		fields[unitFieldCombatReach] = math.Float32bits(newCombatReach)
+	}
+	// OBJECT_FIELD_SCALE_X with the aura fold (the SetScale twin's
+	// effective-scale formula).
+	scaleBase := float64(stats.Scale)
+	if scaleBase <= 0 {
+		scaleBase = 1
+	}
+	effective := scaleBase + float64(s.creatureAuraScaleSum(auraKey))/100
+	if effective < 0.01 {
+		effective = 0.01
+	}
+	fields[objectFieldScale] = math.Float32bits(float32(effective))
+	if item1.Valid && item1.Int64 > 0 {
+		fields[unitVirtualItemSlotID] = uint32(item1.Int64)
+	}
+	if item2.Valid && item2.Int64 > 0 {
+		fields[unitVirtualItemSlotID+1] = uint32(item2.Int64)
+	}
+	if item3.Valid && item3.Int64 > 0 {
+		fields[unitVirtualItemSlotID+2] = uint32(item3.Int64)
+	}
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, fields)
+	return true
 }
 
 // luaObjectGUID resolves a Lua-passed target to a GUID: a creature/player

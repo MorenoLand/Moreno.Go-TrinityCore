@@ -1379,6 +1379,28 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	s.motionMu.Unlock()
 }
 
+// reseatRespawnedEntry reverts a scripted UpdateEntry transform when the
+// creature respawns: C++ Creature::Respawn re-inits from the DB row
+// (Creature::LoadCreatureFromDB -> InitEntry(original entry),
+// Creature.cpp:2156-2215), so a transform never survives death. The latch
+// is cleared so the idle sweep re-affirms DB values again.
+func (s *Server) reseatRespawnedEntry(ctx context.Context, motion *creatureMotion, dbEntry uint32) {
+	if s == nil || motion == nil || dbEntry == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	overridden := motion.EntryOverride
+	s.motionMu.Unlock()
+	if !overridden {
+		return
+	}
+	if s.seatCreatureEntry(ctx, motion, dbEntry) {
+		s.motionMu.Lock()
+		motion.EntryOverride = false
+		s.motionMu.Unlock()
+	}
+}
+
 func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target combatTarget, health uint32, now time.Time) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || target.InstanceID == 0 {
 		return
@@ -1490,6 +1512,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()
+			s.reseatRespawnedEntry(ctx, motion, respawn.Entry)
 			s.clearLootState(respawn.Map, 0, rawGUID)
 			s.broadcastCreatureValuesUpdateInInstance(respawn.Map, 0, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
 			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
@@ -1524,6 +1547,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.PlayerDamageReq = respawn.Health / 2
 		}
 		s.motionMu.Unlock()
+		s.reseatRespawnedEntry(ctx, motion, respawn.Entry)
 		s.clearLootState(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
 		if motion != nil {
 			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset

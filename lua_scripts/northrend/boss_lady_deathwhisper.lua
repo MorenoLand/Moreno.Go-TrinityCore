@@ -80,32 +80,38 @@
 --   DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered; the
 --   InterruptNonMeleeSpells(true) leg has no bridge on the
 --   event-creature method set (net no-op in Go: packet-only casts).
---   The other fanatic SpellHit legs stay out per-arm: the :626-629
---   FULL_HEAL self-cast is PORTED (event 14 fires the self-cast hit;
---   only the UpdateEntry(NPC_DEFORMED_FANATIC) leg stays out, no
---   bridge); :631-635 martyrdom rides
---   SetReactState/AttackStop (no bridges); the :640-660 2s/6s reanimate
---   scheduler rides UpdateEntry + SetFlag(UNIT_FIELD_FLAGS) + the
---   instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD)
---   (no instance bridge).
+--   RE-KEY 2026-10-22: the remaining fanatic SpellHit legs are PORTED —
+--   the :626-629 FULL_HEAL self-cast + UpdateEntry(NPC_DEFORMED_FANATIC)
+--   (Creature::UpdateEntry twin bridged 2026-10-22); the :630-634
+--   martyrdom arm (SetReactState/AttackStop/CastSpell — AttackStop
+--   bridged 2026-10-22); the :640-660 2s/6s reanimate scheduler
+--   (UpdateEntry(REANIMATED_FANATIC) + feign + clear-debuffs + full-heal
+--   triggered + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE) at 2s;
+--   RemoveAuras + RemoveFlag + SetReactState(AGGRESSIVE) + shroud at 6s).
+--   Only the instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD
+--   13) stays out (no instance bridge).
 -- npc_cult_adherent (37949, icecrown_citadel.h:178) — same Reset→engage
 --   re-key (:693-710): SPELL_DEATHCHILL 5s/2500ms victim-cast —
 --   entry-conditional DoCastVictim(SPELL_DEATHCHILL_BLAST 70906) when
 --   GetEntry() == 38136 else DoCastVictim(SPELL_DEATHCHILL_BOLT 70594)
 --   (:696-698); SPELL_SHROUD_OF_THE_OCCULT 70768 self-cast 15s/10s
---   (:703) — all non-triggered. The empowered entry change rides the
---   unbridged SpellHit leg (:717), so the Blast branch is dormant until
---   that leg bridges — documented. CORRECTION (2026-10-16): the
+--   (:703) — all non-triggered. RE-KEY 2026-10-22: the empowered entry
+--   change is PORTED — the SpellHit DARK_EMPOWERMENT_T arm (:714-718)
+--   UpdateEntry-swaps to ENTRY_EMPOWERED_ADHERENT (Creature::UpdateEntry
+--   twin bridged 2026-10-22; registered for both entries since the twin
+--   re-dispatches hooks to the live entry), so the Blast branch is live
+--   once empowered. CORRECTION (2026-10-16): the
 --   IsCasting bridge EXISTS but always returns false for creatures (no
 --   cast state, engine/world/lua_objects.go) — the adherent
 --   SetValidator always passes, so timers firing unconditionally is
 --   C++-net-equal, not a missing leg.
---   SpellHit arms stay out per-arm (event 14 dispatch IS bridged — the
---   earlier "no SpellHit bridge" claim was stale): :724-725
---   DARK_MARTYRDOM_ADHERENT rides SetReactState/AttackStop (no
---   bridges); the :731-752 2s/6s reanimate scheduler rides UpdateEntry
---   + SetFlag(UNIT_FIELD_FLAGS) + the instance-legged boss Talk
---   (no bridges).
+--   SpellHit arms PORTED 2026-10-22 (event 14 dispatch bridged — the
+--   earlier "no SpellHit bridge" claim was stale): :719-723
+--   DARK_MARTYRDOM_T (SetReactState/AttackStop/CastSpell); the :724-752
+--   2s/6s reanimate scheduler (UpdateEntry(REANIMATED_ADHERENT) + feign +
+--   clear-debuffs + full-heal triggered + SetFlag at 2s; RemoveAuras +
+--   RemoveFlag + SetReactState(AGGRESSIVE) + shroud at 6s). Only the
+--   instance-legged boss Talk(SAY_ANIMATE_DEAD) stays out (no bridges).
 --   SPELL_CURSE_OF_TORPOR 71237 (:706-710, ported): DoCast(target,
 --   non-triggered) on SelectTarget(Random, 1) (offset 1 skips the
 --   MaxThreat head, UnitAI.h:172-174 — tank-skip unbridged, the
@@ -164,20 +170,21 @@
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
 -- npc_cult_adherent summon-death scheduler legs (still out — the
--- UpdateEntry/SetFlag/instance blockers above, not SpellHit dispatch).
+-- instance-legged boss Talk has no bridge; the UpdateEntry/SetFlag legs
+-- are PORTED 2026-10-22).
 -- npc_vengeful_shade (38222) — zero own Talk lines; the
 -- VengefulBlast passive / KillSelf / SpellHitTarget legs have no
 -- bridge — NOT registered (the bronjahm npc_corrupted_soul_fragment
 -- precedent). npc_cult_fanatic / npc_cult_adherent ARE registered
--- (timer arms ported above); the fanatic SpellHit transformation arm
--- (:622-625) is PORTED 2026-10-16 — event 14
+-- (timer arms ported above); the fanatic/adherent SpellHit transformation
+-- and reanimate arms (:622-660 / :714-752) are PORTED 2026-10-22 — event 14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
--- (engine/world/spells.go:11709-11730, boss_ai.go:2052-2096), so the earlier
--- "no SpellHit bridge" claim was stale; their remaining SpellHit legs
--- (:626-660 / :724-752) stay out per-arm (UpdateEntry,
--- SetReactState/AttackStop, SetFlag(UNIT_FIELD_FLAGS), the
--- instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) — no
--- bridges), as do the darnavan SHATTERING_THROW conditional leg
+-- (engine/world/spells.go:11709-11730, boss_ai.go:2052-2096) and the
+-- Creature::UpdateEntry twin is bridged (lua_creature_events.go), so the
+-- earlier "no SpellHit/UpdateEntry bridge" claims were stale. The only
+-- SpellHit stay-out is the instance-legged
+-- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) (no instance bridge),
+-- as is the darnavan SHATTERING_THROW conditional leg
 -- (:893-898, immunity gate — no bridge); darnavan CHARGE leg PORTED
 -- (charge-poll). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
 -- but always returns false for creatures (no cast state,
@@ -204,6 +211,9 @@ local ENTRY_LADY_DEATHWHISPER = 36855
 local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
 local ENTRY_CULT_ADHERENT = 37949 -- icecrown_citadel.h:178
 local ENTRY_EMPOWERED_ADHERENT = 38136 -- icecrown_citadel.h:179
+local ENTRY_DEFORMED_FANATIC = 38135 -- icecrown_citadel.h:176
+local ENTRY_REANIMATED_FANATIC = 38009 -- icecrown_citadel.h:177
+local ENTRY_REANIMATED_ADHERENT = 38010 -- icecrown_citadel.h:180
 local ENTRY_DARNAVAN_10 = 38472
 local ENTRY_DARNAVAN_25 = 38485
 
@@ -226,6 +236,18 @@ local SPELL_DARK_TRANSFORMATION = 70900 -- :86
 local SPELL_FULL_HEAL = 17683 -- :82 (fanatic self-cast :627)
 local SPELL_DARK_MARTYRDOM_T = 70897 -- :73 (fanatic SpellHit :630)
 local SPELL_DARK_MARTYRDOM_FANATIC = 71236 -- :92 (fanatic self-cast :634)
+local SPELL_DARK_EMPOWERMENT_T = 70896 -- :72 (adherent SpellHit :716)
+local SPELL_DARK_MARTYRDOM_ADHERENT = 70903 -- :105 (adherent self-cast :723)
+local SPELL_DARK_MARTYRDOM_ADHERENT_25N = 72498 -- :106
+local SPELL_DARK_MARTYRDOM_ADHERENT_10H = 72499 -- :107
+local SPELL_DARK_MARTYRDOM_ADHERENT_25H = 72500 -- :108
+local SPELL_PERMANENT_FEIGN_DEATH = 70628 -- :83 (reanimate 2s :644)
+local SPELL_CLEAR_ALL_DEBUFFS = 34098 -- :81 (reanimate 2s :645)
+local UNIT_FIELD_FLAGS = 59 -- Unit.h UNIT_FIELD_FLAGS
+local UNIT_FLAG_STUNNED = 0x40000 -- UnitDefines.h:142
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000 -- UnitDefines.h:149
+local UNIT_FLAG_UNK_29 = 0x20000000 -- UnitDefines.h:153 (feign death)
+local REACT_AGGRESSIVE = 1 -- UnitDefines.h ReactStates
 local REACT_PASSIVE = 0
 local SPELL_VAMPIRIC_MIGHT = 70674
 local SPELL_SHADOW_CLEAVE = 70670
@@ -563,10 +585,11 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- C++ :626-629 — DoCastSelf(SPELL_FULL_HEAL 17683) non-triggered
         -- fires on the self-cast hit (event 14 delivers self-cast hits,
         -- engine/world/boss_ai.go:2052-2096 — evaded targets and bounced
-        -- reflects never fire; a landed reflect fires on the caster); the me->UpdateEntry(NPC_DEFORMED_FANATIC) leg stays
-        -- out (no UpdateEntry bridge), so the creature heals without
-        -- changing form.
+        -- reflects never fire; a landed reflect fires on the caster),
+        -- then me->UpdateEntry(NPC_DEFORMED_FANATIC) (Creature::UpdateEntry
+        -- twin, bridged 2026-10-22).
         creature:CastSpell(creature, SPELL_FULL_HEAL)
+        creature:UpdateEntry(ENTRY_DEFORMED_FANATIC)
     elseif spellId == SPELL_DARK_MARTYRDOM_T then
         -- C++ :630-634 — me->SetReactState(REACT_PASSIVE) ->
         -- InterruptNonMeleeSpells(true) (no bridge; Go creature casts are
@@ -575,6 +598,32 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         creature:SetReactState(REACT_PASSIVE)
         creature:AttackStop()
         creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_FANATIC)
+    elseif spellId == SPELL_DARK_MARTYRDOM_FANATIC then
+        -- C++ :640-660 — the 2s/6s reanimate scheduler fires on the
+        -- DARK_MARTYRDOM_FANATIC self-cast hit: 2s -> UpdateEntry(
+        -- NPC_REANIMATED_FANATIC) + DoCastSelf(PERMANENT_FEIGN_DEATH) +
+        -- DoCastSelf(CLEAR_ALL_DEBUFFS) + DoCastSelf(FULL_HEAL, triggered)
+        -- + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE); 6s ->
+        -- RemoveAurasDueToSpell(PERMANENT_FEIGN_DEATH) + RemoveFlag +
+        -- SetReactState(AGGRESSIVE) + DoCastSelf(SHROUD_OF_THE_OCCULT).
+        -- The ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD 13) leg has no
+        -- instance bridge (documented).
+        local guid = creature:GetGUID()
+        schedule(guid, "reanimate2", 2000, function()
+            creature:UpdateEntry(ENTRY_REANIMATED_FANATIC)
+            creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
+            creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
+            creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+            creature:SetFlag(UNIT_FIELD_FLAGS,
+                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+        end)
+        schedule(guid, "reanimate6", 6000, function()
+            creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+            creature:RemoveFlag(UNIT_FIELD_FLAGS,
+                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+            creature:SetReactState(REACT_AGGRESSIVE)
+            creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+        end)
     end
 end
 
@@ -595,8 +644,8 @@ end
 local function onDeathchill(creature, guid)
     -- C++ :696-698 — entry-conditional: the empowered adherent casts the
     -- Blast variant, otherwise the Bolt. The entry change rides the
-    -- unbridged SpellHit leg (:717), so the Blast branch is dormant
-    -- until that leg bridges.
+    -- SpellHit DARK_EMPOWERMENT_T arm (UpdateEntry twin, bridged
+    -- 2026-10-22), so the Blast branch is live once empowered.
     if creature:GetEntry() == ENTRY_EMPOWERED_ADHERENT then
         creature:CastSpell(nil, SPELL_DEATHCHILL_BLAST)
     else
@@ -723,6 +772,59 @@ RegisterCreatureEvent(ENTRY_CULT_FANATIC, 23, fanaticReset)
 RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 1, adherentEnterCombat)
 RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 2, adherentLeaveCombat)
 RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 23, adherentReset)
+
+-- C++ npc_cult_adherent::SpellHit (:714-752) — bridged as event 14
+-- (the fanatic SpellHit precedent above). Registered for both the base
+-- and empowered entries: the DARK_EMPOWERMENT_T arm UpdateEntry-swaps
+-- the creature to ENTRY_EMPOWERED_ADHERENT, and the UpdateEntry twin
+-- re-dispatches hooks to the live entry (mirroring the C++ AI object
+-- surviving the transform); the onDeathchill entry-conditional Blast
+-- branch goes live with it.
+local function adherentSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_DARK_EMPOWERMENT_T then
+        -- C++ :716-718 — me->UpdateEntry(NPC_EMPOWERED_ADHERENT)
+        -- (Creature::UpdateEntry twin, bridged 2026-10-22).
+        creature:UpdateEntry(ENTRY_EMPOWERED_ADHERENT)
+    elseif spellId == SPELL_DARK_MARTYRDOM_T then
+        -- C++ :719-723 — me->SetReactState(REACT_PASSIVE) ->
+        -- InterruptNonMeleeSpells(true) (no bridge; Go creature casts are
+        -- packet-only, the interrupt is a net no-op) -> me->AttackStop()
+        -- -> DoCastSelf(SPELL_DARK_MARTYRDOM_ADHERENT) non-triggered.
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_ADHERENT)
+    elseif spellId == SPELL_DARK_MARTYRDOM_ADHERENT
+        or spellId == SPELL_DARK_MARTYRDOM_ADHERENT_25N
+        or spellId == SPELL_DARK_MARTYRDOM_ADHERENT_10H
+        or spellId == SPELL_DARK_MARTYRDOM_ADHERENT_25H then
+        -- C++ :724-752 — the 2s/6s reanimate scheduler (same shape as the
+        -- fanatic's :640-660): 2s -> UpdateEntry(NPC_REANIMATED_ADHERENT)
+        -- + feign + clear debuffs + full heal (triggered) + SetFlag(
+        -- STUNNED|UNK_29|NOT_SELECTABLE); 6s -> RemoveAurasDueToSpell(
+        -- PERMANENT_FEIGN_DEATH) + RemoveFlag + SetReactState(AGGRESSIVE)
+        -- + DoCastSelf(SHROUD_OF_THE_OCCULT). The boss Talk(SAY_ANIMATE_DEAD)
+        -- leg has no instance bridge (documented).
+        local guid = creature:GetGUID()
+        schedule(guid, "reanimate2", 2000, function()
+            creature:UpdateEntry(ENTRY_REANIMATED_ADHERENT)
+            creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
+            creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
+            creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+            creature:SetFlag(UNIT_FIELD_FLAGS,
+                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+        end)
+        schedule(guid, "reanimate6", 6000, function()
+            creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+            creature:RemoveFlag(UNIT_FIELD_FLAGS,
+                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+            creature:SetReactState(REACT_AGGRESSIVE)
+            creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 14, adherentSpellHit)
+RegisterCreatureEvent(ENTRY_EMPOWERED_ADHERENT, 14, adherentSpellHit)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 1, darnavanJustEngagedWith)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 2, darnavanLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 23, darnavanReset)

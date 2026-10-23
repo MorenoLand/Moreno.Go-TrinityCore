@@ -112,13 +112,18 @@
 -- typo replicated as written (the same "blast" timer key is
 -- overwritten, matching EventMap.ScheduleEvent overwrite).
 -- DamageTaken kill-shot latch (:425-444): damage >= GetHealth() ->
--- SetHealth(1) + damage = 0 + RemoveAllAuras + m_bIsFrozen = true —
--- PORTED via event 9 (the thekal kill-shot precedent: return false,
--- 0; SetHealth + RemoveAllAuras bridged on the handler surface,
--- lua_creature_events.go:166/:189). Timers canceled on the latch;
--- frozen flag cleared on event 23 (C++ Reset -> Initialize).
--- DOCUMENTED DEVIATIONS: UpdateEntry(NPC_BRITTLE_GOLEM 28681) has no
--- golem keeps its molten model (cosmetic).
+-- UpdateEntry(28681) + SetHealth(1) + damage = 0 + RemoveAllAuras +
+-- m_bIsFrozen = true — PORTED via event 9 (the thekal kill-shot
+-- precedent: return false, 0; UpdateEntry bridged 2026-10-22
+-- (Creature::UpdateEntry twin); SetHealth + RemoveAllAuras bridged on
+-- the handler surface, lua_creature_events.go:166/:189). Timers canceled
+-- on the latch; frozen flag cleared on event 23 (C++ Reset ->
+-- Initialize). The UpdateEntry morph re-seats faction/flags/display/
+-- stats from the brittle template (the "Set in DB" stunned/
+-- non-attackable flags ride the template unit_flags).
+-- DOCUMENTED DEVIATIONS: InterruptNonMeleeSpells (no bridge; Go
+-- creature casts are packet-only, the interrupt is a net no-op) +
+-- MotionMaster clear (no motion bridge) stay out.
 -- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
 -- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
 -- SpellHit (:444-449: SPELL_SHATTER 52429 dummy on a brittle golem
@@ -131,6 +136,7 @@
 -- unmodeled-achievement queue).
 
 local ENTRY_MOLTEN_GOLEM = 28695
+local ENTRY_BRITTLE_GOLEM = 28681 -- boss_volkhan.cpp:30 (NPC_BRITTLE_GOLEM)
 local ENTRY_VOLKHAN = 28587
 
 local SAY_AGGRO = 0
@@ -246,20 +252,27 @@ local function golemDied(event, creature, killer)
 end
 
 -- C++ DamageTaken :425-444: kill-shot (damage >= GetHealth()) ->
--- SetHealth(1) + damage = 0 + UpdateEntry(28681) + RemoveAllAuras +
--- AttackStop + InterruptNonMeleeSpells + MotionMaster clear +
--- m_bIsFrozen = true. Event 9 fires pre-application with the damage
--- (fireCreatureDamageTaken, lua_creature_events.go); the boolean +
--- damage rewrite is the thekal kill-shot precedent. UpdateEntry /
--- AttackStop / Interrupt / MotionMaster stay out behind true blockers
--- (see header deviations).
+-- UpdateEntry(NPC_BRITTLE_GOLEM) + SetHealth(1) + damage = 0 +
+-- RemoveAllAuras + AttackStop + InterruptNonMeleeSpells(false) +
+-- MotionMaster clear + m_bIsFrozen = true. Event 9 fires pre-application
+-- with the damage (fireCreatureDamageTaken, lua_creature_events.go); the
+-- boolean + damage rewrite is the thekal kill-shot precedent.
+-- UpdateEntry is the Creature::UpdateEntry twin (bridged 2026-10-22):
+-- the brittle template's faction/flags/display/stats apply (the "Set in
+-- DB" stunned/non-attackable flags ride the template unit_flags), and
+-- the entry change dispatches subsequent hooks to the brittle entry's
+-- registrations (registered below for both entries — the C++ AI object
+-- keeps receiving hooks after the transform). AttackStop bridged
+-- 2026-10-22 (C++ order RemoveAllAuras -> AttackStop). Interrupt /
+-- MotionMaster stay out behind true blockers (see header deviations).
 local function golemDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if damage >= creature:GetHealth() then
+        creature:UpdateEntry(ENTRY_BRITTLE_GOLEM)
         creature:SetHealth(1)
         creature:RemoveAllAuras()
         -- C++ boss_volkhan.cpp:433: me->AttackStop() (C++ order
-        -- RemoveAllAuras -> AttackStop; UpdateEntry morph unbridged).
+        -- RemoveAllAuras -> AttackStop).
         creature:AttackStop()
         golemFrozen[guid] = true
         golemCancelTimers(guid)
@@ -278,25 +291,26 @@ end
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 1, golemEnterCombat)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 2, golemLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 4, golemDied)
-RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 9, golemDamageTaken)
 -- C++ SpellHit :444-449 — the dummy effect of SPELL_SHATTER
 -- (52429) on a brittle golem -> DespawnOrUnsummon(). No heroic
 -- variant of SPELL_SHATTER in the C++ enum, so
--- GetSpellIdForDifficulty returns 52429 as-is. The C++ checks
--- me->GetEntry() == NPC_BRITTLE_GOLEM (28681); the port's
--- golemFrozen latch is the UpdateEntry proxy set on the same
--- kill-shot transition in golemDamageTaken above.
+-- GetSpellIdForDifficulty returns 52429 as-is. The C++ gates on
+-- me->GetEntry() == NPC_BRITTLE_GOLEM (28681) — registered for both
+-- entries (the UpdateEntry twin re-dispatches hooks to the live entry,
+-- mirroring the C++ AI object surviving the transform); the entry check
+-- inside is the real C++ gate, replacing the golemFrozen latch proxy.
 local SPELL_SHATTER = 52429
 local function golemSpellHit(event, creature, caster, spellId)
-    if spellId == SPELL_SHATTER then
+    if spellId == SPELL_SHATTER and creature:GetEntry() == ENTRY_BRITTLE_GOLEM then
         local guid = creature:GetGUID()
-        if golemFrozen[guid] then
-            golemCancelTimers(guid)
-            golemFrozen[guid] = nil
-            creature:Despawn()
-        end
+        golemCancelTimers(guid)
+        golemFrozen[guid] = nil
+        creature:Despawn()
     end
 end
 
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 14, golemSpellHit)
+RegisterCreatureEvent(ENTRY_BRITTLE_GOLEM, 9, golemDamageTaken)
+RegisterCreatureEvent(ENTRY_BRITTLE_GOLEM, 14, golemSpellHit)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 23, golemReset)
+RegisterCreatureEvent(ENTRY_BRITTLE_GOLEM, 23, golemReset)

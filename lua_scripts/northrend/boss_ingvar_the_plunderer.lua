@@ -319,6 +319,14 @@ end
 local function ingvarReset(event, creature)
     cancelTimers(creature:GetGUID())
     ingvarState[creature:GetGUID()] = nil
+    -- C++ Reset (lines 113-115): if (GetEntry() != NPC_INGVAR)
+    -- UpdateEntry(NPC_INGVAR) — reverts a phase-2 wipe's undead form
+    -- (Creature::UpdateEntry twin, bridged 2026-10-22). The
+    -- StartZombiePhase UpdateEntry(NPC_INGVAR_UNDEAD) rides the unbridged
+    -- DoAction(ACTION_START_PHASE_2) leg (documented in the header).
+    if creature:GetEntry() ~= ENTRY_INGVAR then
+        creature:UpdateEntry(ENTRY_INGVAR)
+    end
     -- C++ Reset (lines 113-118): RemoveFlag(NON_ATTACKABLE |
     -- NOT_SELECTABLE) + SetImmuneToPC(false) (= RemoveFlag(59, 0x100))
     -- re-arms the feign-death flags so a post-feign wipe re-engages
