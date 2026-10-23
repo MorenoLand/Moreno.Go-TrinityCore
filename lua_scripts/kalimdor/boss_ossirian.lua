@@ -18,9 +18,11 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule SILENCE (30s), CYCLONE (20s), STOMP (30s);
---   self-cast SUPREME 25176; Talk(SAY_AGGRO 2). (C++ also sets
---   weather, summons tornados, spawns crystals — no bridge,
---   documented below.)
+--   self-cast SUPREME 25176; Talk(SAY_AGGRO 2); 5x sand-vortex
+--   summons (NPC_SAND_VORTEX 15428, GetRandomPoint(RoomCenter, 165yd)
+--   twinned in-Lua) each with triggered self-cast SAND_STORM 25160
+--   (live SummonCreature bridge 2026-10-22; weather arm has no
+--   bridge, crystal machine documented below).
 -- - EVENT_SILENCE: Curse of Tongues 25195 via DoCastAOE lowering to
 --   self-cast (C++ DoCastAOE = DoCast(nullptr, spell); the spell's
 --   own AoE targeting resolves the victims — selin_fireheart
@@ -46,10 +48,10 @@
 --   SummonCreature machine, so the leg is stranded).
 -- Unmodeled (documented-only, no bridges):
 -- - Weather (WEATHER_STATE_HEAVY_SANDSTORM): no bridge.
--- - Tornado summons (NPC_SAND_VORTEX): SummonCreature no bridge
---   (zero Lua usage).
 -- - Crystal/trigger summons (SpawnNextCrystal): SummonCreature no
 --   bridge.
+-- - onReset despawns the sand-vortex summons (C++ EnterEvadeMode
+--   summons.DespawnAll(), boss_ossirian.cpp:183-188).
 -- - go_ossirian_crystal (GameObjectAI OnGossipHello): the GO gossip
 --   hello hook IS bridged (RegisterGameObjectGossipEvent, engine/world/
 --   gameobjects.go:747) — the 2026-10-18 "no bridge" claim was stale.
@@ -70,12 +72,14 @@
 -- - BossAI ctor leg DATA_OSSIRIAN and _Reset() — instance bridge,
 --   standing.
 local ENTRY = 15339
+local ENTRY_SAND_VORTEX = 15428 -- NPC_SAND_VORTEX (ruins_of_ahnqiraj.h:50)
 
 local SPELL_CURSE_OF_TONGUES = 25195
 local SPELL_CYCLONE = 25189
 local SPELL_STOMP = 25188
 local SPELL_SUPREME = 25176
 local SPELL_SUMMON = 20477
+local SPELL_SAND_STORM = 25160 -- boss_ossirian.cpp:47 (tornado self-cast)
 
 local SPELL_WEAKNESS_FIRE = 25177
 local SPELL_WEAKNESS_FROST = 25178
@@ -186,6 +190,23 @@ local function onEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_SUPREME)
     creature:Talk(2)
+    -- C++ JustEngagedWith (boss_ossirian.cpp:165-173): 5x
+    -- map->SummonCreature(NPC_SAND_VORTEX, GetRandomPoint(RoomCenter,
+    -- 165yd)) + triggered self-cast SPELL_SAND_STORM on each — summon
+    -- bridge live 2026-10-22 (2-arg map summon = TEMPSUMMON_DEAD_
+    -- DESPAWN); weather arm has no bridge; the SpawnNextCrystal
+    -- machine stays out (documented below). GetRandomPoint is twinned
+    -- in-Lua (uniform disc, center z kept — no ground-height model).
+    for _ = 1, 5 do
+        local a = math.random() * 2 * math.pi
+        local r = 165.0 * math.sqrt(math.random())
+        local tornado = creature:SummonCreature(ENTRY_SAND_VORTEX,
+            -9343.042 + r * math.cos(a), 1923.278 + r * math.sin(a),
+            85.556, 0, 6)
+        if tornado then
+            tornado:CastSpell(tornado, SPELL_SAND_STORM, true)
+        end
+    end
     schedule(guid, "silence", 30000, function()
         onSilence(creature, guid)
     end)
@@ -209,6 +230,11 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_ossirian.cpp:183-188): summons.DespawnAll()
+    -- — despawn the sand-vortex summons (anubarak frost-sphere precedent).
+    for _, v in ipairs(creature:GetCreaturesInGrid(ENTRY_SAND_VORTEX, 500)) do
+        v:Despawn()
+    end
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY 3), victim ignored.

@@ -27,9 +27,9 @@
 -- schedule, jeklik convention). Every third player kill: Talk
 -- (SAY_DING_KILL=1), triggered self-cast 24312 (level up), kill count
 -- reset. Ohgan (14988): sunder armor 24317 5s after Reset then
--- {10s,15s} on the victim (triggered DoCastVictim, C++-exact); never
--- spawns in this build (no summon model) but is registered so any that
--- exist fight correctly. Vilebranch Speaker (11391): demoralizing shout
+-- {10s,15s} on the victim (triggered DoCastVictim, C++-exact);
+-- summoned at engage via the live SummonCreature bridge (arm above).
+-- Vilebranch Speaker (11391): demoralizing shout
 -- 13730 {2s,4s} after Reset then {22s,30s} self-cast (non-triggered
 -- DoCast(me), C++-exact) / cleave 15284 {5s,8s} after Reset then
 -- {6s,9s} on the victim (triggered DoCastVictim, C++-exact).
@@ -63,6 +63,7 @@
 local ENTRY_MANDOKIR = 11382
 local ENTRY_JINDO = 11380 -- NPC_JINDO_THE_HEXXER (zulgurub.h:56)
 local ENTRY_OHGAN = 14988
+local ENTRY_CHAINED_SPIRT = 15117 -- NPC_CHAINED_SPIRT (zulgurub.h:63)
 local ENTRY_SPEAKER = 11391
 
 local SPELL_OVERPOWER = 24407
@@ -209,12 +210,45 @@ local function mandokirResetState(guid)
     state[guid] = nil
 end
 
+-- PosSummonChainedSpirits (boss_mandokir.cpp:72-93).
+local POS_CHAINED_SPIRITS = {
+    { -12167.17, -1979.330, 133.0992, 2.268928 },
+    { -12262.74, -1953.394, 133.5496, 0.593412 },
+    { -12176.89, -1983.068, 133.7841, 2.129302 },
+    { -12226.45, -1977.933, 132.7982, 1.466077 },
+    { -12204.74, -1890.431, 135.7569, 4.415683 },
+    { -12216.70, -1891.806, 136.3496, 4.677482 },
+    { -12236.19, -1892.034, 134.1041, 5.044002 },
+    { -12248.24, -1893.424, 134.1182, 5.270895 },
+    { -12257.36, -1897.663, 133.1484, 5.462881 },
+    { -12265.84, -1903.077, 133.1649, 5.654867 },
+    { -12158.69, -1972.707, 133.8751, 2.408554 },
+    { -12178.82, -1891.974, 134.1786, 3.944444 },
+    { -12193.36, -1890.039, 135.1441, 4.188790 },
+    { -12275.59, -1932.845, 134.9017, 0.174533 },
+    { -12273.51, -1941.539, 136.1262, 0.314159 },
+    { -12247.02, -1963.497, 133.9476, 0.872665 },
+    { -12238.68, -1969.574, 133.6273, 1.134464 },
+    { -12192.78, -1982.116, 132.6966, 1.919862 },
+    { -12210.81, -1979.316, 133.8700, 1.797689 },
+    { -12283.51, -1924.839, 133.5170, 0.069813 },
+}
+
 local function mandokirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:Talk(SAY_AGGRO)
     creature:Dismount() -- C++ JustEngagedWith Dismount, Talk then Dismount order.
+    -- C++ JustEngagedWith (boss_mandokir.cpp:160-163): SummonCreature
+    -- (NPC_OHGAN, x-3, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT 35s) +
+    -- 20x SummonCreature(NPC_CHAINED_SPIRT, TEMPSUMMON_CORPSE_DESPAWN) —
+    -- summon bridge (lua_creature_events.go:877); Ohgan's AI is registered
+    -- above, so the summon fights; the spirits have no C++ AI either.
+    creature:SummonCreature(ENTRY_OHGAN, creature:GetX() - 3, creature:GetY(), creature:GetZ(), creature:GetO(), 3, 35000)
+    for _, pos in ipairs(POS_CHAINED_SPIRITS) do
+        creature:SummonCreature(ENTRY_CHAINED_SPIRT, pos[1], pos[2], pos[3], pos[4], 4)
+    end
     schedule(guid, "overpower", math.random(7000, 9000), function()
         onOverpower(creature, guid)
     end)
@@ -281,9 +315,8 @@ RegisterCreatureEvent(ENTRY_MANDOKIR, 23, mandokirReset)
 
 -- Ohgan (npc_ohgan, C++ ScriptName for 14988): sunder armor 24317 5s
 -- after Reset then {10s,15s} on the victim (triggered DoCastVictim,
--- C++-exact); melee is engine-driven. Never spawns in this build (no
--- summon model), but the AI is registered so any that exist fight
--- correctly.
+-- C++-exact); melee is engine-driven. Summoned at engage by the
+-- mandokir arm above (live SummonCreature bridge).
 local function onSunderArmor(creature, guid)
     local victim = creature:GetVictim()
     if victim then

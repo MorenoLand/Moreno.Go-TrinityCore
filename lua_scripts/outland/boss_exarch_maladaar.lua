@@ -89,11 +89,10 @@
 -- bridge exists, but the leg stays out on the unbridged AttackStart
 -- + cross-AI SetMyClass arms (shirrak precedent); the captured
 -- soulmodel/soulholder/soulclass exist only for this leg.
--- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) —
--- me->SummonCreature(19412, -4.40722f, -387.277f, 40.6294f,
--- 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — the bridge exists, but the
--- leg stays out on the unbridged AttackStart + cross-AI arms (same
--- precedent as the stolen-soul leg).
+-- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) — PORTED
+-- (me->SummonCreature(19412, TEMPSUMMON_MANUAL_DESPAWN) on the live
+-- summon bridge; the arm carries no AttackStart/cross-AI follow-ups —
+-- those belong to the stolen-soul JustSummoned leg above).
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
 -- npc_stolen_soul (18441) — NOT registered (nothing can summon it
 -- without the summon bridge; the yor precedent). Transcribed from
@@ -109,6 +108,7 @@
 -- victim casts + DoMeleeAttackIfReady.
 
 local ENTRY_MALADAAR = 18373 -- DB-side; wowhead-TBC-verified this run
+local ENTRY_DORE = 19412 -- D'ore (boss_exarch_maladaar.cpp:252)
 
 local SAY_INTRO  = 0
 local SAY_SUMMON = 1
@@ -260,10 +260,15 @@ local function maladaarTargetDied(event, creature, victim)
     end
 end
 
--- C++ boss_exarch_maladaarAI::JustDied (:219-224): the D'ore
--- summon leg has no bridge (header).
+-- C++ boss_exarch_maladaarAI::JustDied (:219-224, Talk(SAY_DEATH 5)) +
+-- the D'ore leg (:248-253): me->SummonCreature(19412, -4.40722f,
+-- -387.277f, 40.6294f, 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — the arm
+-- carries no follow-up legs (the AttackStart/SetMyClass arms belong to
+-- the stolen-soul JustSummoned leg above), so it ports whole on the
+-- live summon bridge (lua_creature_events.go:877).
 local function maladaarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SummonCreature(ENTRY_DORE, -4.40722, -387.277, 40.6294, 6.26573, 7)
     clearState(creature:GetGUID())
 end
 

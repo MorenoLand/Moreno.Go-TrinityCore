@@ -89,7 +89,8 @@
 -- SetDisplayId; SetReactState(REACT_AGGRESSIVE) (bridge live since
 -- 2026-10-20 — the 13:00 "no bridge" claim was stale).
 -- JustEngagedWith NPC_CRUCIBLE_OF_SOULS 60yd double-spawn-guard
--- SummonCreature leg (:163-164) — no Go summon bridge, does not port.
+-- SummonCreature leg (:163-164) — PORTED on the live summon bridge
+-- (2026-10-22); the old "no Go summon bridge" rationale is stale.
 -- EVENT_UNLEASHED_SOULS SetDisplayId(DISPLAY_SORROW) (:271) + the
 -- EVENT_FACE_ANGER 5s restore SetDisplayId(DISPLAY_ANGER) (:277-278) —
 -- PORTED (the stale "no display-ID bridge" claim retracted — the bridge
@@ -126,6 +127,7 @@
 -- outro npc movement).
 
 local ENTRY_DEVOURER = 36502
+local ENTRY_CRUCIBLE = 37094 -- NPC_CRUCIBLE_OF_SOULS (forge_of_souls.h:57)
 
 local SAY_FACE_AGGRO = 0
 local SAY_FACE_ANGER_SLAY = 1
@@ -433,6 +435,12 @@ local function devourerEnterCombat(event, creature, target)
     cancelTimers(guid)
     devourerState[guid] = {}
     creature:Talk(SAY_FACE_AGGRO)
+    -- C++ JustEngagedWith (:163-164): NPC_CRUCIBLE_OF_SOULS 60yd
+    -- double-spawn-guard SummonCreature leg — summon bridge live
+    -- 2026-10-22 (2-arg map summon = TEMPSUMMON_DEAD_DESPAWN).
+    if not creature:FindNearestCreature(ENTRY_CRUCIBLE, 60) then
+        creature:SummonCreature(ENTRY_CRUCIBLE, 5672.294, 2520.686, 713.4386, 0.9599311, 6)
+    end
     schedule(guid, "phantom", 5000, function()
         phantomBlastTick(creature, guid)
     end)

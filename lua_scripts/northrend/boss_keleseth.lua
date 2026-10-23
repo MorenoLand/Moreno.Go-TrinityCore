@@ -73,14 +73,15 @@
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
 -- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
 -- bridge; the combat timers are wiped with it.
--- DOCUMENTED-ONLY (in this header; no registration beyond entry 23953):
--- EVENT_SUMMON_SKELETONS (id 3; init 6s :139, arm :199-201):
+-- EVENT_SUMMON_SKELETONS (id 3; init 6s :139, arm :199-202):
 -- Talk(SAY_SUMMON_SKELETONS 2) + SummonSkeletons() (4x SummonCreature
 -- NPC_SKELETON 23970 at {156.2559, 259.2093}, Z 42.8668, :230-234 —
--- "I could not found any spell cast for this", :231) — summon legs
--- have no bridge; the Talk is fused with the summon (a Talk port that
--- would fire with no adds is worse than silence — the zarithrian
--- precedent); fires once in C++ (no re-arm).
+-- "I could not found any spell cast for this", :231) — summon bridge
+-- live 2026-10-22 (5-arg map summon = TEMPSUMMON_MANUAL_DESPAWN =
+-- Lua type 7 default); fires once in C++ (no re-arm) -> one-shot
+-- schedule in kelesethEnterCombat (Reset-inits-on-combat xt002
+-- precedent).
+-- DOCUMENTED-ONLY (in this header; no registration beyond entry 23953):
 -- npc_frost_tomb (NPC_FROSTTOMB 23965, :79-115) — NOT registered (no
 -- genuinely bridgeable arms, the yogg_saron adds precedent):
 -- IsSummonedBy DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97)
@@ -116,8 +117,10 @@
 -- joins the unmodeled-achievement queue.
 
 local ENTRY_KELESETH = 23953
+local ENTRY_SKELETON = 23970 -- NPC_SKELETON (boss_keleseth.cpp:47)
 
 local SAY_START_COMBAT = 1
+local SAY_SUMMON_SKELETONS = 2 -- KelsethEncounter (boss_keleseth.cpp:53)
 local SAY_FROST_TOMB = 3
 local SAY_FROST_TOMB_EMOTE = 4
 local SAY_DEATH = 5
@@ -207,6 +210,19 @@ end
 -- unconditionally (:146-147); the guard AttackStart leg has no bridges
 -- (the auriaya engage-port precedent). C++ Reset inits (:137-139) are
 -- scheduled here on the xt002 precedent.
+-- C++ EVENT_SUMMON_SKELETONS (id 3; init 6s :139, arm :199-202):
+-- Talk(SAY_SUMMON_SKELETONS 2) + SummonSkeletons() — 4x
+-- me->SummonCreature(NPC_SKELETON, {156.2559, 259.2093}, 42.8668, o=0)
+-- (:230-234); one-shot in C++ (no re-arm) -> one-shot schedule here.
+-- The adds get default melee AI (npc_vrykul_skeleton unregistered,
+-- header).
+local function skeletonTick(creature, guid)
+    creature:Talk(SAY_SUMMON_SKELETONS)
+    for _ = 1, 4 do
+        creature:SummonCreature(ENTRY_SKELETON, 156.2559, 259.2093, 42.8668, 0)
+    end
+end
+
 local function kelesethEnterCombat(event, creature, target)
     creature:Talk(SAY_START_COMBAT)
     local guid = creature:GetGUID()
@@ -216,6 +232,9 @@ local function kelesethEnterCombat(event, creature, target)
     end)
     schedule(guid, "frosttomb", {14000, 19000}, function()
         frostTombTick(creature, guid)
+    end)
+    schedule(guid, "skeletons", 6000, function()
+        skeletonTick(creature, guid)
     end)
 end
 

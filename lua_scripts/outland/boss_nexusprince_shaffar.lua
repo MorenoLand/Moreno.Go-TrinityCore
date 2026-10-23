@@ -47,8 +47,10 @@
 -- the base (depth_charge precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 18344 registered):
 -- boss_nexusprince_shaffarAI::Reset — the three initial beacon
--- SummonCreature(NPC_BEACON 18431, TEMPSUMMON_CORPSE_TIMED_DESPAWN
--- 2h) legs — no-summon bridge (shirrak precedent).
+-- SummonCreature(NPC_BEACON 18431, TEMPSUMMON_CORPSE_TIMED_DESPAWN 2h)
+-- legs are PORTED on ev23 (live summon bridge 2026-10-22); the beacon
+-- AI (npc_ethereal_beaconAI) stays unported — beacons spawn but stand
+-- idle (shirrak precedent for the machine, not the summon).
 -- boss_nexusprince_shaffarAI::MoveInLineOfSight — Talk(SAY_INTRO 0)
 -- (line 101) one-shot _hasTaunted-gated on a player within 100.0f —
 -- PORTED on event 27 (CREATURE_EVENT_ON_MOVE_IN_LOS): Go's fire
@@ -112,6 +114,7 @@
 -- documented above).
 
 local ENTRY_SHAFFAR = 18344 -- NPC_SHAFFAR (Creatures enum)
+local ENTRY_BEACON = 18431 -- NPC_BEACON (boss_nexusprince_shaffar.cpp:61)
 
 local SAY_INTRO = 0
 local SAY_AGGRO = 1
@@ -211,6 +214,15 @@ local function shaffarReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     taunted[guid] = nil
+    -- C++ Reset (boss_nexusprince_shaffar.cpp:86-97): three initial
+    -- beacon SummonCreature(NPC_BEACON, home±8, TEMPSUMMON_CORPSE_TIMED_
+    -- DESPAWN 2h) legs — summon bridge live 2026-10-22; the beacon AI
+    -- (npc_ethereal_beaconAI) stays unported (documented above), so the
+    -- beacons spawn but stand idle until the AI is ported.
+    local hx, hy, hz, ho = creature:GetHomePosition()
+    creature:SummonCreature(ENTRY_BEACON, hx - 8.0, hy - 8.0, hz, ho, 5, 7200000)
+    creature:SummonCreature(ENTRY_BEACON, hx - 8.0, hy + 8.0, hz, ho, 5, 7200000)
+    creature:SummonCreature(ENTRY_BEACON, hx + 8.0, hy, hz, ho, 5, 7200000)
 end
 
 -- C++ boss_nexusprince_shaffarAI::KilledUnit:
