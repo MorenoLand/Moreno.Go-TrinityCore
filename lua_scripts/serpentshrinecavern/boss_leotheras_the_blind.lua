@@ -60,7 +60,8 @@
 -- re-arm 3000 outside the range gate (C++-exact; the BP0=100
 -- bonus-point arg and the original-caster arg have no bridge —
 -- quake/blaze SPELLVALUE precedent; the per-tick StopMoving leg is
--- ported inside the 30-yd range gate (pump granularity, 2026-10-22).
+-- ported at pump granularity — every 1s tick with the victim in
+-- range, independent of the blast timer (2026-10-22).
 -- Inner demons 30s one-
 -- shot -> Talk(SAY_INNER_DEMONS), timer pinned to 999999 (C++-
 -- exact; the threat-list pick of up to 5 non-victim players, the
@@ -355,11 +356,15 @@ local function leotherasTick(creature, guid)
     else
         -- Chaos blast: 1s init then 3s — cast only when the victim
         -- is within 30 yd; re-arm sits outside the range gate
-        -- (C++-exact).
+        -- (C++-exact). The StopMoving leg fires on EVERY tick the
+        -- victim is in range, independent of the blast timer
+        -- (boss_leotheras_the_blind.cpp:505-506).
+        local victim = creature:GetVictim()
+        if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+            creature:StopMoving()
+        end
         if st.chaosBlast <= 1000 then
-            local victim = creature:GetVictim()
             if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
-                creature:StopMoving() -- boss_leotheras_the_blind.cpp:512
                 creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             end
             st.chaosBlast = 3000
@@ -472,11 +477,15 @@ local function demonTick(creature, guid)
 
     -- Chaos blast: 1s init then 3s — cast AND re-arm only when the
     -- victim is within 30 yd (the re-arm sits inside the range
-    -- gate here, unlike the boss form — C++-exact).
+    -- gate here, unlike the boss form — C++-exact). The StopMoving
+    -- leg fires on EVERY tick the victim is in range, independent
+    -- of the blast timer (boss_leotheras_the_blind.cpp:665-667).
+    local victim = creature:GetVictim()
+    if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+        creature:StopMoving()
+    end
     if st.chaosBlast <= 1000 then
-        local victim = creature:GetVictim()
         if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
-            creature:StopMoving() -- boss_leotheras_the_blind.cpp:667
             creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             st.chaosBlast = 3000
         end
