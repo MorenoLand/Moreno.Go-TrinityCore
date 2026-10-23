@@ -4289,9 +4289,11 @@ func init() {
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_warlord_najentus.lua.
 	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
 	// encounter-state bookkeeping is blocked on the instance-script model; the
-	// impaling-spine GO summon (185584) and the spine-removal gossip arm have
-	// no bridges (the GO handler needs the instance-creature lookup); the
-	// needle-spine targeting SpellScript filter has no SpellScript bridge.
+	// impaling-spine GO summon (185584) IS ported (creature:SummonGameObject
+	// bridged, target position via GetX/GetY/GetZ/GetO); the spine-removal
+	// gossip arm stays out (the GO handler needs the instance-creature
+	// lookup); the needle-spine targeting SpellScript filter has no
+	// SpellScript bridge.
 	RegisterLuaBoss("boss_najentus", 22887)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_supremus.lua.
 	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
@@ -7269,9 +7271,9 @@ func init() {
 	// statuePositions + SummonCreature(NPC_ATALALARION 8580, corpse-timed
 	// 10min, atalalarianPos). SetData/GetData(EVENT_STATE=1) carry the
 	// pending statue entry from go_atalai_statue gossip (audited above).
-	// No SummonGameObject/SummonCreature/OnGameObjectCreate/Update bridges
-	// — joins the no-instance-script-bridge queue. SUNKEN TEMPLE GROUP
-	// COMPLETE.
+	// No OnGameObjectCreate/Update bridges (SummonGameObject/SummonCreature
+	// are bridged now) — joins the no-instance-script-bridge queue. SUNKEN
+	// TEMPLE GROUP COMPLETE.
 	// instance_sunwell_plateau.cpp audit (map 580, "SWP", EK loader decl
 	// :141 / call :319 follows instance_sunken_temple): InstanceMapScript only —
 	// zero creature/at_/go scripts, zero Talk, zero Spell/AuraScripts, no

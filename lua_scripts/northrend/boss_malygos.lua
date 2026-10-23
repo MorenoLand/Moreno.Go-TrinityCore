@@ -71,7 +71,11 @@
 -- bookkeeping has no bridge — tharon_ja precedent; the
 -- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject
 -- GO_HEART_OF_MAGIC legs and the NPC_ALEXSTRASZA 32295 summon
--- have no instance / summon bridges — documented-only. The 5s
+-- are instance-resolution blocked — the GetGuidData leg has no
+-- bridge; creature:SummonGameObject / creature:SummonCreature
+-- are bridged (lua_creature_events.go:664/:774), but the summoner
+-- itself is unresolvable without the instance bridge. Documented-only.
+-- The 5s
 -- DespawnOrUnsummon IS ported (malygosDied below — stale
 -- "no despawn bridge" retracted; creature:Despawn() is bridged,
 -- lua_objects.go).
@@ -195,7 +199,10 @@ end
 -- Talk(SAY_DEATH) + gift-box-bunny GUID ->
 -- SummonGameObject(HEART_OF_MAGIC) + SummonCreature
 -- NPC_ALEXSTRASZA + DespawnOrUnsummon(5s). The Talk arm is
--- ported; the instance/summon legs have no bridge. The 5s
+-- ported; the summon legs are instance-resolution blocked —
+-- the GetGuidData leg has no bridge (creature:SummonGameObject /
+-- creature:SummonCreature are bridged, but the summoner is
+-- unresolvable without the instance bridge). The 5s
 -- despawn is a fire-and-forget one-shot CreateLuaEvent — the
 -- creature is dead, so no timer bookkeeping is needed (C++
 -- DespawnOrUnsummon rides the creature's own despawn timer,

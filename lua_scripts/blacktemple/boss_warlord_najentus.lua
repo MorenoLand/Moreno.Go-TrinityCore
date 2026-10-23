@@ -141,14 +141,20 @@ local function onNeedle(creature, guid)
     end)
 end
 
--- C++ EVENT_SPINE: triggered 39837 on the random spine target +
+-- C++ EVENT_SPINE (boss_warlord_najentus.cpp:152-160), arm order:
+-- triggered 39837 on the random spine target, _spineTargetGUID =
+-- target [unmodeled — removal machine is instance-bridged], the
+-- target summons GO_NAJENTUS_SPINE 185584 at its own position
+-- (30s, QuaternionData cosmetic-dropped) — ported on the creature
+-- (target position via the bridged GetX/GetY/GetZ/GetO fallback;
+-- summoner-owner tracking has no Lua-visible effect) — then
 -- Talk(SAY_NEEDLE); re-arm {20s,25s} unconditional (C++-exact —
--- the repeat runs even when no target was found). The GO 185584
--- summon has no bridge.
+-- the repeat runs even when no target was found).
 local function onSpine(creature, guid)
     local target = randomSpineTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_IMPALING_SPINE, true)
+        creature:SummonGameObject(GO_NAJENTUS_SPINE, target:GetX(), target:GetY(), target:GetZ(), target:GetO(), 30)
         creature:Talk(SAY_NEEDLE)
     end
     schedule(guid, "spine", 20000 + math.random(0, 5000), function()

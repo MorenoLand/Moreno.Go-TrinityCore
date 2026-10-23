@@ -124,6 +124,12 @@ local SPELL_HORSEMAN_CLEAVE = 42587
 local SPELL_BURNING_COSMETIC = 42971
 local SPELL_RAIN_OF_TREATS = 43344
 local SPELL_HEAD_STUN = 42408
+local GO_PUMPKIN_SHRINE = 186267
+local GO_LOOSELY_TURNED_SOIL = 186314
+-- UNIT_FIELD_FLAGS (UnitDefines.h) / UNIT_FLAG_NOT_SELECTABLE — the
+-- EVENT_RAIN_OF_TREATS SetFlag leg (bridged creature:SetFlag).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local SPELL_HEAD_VISUAL = 42413
 local SPELL_ONKILL_PROC = 43877
 
@@ -220,15 +226,23 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
 
 -- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
--- JustDied schedules EVENT_RAIN_OF_TREATS at 11s ->
--- DoCastSelf(SPELL_RAIN_OF_TREATS 43344), non-triggered. The
--- instance-SetData(DATA_PREPARE_RESET) and pumpkin-shrine GO-summon
--- legs strand (instance + GO bridges), but the 43344 self-cast is
--- severable and ports cleanly.
+-- JustDied schedules EVENT_RAIN_OF_TREATS at 11s, C++
+-- (boss_headless_horseman.cpp:316-323) arm order: DoCastSelf(43344)
+-- non-triggered, SetFlag(UNIT_FLAG_NOT_SELECTABLE),
+-- instance-SetData(DATA_PREPARE_RESET) [strands — no instance-script
+-- bridge], SummonGameObject(GO_PUMPKIN_SHRINE 186267 at 1776.27,
+-- 1348.74, 20.4116, o 6.27281, 7 days) + RemoveGameObject [tracking
+-- leg, no Lua-visible effect], SummonGameObject(GO_LOOSELY_TURNED_
+-- SOIL 186314 at 1765.28, 1347.46, 17.5514, o 0.100363, 7 days) +
+-- RemoveGameObject. 7_days = 604800s. QuaternionData rotation is
+-- cosmetic and dropped (Go bridge uses identity rotation).
 local function onHeadDied(_, creature)
     local guid = creature:GetGUID()
     schedule(guid, "raintreats", 11000, function()
         creature:CastSpell(creature, SPELL_RAIN_OF_TREATS)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SummonGameObject(GO_PUMPKIN_SHRINE, 1776.27, 1348.74, 20.4116, 6.27281, 604800)
+        creature:SummonGameObject(GO_LOOSELY_TURNED_SOIL, 1765.28, 1347.46, 17.5514, 0.100363, 604800)
     end)
 end
 

@@ -6,10 +6,9 @@
 -- 2 OnGossipSelect (closes the menu on the GOSSIP_ACTION_INFO_DEF + 1
 -- action). No combat AI, no timers; melee is engine-driven in Go.
 -- Deviations from C++: instance->SetData(DATA_CHESTLOOTED, 0) has no
--- bearer (no instance-script model); SummonGameObject(ChestEntry[i])
--- (186648 / 187021 / 186672 / 186667 per hostage entry) has no bearer
--- (no summon/gameobject-spawn bridge) — no chest is spawned; player->
--- GetGossipTextId has no bridge, so the menu title id is 0.
+-- bearer (no instance-script model); the chest SummonGameObject IS
+-- ported (creature:SummonGameObject bridged — onSelect above);
+-- player->GetGossipTextId has no bridge, so the menu title id is 0.
 -- (The old "no HasFlag/RemoveFlag on the creature Lua object" claim was
 -- stale — the Eluna gossip creature has GetNPCFlags/SetNPCFlags,
 -- engine/world/lua_objects.go:657/666 — so the one-shot below is the
@@ -38,6 +37,10 @@ local GOSSIP_HOSTAGE1 = "I am glad to help you."
 -- select flag gates), so clearing it is the C++-exact one-shot.
 local UNIT_NPC_FLAG_GOSSIP = 0x00000001
 
+-- C++ HostageEntry[] -> ChestEntry[] (zulaman.cpp:46): 23790 -> 186648,
+-- 23999 -> 187021, 24024 -> 186672, 24001 -> 186667.
+local CHEST_BY_HOSTAGE = { [23790] = 186648, [23999] = 187021, [24024] = 186672, [24001] = 186667 }
+
 local function onHello(event, player, creature)
     -- C++ adds the item unconditionally; the hook only fires while the
     -- flag is set, so the option is inherently one-shot.
@@ -56,7 +59,13 @@ local function onSelect(event, player, creature, sender, action)
     end
     -- C++ me->RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP).
     creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
-    -- instance->SetData(DATA_CHESTLOOTED, 0) + SummonGameObject: no bearer.
+    -- C++ arm order (zulaman.cpp:82-89): instance->SetData(DATA_CHESTLOOTED,
+    -- 0) [strands — no instance-script model], then SummonGameObject(
+    -- ChestEntry[i], x-2, y, z, o 0, 0s). QuaternionData cosmetic-dropped.
+    local chest = CHEST_BY_HOSTAGE[creature:GetEntry()]
+    if chest then
+        creature:SummonGameObject(chest, creature:GetX() - 2, creature:GetY(), creature:GetZ(), 0, 0)
+    end
 end
 
 for _, entry in ipairs(HOSTAGE_ENTRIES) do

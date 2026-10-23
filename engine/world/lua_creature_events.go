@@ -752,6 +752,84 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.fireCreatureSummoned(ctx, motion, scripting.CreatureEventOnJustSummonedCreature, summoned)
 		return []any{s.luaMotionCreature(summoned)}, nil
 	}
+	// SummonGameObject is WorldObject::SummonGameObject
+	// (Object.cpp:2065-2096): spawns a runtime gameobject of the given entry
+	// at (x, y, z, o) on the summoner's map/instance and returns its packed
+	// GUID. Eluna CreatureMethods::SummonGameObject signature
+	// (entry, x, y, z, o, respawnTime); respawnTime is seconds, default 0.
+	// A missing template logs and returns nil (C++ TC_LOG_ERROR + null).
+	// All-zero coords fall back to a close point at the summoner
+	// (Object.cpp:2095-2099 -> GetClosePoint(combatReach) = summoner
+	// position offset by combat reach in facing direction; the
+	// collision/ground folds have no Go model, documented). The summon
+	// type is the C++ default GO_SUMMON_TIMED_OR_CORPSE_DESPAWN: a positive
+	// respawnTime despawns the object when it elapses (time.AfterFunc, the
+	// gobject-add-temp precedent; the respawn scheduler is unmodeled), 0
+	// persists. The summoner-GO tracking leg (Unit::AddGameObject, Unit.cpp)
+	// has no Lua-visible effect — Go carries OwnerGUID on the dyn state,
+	// which is what the instance hooks and rituals read.
+	// spawnDynamicGameObject broadcasts the create block to the map/instance
+	// and fires the GO-ADD + instance-GO-CREATE hooks, twinning
+	// map->AddToMap (Object.cpp:2089).
+	methods["SummonGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		var respawnSecs uint32
+		if len(args) > 5 {
+			if respawnSecs, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+		}
+		if s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{nil}, nil
+		}
+		tmpl, err := gobjectTemplateByEntry(ctx, s.WorldStore.DB, entry)
+		if err != nil || tmpl == nil {
+			return []any{nil}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
+		sx, sy, sz, so := motion.X, motion.Y, motion.Z, motion.Orientation
+		reach := float64(motion.CombatReach)
+		s.motionMu.Unlock()
+		if x == 0 && y == 0 && z == 0 {
+			x = sx + float32(reach*math.Cos(float64(so)))
+			y = sy + float32(reach*math.Sin(float64(so)))
+			z, o = sz, so
+		}
+		lowGUID := s.nextDynamicGameObjectLowGUID()
+		newGUID := gameObjectGUID(lowGUID, entry)
+		size := tmpl.size
+		if size <= 0 {
+			size = 1.0
+		}
+		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+		if respawnSecs > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(respawnSecs)*time.Second, func() {
+				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+		s.spawnDynamicGameObject(dyn)
+		return []any{newGUID}, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id
