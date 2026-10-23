@@ -219,14 +219,18 @@ local function onEnfeeble(creature, guid)
     if st == nil or st.phase == PHASE_THREE then
         return
     end
-    -- C++ EnfeebleHealthEffect: threat-list players except the tank; the
-    -- tank is identified via GetVictim since there is no threat model.
+    -- C++ EnfeebleHealthEffect (boss_prince_malchezaar.cpp:313-335):
+    -- threat-list players except the tank; the tank is identified via
+    -- GetVictim. creature:GetAITargets() is the bridged threat list
+    -- (lua_creature_events.go), replacing the retired alivePlayers
+    -- instance approx 2026-10-23.
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, p in ipairs(alivePlayers(creature)) do
-        if p:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and unit:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = unit
         end
     end
     -- C++ trims to 5 by erasing random entries.

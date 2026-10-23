@@ -91,8 +91,13 @@
 -- C++-exact) DoCast(target, SPELL_CONFLAGRATION 37018),
 -- else DoCastVictim. The arcane explosion arm (5000 init
 -- then 4000+rand()%2000, fired only when a threat-list
--- victim is in melee range) is unmodeled — no threat-list /
--- melee-range bridge (thorngrin flame-buffet precedent). The
+-- victim is in melee range): creature:GetAITargets() is the
+-- bridged threat list (lua_creature_events.go); melee range
+-- is the 5-yd GetDistance stand-in (venoxis/gruul convention).
+-- GetAITargets is threat-SORTED while C++ iterates the list
+-- unsorted, so a first-match pick may name a different melee
+-- victim than C++ — documented delta, same class as the
+-- putricide GetAITargets retarget. The
 -- AttackStart MoveChase(CAPERNIAN_DISTANCE 20.0f) arm has no
 -- movement bridge — unmodeled. Capernian deals no melee
 -- damage (no DoMeleeAttackIfReady in C++ — C++-exact).
@@ -146,6 +151,7 @@ local SPELL_PSYCHIC_BLOW = 10689
 local SPELL_BELLOWING_ROAR = 40636
 local SPELL_CAPERNIAN_FIREBALL = 36971
 local SPELL_CONFLAGRATION = 37018
+local SPELL_ARCANE_EXPLOSION = 36970 -- boss_kaelthas.cpp:158 (capernian)
 local SPELL_BOMB = 37036
 local SPELL_REMOTE_TOY = 37027
 
@@ -372,10 +378,32 @@ local function capernianTick(creature, guid)
     else
         st.conflagration = st.conflagration - 1000
     end
+
+    -- 3. Arcane explosion arm (boss_kaelthas.cpp:1141-1160): 5000 init
+    -- then 4000+rand()%2000 re-arm (C++-exact); scan the threat list for
+    -- the first victim in melee range and DoCast non-triggered
+    -- SPELL_ARCANE_EXPLOSION (36970) on it; no cast when nobody is in
+    -- range. Melee range is the 5-yd GetDistance stand-in (venoxis/gruul
+    -- convention).
+    if st.arcaneExplosion <= 1000 then
+        local target = nil
+        for _, unit in ipairs(creature:GetAITargets()) do
+            if creature:GetDistance(unit) <= 5 then
+                target = unit
+                break
+            end
+        end
+        if target ~= nil then
+            creature:CastSpell(target, SPELL_ARCANE_EXPLOSION)
+        end
+        st.arcaneExplosion = 4000 + math.random(0, 1999)
+    else
+        st.arcaneExplosion = st.arcaneExplosion - 1000
+    end
 end
 
 -- C++ ctor / Initialize() values: fireball 2000 /
--- conflagration 20000 / arcane explosion 5000 (unmodeled) /
+-- conflagration 20000 / arcane explosion 5000 (ported 2026-10-23) /
 -- Yell 2000 (no yell arm — dead timer). The C++
 -- JustEngagedWith talks SAY_CAPERNIAN_AGGRO (the AttackStart
 -- MoveChase(CAPERNIAN_DISTANCE) arm has no movement bridge
@@ -387,6 +415,7 @@ RegisterCreatureEvent(ENTRY_CAPERNIAN, 1, function(_, creature)
     combatStates[guid] = {
         fireball = 2000,
         conflagration = 20000,
+        arcaneExplosion = 5000,
     }
     creature:Talk(0)
     combatTimers[guid] = CreateLuaEvent(function()

@@ -325,13 +325,16 @@ local function vashjTick(creature, guid)
             st.taintedElemental = 50000
         end
 
-        -- CheckTimer: if nobody is in melee range, Shoot/Multishot
-        -- (the C++ threat-list scan has no bridge — the 5-yd
-        -- GetDistance stand-in is the venoxis/gruul convention).
+        -- CheckTimer (boss_lady_vashj.cpp:438-448): if nobody on the
+        -- threat list is in melee range, Shoot/Multishot.
+        -- creature:GetAITargets() is the bridged threat list
+        -- (lua_creature_events.go); melee range is the 5-yd GetDistance
+        -- stand-in (venoxis/gruul convention), replacing the retired
+        -- "no threat bridge" instance-player approx 2026-10-23.
         if st.check <= 1000 then
             local inMeleeRange = false
-            for _, p in ipairs(playersInInstance(creature)) do
-                if creature:GetDistance(p) <= MELEE_RANGE then
+            for _, unit in ipairs(creature:GetAITargets()) do
+                if creature:GetDistance(unit) <= MELEE_RANGE then
                     inMeleeRange = true
                     break
                 end

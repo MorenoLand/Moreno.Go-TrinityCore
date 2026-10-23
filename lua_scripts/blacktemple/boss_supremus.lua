@@ -142,15 +142,18 @@ local function playersInInstance(creature)
     return found
 end
 
--- C++ CalculateHatefulStrikeTarget: highest-health threat-list unit
--- within melee range. No threat-list bridge — approximated by the
--- highest-health alive player in the instance within melee range.
+-- C++ CalculateHatefulStrikeTarget (boss_supremus.cpp:118-136):
+-- highest-health threat-list unit within melee range (no type filter —
+-- creatures count). creature:GetAITargets() is the bridged threat list
+-- (lua_creature_events.go); melee range is the 5-yd GetDistance stand-in
+-- (venoxis/gruul convention), replacing the retired "no threat-list
+-- bridge" instance-player approx 2026-10-23.
 local function hatefulStrikeTarget(creature)
     local best, bestHealth = nil, 0
-    for _, p in ipairs(playersInInstance(creature)) do
-        local health = p:GetHealth()
-        if health > bestHealth and creature:GetDistance(p) <= MELEE_RANGE then
-            best, bestHealth = p, health
+    for _, unit in ipairs(creature:GetAITargets()) do
+        local health = unit:GetHealth()
+        if health > bestHealth and creature:GetDistance(unit) <= MELEE_RANGE then
+            best, bestHealth = unit, health
         end
     end
     return best

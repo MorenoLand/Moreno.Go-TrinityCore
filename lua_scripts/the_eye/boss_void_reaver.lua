@@ -107,16 +107,17 @@ local function freshState()
 end
 
 -- C++ EVENT_ARCANE_ORB target leg: random alive player >18yd
--- from the boss (vashj playersInInstance convention — no
--- threat-list bridge), empty -> me->GetVictim() fallback.
+-- from the boss, drawn from the threat list (boss_void_reaver.cpp:115-125:
+-- GetUnsortedThreatList filtered TYPEID_PLAYER + IsAlive + !IsWithinDist(18)),
+-- empty -> me->GetVictim() fallback. creature:GetAITargets() is the bridged
+-- threat list (lua_creature_events.go); the old "no threat-list bridge"
+-- instance-player approx was retired 2026-10-23.
 local function pickArcaneOrbTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead()
-                and creature:GetDistance(p) > ARCANE_ORB_MIN_DIST then
-            found[#found + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) > ARCANE_ORB_MIN_DIST then
+            found[#found + 1] = unit
         end
     end
     if #found == 0 then

@@ -218,10 +218,17 @@ end
 
 local function startFlameWreath(creature, guid)
     local st = aranState[guid]
-    -- C++ FlameWreathEffect: up to 3 random alive players from the threat
-    -- list (random removal while > 3), with no range cap; no threat model on
-    -- the bridge, so the pool is the alive instance players, uncapped.
-    local pool = alivePlayers(creature)
+    -- C++ FlameWreathEffect (boss_shade_of_aran.cpp:184-203): up to 3
+    -- random alive players from the threat list (random removal while > 3),
+    -- no range cap. creature:GetAITargets() is the bridged threat list
+    -- (lua_creature_events.go), replacing the retired alivePlayers
+    -- instance approx 2026-10-23.
+    local pool = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            pool[#pool + 1] = unit
+        end
+    end
     while #pool > 3 do
         table.remove(pool, math.random(#pool))
     end
