@@ -134,13 +134,15 @@ local function playersInInstance(creature)
 end
 
 -- C++: random mana-holder from the threat list. Lua model: a
--- random alive player in the instance whose power type is
--- mana (thespia select-target + moroes mana-gate
--- precedents).
+-- random alive player in the instance with current mana > 0 —
+-- C++ zone_netherstorm.cpp:425 checks GetPower(POWER_MANA) truthy
+-- (current mana, not power type), so the moroes power-type gate was
+-- wrong for zero-mana targets. player:GetPower(type) bridged
+-- (lua_player.go:96); non-mana classes have Powers[0]==0.
 local function randomManaPlayer(creature)
     local candidates = {}
     for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetPowerType() == POWER_MANA then
+        if p:GetPower(POWER_MANA) > 0 then
             candidates[#candidates + 1] = p
         end
     end

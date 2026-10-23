@@ -450,11 +450,28 @@ end
 -- Gathios the Shatterer (22949).
 ------------------------------------------------------------------
 
--- C++ EVENT_BLESS: random friendly unit within 100 yd -> random
--- of {41450, 41451}. No friendly enumeration bridge — the cast
--- is skipped and only the {30s,45s} cycle kept (hexlord
--- friendly-scan convention).
+-- C++ EVENT_BLESS (boss_illidari_council.cpp:329-340):
+-- AnyFriendlyUnitInObjectRangeCheck(me, 100.0f) pool (alive, friendly,
+-- players included) -> uniform-random pick -> non-triggered
+-- DoCast(target, RAND(SPELL_BLESS_PROTECTION 41450,
+-- SPELL_BLESS_SPELL_WARDING 41451)); unconditional {30s,45s} re-arm.
+-- Bridged on creature:GetCreaturesInGrid (lua_creature_events.go:2164);
+-- the old "no friendly enumeration bridge" claim was stale (the
+-- 2026-10-23 sulfuron precedent). Pool is the 4 council members in
+-- practice (players are hostile to Gathios); Veras's vanish-effect
+-- creature is DB-side with no C++ constant — out of reach.
 local function gathiosBless(creature, guid)
+    local pool = {}
+    for _, entry in ipairs(COUNCIL_ENTRIES) do
+        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 100.0)) do
+            if not member:IsDead() then
+                pool[#pool + 1] = member
+            end
+        end
+    end
+    if #pool > 0 then
+        creature:CastSpell(pool[math.random(#pool)], Blesses[math.random(2)])
+    end
     schedule(guid, "gathios_bless", math.random(30000, 45000), function()
         gathiosBless(creature, guid)
     end)

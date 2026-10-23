@@ -144,9 +144,12 @@
 -- out: IsHeroic() is bridged but false for 25N, which the gate passes,
 -- so no exact difficulty bridge; the list also carries the
 -- -SPELL_DOMINATE_MIND aura exclusion); SummonWaveP1 /
--- Shadow Bolt / DoImproveCultist scheduler tasks with
+-- Shadow Bolt scheduler tasks with
 -- Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12) ride
--- summon / random-target / cross-creature machines (no bridge); the
+-- summon / random-target machines (no bridge); the DoImproveCultist
+-- task is PORTED 2026-10-23 (onImproveCultist: GetCreaturesInGrid pool,
+-- cross-creature CastSpell + triggered flag, Talk — the "no
+-- friendly/cross-creature bridge" claim was stale).
 -- CheckRequiredBosses / EnterEvadeMode / instance->DoCastSpellOnPlayers
 -- / instance->SetBossState legs have no instance bridge (the
 -- DoZoneInCombat :293 leg is PORTED in the event-1 handler — live
@@ -205,10 +208,11 @@
 -- no-SpellScript-bridge queue.
 -- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
 -- queue (the pit_of_saron cavern-triggers precedent).
--- All 19 Talk() calls in the file accounted for (19 = ported (7): lady
+-- All 19 Talk() calls in the file accounted for (19 = ported (9): lady
 -- aggro 7 + berserk 15 + phase-2 8 + emote 9 + kill 14 + death 16 +
--- darnavan aggro 0; documented-only (12): intro 0-6 (7) + dominate 10
--- + dark 11/12 (2) + animate-dead 13 (2) + darnavan rescued 1 (1)).
+-- dark empowerment 11 + dark transformation 12 +
+-- darnavan aggro 0; documented-only (10): intro 0-6 (7) + dominate 10
+-- + animate-dead 13 (2) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
 local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
@@ -227,6 +231,8 @@ local SAY_BERSERK = 15
 local SAY_PHASE_2 = 8 -- boss_lady_deathwhisper.cpp:43
 local EMOTE_PHASE_2 = 9 -- :44
 local SAY_DARNAVAN_AGGRO = 0
+local SAY_DARK_EMPOWERMENT = 11 -- boss_lady_deathwhisper.cpp:46
+local SAY_DARK_TRANSFORMATION = 12 -- boss_lady_deathwhisper.cpp:47
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_MANA_BARRIER = 70842
@@ -268,6 +274,10 @@ local SPELL_SUNDER_ARMOR = 65936
 local SPELL_CHARGE = 65927 -- :901 DoCastVictim, non-triggered
 
 local timers = {}
+
+-- C++ _cultistQueue removal latch (DoImproveCultist :564-565): GUIDs
+-- already improved are never re-picked; per-boss-GUID.
+local improvedCultists = {}
 
 -- C++ _phase (PHASE_ONE=2 / PHASE_TWO=3, :141-142); Lua-side latch for
 -- the event-9 phase-2 transition (loken event-9 precedent).
@@ -342,6 +352,44 @@ local function onDeathAndDecay(creature, guid)
     end
     schedule(guid, "deathanddecay", {22000, 30000}, function()
         onDeathAndDecay(creature, guid)
+    end)
+end
+
+-- C++ :331-334 phase-ONE only (GROUP_ONE, cancelled at the phase
+-- transition :419): DoImproveCultist (:559-577); init 15s, unconditional
+-- 25s re-arm. Bridges: creature:GetCreaturesInGrid
+-- (lua_creature_events.go:2164) for the pool, creature:CastSpell with a
+-- target + triggered flag (:226), creature:Talk. The C++ _cultistQueue is
+-- summon-membership-exact; the Lua twin pools alive non-improved cult
+-- adds in 80 yd (all 7 fixed summon spots are within ~75 yd of the
+-- boss), the closest live-bridge stand-in.
+local function onImproveCultist(creature, guid)
+    local improved = improvedCultists[guid] or {}
+    local pool = {}
+    for _, entry in ipairs({ ENTRY_CULT_FANATIC, ENTRY_CULT_ADHERENT }) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 80.0)) do
+            if not add:IsDead() and not improved[add:GetGUID()] then
+                pool[#pool + 1] = add
+            end
+        end
+    end
+    if #pool > 0 then
+        -- C++ :564-565 uniform pick + removal from the queue; Lua latch.
+        local cultist = pool[math.random(#pool)]
+        improved[cultist:GetGUID()] = true
+        improvedCultists[guid] = improved
+        -- C++ :571-575: RAND(0,1) martyrdom vs triggered
+        -- transformation (fanatic) / empowerment (adherent) + Talk.
+        if math.random(2) == 1 then
+            creature:CastSpell(cultist, SPELL_DARK_MARTYRDOM_T)
+        else
+            local fanatic = cultist:GetEntry() == ENTRY_CULT_FANATIC
+            creature:CastSpell(cultist, fanatic and SPELL_DARK_TRANSFORMATION_T or SPELL_DARK_EMPOWERMENT_T, true)
+            creature:Talk(fanatic and SAY_DARK_TRANSFORMATION or SAY_DARK_EMPOWERMENT)
+        end
+    end
+    schedule(guid, "improve", 25000, function()
+        onImproveCultist(creature, guid)
     end)
 end
 
@@ -427,6 +475,11 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
             RemoveEventById(per["shadowbolt"])
             per["shadowbolt"] = nil
         end
+        -- C++ CancelGroup(GROUP_ONE) also kills the DoImproveCultist arm.
+        if per and per["improve"] then
+            RemoveEventById(per["improve"])
+            per["improve"] = nil
+        end
         schedule(guid, "frostbolt", 12000, function()
             frostboltTick(creature, guid)
         end)
@@ -463,6 +516,7 @@ end
 local function deathwhisperJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    improvedCultists[guid] = {}
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
     creature:SetCombatPulseDelay(5) -- boss_lady_deathwhisper.cpp:291 (JustEngagedWith arm 2; the setActive leg still has no bridge)
     creature:DoZoneInCombat() -- boss_lady_deathwhisper.cpp:293 (JustEngagedWith arm 3; bridge live engine/world/lua_creature_events.go, 2026-10-23)
@@ -478,17 +532,20 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     schedule(guid, "deathanddecay", 17000, function() onDeathAndDecay(creature, guid) end)
     schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)
+    schedule(guid, "improve", 15000, function() onImproveCultist(creature, guid) end)
 end
 
 local function deathwhisperLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
 end
 
 local function deathwhisperReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
     -- C++ Reset() (:226): unconditional non-triggered self-cast of the
     -- phase-1 channeling aura (removed on engage via
@@ -521,6 +578,7 @@ end
 -- deathanddecay + (phase-1) shadowbolt arms from firing on the corpse.
 local function deathwhisperJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    improvedCultists[creature:GetGUID()] = nil
     creature:Talk(SAY_DEATH)
 end
 
