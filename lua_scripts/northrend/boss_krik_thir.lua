@@ -26,6 +26,12 @@
 -- EVENT_SWARM — DoCastAOE(SPELL_SWARM 52440) self-cast +
 -- Talk(SAY_SWARM 3), 5s init, no repeat (C++ does not reschedule;
 -- one-shot timer).
+-- EVENT_ANUBAR_CHARGE — DoCast(SelectTarget(Random, 0, 100.0f,
+-- true), SPELL_CHARGE 52538) via randomPlayer, 6-8s init, 20-25s repeat
+-- (2026-10-23: previously missed — never ported nor documented).
+-- EVENT_BACKSTAB — DoCastVictim(SPELL_BACKSTAB 52540) gated on
+-- victim->isInBack(me) via the new event-surface creature:IsInBack
+-- bridge (lua_creature_events.go), 7-9s init, 10-13s repeat.
 -- Unmodeled (no bridges — documented, not wired):
 -- The passive pre-fight model — Reset leg SetReactState(REACT_PASSIVE)
 -- (SetReactState IS bridged — frozen_core precedent,
@@ -109,8 +115,9 @@
 -- EVENT_ANUBAR_CHARGE behind the random-
 -- target SelectTarget bridge + SpellHitTarget(CHARGE 52538) ->
 -- DoCast(unitTarget, FIXATE_TRIGGER 52536) behind event-15 +
--- EVENT_BACKSTAB DoCastVictim(52540) gated on victim->isInBack (no
--- positional-facing bridge); shadowcaster EVENT_SHADOW_NOVA DoCastVictim
+-- EVENT_BACKSTAB DoCastVictim(52540) gated on victim->isInBack
+-- (creature:IsInBack now bridged on the event surface — skirmisher stays
+-- out on entry-blocked grounds, not bridge grounds); shadowcaster EVENT_SHADOW_NOVA DoCastVictim
 -- (52535) 10-14s init, 10-16s repeat (EVENT_SHADOW_BOLT 52534 behind the
 -- random-target SelectTarget bridge); skittering_swarmer InitializeAI
 -- (instance->GetCreature(DATA_KRIKTHIR)->getAttackerForHelper()
@@ -145,6 +152,8 @@ local SPELL_MIND_FLAY = 52586
 local SPELL_SWARM = 52440
 local SPELL_FRENZY = 28747
 local SPELL_CURSE_OF_FATIGUE = 52592
+local SPELL_BACKSTAB = 52540
+local SPELL_CHARGE = 52538
 
 local timers = {}
 
@@ -168,6 +177,24 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- SelectTarget(Random, 0, 100.0f, true) bridge: randomPlayer is the in-tree
+-- bridge (faerlina / anomalus / eck precedents).
+local function randomPlayer(creature)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_MIND_FLAY: DoCastVictim; randtime(1s,3s) init, 9-11s repeat.
@@ -226,6 +253,32 @@ local function krikThirDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ EVENT_ANUBAR_CHARGE: DoCast(SelectTarget(Random, 0, 100.0f,
+-- true), SPELL_CHARGE 52538), 6-8s init, 20-25s repeat (previously missed:
+-- never ported nor header-documented).
+local function chargeTick(creature, guid)
+    local target = randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_CHARGE)
+    end
+    schedule(guid, "charge", math.random(20000, 25000), function()
+        chargeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BACKSTAB: DoCastVictim(SPELL_BACKSTAB 52540) gated on
+-- victim->isInBack(me) (creature:IsInBack bridge, event-handler surface);
+-- randtime(7s,9s) init, 10-13s repeat.
+local function backstabTick(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and creature:IsInBack(victim) then
+        creature:CastSpell(nil, SPELL_BACKSTAB)
+    end
+    schedule(guid, "backstab", math.random(10000, 13000), function()
+        backstabTick(creature, guid)
+    end)
+end
+
 local function krikThirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -234,6 +287,12 @@ local function krikThirEnterCombat(event, creature, target)
     end)
     schedule(guid, "swarm", 5000, function()
         swarmTick(creature)
+    end)
+    schedule(guid, "charge", math.random(6000, 8000), function()
+        chargeTick(creature, guid)
+    end)
+    schedule(guid, "backstab", math.random(7000, 9000), function()
+        backstabTick(creature, guid)
     end)
 end
 

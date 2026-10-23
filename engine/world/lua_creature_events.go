@@ -20,6 +20,37 @@ import (
 // The generic object methods (GetName, GetEntry, GetGUID, GetHealth,
 // GetMaxHealth, GetLevel, GetX/Y/Z, IsAlive, IsDead, ...) read these fields,
 // so Eluna-style handlers get the standard read surface for free.
+
+// backArcTarget resolves the target of the creature IsInBack bridge: either
+// a Lua object with X/Y/GUID fields (a creature/player object, e.g. from
+// GetVictim) or raw x, y numbers — the event-surface twin of luaAngleTarget
+// in lua_objects.go.
+func backArcTarget(args []any) (x, y float32, guid uint64, ok bool) {
+	if len(args) > 0 {
+		if obj, isObj := args[0].(*scripting.Object); isObj && obj != nil {
+			if fx, found := objectFloat32Field(obj, "X"); found {
+				if fy, found := objectFloat32Field(obj, "Y"); found {
+					g, _ := objectUint64Field(obj, "GUID")
+					return fx, fy, g, true
+				}
+			}
+			return 0, 0, 0, false
+		}
+	}
+	if len(args) < 2 {
+		return 0, 0, 0, false
+	}
+	x, err := luaFloat32Arg(args, 0)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	y, err = luaFloat32Arg(args, 1)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return x, y, 0, true
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -57,6 +88,30 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		inCombat := motion.InCombat
 		s.motionMu.Unlock()
 		return []any{inCombat}, nil
+	}
+	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
+	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420), the event-surface
+	// twin of the session bridge (lua_objects.go:477-496); Eluna's arc
+	// defaults to pi. The target is a Lua object with X/Y fields
+	// (creature:GetVictim() returns one — the backstab gate pattern) or raw
+	// x, y numbers; self is never in its own back arc.
+	methods["IsInBack"] = func(_ context.Context, args []any) ([]any, error) {
+		tx, ty, targetGUID, ok := backArcTarget(args)
+		if !ok {
+			return nil, fmt.Errorf("target is required")
+		}
+		if targetGUID != 0 && targetGUID == motion.GUID {
+			return []any{false}, nil // self is always in the frontal arc, never behind it
+		}
+		arc := float64(math.Pi)
+		if len(args) > 1 {
+			a, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			arc = float64(a)
+		}
+		return []any{!hasInArc(motion.Orientation, motion.X, motion.Y, tx, ty, 2*math.Pi-arc)}, nil
 	}
 	// IsCharmed reports the engine's charm state (creaturemotion.go
 	// charmCreatureFaction/uncharmCreature, the Unit::SetCharmedBy /

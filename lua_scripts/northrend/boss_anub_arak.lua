@@ -137,10 +137,11 @@
 -- 6s init, 12s repeat; venomancer EVENT Poison Bolt DoCastVictim(
 -- 53617) 5s init, 2-3s repeat; assassin JustEngagedWith backstab
 -- machine (6s init / 6s repeat via task.Repeat(), DoCastVictim(
--- SPELL_BACKSTAB 52540) gated on victim->isInBack(me) — no
--- positional-facing bridge on the event-handler surface (IsInBack is
--- session-bound-only, lua_objects.go:467) — krik_thir skirmisher
--- precedent). Additionally unbridged:
+-- SPELL_BACKSTAB 52540) gated on victim->isInBack(me) — creature:IsInBack
+-- now bridged on the event surface (lua_creature_events.go; krik_thir
+-- backstab ported 2026-10-23) — the assassin stays out on
+-- entry-blocked grounds (no C++ NPC constant, summon DB-side).
+-- Additionally unbridged:
 -- the pet-template InitializeAI leg (cross-AI SetGUID(GUID_TYPE_PET)
 -- -> JustSummoned — SetGUID bridge absent; GetCreature(DATA_ANUBARAK)
 -- instance legs — instance model absent), JustDied
