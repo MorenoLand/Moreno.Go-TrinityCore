@@ -132,8 +132,10 @@
 -- npc_unleashed_dark (34628) / npc_unleashed_light (34630) —
 -- entry-unverifiable: Reset SetFlag(NON_ATTACKABLE | NOT_SELECTABLE)
 -- + SetReactState(REACT_PASSIVE) + SetDisableGravity(true) +
--- SetCanFly(true) + SetCombatMovement(false) + MovePoint (no flag /
--- react / gravity / fly / combat-movement / motion bridges);
+-- SetCanFly(true) (BRIDGED 2026-10-23, creature:SetCanFly — arm
+-- stays out behind the unported add AI, unregistered + motion machine)
+-- + SetCombatMovement(false) + MovePoint (no flag /
+-- react / gravity / combat-movement / motion bridges);
 -- UpdateAI: SelectNearestPlayer(3.0f) -> DoCastAOE(Unleashed Dark
 -- 65808-helper RAID_MODE(65808,67172,67173,67174) / Unleashed Light
 -- 65795-helper RAID_MODE(65795,67238,67239,67240)) + MoveIdle +

@@ -33,8 +33,9 @@
 --   GetHealthPct() < 70 check): phase AIR -> GROUND,
 --   SetCombatMovement(true) (bridged, boss_ayamiss.cpp:166),
 --   cancel POISON_STINGER, schedule LASH (5-8s) + TRASH (3-6s).
---   The motion legs (MovePoint to victim, SetCanFly) have no bridge —
---   documented below; the SetCombatMovement(false) Reset arm PORTED
+--   The motion leg (MovePoint to victim) has no bridge —
+--   documented below; SetCanFly(true/false) PORTED 2026-10-23
+--   (creature:SetCanFly, lua_creature_events.go); the SetCombatMovement(false) Reset arm PORTED
 --   2026-10-22 (creature:SetCombatMovement, lua_creature_events.go —
 --   C++ boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
 --   (creature:ClearThreatList, bridged lua_objects.go:389).
@@ -45,9 +46,10 @@
 --   FRENZY 8269, Talk(EMOTE_FRENZY 0), latched (kurinnaxx enrage
 --   convention).
 -- Unmodeled (documented-only, no bridges):
--- - Motion: SetCanFly/MovePoint(POINT_AIR) on engage, MovePoint
+-- - Motion: MovePoint(POINT_AIR) on engage, MovePoint
 --   (POINT_GROUND) at phase change, UNIT_STATE_ROOT via MovementInform
---   — no Lua bridge for motion or unit states. Engage's
+--   — no Lua bridge for motion or unit states (SetCanFly PORTED
+--   2026-10-23, creature:SetCanFly). Engage's
 --   SetDisableGravity(true) ports via the creature:SetDisableGravity
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
@@ -188,10 +190,11 @@ local function checkGroundPhase(creature, guid, damage)
         state.phase = PHASE_GROUND
         -- C++ ground-phase arm (boss_ayamiss.cpp:162-176): _phase =
         -- PHASE_GROUND -> SetCombatMovement(true) (:166) ->
-        -- SetCanFly(false) (no bridge) -> MovePoint(POINT_GROUND,
+        -- SetCanFly(false) (PORTED 2026-10-23, below) -> MovePoint(POINT_GROUND,
         -- victim pos) (no movement bridge) -> ResetThreatList() ->
         -- schedule LASH/TRASH -> cancel POISON_STINGER.
         creature:SetCombatMovement(true)
+        creature:SetCanFly(false) -- C++ :166, right after SetCombatMovement
         -- C++ ground-phase leg: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no bridge" header claims were
         -- stale); the motion leg has no bridge.
@@ -247,8 +250,9 @@ local function onEnterCombat(event, creature, target)
         onParalyze(creature, guid)
     end)
     -- C++ JustEngagedWith (boss_ayamiss.cpp:140-152): schedules (above),
-    -- SetCanFly(true) (no bridge), me->SetDisableGravity(true) (:151),
+    -- SetCanFly(true) (:150), me->SetDisableGravity(true) (:151),
     -- MovePoint(POINT_AIR) (no movement bridge).
+    creature:SetCanFly(true)
     creature:SetDisableGravity(true)
 end
 

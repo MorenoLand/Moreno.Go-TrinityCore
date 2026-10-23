@@ -6434,7 +6434,9 @@ func init() {
 	// GetSummonerUnit / ToPlayer — no summoner bridge, midnight
 	// precedent); movement (MotionMaster Clear/MovePoint,
 	// GetClosePoint, UpdatePosition), visibility, SetTarget, emote,
-	// SetCanFly/SetFarVisible/setActive have no bridges; Talk(0) is a
+	// SetFarVisible/setActive have no bridges (SetCanFly IS bridged —
+	// creature:SetCanFly, lua_creature_events.go — but the whole AI is
+	// unported, so nothing here is wired); Talk(0) is a
 	// player-targeted whisper (broadcast Talk has no whisper target,
 	// hiborne-lamenter precedent); IsResurrectRequested and
 	// DisappearAndDie are unbridged. Entry is not C++-verifiable

@@ -66,10 +66,13 @@
 --   (random-target 18392), EVENT_LAIR_GUARD / EVENT_WHELP_SPAWN
 --   summons (NPC_LAIRGUARD 36561 / NPC_WHELP 11262, 90s / 500ms
 --   cadence, RAID_MODE(20,40) whelp cap) — no movement /
---   MotionMaster / summon bridges (summon STRAND list, standing).
+--   MotionMaster bridges; SummonCreature IS bridged
+--   (lua_creature_events.go) but the phase-2 flight machine that
+--   fires these summons is unreachable (summon STRAND list, standing).
 -- - JustSummoned (DoZoneInCombat, AttackStart on a random target,
 --   SummonWhelpCount, summons.Summon, lair-guard setActive /
---   SetFarVisible) — no summon bridges.
+--   SetFarVisible) — stays out behind the unreachable phase-2
+--   summon machine (SummonCreature IS bridged).
 -- - MovementInform arms (phase-2 takeoff, phase-3 landing Talk
 --   SAY_PHASE_2_TRANS (2), trigger kill, tank MoveChase) — no
 --   MovementInform / movement bridges.

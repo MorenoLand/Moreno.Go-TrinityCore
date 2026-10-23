@@ -25,8 +25,9 @@
 -- drakonids per 4s firing); at >= 42 the C++ summons Nefarian and
 -- drops Nefarius out of the fight — modeled as: SetVisible(false)
 -- (creature:SetVisible bridge, Unit.cpp:8656) + cancel all timers
--- (the drakonid/Nefarian summons have no summon bridge, see
--- deviations). The adds themselves never spawn — only the 4s
+-- (the drakonid/Nefarian summons stay out behind the unported
+-- wave machine — SummonCreature IS bridged, lua_creature_events.go,
+-- see deviations). The adds themselves never spawn — only the 4s
 -- re-arm/count cycle is kept (jeklik six-bat convention).
 -- Nefarian (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_RANDOM=0), arm shadowflame 22539 12s then 12s /
@@ -247,7 +248,8 @@ local function onNefariusFear(creature, guid)
     end)
 end
 
--- C++ EVENT_SPAWN_ADD: two drakonids per wave, no summon bridge — only
+-- C++ EVENT_SPAWN_ADD: two drakonids per wave — the wave machine is
+-- unported (SummonCreature IS bridged) — only
 -- the counting/re-arm cycle is kept; at 42 the C++ summons Nefarian
 -- and drops Nefarius out of the fight, so cancel the timers.
 local function onNefariusSpawnAdd(creature, guid)
