@@ -69,8 +69,13 @@
 -- instance model absent (standing).
 -- The _consumptionJunction latch (Initialize/Reset true; UpdateAI
 -- flips it false when GetAura(SPELL_CONSUME_BUFF_HELPER 49381 /
--- 59805)->GetStackAmount() > 9) — no aura-stack bridge; the
--- consumption-junction leg never reaches the Lua surface anyway.
+-- 59805)->GetStackAmount() > 9) — stays out NOT for lack of a bridge
+-- (creature:GetStackAmount is bridged since the emalon run,
+-- engine/world/lua_creature_events.go): the latch is write-only from
+-- Lua's perspective — its only reader is GetData
+-- (DATA_CONSUMPTION_JUNCTION 1), whose only caller is
+-- achievement_consumption_junction (no cross-AI GetData bridge).
+-- Porting the write would be dead code.
 -- GetData(DATA_CONSUMPTION_JUNCTION 1) — no cross-AI GetData bridge
 -- (its only caller is achievement_consumption_junction — see below).
 -- JustSummoned — summon->GetMotionMaster()->MovePoint(POINT_LANDING,

@@ -194,6 +194,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.removeCreatureAura(auraKey(), spell)
 		return nil, nil
 	}
+	// GetStackAmount is Aura::GetStackAmount (SpellAuras.h) for handler
+	// creatures: the stack count of the named aura, or 0 when the aura is
+	// absent (the C++ call sites null-check the Aura* first — returning 0
+	// subsumes the missing-aura leg). Only engine-applied auras
+	// (activeCreatureAuras) carry stacks; the Lua AddAura presence set
+	// (creatureAuras) is boolean-only, so a Lua-added aura reads 0.
+	methods["GetStackAmount"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		aura := s.activeCreatureAuras[key][spell]
+		s.auraMu.Unlock()
+		if aura == nil {
+			return []any{uint32(0)}, nil
+		}
+		return []any{aura.StackAmount}, nil
+	}
 	// RemoveAllAuras is Unit::RemoveAllAuras for handler creatures: the
 	// full strip via clearCreatureAuras (the evade-leg twin — timers
 	// stopped, both aura maps cleared). Freywinn's tranquility arm.

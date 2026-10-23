@@ -47,19 +47,26 @@
 -- EVENT_SHOCK (:265-268) — DoCastVictim(SPELL_SHOCK 64363) (:267,
 -- 1-arg = non-triggered) -> CastSpell(nil, 64363); re-arm 20s
 -- (:268).
--- DOCUMENTED DEVIATIONS: none on the ported arms — all four boss
+-- EVENT_OVERCHARGE (:145-157) — PORTED (overchargeTick, 45s seed in
+-- JustEngagedWith :115): random alive minion via GetCreaturesInGrid
+-- (33998, 100y) + IsDead filter (C++ pick order unspecified);
+-- minion->CastSpell(me, SPELL_OVERCHARGED 64217, true) (:151) ->
+-- minion:CastSpell(creature, 64217, true) — C++-exact INCLUDING the
+-- quirk that :151 targets `me` (Emalon) rather than the minion (see
+-- DOCUMENTED-ONLY below); minion->SetFullHealth() (:152) ->
+-- minion:SetHealth(minion:GetMaxHealth()); Talk(EMOTE_OVERCHARGE 0)
+-- (:153) -> creature:Talk(0); re-arm 45s only inside the IsAlive gate
+-- (:154), C++-exact.
+-- DOCUMENTED DEVIATIONS: none on the ported arms — all five boss
 -- timers and the minion shock timer carry C++-exact timing and
 -- targeting. The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates
 -- (:129, :166) and DoMeleeAttackIfReady() (:170) have no bridge —
 -- casts fire unconditionally on their timers (the hodir
--- UNIT_STATE_CASTING precedent).
+-- UNIT_STATE_CASTING precedent). Minion pick: C++ draws from the
+-- BossAI summons list (dead minions included, then IsAlive-gated);
+-- Lua draws from the live grid list — same outcome when all four
+-- minions are alive, benign delta otherwise.
 -- DOCUMENTED-ONLY (in this header; entries 33993 / 33998):
--- EVENT_OVERCHARGE (:145-157) — random alive minion picked from the
--- boss's BossAI summons list (ObjectAccessor::GetCreature on
--- SelectRandomContainerElement — no summons-list bridge, even though
--- the minions themselves now materialize on Reset); the
--- minion->CastSpell(me, SPELL_OVERCHARGED, true) + SetFullHealth()
--- legs and the Talk (EMOTE_OVERCHARGE 0) riding it all stay out.
 -- boss_emalonAI::Reset (:85-91) — four SummonCreature
 -- (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN) at TempestMinions[]
 -- positions PORTED this run (emalonReset, event 23 — the old "no
@@ -72,25 +79,25 @@
 -- GetGuidData(DATA_EMALON) respawn leg (Emalon re-summons the minion,
 -- Talk EMOTE_MINION_RESPAWN 1): instance-script bridge missing.
 -- npc_tempest_minionAI::UpdateAI overcharge self-stack loop
--- (:242-263) — GetAura stack count (creature:HasAura is
--- boolean-only), DoCast(me, SPELL_OVERCHARGED) every 2s,
--- SPELL_OVERCHARGED_BLAST 64219 at 10 stacks: no GetAura stack-count
--- bridge.
--- SetFullHealth (:152) and DespawnOrUnsummon (:259): the minions now
--- exist (Reset summons, above), but the 10-stack trigger needs
--- GetAura stack count (HasAura is boolean-only) — SetHealth/Despawn
--- bridges exist but the arms stay out behind the unbridged
--- stack-count gate.
+-- (:242-263) — STAYS OUT (not for the old "no stack-count bridge"
+-- reason: creature:GetStackAmount is bridged since this run,
+-- engine/world/lua_creature_events.go). The seeding arm :151 casts
+-- SPELL_OVERCHARGED on `me` (Emalon), never on the minion, so the
+-- minion's own GetAura(SPELL_OVERCHARGED) can never be non-nil in
+-- this tree — the :242-263 loop is inert in C++ too. Porting it
+-- would add dead code; the quirk is kept 1:1 in overchargeTick.
 -- DoZoneInCombat() (:221): no bridge.
 
 local ENTRY_EMALON = 33993
 local ENTRY_TEMPEST_MINION = 33998
 
 local EMOTE_BERSERK = 2
+local EMOTE_OVERCHARGE = 0
 
 local SPELL_CHAIN_LIGHTNING = 64213
 local SPELL_LIGHTNING_NOVA = 64216
 local SPELL_BERSERK = 26662
+local SPELL_OVERCHARGED = 64217
 
 local SPELL_SHOCK = 64363
 
@@ -185,9 +192,35 @@ local function emalonReset(event, creature)
     end
 end
 
+-- C++ EVENT_OVERCHARGE (boss_emalon.cpp:145-157): every 45s a random
+-- minion is picked from the BossAI summons list and, if alive:
+-- minion->CastSpell(me, SPELL_OVERCHARGED 64217, true) (:151),
+-- minion->SetFullHealth() (:152), Talk(EMOTE_OVERCHARGE 0) (:153);
+-- re-arm 45s (:154) sits INSIDE the IsAlive gate, so a dead pick (or an
+-- empty list) stops the event. C++ QUIRK (kept 1:1): :151 targets `me`
+-- (Emalon), not the minion — against the design (the buff belongs on
+-- the minion) and against the minion's own :242-263 self-stack loop,
+-- which reads the MINION's aura and is therefore inert in this tree
+-- (documented stay-out below). Minion picked via GetCreaturesInGrid
+-- (33998) + alive filter; C++ pick order is unspecified (benign).
+-- SetFullHealth() = SetHealth(GetMaxHealth()) (both bridged).
+local function overchargeTick(creature, guid)
+    local minions = creature:GetCreaturesInGrid(ENTRY_TEMPEST_MINION, 100)
+    if #minions > 0 then
+        local minion = minions[math.random(#minions)]
+        if not minion:IsDead() then
+            minion:CastSpell(creature, SPELL_OVERCHARGED, true)
+            minion:SetHealth(minion:GetMaxHealth())
+            creature:Talk(EMOTE_OVERCHARGE)
+            schedule(guid, "overcharge", 45000, function()
+                overchargeTick(creature, guid)
+            end)
+        end
+    end
+end
+
 -- C++ boss_emalonAI::JustEngagedWith (:102-120): the ScheduleEvent
--- calls seed the combat timers below (5s / 40s / 6min; EVENT_OVERCHARGE
--- 45s stays out — documented in the header).
+-- calls seed the combat timers below (5s / 40s / 6min / 45s).
 local function emalonEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -199,6 +232,9 @@ local function emalonEnterCombat(event, creature)
     end)
     schedule(guid, "berserk", 360000, function()
         emalonBerserkTick(creature, guid)
+    end)
+    schedule(guid, "overcharge", 45000, function()
+        overchargeTick(creature, guid)
     end)
 end
 
