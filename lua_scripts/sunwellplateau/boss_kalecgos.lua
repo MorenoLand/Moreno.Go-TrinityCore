@@ -66,7 +66,10 @@
 -- self -> damage rewritten to 0 (C++ damage = 0, C++-exact).
 -- OnTargetDied(3): player victim + 50% roll -> Talk(SAY_EVIL_SLAY).
 -- OnLeaveCombat(2)/OnReset(23): the EnterEvadeMode instance arms
--- (SendEncounterUnit disengage, DoRemoveAurasDueToSpellOnPlayers
+-- (SendEncounterUnit disengage, DoRemoveAurasDueToSpellOnPlayers(
+-- SPELL_SPECTRAL_REALM_AURA 46021, true, true — the
+-- includePets/includeControlled legs have no pet/controlled
+-- iteration bridge),
 -- spectral-realm, summons.DespawnAll, DespawnPortals, the sathrovarr
 -- _DespawnAtEvade relay and the outro-phase early return) have no
 -- bridges — modeled as timer/state cleanup only.
@@ -105,7 +108,9 @@
 -- damage rewritten to 0 (C++-exact). OnTargetDied(3): player victim
 -- -> Talk(SAY_SATH_SLAY); the killed-kalecgos-human evade relay has
 -- no bridge — skipped. OnDied(4): Talk(SAY_SATH_DEATH); the
--- DoRemoveAurasDueToSpellOnPlayers arm and the kalecgos ACTION_
+-- DoRemoveAurasDueToSpellOnPlayers arm (SPELL_SPECTRAL_REALM_AURA
+-- 46021, true, true — the includePets/includeControlled legs have no
+-- pet/controlled iteration bridge) and the kalecgos ACTION_
 -- START_OUTRO relay have no bridges — skipped. OnSpellHit(14): hit
 -- by 46733 (tap check damage) -> triggered self-cast teleport back
 -- 46020; the Unit::Kill(caster) arm has no kill bridge — skipped.
@@ -564,7 +569,9 @@ local function sathrovarrResetState(guid)
 end
 
 -- C++ JustDied: Talk(SAY_SATH_DEATH). The
--- DoRemoveAurasDueToSpellOnPlayers arm and the kalecgos ACTION_
+-- DoRemoveAurasDueToSpellOnPlayers arm (SPELL_SPECTRAL_REALM_AURA
+-- 46021, true, true — the includePets/includeControlled legs have no
+-- pet/controlled iteration bridge) and the kalecgos ACTION_
 -- START_OUTRO relay have no bridges — skipped.
 local function sathrovarrDied(event, creature, killer)
     creature:Talk(SAY_SATH_DEATH)

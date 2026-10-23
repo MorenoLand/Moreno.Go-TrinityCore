@@ -263,9 +263,11 @@ lokenResetMod = function(guid)
 end
 
 -- C++ JustDied: Talk(DEATH) + _JustDied() +
--- DoRemoveAurasDueToSpellOnPlayers(PULSING_SHOCKWAVE_AURA 59414) — Talk
--- and the player-strip both ported (moroes precedent: no dead-player
--- filter, C++ iterates every instance player).
+-- DoRemoveAurasDueToSpellOnPlayers(PULSING_SHOCKWAVE_AURA 59414,
+-- true, true) — Talk and the player-strip both ported (moroes
+-- precedent: no dead-player filter, C++ iterates every instance
+-- player); the includePets/includeControlled legs have no
+-- pet/controlled iteration bridge and stay unmodeled.
 local function lokenDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()

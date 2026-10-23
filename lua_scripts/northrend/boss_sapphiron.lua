@@ -68,8 +68,10 @@
 -- DATA_HAD_SAPPHIRON_BIRTH) legs + visibility/flag/react-state legs —
 -- instance-blocked (no instance bridge; flag/react-state ARE bridged in
 -- isolation).
--- Reset — flight-phase DoRemoveAurasDueToSpellOnPlayers(ICEBOLT)
--- (instance model), SetReactState / hover legs (hover-blocked; the
+-- Reset — flight-phase DoRemoveAurasDueToSpellOnPlayers(ICEBOLT,
+-- true, true) (gated on the unported PHASE_FLIGHT machine AND the
+-- includePets/includeControlled legs have no pet/controlled
+-- iteration bridge), SetReactState / hover legs (hover-blocked; the
 -- react-state leg is bridged in isolation) + _Reset bookkeeping.
 -- DamageTaken — air-phase death prevention (damage = health-1):
 -- the event-9 numeric-return bridge EXISTS (fireCreatureDamageTaken;
@@ -112,8 +114,10 @@
 -- phase machine has no bridge.
 -- EVENT_EXPLOSION — DoCastAOE(Frost Breath 28524 + Frost Breath
 -- Anti-Cheat 29318) 1-arg (triggered defaults false) — TWO casts, not one — +
--- instance DoRemoveAurasDueToSpellOnPlayers(ICEBOLT) — stays OUT:
--- same PHASE_FLIGHT bar + the instance-aura leg has no bridge.
+-- instance DoRemoveAurasDueToSpellOnPlayers(ICEBOLT, true, true) —
+-- stays OUT: same PHASE_FLIGHT bar + the
+-- includePets/includeControlled legs have no pet/controlled
+-- iteration bridge.
 -- EVENT_LAND — buffet DespawnOrUnsummon (cross-AI, no bridge) +
 -- hover/emote/phase legs (no hover / emote / phase bridges).
 -- EVENT_BIRTH — visible/flag/react legs (no bridges).

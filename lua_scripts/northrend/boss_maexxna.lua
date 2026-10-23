@@ -32,7 +32,9 @@
 -- i.e. self-cast (ScriptedAI::DoCast without a target casts on self).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers. The C++
 -- Reset() also runs instance->DoRemoveAurasDueToSpellOnPlayers(
--- SPELL_WEB_WRAP 28622) — no instance bridge (standing).
+-- SPELL_WEB_WRAP 28622) — PORTED (2026-10-23) via GetPlayersInWorld +
+-- mapId/instanceId filter + player:RemoveAura (the moroes precedent;
+-- the stale "no instance bridge" claim is retracted).
 -- Deliberate deviations (all await engine bridges): EVENT_WRAP
 -- (DoSummon(NPC_WEB_WRAP 16486) + wrap->AI()->SetGUID + target->
 -- MoveJump + MoveSplineInit/web-wrap aura application) — no summon /
@@ -50,6 +52,7 @@
 local SPELL_WEB_SPRAY = 29484
 local SPELL_POISON_SHOCK = 28741
 local SPELL_NECROTIC_POISON = 28776
+local SPELL_WEB_WRAP = 28622 -- boss_maexxna.cpp:30
 local SPELL_FRENZY = 54123
 local SPELL_FRENZY_HELPER_25 = 54124
 
@@ -171,6 +174,17 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (boss_maexxna.cpp:117-121): instance->
+    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_WEB_WRAP 28622) via
+    -- GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura
+    -- (the moroes precedent; the stale "no instance bridge" claim
+    -- is retracted).
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_WEB_WRAP)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

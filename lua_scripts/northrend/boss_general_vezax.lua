@@ -77,9 +77,11 @@
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
 -- JustDied (:234-239) — _JustDied() passthrough + Talk(SAY_DEATH
--- 3) + DoRemoveAurasDueToSpellOnPlayers(62692) leg — only the
--- Talk arm is bridgeable (event 4; the sjonnir JustDied-Talk
--- precedent); also wipes the surge/berserk timers.
+-- 3) + DoRemoveAurasDueToSpellOnPlayers(SPELL_AURA_OF_DESPAIR
+-- 62692, true, true) leg — only the Talk arm is bridgeable
+-- (event 4; the sjonnir JustDied-Talk precedent; the
+-- includePets/includeControlled legs have no pet/controlled
+-- iteration bridge); also wipes the surge/berserk timers.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33271):
 -- Reset / Initialize — _Reset() + shadowDodger /
@@ -351,8 +353,10 @@ local function vezaxTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied (:234-239): _JustDied() passthrough + Talk
--- (SAY_DEATH) + DoRemoveAurasDueToSpellOnPlayers(62692) — only
--- the Talk arm is bridgeable; the surge/berserk timers are wiped
+-- (SAY_DEATH) + DoRemoveAurasDueToSpellOnPlayers(SPELL_AURA_OF_
+-- DESPAIR 62692, true, true) — only the Talk arm is bridgeable;
+-- the includePets/includeControlled legs have no pet/controlled
+-- iteration bridge; the surge/berserk timers are wiped
 -- with it.
 local function vezaxDied(event, creature, killer)
     creature:Talk(SAY_DEATH)

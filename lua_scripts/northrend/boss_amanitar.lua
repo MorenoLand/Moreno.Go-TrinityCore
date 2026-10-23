@@ -60,14 +60,16 @@
 -- absent — the old "no despawn bridge (terestian precedent)" was
 -- stale: creature:Despawn() IS bridged (lua_creature_events.go:236),
 -- but the arm needs the whole summon list), instance
--- DoRemoveAurasDueToSpellOnPlayers(Mini) (instance-script model
--- absent — standing blocker), _DespawnAtEvade.
+-- DoRemoveAurasDueToSpellOnPlayers(Mini) (SPELL_MINI 57055, true,
+-- true — the includePets/includeControlled legs have no
+-- pet/controlled iteration bridge), _DespawnAtEvade.
 -- JustDied — _JustDied() instance bookkeeping only (no bridge);
 -- DoCastAOE(Remove Mushroom Power 57283) ported as self-cast
 -- (creature:CastSpell(creature, 57283) — the Go creature-cast path
 -- carries no alive-gate on the caster, so the OnDied cast is
 -- faithful); instance DoRemoveAurasDueToSpellOnPlayers(Mini)
--- (instance model absent).
+-- (SPELL_MINI 57055, true, true — the includePets/
+-- includeControlled legs have no pet/controlled iteration bridge).
 -- npc_amanitar_mushrooms — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (30391 NPC_HEALTHY_MUSHROOM / 30435 NPC_POISONOUS_MUSHROOM —
 -- ahnkahet.h kalecgos pass): zero registration. Reset leg —
@@ -321,8 +323,9 @@ end
 local function amanitarLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ EnterEvadeMode (boss_amanitar.cpp:103-109): summons.DespawnAll()
-    -- (moot — nothing modeled) + instance DoRemoveAurasDueToSpellOnPlayers
-    -- (no instance bridge) + _DespawnAtEvade() — DespawnOrUnsummon is
+    -- (moot — nothing modeled) + instance DoRemoveAurasDueToSpellOnPlayers(
+    -- SPELL_MINI 57055, true, true — the includePets/includeControlled
+    -- legs have no pet/controlled iteration bridge) + _DespawnAtEvade() — DespawnOrUnsummon is
     -- immediate at evade (ScriptedCreature.cpp:596-616); drakkari precedent.
     -- Stale "no despawn bridge" retracted.
     creature:Despawn()
@@ -330,6 +333,12 @@ end
 
 local function amanitarDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_amanitar.cpp:111-116): _JustDied() is the
+    -- cancelTimers above; DoCastAOE(SPELL_REMOVE_MUSHROOM_POWER)
+    -- ports below; instance->DoRemoveAurasDueToSpellOnPlayers(
+    -- SPELL_MINI 57055, true, true) stays out — the
+    -- includePets/includeControlled legs have no pet/controlled
+    -- iteration bridge.
     creature:CastSpell(creature, SPELL_REMOVE_MUSHROOM_POWER)
 end
 

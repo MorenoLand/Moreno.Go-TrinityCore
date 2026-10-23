@@ -54,10 +54,13 @@
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
 -- DoZoneInCombat (no instance bridge) and
 -- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) (no-DoAction
--- bridge; the krick ACTION_OUTRO precedent); JustDied legs
--- DoRemoveAurasDueToSpellOnPlayers(MUTATED_INFECTION) and
--- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — no instance /
--- DoAction bridge; JustReachedHome
+-- bridge; the krick ACTION_OUTRO precedent); JustDied leg
+-- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — no DoAction
+-- bridge; JustDied's DoRemoveAurasDueToSpellOnPlayers(
+-- MUTATED_INFECTION) is PORTED (2026-10-23) via GetPlayersInWorld +
+-- mapId/instanceId filter + player:RemoveAura (the moroes
+-- precedent — the stale "no instance bridge" claim is retracted);
+-- JustReachedHome
 -- instance->SetBossState(DATA_ROTFACE, FAIL) + SetData(
 -- DATA_OOZE_DANCE_ACHIEVEMENT) — no instance bridge; EnterEvadeMode
 -- cross-AI professor EnterEvadeMode — no bridge; JustSummoned
@@ -131,6 +134,11 @@ local SAY_DEATH = 8
 
 local SPELL_GREEN_ABOMINATION = 70001
 local SPELL_MUTATED_INFECTION = 69674
+-- MUTATED_INFECTION RAID_MODE(69674, 71224, 73022, 73023)
+-- (boss_rotface.cpp:85): only one variant can be present per instance,
+-- so the strip pool checks all four (the twin_valkyr essence-pool
+-- convention).
+local MUTATED_INFECTION_AURAS = { 69674, 71224, 73022, 73023 }
 local SPELL_VILE_GAS_TRIGGER = 72285 -- boss_rotface.cpp:82
 
 local timers = {}
@@ -241,6 +249,20 @@ end
 -- auto-cancel — the devourer/festergut death-cancel precedent).
 local function rotfaceJustDied(event, creature, killer)
     local guid = creature:GetGUID()
+    -- C++ JustDied (:141-148): instance->
+    -- DoRemoveAurasDueToSpellOnPlayers(MUTATED_INFECTION) is the
+    -- FIRST arm — via GetPlayersInWorld + mapId/instanceId filter +
+    -- player:RemoveAura (the moroes precedent; the stale "no
+    -- instance bridge" claim is retracted); the professor
+    -- DoAction(ACTION_ROTFACE_DEATH) leg has no bridge.
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            for _, aura in ipairs(MUTATED_INFECTION_AURAS) do
+                p:RemoveAura(aura)
+            end
+        end
+    end
     cancelTimers(guid)
     infection[guid] = nil
     creature:Talk(SAY_DEATH)

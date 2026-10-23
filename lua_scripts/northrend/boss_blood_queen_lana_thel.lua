@@ -47,7 +47,13 @@
 -- Is25ManRaid() — no 25-man bridge, stays out;
 -- instance->SetData(DATA_BLOOD_QUICKENING_STATE, DONE) /
 -- RewardPlayerAndGroupAtEvent / FindNearestCreature minchar legs
--- have no instance bridge.
+-- have no instance bridge. PORTED (2026-10-23): CleanAuras()
+-- (:221-233) — the ten DoRemoveAurasDueToSpellOnPlayers strips —
+-- via GetPlayersInWorld + mapId/instanceId filter +
+-- player:RemoveAura (the moroes precedent; the stale "no
+-- instance-aura bridge" claim is retracted). The :716
+-- spell_blood_queen_pact_of_the_darkfallen FilterTargets pact strip
+-- rides the SpellScript bridge gap (see below) and stays out.
 -- boss_blood_queen_lana_thel JustReachedHome — the Talk(SAY_WIPE 9) leg
 -- SetDisableGravity(false) / SetReactState(2) / Talk(SAY_WIPE 9) ported
 -- on event 24 in C++ arm order (bridges live, lua_creature_events.go);
@@ -202,6 +208,20 @@ local SPELL_SHROUD_OF_SORROW = 70986
 local SPELL_FRENZIED_BLOODTHIRST_VISUAL = 71949
 local SPELL_CLEAR_ALL_STATUS_AILMENTS = 70939
 
+-- C++ CleanAuras RAID_MODE pools (boss_blood_queen_lana_thel.cpp:94-95):
+-- only one variant can be present per instance, so the strip pool
+-- checks all four (the twin_valkyr essence-pool convention).
+local ESSENCE_OF_BLOOD_QUEEN_AURAS = { 70867, 71473, 71532, 71533 }
+local ESSENCE_OF_BLOOD_QUEEN_PLR_AURAS = { 70879, 71525, 71530, 71531 }
+local SPELL_FRENZIED_BLOODTHIRST = 70877
+local SPELL_UNCONTROLLABLE_FRENZY = 70923
+local SPELL_BLOOD_MIRROR_DAMAGE = 70821
+local SPELL_BLOOD_MIRROR_VISUAL = 71510
+local SPELL_BLOOD_MIRROR_DUMMY = 70838
+local SPELL_DELIRIOUS_SLASH = 71623
+local SPELL_PACT_OF_THE_DARKFALLEN = 71340
+local SPELL_PRESENCE_OF_THE_DARKFALLEN = 70994
+
 -- C++ boss_blood_queen_lana_thel::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:174-180) has no bridge (same
@@ -242,9 +262,47 @@ end
 
 -- C++ boss_blood_queen_lana_thel::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
+-- C++ CleanAuras (boss_blood_queen_lana_thel.cpp:221-233): the ten
+-- DoRemoveAurasDueToSpellOnPlayers strips, in C++ call order (the two
+-- RAID_MODE essence pools expand to all four variants). The
+-- instance-player set is the mapId/instanceId-filtered
+-- GetPlayersInWorld() pool (the moroes precedent) and
+-- player:RemoveAura is bridged (lua_player.go:219).
+local function cleanAuras(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local pools = {
+        ESSENCE_OF_BLOOD_QUEEN_AURAS,
+        ESSENCE_OF_BLOOD_QUEEN_PLR_AURAS,
+        { SPELL_FRENZIED_BLOODTHIRST },
+        { SPELL_UNCONTROLLABLE_FRENZY },
+        { SPELL_BLOOD_MIRROR_DAMAGE },
+        { SPELL_BLOOD_MIRROR_VISUAL },
+        { SPELL_BLOOD_MIRROR_DUMMY },
+        { SPELL_DELIRIOUS_SLASH },
+        { SPELL_PACT_OF_THE_DARKFALLEN },
+        { SPELL_PRESENCE_OF_THE_DARKFALLEN },
+    }
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            for _, pool in ipairs(pools) do
+                for _, aura in ipairs(pool) do
+                    p:RemoveAura(aura)
+                end
+            end
+        end
+    end
+end
+
 local function lanaThelJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:195-218): _JustDied() is the cancelTimers(guid)
+    -- above; the Is25ManRaid()-gated DoCastAOE(SPELL_BLOOD_INFUSION_
+    -- CREDIT) leg has no 25-man bridge; CleanAuras() (:221-233)
+    -- ports via cleanAuras above (C++ order kept); the
+    -- blood-quickening SetData/RewardPlayerAndGroupAtEvent/
+    -- FindNearestCreature minchar legs have no instance bridge.
+    cleanAuras(creature)
 end
 
 -- C++ boss_blood_queen_lana_thel::JustReachedHome: SetDisableGravity(false)

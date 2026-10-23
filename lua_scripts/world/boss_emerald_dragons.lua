@@ -98,10 +98,13 @@
 -- 25%-per-stage banish machine (3x triggered victim-cast shade summons
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
 -- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) — event 9
--- IS bridged, so the arm stays out only on the no-flag / no-react-state
--- / no-summon-death bridges (SummonedCreatureDies _shades-- leg +
--- UpdateAI banish/timeout machine); the stale "no-DamageTaken bridge"
--- claim is retracted.
+-- IS bridged, and SetFlag/RemoveFlag (2026-10-23) + SetReactState
+-- (lana_thel precedent) + AttackStop (2026-10-22) are now bridged too,
+-- so the arm stays out only on the no-SummonedCreatureDies bridge
+-- (boss_ai.go:7020 comment; mandokir/nefarian precedent — the
+-- _shades-- leg gates the banish exit) and the no-InterruptNonMeleeSpells
+-- bridge (verified STAND 2026-10-23); the flag/react/AttackStop legs ride
+-- the machine. The stale "no-DamageTaken bridge" claim is retracted.
 -- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
 -- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
@@ -388,7 +391,9 @@ local function dragonReset(event, creature)
     -- C++ emerald_dragonAI::Reset (boss_emerald_dragons.cpp:100):
     -- RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE|NON_ATTACKABLE)
     -- (ported 2026-10-20); the banish-machine SetFlag pair (:638) is
-    -- unported, so this is the only flag leg at a registered site.
+    -- unported — the flags now bridge but the pair rides the unported
+    -- banish machine (no SummonedCreatureDies / InterruptNonMeleeSpells
+    -- bridges), so this is the only flag leg at a registered site.
     -- C++ :101's SetReactState(REACT_AGGRESSIVE) stays out: nothing in
     -- the ported model ever sets the dragons non-aggressive (the
     -- 25%-stage banish machine's REACT_PASSIVE :639 and its

@@ -61,8 +61,11 @@
 -- (Go's lethal path had already set it); a both-dead death sets it on
 -- me (redundant with the lethal path) and on the sister via
 -- GetCreaturesInGrid (150y — same arena; no cross-creature GUID
--- bridge). The instance SetBossState DONE/SPECIAL + HandleRemoveAuras
--- + summons.DespawnAll legs have no bridge (documented);
+-- bridge). The instance SetBossState DONE/SPECIAL legs have no
+-- bridge (documented); HandleRemoveAuras() is PORTED via
+-- stripHelperAuras (GetPlayersInWorld + mapId/instanceId filter +
+-- player:RemoveAura — the moroes precedent); summons.DespawnAll()
+-- is a no-op (documented);
 -- EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075
 -- / Dark Twin Spike 66069), 20s init, 20s repeat (moroes precedent;
 -- C++ UpdateAI runs combat events whenever UpdateVictim() holds —
@@ -205,6 +208,34 @@ local SPELL_DARK_TOUCH = 67282 -- C++ :86 (eydis's TouchSpellId)
 -- all four — C++-exact within a running instance.
 local DARK_ESSENCE_AURAS = { 65684, 67176, 67177, 67178 }
 local LIGHT_ESSENCE_AURAS = { 65686, 67222, 67223, 67224 }
+-- C++ RAID_MODE helper pool (boss_twin_valkyr.cpp:123): only one
+-- variant can be present per instance, so the strip pool checks all
+-- four — same convention as DARK/LIGHT_ESSENCE_AURAS above.
+local POWERING_UP_HELPER_AURAS = { 67590, 67602, 67603, 67604 }
+
+-- C++ boss_twin_baseAI::HandleRemoveAuras (boss_twin_valkyr.cpp:228-235):
+-- the four DoRemoveAurasDueToSpellOnPlayers helper-aura strips, in C++
+-- call order (the :233 POWERING_UP_HELPER repeat is a no-op second
+-- strip, kept in the pool order; the sister-essence pools reuse the
+-- DARK/LIGHT_ESSENCE_AURAS tables — same RAID_MODE ids). The
+-- instance-player set is the mapId/instanceId-filtered
+-- GetPlayersInWorld() pool (the moroes precedent) and
+-- player:RemoveAura is bridged (lua_player.go:219); the OrbsDespawner
+-- leg rides the unported summon machine.
+local function stripHelperAuras(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local pools = { LIGHT_ESSENCE_AURAS, POWERING_UP_HELPER_AURAS,
+                    DARK_ESSENCE_AURAS, POWERING_UP_HELPER_AURAS }
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            for _, pool in ipairs(pools) do
+                for _, aura in ipairs(pool) do
+                    p:RemoveAura(aura)
+                end
+            end
+        end
+    end
+end
 
 local timers = {}
 
@@ -354,6 +385,12 @@ local function died(event, creature, killer)
         for _, other in ipairs(creature:GetCreaturesInGrid(sisterEntry, 150)) do
             other:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         end
+        -- C++ JustDied :248 — events.Reset() is the cancelTimers(guid)
+        -- at the top, summons.DespawnAll() is a no-op,
+        -- instance->SetBossState(DATA_TWIN_VALKIRIES, DONE) has no
+        -- instance bridge; HandleRemoveAuras() ports via
+        -- stripHelperAuras (C++ order kept).
+        stripHelperAuras(creature)
     else
         -- Sister still fighting: not lootable (clears the lethal path's
         -- auto-set).
@@ -387,14 +424,21 @@ RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
 
 -- C++ boss_twin_baseAI::JustReachedHome (boss_twin_valkyr.cpp:203-208,
 -- shared by both twins): instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL)
--- has no instance bridge; HandleRemoveAuras() (:228-235) strips the helper
--- essences from PLAYERS via the instance (no bridge) and never touches the
--- boss's own auras, so it has no separable bridgeable arm; summons.DespawnAll()
--- is vacuous (no summon model, adds unregistered). The only bridgeable arm is
+-- has no instance bridge; HandleRemoveAuras() (:228-235) is PORTED via
+-- stripHelperAuras (GetPlayersInWorld + mapId/instanceId filter +
+-- player:RemoveAura — the moroes precedent; the stale
+-- "no separable bridgeable arm" claim is retracted — player:RemoveAura
+-- is bridged, lua_player.go:219); summons.DespawnAll() is vacuous
+-- (no summon model, adds unregistered). The other bridgeable arm is
 -- me->DespawnOrUnsummon() -> creature:Despawn() (respawns DB-spawned
 -- creatures on their normal spawntimesecs, opera precedent). Event 24 fires
 -- at the home-move completion.
 local function reachHome(event, creature)
+    -- C++ JustReachedHome :203-208 — instance->SetBossState(
+    -- DATA_TWIN_VALKIRIES, FAIL) has no instance bridge;
+    -- HandleRemoveAuras() ports via stripHelperAuras (C++ order kept);
+    -- summons.DespawnAll() is a no-op.
+    stripHelperAuras(creature)
     creature:Despawn()
 end
 

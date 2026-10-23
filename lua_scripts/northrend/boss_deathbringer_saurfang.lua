@@ -69,11 +69,16 @@
 --   combat scheduler seeds: EVENT_SUMMON_BLOOD_BEAST 30s (:304),
 --   EVENT_BERSERK (:305, see deviation), EVENT_BOILING_BLOOD 15500ms
 --   (:306), EVENT_BLOOD_NOVA 17s (:307), EVENT_RUNE_OF_BLOOD 20s
---   (:308). The CheckRequiredBosses evade branch, DoCastSpellOnPlayers,
---   DoZoneInCombat, instance->SetBossState(IN_PROGRESS),
---   DoRemoveAurasDueToSpellOnPlayers legs have no instance bridge;
---   the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY 70572) exploit
---   leg rides the unbridged intro DoAction machine (see
+--   (:308). The _fallenChampionCastCount = 0 latch (:310) is
+--   untracked in Lua; instance->DoRemoveAurasDueToSpellOnPlayers(
+--   SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) (:311) is PORTED via
+--   GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura
+--   (the moroes precedent — the stale "no instance bridge" claim
+--   for this leg is retracted). The CheckRequiredBosses evade
+--   branch, DoCastSpellOnPlayers, DoZoneInCombat and
+--   instance->SetBossState(IN_PROGRESS) legs have no instance
+--   bridge; the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY 70572)
+--   exploit leg rides the unbridged intro DoAction machine (see
 --   documented-only).
 -- EVENT_SUMMON_BLOOD_BEAST (:493-502) — DoCastSelf(
 --   SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) = 2x non-triggered
@@ -246,6 +251,7 @@ local SPELL_ZERO_POWER = 72242
 local SPELL_BLOOD_LINK = 72178
 local SPELL_BLOOD_POWER = 72371
 local SPELL_MARK_OF_THE_FALLEN_CHAMPION_S = 72256
+local SPELL_MARK_OF_THE_FALLEN_CHAMPION = 72293 -- boss_deathbringer_saurfang.cpp:108
 local SPELL_RUNE_OF_BLOOD_S = 72408
 
 local POWER_ENERGY = 3 -- Powers enum (Unit.h): MANA 0, RAGE 1, FOCUS 2, ENERGY 3
@@ -364,6 +370,20 @@ local function saurfangJustEngagedWith(event, creature, target)
     schedule(guid, "boiling", 15500, function() onBoilingBlood(creature, guid) end)
     schedule(guid, "nova", 17000, function() onBloodNova(creature, guid) end)
     schedule(guid, "rune", 20000, function() onRuneOfBlood(creature, guid) end)
+    -- C++ JustEngagedWith (:310-313): _fallenChampionCastCount = 0
+    -- (no Lua latch — untracked) + instance->
+    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_MARK_OF_THE_FALLEN_
+    -- CHAMPION 72293) via GetPlayersInWorld + mapId/instanceId filter
+    -- + player:RemoveAura (the moroes precedent; the stale "no
+    -- instance bridge" claim is retracted); the
+    -- instance->SetBossState(DATA_DEATHBRINGER_SAURFANG, IN_PROGRESS)
+    -- leg has no instance bridge.
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_MARK_OF_THE_FALLEN_CHAMPION)
+        end
+    end
 end
 
 local function saurfangLeaveCombat(event, creature)
