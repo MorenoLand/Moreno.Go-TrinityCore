@@ -23,25 +23,24 @@
 --   then DoCastVictim(SPELL_KNOCKAWAY 10101); 14000ms re-arm is
 --   unconditional either way.
 -- - EVENT_SHOOT: DoCastVictim(SPELL_SHOOT 16496); 1000ms re-arm.
--- - EVENT_SUMMONRIFLEMAN: the timer shape is preserved (15000ms then
---   30000ms re-arm) and the C++ `switch (rand32() % 9)` case selection
---   is preserved as the random leg; the SummonCreature(11054) legs have
---   no summon bridge (herod precedent), so they are documented-only.
---   The 9 positions (C++ ADD_1..ADD_9, all Z 125.001015 / O 0.592007):
---   1 front-left (3553.851807, -2945.885986), 2 front-right
---   (3559.206299, -2952.929932), 3 mid-left (3552.41748, -2948.667236),
---   4 mid-right (3555.651855, -2953.519043), 5 back-left
---   (3547.927246, -2950.977295), 6 back-mid (3553.094697, -2952.123291),
---   7 back-right (3552.727539, -2957.776123), 8 behind-left
---   (3547.15625, -2953.162354), 9 behind-right (3550.202148,
---   -2957.437744). The 9 summon cases are triples: 0:(1,2,4),
---   1:(2,3,5), 2:(3,4,6), 3:(4,5,7), 4:(5,6,8), 5:(6,7,9),
---   6:(7,8,1), 7:(8,9,2), 8:(9,1,3) — all TEMPSUMMON_TIMED_DESPAWN,
---   4min, entry 11054 (Crimson Rifleman).
--- - OnDied: timer clear modeled; the C++ JustDied legs (7x
+-- - EVENT_SUMMONRIFLEMAN is PORTED (onSummonRifleman): the timer shape
+--   (15000ms then 30000ms re-arm), the C++ `switch (rand32() % 9)` case
+--   selection, and the 3x SummonCreature(11054) legs at the C++-exact
+--   position triples — 0:(1,2,4), 1:(2,3,5), 2:(3,4,6), 3:(4,5,7),
+--   4:(5,6,8), 5:(6,7,9), 6:(7,8,1), 7:(8,9,2), 8:(9,1,3) —
+--   TEMPSUMMON_TIMED_DESPAWN (Eluna type 2, 4min), entry 11054
+--   (Crimson Rifleman). The stale "no summon bridge" claim is
+--   retracted. The 9 positions (C++ ADD_1..ADD_9, all Z 125.001015 /
+--   O 0.592007): 1 front-left (3553.851807, -2945.885986), 2
+--   front-right (3559.206299, -2952.929932), 3 mid-left (3552.41748,
+--   -2948.667236), 4 mid-right (3555.651855, -2953.519043), 5
+--   back-left (3547.927246, -2950.977295), 6 back-mid (3553.094697,
+--   -2952.123291), 7 back-right (3552.727539, -2957.776123), 8
+--   behind-left (3547.15625, -2953.162354), 9 behind-right
+--   (3550.202148, -2957.437744).
+-- - OnDied: timer clear modeled + the C++ JustDied legs (7x
 --   SummonCreature(11054) at positions 1,2,3,4,5,7,9 — note C++ skips
---   6 and 8 here, 4min timed despawn) are documented-only (no summon
---   bridge).
+--   6 and 8 here, 4min timed despawn) are PORTED (same summon idiom).
 -- Unmodeled (documented-only, no bridges):
 -- - UpdateAI's `if (!UpdateVictim()) return` gate: engine-driven.
 -- - GetStratholmeAI wrapper: plain AI factory template, no logic.
@@ -125,15 +124,36 @@ local function onShoot(creature, guid)
     schedule(guid, "shoot", 1000, function() onShoot(creature, guid) end)
 end
 
--- C++ SummonRifleman timer (15000ms then 30000ms): the rand32() % 9
--- case selection is preserved as the random leg; the 3x
--- SummonCreature(11054) legs have no summon bridge — timer shape
--- preserved, legs documented-only (herod precedent).
+-- C++ SummonRifleman timer (15000ms then 30000ms) — PORTED: the
+-- rand32() % 9 case selection is preserved as the random leg and the
+-- 3x SummonCreature(11054, entry 11054, TEMPSUMMON_TIMED_DESPAWN
+-- Eluna type 2, 4min) legs fire at the C++-exact position triples
+-- (C++ boss_cannon_master_willey.cpp ADD_1..ADD_9, all Z
+-- 125.001015 / O 0.592007): 0:(1,2,4), 1:(2,3,5), 2:(3,4,6),
+-- 3:(4,5,7), 4:(5,6,8), 5:(6,7,9), 6:(7,8,1), 7:(8,9,2), 8:(9,1,3).
+local ADD_POSITIONS = {
+    {3553.851807, -2945.885986}, -- 1 front-left
+    {3559.206299, -2952.929932}, -- 2 front-right
+    {3552.417480, -2948.667236}, -- 3 mid-left
+    {3555.651855, -2953.519043}, -- 4 mid-right
+    {3547.927246, -2950.977295}, -- 5 back-left
+    {3553.094697, -2952.123291}, -- 6 back-mid
+    {3552.727539, -2957.776123}, -- 7 back-right
+    {3547.156250, -2953.162354}, -- 8 behind-left
+    {3550.202148, -2957.437744}, -- 9 behind-right
+}
+local RIFLEMAN_Z = 125.001015
+local RIFLEMAN_O = 0.592007
+local SUMMON_TRIPLES = {
+    {1, 2, 4}, {2, 3, 5}, {3, 4, 6}, {4, 5, 7}, {5, 6, 8},
+    {6, 7, 9}, {7, 8, 1}, {8, 9, 2}, {9, 1, 3},
+}
 local function onSummonRifleman(creature, guid)
-    -- C++ `switch (rand32() % 9)` case selection is preserved as the
-    -- random leg (selects one of the 9 summon triples); the 3x
-    -- SummonCreature(11054) legs have no summon bridge, so nothing fires.
-    math.random(0, 8)
+    local triple = SUMMON_TRIPLES[math.random(0, 8) + 1]
+    for _, idx in ipairs(triple) do
+        local x, y = ADD_POSITIONS[idx][1], ADD_POSITIONS[idx][2]
+        creature:SummonCreature(11054, x, y, RIFLEMAN_Z, RIFLEMAN_O, 2, 240000)
+    end
     schedule(guid, "summon_rifleman", 30000, function() onSummonRifleman(creature, guid) end)
 end
 
@@ -155,6 +175,15 @@ end
 
 local function onDied(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_cannon_master_willey.cpp:119-126): 7x
+    -- SummonCreature(11054, positions 1,2,3,4,5,7,9 — C++ skips 6 and 8
+    -- here, all Z 125.001015 / O 0.592007, TEMPSUMMON_TIMED_DESPAWN
+    -- Eluna type 2, 4min) — PORTED (the stale "no summon bridge" claim
+    -- is retracted).
+    for _, idx in ipairs({1, 2, 3, 4, 5, 7, 9}) do
+        local x, y = ADD_POSITIONS[idx][1], ADD_POSITIONS[idx][2]
+        creature:SummonCreature(11054, x, y, RIFLEMAN_Z, RIFLEMAN_O, 2, 240000)
+    end
 end
 
 local function onReset(event, creature)

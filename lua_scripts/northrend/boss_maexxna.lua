@@ -20,10 +20,10 @@
 -- poison arm — DoCastVictim(SPELL_NECROTIC_POISON 28776);
 -- creature:CastSpell(nil, spell) = victim-cast (vaelastrasz
 -- convention); repeat randtime(10s,20s).
--- summon arm — Talk(EMOTE_SPIDERS 0) is unconditional in C++, so the
--- tick keeps the C++-exact 30s/40s schedule with the unmodeled
--- DoSummon(NPC_SPIDERLING 17055) x8-10 leg (no summon bridge —
--- standing, azuregos nil-tick schedule convention).
+-- summon arm — Talk(EMOTE_SPIDERS 0) is unconditional in C++; the
+-- tick keeps the C++-exact 30s/40s schedule with the PORTED
+-- DoSummon(NPC_SPIDERLING 17055) x8-10 leg (Eluna type 5,
+-- 5s; the stale "no summon bridge" claim is retracted).
 -- frenzy latch — C++ UpdateAI checks every tick: HealthBelowPct(30)
 -- && !me->HasAura(SPELL_FRENZY_HELPER); checked by a 1s per-GUID
 -- pump (azuregos enrage-pump convention). SPELL_FRENZY_HELPER is
@@ -53,6 +53,9 @@ local SPELL_FRENZY_HELPER_25 = 54124
 
 local EMOTE_SPIDERS = 0
 local EMOTE_WEB_SPRAY = 2
+
+-- boss_maexxna.cpp enum (local, no DB-side creature template).
+local NPC_SPIDERLING = 17055
 
 local ENTRY = 15952
 local ENTRY_WEB_WRAP = 16486 -- boss_maexxna.cpp:47
@@ -104,9 +107,19 @@ local function poisonTick(creature, guid)
 end
 
 local function summonTick(creature, guid)
-    -- No DoSummon bridge (standing) — the NPC_SPIDERLING 17055 x8-10
-    -- leg is unmodeled; the Talk + C++-exact schedule are kept.
+    -- PORTED (boss_maexxna.cpp:179-184): Talk(EMOTE_SPIDERS) then
+    -- urand(8,10) x DoSummon(NPC_SPIDERLING 17055, me, 4.0f,
+    -- TEMPSUMMON_CORPSE_TIMED_DESPAWN Eluna type 5, 5s); the
+    -- random-near-4.0f is a uniform polar offset around the boss.
+    -- Delta: summoned spiderling AI is unported — summons are inert.
     creature:Talk(EMOTE_SPIDERS)
+    local cx, cy, cz = creature:GetX(), creature:GetY(), creature:GetZ()
+    for _ = 1, math.random(8, 10) do
+        local angle = math.random() * math.pi * 2
+        local r = math.random() * 4
+        creature:SummonCreature(NPC_SPIDERLING, cx + r * math.cos(angle),
+            cy + r * math.sin(angle), cz, 0, 5, 5000)
+    end
     schedule(guid, "summon", 40000, function()
         summonTick(creature, guid)
     end)

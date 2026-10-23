@@ -114,10 +114,11 @@
 -- npc_collapsing_starAI DamageTaken — the _dying latch damage=0 rewrite +
 -- SPELL_BLACK_HOLE_SPAWN_VISUAL / SPELL_SUMMON_BLACK_HOLE self-casts —
 -- no Talk arm; the casts themselves are bridgeable (triggered
--- self-cast), but the star is never summoned in Go
--- (EVENT_SUMMON_COLLAPSING_STAR unported — no summon bridge), so the
--- arm stays out on trigger-path grounds; no registration
--- (NPC_COLLAPSING_STAR 32955 entry-verifiable, ulduar.h line 234).
+-- self-cast), but the summoned star AI has no registration yet
+-- (the summon leg itself IS ported in collapsingStarTick — the stale
+-- "no summon bridge" claim is retracted); the star arms stay out on
+-- registration grounds (NPC_COLLAPSING_STAR 32955 entry-verifiable,
+-- ulduar.h line 234).
 -- npc_living_constellation / npc_black_hole — no Talk arms; no
 -- registrations (NPC_LIVING_CONSTELLATION 33052 / NPC_BLACK_HOLE 32953
 -- entry-verifiable, ulduar.h lines 232 / 235).
@@ -174,9 +175,16 @@ local function getState(guid)
     return state
 end
 
+local timers = {}
+
 -- C++ DamageTaken: if (!_phaseTwo && me->HealthBelowPctDamaged(20,
 -- damage)) { _phaseTwo = true; Talk(SAY_ALGALON_PHASE_TWO); <unbridgeable
--- despawn/cancel/summon legs> } — the moroes threshold+latch precedent.
+-- despawn/summon legs> } — the moroes threshold+latch precedent.
+-- The EVENT_SUMMON_COLLAPSING_STAR cancel (boss_algalon_the_
+-- observer.cpp:473) is ported: the "collapsingstar" schedule key is
+-- cancelled one-shot (the summons.DespawnEntry constellation/star/
+-- black-hole/stalker legs + worm-hole DoSummon machine stay out —
+-- documented only).
 -- The _fightWon 2.5% branch has no Talk arm and its damage=0 rewrite
 -- rides the unbridgeable outro machine — deliberately not modeled.
 local function algalonDamageTaken(event, creature, attacker, damage)
@@ -192,6 +200,11 @@ local function algalonDamageTaken(event, creature, attacker, damage)
     if (creature:GetHealth() - damage) < math.floor(maxHealth * 20 / 100) then
         state.phaseTwo = true
         creature:Talk(SAY_ALGALON_PHASE_TWO)
+        local per = timers[guid]
+        if per and per["collapsingstar"] then
+            RemoveEventById(per["collapsingstar"])
+            per["collapsingstar"] = nil
+        end
     end
 end
 
@@ -212,8 +225,6 @@ local function algalonTargetDied(event, creature, victim)
         creature:Talk(SAY_ALGALON_KILL)
     end
 end
-
-local timers = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -287,6 +298,18 @@ local ENTRY_LIVING_CONSTELLATION = 33052
 
 local SAY_ALGALON_ASCEND = 9
 local EMOTE_ALGALON_COSMIC_SMASH = 10
+local SAY_ALGALON_COLLAPSING_STAR = 5
+local EMOTE_ALGALON_COLLAPSING_STAR = 6
+
+-- boss_algalon_the_observer.cpp:221-226 (NPC_COLLAPSING_STAR 32955,
+-- ulduar.h line 234).
+local NPC_COLLAPSING_STAR = 32955
+local COLLAPSING_STAR_POSITIONS = {
+    {1649.438, -319.8127, 418.3941, 1.082104},
+    {1647.005, -288.6790, 417.3955, 3.490659},
+    {1622.451, -321.1563, 417.6188, 4.677482},
+    {1615.060, -291.6816, 417.7796, 3.490659},
+}
 
 -- Later-pull introDelay (:376); the first-pull 26500ms path is selected
 -- by the _firstPull latch in algalonTimersStart above.
@@ -329,6 +352,24 @@ end
 local function ascendTick(creature, guid)
     creature:Talk(SAY_ALGALON_ASCEND)
     creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
+end
+
+-- C++ EVENT_SUMMON_COLLAPSING_STAR: Talk(SAY_ALGALON_COLLAPSING_
+-- STAR 5) + Talk(EMOTE_ALGALON_COLLAPSING_STAR 6) + 4x SummonCreature(
+-- NPC_COLLAPSING_STAR 32955, CollapsingStarPos literals,
+-- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4), 18s+introDelay init,
+-- Repeat(1min) (:394, :594-600 verified). The stale "no summon
+-- bridge" claim is retracted for this leg. Delta: summoned star AIs
+-- are unported — the stars are inert.
+local function collapsingStarTick(creature, guid)
+    creature:Talk(SAY_ALGALON_COLLAPSING_STAR)
+    creature:Talk(EMOTE_ALGALON_COLLAPSING_STAR)
+    for _, pos in ipairs(COLLAPSING_STAR_POSITIONS) do
+        creature:SummonCreature(NPC_COLLAPSING_STAR, pos[1], pos[2], pos[3], pos[4], 4, 0)
+    end
+    schedule(guid, "collapsingstar", 60000, function()
+        collapsingStarTick(creature, guid)
+    end)
 end
 
 -- C++ JustEngagedWith (boss_algalon_the_observer.cpp:362-386): the
@@ -383,6 +424,9 @@ local function algalonTimersStart(event, creature)
     end)
     schedule(guid, "ascend", 360000 + introDelay, function()
         ascendTick(creature, guid)
+    end)
+    schedule(guid, "collapsingstar", 18000 + introDelay, function()
+        collapsingStarTick(creature, guid)
     end)
 end
 

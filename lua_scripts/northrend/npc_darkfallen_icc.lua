@@ -184,8 +184,24 @@ local function darkfallenEngage(entry, creature)
                 creature:CastSpell(target, SPELL_CHAINS_OF_SHADOW)
             end
         end)
-        -- The 11s/30s vampiric-fiend summon (SummonCreature + AttackStart)
-        -- has no summon bridge — documented.
+        -- The 11s/30s vampiric-fiend summon (icecrown_citadel.cpp:899-906)
+        -- is PORTED: target = me->GetVictim(), SummonCreature(
+        -- NPC_VAMPIRIC_FIEND 37901, target's position,
+        -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4). The vampiric->AI()->
+        -- AttackStart(target) leg is dropped — the fiend spawns on the
+        -- victim so engine aggro engages immediately (shade_of_aran
+        -- AttackStart-drop precedent); the fiend AI is ported below.
+        schedule(guid, "fiend", 11000, 0, function()
+            local function fiendTick()
+                local victim = creature:GetVictim()
+                if victim then
+                    creature:SummonCreature(NPC_VAMPIRIC_FIEND,
+                        victim:GetX(), victim:GetY(), victim:GetZ(), 0, 4, 0)
+                end
+                schedule(guid, "fiend", 30000, 0, fiendTick)
+            end
+            fiendTick()
+        end)
     elseif entry == NPC_DARKFALLEN_ARCHMAGE then
         -- C++ npc_darkfallen_archmage::ScheduleSpells (:947-970):
         -- AttackSpellId = FIREBALL (DoSpellAttackIfReady — unmodeled,

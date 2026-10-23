@@ -60,9 +60,9 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — Initialize() (postPull=false) + _Reset() — no instance
 -- bridge; the cast ScheduleEvent legs are ported above.
--- UpdateAI — EVENT_BOMB_SUMMON: for i <= (postPull ? 3 : 0)
--- SummonCreature(NPC_UNSTABLE_SPHERE 28166, GetRandomNearPosition)
--- + 2s repeat — no summon bridge (summon STRAND absent).
+-- UpdateAI — EVENT_BOMB_SUMMON is PORTED (bombTick, below); the
+-- stale "no summon bridge" claim is retracted (gurtogg convention
+-- superseded).
 -- npc_unstable_sphere — entry-unverifiable (28166, local-enum-only)
 -- — no registration, no lua; its arms are documented here only:
 -- Reset — SetReactState(REACT_PASSIVE) + MoveRandom(40.0f) + AddAura(
@@ -94,6 +94,9 @@ local SAY_STOMP = 4
 
 local SPELL_MAGIC_PULL = 51336
 local SPELL_THUNDERING_STOMP = 50774
+
+-- boss_drakos.cpp local enum (no DB-side creature template).
+local NPC_UNSTABLE_SPHERE = 28166
 
 local timers = {}
 local postPull = {}
@@ -147,6 +150,26 @@ end
 -- instance-bookkeeping leg has no instance bridge — tharon_ja
 -- precedent); the Reset ScheduleEvent legs (boss_drakos.cpp:76-78)
 -- are ported as engage-seeded timers (krystallus convention).
+-- EVENT_BOMB_SUMMON (boss_drakos.cpp:103-111) is PORTED: for
+-- i <= (postPull ? 3 : 0) (1 pre-pull, 4 post-pull) x SummonCreature(
+-- NPC_UNSTABLE_SPHERE 28166, GetRandomNearPosition(frand(0,10)),
+-- default TEMPSUMMON_MANUAL_DESPAWN Eluna type 7) + 2s repeat; the
+-- random-near is a uniform polar offset. Delta: the C++ Reset-schedules
+-- the bomb tick even out of combat — the Lua seed is engage-side.
+local function bombTick(creature, guid)
+    local count = postPull[guid] and 4 or 1
+    local cx, cy, cz = creature:GetX(), creature:GetY(), creature:GetZ()
+    for _ = 1, count do
+        local angle = math.random() * math.pi * 2
+        local r = math.random() * 10
+        creature:SummonCreature(NPC_UNSTABLE_SPHERE,
+            cx + r * math.cos(angle), cy + r * math.sin(angle), cz, 0, 7, 0)
+    end
+    schedule(guid, "bomb", 2000, function()
+        bombTick(creature, guid)
+    end)
+end
+
 local function drakosEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -156,6 +179,9 @@ local function drakosEnterCombat(event, creature, target)
     end)
     schedule(guid, "stomp", 15000, function()
         stompTick(creature, guid)
+    end)
+    schedule(guid, "bomb", 2000, function()
+        bombTick(creature, guid)
     end)
 end
 

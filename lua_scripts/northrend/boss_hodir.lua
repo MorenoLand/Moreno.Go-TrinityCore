@@ -118,10 +118,10 @@
 -- ACTION_CHEESE_THE_FREEZE) — DoAction-gated achievement
 -- flags, no bridge.
 -- Reset (lines 359-366): _Reset() + SetReactState REACT_PASSIVE
--- are PORTED in hodirReset (the passive leg is separable from the
--- frozen-helper SummonCreature loop, lines 368-373 — summon legs,
--- no bridge); the ctor's SetReactState(REACT_PASSIVE) (line 336)
--- rides the same ev23 hook (Eluna On_Reset fires at spawn).
+-- + the frozen-helper summon loop (PORTED in hodirReset, below;
+-- the stale "no bridge" claim is retracted); the ctor's
+-- SetReactState(REACT_PASSIVE) (line 336) rides the same ev23
+-- hook (Eluna On_Reset fires at spawn).
 -- npc_hodir_priest / npc_hodir_shaman / npc_hodir_druid /
 -- npc_hodir_mage — adds legs, BLOCKED: EVENT_HEAL
 -- DoCastAOE(SPELL_GREATER_HEAL 62809) (lines 696-698,
@@ -338,11 +338,32 @@ local function hodirDied(event, creature, killer)
 end
 
 -- C++ Reset (lines 359-366): _Reset() (cancelTimers twin) +
--- SetReactState(REACT_PASSIVE); the frozen-helper SummonCreature
--- loop (lines 368-373) stays out — no summon bridge.
+-- SetReactState(REACT_PASSIVE) + the frozen-helper summon loop
+-- (boss_hodir.cpp:362-364) — PORTED: FRIENDS_COUNT = 4 (the
+-- RAID_MODE 10-man value; the raid-size selector has no bridge)
+-- helpers, entries 32897/33325/33328/32893 (ulduar.h), literal
+-- SummonPositions, TEMPSUMMON_MANUAL_DESPAWN (Eluna type 7, 0ms),
+-- each self-casting SPELL_SUMMON_FLASH_FREEZE_HELPER 61989
+-- triggered (the stale "no summon bridge" claim is retracted).
+-- Delta: summoned add AIs are unported — the helpers are inert.
+local FROZEN_HELPER_ENTRIES = {32897, 33325, 33328, 32893}
+local FROZEN_HELPER_POSITIONS = {
+    {1983.75, -243.36, 432.767, 1.57},
+    {1999.90, -230.49, 432.767, 1.57},
+    {2010.06, -243.45, 432.767, 1.57},
+    {2021.12, -236.65, 432.767, 1.57},
+}
 local function hodirReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetReactState(REACT_PASSIVE)
+    for i = 1, 4 do
+        local pos = FROZEN_HELPER_POSITIONS[i]
+        local helper = creature:SummonCreature(FROZEN_HELPER_ENTRIES[i],
+            pos[1], pos[2], pos[3], pos[4], 7, 0)
+        if helper then
+            helper:CastSpell(helper, 61989, true)
+        end
+    end
 end
 
 -- C++ KilledUnit (lines 389-391): who->GetTypeId() ==

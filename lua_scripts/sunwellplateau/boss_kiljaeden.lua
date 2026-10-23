@@ -95,10 +95,11 @@
 --   kalecgos_kj via the instance script — cross-creature/instance
 --   blocked; the C++ OrbActivated=true deactivation is mirrored
 --   (timer deactivates after firing).
--- * armageddon (phase 4+): the target pick + NPC_ARMAGEDDON_TARGET
---   summon have no summon bridge — the arm is summon-blocked and
---   excluded from the pump (documented, no bridgeable side
---   effects).
+-- * armageddon (phase 4+): the target pick (pickRandomPlayer, the
+--   C++ up-to-6-try vengeance loop) + NPC_ARMAGEDDON_TARGET summon
+--   are PORTED in fireTimer; deltas: the NOT_SELECTABLE/NON_
+--   ATTACKABLE flag legs and summon-list latch have no GUID-deref
+--   bridge (summoned target is attackable).
 -- Phase transitions (C++-exact): <85% -> PHASE_DARKNESS
 -- (ActiveTimers=9), <55% -> PHASE_ARMAGEDDON (ActiveTimers=10),
 -- <25% -> PHASE_SACRIFICE; each runs EnterNextPhase: all timers
@@ -267,11 +268,13 @@ local PHASE_SACRIFICE = 5
 local TICK = 100
 
 -- C++ Timer indices 1..8 (TIMER_SOUL_FLAY..TIMER_ORBS_EMPOWER);
--- TIMER_SPEECH is replaced by the KJ self-line one-shots and
--- TIMER_ARMAGEDDON is summon-blocked (header).
+-- TIMER_SPEECH is replaced by the KJ self-line one-shots;
+-- TIMER_ARMAGEDDON (index 9) fires only when st.active >= 10
+-- (PHASE_ARMAGEDDON), C++-exact.
 local TIMER_ORDER = {
     "soulflay", "lightning", "firebloom", "shieldorb",
     "shadowspike", "flamedart", "darkness", "orbsempower",
+    "armageddon",
 }
 
 local timers = {}
@@ -337,6 +340,7 @@ local function newKjState()
             flamedart = 3000,
             darkness = 45000,
             orbsempower = 35000,
+            armageddon = 2000,
         },
         off = {
             soulflay = false,
@@ -347,6 +351,7 @@ local function newKjState()
             flamedart = false,
             darkness = false,
             orbsempower = false,
+            armageddon = false,
         },
         isInDarkness = false,
         isWaiting = false,
@@ -481,6 +486,20 @@ local function fireTimer(creature, st, name)
         -- C++ OrbActivated=true one-shot-per-phase deactivation.
         st.orbActivated = true
         st.off.orbsempower = true
+    elseif name == "armageddon" then
+        -- C++ TIMER_ARMAGEDDON :852-864: pick random target (the
+        -- up-to-6-try vengeance-of-the-blue-flight loop is
+        -- pickRandomPlayer, above) and SummonCreature(NPC_ARMAGEDDON_
+        -- TARGET, x, y, z, 0, TEMPSUMMON_TIMED_DESPAWN Eluna type 2,
+        -- 15s). Deltas: the NOT_SELECTABLE/NON_ATTACKABLE flag legs
+        -- + summon-list latch have no GUID-deref bridge, so the
+        -- summoned target is attackable in the Lua port.
+        local target = pickRandomPlayer(creature)
+        if target then
+            creature:SummonCreature(ENTRY_ARMAGEDDON_TARGET,
+                target:GetX(), target:GetY(), target:GetZ(), 0, 2, 15000)
+        end
+        st.t.armageddon = 2000
     end
 end
 

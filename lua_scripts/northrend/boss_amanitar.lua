@@ -45,15 +45,17 @@
 -- JustDied — DoCastAOE(Remove Mushroom Power 57283), self-cast
 -- (arugal precedent).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_SPAWN — SummonCreature(healthy 30391 40% / poisonous
--- 30435, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 4s) over the 32
--- MushroomPositions (1s): summon STRAND absent (standing).
+-- EVENT_SPAWN is PORTED (spawnTick — the stale "summon STRAND
+-- absent" claim is retracted for this one-shot summon leg; the
+-- summoned mushroom AIs stay unported).
 -- EVENT_RESPAWN — _mushroomsDeque dead-mushroom position re-spawn
--- machine (40-60s repeat): summon STRAND absent.
--- JustSummoned summons.Summon leg — no summon bridge.
+-- machine (40-60s repeat): unported (dead-mushroom position
+-- bookkeeping has no cross-AI bridge).
+-- JustSummoned summons.Summon leg: moot in Lua (no summon-list
+-- container; the spawnTick SummonCreature calls arm the timer via
+-- the Eluna spawn type directly).
 -- SummonedCreatureDies mushroom-position bookkeeping (into the
--- deque the EVENT_RESPAWN leg reads) — cross-AI / summon bridges
--- absent.
+-- deque the EVENT_RESPAWN leg reads) — cross-AI bridge absent.
 -- EnterEvadeMode — summons.DespawnAll (summon-lifecycle STRAND
 -- absent — the old "no despawn bridge (terestian precedent)" was
 -- stale: creature:Despawn() IS bridged (lua_creature_events.go:236),
@@ -77,10 +79,11 @@
 -- (Putrid Mushroom 31690 / Shrink 31691 triggered / Grow 57059
 -- triggered) + the healthy/poisonous visual-aura self-cast
 -- (56740 / 56741) + the 800ms re-Grow scheduler (CreateLuaEvent
--- one-shot): the Reset leg stays out — the mushroom entries
--- (30391/30435) have no summon source (the boss EVENT_SPAWN leg
--- rides the summon STRAND), so the whole arm would be dead code
--- until the strand exists. The
+-- one-shot): the Reset leg stays out — the npc_amanitar_mushrooms
+-- Reset arms (SetReactState/SetDisplayId/DoCastSelf triplet) are
+-- documented here only because the summoned mushroom AI has no
+-- registration yet (no summon-AI bridge, not no summon bridge:
+-- the EVENT_SPAWN SummonCreature leg is ported above). The
 -- MoveInLineOfSight player-proximity poison leg (2.0f, _active
 -- latch): target RemoveAurasDueToSpell(Potent Fungus 56648)
 -- (player:RemoveAura IS bridged — engine/world/lua_player.go:219; the
@@ -110,6 +113,45 @@ local SPELL_MINI = 57055
 local SPELL_ENTANGLING_ROOTS = 57095
 local SPELL_VENOM_BOLT_VOLLEY = 57088
 local SPELL_REMOVE_MUSHROOM_POWER = 57283
+
+-- boss_amanitar.cpp :52-82 (ahnkahet.h NPC_HEALTHY_MUSHROOM 30391,
+-- NPC_POISONOUS_MUSHROOM 30435).
+local NPC_HEALTHY_MUSHROOM = 30391
+local NPC_POISONOUS_MUSHROOM = 30435
+local MUSHROOM_POSITIONS = {
+    {373.4807, -856.5301, -74.30518, 0.2094395},
+    {358.4792, -879.3193, -75.9463, 5.166174},
+    {356.5531, -846.3022, -72.1796, 3.193953},
+    {332.369, -846.081, -74.30516, 4.834562},
+    {360.2234, -862.055, -75.22755, 1.658063},
+    {351.7189, -890.9619, -76.54617, 1.064651},
+    {345.8126, -869.1772, -77.17728, 1.361357},
+    {367.5179, -884.0129, -77.32881, 4.276057},
+    {370.6044, -868.4305, -74.19881, 0.8901179},
+    {381.3156, -873.2377, -74.82656, 1.099557},
+    {371.5869, -873.8141, -74.72424, 1.082104},
+    {340.4079, -891.6375, -74.99128, 1.134464},
+    {368.21, -851.5953, -73.99741, 4.694936},
+    {328.7047, -853.9812, -75.51253, 0.5759587},
+    {366.4145, -876.39, -75.52739, 5.253441},
+    {380.1362, -861.4344, -73.45917, 3.787364},
+    {373.3007, -888.8057, -79.03593, 5.602507},
+    {348.3599, -848.0839, -73.54117, 1.745329},
+    {352.5586, -882.6624, -75.68202, 3.822271},
+    {357.8967, -871.179, -75.77553, 2.443461},
+    {360.1034, -842.3351, -71.08852, 4.34587},
+    {348.1334, -861.5244, -74.61307, 2.565634},
+    {401.4896, -866.7059, -73.22395, 0.8901179},
+    {360.1683, -889.1515, -76.74798, 3.612832},
+    {350.1828, -907.7313, -74.94678, 5.044002},
+    {340.6278, -856.5973, -74.23862, 4.415683},
+    {366.4849, -859.7621, -74.82679, 1.500983},
+    {359.1482, -853.3346, -74.47543, 5.654867},
+    {374.9992, -879.0921, -75.56115, 1.867502},
+    {339.5252, -850.4612, -74.45442, 4.764749},
+    {337.0534, -864.002, -75.72749, 4.642576},
+    {398.2797, -851.8694, -68.84419, 0.5759587},
+}
 
 local timers = {}
 
@@ -237,13 +279,31 @@ local function bashTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SPAWN (boss_amanitar.cpp:148-151, :130-133) — PORTED:
+-- fires once, 1s after engage; for each of the 32 MushroomPositions,
+-- SummonCreature(roll_chance_i(40) ? NPC_HEALTHY_MUSHROOM 30391 :
+-- NPC_POISONOUS_MUSHROOM 30435, pos, TEMPSUMMON_CORPSE_TIMED_DESPAWN
+-- Eluna type 5, 4s). Delta: summoned mushroom AI is unported — the
+-- summons are inert (the npc_amanitar_mushrooms Reset proximity
+-- poison machine needs MoveInLineOfSight etc.).
+local function spawnTick(creature, guid)
+    for _, pos in ipairs(MUSHROOM_POSITIONS) do
+        local entry = (math.random(1, 100) <= 40)
+            and NPC_HEALTHY_MUSHROOM or NPC_POISONOUS_MUSHROOM
+        creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 4000)
+    end
+end
+
 local function amanitarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ JustEngagedWith (boss_amanitar.cpp:96-101): EVENT_ROOT
     -- 5-9s, EVENT_BASH 10-14s, EVENT_BOLT 15-20s, EVENT_MINI
-    -- 12-18s, EVENT_SPAWN 1s (summon machine — unbridged),
+    -- 12-18s, EVENT_SPAWN 1s (PORTED — one-shot, above),
     -- EVENT_RESPAWN 40-60s (summon machine — unbridged).
+    schedule(guid, "spawn", 1000, function()
+        spawnTick(creature, guid)
+    end)
     schedule(guid, "root", math.random(5000, 9000), function()
         rootTick(creature, guid)
     end)

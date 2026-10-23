@@ -72,12 +72,14 @@
 -- the 19s intro AggroTimer / Intro / CanAttack / UNIT_FLAG_NON_
 -- ATTACKABLE MoveInLineOfSight machine — the flag arms are PORTED
 -- (2026-10-20); the instance bookkeeping stays skipped);
--- no summon bridge — the 4x shield-generator-channel (19870),
--- enchanted-elemental (21958), tainted-elemental (22009),
--- Coilfang-elite (22055) and Coilfang-strider (22056) summon
--- arms unmodeled (firesworn/hydross convention), and the phase-3
--- sporebat (22140) summon arm is unreachable anyway; no
--- movement/teleport bridge — the phase-2 MotionMaster Clear +
+-- the passive summon legs are PORTED (the stale "no summon bridge"
+-- claim is retracted): 4x shield-generator-channel (19870) at the
+-- phase-2 transition, enchanted-elemental (21958, cycling ElementPos)
+-- and tainted-elemental (22009, random ElementPos) on their C++-exact
+-- timers. STAY-OUT: Coilfang-elite (22055), Coilfang-strider (22056)
+-- and sporebat (22140) — all ride spawned-AI()->AttackStart(random
+-- target) and their sole role is combat (dropped leg guts the arm);
+-- no movement/teleport bridge — the phase-2 MotionMaster Clear +
 -- DoTeleportTo and the enchanted-elemental MovePoint waypoint
 -- machine unmodeled (the enchanted elemental is movement-driven
 -- through and through: nearest-waypoint search, SetWalk, walk
@@ -144,6 +146,26 @@ local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 local ENTRY_TAINTED_ELEMENTAL = 22009
 local ENTRY_SHIELD_GENERATOR_CHANNEL = 19870 -- boss_lady_vashj.cpp:60 (C++ spells it SHIED_GENERATOR_CHANNEL)
+local ENTRY_ENCHANTED_ELEMENTAL = 21958
+
+-- boss_lady_vashj.cpp:133-139 (ShieldGeneratorChannelPos) and
+-- :83-92 (ElementPos), literal tables.
+local SHIELD_GENERATOR_CHANNEL_POSITIONS = {
+    {49.6262, -902.181, 43.0975, 3.95683},
+    {10.988, -901.616, 42.5371, 5.4373},
+    {10.3859, -944.036, 42.5446, 0.779888},
+    {49.3126, -943.398, 42.5501, 2.40174},
+}
+local ELEMENT_POSITIONS = {
+    {8.3, -835.3, 21.9, 5.0},
+    {53.4, -835.3, 21.9, 4.5},
+    {96.0, -861.9, 21.8, 4.0},
+    {96.0, -986.4, 21.4, 2.5},
+    {54.4, -1010.6, 22, 1.8},
+    {9.8, -1012, 21.7, 1.4},
+    {-35.0, -987.6, 21.5, 0.8},
+    {-58.9, -901.6, 21.5, 6.0},
+}
 
 local MELEE_RANGE = 5
 local STATIC_CHARGE_RANGE = 200
@@ -279,13 +301,28 @@ local function vashjTick(creature, guid)
         end
 
         -- Phase 2 at <70% health, once (C++ HealthBelowPct(70) is
-        -- evaluated every UpdateAI; the teleport and shield-
-        -- channel summons have no bridges — unmodeled, header).
+        -- evaluated every UpdateAI; the teleport has no bridge —
+        -- dropped, documented). PORTED (boss_lady_vashj.cpp:398-408):
+        -- 4x SummonCreature(SHIED_GENERATOR_CHANNEL 19870 at
+        -- ShieldGeneratorChannelPos, TEMPSUMMON_CORPSE_DESPAWN Eluna
+        -- type 4), then Talk(SAY_PHASE2). The ShieldGeneratorChannel
+        -- GUID latch feeds the instance-blocked Reset cleanup only.
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 70 / 100) then
+            for _, pos in ipairs(SHIELD_GENERATOR_CHANNEL_POSITIONS) do
+                creature:SummonCreature(ENTRY_SHIELD_GENERATOR_CHANNEL,
+                    pos[1], pos[2], pos[3], pos[4], 4, 0)
+            end
             creature:Talk(SAY_PHASE2)
             st.phase = 2
+            -- Elemental summon arms (:474-495) are phase-3 in C++; the
+            -- phase-3 DATA_CANSTARTPHASE3 poll has no bridge so the Lua
+            -- hosts them in the phase-2 branch (documented delta),
+            -- seeded at phase-2 entry with the C++ init values.
+            st.enchantedElementalPos = 0
+            st.enchantedElemental = 5000
+            st.taintedElemental = 50000
         end
 
         -- CheckTimer: if nobody is in melee range, Shoot/Multishot
@@ -322,6 +359,34 @@ local function vashjTick(creature, guid)
             st.forkedLightning = 2000 + math.random(0, 5999)
         else
             st.forkedLightning = st.forkedLightning - 1000
+        end
+
+        -- Enchanted elementals (:476-486): SummonCreature(ENCHANTED_
+        -- ELEMENTAL 21958 at ElementPos[EnchantedElementalPos], then
+        -- the index cycles 0..7; TEMPSUMMON_CORPSE_DESPAWN Eluna
+        -- type 4; re-arm 10000+rand5000 (C++-exact).
+        if st.enchantedElemental <= 1000 then
+            local pos = ELEMENT_POSITIONS[st.enchantedElementalPos + 1]
+            creature:SummonCreature(ENTRY_ENCHANTED_ELEMENTAL,
+                pos[1], pos[2], pos[3], pos[4], 4, 0)
+            st.enchantedElementalPos = (st.enchantedElementalPos == 7) and 0 or (st.enchantedElementalPos + 1)
+            st.enchantedElemental = 10000 + math.random(0, 4999)
+        else
+            st.enchantedElemental = st.enchantedElemental - 1000
+        end
+
+        -- Tainted elementals (:488-495): SummonCreature(TAINTED_
+        -- ELEMENTAL 22009 at ElementPos[rand8], TEMPSUMMON_DEAD_DESPAWN
+        -- Eluna type 6); re-arm 120000 (C++-exact). Delta: the
+        -- EventTaintedElementalDeath 50s-after-death re-arm has no
+        -- cross-AI bridge — unmodeled.
+        if st.taintedElemental <= 1000 then
+            local pos = ELEMENT_POSITIONS[math.random(1, 8)]
+            creature:SummonCreature(ENTRY_TAINTED_ELEMENTAL,
+                pos[1], pos[2], pos[3], pos[4], 6, 0)
+            st.taintedElemental = 120000
+        else
+            st.taintedElemental = st.taintedElemental - 1000
         end
     end
 end

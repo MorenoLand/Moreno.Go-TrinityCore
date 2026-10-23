@@ -37,12 +37,14 @@
 -- the pick is nil (C++-exact), re-arm 15000. Electrified net
 -- 35107 10s -> DoCastVictim, re-arm 10000. Health thresholds
 -- (once-guarded GetHealthPct() < N, C++ HealthBelowPct): at
--- 75/50/25 -> Talk(SAY_MECHANICS); the mechanic summons
--- (3x at +/-5 plus two rand32()%2 extra at (5,-7)/(7,-5),
--- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 240s) have no summon
--- bridge — unmodeled (below). OnTargetDied(3): Talk(SAY_SLAY)
--- (no TYPEID gate, C++-exact). OnDied(4): Talk(SAY_DEATH) +
--- cleanup (the SetBossState DONE arm is instance-blocked).
+-- 75/50/25 -> Talk(SAY_MECHANICS) + the PORTED SummonMechanichs
+-- legs (3x at +/-5 plus two rand32()%2 extra at (5,-7)/(7,-5),
+-- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN Eluna type 1, 240s). The stale
+-- "no summon bridge" claim is retracted; the summoned mechanic AI is
+-- instance-gated and unported, so the summons are inert.
+-- OnTargetDied(3): Talk(SAY_SLAY) (no TYPEID gate, C++-exact).
+-- OnDied(4): Talk(SAY_DEATH) + cleanup (the SetBossState DONE arm
+-- is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the Initialize() reset and the SetBossState NOT_
 -- STARTED arm are instance-blocked). Melee is engine-driven.
@@ -64,9 +66,9 @@
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped; the
 -- DATA_ACCESS_PANEL_MEK / main-door sequencing arms live in
 -- instance_steam_vault.cpp, which stays blocked on the
--- instance-script model); no summon bridge — the 3-5x
--- mechanic summons at the fixed offsets unmodeled (the C++
--- ScriptData even notes "no known summon spells exist"); no
+-- instance-script model); the 3-5x mechanic summons at the fixed
+-- offsets are PORTED (summonMechanics, below — the C++ ScriptData
+-- even notes "no known summon spells exist"); no
 -- SpellScript/AuraScript scripts in this file.
 
 local SPELL_SUPER_SHRINK_RAY = 31485
@@ -79,6 +81,7 @@ local SAY_SLAY = 2
 local SAY_DEATH = 3
 
 local ENTRY_STEAMRIGGER = 17796
+local NPC_STREAMRIGGER_MECHANIC = 17951
 
 local timers = {}
 local states = {}
@@ -140,6 +143,23 @@ local function freshState()
     }
 end
 
+-- C++ SummonMechanichs (boss_mekgineer_steamrigger.cpp:119-131),
+-- PORTED — see the summon-threshold block above.
+local function summonMechanics(creature)
+    local cx, cy, cz = creature:GetX(), creature:GetY(), creature:GetZ()
+    local offsets = {{5, 5}, {-5, 5}, {-5, -5}}
+    if math.random(0, 1) == 1 then
+        offsets[#offsets + 1] = {5, -7}
+    end
+    if math.random(0, 1) == 1 then
+        offsets[#offsets + 1] = {7, -5}
+    end
+    for _, off in ipairs(offsets) do
+        creature:SummonCreature(NPC_STREAMRIGGER_MECHANIC,
+            cx + off[1], cy + off[2], cz, 0, 1, 240000)
+    end
+end
+
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -181,13 +201,20 @@ local function bossTick(creature, guid)
 
     -- Summon thresholds: once-guarded HealthBelowPct checks in
     -- the C++ arm order; the Talk is unconditional in C++ and
-    -- kept even though the mechanic summons have no summon
-    -- bridge (morogrim precedent).
+    -- the SummonMechanichs legs are PORTED (boss_mekgineer_
+    -- steamrigger.cpp:119-131): Talk(SAY_MECHANICS) then
+    -- DoSpawnCreature(NPC_STREAMRIGGER_MECHANIC 17951) at the
+    -- me-relative offsets (5,5)/(-5,5)/(-5,-5) plus rand32()%2
+    -- each at (5,-7)/(7,-5), TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN
+    -- Eluna type 1, 240s. The stale "no summon bridge" claim is
+    -- retracted. Delta: the mechanic AI is instance-gated and
+    -- unported — the summons are inert.
     if not st.summon75 then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 75 / 100) then
             creature:Talk(SAY_MECHANICS)
+            summonMechanics(creature)
             st.summon75 = true
         end
     end
@@ -196,6 +223,7 @@ local function bossTick(creature, guid)
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
             creature:Talk(SAY_MECHANICS)
+            summonMechanics(creature)
             st.summon50 = true
         end
     end
@@ -204,6 +232,7 @@ local function bossTick(creature, guid)
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
             creature:Talk(SAY_MECHANICS)
+            summonMechanics(creature)
             st.summon25 = true
         end
     end
