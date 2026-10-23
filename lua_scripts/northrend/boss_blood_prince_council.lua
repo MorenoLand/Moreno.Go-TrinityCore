@@ -61,8 +61,9 @@
 -- BloodPrincesBossAI::JustEngagedWith (:455) — the scheduler seeds
 -- plus the SetCombatPulseDelay(5) arm (PORTED — creature:SetCombatPulseDelay
 -- bridge, lua_creature_events.go; event 1, C++ arm order)
--- and the Reset's SetCombatPulseDelay(0) arm (PORTED — event 23, C++ arm
--- order); the setActive/DoZoneInCombat legs have no bridge:
+-- and the Reset's SetCombatPulseDelay(0) + SetImmuneToPC(false) (:447/:449)
+-- arms (PORTED — event 23, C++ arm order); the setActive/DoZoneInCombat legs
+-- have no bridge:
 -- keleseth: EVENT_BERSERK 600000ms (:622), EVENT_SHADOW_RESONANCE
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
 -- taldaram: EVENT_BERSERK 600000ms (:689), EVENT_GLITTERING_SPARKS
@@ -507,6 +508,7 @@ end
 local function princesReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
+    creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
 end
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)

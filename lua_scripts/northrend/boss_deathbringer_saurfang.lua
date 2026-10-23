@@ -118,8 +118,10 @@
 --   (:373), DoCastSelf(SPELL_PERMANENT_FEIGN_DEATH 70628) (:374).
 --   C++ order kept (frenzy check before fight-won; both may fire on
 --   one hit). The _EnterEvadeMode / SetFlag(NOT_SELECTABLE) /
---   SetImmuneToPC / RemoveAurasOnEvade legs and the cross-AI
---   DoAction(ACTION_START_OUTRO) leg have no bridge.
+--   RemoveAurasOnEvade legs and the cross-AI DoAction(ACTION_START_OUTRO)
+--   leg have no bridge; the SetImmuneToPC(true) (:368) leg IS bridged —
+--   SetFlag(59, 0x100), the nefarian/opera twin — ported flag-only in
+--   C++ order.
 -- Reset (:257-273) — C++ schedules no timers here, so event 23 only
 --   cancels timers and replays the bridgeable aura-setup arms:
 --   DoCastSelf(SPELL_ZERO_POWER 72242 / SPELL_BLOOD_LINK 72178 /
@@ -363,6 +365,7 @@ local function saurfangJustEngagedWith(event, creature, target)
         return
     end
     initState(guid)
+    creature:RemoveFlag(59, 0x100) -- C++ :293 (JustEngagedWith SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC, after events.Reset/SetPhase)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "beasts", 30000, function() onSummonBloodBeast(creature, guid) end)
     -- C++ :305 seed: IsHeroic() ? 360s : 480s rides creature:IsHeroic()
@@ -454,8 +457,9 @@ end
 -- SPELL_REPUTATION_BOSS_KILL 73843, true) TRIGGERED, DoCastSelf(
 -- SPELL_PERMANENT_FEIGN_DEATH 70628). C++ order kept (frenzy check
 -- before fight-won; both may fire on one hit). The _EnterEvadeMode /
--- SetFlag(NOT_SELECTABLE) / SetImmuneToPC / RemoveAurasOnEvade legs
--- and the cross-AI DoAction(ACTION_START_OUTRO) leg have no bridge.
+-- SetFlag(NOT_SELECTABLE) / RemoveAurasOnEvade legs and the cross-AI
+-- DoAction(ACTION_START_OUTRO) leg have no bridge; the SetImmuneToPC(true)
+-- (:368) leg is ported flag-only above via the SetFlag(59, 0x100) twin.
 local function saurfangDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = saurfangState[guid]
@@ -477,6 +481,7 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
     if not st.dead and health - newDamage < FIGHT_WON_VALUE then
         st.dead = true
         cancelTimers(guid)
+        creature:SetFlag(59, 0x100) -- C++ :368 (fight-won SetImmuneToPC(true) = set UNIT_FLAG_IMMUNE_TO_PC; the _EnterEvadeMode / NOT_SELECTABLE / RemoveAurasOnEvade / cross-AI DoAction legs have no bridge)
         creature:CastSpell(creature, SPELL_REMOVE_MARKS_OF_THE_FALLEN_CHAMPION)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT, true)
         creature:Talk(SAY_DEATH)

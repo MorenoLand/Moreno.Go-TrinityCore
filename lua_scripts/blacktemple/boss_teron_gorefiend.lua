@@ -189,8 +189,9 @@ local function onIncinerate(creature, guid)
 end
 
 -- C++ EVENT_SUMMON_DOOM_BLOSSOM: triggered self-cast 40188 +
--- Talk(SAY_BLOSSOM); re-arm {30s,40s}. The doom blossom summon has
--- no summon bridge.
+-- Talk(SAY_BLOSSOM); re-arm {30s,40s}. The doom blossom itself
+-- is summoned by spell 40188's cast effect in C++ (DoCastSelf, no
+-- C++ SummonCreature leg), so the cast is the whole modeled arm.
 local function onDoomBlossom(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_DOOM_BLOSSOM, true)
     creature:Talk(SAY_BLOSSOM)

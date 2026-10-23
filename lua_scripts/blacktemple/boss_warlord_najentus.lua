@@ -50,7 +50,8 @@
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_HIGH_WARLORD_NAJENTUS
 -- bookkeeping arms skipped); the impaling-spine GO summon (185584)
--- has no summon bridge — only the spine cast and Talk are kept;
+-- is ported via creature:SummonGameObject in onSpine (the Summon
+-- bridge landed after the old "no summon bridge" note was written);
 -- the EnterEvadeMode _DespawnAtEvade arm rides creature:Despawn in
 -- najentusLeaveCombat (drakkari/moorabi precedent).
 

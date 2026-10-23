@@ -57,13 +57,15 @@
 -- outside the target check), non-triggered DoCast(target). The old
 -- "no SelectTarget bridge" claim (doomwalker / kazzak / doomrel
 -- precedent — this file was the cited unit) is retracted.
--- Unmodeled: Reset's SetFaction(FACTION_FRIENDLY) /
--- SetImmuneToPC(true) / UNIT_NPC_FLAG_GOSSIP flag machine (gated on
+-- Unmodeled: Reset's UNIT_NPC_FLAG_GOSSIP flag machine (gated on
 -- instance DATA_GHOSTKILL >= 7), EnterEvadeMode's instance
 -- SetGuidData(DATA_EVENSTARTER), JustDied's instance
--- SetData(DATA_GHOSTKILL, 1) — no faction/immune/flag/instance-script
--- bridges (instance_blackrock_depths.cpp stays blocked on the
--- instance-script model; vael precedent for the SetFaction arms).
+-- SetData(DATA_GHOSTKILL, 1) — no flag/instance-script bridges
+-- (instance_blackrock_depths.cpp stays blocked on the
+-- instance-script model). Reset's SetFaction(FACTION_FRIENDLY) /
+-- SetImmuneToPC(true) legs are unconditional and PORTED in onReset
+-- below (coren_direbrew precedent); the old "no faction/immune
+-- bridges" claim is retracted.
 -- Unmodeled: boss_gloomrel (same C++ file, entry 9037 —
 -- C++-verifiable at instance_blackrock_depths.cpp:42) is a pure
 -- gossip teaching script: its hello gates need
@@ -79,6 +81,8 @@
 -- (maiden convention).
 
 local ENTRY_DOOMREL = 9039
+
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231 (coren_direbrew precedent)
 
 local SPELL_SHADOWBOLTVOLLEY = 15245
 local SPELL_CURSEOFWEAKNESS = 12493
@@ -221,10 +225,16 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onReset(event, creature)
-    -- C++ Reset: Initialize() clears _voidwalkers; timer/state-only
-    -- here (the faction/immune/flag arms have no bridges).
+    -- C++ Reset (boss_tomb_of_seven.cpp:155-160, C++ order):
+    -- Initialize() clears _voidwalkers; SetFaction(FACTION_FRIENDLY) +
+    -- SetImmuneToPC(true) [SetFlag(59, 0x100)] are unconditional and
+    -- ported (coren_direbrew onReset precedent — same arm shape); the
+    -- UNIT_NPC_FLAGS gossip-flag machine is gated on instance
+    -- DATA_GHOSTKILL >= 7 — no instance bridge, stays out.
     local guid = creature:GetGUID()
     voidwalkersSummoned[guid] = false
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(59, 0x100)
     cancelTimers(guid)
 end
 
