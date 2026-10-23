@@ -41,8 +41,9 @@
 -- SpawnAdds, the spirit Siphon Soul 43501 casts, the spirit death-state
 -- arms (incl. JustDied's), and the vortex summon/cleanup arms are
 -- skipped (the vortex AI is still registered so any spawned 24136
--- zaps back correctly); no teleport bridge — DoTeleportTo(CENTER) on
--- phase change skipped; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
+-- zaps back correctly); the teleport is ported below via
+-- creature:Teleport (120.148811, 703.713684, 45.111477, 100) on
+-- phase change; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
 -- via creature:SetEquipmentSlots (33975 on reset, 0 on phase change); no
 -- movement model — AttackStartNoMove (eagle), AttackStart victim
 -- switches (claw/lynx), and MoveChase (lynx
@@ -398,7 +399,8 @@ end
 local PHASE_TIMER_KEYS = { "intro", "whirlwind", "grievous", "paralysis",
     "clawrage", "lynxrush", "seqloop", "flamework", "flamebreath", "pillar" }
 
--- C++ EnterPhase(NextPhase): teleport/AttackStart arms have no bridge;
+-- C++ EnterPhase(NextPhase): the teleport arm is ported below via
+-- creature:Teleport; AttackStart arms have no bridge;
 -- the equipment arm is ported below via creature:SetEquipmentSlots; the
 -- threat reset, transform unaura removal, transform cast, yell,
 -- energy-storm cast/removal, and per-phase timer arming are modeled.
@@ -416,6 +418,9 @@ local function enterPhase(creature, guid, next)
     end
     st.phase = next
     if next >= PHASE_BEAR then
+        -- C++ EnterPhase cases 1-4: DoTeleportTo(CENTER_X, CENTER_Y,
+        -- CENTER_Z, 100) first (boss_zuljin.cpp:303).
+        creature:Teleport(120.148811, 703.713684, 45.111477, 100)
         -- C++ EnterPhase cases 1-4: ResetThreatList().
         creature:ClearThreatList()
         -- C++ EnterPhase cases 1-4: SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 0)

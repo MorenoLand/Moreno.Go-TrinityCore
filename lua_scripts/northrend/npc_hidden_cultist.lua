@@ -13,8 +13,9 @@
 -- Ported arm (C++ Reset() :1508-1518): DoCast(
 -- SPELL_SHROUD_OF_THE_DEATH_CULTIST 46077, :1459) — the 1-arg DoCast
 -- is the non-triggered self-cast; the emote-state / npc-flags restores
--- and RestoreFaction() are DB-template idempotent (no lua bridge, no
--- visible delta). One-shot per spawn/reset, no timers, no per-GUID
+-- and RestoreFaction() are DB-template idempotent (bridges exist —
+-- creature:SetNPCFlags, creature:EmoteState — but the restores produce
+-- no visible delta). One-shot per spawn/reset, no timers, no per-GUID
 -- state (the blessed_banner / storm_cloud shape).
 -- Unmodeled: the OnGossipSelect -> DoAction(1) -> uiEventPhase Talk
 -- chain (:1651-1660 -> :1519 -> :1546-1605) — the gossip seed IS

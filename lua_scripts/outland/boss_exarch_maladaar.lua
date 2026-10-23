@@ -85,13 +85,15 @@
 -- shaffar port).
 -- StolenSoul_Timer summon leg (:256) — me->SummonCreature(
 -- ENTRY_STOLEN_SOUL 18441, 0.0f, 0.0f, 0.0f, 0.0f,
--- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 10s) — no SummonCreature
--- bridge (confirmed zero bindings in the Lua-facing engine this
--- run); the captured soulmodel/soulholder/soulclass exist only
--- for this leg.
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 10s) — the SummonCreature
+-- bridge exists, but the leg stays out on the unbridged AttackStart
+-- + cross-AI SetMyClass arms (shirrak precedent); the captured
+-- soulmodel/soulholder/soulclass exist only for this leg.
 -- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) —
 -- me->SummonCreature(19412, -4.40722f, -387.277f, 40.6294f,
--- 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — same no-summon bridge.
+-- 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — the bridge exists, but the
+-- leg stays out on the unbridged AttackStart + cross-AI arms (same
+-- precedent as the stolen-soul leg).
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
 -- npc_stolen_soul (18441) — NOT registered (nothing can summon it
 -- without the summon bridge; the yor precedent). Transcribed from

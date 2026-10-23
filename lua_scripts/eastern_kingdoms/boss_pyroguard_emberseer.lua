@@ -37,8 +37,11 @@
 -- ticks it out of combat as well; the port starts it on
 -- OnEnterCombat(1) — the out-of-combat ticks are unmodeled.
 -- Unmodeled (documented-only): the whole pre-fight event is gated on
--- instance / SpellHit / SetData bridges that do not exist on the Lua
--- surface — RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
+-- instance / SetData bridges that do not exist on the Lua surface
+-- (SpellHit IS bridged — event 14 — but the SpellHit arms are dead
+-- code in the ported model: 15281 is self-cast by the unported
+-- incarcerator machine, and 16048's trigger is unmodeled) —
+-- RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
 -- (DATA_BLACKHAND_INCARCERATOR, 1) + SetBossState(NOT_STARTED));
 -- (Reset's UNIT_FLAG_NOT_SELECTABLE + SetImmuneToPC(true) pair IS
 -- ported — creature:SetFlag(59, 0x2000000) / SetFlag(59, 0x100),
@@ -54,7 +57,7 @@
 -- Reset if no aura; SpellHit 16049 stack latches (EMOTE_TEN_STACK at
 -- 10, at 20: remove 16245, cast 16047, Talk(EMOTE_FREE_OF_BONDS /
 -- YELL_FREE_OF_BONDS), clear flags, EVENT_ENTER_COMBAT at 2s)
--- (instance / SpellHit / SelectTarget precedents: instance / the_beast /
+-- (instance / SetData / SelectTarget precedents: instance / the_beast /
 -- draenei_survivor).
 -- Reset's _Reset() and JustDied's _JustDied() are internal
 -- BossAI machinery covered by the cancel/re-arm on combat events
