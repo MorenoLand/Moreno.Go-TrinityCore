@@ -68,9 +68,9 @@
 -- the latch also cancels the human timers (the phase gate above) and
 -- ports the DamageTaken transition legs: RemoveAllAuras + triggered
 -- self-cast SPELL_INGVAR_FEIGN_DEATH 42795 + SetFlag(NON_ATTACKABLE |
--- NOT_SELECTABLE) + SetImmuneToPC(true) (= SetFlag(59, 0x100)) — the
--- StopMoving / EVENT_SUMMON_BANSHEE summon legs stay out (no movement /
--- summon bridges); Reset re-arms the flags (kologarn precedent). The
+-- NOT_SELECTABLE) + SetImmuneToPC(true) (= SetFlag(59, 0x100)) +
+-- StopMoving; the EVENT_SUMMON_BANSHEE summon leg stays out (no summon
+-- bridge); Reset re-arms the flags (kologarn precedent). The
 -- PHASE_EVENT damage = 0 rewrite IS bridged (numeric second return,
 -- fireCreatureDamageTaken; the anubarak-spike / halazzi precedent) —
 -- the latch returns false, 0 and any further PHASE_EVENT damage is
@@ -279,8 +279,9 @@ local function ingvarDamageTaken(event, creature, attacker, damage)
         -- C++ DamageTaken transition legs (lines 127-136): triggered
         -- feign-death self-cast + SetFlag(NON_ATTACKABLE |
         -- NOT_SELECTABLE) + SetImmuneToPC(true) (= SetFlag(59, 0x100),
-        -- Unit.cpp:8455-8463; StopMoving / EVENT_SUMMON_BANSHEE legs
-        -- stay out — no movement / summon bridges).
+        -- Unit.cpp:8455-8463; EVENT_SUMMON_BANSHEE summon leg stays
+        -- out — no summon bridge).
+        creature:StopMoving() -- boss_ingvar_the_plunderer.cpp:130
         creature:CastSpell(creature, SPELL_INGVAR_FEIGN_DEATH, true)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)

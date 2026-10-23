@@ -128,10 +128,12 @@ end
 local function onFlameBreath(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
-        -- C++ boss_janalai.cpp:417: me->AttackStop() before the flame
-        -- breath cast (motion Clear / StopMoving legs unbridged).
+        -- C++ boss_janalai.cpp:417-420: me->AttackStop() + DoCast
+        -- before the flame breath cast; me->StopMoving() stops the
+        -- breath-caster mid-stride (motion Master Clear stays unbridged).
         creature:AttackStop()
         creature:CastSpell(target, SPELL_FLAME_BREATH)
+        creature:StopMoving()
     end
     schedule(timers, guid, "flamebreath", 8000, function()
         onFlameBreath(creature, guid)

@@ -59,8 +59,9 @@
 -- bridge for the IsWithinDist gate) -> CastSpell(victim, 37674);
 -- re-arm 3000 outside the range gate (C++-exact; the BP0=100
 -- bonus-point arg and the original-caster arg have no bridge —
--- quake/blaze SPELLVALUE precedent, and the StopMoving arm has
--- no movement bridge — unmodeled, below). Inner demons 30s one-
+-- quake/blaze SPELLVALUE precedent; the per-tick StopMoving leg is
+-- ported inside the 30-yd range gate (pump granularity, 2026-10-22).
+-- Inner demons 30s one-
 -- shot -> Talk(SAY_INNER_DEMONS), timer pinned to 999999 (C++-
 -- exact; the threat-list pick of up to 5 non-victim players, the
 -- SummonCreature(INNER_DEMON_ID) arms and the player-side
@@ -358,6 +359,7 @@ local function leotherasTick(creature, guid)
         if st.chaosBlast <= 1000 then
             local victim = creature:GetVictim()
             if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+                creature:StopMoving() -- boss_leotheras_the_blind.cpp:512
                 creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             end
             st.chaosBlast = 3000
@@ -474,6 +476,7 @@ local function demonTick(creature, guid)
     if st.chaosBlast <= 1000 then
         local victim = creature:GetVictim()
         if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+            creature:StopMoving() -- boss_leotheras_the_blind.cpp:667
             creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             st.chaosBlast = 3000
         end

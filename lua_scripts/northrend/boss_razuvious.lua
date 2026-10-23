@@ -184,6 +184,7 @@ end
 
 local function razyviousEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- Reset arm, boss_razuvious.cpp:169 (ranged AI stands and casts)
+    creature:StopMoving() -- boss_razuvious.cpp:123 (DoZoneInCombat sibling unbridged)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

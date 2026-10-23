@@ -163,11 +163,13 @@ local SPELLS = {
     },
     ["npc_frost_wyrm"] = {
         { spell = 31688, lo = 5000, hi = 5000, rlo = 4000, rhi = 4000,
-          target = "victim", gate = { dist = 25, mode = "far" } },
+          target = "victim", gate = { dist = 25, mode = "far" },
+          stopMoving = true }, -- hyjal_trash.cpp:1271: StopMoving after cast
     },
     ["npc_gargoyle"] = {
         { spell = 31664, lo = 2000, hi = 6999, rlo = 2000, rhi = 2999,
-          target = "victim", gate = { dist = 20, mode = "near" } },
+          target = "victim", gate = { dist = 20, mode = "near" },
+          stopMoving = true }, -- hyjal_trash.cpp:1418: StopMoving after cast
     },
 }
 
@@ -229,6 +231,9 @@ local function onSpell(creature, guid, name, idx)
             creature:CastSpell(target, spec.spell, true)
         else
             creature:CastSpell(target, spec.spell)
+        end
+        if spec.stopMoving then
+            creature:StopMoving()
         end
         local rlo, rhi = repeatRange(spec)
         schedule(guid, "spell" .. idx, math.random(rlo, rhi), function()
