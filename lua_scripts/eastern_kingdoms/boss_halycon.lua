@@ -21,17 +21,14 @@
 -- EVENT_REND: victim-cast REND 13738, {17s,20s} init -> {8s,10s} loop
 -- (C++ ScheduleEvent ranges; CreateLuaEvent {min,max} table is the
 -- randtime idiom, maiden convention).
--- EVENT_THRASH: self-cast THRASH 3391, 10s one-shot init — C++ does
--- NOT re-arm the timer, so the one-shot is C++-exact
--- (creature:CastSpell(creature, spell) is the DoCast(me, spell) path,
--- boss_twilight_corrupter convention).
--- JustDied: Talk(EMOTE_DEATH = 0) on OnDied(4), najentus precedent
--- (boss_warlord_najentus.lua najentusDied).
--- Unmodeled: JustDied me->SummonCreature(NPC_GIZRUL_THE_SLAVENER =
--- 10268, SummonLocation, TEMPSUMMON_TIMED_DESPAWN, 5min) — no
--- SummonCreature bridge on the Lua surface (phoenix / flamelash
--- precedent). The entry 10268 is verifiable in blackrock_spire.h but
--- unregistered since the summon arm is unbridgeable.
+-- EVENT_THRASH: self-cast THRASH 3391, {10s,12s} one-shot init (C++ ScheduleEvent
+-- 10s,12s, boss_halycon.cpp:68) — C++ does NOT re-arm the timer, so the
+-- one-shot is C++-exact (creature:CastSpell(creature, spell) is the
+-- DoCast(me, spell) path, boss_twilight_corrupter convention).
+-- JustDied: me->SummonCreature(NPC_GIZRUL_THE_SLAVENER = 10268,
+-- SummonLocation {-167.9561,-411.7844,76.23057,1.53589},
+-- TEMPSUMMON_TIMED_DESPAWN, 5min) then Talk(EMOTE_DEATH = 0), C++ arm
+-- order (boss_halycon.cpp:71-74; najentus precedent for the talk leg).
 -- The Summoned member is write-only in C++ (Initialize sets false,
 -- JustDied sets true, never read) — no Lua state needed.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
@@ -46,6 +43,7 @@ local SPELL_THRASH = 3391
 local EMOTE_DEATH = 0
 
 local ENTRY_HALYCON = 10220
+local ENTRY_GIZRUL_THE_SLAVENER = 10268
 
 local timers = {}
 
@@ -87,7 +85,7 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
-    schedule(guid, "thrash", 10000, function() onThrash(creature) end)
+    schedule(guid, "thrash", {10000, 12000}, function() onThrash(creature) end)
 end
 
 local function onCombatEnd(_, creature)
@@ -96,6 +94,7 @@ end
 
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
+    creature:SummonCreature(ENTRY_GIZRUL_THE_SLAVENER, -167.9561, -411.7844, 76.23057, 1.53589, 0, 300000)
     creature:Talk(EMOTE_DEATH)
 end
 
