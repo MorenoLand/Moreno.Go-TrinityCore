@@ -107,8 +107,8 @@
 -- timers); the intro/outro
 -- movement machines, DoCast summon legs, phase SetPhase legs, and the
 -- JustDied MoveFall / light-override legs ride bridges that do not
--- exist; the SPELL_PLAY_MOVIE (73159) JustDied leg IS ported (ev4
--- lichKingJustDied, DoCastAOE = self-cast per UnitAI.h:322).
+-- exist; the SPELL_PLAY_MOVIE (73159) and SetDisableGravity(false)
+-- JustDied legs ARE ported (ev4 lichKingJustDied).
 -- MISSING-CAST TRIAGE (2026-10-16; C++ line cites from
 -- boss_the_lich_king.cpp) — all 12 BLOCKED, none ported:
 -- 68981 SPELL_REMORSELESS_WINTER_1 (:849) / 72259
@@ -332,11 +332,12 @@ end
 -- _JustDied() (instance boss-state machine, unported) then
 -- DoCastAOE(SPELL_PLAY_MOVIE 73159, false). DoCastAOE is self-cast
 -- per UnitAI.h:322, so creature:CastSpell(creature, SPELL_PLAY_MOVIE).
--- The SetDisableGravity/MoveFall, zone light/weather, and 25-man
+-- The MoveFall, zone light/weather, and 25-man
 -- quest-credit legs ride unbridged machines.
 local function lichKingJustDied(event, creature)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_PLAY_MOVIE)
+    creature:SetDisableGravity(false) -- C++ :553, after the movie cast
     -- C++ :555-556: FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0f)
     -- -> DespawnOrUnsummon (FindNearestCreature and Despawn both bridged;
     -- stale "unbridged machines" claim retracted).

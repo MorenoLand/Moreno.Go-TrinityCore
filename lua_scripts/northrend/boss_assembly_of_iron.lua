@@ -116,7 +116,9 @@
 -- legs have no bridges; RemoveAllAuras() IS bridged (the
 -- handler twin, engine/world/lua_creature_events.go:166) and
 -- rides the three event-23 handlers; brundir's SetHover(false)
--- has no bridge. The interrupt/stun immunity-reset removes ride the
+-- is bridged (lua_creature_events.go) and rides brundirReset in
+-- C++ arm order (the old "no bridge" claim was stale). The
+-- interrupt/stun immunity-reset removes ride the
 -- creature:ApplySpellImmune bridge but are no-op removes — nothing
 -- ever adds those rows (the DoAction supercharge adds are unported),
 -- so they stay out.
@@ -437,13 +439,15 @@ local function brundirLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
--- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
--- handler twin (engine/world/lua_creature_events.go:166, the
--- evade-leg twin).
+-- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() +
+-- me->SetHover(false) (:476) — the _Reset()/phase legs have no
+-- bridges; RemoveAllAuras rides the handler twin
+-- (engine/world/lua_creature_events.go:166, the evade-leg twin),
+-- and SetHover(false) follows in C++ arm order.
 local function brundirReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:RemoveAllAuras()
+    creature:SetHover(false)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk

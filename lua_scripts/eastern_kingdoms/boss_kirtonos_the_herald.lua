@@ -44,8 +44,8 @@
 --   so a fresh re-summon starts aura-clean exactly as C++ does.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden precedent);
--- the transform arm's SetCanFly(true/false) legs have no bridge (zuljin
--- precedent);
+-- the transform arm's SetCanFly(true/false) legs are PORTED 2026-10-22
+-- (the old "no bridge" note was stale);
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The BossAI(creature, DATA_KIRTONOS) constructor and
 --   GetScholomanceAI -> GetInstanceAI legs (instance-script model
@@ -176,15 +176,18 @@ end
 -- C++-exact. The staff legs are ported via creature:SetEquipmentSlots
 -- with EQUIP_NO_CHANGE (0xFFFFFFFF) on the untouched slots, mirroring
 -- C++ SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID + 0, 11365/0) which
--- writes slot 0 only. The SetCanFly(true/false) legs have no bridge
--- (zuljin precedent).
+-- writes slot 0 only. The SetCanFly(true/false) legs ARE bridged
+-- (lua_creature_events.go, PORTED 2026-10-22; the old "no bridge"
+-- note was stale).
 local function onTransform(creature, guid)
     if creature:HasAura(SPELL_KIRTONOS_TRANSFORM) then
         creature:RemoveAura(SPELL_KIRTONOS_TRANSFORM)
         creature:SetEquipmentSlots(0, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
+        creature:SetCanFly(false) -- C++ :237, after the staff clear
     else
         creature:CastSpell(creature, SPELL_KIRTONOS_TRANSFORM)
         creature:SetEquipmentSlots(WEAPON_KIRTONOS_STAFF, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
+        creature:SetCanFly(true) -- C++ :243, after the staff equip
     end
     schedule(guid, "transform", math.random(16000, 18000), function() onTransform(creature, guid) end)
 end

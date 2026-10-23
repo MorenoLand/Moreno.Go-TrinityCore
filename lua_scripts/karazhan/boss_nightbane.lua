@@ -274,6 +274,12 @@ local function onLand(creature, guid)
         return
     end
     creature:Talk(YELL_LAND_PHASE)
+    -- C++ EVENT_LAND (boss_nightbane.cpp:304-308): Talk(YELL_LAND_PHASE),
+    -- me->SetDisableGravity(true) (:306) — already true since
+    -- startPhaseFly, idempotent but C++-order-exact — then the
+    -- MoveAlongSplineChain(POINT_PHASE_TWO_END) whose arrival is
+    -- approximated below.
+    creature:SetDisableGravity(true)
     -- C++ MoveAlongSplineChain(POINT_PHASE_TWO_END, SPLINE_CHAIN_PHASE_TWO)
     -- arrival — 5s approximates the return flight with no movement model.
     schedule(guid, "f_endphasetwo", 5000, function() onEndPhaseTwo(creature, guid) end)
@@ -380,6 +386,10 @@ local function nightbaneReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nightbaneInitState(guid)
+    -- C++ boss_nightbane::Reset (:126-133): _Reset(), _flyCount = 0,
+    -- me->SetDisableGravity(true) (:130) — bridged (lua_creature_events.go,
+    -- PORTED 2026-10-22). The terrace-door / urn legs have no bridges.
+    creature:SetDisableGravity(true)
 end
 
 local function nightbaneDamageTaken(event, creature, attacker, damage)

@@ -940,12 +940,15 @@ local function illidanCleanup(event, creature)
     cancelTimers(guid)
     illidanState[guid] = nil
     if event == 2 or event == 23 then
-        -- C++ boss_illidan_stormrage::Reset (boss_illidan.cpp:479):
+        -- C++ boss_illidan_stormrage::Reset (boss_illidan.cpp:479-480):
         -- me->SetControlled(false, UNIT_STATE_ROOT) — ports via
         -- creature:SetRooted (2026-10-21; thekal/urom/ionar
-        -- precedent). Gated off event 4: C++ JustDied (:649) never
-        -- calls Reset, so the death path leaves root alone.
+        -- precedent); me->SetDisableGravity(false) follows in C++
+        -- arm order (bridge live, lua_creature_events.go). Gated off
+        -- event 4: C++ JustDied (:649) never calls Reset, so the death
+        -- path leaves root alone.
         creature:SetRooted(false)
+        creature:SetDisableGravity(false)
         creature:SetSheath(0) -- SHEATH_STATE_UNARMED (boss_illidan.cpp:478)
     end
     if event == 4 then

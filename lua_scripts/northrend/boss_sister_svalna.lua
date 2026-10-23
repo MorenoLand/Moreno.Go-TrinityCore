@@ -463,10 +463,13 @@ local function svalnaReset(event, creature)
 end
 
 -- C++ boss_sister_svalna::JustReachedHome :389-395 —
--- _JustReachedHome() then SetReactState(REACT_PASSIVE 0);
--- SetDisableGravity / SetHover legs have no bridge and stay out.
+-- _JustReachedHome() then SetReactState(REACT_PASSIVE 0),
+-- SetDisableGravity(false) (:393), SetHover(false) (:394); bridges live
+-- (lua_creature_events.go).
 local function svalnaReachHome(event, creature)
     creature:SetReactState(0)
+    creature:SetDisableGravity(false)
+    creature:SetHover(false)
 end
 
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 1, svalnaEnterCombat)

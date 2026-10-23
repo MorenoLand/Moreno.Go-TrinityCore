@@ -254,11 +254,14 @@ end
 
 -- C++ boss_sindragosa::JustReachedHome (:294-300): BossAI::JustReachedHome()
 -- is instance bookkeeping (no bridge), instance->SetBossState(FAIL) has no
--- bridge, SetCanFly(false)/SetDisableGravity(false) have no bridges; the
--- SetReactState(REACT_DEFENSIVE 1) leg is bridged (lua_creature_events.go:524)
--- and ported. Event 24 fires at the home-move completion (C++
+-- bridge; SetCanFly(false) (:298) / SetDisableGravity(false) (:299) /
+-- SetReactState(REACT_DEFENSIVE 1) (:300) ported in C++ arm order
+-- (bridges live, lua_creature_events.go). The old "no bridges" note was
+-- stale. Event 24 fires at the home-move completion (C++
 -- HomeMovementGenerator::DoFinalize twin).
 local function sindragosaReachHome(event, creature)
+    creature:SetCanFly(false)
+    creature:SetDisableGravity(false)
     creature:SetReactState(1)
 end
 

@@ -54,7 +54,8 @@
 -- victim fallback; ResetThreatList PORTED 2026-10-19
 -- (creature:ClearThreatList, bridged lua_creature_events.go); no movement
 -- model — the
--- charge AttackStart arm skipped; no SetCanFly bridge — the phase-1
+-- charge AttackStart arm skipped; SetCanFly IS bridged
+-- (lua_creature_events.go, PORTED 2026-10-22) — the phase-1
 -- flight is cosmetic; the C++ while-loop casting gate
 -- (UNIT_STATE_CASTING checks in UpdateAI) has no bridge — timers fire
 -- unconditionally.
@@ -272,6 +273,9 @@ local function jeklikEnterCombat(event, creature, target)
     cancelTimers(guid)
     state[guid] = { phase = PHASE_ONE }
     creature:Talk(SAY_AGGRO)
+    -- C++ :110: me->SetCanFly(true) before the bat-form DoCast
+    -- (bridge live, lua_creature_events.go).
+    creature:SetCanFly(true)
     creature:CastSpell(creature, SPELL_BAT_FORM)
     schedule(guid, "charge", 20000, function()
         onCharge(creature, guid)
@@ -308,9 +312,10 @@ local function jeklikDamageTaken(event, creature, attacker, damage)
     end
     st.phase = PHASE_TWO
     creature:RemoveAura(SPELL_BAT_FORM)
-    -- C++ DamageTaken phase-1->2: ResetThreatList() after the bat-form
-    -- strip (bridged lua_creature_events.go; the old "ResetThreatList skipped"
-    -- header claim was stale). SetCanFly(false) has no bridge.
+    -- C++ DamageTaken phase-1->2 (:116-119): RemoveAurasDueToSpell, then
+    -- me->SetCanFly(false), then ResetThreatList (bridged
+    -- lua_creature_events.go) — C++ arm order kept.
+    creature:SetCanFly(false)
     creature:ClearThreatList()
     for _, key in ipairs(PHASE_ONE_TIMER_KEYS) do
         local per = timers[guid]
@@ -347,8 +352,9 @@ end
 
 local function jeklikReset(event, creature)
     jeklikResetState(creature:GetGUID())
-    -- C++ Reset's SetCanFly(true) restore and _Reset bookkeeping have
-    -- no bridge.
+    -- C++ Reset (:88-91) is _Reset() only — no SetCanFly leg exists
+    -- (the old "SetCanFly restore / no bridge" note was stale twice
+    -- over: the bridge exists and the C++ arm never calls it).
 end
 
 RegisterCreatureEvent(ENTRY_JEKLIK, 1, jeklikEnterCombat)

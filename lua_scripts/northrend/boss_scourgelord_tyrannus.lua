@@ -134,7 +134,8 @@
 --   / NON_ATTACKABLE), JustReachedHome InstallAllAccessories (:322-326,
 --   vehicle), DoAction legs (:328-340: ACTION_START_RIMEFANG /
 --   ACTION_END_COMBAT) — no movement/vehicle/flag bridges (the
---   REACT_PASSIVE arm is PORTED 2026-10-20 — creature:SetReactState).
+--   REACT_PASSIVE and SetCanFly(true) arms are PORTED 2026-10-20/22 —
+--   creature:SetReactState / creature:SetCanFly).
 --   The :319 SetFlag(NON_ATTACKABLE) is never cleared live anywhere in
 --   the rimefang AI (permanent vehicle-dragon property; flags re-affirm
 --   to template on the creature sweep) — VACUOUS, not ported.
@@ -327,8 +328,10 @@ end
 
 local function rimefangCancelCombat(event, creature)
     initState(creature:GetGUID())
-    -- C++ boss_scourgelord_tyrannus.cpp:318: me->SetReactState(REACT_PASSIVE)
-    -- (rimefang Reset: PASSIVE is the permanent baseline, no flip in C++).
+    -- C++ boss_scourgelord_tyrannus.cpp:317-318: me->SetCanFly(true) then
+    -- me->SetReactState(REACT_PASSIVE) (rimefang Reset: PASSIVE is the
+    -- permanent baseline, no flip in C++).
+    creature:SetCanFly(true)
     creature:SetReactState(0) -- REACT_PASSIVE
 end
 

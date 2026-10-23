@@ -49,10 +49,10 @@
 -- RewardPlayerAndGroupAtEvent / FindNearestCreature minchar legs
 -- have no instance bridge.
 -- boss_blood_queen_lana_thel JustReachedHome — the Talk(SAY_WIPE 9) leg
--- is ported below on event 24 (this tick — the old "no event-24 port
--- precedent" note was stale); the SetDisableGravity / instance->SetBossState(FAIL)
--- legs have no bridges and stay out (SetReactState(2) REACT_AGGRESSIVE is
--- bridged and ported in the reach-home arm in C++ order).
+-- SetDisableGravity(false) / SetReactState(2) / Talk(SAY_WIPE 9) ported
+-- on event 24 in C++ arm order (bridges live, lua_creature_events.go);
+-- the instance->SetBossState(FAIL) leg has no instance bridge and stays
+-- out (the old "no event-24 port precedent" note was stale).
 -- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
@@ -247,13 +247,12 @@ local function lanaThelJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ boss_blood_queen_lana_thel::JustReachedHome: the Talk(SAY_WIPE 9)
--- leg is ungated and fires at the home-move completion (event 24); the
--- SetDisableGravity(false) / instance FAIL legs ride the no-gravity /
--- no-instance bridges and stay out. SetReactState(REACT_AGGRESSIVE 2) is
--- bridged (lua_creature_events.go:524) and ported in C++ arm order ahead
--- of the Talk; the old "no-react-state bridge" note was stale.
+-- C++ boss_blood_queen_lana_thel::JustReachedHome: SetDisableGravity(false)
+-- (bridge live), then SetReactState(REACT_AGGRESSIVE 2) in C++ arm order
+-- ahead of the Talk(SAY_WIPE 9); the instance FAIL leg has no instance
+-- bridge and stays out. The old "no-gravity bridge" note was stale.
 local function lanaThelReachHome(event, creature)
+    creature:SetDisableGravity(false)
     creature:SetReactState(2)
     creature:Talk(SAY_WIPE)
 end
