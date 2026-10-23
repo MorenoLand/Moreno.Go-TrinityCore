@@ -44,9 +44,11 @@
 -- cross-creature DoActions, MovementInform pathing) has no bridges, so
 -- the port runs the phase-1 cleave cadence flat. JustDied's
 -- _instance->SetData(DATA_HORSEMAN_EVENT_STATE, DONE) leg is blocked on
--- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg has
--- no summon bridge (dark-rider precedent); the LFG FinishDungeon leg has
--- no LFG bridge. JustEngagedWith's setActive leg has no bridge;
+-- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg is
+-- PORTED (creature:SummonCreature bridge, lua_creature_events.go:728 —
+-- the stale "no summon bridge" claim retracted; Eluna type 7 =
+-- TEMPSUMMON_MANUAL_DESPAWN, the C++ default); the LFG FinishDungeon leg
+-- has no LFG bridge. JustEngagedWith's setActive leg has no bridge;
 -- its SetCombatPulseDelay(5) arm is PORTED (creature:SetCombatPulseDelay
 -- bridge, lua_creature_events.go; event 1, C++ arm order). Its
 -- EVENT_RANDOM_LAUGH arm is ported as the
@@ -138,6 +140,7 @@ local SAY_KILL_PLAYER = 5
 
 local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
+local ENTRY_SIR_THOMAS = 23904 -- NPC_SIR_THOMAS, scarlet_monastery.h:75
 
 local timers = {}
 
@@ -202,6 +205,12 @@ local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_BURNING_COSMETIC)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_headless_horseman.cpp:442-456) arm order:
+    -- DoCastSelf(BURNING_COSMETIC) -> SetData (instance, blocked) ->
+    -- Talk(SAY_DEATH) -> SummonCreature(NPC_SIR_THOMAS, me->GetPosition(),
+    -- TEMPSUMMON_MANUAL_DESPAWN Eluna type 7, 0ms) -> LFG (blocked).
+    creature:SummonCreature(ENTRY_SIR_THOMAS, creature:GetX(), creature:GetY(),
+        creature:GetZ(), creature:GetO(), 7, 0)
 end
 
 -- C++ boss_headless_horseman::JustAppeared -> HandleInitialSetup

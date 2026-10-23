@@ -86,13 +86,14 @@
 -- (!HealthAbovePct(p) = health <= floor(max*p/100)). The three cast
 -- spells (24795/24811/24910) have no Go effect implementation —
 -- visual-only casts like midnight's SPELL_SUMMON_ATTUMEN.
--- boss_lethon SpellHitTarget — the DRAW_SPIRIT hit-target summon
--- machine (NPC_SPIRIT_SHADE 15261, 50s) — stale "no-SpellHitTarget
--- bridge" retracted (2026-10-21): ev15
--- CREATURE_EVENT_ON_SPELL_HIT_TARGET IS bridged
--- (engine/scripting/runtime.go:228; fired boss_ai.go:2280-2287);
--- arm stays out: the whole payload is me->SummonCreature (summon
--- machine, no Lua bridge) — an ev15 handler would be an empty shell.
+-- boss_lethon SpellHitTarget — PORTED (lethonSpellHitTarget, ev15): the
+-- stale "no-SpellHitTarget bridge" claim was retracted 2026-10-21 (ev15
+-- CREATURE_EVENT_ON_SPELL_HIT_TARGET bridged, runtime.go:228; fired
+-- boss_ai.go:2280-2287) and the stale "no summon bridge" claim retracted
+-- 2026-10-23 (creature:SummonCreature live, lua_creature_events.go:728):
+-- DRAW_SPIRIT hit-target -> SummonCreature(NPC_SPIRIT_SHADE 15261) at the
+-- target's position, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT Eluna type 3,
+-- 50s, with the C++ TYPEID_PLAYER gate.
 -- boss_taerar DamageTaken — Talk(SAY_TAERAR_SUMMON_SHADES 1) rides the
 -- 25%-per-stage banish machine (3x triggered victim-cast shade summons
 -- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
@@ -126,6 +127,8 @@ local ENTRY_YSONDRE = 14887
 local ENTRY_LETHON  = 14888
 local ENTRY_EMERISS = 14889
 local ENTRY_TAERAR  = 14890
+
+local ENTRY_SPIRIT_SHADE = 15261 -- NPC_SPIRIT_SHADE, boss_emerald_dragons.cpp:388
 
 -- UnitDefines.h:125/149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
 -- is bridged (engine/world/lua_creature_events.go:690/725).
@@ -255,10 +258,9 @@ end
 
 -- C++ boss_lethon::DamageTaken (:376-384): if (!HealthAbovePct(100 -
 -- 25*_stage)) { Talk(1); DoCast(me, 24811) non-triggered; ++_stage; }.
--- The SpellHitTarget spirit-shade summon machine stays out (ev15
--- dispatch IS bridged — the "no-SpellHitTarget bridge" claim was
--- stale; the summon machine itself has no bridge); the draw-spirit
--- cast is visual-only (no Go effect for 24811).
+-- The SpellHitTarget spirit-shade summon is PORTED (lethonSpellHitTarget,
+-- ev15 — both bridges now live); the draw-spirit cast itself is
+-- visual-only (no Go effect for 24811).
 local function lethonDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local stage = stages[guid] or 1
@@ -271,6 +273,20 @@ local function lethonDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_SUMMON)
         creature:CastSpell(creature, SPELL_DRAW_SPIRIT)
         stages[guid] = stage + 1
+    end
+end
+
+-- C++ boss_lethon::SpellHitTarget (boss_emerald_dragons.cpp:386-393):
+-- if (spellInfo->Id == SPELL_DRAW_SPIRIT && target->GetTypeId() ==
+-- TYPEID_PLAYER) { Position targetPos = target->GetPosition();
+-- me->SummonCreature(NPC_SPIRIT_SHADE, targetPos,
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 50s); } — gruul hook-15
+-- precedent; Eluna summon type 3 = TIMED_DESPAWN_OUT_OF_COMBAT.
+local function lethonSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_DRAW_SPIRIT and target and
+            target:GetObjectType() == "Player" then
+        creature:SummonCreature(ENTRY_SPIRIT_SHADE, target:GetX(), target:GetY(),
+            target:GetZ(), target:GetO(), 3, 50000)
     end
 end
 
@@ -404,6 +420,7 @@ RegisterCreatureEvent(ENTRY_LETHON,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_LETHON,  4, dragonDied)
 RegisterCreatureEvent(ENTRY_LETHON,  3, dragonKilledUnit)
 RegisterCreatureEvent(ENTRY_LETHON,  9, lethonDamageTaken)
+RegisterCreatureEvent(ENTRY_LETHON,  15, lethonSpellHitTarget)
 RegisterCreatureEvent(ENTRY_LETHON,  23, dragonReset)
 RegisterCreatureEvent(ENTRY_EMERISS, 1, emerissEnterCombat)
 RegisterCreatureEvent(ENTRY_EMERISS, 2, dragonLeaveCombat)
