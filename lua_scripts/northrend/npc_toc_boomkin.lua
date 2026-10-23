@@ -30,8 +30,9 @@
 -- base JustEngagedWith (event 1): DoCast(me, SPELL_ANTI_AOE 68595,
 -- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
--- the setActive / DoZoneInCombat / controller SetData(2,
--- IN_PROGRESS) legs have no bridges (tharon_ja precedent).
+-- the DoZoneInCombat leg is PORTED 2026-10-23 (bridge live,
+-- engine/world/lua_creature_events.go); the setActive / controller
+-- SetData(2, IN_PROGRESS) legs have no bridges (tharon_ja precedent).
 -- EVENT_CYCLONE — SelectTarget(Random, 0, NonTankTargetSelector) ->
 -- DoCast(Cyclone 65859), 10-20s init, 10-20s re-arm: randomNonTankPlayer
 -- (netherspite / blood_prince_council precedent — alive same-map
@@ -231,10 +232,15 @@ local function scheduleRotation(creature)
     creature:SetEquipmentSlots(EQUIP_STAFF, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
 end
 
--- C++ base JustEngagedWith: DoCast(me, SPELL_ANTI_AOE, true) triggered.
+-- C++ base JustEngagedWith (boss_faction_champions.cpp:644-651): DoCast(me,
+-- SPELL_ANTI_AOE, true) triggered, SetCombatPulseDelay(5), setActive,
+-- DoZoneInCombat() (PORTED 2026-10-23 — bridge live,
+-- engine/world/lua_creature_events.go), controller SetData(2, IN_PROGRESS)
+-- (no instance/SetData bridge).
 local function boomkinEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
-    creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647 (base JustEngagedWith arm 2; setActive/DoZoneInCombat/SetData legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:646
+    creature:DoZoneInCombat() -- C++ :649, in arm order after pulse delay (bridge live 2026-10-23)
 end
 
 local function boomkinLeaveCombat(event, creature)

@@ -119,7 +119,10 @@
 -- npc_crok_scourgebane::JustEngagedWith (:859-863) —
 --   me->SetHomePosition(*me) (:861) ported in crokEnterCombat
 --   (event-surface SetHomePosition); the if (IsUndead)
---   DoZoneInCombat() leg (:862-863) has no bridge — documented-only.
+--   DoZoneInCombat() leg (:862-863) stays out — re-evaluated
+--   2026-10-23 against the live bridge: IsUndead-gated on the
+--   unported latch (set-arm rides the setDeathState/UpdateEntry
+--   machine) — documented-only.
 -- npc_crok_scourgebane::CanAIAttack x2 (:792-796, :866-870) — the
 --   Y > 2660 Frostwing-Halls gate ("do not see targets inside
 --   Frostwing Halls when we are not there") stays out: creature:GetY

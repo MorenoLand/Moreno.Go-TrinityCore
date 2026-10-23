@@ -118,7 +118,9 @@
 -- OrbFinalPositionEvent), the SPELL_AWAKEN_SUBBOSS 47669 /
 -- SPELL_AWAKEN_GORTOK 47670 SpellScripts, the DoAction(ACTION_START_
 -- FIGHT) unfreeze/unflag/DoZoneInCombat legs (C++: PalehoofMinionsBossAI
--- ::DoAction / CombatStartEvent BasicEvent), the miniboss JustDied ->
+-- ::DoAction / CombatStartEvent BasicEvent — the DoZoneInCombat leg
+-- re-evaluated 2026-10-23 against the live bridge: stays out,
+-- DoAction machine), the miniboss JustDied ->
 -- DoAction(ACTION_NEXT_PHASE) cross-creature cascade, the
 -- EnterEvadeMode cross-creature cascade, the jormungar JustSummoned
 -- worm machine (WormAttackEvent + MoveRandom 5.0f; WormAttackEvent::
@@ -141,7 +143,7 @@
 -- STALE); the matching ACTION_START_FIGHT RemoveAurasDueToSpell
 -- (:341-345) is ported via creature:RemoveAura at combat start; the
 -- SetImmuneToPC/DoZoneInCombat legs ride the unbridged DoAction
--- machine (see DEVIATION above).
+-- machine (see DEVIATION above; re-evaluated 2026-10-23, stays out).
 -- The orb / awaken-spell / sphere DoAction machine (see DEVIATION
 -- above), spell_palehoof_crazed / spell_palehoof_crazed_effect /
 -- spell_palehoof_awaken_subboss / spell_palehoof_awaken_gortok
@@ -315,7 +317,8 @@ local function furbolgEnterCombat(event, creature)
     cancelTimers(guid)
     -- C++ PalehoofMinionsBossAI::DoAction(ACTION_START_FIGHT) (:341-345):
     -- RemoveAurasDueToSpell(SPELL_FREEZE) — the unfreeze leg (the
-    -- SetImmuneToPC/DoZoneInCombat legs have no bridges).
+    -- SetImmuneToPC/DoZoneInCombat legs stay out — re-evaluated
+    -- 2026-10-23 against the live bridge: DoAction machine).
     creature:RemoveAura(SPELL_FREEZE)
     local function crazedTick()
         creature:CastSpell(creature, SPELL_CRAZED)

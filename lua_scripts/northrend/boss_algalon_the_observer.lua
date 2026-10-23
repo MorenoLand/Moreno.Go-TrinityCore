@@ -43,11 +43,15 @@
 -- -> Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID 15878)
 -- (ported as creature:PlayMusic — the bridged SMSG_PLAY_MUSIC twin;
 -- the instance->SetBossState(IN_PROGRESS) companion leg has no bridge).
--- The remaining JustEngagedWith legs (SetFlag NOT_SELECTABLE,
--- SetImmuneToNPC, DoZoneInCombat, summons.DespawnEntry(NPC_AZEROTH),
+-- The remaining JustEngagedWith legs (the later-pull SetFlag
+-- NOT_SELECTABLE, SetImmuneToNPC, summons.DespawnEntry(NPC_AZEROTH),
 -- instance->SetData, BossAI::JustEngagedWith passthrough)
 -- have no bridges; InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
 -- is an explicit no-op for creatures (lua_objects.go:332).
+-- (CORRECTION 2026-10-23: the :384 first-pull DoZoneInCombat leg IS
+-- ported below — creature:DoZoneInCombat() is bridged
+-- (engine/world/lua_creature_events.go); the stale "no bridge" claim
+-- is retracted for that leg.)
 -- (CORRECTION 2026-10-22: the old "PlayDirectMusic has no bridge" claims
 -- were stale — creature:PlayMusic IS bridged (lua_creature_events.go:118);
 -- both engage music arms (:373 later pulls, :557 EVENT_START_COMBAT) are
@@ -386,10 +390,11 @@ local function algalonTimersStart(event, creature)
     if algalonFirstPull[guid] == nil then
         algalonFirstPull[guid] = false
         creature:Talk(SAY_ALGALON_START_TIMER)
-        -- C++ JustEngagedWith first-pull (boss_algalon_the_observer.cpp:383):
-        -- me->SetFarVisible(true) (the InterruptNonMeleeSpells/setActive/
-        -- DoZoneInCombat legs have no bridge).
+        -- C++ JustEngagedWith first-pull (boss_algalon_the_observer.cpp:383-384):
+        -- me->SetFarVisible(true), then DoZoneInCombat() (the
+        -- InterruptNonMeleeSpells/setActive legs have no bridge).
         creature:SetFarVisible(true)
+        creature:DoZoneInCombat() -- C++ :384, in arm order after SetFarVisible (bridge live 2026-10-23)
         introDelay = 26500
         -- C++ EVENT_START_COMBAT (:554-559, first-pull only, 16s):
         -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)

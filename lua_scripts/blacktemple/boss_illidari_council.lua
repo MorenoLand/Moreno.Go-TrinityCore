@@ -41,8 +41,11 @@
 -- cross-creature bridge" claim retracted, 2026-10-21);
 -- the random-member Talk(SAY_COUNCIL_AGRO) is ported the same way.
 -- The SendEncounterUnit engage/
--- disengage, DoZoneInCombat, SetBoundary and SummonCreatureGroup
--- arms have no instance/summon bridges. OnDied: the four members'
+-- disengage, SetBoundary and SummonCreatureGroup
+-- arms have no instance/summon bridges. The DoZoneInCombat leg is
+-- PORTED 2026-10-23 (member:DoZoneInCombat() in the controller's
+-- event-1 handler, live bridge engine/world/lua_creature_events.go;
+-- members gathered via GetCreaturesInGrid). OnDied: the four members'
 -- quiet-suicide 3617 casts are PORTED via GetCreaturesInGrid;
 -- LowerPlayerDamageReq has no bridge — skipped; the
 -- SetBossState(DONE) arm is blocked on the instance-script model. OnLeaveCombat/OnReset:
@@ -52,8 +55,10 @@
 -- Gathios the Shatterer (22949): OnReset: triggered self-cast
 -- balance of power 41341 + SetCombatPulseDelay(0) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event
--- 23, C++ arm order). OnEnterCombat (the setActive
--- and DoZoneInCombat arms have no bridges): triggered self-cast
+-- 23, C++ arm order). OnEnterCombat (the setActive arm has no bridge;
+-- the DoZoneInCombat leg is PORTED in the event-1 handler below, live
+-- bridge engine/world/lua_creature_events.go, 2026-10-23): triggered
+-- self-cast
 -- seal of blood 41459 (C++ ScheduleEvents one-time arm) / bless
 -- {41450, 41451} 20s then {30s,45s} — the random-friendly-in-
 -- 100-yd scan has no friendly enumeration bridge, so the cast is
@@ -144,7 +149,9 @@
 -- the boundary/setActive arms have no
 -- bridges; the SetCombatPulseDelay(5) arm is PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
--- C++ arm order).
+-- C++ arm order); the base-JustEngagedWith DoZoneInCombat(illidari) leg
+-- is PORTED (illidari:DoZoneInCombat() via the live bridge,
+-- engine/world/lua_creature_events.go, 2026-10-23).
 local ENTRY_ILLIDARI_COUNCIL = 23426
 local ENTRY_GATHIOS = 22949
 local ENTRY_ZEREVOR = 22950
@@ -270,8 +277,10 @@ end
 
 -- C++ JustEngagedWith: _inCombat once-guard (cleared on Reset),
 -- BossAI::JustEngagedWith skipped (no instance-script model);
--- the SendEncounterUnit/DoZoneInCombat/SendEncounterUnit arms have
--- no bridge. Arms: triggered self-cast 41499, the equivalency
+-- the SendEncounterUnit/SendEncounterUnit arms have no bridge; the
+-- DoZoneInCombat leg is PORTED below (members gathered via
+-- GetCreaturesInGrid, live bridge engine/world/lua_creature_events.go,
+-- 2026-10-23). Arms: triggered self-cast 41499, the equivalency
 -- cycle, the 15min berserk one-shot (its member casts have no
 -- cross-creature bridge — the arm fires empty), and the random-
 -- member Talk(SAY_COUNCIL_AGRO) — PORTED below (the stale "no
@@ -287,6 +296,16 @@ local function councilEnterCombat(event, creature, target)
     end
     st.inCombat = true
     creature:CastSpell(creature, SPELL_EMPYREAL_BALANCE, true)
+    -- C++ JustEngagedWith (boss_illidari_council.cpp:153-160): engage
+    -- each council member in the zone (the SendEncounterUnit legs stay
+    -- out). Members are in hand via GetCreaturesInGrid (exact entries,
+    -- the Talk-block idiom below); the DoZoneInCombat bridge is live
+    -- (engine/world/lua_creature_events.go, 2026-10-23).
+    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
+        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+            member:DoZoneInCombat()
+        end
+    end
     -- C++ JustEngagedWith (boss_illidari_council.cpp:163-164): a random
     -- one of the four council members Talks SAY_COUNCIL_AGRO (the C++
     -- instance->GetCreature(CouncilData[urand(0,3)]) is nil-guarded;
@@ -486,14 +505,25 @@ local function gathiosAura(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith + ScheduleEvents: the
--- setActive/DoZoneInCombat arms have no bridges; the SetCombatPulseDelay(5)
--- arm is PORTED (creature:SetCombatPulseDelay bridge, lua_creature_events.go;
+-- C++ JustEngagedWith + ScheduleEvents: the setActive arm has no
+-- bridge (the DoZoneInCombat leg is PORTED below); the
+-- SetCombatPulseDelay(5) arm is PORTED
+-- (creature:SetCombatPulseDelay bridge, lua_creature_events.go;
 -- event 1, C++ arm order); non-triggered
 -- self-cast seal of blood 41459 one-time (C++ DoCastSelf literal
 -- form = TRIGGERED_NONE); the five cycle arms.
 local function gathiosEnterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
+    -- engage the controller (entry 23426) in the zone; the controller is
+    -- in hand via GetCreaturesInGrid (the memberTargetDied Talk
+    -- precedent in this file) and the bridge is live
+    -- (engine/world/lua_creature_events.go, 2026-10-23), called on the
+    -- controller object (the C++ arm engages the controller, not the
+    -- member); C++ arm order kept.
+    for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
+        illidari:DoZoneInCombat()
+    end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:312: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -587,7 +617,17 @@ end
 -- REFRESH_DAMPEN), which has no bearer (the dampen-magic
 -- AuraScript has no bridge).
 local function zerevorEnterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
+    -- engage the controller (entry 23426) in the zone; the controller is
+    -- in hand via GetCreaturesInGrid (the memberTargetDied Talk
+    -- precedent in this file) and the bridge is live
+    -- (engine/world/lua_creature_events.go, 2026-10-23), called on the
+    -- controller object (the C++ arm engages the controller, not the
+    -- member); C++ arm order kept.
+    for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
+        illidari:DoZoneInCombat()
+    end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:368: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -668,7 +708,17 @@ end
 -- The HealReceived -> shared-rule arm and the DoSpellAttackIfReady
 -- (41471) filler have no bridges — unmodeled.
 local function malandeEnterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
+    -- engage the controller (entry 23426) in the zone; the controller is
+    -- in hand via GetCreaturesInGrid (the memberTargetDied Talk
+    -- precedent in this file) and the bridge is live
+    -- (engine/world/lua_creature_events.go, 2026-10-23), called on the
+    -- controller object (the C++ arm engages the controller, not the
+    -- member); C++ arm order kept.
+    for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
+        illidari:DoZoneInCombat()
+    end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:451: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -710,7 +760,17 @@ end
 -- C++ JustEngagedWith + ScheduleEvents: the vanish cycle. The
 -- CanSeeAlways vanish-vision arm has no bridge — unmodeled.
 local function verasEnterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; setActive/DoZoneInCombat legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
+    -- engage the controller (entry 23426) in the zone; the controller is
+    -- in hand via GetCreaturesInGrid (the memberTargetDied Talk
+    -- precedent in this file) and the bridge is live
+    -- (engine/world/lua_creature_events.go, 2026-10-23), called on the
+    -- controller object (the C++ arm engages the controller, not the
+    -- member); C++ arm order kept.
+    for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
+        illidari:DoZoneInCombat()
+    end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:511: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)

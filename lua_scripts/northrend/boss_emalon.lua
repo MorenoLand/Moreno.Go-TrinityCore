@@ -40,10 +40,11 @@
 -- 2-arg = non-triggered) -> CastSpell(creature, 26662); Talk
 -- (EMOTE_BERSERK 2) (:160) -> creature:Talk(2); cast-before-Talk kept;
 -- 6min one-shot, no re-arm (:116).
--- npc_tempest_minionAI::JustEngagedWith (:219-229) — schedules
--- EVENT_SHOCK at 20s (:222); the DoZoneInCombat() and the
--- instance->GetGuidData(DATA_EMALON) pEmalon AttackStart legs are
--- unmodeled.
+-- npc_tempest_minionAI::JustEngagedWith (:219-229) — DoZoneInCombat()
+-- (:221, head of the arm) PORTED in the event-1 handler below (live
+-- bridge engine/world/lua_creature_events.go, 2026-10-23); EVENT_SHOCK
+-- scheduled at 20s (:222); the instance->GetGuidData(DATA_EMALON)
+-- pEmalon AttackStart leg is unmodeled.
 -- EVENT_SHOCK (:265-268) — DoCastVictim(SPELL_SHOCK 64363) (:267,
 -- 1-arg = non-triggered) -> CastSpell(nil, 64363); re-arm 20s
 -- (:268).
@@ -88,7 +89,9 @@
 -- minion's own GetAura(SPELL_OVERCHARGED) can never be non-nil in
 -- this tree — the :242-263 loop is inert in C++ too. Porting it
 -- would add dead code; the quirk is kept 1:1 in overchargeTick.
--- DoZoneInCombat() (:221): no bridge.
+-- DoZoneInCombat() (:221): PORTED (creature:DoZoneInCombat at the head
+-- of minionEnterCombat — live bridge engine/world/lua_creature_events.go,
+-- 2026-10-23).
 
 local ENTRY_EMALON = 33993
 local ENTRY_TEMPEST_MINION = 33998
@@ -261,12 +264,15 @@ local function shockTick(creature, guid)
     end)
 end
 
--- C++ npc_tempest_minionAI::JustEngagedWith (:219-229): EVENT_SHOCK
--- scheduled at 20s (:222). The DoZoneInCombat and instance legs are
--- unmodeled (documented in the header).
+-- C++ npc_tempest_minionAI::JustEngagedWith (:219-229): DoZoneInCombat
+-- (:221, head of the arm) PORTED (live bridge
+-- engine/world/lua_creature_events.go, 2026-10-23); EVENT_SHOCK
+-- scheduled at 20s (:222). The instance leg is unmodeled (documented
+-- in the header).
 local function minionEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:DoZoneInCombat() -- C++ :221
     schedule(guid, "shock", 20000, function()
         shockTick(creature, guid)
     end)

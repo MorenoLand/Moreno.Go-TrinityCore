@@ -27,9 +27,10 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms; dummy_dragonAI base,
 -- shared across the three drakes):
--- JustEngagedWith — Talk(SAY_AGGRO 0) + the shadow-breath and
--- shadow-fissure timers (event 1; the DoZoneInCombat leg has no
--- bridge — the tharon_ja / malygos DoZoneInCombat precedent; the
+-- JustEngagedWith — Talk(SAY_AGGRO 0) + DoZoneInCombat (PORTED
+-- 2026-10-23 — creature:DoZoneInCombat bridge live,
+-- engine/world/lua_creature_events.go, C++ arm order) + the
+-- shadow-breath and shadow-fissure timers (event 1; the
 -- EVENT_SHADOW_FISSURE leg rides the fissureTick port, so the old
 -- "no target-selection" leg claim is retracted).
 -- EVENT_SHADOW_BREATH — Talk(SAY_BREATH 3) +
@@ -63,9 +64,11 @@
 -- no bridge); SetData DATA_CAN_LOOT (_canLoot — no bridge);
 -- MovementInform (the POINT_ID_INIT 100 / POINT_ID_LAND 200
 -- waypoint machine over dragonCommon[6]: instance-gated
--- EnterEvadeMode, Clear + DoZoneInCombat + random-target chase
--- legs at the LAND point, waypointId wrap + EVENT_FREE_MOVEMENT
--- — no motion / instance / target-selection bridges);
+-- EnterEvadeMode, Clear + DoZoneInCombat (re-evaluated 2026-10-23
+-- against the live bridge — stays out: movement-machine leg) +
+-- random-target chase legs at the LAND point, waypointId wrap +
+-- EVENT_FREE_MOVEMENT — no motion / instance / target-selection
+-- bridges);
 -- OpenPortal (portal grid search (GO_TWILIGHT_PORTAL 193988,
 -- 50.0f), Tenebron egg summons (NPC_TWILIGHT_EGG 30882 /
 -- NPC_SARTHARION_TWILIGHT_EGG 31204, six positions,
@@ -127,8 +130,10 @@
 -- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED; the
 -- EVENT_TWILIGHT_EGGS 20s payload (SetBossState + SpawnWhelps whelp
 -- summons NPC_TWILIGHT_WHELP 30890 / NPC_SARTHARION_TWILIGHT_WHELP
--- 31214 + KillSelf) and JustSummoned (DoZoneInCombat) have no
--- summon / instance bridges — documented-only.
+-- 31214 + KillSelf) and JustSummoned (DoZoneInCombat — re-evaluated
+-- 2026-10-23 against the live bridge: stays out, summon-leg call on
+-- a different creature) have no summon / instance bridges —
+-- documented-only.
 -- npc_flame_tsunami (NPC_FLAME_TSUNAMI 30616, boss_sartharion.cpp
 -- enum) — EVENT_TSUNAMI_TIMER DoCast(me,
 -- SPELL_FLAME_TSUNAMI_DMG_AURA 57491) (2-arg non-triggered
@@ -154,8 +159,9 @@
 -- npc_twilight_whelp — PORTED 2026-10-16: the EVENT_FADE_ARMOR
 -- timer leg is bridgeable (CreateLuaEvent; see whelpEnterCombat /
 -- fadeArmorTick below); Reset's RemoveAllAuras leg ported
--- 2026-10-19, the DoZoneInCombat leg has no bridge (documented
--- deviation).
+-- 2026-10-19; the DoZoneInCombat leg stays out (re-evaluated
+-- 2026-10-23 against the live bridge: arm lives in Reset, not a
+-- JustEngagedWith — documented deviation).
 -- achievement_twilight_assist / achievement_twilight_duo /
 -- achievement_twilight_zone (target->GetAI()->GetData
 -- (TWILIGHT_ACHIEVEMENTS) >= 1 / >= 2 / == 3 — Sartharion's
@@ -275,13 +281,15 @@ end
 -- DoZoneInCombat + ScheduleEvent(EVENT_SHADOW_FISSURE,
 -- EVENT_SHADOW_BREATH) — the Talk and both timer legs are bridgeable
 -- (the old "no target-selection bridge" claim for the fissure leg was
--- stale — randomPlayerInRange); the DoZoneInCombat leg has no bridge.
+-- stale — randomPlayerInRange); the DoZoneInCombat leg is PORTED
+-- 2026-10-23 (bridge live).
 -- Plus the per-drake engage timers: EVENT_HATCH_EGGS
 -- (tenebron) and EVENT_ACOLYTE_SHADRON (shadron) payloads are
 -- unbridged; EVENT_ACOLYTE_VESPERON (vesperon) ports the
 -- victim-cast leg only (tormentTick, 1min init).
 local function dragonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:DoZoneInCombat() -- obsidian_sanctum.cpp:189 (dummy_dragonAI::JustEngagedWith arm 2, C++ order; bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shadowbreath", 20000, function()
@@ -378,8 +386,10 @@ end
 RegisterCreatureEvent(ENTRY_SHADRON, 23, shadronReset)
 
 -- C++ npc_twilight_whelp::Reset (obsidian_sanctum.cpp:983-988):
--- RemoveAllAuras ported 2026-10-19; the DoZoneInCombat leg has no
--- bridge (documented deviation); the bridgeable leg is
+-- RemoveAllAuras ported 2026-10-19; the DoZoneInCombat leg stays out
+-- (re-evaluated 2026-10-23 against the live bridge: arm lives in
+-- Reset, not a JustEngagedWith — documented deviation); the
+-- bridgeable leg is
 -- ScheduleEvent(EVENT_FADE_ARMOR,
 -- 1s), seeded here on event 1 per the svalna precedent (Reset-seeded
 -- timers re-keyed to combat start). UpdateAI ExecuteEvent:

@@ -86,11 +86,16 @@
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
 -- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as
 --   RemoveFlag(59, 0x300) in onStartFight (the keepCombat=false combat-end
---   leg drops, no bridge); the DoZoneInCombat + despawn
---   NPC_CROWN_APOTHECARY 36885 in grid sibling arms stay out (no bridges).
+--   leg drops, no bridge); the DoZoneInCombat (:220) + despawn
+--   NPC_CROWN_APOTHECARY 36885 in grid sibling arms stay out —
+--   2026-10-23 re-evaluation: the DoZoneInCombat fires from the
+--   UpdateAI EVENT_START_FIGHT timer (not a JustEngagedWith arm), and the
+--   despawn rides the unbridged grid search; bridges don't cover them.
 -- - CALL_BAXTER/FRYE: summons.DoAction(ACTION_START_FIGHT,
 --   EntryCheckPredicate) + summons.DoZoneInCombat(BAXTER) relay — no
---   bridges; the Talk arms are modeled.
+--   bridges (2026-10-23 re-evaluation: the relay is a summons-container
+--   call on a DIFFERENT creature riding the unported DoAction machine;
+--   stays out); the Talk arms are modeled.
 -- - npc_apothecary_genericAI DoAction legs (MovePoint to BaxterMovePos /
 --   FryeMovePos + EMOTE_STATE_USE_STANDING on MovementInform;
 --   ACTION_START_FIGHT immunity/combat legs) — no MotionMaster/
@@ -213,7 +218,8 @@ local function onCallFrye(creature, guid)
 end
 
 -- C++ EVENT_CALL_BAXTER: Talk(SAY_CALL_BAXTER); the DoAction/DoZoneInCombat
--- summon relays have no bridges.
+-- summon relays stay out — summons-container call on a different
+-- creature riding the unported DoAction machine (2026-10-23 re-eval).
 local function onCallBaxter(creature, guid)
     creature:Talk(SAY_CALL_BAXTER)
 end
@@ -223,7 +229,8 @@ end
 -- the flag twin RemoveFlag(UNIT_FIELD_FLAGS 59, 0x100|0x200 = 0x300)
 -- (Unit.cpp:8440-8451; SetImmuneToPC-sweep precedent): the keepCombat=false
 -- combat-end leg has no bridge (dropped), and so do the sibling
--- DoZoneInCombat() + NPC_CROWN_APOTHECARY grid-despawn arms (no bridges).
+-- DoZoneInCombat() (EVENT_START_FIGHT timer arm, not JustEngagedWith)
+-- + NPC_CROWN_APOTHECARY grid-despawn arms (2026-10-23 re-eval).
 local function onStartFight(creature, guid)
     creature:RemoveFlag(59, 0x300)
     schedule(guid, "baxter", 6000, function() onCallBaxter(creature, guid) end)

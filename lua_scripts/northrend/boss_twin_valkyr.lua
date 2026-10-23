@@ -47,9 +47,11 @@
 -- spell ids — the fjola/eydis AIs differ only in the id fields set
 -- in Reset):
 -- JustEngagedWith Talk(SAY_AGGRO 0) (event 1) + DoCastSelf(Surge
--- 65766 Light / 65768 Dark) (event arms; the BossAI::JustEngagedWith
--- instance-bookkeeping leg, DoZoneInCombat, cross-AI sister
--- AddAura/Empathy and setActive have no bridges
+-- 65766 Light / 65768 Dark) (event arms; the me->DoZoneInCombat() first
+-- arm is PORTED 2026-10-23 — DoZoneInCombat bridge live
+-- (engine/world/lua_creature_events.go); the BossAI::JustEngagedWith
+-- instance-bookkeeping leg, cross-AI sister AddAura/Empathy and
+-- DoZoneInCombat(pSister), and setActive have no bridges
 -- — tharon_ja precedent; the SetCombatPulseDelay(5) arm is PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
 -- C++ arm order)); KilledUnit Talk(SAY_KILL_PLAYER 6)
@@ -333,9 +335,15 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
         if creature:GetEntry() == ENTRY_FJOLA then
             creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
         end
+        -- C++ boss_twin_baseAI::JustEngagedWith first arm (:267, PORTED
+        -- 2026-10-23 — DoZoneInCombat bridge live,
+        -- engine/world/lua_creature_events.go); the cross-AI sister
+        -- DoZoneInCombat(pSister) leg (:270) stays out — no cross-AI
+        -- bridge.
+        creature:DoZoneInCombat()
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
-        creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; DoZoneInCombat/AddAura/sister Empathy/setActive legs have no bridge)
+        creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; AddAura/sister Empathy/setActive legs have no bridge)
         local guid = creature:GetGUID()
         cancelTimers(guid)
         schedule(guid, "twinspike", 20000, function()

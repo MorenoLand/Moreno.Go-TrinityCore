@@ -131,7 +131,12 @@
 -- npc_argent_captainAI::JustEngagedWith (:859-864) —
 --   SetHomePosition(*me) PORTED 2026-10-20 (event-surface
 --   SetHomePosition + GetX/GetY/GetZ/GetO, first in C++ order);
---   the DoZoneInCombat leg (IsUndead-gated) has no bridge.
+--   the IsUndead-gated DoZoneInCombat leg stays out — 2026-10-23
+--   re-evaluation against the live bridge: IsUndead flips true only via
+--   the Svalna REVIVE_CHAMPION SpellHit -> UpdateEntry leg
+--   (boss_sister_svalna.cpp:894-898), which never fires in Go (the
+--   resurrect rides the unbridged gauntlet DoAction machine), so the
+--   gate is dead in the ported model.
 -- npc_argent_captainAI::EnterEvadeMode (:869-892) —
 --   MoveFollow + far-visible/active legs (no movement bridge).
 -- npc_captain_arnath EVENT_ARNATH_FLASH_HEAL (:966-969,
@@ -276,7 +281,8 @@ end
 local function arnathEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
     -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
-    -- DoZoneInCombat leg has no bridge.
+    -- DoZoneInCombat leg stays out (2026-10-23 re-eval — the IsUndead
+    -- gate is dead in Go; see header).
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -320,7 +326,8 @@ end
 local function brandonEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
     -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
-    -- DoZoneInCombat leg has no bridge.
+    -- DoZoneInCombat leg stays out (2026-10-23 re-eval — the IsUndead
+    -- gate is dead in Go; see header).
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -377,7 +384,8 @@ end
 local function grondelEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
     -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
-    -- DoZoneInCombat leg has no bridge.
+    -- DoZoneInCombat leg stays out (2026-10-23 re-eval — the IsUndead
+    -- gate is dead in Go; see header).
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -424,7 +432,8 @@ end
 local function rupertEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859): me->SetHomePosition(*me)
     -- is the base-AI engage arm (the svalna :386 precedent); the IsUndead
-    -- DoZoneInCombat leg has no bridge.
+    -- DoZoneInCombat leg stays out (2026-10-23 re-eval — the IsUndead
+    -- gate is dead in Go; see header).
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)

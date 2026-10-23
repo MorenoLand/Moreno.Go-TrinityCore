@@ -94,8 +94,10 @@
 -- no-DoAction bridge (the krick ACTION_OUTRO precedent).
 -- boss_professor_putricide JustEngagedWith instance legs —
 -- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) /
--- DoZoneInCombat / instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
--- IN_PROGRESS) — no instance bridge; JustDied DoCastAOE(
+-- instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
+-- IN_PROGRESS) — no instance bridge (the DoZoneInCombat(me) :275 leg is
+-- PORTED in the event-1 handler — live bridge
+-- engine/world/lua_creature_events.go, 2026-10-23); JustDied DoCastAOE(
 -- SPELL_UNHOLY_INFUSION_CREDIT) leg: cast bridge exists
 -- (creature:CastSpell self-cast triggered) but the arm is gated on
 -- Is25ManRaid() — no 25-man bridge, stays out;
@@ -212,7 +214,8 @@ local function putricideJustEngagedWith(event, creature, target)
     -- C++ :274 — DoCast(me, SPELL_OOZE_TANK_PROTECTION, true)
     -- (triggered self-cast).
     creature:CastSpell(creature, SPELL_OOZE_TANK_PROTECTION, true)
-    creature:SetCombatPulseDelay(5) -- boss_professor_putricide.cpp:276 (JustEngagedWith arm; DoZoneInCombat leg has no bridge)
+    creature:DoZoneInCombat() -- boss_professor_putricide.cpp:275 (JustEngagedWith arm; bridge live engine/world/lua_creature_events.go, 2026-10-23)
+    creature:SetCombatPulseDelay(5) -- boss_professor_putricide.cpp:276 (JustEngagedWith arm)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     -- C++ :267 — events.ScheduleEvent(EVENT_SLIME_PUDDLE, 10s).
     schedule(guid, "slimepuddle", 10000, function() slimePuddleTick(creature, guid) end)

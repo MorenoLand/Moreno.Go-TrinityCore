@@ -31,8 +31,10 @@
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
 -- no instance-script model — boss admission via the luaBossAI shim
 -- (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI bookkeeping
--- and the DATA_VENOXIS encounter-state arms skipped); DoZoneInCombat has
--- no bridge — zone adds are not pulled; RemoveAllAuras is bridged
+-- and the DATA_VENOXIS encounter-state arms skipped); DoZoneInCombat is
+-- PORTED (creature:DoZoneInCombat, event-1 handler tail in C++ arm
+-- order — live bridge engine/world/lua_creature_events.go, 2026-10-23);
+-- RemoveAllAuras is bridged
 -- (creature:RemoveAllAuras) and ported in Reset/JustDied, and the
 -- REACT_PASSIVE/REACT_AGGRESSIVE arms are PORTED (creature:SetReactState,
 -- bridged lua_creature_events.go:524 — the stale "no bridge" note is
@@ -313,9 +315,11 @@ end
 RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    -- C++ boss_venoxisAI::JustEngagedWith (boss_venoxis.cpp:125-128):
+    -- C++ boss_venoxisAI::JustEngagedWith (boss_venoxis.cpp:125-141):
     -- SetReactState(REACT_AGGRESSIVE); BossAI::JustEngagedWith
-    -- bookkeeping and DoZoneInCombat have no bridge.
+    -- bookkeeping still skipped; DoZoneInCombat (:141, tail) PORTED
+    -- below (live bridge engine/world/lua_creature_events.go,
+    -- 2026-10-23).
     creature:SetReactState(REACT_AGGRESSIVE)
     schedule(guid, "thrash", 5000, function()
         onThrash(creature, guid)
@@ -335,6 +339,8 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
     schedule(guid, "holywrath", 60000, function()
         onHolyWrath(creature, guid)
     end)
+    -- C++ :141 — DoZoneInCombat(), JustEngagedWith tail (C++ arm order).
+    creature:DoZoneInCombat()
 end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 2, function(event, creature)

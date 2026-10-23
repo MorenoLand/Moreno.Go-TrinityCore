@@ -245,8 +245,11 @@ end
 -- raised row blocks effect-114 taunts (IMMUNE2 strip) and aura-11
 -- taunts (aura-apply strip) — gurtogg precedent ported at
 -- boss_gurtogg_bloodboil.lua:357-358. The ResetThreatList arm is
--- PORTED below; the DoZoneInCombat re-engage has no bridge — Go
--- keeps the stale victim while the table rebuilds from damage.
+-- PORTED below; the ChangePhase-tail DoZoneInCombat re-engage
+-- (supremus.cpp:114) stays out — 2026-10-23 re-evaluation against the
+-- live bridge: it is a phase-machine re-engage, not a JustEngagedWith
+-- arm, so Go keeps the stale victim while the table rebuilds from
+-- damage.
 -- EVENT_SWITCH_PHASE is re-armed 60s unconditional (C++-exact).
 -- NOTE (2026-10-13): the opposite-phase timer cancels above are
 -- LOCAL-TREE-exact. Stock TC's EventMap keeps phase-mismatched
@@ -285,9 +288,9 @@ local function changePhase(creature, guid)
         creature:ApplySpellImmune(0, 1, 11, true)
         creature:ApplySpellImmune(0, 0, 114, true)
     end
-    -- C++ ChangePhase tail (supremus.cpp:113): ResetThreatList() before the
-    -- 60s re-arm (the DoZoneInCombat re-engage has no bridge — Go keeps
-    -- the stale victim while the table rebuilds from damage).
+    -- C++ ChangePhase tail (supremus.cpp:113-114): ResetThreatList() before the
+    -- 60s re-arm (the DoZoneInCombat re-engage stays out — phase-machine
+    -- leg re-evaluated against the live 2026-10-23 bridge).
     creature:ClearThreatList()
     schedule(guid, "switchphase", 60000, function()
         changePhase(creature, guid)

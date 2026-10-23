@@ -28,7 +28,11 @@
 -- boss_anubrekhan: JustEngagedWith Talk(SAY_AGGRO 0) (event 1; the
 -- BossAI::JustEngagedWith instance-bookkeeping leg, summons.
 -- DoZoneInCombat, events.SetPhase(PHASE_NORMAL) have no bridge —
--- tharon_ja precedent); KilledUnit Talk(SAY_SLAY 2) (event 3 —
+-- tharon_ja precedent; re-evaluated against the live DoZoneInCombat
+-- bridge 2026-10-23 and STAYS OUT: boss_anubrekhan.cpp:164 is
+-- summons.DoZoneInCombat() (engages the summoned crypt guards), not a
+-- me->DoZoneInCombat() on the boss itself); KilledUnit Talk(SAY_SLAY 2)
+-- (event 3 —
 -- C++-UNCONDITIONAL: the Talk fires for any victim; only the corpse
 -- scarab cast below is player-gated; no nalorakk gate here);
 -- EVENT_LOCUST — Talk(EMOTE_LOCUST 3) + DoCastSelf(Locust Swarm

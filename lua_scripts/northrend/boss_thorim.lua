@@ -24,8 +24,10 @@
 -- non-triggered; the phase-2 removal at line 724 rides the unbridged
 -- phase machine, so in Lua the aura persists — documented deviation).
 -- boss_thorimAI KilledUnit — player-gated Talk(SAY_SLAY 4).
--- npc_runic_colossusAI JustEngagedWith (lines 1447-1449) — schedules the
--- three arms below (the DoZoneInCombat leg has no bridge).
+-- npc_runic_colossusAI JustEngagedWith (boss_thorim.cpp:1444-1449) — the
+-- DoZoneInCombat first arm is PORTED 2026-10-23 (bridge live,
+-- engine/world/lua_creature_events.go); the three ScheduleEvent arms
+-- below follow in C++ order.
 -- npc_runic_colossusAI EVENT_RUNIC_BARRIER (enum line 117; arm lines
 -- 1463-1466, Repeat(35s,45s)) — Talk(EMOTE_RUNIC_BARRIER 0) +
 -- DoCastAOE(SPELL_RUNIC_BARRIER 62338), non-triggered.
@@ -35,7 +37,9 @@
 -- 1472-1479, Repeat(20s)) — random player 8-40y,
 -- DoCast(target, SPELL_RUNIC_CHARGE 62613), non-triggered (the baltharus
 -- GetPlayersInWorld candidate-selection precedent).
--- npc_ancient_rune_giantAI JustEngagedWith (lines 1534-1536).
+-- npc_ancient_rune_giantAI JustEngagedWith (boss_thorim.cpp:1531-1536) —
+-- the DoZoneInCombat first arm is PORTED 2026-10-23 (bridge live,
+-- engine/world/lua_creature_events.go).
 -- npc_ancient_rune_giantAI EVENT_RUNIC_FORTIFICATION (enum line 123;
 -- arm lines 1559-1561, 1ms once) — Talk(EMOTE_RUNIC_MIGHT 0) +
 -- DoCastAOE(SPELL_RUNIC_FORTIFICATION 62942), non-triggered.
@@ -71,8 +75,12 @@
 -- on the summoner (lua_creature_events.go:766) and SetReactState IS
 -- bridged (frozen_core precedent) — the arms stay out on the
 -- TrashJumpEvent legs (:386-410): stage-1 DoZoneInCombat + SetBoundary
--- (no DoZoneInCombat bridge) and the SPELL_LEAP movement — without
--- them the pre-phase adds would stand passive forever.
+-- and the SPELL_LEAP movement — without them the pre-phase adds would
+-- stand passive forever (2026-10-23: re-evaluated against the live
+-- DoZoneInCombat bridge — the stage-1 leg (boss_thorim.cpp:400,
+-- _owner->AI()->DoZoneInCombat(_owner)) stays out because it is a
+-- cross-creature call inside the unbridged BasicEvent machine, not a
+-- plain me->DoZoneInCombat() in a ported JustEngagedWith arm.)
 -- boss_thorimAI EVENT_BERSERK (lines 750+) — phase-conditional Talk(SAY_WIPE
 -- 6 / SAY_BERSERK 5) + triggered casts; DoAction(ACTION_BERSERK)-gated
 -- reschedule; no DoAction / berserk bridge.
@@ -251,12 +259,13 @@ local function colossusRunicChargeTick(creature, guid)
     end)
 end
 
--- C++ npc_runic_colossusAI::JustEngagedWith: DoZoneInCombat();
--- _events.Reset(); ScheduleEvent(EVENT_RUNIC_BARRIER, 12s, 15s),
--- EVENT_SMASH (15s, 18s), EVENT_RUNIC_CHARGE (20s, 24s).
--- (The DoZoneInCombat leg has no bridge; EVENT_RUNIC_SMASH rides
+-- C++ npc_runic_colossusAI::JustEngagedWith (boss_thorim.cpp:1444-1449):
+-- DoZoneInCombat() first (PORTED 2026-10-23 — bridge live,
+-- engine/world/lua_creature_events.go), then _events.Reset() and the
+-- three ScheduleEvent arms. (EVENT_RUNIC_SMASH rides
 -- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) — no DoAction bridge.)
 local function colossusEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- C++ :1444, first arm (bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "runicbarrier", {12000, 15000}, function()
@@ -304,10 +313,12 @@ local function giantRuneDetonationTick(creature, guid)
     end)
 end
 
--- C++ npc_ancient_rune_giantAI::JustEngagedWith: DoZoneInCombat();
--- _events.Reset(); ScheduleEvent(EVENT_RUNIC_FORTIFICATION, 1ms),
--- EVENT_STOMP (10s, 12s), EVENT_RUNE_DETONATION (25s).
+-- C++ npc_ancient_rune_giantAI::JustEngagedWith (boss_thorim.cpp:1531-1535):
+-- DoZoneInCombat() first (PORTED 2026-10-23 — bridge live,
+-- engine/world/lua_creature_events.go), then _events.Reset() and the
+-- three ScheduleEvent arms.
 local function giantEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- C++ :1532, first arm (bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "runicfortification", 1, function()

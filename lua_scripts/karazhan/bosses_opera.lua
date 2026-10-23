@@ -23,13 +23,16 @@
 -- Romulo (17533), and the wolf (grandmother gossip, 17603) ARE summoned
 -- now (2026-10-22 summon bridge — creature:SummonCreature on the handler
 -- surface); the cyclone summon still has no bearer. The C++ aggro legs
--- (AttackStart / DoZoneInCombat / Attack) have no bridge, so summons idle
+-- (AttackStart / Attack have no bridge; DoZoneInCombat is bridged since
+-- 2026-10-23 but the summon legs call it on the summon — different
+-- creature, stay out per triage rule), so summons idle
 -- until the engine aggros them — npc_tito (17548), boss_crone (18168),
 -- boss_bigbadwolf (17521) and boss_romulo (17533) are all registered, so
 -- a spawned one fights correctly once engaged (aran-elemental
 -- convention). No
 -- instance-script model — the Oz death counter, DATA_OPERA_PERFORMANCE
--- SetBossState(DONE), and DoZoneInCombat arms are skipped. No threat
+-- SetBossState(DONE), and DoZoneInCombat arms are skipped
+-- (instance-legs: re-evaluated 2026-10-23, stays out). No threat
 -- model — the wolf's chase threat juggling is skipped (chase is Talk +
 -- debuff + a fear/swipe freeze) and BackwardLunge picks a random alive
 -- player excluding the victim (approximates the C++ second-threat
@@ -936,8 +939,10 @@ RegisterCreatureGossipEvent(ENTRY_GRANDMOTHER, 2, grandmotherGossipSelect)
 -- drink-poison 30907, 2-arg non-triggered) then SpellHit fires
 -- Talk(SAY_JULIANNE_DEATH01 = 2), and 2.5s later she fakes death and flips
 -- to phase ROMULO; 10s after that Romulo is summoned (summon bridge,
--- 2026-10-22 — his DoZoneInCombat aggro leg has no bridge, so he stands
--- until the engine aggros him, documented gap).
+-- 2026-10-22 — his DoZoneInCombat aggro leg (bosses_opera.cpp:1411,
+-- on the summon, not self) stays out: re-evaluated 2026-10-23
+-- against the live bridge — summon-leg call on a different
+-- creature; he stands until the engine aggros him, documented gap).
 -- Phase ROMULO: Romulo fights — backward lunge 30815 on a random alive
 -- player within 100 yd every 15-30s (C++ picks the second-threat target
 -- behind him; no threat/facing model), daring 30841 on self every 20-40s,
@@ -1209,8 +1214,10 @@ local function julianneDamageTaken(event, creature, attacker, damage)
                 -- C++ arm order: RomuloGUID latch (raj.romulo/romuloGuid),
                 -- ENSURE_AI JulianneGUID + Phase = PHASE_ROMULO (the
                 -- shared raj table — single-instance convention),
-                -- DoZoneInCombat (NO bridge — the summon stands until
-                -- the engine aggros it, documented gap),
+                -- DoZoneInCombat (bridged 2026-10-23 but STAY-OUT:
+                -- bosses_opera.cpp:1411 calls it on the summon —
+                -- different creature; he stands until the engine
+                -- aggros him, documented gap),
                 -- SetFaction(FACTION_MONSTER_2) (bridged, ported).
                 local summon = creature:SummonCreature(ENTRY_ROMULO,
                     ROMULO_X, ROMULO_Y, creature:GetZ(), creature:GetO(),

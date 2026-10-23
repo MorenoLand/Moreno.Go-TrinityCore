@@ -9,8 +9,10 @@
 -- maiden_of_virtue idiom — GetPlayersInWorld filtered by
 -- map/instance/alive).
 -- The 35s KillSelf has no Lua bridge (no KillSelf API); the portal
--- summon/JustDied cross-kill and DoZoneInCombat have no bridge —
--- documented, not wired.
+-- summon/JustDied cross-kill legs stay out (no bridges — documented,
+-- not wired). The JustEngagedWith DoZoneInCombat leg PORTED
+-- 2026-10-23 (creature:DoZoneInCombat bridge live,
+-- engine/world/lua_creature_events.go).
 local ENTRY = 15726
 local SPELL_MIND_FLAY = 26143
 
@@ -47,6 +49,7 @@ local function onMindFlay(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- boss_cthun.cpp:927-930 (eye_tentacleAI::JustEngagedWith — sole arm; bridge live 2026-10-23)
     creature:SetMeleeAttack(false) -- boss_cthun.cpp:932: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)

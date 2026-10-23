@@ -75,7 +75,7 @@
 --   DoAction bridge — porting the apply alone fabricates a
 --   permanently-immune boss (the falric header carries the full note,
 --   2026-10-23 SetImmuneToAll sweep).
--- JustEngagedWith :68 DoZoneInCombat — no bridge.
+-- JustEngagedWith :68 DoZoneInCombat — PORTED (creature:DoZoneInCombat, event-1 handler, C++ arm order — live bridge engine/world/lua_creature_events.go, 2026-10-23).
 -- JustEngagedWith :69 / JustDied :81 instance->SetBossState
 --   (DATA_MARWYN, IN_PROGRESS / DONE) — no instance-state bridge.
 -- UpdateAI :97 me->HasUnitState(UNIT_STATE_CASTING) gate — no
@@ -221,13 +221,15 @@ local function onSharedSuffering(creature, guid)
     schedule(guid, "sharedsuffering", {14000, 15000}, function() onSharedSuffering(creature, guid) end)
 end
 
--- C++ :65-74 JustEngagedWith: Talk(SAY_AGGRO) (:67); seeds the four
--- timers (:71-74). DoZoneInCombat (:68) and instance->SetBossState
--- IN_PROGRESS (:69) have no bridge (see header).
+-- C++ :65-74 JustEngagedWith: Talk(SAY_AGGRO) (:67); DoZoneInCombat
+-- (:68) PORTED below (live bridge engine/world/lua_creature_events.go,
+-- 2026-10-23); seeds the four timers (:71-74).
+-- instance->SetBossState IN_PROGRESS (:69) has no bridge (see header).
 local function marwynJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
     creature:Talk(SAY_AGGRO)
+    creature:DoZoneInCombat() -- C++ :68
     schedule(guid, "obliterate", {8000, 13000}, function() onObliterate(creature, guid) end)
     schedule(guid, "well", 12000, function() onWellOfCorruption(creature, guid) end)
     schedule(guid, "corruptedflesh", 20000, function() onCorruptedFlesh(creature, guid) end)

@@ -30,7 +30,9 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_razuvious: JustEngagedWith Talk(SAY_AGGRO 0) (event 1; the
 -- BossAI::JustEngagedWith instance-bookkeeping leg, me->StopMoving,
--- summons.DoZoneInCombat have no bridge — tharon_ja precedent);
+-- summons.DoZoneInCombat (stays out — summons-container call, not a
+-- plain me->DoZoneInCombat() JustEngagedWith arm; tharon_ja precedent
+-- — 2026-10-23 re-evaluated against the live bridge);
 -- KilledUnit Talk(SAY_SLAY 1) (event 3 — C++-GATED: Talk fires only
 -- when the victim is a player or a TYPEID_UNIT with entry
 -- NPC_DK_UNDERSTUDY 16803 — the nalorakk player-gate variant, extended
@@ -77,8 +79,11 @@
 -- RegisterLuaBoss-style surface): LoadEquipment(1) — no equipment
 -- bridge; JustEngagedWith — SetUInt32Value(UNIT_NPC_EMOTESTATE,
 -- EMOTE_ONESHOT_NONE) + cross-AI DoZoneInCombat on razuvious via
--- _instance->GetGuidData(DATA_RAZUVIOUS) — no instance / cross-AI
--- bridges; JustReachedHome — DespawnOrUnsummon when BOSS_RAZUVIOUS ==
+-- _instance->GetGuidData(DATA_RAZUVIOUS) — stays out: 2026-10-23
+-- re-evaluation against the live bridge — a DIFFERENT creature's arm
+-- (razuvious, not the understudy) riding the unbridged instance
+-- GetGuidData leg; the understudy has no event-1 registration in Lua
+-- to host it, so there is no PORT site either; JustReachedHome — DespawnOrUnsummon when BOSS_RAZUVIOUS ==
 -- DONE — instance model; UpdateAI — bloodStrikeTimer DoCastVictim(
 -- SPELL_UNDERSTUDY_BLOOD_STRIKE 61696) — PORTED 2026-10-23 as the
 -- event-7 understudyAIUpdate below: the timer is 0-initialized and
@@ -86,7 +91,9 @@
 -- !isPossessedByPlayer() gates ride the new creature:IsCharmed()
 -- bridge (lua_creature_events.go). OnCharmed — stays out: the arm's
 -- only effects are SetUInt32Value emotestate + cross-AI DoZoneInCombat
--- on Razuvious (no bridges); the ScriptedAI::JustEngagedWith base is
+-- on Razuvious (different creature, instance-leg-gated — same stay-out
+-- as the understudy JustEngagedWith leg above, 2026-10-23 re-eval);
+-- the ScriptedAI::JustEngagedWith base is
 -- a no-op hook.
 
 local ENTRY_RAZUVIOUS = 16061
@@ -188,7 +195,8 @@ end
 
 local function razyviousEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- Reset arm, boss_razuvious.cpp:169 (ranged AI stands and casts)
-    creature:StopMoving() -- boss_razuvious.cpp:123 (DoZoneInCombat sibling unbridged)
+    creature:StopMoving() -- boss_razuvious.cpp:123 (the summons.DoZoneInCombat
+    -- sibling at :124 stays out — summons-container call, 2026-10-23 re-eval)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

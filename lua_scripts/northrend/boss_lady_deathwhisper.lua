@@ -47,9 +47,11 @@
 -- boss JustEngagedWith (:281-342): Talk(SAY_AGGRO 7) (:338),
 -- RemoveAurasDueToSpell(SHADOW_CHANNELING) (:339), then
 -- DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340). The
--- CheckRequiredBosses evade branch, DoZoneInCombat,
+-- CheckRequiredBosses evade branch,
 -- instance->SetBossState, scheduler.CancelGroup(GROUP_INTRO) legs have
--- no bridge. Phase-INDEPENDENT scheduler arms ported:
+-- no bridge (the DoZoneInCombat leg :293 is PORTED in the event-1
+-- handler — live bridge engine/world/lua_creature_events.go,
+-- 2026-10-23). Phase-INDEPENDENT scheduler arms ported:
 -- SPELL_BERSERK 26662 self-cast 10min one-shot + Talk(SAY_BERSERK 15)
 -- (:296-300); SPELL_DEATH_AND_DECAY 71001 — no GROUP arg, survives
 -- phase transition (:301-306): random-target cast init 17s / re-arm
@@ -146,8 +148,9 @@
 -- Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12) ride
 -- summon / random-target / cross-creature machines (no bridge); the
 -- CheckRequiredBosses / EnterEvadeMode / instance->DoCastSpellOnPlayers
--- / DoZoneInCombat / instance->SetBossState legs have no instance
--- bridge.
+-- / instance->SetBossState legs have no instance bridge (the
+-- DoZoneInCombat :293 leg is PORTED in the event-1 handler — live
+-- bridge engine/world/lua_creature_events.go, 2026-10-23).
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
 -- transition; the old "(no health-pct bridge; the garfrost
@@ -461,7 +464,8 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
-    creature:SetCombatPulseDelay(5) -- boss_lady_deathwhisper.cpp:291 (JustEngagedWith arm 2; setActive/DoZoneInCombat legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_lady_deathwhisper.cpp:291 (JustEngagedWith arm 2; the setActive leg still has no bridge)
+    creature:DoZoneInCombat() -- boss_lady_deathwhisper.cpp:293 (JustEngagedWith arm 3; bridge live engine/world/lua_creature_events.go, 2026-10-23)
     creature:Talk(SAY_AGGRO)
     -- C++ :338 DoStartNoMovement(who) — engage-stationary; phase-1 exact.
     -- The phase-2 DoStartMovement leg is ported in the DamageTaken

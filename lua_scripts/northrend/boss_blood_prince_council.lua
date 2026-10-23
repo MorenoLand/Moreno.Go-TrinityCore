@@ -63,7 +63,8 @@
 -- bridge, lua_creature_events.go; event 1, C++ arm order)
 -- and the Reset's SetCombatPulseDelay(0) + SetImmuneToPC(false) (:447/:449)
 -- arms (PORTED — event 23, C++ arm order); the setActive/DoZoneInCombat legs
--- have no bridge:
+-- stay out (re-evaluated 2026-10-23 against the live bridge — the
+-- controller is not in hand):
 -- keleseth: EVENT_BERSERK 600000ms (:622), EVENT_SHADOW_RESONANCE
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
 -- taldaram: EVENT_BERSERK 600000ms (:689), EVENT_GLITTERING_SPARKS
@@ -103,7 +104,9 @@
 --
 -- DOCUMENTED-ONLY (no registration beyond the three prince entries):
 -- boss_blood_council_controller — zero own Talk lines; its
--- JustEngagedWith (:254-292, CheckRequiredBosses / DoZoneInCombat /
+-- JustEngagedWith (:254-292, CheckRequiredBosses / DoZoneInCombat
+-- (re-evaluated 2026-10-23: stays out — controller unregistered, arm
+-- rides the instance machine) /
 -- SetBossState / DoCastSelf(SPELL_INVOCATION_OF_BLOOD_VALANAR 70952) /
 -- the roll_chance_i(50) _invocationOrder build / EVENT_INVOCATION_OF_BLOOD
 -- seed :289) has no instance bridge; UpdateAI EVENT_INVOCATION_OF_BLOOD
@@ -361,7 +364,7 @@ end
 -- legs :628-629 (creature:IsHeroic() now bridged).
 -- JustEngagedWith (:455) otherwise has no bridgeable leg.
 local function kelesethEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -378,7 +381,7 @@ end
 -- EVENT_CONJURE_FLAME 20000ms + the IsHeroic-gated shadow-prison
 -- leg :693 (creature:IsHeroic() now bridged).
 local function taldaramEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -469,7 +472,7 @@ local function nucleusReset(event, creature)
 end
 
 local function valanarEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive/DoZoneInCombat(controller) legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then

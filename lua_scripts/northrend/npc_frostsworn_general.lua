@@ -63,8 +63,11 @@
 -- npc_frostsworn_general UpdateAI — EVENT_CLONE (:1939-1942)
 -- SummonClones machine (:1950-1964: SelectTargetList + SummonCreature
 -- + clone/ghost-visual casts + AttackStart) rides the no-summon /
--- no-instance-GetGuidData bridges, so it is documented-only;
--- DoZoneInCombat has no bridge.
+-- no-instance-GetGuidData bridges, so it is documented-only.
+-- (CORRECTION 2026-10-23: the JustEngagedWith DoZoneInCombat leg
+-- (:1908) IS ported below — creature:DoZoneInCombat() is bridged
+-- (engine/world/lua_creature_events.go); the stale "no bridge" claim
+-- is retracted for that leg.)
 -- The jaina/sylvanas intro Talk machine (SAY_JAINA_INTRO_1..11,
 -- SAY_SYLVANAS_INTRO_1..8, SAY_UTHER_INTRO_A2/H2_*, SAY_LK_INTRO_1..3) and
 -- the escape Talk machine all ride instance SetData / DoAction legs —
@@ -188,10 +191,12 @@ end
 
 -- C++ npc_frostsworn_generalAI::JustEngagedWith :1905-1913:
 -- Talk(SAY_AGGRO) (the auriaya engage-port precedent), DoZoneInCombat
--- (no bridge), EVENT_SHIELD at 5000ms, EVENT_SPIKE at 14000ms
+-- (PORTED 2026-10-23 — bridge live, engine/world/lua_creature_events.go),
+-- EVENT_SHIELD at 5000ms, EVENT_SPIKE at 14000ms
 -- (EVENT_CLONE's SummonClones leg is documented-only).
 local function frostswornGeneralJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:DoZoneInCombat() -- C++ halls_of_reflection.cpp:1908, in arm order after Talk (bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shield", 5000, function() generalShieldTick(creature, guid) end)

@@ -42,10 +42,12 @@
 -- CheckRequiredBosses gate / EVADE_REASON_SEQUENCE_BREAK leg /
 -- DoCastSpellOnPlayers LIGHT_S_HAMMER_TELEPORT leg / DoCastSelf
 -- FROST_AURA+PERMAEATING_CHILL legs / SetBossState(IN_PROGRESS) /
--- setActive / DoZoneInCombat legs have no bridges; the
--- SetCombatPulseDelay(5) + SetFarVisible(true) arms are PORTED
+-- setActive leg has no bridge; the SetCombatPulseDelay(5) +
+-- SetFarVisible(true) arms are PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
--- C++ arm order)).
+-- C++ arm order); the DoZoneInCombat tail (:284) is PORTED
+-- (creature:DoZoneInCombat, live bridge
+-- engine/world/lua_creature_events.go, 2026-10-23)).
 -- boss_sindragosa KilledUnit — Talk(SAY_KILL 8) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
@@ -228,7 +230,8 @@ local function sindragosaJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_PERMAEATING_CHILL)
     creature:Talk(SAY_AGGRO)
     creature:SetCombatPulseDelay(5) -- boss_sindragosa.cpp:281 (JustEngagedWith arm)
-    creature:SetFarVisible(true) -- boss_sindragosa.cpp:283 (the setActive/DoZoneInCombat legs still have no bridge)
+    creature:SetFarVisible(true) -- boss_sindragosa.cpp:283 (the setActive leg still has no bridge)
+    creature:DoZoneInCombat() -- boss_sindragosa.cpp:284 (JustEngagedWith tail; bridge live engine/world/lua_creature_events.go, 2026-10-23)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
 end
 
