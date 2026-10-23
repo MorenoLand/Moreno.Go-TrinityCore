@@ -138,6 +138,20 @@ local SPELL_OOZE_TANK_PROTECTION = 71770
 local SPELL_MUTATED_PLAGUE_CLEAR = 72618
 local SPELL_BERSERK2 = 47008
 local SPELL_SLIME_PUDDLE_TRIGGER = 70341
+local SPELL_MALLEABLE_GOO_H = 72296
+local SPELL_GROW_STACKER = 70345
+local SPELL_SLIME_PUDDLE_AURA = 70343
+local SPELL_GROW = 70347
+local SPELL_CHOKING_GAS_BOMB_PERIODIC = 71259
+local SPELL_CHOKING_GAS_EXPLOSION_TRIGGER = 71280
+
+local NPC_MALLEABLE_OOZE_STALKER = 38556
+local NPC_GROWING_OOZE_PUDDLE = 37690
+local NPC_GAS_CLOUD = 37562
+local NPC_VOLATILE_OOZE = 37697
+local NPC_CHOKING_GAS_BOMB = 38159
+local NPC_MUTATED_ABOMINATION_10 = 37672
+local NPC_MUTATED_ABOMINATION_25 = 38285
 
 local timers = {}
 
@@ -266,8 +280,58 @@ local function putricideJustDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_MUTATED_PLAGUE_CLEAR)
 end
 
+-- C++ boss_professor_putricide::JustSummoned (boss_professor_putricide.cpp:305-344):
+-- per-entry summon arms. Event 19 (Eluna JustSummoned) fires on the summoner
+-- as (event, creature, summoned) — the magtheridon channelerJustSummoned
+-- precedent.
+local function putricideJustSummoned(event, creature, summon)
+    -- C++ opens with summons.Summon(summon) summon-list tracking — no
+    -- summon-list bridge, dropped (same as the Reset summons.DespawnAll
+    -- arm, which is also unmodeled in putricideReset).
+    local entry = summon:GetEntry()
+    if entry == NPC_MALLEABLE_OOZE_STALKER then
+        -- C++ :311 DoCast(summon, SPELL_MALLEABLE_GOO_H), non-triggered;
+        -- the return skips the :342-343 IsInCombat/DoZoneInCombat tail.
+        creature:CastSpell(summon, SPELL_MALLEABLE_GOO_H)
+        return
+    elseif entry == NPC_GROWING_OOZE_PUDDLE then
+        -- C++ :314-318: triggered self-casts; the 7x SPELL_GROW loop is
+        -- sniff-confirmed (blizzard casts it 7 times initially).
+        summon:CastSpell(summon, SPELL_GROW_STACKER, true)
+        summon:CastSpell(summon, SPELL_SLIME_PUDDLE_AURA, true)
+        for _ = 1, 7 do
+            summon:CastSpell(summon, SPELL_GROW, true)
+        end
+    elseif entry == NPC_GAS_CLOUD then
+        -- C++ :320-323: summon->ModifyAuraState(AURA_STATE_UNKNOWN22, true)
+        -- has no Lua bridge (no ModifyAuraState on the creature event
+        -- surface; engine/world/aura_state.go keeps the mask computed with
+        -- no manual override — the twin_valkyr Reset STAY-OUT precedent), so
+        -- only the REACT_PASSIVE arm ports.
+        summon:SetReactState(0) -- REACT_PASSIVE
+    elseif entry == NPC_VOLATILE_OOZE then
+        -- C++ :325-328: same shape as gas cloud (AURA_STATE_UNKNOWN19).
+        summon:SetReactState(0) -- REACT_PASSIVE
+    elseif entry == NPC_CHOKING_GAS_BOMB then
+        -- C++ :331-333 triggered self-casts; the return skips the tail.
+        summon:CastSpell(summon, SPELL_CHOKING_GAS_BOMB_PERIODIC, true)
+        summon:CastSpell(summon, SPELL_CHOKING_GAS_EXPLOSION_TRIGGER, true)
+        return
+    elseif entry == NPC_MUTATED_ABOMINATION_10 or entry == NPC_MUTATED_ABOMINATION_25 then
+        -- C++ :334-337: plain return, skips the tail.
+        return
+    end
+    -- C++ :342-343: the tail every non-returning branch shares —
+    -- DoZoneInCombat(summon) rides the summon-object receiver (mandokir
+    -- precedent).
+    if creature:IsInCombat() then
+        summon:DoZoneInCombat()
+    end
+end
+
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 1, putricideJustEngagedWith)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 2, putricideLeaveCombat)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 3, putricideKilledUnit)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 4, putricideJustDied)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 23, putricideReset)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 19, putricideJustSummoned)
