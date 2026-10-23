@@ -54,8 +54,12 @@
 -- _JustDied arm is instance-blocked). OnLeaveCombat(2)/OnReset(23):
 -- cancel the pump, drop per-GUID state (the _Reset arm is
 -- instance-blocked; the Reset() REACT_PASSIVE + UNIT_FLAG_NON_
--- ATTACKABLE + SetImmuneToAll(true) arms have no flag/react/immune
--- bridges — thespia/kalithresh precedent — and the
+-- ATTACKABLE + SetImmuneToAll(true) arms stay out — the stale
+-- 'no flag/react/immune bridges' claim is retracted (the
+-- SetFlag/RemoveFlag(59) surface IS bridged): the immune apply
+-- is paired with the unbridgeable ChannelerDied clear, so
+-- porting the apply alone would leave the boss permanently
+-- immune and unpullable — and the
 -- SummonChannelers() arm has no summon bridge, steamrigger
 -- precedent).
 -- Deliberate deviations (all await engine bridges): no
@@ -71,9 +75,14 @@
 -- channelers-dead activation: REACT_AGGRESSIVE +
 -- RemoveFlag(NON_ATTACKABLE) + SetImmuneToAll(false) + AttackStart
 -- (killer)) and GetChanneled unmodeled, so SAY_ADD_AGGRO is
--- unreachable in this model; no flag/react/immune bridges — the
--- pre-fight passive/non-attackable/immune channeling state
--- unmodeled, and with it the !UpdateVictim evocation (SPELL_
+-- unreachable in this model; no react bridge — the
+-- pre-fight passive/non-attackable channeling state stays
+-- unmodeled (the Reset() SetImmuneToAll(true) apply is paired
+-- with the unbridgeable ChannelerDied clear — porting the apply
+-- alone would leave the boss permanently immune and unpullable,
+-- so the pair stays out; the stale 'no flag/immune bridges'
+-- claim is retracted — the SetFlag/RemoveFlag(59) surface IS
+-- bridged), and with it the !UpdateVictim evocation (SPELL_
 -- EVOCATION 30935) check_Timer arm, which only fires in that
 -- state; no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the JustEngagedWith and burning-
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia

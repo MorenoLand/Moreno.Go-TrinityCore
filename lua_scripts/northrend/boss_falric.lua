@@ -75,11 +75,20 @@
 --   72435) = self-cast; re-arm {21000,39000}ms randtime unconditional.
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 38112):
--- ctor / boss_horAI::Reset (boss_horAI.cpp) — _Reset() passthrough,
---   SetVisible(false), SetImmuneToAll(true), SetReactState(REACT_PASSIVE),
---   the GetData(DATA_WAVE_COUNT)/ProcessEvent(EVENT_DO_WIPE) wave leg —
---   no bridge by construction; Initialize (_hopelessnessCount = 0, :67)
---   is the per-GUID state seed on enter combat.
+-- ctor / boss_horAI::Reset (boss_horAI.cpp:26-34) — _Reset() passthrough,
+--   SetVisible(false), SetImmuneToAll(true) (:30),
+--   SetReactState(REACT_PASSIVE), the GetData(DATA_WAVE_COUNT) /
+--   ProcessEvent(EVENT_DO_WIPE) wave leg. The flag twin
+--   (creature:SetFlag(59, 0x300)) IS bridged, but :30 is the apply half
+--   of an instance-sequencer-driven toggle: the clear
+--   (DoAction(ACTION_ENTER_COMBAT), boss_horAI.cpp:41, driven by the
+--   unported instance wave machine) has no DoAction bridge, so porting
+--   the apply alone fabricates a permanently-immune boss the C++ never
+--   exhibits — both halves stay out (the 2026-10-23 SetImmuneToAll
+--   sweep; same bar as the svalna gauntlet toggle). The old "no bridge
+--   by construction" phrasing is retracted: the blocker is the unported
+--   toggle pair, not the flag bridge. Initialize (_hopelessnessCount =
+--   0, :67) is the per-GUID state seed on enter combat.
 -- JustEngagedWith :79 DoZoneInCombat / :80 instance->SetBossState
 --   IN_PROGRESS — no bridge.
 -- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — no unit-state

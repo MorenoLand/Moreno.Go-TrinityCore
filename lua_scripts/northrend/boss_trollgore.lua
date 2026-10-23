@@ -89,7 +89,9 @@
 -- POINT_MOTION_TYPE, POINT_LANDING) -> me->Dismount() +
 -- SetImmuneToAll(false) + DoCastAOE(SPELL_INVADER_TAUNT 49405) —
 -- motion-master bridge absent; Dismount bridge live (lua_creature_events.go) —
--- the arm rides the unbridged MovementInform, so it stays out; immune-all bridge absent;
+-- the arm rides the unbridged MovementInform, so it stays out; the
+-- SetImmuneToAll(false) leg's flag twin RemoveFlag(59, 0x300) is bridged but
+-- never fires without its movement gate (SetImmuneToAll sweep 2026-10-23);
 -- the taunt effect is SpellScript-delivered anyway
 -- (spell_trollgore_invader_taunt). Joins the
 -- entry-verifiable-but-bridge-blocked queue.

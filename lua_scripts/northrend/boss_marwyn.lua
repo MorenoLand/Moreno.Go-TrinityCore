@@ -65,10 +65,16 @@
 --   cancellation (initState).
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 38113):
--- Reset (:60-63) — boss_horAI::Reset passthrough (see below).
+-- Reset (:26-34) — boss_horAI::Reset passthrough (see below).
 -- boss_horAI base (boss_horAI.h:27-33 / boss_horAI.cpp) — the
---   ctor/Reset/DoAction/JustSummoned passthroughs have no bridge; none
---   carries Marwyn-specific logic.
+--   ctor/Reset/DoAction/JustSummoned arms are documented-only: the flag
+--   twin (creature:SetFlag(59, 0x300)) IS bridged, but Reset's
+--   SetImmuneToAll(true) (:30) is the apply half of an
+--   instance-sequencer-driven toggle whose clear (DoAction
+--   ACTION_ENTER_COMBAT, :41, unported instance wave machine) has no
+--   DoAction bridge — porting the apply alone fabricates a
+--   permanently-immune boss (the falric header carries the full note,
+--   2026-10-23 SetImmuneToAll sweep).
 -- JustEngagedWith :68 DoZoneInCombat — no bridge.
 -- JustEngagedWith :69 / JustDied :81 instance->SetBossState
 --   (DATA_MARWYN, IN_PROGRESS / DONE) — no instance-state bridge.

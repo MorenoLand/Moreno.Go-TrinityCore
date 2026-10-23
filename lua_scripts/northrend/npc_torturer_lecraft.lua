@@ -64,13 +64,17 @@
 -- npc_wyrmrest_defender (VehicleAI) — UpdateAI low-hp arm
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
 -- recovery re-arm gate) sits behind the unmodeled VehicleAI
--- base UpdateAI pass and there is no NPC_ entry constant in the
--- C++ sources for the defender itself (entry DB-side only,
--- unregistered file = dead code — minigob precedent); the
+-- base UpdateAI pass; the defender has no NPC_ entry constant in
+-- the C++ sources (entry DB-side only) but IS registered —
+-- AddSC_dragonblight() (zone_dragonblight.cpp:690-696, loader call
+-- 395) — so the old "unregistered file = dead code" parenthetical
+-- is retracted (2026-10-23 SetImmuneToAll sweep); the
 -- SpellHit arms (49256 mount / 52421 low-hp emote / 49263 renew
 -- talk machines): the 'no SpellHit bridge' claim is stale (ev14
 -- fires — this file registers it below); the arms stay out on the
--- unregistered-file / VehicleAI grounds above; the OnGossipSelect
+-- VehicleAI / quest-vehicle-machine grounds (the whole defender
+-- script is documented-only, no Lua handler is registered for the
+-- defender's entry); the OnGossipSelect
 -- quest-12372 arm: stale 'no gossip bridge' retracted (bridged —
 -- RegisterCreatureGossipEvent); arm stays out on the no
 -- player:CastSpell bridge (kalecgos pass).

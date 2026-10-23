@@ -43,6 +43,13 @@
 --   does not exist in the C++ — only SetImmuneToAll(false) at :2619
 --   and :2687 — so its "fidelity gap" claim is retracted as
 --   unfounded; the engage-gated arms are C++-exact.)
+-- Reset's SetImmuneToAll(false) (:2619) is gated on the _intro latch
+--   (false only after the unported EVENT_QUEL_DELAR_INIT flight seed)
+--   and EVENT_QUEL_DELAR_FIGHT's clear (:2687) rides the unported
+--   flight machine — both stay out (2026-10-23 SetImmuneToAll sweep);
+--   an unconditional clear would fabricate an intro-phase clear the
+--   C++ never performs. The flag twin (creature:RemoveFlag(59,
+--   0x300)) is bridged but the gating state is not modeled.
 -- Reset's DoCast(SPELL_WHIRLWIND_VISUAL 70300) (:2614-2616) fires on
 --   the C++ spawn path; Go fires events 23/5 only on the respawn path
 --   (engine/world/lua_creature_events.go:368-395), so the leg is

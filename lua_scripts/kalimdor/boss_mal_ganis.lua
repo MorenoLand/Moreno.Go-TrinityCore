@@ -63,7 +63,10 @@
 --   SAY_SLAY (4) (terestian_illhoof victim:GetObjectType() ==
 --   "Player" convention); the !_defeated gate reads defeated[guid]
 --   in the event-3 handler itself (the DamageTaken latch sets it);
---   the UpdateAI _defeated evade/immune legs stay out (no bridges).
+--   the UpdateAI _defeated EnterEvadeMode leg stays out (no bridge), but
+--   the SetImmuneToAll(true) flag leg is PORTED (2026-10-23) on a 1s
+--   defeat pump (below) — the stale "no immune-to-all bridge" claim is
+--   retracted: SetFlag(59, 0x300) is bridged (Unit.cpp:8440-8451).
 -- - Death (no JustDied override in C++ — the defeated machine
 --   short-circuits it): cancel only.
 -- Unmodeled (documented-only, no bridges):
@@ -80,11 +83,18 @@
 --   midnight "returns false, newDamage" convention with the health > 0
 --   hook guard. The PermBindAllPlayers leg rides no Lua bridge
 --   (instance_binds.go has no Lua surface) — stays out. The UpdateAI
---   _defeated legs (EnterEvadeMode/SetImmuneToAll) still ride no
---   evade/immune bridges (below).
+--   _defeated EnterEvadeMode leg stays out (no bridge); the
+--   SetImmuneToAll(true) flag leg is PORTED on the 1s defeat pump (below)
+--   — the stale "no immune-to-all bridge" claim is retracted:
+--   SetFlag(59, 0x300) is bridged (Unit.cpp:8440-8451); the
+--   keepCombat=false combat-end leg drops (no bridge).
 -- - UpdateAI's _defeated leg: me->IsInCombat() -> EnterEvadeMode() +
---   SetImmuneToAll(true) — no evade-mode / immune-to-all bridges
---   (infinite_corruptor DoAction-leave precedent).
+--   SetImmuneToAll(true) — the evade leg has no bridge
+--   (infinite_corruptor DoAction-leave precedent); the immunity leg ports
+--   as SetFlag(59, 0x300) on a 1s pump (the sironas per-tick
+--   approximation), gated on the ported DamageTaken latch
+--   (defeated[guid]) + creature:IsInCombat() (bridged), in C++ arm order
+--   after the dropped evade call.
 -- - JustReachedHome: DespawnOrUnsummon(1s) — PORTED (onReachedHome,
 --   event 24): the stale "no despawn bridge" was retracted earlier
 --   (creature:Despawn() is bridged, lua_creature_events.go:214), and
@@ -112,6 +122,7 @@ local SPELL_VAMPIRIC_TOUCH = 52723
 
 local timers = {}
 local pumps = {}
+local defeatPumps = {} -- per-GUID C++ UpdateAI _defeated evade/immune pump
 local defeated = {} -- per-GUID C++ _defeated latch, reset on engage
 
 local function cancelTimers(guid)
@@ -126,6 +137,11 @@ local function cancelTimers(guid)
     if pump then
         RemoveEventById(pump)
         pumps[guid] = nil
+    end
+    local defeatPump = defeatPumps[guid]
+    if defeatPump then
+        RemoveEventById(defeatPump)
+        defeatPumps[guid] = nil
     end
 end
 
@@ -270,11 +286,30 @@ local function startHealthYellPump(creature, guid)
     end, 1000, 0)
 end
 
+-- C++ UpdateAI _defeated leg (boss_mal_ganis.cpp:113-120):
+-- if (_defeated) { if (me->IsInCombat()) { EnterEvadeMode();
+-- me->SetImmuneToAll(true); } return; }. 1s per-GUID pump (the sironas
+-- per-tick approximation this file already uses for the health yells):
+-- the EnterEvadeMode leg has no bridge (dropped); the immunity leg ports
+-- as SetFlag(UNIT_FIELD_FLAGS 59, 0x100|0x200 = 0x300) (Unit.cpp:8440-8451),
+-- gated on the ported DamageTaken latch (defeated[guid]) plus
+-- creature:IsInCombat() (bridged, lua_creature_events.go:178), in C++
+-- arm order after the dropped evade call. The keepCombat=false
+-- combat-end leg drops (no bridge).
+local function startDefeatPump(creature, guid)
+    defeatPumps[guid] = CreateLuaEvent(function()
+        if defeated[guid] and creature:IsInCombat() then
+            creature:SetFlag(59, 0x300)
+        end
+    end, 1000, 0)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     defeated[guid] = nil -- C++ JustEngagedWith resets _defeated
     startHealthYellPump(creature, guid)
+    startDefeatPump(creature, guid)
     schedule(guid, "carrionswarm", 5000, function()
         onCarrionSwarm(creature, guid)
     end)

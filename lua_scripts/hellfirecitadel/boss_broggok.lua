@@ -55,10 +55,13 @@
 -- unbridgeable ACTIVATE DoAction — so the activate schedule
 -- is applied at the only engagement hook this model has,
 -- OnEnterCombat(1) (Talk(SAY_AGGRO) stays on engage,
--- C++-exact); no flag/react/immune bridges — the ACTIVATE
--- arm's SetReactState(REACT_AGGRESSIVE), RemoveFlag(NON_
--- ATTACKABLE), SetImmuneToAll(false) and the RESET arm's
--- mirror flips unmodeled (thespia/kalithresh precedent); no
+-- C++-exact); no react bridge (SetReactState unbridged) —
+-- the ACTIVATE arm's SetReactState(REACT_AGGRESSIVE) and the
+-- RESET arm's mirror flip unmodeled; the NON_ATTACKABLE flag
+-- flips and the SetImmuneToAll(false/true) flag legs stay out
+-- on the unbridgeable DoAction gate (the SetFlag/RemoveFlag(59)
+-- surface itself IS bridged, lua_creature_events.go — the stale
+-- 'no flag/immune bridges' claim is retracted, 2026-10-23); no
 -- DoZoneInCombat bridge — the ACTIVATE DoZoneInCombat arm
 -- unmodeled; the JustSummoned arms for NPC_BROGGOK_POISON_CLOUD
 -- 17662 (react passive + CastSpell SPELL_POISON_CLOUD_PASSIVE 30914)

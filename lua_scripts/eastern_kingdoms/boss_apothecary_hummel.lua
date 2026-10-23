@@ -84,10 +84,10 @@
 --   are dead instead of dying (precise, unbridgeable).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
--- - START_FIGHT: SetImmuneToAll(false) + DoZoneInCombat + despawn
---   NPC_CROWN_APOTHECARY 36885 in grid — the immune leg would be
---   RemoveFlag(59, 0x300) on the bridged surface, but the arm rides the
---   unported DoAction plus unbridged DoZoneInCombat/grid-despawn.
+-- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as
+--   RemoveFlag(59, 0x300) in onStartFight (the keepCombat=false combat-end
+--   leg drops, no bridge); the DoZoneInCombat + despawn
+--   NPC_CROWN_APOTHECARY 36885 in grid sibling arms stay out (no bridges).
 -- - CALL_BAXTER/FRYE: summons.DoAction(ACTION_START_FIGHT,
 --   EntryCheckPredicate) + summons.DoZoneInCombat(BAXTER) relay — no
 --   bridges; the Talk arms are modeled.
@@ -218,8 +218,14 @@ local function onCallBaxter(creature, guid)
     creature:Talk(SAY_CALL_BAXTER)
 end
 
--- C++ EVENT_START_FIGHT: arms the combat pumps.
+-- C++ EVENT_START_FIGHT: arms the combat pumps. The SetImmuneToAll(false)
+-- leg (boss_apothecary_hummel.cpp:219) ports first, in C++ arm order, as
+-- the flag twin RemoveFlag(UNIT_FIELD_FLAGS 59, 0x100|0x200 = 0x300)
+-- (Unit.cpp:8440-8451; SetImmuneToPC-sweep precedent): the keepCombat=false
+-- combat-end leg has no bridge (dropped), and so do the sibling
+-- DoZoneInCombat() + NPC_CROWN_APOTHECARY grid-despawn arms (no bridges).
 local function onStartFight(creature, guid)
+    creature:RemoveFlag(59, 0x300)
     schedule(guid, "baxter", 6000, function() onCallBaxter(creature, guid) end)
     schedule(guid, "frye", 14000, function() onCallFrye(creature, guid) end)
     schedule(guid, "perfume", 3640, function() onPerfumeSpray(creature, guid) end)
