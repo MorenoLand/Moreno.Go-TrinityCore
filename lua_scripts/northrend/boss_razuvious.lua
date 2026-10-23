@@ -80,10 +80,14 @@
 -- _instance->GetGuidData(DATA_RAZUVIOUS) — no instance / cross-AI
 -- bridges; JustReachedHome — DespawnOrUnsummon when BOSS_RAZUVIOUS ==
 -- DONE — instance model; UpdateAI — bloodStrikeTimer DoCastVictim(
--- SPELL_UNDERSTUDY_BLOOD_STRIKE 61696) — port-pattern-ready in
--- isolation (moroes precedent) but gated on !me->isPossessedByPlayer()
--- — no charm-possession bridge (jedoga over-cast bar); OnCharmed —
--- no bridge.
+-- SPELL_UNDERSTUDY_BLOOD_STRIKE 61696) — PORTED 2026-10-23 as the
+-- event-7 understudyAIUpdate below: the timer is 0-initialized and
+-- never re-armed, so C++ casts on every AI tick; the
+-- !isPossessedByPlayer() gates ride the new creature:IsCharmed()
+-- bridge (lua_creature_events.go). OnCharmed — stays out: the arm's
+-- only effects are SetUInt32Value emotestate + cross-AI DoZoneInCombat
+-- on Razuvious (no bridges); the ScriptedAI::JustEngagedWith base is
+-- a no-op hook.
 
 local ENTRY_RAZUVIOUS = 16061
 local ENTRY_DK_UNDERSTUDY = 16803
@@ -243,3 +247,24 @@ RegisterCreatureEvent(ENTRY_RAZUVIOUS, 2, razyviousLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 3, razyviousTargetDied)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 4, razyviousDied)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 23, razyviousReset)
+
+-- npc_dk_understudy (16803) UpdateAI, boss_razuvious.cpp:205-216. The
+-- bloodStrikeTimer is 0-initialized and never re-armed, so C++ casts
+-- Blood Strike (61696) on every AI tick. !isPossessedByPlayer() gates
+-- both the UpdateVictim early-out and the cast; Lua twins it with
+-- IsCharmed() — the only charm source in this fight is priest Mind
+-- Control, so the engine's Charmed flag is exact here. GetVictim() nil
+-- twins the !UpdateVictim() return; melee stays engine-driven, and the
+-- charmed (MC'd) understudy is pet-driven by the engine anyway.
+local SPELL_UNDERSTUDY_BLOOD_STRIKE = 61696 -- boss_razuvious.cpp:41
+
+local function understudyAIUpdate(event, creature, diff)
+    if not creature:IsCharmed() then
+        if creature:GetVictim() == nil then
+            return
+        end
+        creature:CastSpell(nil, SPELL_UNDERSTUDY_BLOOD_STRIKE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_DK_UNDERSTUDY, 7, understudyAIUpdate)

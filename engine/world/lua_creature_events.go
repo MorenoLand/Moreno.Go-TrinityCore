@@ -58,6 +58,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{inCombat}, nil
 	}
+	// IsCharmed reports the engine's charm state (creaturemotion.go
+	// charmCreatureFaction/uncharmCreature, the Unit::SetCharmedBy /
+	// RemoveCharmedBy twin). Lets Lua gate possess/charm-sensitive arms
+	// such as the Razuvious understudy's !isPossessedByPlayer() UpdateAI
+	// leg; in that fight the only charm source is priest Mind Control.
+	methods["IsCharmed"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		charmed := motion.Charmed
+		s.motionMu.Unlock()
+		return []any{charmed}, nil
+	}
 	// CastSpell(target, spellId[, triggered]) casts a creature spell through
 	// the server's creature cast path (SMSG_SPELL_GO broadcast, the same path
 	// the Go BossAI implementations use). Eluna argument order. The target
