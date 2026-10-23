@@ -53,7 +53,7 @@
 -- precedent); JustDied's instance->SetBossState(DATA_GYTH, DONE) —
 -- instance precedent, unmodeled. SetData(type, 1) -> EVENT_SUMMONED_1
 -- 1s (self-cast aura SPELL_REND_MOUNTS 16167 (AddAura), FindNearestGame
--- Object(GO_DR_PORTCULLIS 175186-ish, 40.0f)->UseDoorOrButton,
+-- Object(GO_DR_PORTCULLIS 175185, 40.0f)->UseDoorOrButton,
 -- FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS, 75.0f)->AI()->SetData(1,
 -- 1), then EVENT_SUMMONED_2 2s -> MovePath(GYTH_PATH_1 1379681)) — the
 -- whole pre-fight event gates on gameobject / creature-list /

@@ -30,15 +30,12 @@
 --   player-gated convention).
 -- - Health latches (C++ UpdateAI polls every tick; the 1s pump is
 --   the honest approximation — shade_of_aran precedent):
---   <=60%: Talk(SAY_SUMMON60 1) + frost-spectres summon
---   documented-only; <=50%: Talk(SAY_HP 3); <=30%:
---   Talk(SAY_SUMMON30 2) + frost-spectres summon documented-only.
+--   <=60%: Talk(SAY_SUMMON60 1) + DoCastVictim frost-spectres summon
+--   12642 (non-triggered, bridged via the castVictim helper); <=50%:
+--   Talk(SAY_HP 3); <=30%: Talk(SAY_SUMMON30 2) + DoCastVictim
+--   frost-spectres summon 12642.
 --   One-shot latches cleared on Reset like C++ Initialize().
 -- Unmodeled (documented-only, no bridges):
--- - Frost Spectres 12642 summon arms (60% + 30%): the C++ cast is
---   DoCastVictim(12642) but the spell's whole point is the summon
---   effect — no summon bridge (jeklik/venoxis summon-STRAND
---   precedent); Talk fires, cast skipped.
 -- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
 --   instance bridge (standing).
 -- - The C++ UNIT_STATE_CASTING early-return gates in UpdateAI —
@@ -55,6 +52,7 @@ local SAY_KILL     = 4
 local SPELL_AMNENNARSWRATH = 13009
 local SPELL_FROSTBOLT      = 15530
 local SPELL_FROST_NOVA     = 15531
+local SPELL_FROST_SPECTRES = 12642
 
 local timers = {}
 
@@ -116,7 +114,8 @@ end
 
 -- C++ UpdateAI polls HealthBelowPct every tick; the 1s pump is the
 -- honest approximation (shade_of_aran precedent). Frost Spectres
--- 12642 summon arms are documented-only (no summon bridge).
+-- 12642 arms are wired via castVictim (the cast bridge falls back to
+-- the current victim, i.e. DoCastVictim).
 local function healthPump(creature, guid, st)
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -129,18 +128,18 @@ local function healthPump(creature, guid, st)
     -- (Unit::HealthBelowPct truncates); the old float GetHealthPct()<=p
     -- fired 1 HP early at integer boundaries.
     if not st.hp60 and health < math.floor(maxHealth * 60 / 100) then
-        st.hp60 = true
         creature:Talk(SAY_SUMMON60)
-        -- DoCastVictim(12642) summon effect: no bridge, not wired.
+        castVictim(creature, SPELL_FROST_SPECTRES)
+        st.hp60 = true
     end
     if not st.hp50 and health < math.floor(maxHealth * 50 / 100) then
-        st.hp50 = true
         creature:Talk(SAY_HP)
+        st.hp50 = true
     end
     if not st.hp30 and health < math.floor(maxHealth * 30 / 100) then
-        st.hp30 = true
         creature:Talk(SAY_SUMMON30)
-        -- DoCastVictim(12642) summon effect: no bridge, not wired.
+        castVictim(creature, SPELL_FROST_SPECTRES)
+        st.hp30 = true
     end
     schedule(guid, "pump", 1000, function()
         healthPump(creature, guid, st)

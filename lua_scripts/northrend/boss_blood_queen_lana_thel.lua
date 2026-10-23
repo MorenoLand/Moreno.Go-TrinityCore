@@ -226,42 +226,6 @@ local SPELL_PRESENCE_OF_THE_DARKFALLEN = 70994
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:174-180) has no bridge (same
 -- accepted deviation as the Talk).
-local function lanaThelJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    creature:Talk(SAY_AGGRO)
-    -- C++ :188-190 — triggered self-cast auras (curator engage-cast
-    -- precedent): DoCast(me, SPELL_SHROUD_OF_SORROW, true) +
-    -- DoCast(me, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true) +
-    -- DoCastSelf(SPELL_CLEAR_ALL_STATUS_AILMENTS, true).
-    creature:CastSpell(creature, SPELL_SHROUD_OF_SORROW, true)
-    creature:CastSpell(creature, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true)
-    creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
-    schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
-    schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
-end
-
--- C++ Reset() timer machinery — cancel/re-arm on combat events
--- (the maiden convention).
-local function lanaThelLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-end
-
-local function lanaThelReset(event, creature)
-    cancelTimers(creature:GetGUID())
-end
-
--- C++ boss_blood_queen_lana_thel::KilledUnit:
--- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL) — the
--- razuvious player-gated variant precedent.
-local function lanaThelKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" then
-        creature:Talk(SAY_KILL)
-    end
-end
-
--- C++ boss_blood_queen_lana_thel::JustDied:
--- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 -- C++ CleanAuras (boss_blood_queen_lana_thel.cpp:221-233): the ten
 -- DoRemoveAurasDueToSpellOnPlayers strips, in C++ call order (the two
 -- RAID_MODE essence pools expand to all four variants). The
@@ -292,6 +256,51 @@ local function cleanAuras(creature)
         end
     end
 end
+
+local function lanaThelJustEngagedWith(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (:184): CleanAuras() after Talk(SAY_AGGRO) /
+    -- SetBossState(IN_PROGRESS) (no instance bridge), before the
+    -- triggered self-cast auras below — C++ arm order kept.
+    cleanAuras(creature)
+    -- C++ :188-190 — triggered self-cast auras (curator engage-cast
+    -- precedent): DoCast(me, SPELL_SHROUD_OF_SORROW, true) +
+    -- DoCast(me, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true) +
+    -- DoCastSelf(SPELL_CLEAR_ALL_STATUS_AILMENTS, true).
+    creature:CastSpell(creature, SPELL_SHROUD_OF_SORROW, true)
+    creature:CastSpell(creature, SPELL_FRENZIED_BLOODTHIRST_VISUAL, true)
+    creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
+    schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
+    schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
+end
+
+-- C++ Reset() timer machinery — cancel/re-arm on combat events
+-- (the maiden convention).
+local function lanaThelLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function lanaThelReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    -- C++ Reset() ends with CleanAuras() (boss_blood_queen_lana_thel.cpp:168),
+    -- after the timer arms; _vampires.clear()/Initialize() are unported
+    -- internals.
+    cleanAuras(creature)
+end
+
+-- C++ boss_blood_queen_lana_thel::KilledUnit:
+-- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL) — the
+-- razuvious player-gated variant precedent.
+local function lanaThelKilledUnit(event, creature, victim)
+    if victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_KILL)
+    end
+end
+
+-- C++ boss_blood_queen_lana_thel::JustDied:
+-- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 
 local function lanaThelJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())

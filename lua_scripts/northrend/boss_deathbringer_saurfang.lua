@@ -400,7 +400,10 @@ end
 -- the RemoveAura bridge (the arlokk / bronjahm idiom). Mirrors the
 -- `if (_dead) return;` early-out (:277-278): after the fight-won
 -- leg the reset casts are skipped.
-local function saurfangReset(event, creature)
+-- C++ boss_deathbringer_saurfang::Reset() legs (:257-273), shared by the
+-- event-23 Reset arm and the JustReachedHome arm (which calls Reset() in
+-- C++ arm order).
+local function doSaurfangReset(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local st = saurfangState[guid]
@@ -427,6 +430,10 @@ local function saurfangReset(event, creature)
     creature:RemoveAura(SPELL_FRENZY)
 end
 
+local function saurfangReset(event, creature)
+    doSaurfangReset(creature)
+end
+
 -- C++ :344-348 KilledUnit: if (victim->GetTypeId() == TYPEID_PLAYER)
 -- Talk(SAY_KILL) — the razuvious player-gated variant precedent.
 local function saurfangKilledUnit(event, creature, victim)
@@ -440,6 +447,27 @@ end
 -- SAY_DEATH 13 rides the DamageTaken fight-won leg below).
 local function saurfangJustDied(event, creature)
     clearState(creature:GetGUID())
+end
+
+-- C++ JustReachedHome (:334-342): the _dead guard; _JustReachedHome()
+-- (events.Reset) is the cancelTimers inside doSaurfangReset; Reset()
+-- ports via doSaurfangReset in C++ arm order; the SetBossState(FAIL) leg
+-- has no instance bridge; then DoRemoveAurasDueToSpellOnPlayers(
+-- SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) via GetPlayersInWorld +
+-- mapId/instanceId filter + player:RemoveAura (the moroes precedent).
+local function saurfangReachHome(event, creature)
+    local guid = creature:GetGUID()
+    local st = saurfangState[guid]
+    if st and st.dead then
+        return
+    end
+    doSaurfangReset(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
+            plr:RemoveAura(SPELL_MARK_OF_THE_FALLEN_CHAMPION)
+        end
+    end
 end
 
 -- C++ :350-378 DamageTaken, fires pre-application (event 9). The
@@ -499,3 +527,4 @@ RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 3, saurfangKilledUnit)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 4, saurfangJustDied)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 9, saurfangDamageTaken)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 23, saurfangReset)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 24, saurfangReachHome)

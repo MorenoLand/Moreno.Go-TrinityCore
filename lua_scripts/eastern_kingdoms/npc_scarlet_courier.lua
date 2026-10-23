@@ -25,8 +25,10 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The out-of-combat stage machine (Initialize: uiStage = 1,
 --   uiStage_timer = 3000): stage 1's FindNearestGameObject(
---   GO_INCONSPICUOUS_TREE 191144, 40.0f) (no nearest-gameobject /
---   ObjectAccessor bridge — dark-rider precedent) + Talk(SAY_TREE1
+--   GO_INCONSPICUOUS_TREE 191144, 40.0f) (FindNearestGameObject IS
+--   bridged — lua_creature_events.go:2072 — but the arm's GetContactPoint
+--   + MovePoint legs have no bridge, so the arm stays out all the same;
+--   Talk(SAY_TREE1
 --   = 0) + SetWalk(true) (no walk-state bridge) + tree->
 --   GetContactPoint (no contact-point bridge) + me->
 --   GetMotionMaster()->MovePoint(1, x, y, z) (no MotionMaster

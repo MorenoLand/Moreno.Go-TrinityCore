@@ -32,9 +32,13 @@
 -- 100ms-per-bomb sequence, Boom, and the enrage-timer 10s shave never run;
 -- the hatcher arm has no bridge — no egg enumeration (HatchAllEggs), no
 -- summon model (the two 23818 hatchers never exist), so Talk(SAY_SUMMON_
--- HATCHER=2) and HatcherTimer never run; the all-eggs 35% arm has no
--- bridge — no teleport, SPELL_HATCH_ALL 43144 is never cast, eggs never
--- hatch, Talk(SAY_ALL_EGGS=3) never runs, noeggs stays false; the Reset
+-- HATCHER=2) and HatcherTimer never run; the all-eggs 35% arm stays out —
+-- its core effect is HatchAllEggs(2) (no egg-enumeration bridge), so
+-- porting the Talk(SAY_ALL_EGGS=3)/AttackStop/teleport/StopMoving/
+-- SPELL_HATCH_ALL 43144 shell without the hatch would fabricate behavior
+-- (the 2026-10-23 "no teleport" parenthetical is retracted — Teleport,
+-- AttackStop and StopMoving are bridged; the blocker is the egg
+-- enumeration). noeggs stays false; the Reset
 -- egg display-id restore (HatchAllEggs(1), display 10056) has no bearer;
 -- no instance-script model — admission only via the luaBossAI shim
 -- (GetZulAmanAI/BossAI SetBossState arms skipped, the hatchling's

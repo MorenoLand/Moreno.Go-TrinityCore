@@ -90,7 +90,12 @@
 -- EVENT_CHAOS_1's FindNearestCreature(NPC_GYTH 10339, 75.0f, true)
 -- + SetFacingToObject leg (boss_nefarian.cpp:263-267) is
 -- unreachable — no SetData bearer, no MovePath bridge. FindNearest_
--- GameObject still has no bridge, so the portcullis arms stay out; the EVENT_SHADOW_BOLT ResetThreatList arm IS
+-- GameObject IS bridged (lua_creature_events.go:2072; GO UseDoorOrButton /
+-- SetGoState / GetGoState too, :1127/:1095/:1080) — the stale "no bridge"
+-- claim is retracted — but the portcullis arms stay out: they fire only
+-- from the unported pre-fight event machine (no SetData bearer, no
+-- MovePath bridge), the same unreachable verdict as the FindNearestCreature
+-- arms above; the EVENT_SHADOW_BOLT ResetThreatList arm IS
 -- ported (:223 — ClearThreatList bridged, lua_objects.go:389); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
 -- + bone-construct grid despawn) is blocked on the instance-script
