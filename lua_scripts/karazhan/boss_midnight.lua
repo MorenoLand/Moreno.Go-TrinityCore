@@ -25,7 +25,8 @@
 -- (Midnight's DamageTaken casting SPELL_MOUNT triggered) fires from the
 -- Midnight damage hook; Attumen's SpellHit(SPELL_MOUNT) arm cancels its
 -- timers and Talk(SAY_MOUNT), but the follow/visibility/summon-mounted
--- steps have no bridge (no MoveFollow/SetVisible/react-state model). No
+-- steps stay out (no MoveFollow bridge — the creature:SetVisible bridge
+-- is live but the arm's follow machine is unported). No
 -- MECHANIC_DISARM info reaches the Lua spell-hit hook, so the
 -- SAY_DISARMED arm is skipped. Midnight's directed Talk(SAY_MIDNIGHT_KILL,
 -- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
@@ -197,9 +198,9 @@ local function midnightReset(event, creature)
     cancelTimers(guid)
     midnightInitState(guid)
     -- C++ boss_midnightAI::Reset (boss_midnight.cpp:300-306): SetVisible(true)
-    -- + SetReactState(REACT_DEFENSIVE). SetVisible(true) is a no-op on a
-    -- spawned creature; the react-state leg rides the SetReactState bridge
-    -- (engine/world/lua_creature_events.go).
+    -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656) +
+    -- SetReactState(REACT_DEFENSIVE) (SetReactState bridge), in C++ order.
+    creature:SetVisible(true)
     creature:SetReactState(REACT_DEFENSIVE)
 end
 

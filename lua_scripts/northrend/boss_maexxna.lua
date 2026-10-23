@@ -40,10 +40,12 @@
 -- precedent); Talk(EMOTE_WEB_WRAP 1) is target-conditional in C++
 -- and stays out with the wrap leg rather than fabricate a lone emote;
 -- npc_webwrap (CreatureScript "npc_webwrap", entry 16486) is the
--- summon-side AI of that same machine; only its JustDied
+-- summon-side AI of that same machine; its JustDied
 -- DespawnOrUnsummon(5s) leg ports (event 4, below — the freya
--- delayed-despawn idiom); the victimGUID aura-removal leg has no
--- bridge (stays out).
+-- delayed-despawn idiom) and its InitializeAI SetVisible(false) leg
+-- ports (event 5, creature:SetVisible bridge); the victimGUID
+-- aura-removal leg and the visibleTimer reveal arm have no bridge
+-- (stay out).
 
 local SPELL_WEB_SPRAY = 29484
 local SPELL_POISON_SHOCK = 28741
@@ -185,6 +187,15 @@ local function webWrapJustDied(event, creature, killer)
         creature:Despawn()
     end, 5000)
 end
+
+-- C++ npc_webwrapAI::InitializeAI (boss_maexxna.cpp:211-214):
+-- me->SetVisible(false) (creature:SetVisible bridge, Unit::SetVisible
+-- Unit.cpp:8656). The visibleTimer reveal arm (SetGUID -> visibleTimer
+-- -> UpdateAI SetVisible(true)) stays out — no SetGUID bridge. Event 5
+-- (OnSpawn) fires at AI init for summons (dark-fiend precedent).
+RegisterCreatureEvent(ENTRY_WEB_WRAP, 5, function(_, creature)
+    creature:SetVisible(false)
+end)
 
 RegisterCreatureEvent(ENTRY_WEB_WRAP, 4, webWrapJustDied)
 RegisterCreatureEvent(ENTRY_WEB_WRAP, 1, function(_, creature)

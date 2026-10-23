@@ -192,6 +192,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 			spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 			s.applyCreatureMotionToSpawn(state, &spawns[index])
+			if !seesHidden && s.creatureScriptHidden(state.Map, state.InstanceID, spawns[index].GUID, spawns[index].Entry) {
+				count--
+				continue
+			}
 			updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 		}
 		packet, err := updates.BuildPacket(0)
@@ -228,10 +232,29 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 		s.applyCreatureMotionToSpawn(state, &spawns[index])
+		if !seesHidden && s.creatureScriptHidden(state.Map, state.InstanceID, spawns[index].GUID, spawns[index].Entry) {
+			count--
+			continue
+		}
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
+}
+
+// creatureScriptHidden reports the Unit::SetVisible script override
+// (motion.ScriptHidden, Unit.cpp:8656): a hidden creature is visible to GM
+// seers only (SERVERSIDE_VISIBILITY_GM, SEC_GAMEMASTER).
+func (s *Server) creatureScriptHidden(mapID, instanceID uint32, guid, entry uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, creatureWorldGUID(guid, entry)); motion != nil {
+		return motion.ScriptHidden
+	}
+	return false
 }
 
 func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSpawn) {

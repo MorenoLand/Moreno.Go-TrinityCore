@@ -98,6 +98,7 @@ type creatureMotion struct {
 	MountKnown            bool
 	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
 	ScriptRunRateKnown    bool
+	ScriptHidden          bool    // m_serverSideVisibility SERVERSIDE_VISIBILITY_GM arm script override: Lua CreatureMethods::SetVisible (Unit::SetVisible twin, Unit.cpp:8656); true = visible to GM seers only (SEC_GAMEMASTER), false = normal visibility (SEC_PLAYER); honored by the nearby-creature update filter, so script hide/unhide arms port with real effect
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect

@@ -23,11 +23,11 @@
 -- arena, the range check skipped) / spawn_add 10s then 4s.
 -- EVENT_SPAWN_ADD: SpawnedAdds grows by 2 per wave (C++ sums two
 -- drakonids per 4s firing); at >= 42 the C++ summons Nefarian and
--- drops Nefarius out of the fight — modeled as: cancel all timers,
--- mark the event done (the summons, the Nefarian summon and the
--- SetVisible(false) arm have no bridges, see deviations). The adds
--- themselves never spawn — only the 4s re-arm/count cycle is kept
--- (jeklik six-bat convention).
+-- drops Nefarius out of the fight — modeled as: SetVisible(false)
+-- (creature:SetVisible bridge, Unit.cpp:8656) + cancel all timers
+-- (the drakonid/Nefarian summons have no summon bridge, see
+-- deviations). The adds themselves never spawn — only the 4s
+-- re-arm/count cycle is kept (jeklik six-bat convention).
 -- Nefarian (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_RANDOM=0), arm shadowflame 22539 12s then 12s /
 -- bellowing roar 22686 {25s,35s} / veil of shadow 7068 {25s,35s} /
@@ -257,6 +257,12 @@ local function onNefariusSpawnAdd(creature, guid)
     end
     st.spawnedAdds = st.spawnedAdds + 2
     if st.spawnedAdds >= 42 then
+        -- C++ EVENT_SPAWN_ADD (boss_nefarian.cpp:344-364): at 42 the
+        -- C++ summons Nefarian (unported — the wave/summon machine never
+        -- fires, see deviations), cancels the events and drops Nefarius
+        -- out of the fight via me->SetVisible(false) (creature:SetVisible
+        -- bridge, Unit::SetVisible Unit.cpp:8656).
+        creature:SetVisible(false)
         cancelTimers(guid)
         return
     end
@@ -339,9 +345,11 @@ local function onNefariusReset(event, creature)
     -- C++ boss_victor_nefariusAI::Reset (boss_nefarian.cpp:182-197):
     -- on map 469 he sits on the throne (SetStandState(
     -- UNIT_STAND_STATE_SIT_HIGH_CHAIR)) and the barrier aura is
-    -- removed; SetVisible / SetPhaseMask legs have no bridges (see
-    -- deviations), so only the bridged legs port.
+    -- removed. The SetPhaseMask leg has no bridge (see deviations);
+    -- SetVisible(true) rides the creature:SetVisible bridge
+    -- (Unit::SetVisible, Unit.cpp:8656) in C++ order (first).
     if creature:GetMapId() == 469 then
+        creature:SetVisible(true)
         -- C++ SetUInt32Value(UNIT_NPC_FLAGS, 1): whole-value set to the
         -- GOSSIP bit, bridged via SetNPCFlags on the event surface
         -- (UpdateFields.h:139: UNIT_NPC_FLAGS = 82).

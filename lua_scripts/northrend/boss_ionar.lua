@@ -41,11 +41,12 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28546):
 -- boss_ionar Reset / Initialize — lSparkList.DespawnAll() +
--- Initialize() flag/timer clears, RemoveFlag / SetVisible legs,
+-- Initialize() flag/timer clears, RemoveFlag legs,
 -- instance->SetBossState(DATA_IONAR, NOT_STARTED) — no summon-list /
--- flag / visibility / instance bridges. The SetControlled(false,
--- UNIT_STATE_ROOT) leg ports via creature:SetRooted(false)
--- (lua_creature_events.go) in ionarCombatEnd.
+-- flag / instance bridges. The SetControlled(false, UNIT_STATE_ROOT)
+-- leg ports via creature:SetRooted(false) (lua_creature_events.go)
+-- and the if (!IsVisible) SetVisible(true) leg via creature:SetVisible,
+-- both in ionarCombatEnd (C++-exact arms).
 -- SpellHit — the SPELL_DISPERSE 52770 split machine (five
 -- SPELL_SUMMON_SPARK 52746 casts, AttackStop, SetVisible(false),
 -- NON_ATTACKABLE+NOT_SELECTABLE flags, UNIT_STATE_ROOT, motion
@@ -64,8 +65,9 @@
 -- UpdateAI split machine (uiSplitTimer 25s / 2.5s; bIsSplitPhase
 -- CallBackSparks leg; lSparkList.empty() restore leg with
 -- SetVisible(true), flag removal, SPELL_SPARK_DESPAWN 52776
--- self-cast, MoveChase) — no timer / visibility / flag / cast /
--- motion bridges.
+-- self-cast, MoveChase) — no timer / flag / cast / motion bridges;
+-- the split machine itself is unported, so its SetVisible arms stay
+-- out with it (the creature:SetVisible bridge is live).
 -- UpdateAI timer events (boss_ionar.cpp:260-275) — PORTED:
 -- uiBallLightningTimer DoCastVictim(SPELL_BALL_LIGHTNING 52780)
 -- non-triggered, urand(10s, 11s) init -> urand(10s, 11s) loop
@@ -191,9 +193,15 @@ local function ionarEnterCombat(event, creature, target)
 end
 
 local function ionarCombatEnd(event, creature)
-    -- C++ Reset: me->SetControlled(false, UNIT_STATE_ROOT)
-    -- (boss_ionar.cpp:119); both ev2 (EnterEvadeMode -> Reset) and ev23
-    -- (Reset) clear the root state.
+    -- C++ Reset (boss_ionar.cpp:114-122): lSparkList.DespawnAll() (the
+    -- spark summon list is unmodeled) + Initialize() (flag/timer clears,
+    -- covered by cancelTimers) + RemoveFlag(NON_ATTACKABLE |
+    -- NOT_SELECTABLE) (the set side is unported, so the clear is
+    -- vacuous) + SetControlled(false, UNIT_STATE_ROOT) (SetRooted
+    -- bridge, below) + if (!me->IsVisible()) me->SetVisible(true)
+    -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656 —
+    -- unconditional here is end-state-identical to the C++ gate).
+    creature:SetVisible(true)
     creature:SetRooted(false)
     cancelTimers(creature:GetGUID())
 end

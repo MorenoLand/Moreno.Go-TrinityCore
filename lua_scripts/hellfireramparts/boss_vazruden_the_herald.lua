@@ -51,8 +51,10 @@
 -- alive/adds-victim watch arm and the both-dead
 -- DisappearAndDie arm) unmodeled (steamrigger precedent);
 -- the SetVisible(false)/UNIT_STATE_ROOT vanish arms and
--- the ClearUnitState/SetVisible(true) restore arms have no
--- visibility/state bridges; no cross-creature bridge — the
+-- the ClearUnitState/SetVisible(true) restore arms stay out with the
+-- unported SummonAdds machine (the creature:SetVisible bridge is live,
+-- but the arms ride the unmodeled summon machine); no cross-creature
+-- bridge — the
 -- sentry JustDied -> herald SentryDownBy(killer) relay and
 -- the sentryDown AttackStartNoMove arm unmodeled (see
 -- npc_hellfire_sentry.lua); no SpellScript/AuraScript

@@ -52,8 +52,8 @@
 -- timer/state cleanup only (the _JustDied arm is blocked on the
 -- instance-script model). OnReset(23)/OnLeaveCombat(2): timer/
 -- state cleanup (the RemoveFlag(NOT_SELECTABLE) arm is vacuous —
--- the set side stays out, above; SetVisible(true) has no visibility
--- bridge; the _Reset instance bookkeeping and the EnterEvadeMode
+-- the set side stays out, above; the _Reset instance bookkeeping and
+-- the EnterEvadeMode
 -- entropius relay are blocked on the instance-script/cross-creature
 -- bridges). The
 -- SetCombatMovement(false) constructor arm has no movement
@@ -286,6 +286,13 @@ end
 
 local function muruReset(event, creature)
     muruResetState(creature:GetGUID())
+    -- C++ boss_muruAI::Reset (boss_muru.cpp:247-253): _Reset() +
+    -- Initialize() (instance bookkeeping + timer re-init, covered by
+    -- muruResetState) -> RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_
+    -- SELECTABLE) (deliberately unported — the set side stays out, see
+    -- header) -> me->SetVisible(true) (creature:SetVisible bridge,
+    -- Unit::SetVisible, Unit.cpp:8656).
+    creature:SetVisible(true)
 end
 
 RegisterCreatureEvent(ENTRY_MURU, 1, muruEnterCombat)

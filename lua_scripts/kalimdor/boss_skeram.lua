@@ -32,8 +32,8 @@
 --   documented-only.
 -- - Blink (30-45s init -> 10-30s): self-cast one of {4801, 8195,
 --   20449} (C++ BlinkSpells). ResetThreatList PORTED 2026-10-19
---   (creature:ClearThreatList, bridged lua_objects.go:389); SetVisible
---   legs are no-bridge — documented-only.
+--   (creature:ClearThreatList, bridged lua_objects.go:389); SetVisible(true)
+--   PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
 -- - Earth Shock 26194 (DoCastVictim, 2s repeat): victim cast
 --   (fankriss GetVictim convention).
 -- - Split at 75/50/25% (latched, event 9 projected-health check,
@@ -43,8 +43,8 @@
 --   so the port projects (health - damage) clamped at 0 with a
 --   postDamage > 0 guard (nefarian rule).
 --   The DoCastAOE SPELL_SUMMON_IMAGES 747 leg is no-bridge
---   (SummonCreature zero Lua usage) and SetVisible(false) has no
---   bridge — documented-only.
+--   (SummonCreature zero Lua usage) — documented-only; SetVisible(false)
+--   PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
 -- - Talk: SAY_AGGRO 0 on engage, SAY_SLAY 1 on kill,
 --   SAY_SPLIT 2 at split thresholds, SAY_DEATH 3 on death.
 -- Unmodeled (documented-only, no bridges):
@@ -158,6 +158,10 @@ local function onBlink(creature, guid)
     -- C++ EVENT_BLINK: ResetThreatList() after the blink cast (bridged
     -- lua_objects.go:389; the old "no bridge" header claims were stale).
     creature:ClearThreatList()
+    -- C++ EVENT_BLINK: me->SetVisible(true) (boss_skeram.cpp:174,
+    -- creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656),
+    -- in C++ order (after ResetThreatList, before the re-arm).
+    creature:SetVisible(true)
     schedule(guid, "blink", math.random(10000, 30000), function()
         onBlink(creature, guid)
     end)
@@ -186,8 +190,9 @@ end
 -- -> DoCastAOE(SPELL_SUMMON_IMAGES, true) + Talk(SAY_SPLIT),
 -- _hpct -= 25, SetVisible(false), RescheduleEvent(EVENT_BLINK,
 -- 2s). Eluna event 9 is pre-damage, so projected-health check
--- (sartura/huhuran convention). Summon cast + SetVisible: no
--- bridge; ported as the Talk + blink re-arm.
+-- (sartura/huhuran convention). Summon cast has no bridge;
+-- SetVisible(false) PORTED via the creature:SetVisible bridge;
+-- ported as the Talk + visibility + blink re-arm.
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local s = st(guid)
@@ -208,6 +213,11 @@ local function onDamageTaken(event, creature, attacker, damage)
     if postDamage > 0 and postDamage * 100 < maxHealth * s.splitHpct then
         s.splitHpct = s.splitHpct - 25
         creature:Talk(SAY_SPLIT)
+        -- C++ UpdateAI split (boss_skeram.cpp:184-190): _hpct -= 25 ->
+        -- me->SetVisible(false) (creature:SetVisible bridge,
+        -- Unit::SetVisible Unit.cpp:8656) -> RescheduleEvent(EVENT_BLINK,
+        -- 2s), in C++ order.
+        creature:SetVisible(false)
         schedule(guid, "blink", 2000, function()
             onBlink(creature, guid)
         end)
@@ -239,6 +249,10 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_skeramAI::Reset (boss_skeram.cpp:70-74): Initialize()
+    -- (split-hpct re-init, covered by st()) -> me->SetVisible(true)
+    -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656).
+    creature:SetVisible(true)
 end
 
 local function onTargetDied(event, creature, victim)

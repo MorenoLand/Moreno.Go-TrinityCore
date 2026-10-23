@@ -1443,6 +1443,50 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return 1.0
 	})
+	// SetVisible is Unit::SetVisible (Unit.cpp:8656): toggles the
+	// m_serverSideVisibility SERVERSIDE_VISIBILITY_GM arm — false hides the
+	// creature from everyone except GM seers (SEC_GAMEMASTER), true restores
+	// normal visibility (SEC_PLAYER), followed by UpdateObjectVisibility.
+	// The script override lives on motion.ScriptHidden; the nearby-creature
+	// update filter (creatures.go) skips hidden motions for observers whose
+	// gmVisibilityDetect is SEC_PLAYER, mirroring
+	// WorldObject::CanSeeOrDetect (Object.cpp:1622-1630). Hiding broadcasts
+	// SMSG_DESTROY_OBJECT to the non-GM sessions in the instance (the
+	// Despawn precedent); unhiding re-creates the object via the periodic
+	// nearby-creature update, the same path that re-creates respawned
+	// creatures. The AI keeps running while hidden (C++ does not touch the
+	// motion master or threat list).
+	methods["SetVisible"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetVisible requires a bool, got no args")
+		}
+		visible, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetVisible requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.ScriptHidden = !visible
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		if !visible {
+			destroyBuf := protocol.NewBuffer(9)
+			destroyBuf.WriteU64(guid)
+			destroyBuf.WriteU8(0)
+			payload := destroyBuf.Bytes()
+			opcode := uint16(protocol.OpcodeSMSG_DESTROY_OBJECT)
+			s.sessionsMu.RLock()
+			for target := range s.sessions {
+				if !target.authed || !target.worldReady.Load() || target.player == nil ||
+					target.player.Map != mapID || target.player.InstanceID != instanceID ||
+					target.gmVisibilityDetect != 0 {
+					continue
+				}
+				_ = target.write(opcode, payload, true)
+			}
+			s.sessionsMu.RUnlock()
+		}
+		return nil, nil
+	}
 	// SetTarget is Creature::SetTarget (Creature.cpp:3221-3226): the visual
 	// UNIT_FIELD_TARGET (the GUID shown above the creature's head). It is
 	// NOT the combat victim (motion.TargetGUID, driven by the threat
