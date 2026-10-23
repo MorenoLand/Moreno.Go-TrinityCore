@@ -232,7 +232,7 @@ end
 -- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
 -- SPELL_KOLOGARN_REDUCE_PARRY 64651) non-triggered, in C++ arm order;
--- SetCombatMovement(false) is bridged (lua_creature_events.go:670) and
+-- SetCombatMovement(false) is bridged (lua_creature_events.go:759) and
 -- PORTED in kologarnEnterCombat below (event 1); the root arm (SetRooted,
 -- bridged) would alone keep him stationary (Go's chase-pause NOT_MOVE
 -- gate, creaturemotion.go), the documented turret deviation. Go event 5

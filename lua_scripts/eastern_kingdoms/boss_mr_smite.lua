@@ -30,7 +30,7 @@
 -- Deviations from C++: of the phase-transition ability-halt leg
 -- (boss_mr_smite.cpp:141-144), AttackStop IS ported (bridge
 -- lua_creature_events.go:180); SetCombatMovement(false) has a bridge
--- (lua_creature_events.go:670) but the mid-combat arm is a C++ no-op
+-- (lua_creature_events.go:759) but the mid-combat arm is a C++ no-op
 -- (only AttackStart reads the flag) and porting it would diverge via
 -- the per-tick gate (10:19); InterruptNonMeleeSpells(false) has no
 -- bridge. SetReactState(

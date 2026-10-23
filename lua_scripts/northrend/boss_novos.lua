@@ -38,7 +38,7 @@
 -- bookkeeping has no bridge).
 -- AttackStart — DoStartNoMovement (novos never moves) — PORTED
 -- 2026-10-22 via creature:SetCombatMovement(false) at OnEnterCombat
--- (lua_creature_events.go:670; per-tick gate holds all fight).
+-- (lua_creature_events.go:759; per-tick gate holds all fight).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset's SetCrystalsStatus(false) / SetSummonerStatus(false) /
 -- SetBubbled(false) legs — instance GetGuidData + ObjectAccessor

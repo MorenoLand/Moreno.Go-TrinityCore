@@ -885,6 +885,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{id}, nil
 	}
+	// GetTemplateModelId is the Lua read path for
+	// Creature::GetCreatureTemplate()->Modelid1..4 (Creature.h): the
+	// template model-id row backing the spawn display. C++ script arms
+	// morph with SetDisplayId(me->GetCreatureTemplate()->Modelid2) — the
+	// Lua surface had no template-model getter, so those arms stayed out
+	// (sironas Reset, muru dark-fiend ctor). Index 1-4; returns 0 for an
+	// out-of-range index or a missing template row.
+	methods["GetTemplateModelId"] = func(ctx context.Context, args []any) ([]any, error) {
+		idx, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if idx < 1 || idx > 4 || s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{uint32(0)}, nil
+		}
+		cols := [4]string{"modelid1", "modelid2", "modelid3", "modelid4"}
+		var v sql.NullInt64
+		if err := s.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT "+cols[idx-1]+" FROM creature_template WHERE entry = ?", motion.Entry).Scan(&v); err != nil || !v.Valid {
+			return []any{uint32(0)}, nil
+		}
+		return []any{uint32(v.Int64)}, nil
+	}
 	// UpdateEntry is Creature::UpdateEntry (Creature.cpp:552-655): re-seats
 	// the creature on a new creature_template entry — the scripted
 	// transform twin (volkhan's brittle golem, the deathwhisper

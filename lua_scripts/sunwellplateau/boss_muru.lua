@@ -93,9 +93,9 @@
 -- is summon-blocked — unmodeled. Dark Fiend (25744). OnSpawn(5):
 -- triggered self-cast darkfiend skin 45934 (C++-exact — the
 -- constructor/Initialize arm, which has no Reset() override (the
--- class never re-casts it on evade); the SetDisplayId arm rides the
--- unported constructor machine (display bridge live 2026-10-20 —
--- the blocker is the unbridged Modelid2 bearer) (the react
+-- class never re-casts it on evade); the SetDisplayId(Modelid2) arm
+-- is ported in darkFiendSpawn via creature:GetTemplateModelId(2)
+-- (bridge live 2026-10-22) (the react
 -- bridge exists — creature:SetReactState — but the REACT_PASSIVE half
 -- stays out: its 2s co-arm (REACT_AGGRESSIVE + summoner-GUID
 -- AttackStart) has no cross-creature/AttackStart bridge, and porting
@@ -157,9 +157,8 @@
 -- — the muru phase-two RemoveAllAuras arm and the entropius 2s
 -- DoResetPortals grid scan are bridged and ported; the muru
 -- NOT_SELECTABLE set stays out (summon-resolution ground, above)
--- with the Reset RemoveFlag vacuous; the dark-fiend display/react
--- arms stay out (Modelid2 bearer unbridged; PASSIVE half would strand
--- the fiend); the black-hole 15s despawn is ported; the entropius
+-- with the Reset RemoveFlag vacuous; the dark-fiend SetDisplayId(Modelid2) arm is ported (GetTemplateModelId bridge live
+-- 2026-10-22) while the REACT_PASSIVE half stays out (would strand the fiend); the black-hole 15s despawn is ported; the entropius
 -- evade despawn-all arms stay unmodeled.
 
 local SPELL_OPEN_PORTAL_PERIODIC = 45994
@@ -395,13 +394,15 @@ end
 
 -- C++ constructor (Initialize): triggered self-cast 45934.
 local function darkFiendSpawn(event, creature)
-    -- C++ npc_dark_fiendAI constructor (Initialize): triggered self-cast
-    -- SPELL_DARKFIEND_SKIN (boss_muru.cpp:407) — spawn-only ctor arm
-    -- (no Reset() override: never re-cast on evade), so bound to event
-    -- 5. Alive-gated; cancelTimers rides the death leg deliberately.
+    -- C++ npc_dark_fiendAI constructor (Initialize): SetDisplayId(Modelid2)
+    -- first (boss_muru.cpp:405), then the triggered self-cast
+    -- SPELL_DARKFIEND_SKIN — spawn-only ctor arm (no Reset() override:
+    -- never re-cast on evade), so bound to event 5. Alive-gated;
+    -- cancelTimers rides the death leg deliberately.
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsAlive() then
+        creature:SetDisplayId(creature:GetTemplateModelId(2))
         creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
         schedule(guid, "proximity", 3000,
             function() darkFiendProximity(creature, guid) end)

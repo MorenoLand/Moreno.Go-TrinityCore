@@ -97,7 +97,7 @@
 --   support yet"), so the "dropped (no difficulty bridge)" claim was
 --   stale and is retracted.
 -- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) —
---   GetHomePosition IS bridged (lua_objects.go:350) but EnterEvadeMode
+--   GetHomePosition IS bridged (lua_creature_events.go:1475) but EnterEvadeMode
 --   has no bridge (boss_ai.go:5753-5754 explicit) — the check stays out
 --   (the_beast evade precedent).
 -- - The eight lackey CreatureScript classes + commented-out
