@@ -188,7 +188,7 @@ end
 -- init, randtime(5s,15s) repeat.
 local function cleaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE)
-    schedule(guid, "cleave", math.random(5, 15) * 1000, function()
+    schedule(guid, "cleave", {5000, 15000}, function()
         cleaveTick(creature, guid)
     end)
 end
@@ -215,7 +215,7 @@ local function sapphironEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_FROST_AURA, true)
     resistsTick(creature, guid)
-    schedule(guid, "cleave", math.random(5, 15) * 1000, function()
+    schedule(guid, "cleave", {5000, 15000}, function()
         cleaveTick(creature, guid)
     end)
     schedule(guid, "berserk", 900000, function()

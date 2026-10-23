@@ -167,7 +167,7 @@ local function powerSurgeTick(creature, guid)
         return
     end
     creature:CastSpell(creature, SPELL_STALAGG_POWERSURGE)
-    schedule(guid, "powersurge", math.random(25, 30) * 1000, function()
+    schedule(guid, "powersurge", {25000, 30000}, function()
         powerSurgeTick(creature, guid)
     end)
 end
