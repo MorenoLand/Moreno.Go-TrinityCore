@@ -1510,6 +1510,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// SetFarVisible is WorldObject::SetFarVisible (Object.cpp:1049-1055):
+	// sets the m_isFarVisible flag (no-op for players in C++; this surface
+	// only ever receives creatures). The flag feeds the GetVisibilityRange
+	// twin in the nearby-creature update filter (creatures.go): a
+	// far-visible creature is visible out to MAX_VISIBILITY_DISTANCE
+	// (Object.cpp:1515-1522, SIZE_OF_GRIDS) instead of the map default.
+	// C++ sets only the flag — the visibility change takes effect on the
+	// next visibility update, so no broadcast here (the periodic
+	// nearby-creature rebuild picks it up). Backs the farvisible hunt
+	// (hidden_files/farvisible_hunt.py, 2026-10-23).
+	methods["SetFarVisible"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetFarVisible requires a bool, got no args")
+		}
+		farVisible, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetFarVisible requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.FarVisible = farVisible
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetTarget is Creature::SetTarget (Creature.cpp:3221-3226): the visual
 	// UNIT_FIELD_TARGET (the GUID shown above the creature's head). It is
 	// NOT the combat victim (motion.TargetGUID, driven by the threat

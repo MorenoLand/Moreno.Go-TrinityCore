@@ -386,6 +386,10 @@ local function algalonTimersStart(event, creature)
     if algalonFirstPull[guid] == nil then
         algalonFirstPull[guid] = false
         creature:Talk(SAY_ALGALON_START_TIMER)
+        -- C++ JustEngagedWith first-pull (boss_algalon_the_observer.cpp:383):
+        -- me->SetFarVisible(true) (the InterruptNonMeleeSpells/setActive/
+        -- DoZoneInCombat legs have no bridge).
+        creature:SetFarVisible(true)
         introDelay = 26500
         -- C++ EVENT_START_COMBAT (:554-559, first-pull only, 16s):
         -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)

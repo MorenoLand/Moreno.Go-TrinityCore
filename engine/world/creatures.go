@@ -9,6 +9,11 @@ import (
 )
 
 const (
+	// maxVisibilityDistance is the MAX_VISIBILITY_DISTANCE twin
+	// (ObjectDefines.h:28 = SIZE_OF_GRIDS, GridDefines.h:38): the range at
+	// which a far-visible (WorldObject::SetFarVisible) object stays visible,
+	// per WorldObject::GetVisibilityRange (Object.cpp:1515-1522).
+	maxVisibilityDistance          = 533.3333
 	creatureTypeMask        uint32 = 0x00000009
 	creatureUpdateFlags     uint16 = 0x0060
 	creatureValuesCount            = 148
@@ -82,6 +87,14 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if distance <= 0 {
 		return nil, 0, nil
 	}
+	// GetVisibilityRange twin (Object.cpp:1515-1522): when any far-visible
+	// creature exists on this map/instance the bounding-box prefilter widens
+	// to MAX_VISIBILITY_DISTANCE; each row is range-checked against its own
+	// effective range below.
+	boxDist := distance
+	if s.anyFarVisibleCreature(state.Map, state.InstanceID) {
+		boxDist = maxVisibilityDistance
+	}
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
 	// seesHidden is the SERVERSIDE_VISIBILITY_GM detect arm of
 	// WorldObject::CanSeeOrDetect (Object.cpp:1622-1630), distinct from the
@@ -135,7 +148,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		ORDER BY c.guid`
 	queryArgs := make([]any, 0, len(selectArgs)+9+len(eventArgs)+len(phaseOverrideArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, phaseMask)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-boxDist, float64(state.X)+boxDist, float64(state.Y)-boxDist, float64(state.Y)+boxDist, isGM, phaseMask)
 	queryArgs = append(queryArgs, phaseOverrideArgs...)
 	queryArgs = append(queryArgs, seesHidden, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
@@ -151,7 +164,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			AND (` + phaseClause + `)
 			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(NULLIF(c.npcflag, 0), t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		fallbackArgs := []any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM, phaseMask}
+		fallbackArgs := []any{state.Map, float64(state.X) - boxDist, float64(state.X) + boxDist, float64(state.Y) - boxDist, float64(state.Y) + boxDist, isGM, phaseMask}
 		fallbackArgs = append(fallbackArgs, phaseOverrideArgs...)
 		fallbackArgs = append(fallbackArgs, seesHidden, isGhost)
 		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, fallbackArgs...)
@@ -169,7 +182,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &walkSpeed, &runSpeed, &attackTime, &rangedAttack); err != nil {
 				return nil, count, err
 			}
-			if math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
+			visRange := distance
+			if s.creatureScriptFarVisible(state.Map, state.InstanceID, uint32(guid), uint32(entry)) {
+				visRange = maxVisibilityDistance
+			}
+			if math.Hypot(x-float64(state.X), y-float64(state.Y)) > visRange || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 				continue
 			}
 			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack)}
@@ -209,7 +226,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3); err != nil {
 			return nil, count, err
 		}
-		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
+		visRange := distance
+		if s.creatureScriptFarVisible(state.Map, state.InstanceID, uint32(guid), uint32(entry)) {
+			visRange = maxVisibilityDistance
+		}
+		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > visRange || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}
 		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
@@ -253,6 +274,39 @@ func (s *Server) creatureScriptHidden(mapID, instanceID uint32, guid, entry uint
 	defer s.motionMu.Unlock()
 	if motion := s.findCreatureMotionLocked(mapID, instanceID, creatureWorldGUID(guid, entry)); motion != nil {
 		return motion.ScriptHidden
+	}
+	return false
+}
+
+// creatureScriptFarVisible reports the WorldObject::SetFarVisible script
+// override (motion.FarVisible, Object.cpp:1049-1055).
+func (s *Server) creatureScriptFarVisible(mapID, instanceID uint32, guid, entry uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, creatureWorldGUID(guid, entry)); motion != nil {
+		return motion.FarVisible
+	}
+	return false
+}
+
+// anyFarVisibleCreature reports whether any creature motion on the given
+// map/instance currently carries the far-visible script override. Used to
+// widen the nearby-creature bounding-box prefilter to
+// MAX_VISIBILITY_DISTANCE (the WorldObject::GetVisibilityRange twin,
+// Object.cpp:1515-1522).
+func (s *Server) anyFarVisibleCreature(mapID, instanceID uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion != nil && motion.FarVisible {
+			return true
+		}
 	}
 	return false
 }

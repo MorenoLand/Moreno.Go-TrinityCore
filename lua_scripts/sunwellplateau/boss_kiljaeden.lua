@@ -592,6 +592,10 @@ local function kjCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     kjState[guid] = nil
+    -- C++ Reset (boss_kiljaeden.cpp:268): me->SetFarVisible(true)
+    -- (the SetDisableGravity/SetFlag-NOT_SELECTABLE/setActive legs
+    -- ride their own axes; the orb-loop leg is GO-side, no bridge).
+    creature:SetFarVisible(true)
 end
 
 local function kjDied(event, creature, killer)

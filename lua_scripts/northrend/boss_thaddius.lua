@@ -41,8 +41,9 @@
 -- victim->GetTypeId() == TYPEID_PLAYER — nalorakk/kelthuzad/gothik
 -- player-gate variant; fifth ported variant of this gate); JustDied
 -- Talk(SAY_DEATH 4) (event 4; the _JustDied bookkeeping +
--- setActive/SetFarVisible + the stalagg/feugen cross-AI legs via
--- DATA_STALAGG/DATA_FEUGEN have no bridge — tharon_ja precedent).
+-- setActive + the stalagg/feugen cross-AI legs via
+-- DATA_STALAGG/DATA_FEUGEN have no bridge — tharon_ja precedent;
+-- the me->SetFarVisible(false) arm is PORTED).
 -- SAY_GREET (0) fires from at_thaddius_entrance — no area-trigger
 -- bridge — documented-only. SAY_ELECT (3) + EMOTE_POLARITY_SHIFTED (6)
 -- ride the unbridged EVENT_SHIFT leg (vortex precedent).
@@ -125,6 +126,10 @@ end
 -- SetFarVisible + the stalagg/feugen cross-AI legs via
 -- DATA_STALAGG/DATA_FEUGEN have no bridge — tharon_ja precedent).
 local function thaddiusDied(event, creature, killer)
+    -- C++ JustDied (boss_thaddius.cpp:212): me->SetFarVisible(false)
+    -- (the setActive + stalagg/feugen cross-AI legs via
+    -- DATA_STALAGG/DATA_FEUGEN have no bridge).
+    creature:SetFarVisible(false)
     creature:Talk(SAY_DEATH)
 end
 
