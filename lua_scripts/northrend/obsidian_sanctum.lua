@@ -342,6 +342,14 @@ local function dragonDied(event, creature, killer)
 end
 
 local function dragonReset(event, creature)
+    -- C++ dummy_dragonAI::Reset (obsidian_sanctum.cpp:178-181): the
+    -- HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)-gated
+    -- RemoveFlag leg, in C++ arm order before events.Reset; the flag
+    -- is live in this port (intro mask SetFlag, line 544), and
+    -- creature:HasFlag is bridged (Unit::HasFlag twin).
+    if creature:HasFlag(59, 0x2) then
+        creature:RemoveFlag(59, 0x2)
+    end
     cancelTimers(creature:GetGUID())
 end
 

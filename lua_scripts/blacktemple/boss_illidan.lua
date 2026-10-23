@@ -814,6 +814,11 @@ local function startPhase4(creature, guid)
     -- (ACTION_START_PHASE_4: the summons.DoAction/AttackStop/SetFlag co-arms
     -- stay out on no-bridge grounds; the flip fires unconditionally here).
     creature:SetReactState(0) -- REACT_PASSIVE
+    -- C++ boss_illidan.cpp:628: SetFlag(UNIT_FIELD_FLAGS,
+    -- UNIT_FLAG_NOT_SELECTABLE), in C++ arm order after the react
+    -- flip (AttackStop has no bridge); he lands but cannot be
+    -- targeted until Maiev's confrontation ends.
+    creature:SetFlag(59, 0x2000000)
     schedule(guid, "shadowPrisonText", 500, function()
         creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
         schedule(guid, "summonMaiev", 9000, function()
@@ -821,8 +826,11 @@ local function startPhase4(creature, guid)
             schedule(guid, "confrontMaiev", 9000, function()
                 creature:Talk(SAY_ILLIDAN_CONFRONT_MAIEV)
                 schedule(guid, "resumeCombat4", 13000, function()
-                    -- C++ boss_illidan.cpp:1000: me->SetReactState(REACT_AGGRESSIVE)
-                    -- (EVENT_RESUME_COMBAT_PHASE_4: flip before the phase-4 re-arm).
+                    -- C++ boss_illidan.cpp:999-1000: RemoveFlag(UNIT_FIELD_FLAGS,
+                    -- UNIT_FLAG_NOT_SELECTABLE) then me->SetReactState(REACT_AGGRESSIVE)
+                    -- (EVENT_RESUME_COMBAT_PHASE_4: flag clear before the flip,
+                    -- before the phase-4 re-arm).
+                    creature:RemoveFlag(59, 0x2000000)
                     creature:SetReactState(2) -- REACT_AGGRESSIVE
                     armPhaseSchedule(creature, guid, PHASE_4)
                 end)

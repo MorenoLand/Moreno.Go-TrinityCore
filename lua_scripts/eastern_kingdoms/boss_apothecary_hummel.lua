@@ -305,6 +305,11 @@ local function onDied(event, creature)
         creature:Talk(SAY_HUMMEL_DEATH)
     end
     clearState(guid)
+    -- C++ JustDied (boss_apothecary_hummel.cpp:179), in C++ order after
+    -- events.Reset: RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
+    -- UNIT_FLAG_NOT_SELECTABLE) = RemoveFlag(59, 0x20000000|0x2000000);
+    -- the instance->SetBossState/LFG legs have no bridges.
+    creature:RemoveFlag(59, 0x22000000)
 end
 
 local function onReset(event, creature)

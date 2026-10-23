@@ -1655,6 +1655,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{mounted}, nil
 	}
+	// HasFlag is Unit::HasFlag (Unit.h: GetUInt32Value(field) & flag) for
+	// the flag-backed fields the SetFlag/RemoveFlag bridges honor:
+	// UNIT_FIELD_FLAGS (59) reads the live motion.UnitFlags mirror (init
+	// from template at spawn; SetFlag/RemoveFlag/Mount/Dismount write
+	// it), UNIT_NPC_FLAGS (82) reads motion.NPCFlags, UNIT_DYNAMIC_FLAGS
+	// (79) reads motion.DynamicFlags. Other fields return false.
+	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		var has bool
+		switch field {
+		case 59:
+			has = motion.UnitFlags&flag != 0
+		case unitFieldNPCFlags:
+			has = motion.NPCFlags&flag != 0
+		case unitFieldDynamicFlags:
+			has = motion.DynamicFlags&flag != 0
+		}
+		s.motionMu.Unlock()
+		return []any{has}, nil
+	}
 	// unitFieldFlagsValue is UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and

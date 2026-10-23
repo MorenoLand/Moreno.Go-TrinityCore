@@ -35,11 +35,13 @@
 -- fires inline in gossip.go): OnGossipHello offers the challenge
 -- option; OnGossipSelect action 1001 shows the confirm option;
 -- action 1002 closes the menu and the challenge resolves. The C++
--- challenge trigger legs — SetFaction(FACTION_DARK_IRON_DWARVES),
--- SetImmuneToPC(false), AI()->AttackStart(player),
--- instance->SetGuidData(DATA_EVENSTARTER, player GUID) — have no
--- bridges (vael precedent: SetFaction and AttackStart on the gossip
--- player have no bearer), so the fight starts when a player pulls.
+-- challenge trigger legs — SetFaction(FACTION_DARK_IRON_DWARVES) and
+-- SetImmuneToPC(false) [RemoveFlag(59, 0x100)] are ported in C++ order
+-- (SetFaction + immune-off); AI()->AttackStart(player) and
+-- instance->SetGuidData(DATA_EVENSTARTER, player GUID) have no
+-- bridges (vael precedent: AttackStart and the instance SetGuidData
+-- on the gossip player have no bearer), so the fight starts when a
+-- player pulls.
 -- The option texts are approximated — the real strings live in the
 -- DB broadcast_text rows (vael precedent). C++ uses the DB-reference
 -- AddGossipItemFor overload (ScriptedGossip.cpp:49-53): hello adds menu
@@ -242,11 +244,13 @@ local function onGossipSelect(event, player, creature, sender, action)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipClearMenu()
         player:GossipComplete()
-        -- C++: SetFaction(FACTION_DARK_IRON_DWARVES) +
-        -- SetImmuneToPC(false) + AI()->AttackStart(player) +
-        -- instance->SetGuidData(DATA_EVENSTARTER, player GUID) — all
-        -- behind absent bridges (vael precedent); the fight starts
-        -- when a player pulls.
+        -- C++ (boss_tomb_of_seven.cpp:246-250, C++ order):
+        -- SetFaction(FACTION_DARK_IRON_DWARVES) + SetImmuneToPC(false)
+        -- [RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100)] +
+        -- AI()->AttackStart(player) (no bridge — the fight starts when a
+        -- player pulls) + instance->SetGuidData (no instance bridge).
+        creature:SetFaction(754)
+        creature:RemoveFlag(59, 0x100)
     end
 end
 

@@ -8,9 +8,11 @@
 -- (return true) suppresses the default aggro engage, matching the
 -- C++ empty AttackStart/JustEngagedWith overrides.
 -- Zero Talk() in C++.
--- Documented-only: Reset's SetHover/SetSwim/SetFlag NOT_SELECTABLE —
--- no Lua bridge for those unit flags; the trap's passive/invisible
--- posture is a template concern, not scripted here. The rizzle
+-- Documented-only: Reset's SetHover/SetSwim — no Lua bridges for
+-- those unit states; the SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) leg IS bridged and ported on onReset
+-- below (zone_azshara.cpp:339). The trap's passive/invisible posture
+-- is a template concern, not scripted here. The rizzle
 -- escort/blackjack machine (MoveInLineOfSight quest-status gate,
 -- SPELL_RIZZLE_BLACKJACK 39865, SPELL_RIZZLE_ESCAPE teleport timer,
 -- zone_azshara.cpp:150-163) stays documented-only: no quest-status /
@@ -47,6 +49,16 @@ RegisterCreatureEvent(ENTRY, 27, onMoveInLOS)
 RegisterCreatureEvent(ENTRY, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- zone_azshara.cpp:361: custom UpdateAI never calls DoMeleeAttackIfReady (despawn-timer UpdateAI in C++, never melees)
 end)
+
+-- C++ npc_depth_chargeAI::Reset (zone_azshara.cpp:336-342): SetHover /
+-- SetSwim stay out (no bridges); SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) ported, in C++ arm order after the
+-- hover/swim legs.
+local function onReset(event, creature)
+    creature:SetFlag(59, 0x2000000)
+end
+
+RegisterCreatureEvent(ENTRY, 23, onReset)
 
 -- npc_rizzle_sprysprocket gossip (zone_azshara.cpp) — entry NPC_RIZZLE
 -- 23002 (go_scripts.cpp:268).

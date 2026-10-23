@@ -115,7 +115,8 @@
 -- PORTED (boss_magtheridon.cpp:253, magtheridonEnterCombat below —
 -- the flag bridge is live since e9387671; the old "no flag bridge"
 -- claim is retracted for this leg); the paired SetImmuneToPC(false)
--- leg has no bridge (stays out) — the channeler REACT_DEFENSIVE arm
+-- leg IS bridged (RemoveFlag(59, 0x100)) and ported in C++ order at
+-- magtheridonEnterCombat (boss_magtheridon.cpp:254); the channeler REACT_DEFENSIVE arm
 -- is PORTED 2026-10-20 (creature:SetReactState);
 -- no interrupt/distance bridges — the
 -- quake/blaze SPELLVALUE target-count args, the channeler
@@ -310,6 +311,10 @@ local function magtheridonEnterCombat(event, creature)
     creature:Talk(EMOTE_BREAKS_FREE)
     creature:Talk(SAY_FREE)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    -- C++ EVENT_RELEASED (boss_magtheridon.cpp:253-254), in C++ order
+    -- right after the NOT_SELECTABLE clear: SetImmuneToPC(false) ≡
+    -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100).
+    creature:RemoveFlag(59, 0x100)
     creature:RemoveAura(SPELL_SHADOW_CAGE_C)
     schedule(guid, "cleave", 10000, function()
         magtheridonCleave(creature, guid)

@@ -103,9 +103,10 @@
 --   (timer deactivates after firing).
 -- * armageddon (phase 4+): the target pick (pickRandomPlayer, the
 --   C++ up-to-6-try vengeance loop) + NPC_ARMAGEDDON_TARGET summon
---   are PORTED in fireTimer; deltas: the NOT_SELECTABLE/NON_
---   ATTACKABLE flag legs and summon-list latch have no GUID-deref
---   bridge (summoned target is attackable).
+--   are PORTED in fireTimer; the NOT_SELECTABLE/NON_ATTACKABLE
+--   flag legs are ported on the target's own spawn (ev5
+--   armageddonSpawn — the spawned creature sets its own flags, so no
+--   GUID-deref bridge is needed); the summon-list latch stays out.
 -- Phase transitions (C++-exact): <85% -> PHASE_DARKNESS
 -- (ActiveTimers=9), <55% -> PHASE_ARMAGEDDON (ActiveTimers=10),
 -- <25% -> PHASE_SACRIFICE; each runs EnterNextPhase: all timers
@@ -499,9 +500,10 @@ local function fireTimer(creature, st, name)
         -- up-to-6-try vengeance-of-the-blue-flight loop is
         -- pickRandomPlayer, above) and SummonCreature(NPC_ARMAGEDDON_
         -- TARGET, x, y, z, 0, TEMPSUMMON_TIMED_DESPAWN Eluna type 2,
-        -- 15s). Deltas: the NOT_SELECTABLE/NON_ATTACKABLE flag legs
-        -- + summon-list latch have no GUID-deref bridge, so the
-        -- summoned target is attackable in the Lua port.
+        -- 15s). Deltas: the summon-list latch has no GUID-deref
+        -- bridge (stays out); the NOT_SELECTABLE/NON_ATTACKABLE flag
+        -- legs are ported on the target's own spawn (ev5
+        -- armageddonSpawn, below).
         local target = pickRandomPlayer(creature)
         if target then
             creature:SummonCreature(ENTRY_ARMAGEDDON_TARGET,
@@ -786,6 +788,18 @@ end
 RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 2, armageddonCleanup)
 RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 4, armageddonCleanup)
 RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 23, armageddonReset)
+
+-- C++ boss_kiljaedenAI::JustSummoned (boss_kiljaeden.cpp:617-626):
+-- the summoned NPC_ARMAGEDDON_TARGET gets NOT_SELECTABLE |
+-- NON_ATTACKABLE (the SetVisibility(VISIBILITY_OFF) leg is commented
+-- out in C++); SetFaction(me->GetFaction()) and summons.Summon are the
+-- engine-side summon defaults. Ported on the target's own spawn (ev5).
+local function armageddonSpawn(event, creature)
+    creature:SetFlag(59, 0x2000000)
+    creature:SetFlag(59, 0x2)
+end
+
+RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 5, armageddonSpawn)
 
 -- ================= Sinister Reflection (25708) =================
 

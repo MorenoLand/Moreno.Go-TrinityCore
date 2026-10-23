@@ -23,8 +23,9 @@
 -- (10 summons, ~100s) is C++-exact where the live field would drift. The
 -- Evocation channel's in-spell mana refill is approximated by restoring
 -- mana to 100% after the 20s channel. ApplySpellImmune(arcane damage)
--- from Reset and InterruptNonMeleeSpells(false) before Evocation have no
--- bridge. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
+-- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
+-- and ported at onReset below; InterruptNonMeleeSpells(false) before
+-- Evocation has no bridge (documented-only). Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
 -- i.e. a non-tank — is approximated with a random alive player in 100 yd,
 -- since the engine has no threat model.
 

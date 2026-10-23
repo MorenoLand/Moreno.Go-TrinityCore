@@ -181,6 +181,12 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
+    -- C++ Reset (chapter1.cpp:136): SetImmuneToPC(true) ≡
+    -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100), in C++
+    -- arm order after SetFaction(FACTION_CREATURE) (unported —
+    -- documented-only; see header) and before the KNEEL stand
+    -- (unported, see header).
+    creature:SetFlag(59, 0x100)
     cancelTimers(creature:GetGUID())
 end
 

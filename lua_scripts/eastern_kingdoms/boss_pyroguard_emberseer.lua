@@ -38,9 +38,11 @@
 -- OnEnterCombat(1) — the out-of-combat ticks are unmodeled.
 -- Unmodeled (documented-only): the whole pre-fight event is gated on
 -- instance / SpellHit / SetData bridges that do not exist on the Lua
--- surface — Reset's UNIT_FLAG_NOT_SELECTABLE + SetImmuneToPC(true) +
--- RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
+-- surface — RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
 -- (DATA_BLACKHAND_INCARCERATOR, 1) + SetBossState(NOT_STARTED));
+-- (Reset's UNIT_FLAG_NOT_SELECTABLE + SetImmuneToPC(true) pair IS
+-- ported — creature:SetFlag(59, 0x2000000) / SetFlag(59, 0x100),
+-- boss_pyroguard_emberseer.cpp:85-86.)
 -- SetData(type, 1) -> EVENT_PLAYER_CHECK 5s (player-list aura scan
 -- for SPELL_EMBERSEER_OBJECT_VISUAL 16532, instance->SetBossState
 -- (IN_PROGRESS)); EVENT_PRE_FIGHT_1 (GetCreatureListWithEntryInGrid
@@ -144,6 +146,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
+    -- C++ Reset (boss_pyroguard_emberseer.cpp:83-86): NOT_SELECTABLE +
+    -- SetImmuneToPC(true) [SetFlag(59, 0x100)] — the flag pair comes
+    -- first in arm order, before events.Reset and the aura cleanup.
+    creature:SetFlag(59, 0x2000000)
+    creature:SetFlag(59, 0x100)
     cancelTimers(creature:GetGUID())
 end
 

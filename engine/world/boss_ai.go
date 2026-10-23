@@ -4300,7 +4300,9 @@ func init() {
 	// encounter-state bookkeeping is blocked on the instance-script model; the
 	// ResetThreatList/AddThreat arms have no threat bridge (the hateful strike
 	// target pick is approximated by the highest-health melee-range player);
-	// the ApplySpellImmune taunt arms have no bridge; the volcano and molten
+	// the ApplySpellImmune taunt arms stay out on no-bearer grounds (the
+	// immunity bridge itself exists: creature:ApplySpellImmune — see
+	// boss_supremus.lua); the volcano and molten
 	// flame add AIs are not registered (ScriptName bindings are DB-side); the
 	// volcanic summon/volcano adds have no summon model.
 	RegisterLuaBoss("boss_supremus", 22898)
@@ -4328,7 +4330,10 @@ func init() {
 	// (41999) cast's effect lives in the unmodeled SpellScript; the doom
 	// blossom and shadowy construct AIs are not registered (ScriptName
 	// bindings are DB-side) and the construct's instance-creature lookup,
-	// ResetThreatList/AddThreat and ApplySpellImmune arms have no bridges;
+	// ResetThreatList/AddThreat and ApplySpellImmune arms stay out — the
+	// immunity bridge exists (creature:ApplySpellImmune) but the recv is
+	// cross-creature via the instance lookup, with no GUID-to-creature
+	// bridge (see boss_teron_gorefiend.lua);
 	// the shadow of death / spiritual vengeance AuraScripts have no
 	// AuraScript bridge.
 	RegisterLuaBoss("boss_teron_gorefiend", 22871)
@@ -4338,8 +4343,9 @@ func init() {
 	// (DATA_GURTOGG_BLOODBOIL); the GetThreat/ModifyThreatByPercent/AddThreat
 	// and AttackStart(oldTarget) victim-restore arms have no threat bridge
 	// (the fel rage GUID is followed via per-GUID Lua state); the
-	// ApplySpellImmune taunt/attack-me arms and the bewildering-strike
-	// CanAIAttack gate have no bridges; the fel acid breath combat-reach
+	// ApplySpellImmune taunt/attack-me arms are PORTED (creature:ApplySpellImmune
+	// bridge — see boss_gurtogg_bloodboil.lua) and the bewildering-strike
+	// CanAIAttack gate has no bridge; the fel acid breath combat-reach
 	// pick is approximated at 10 yd (no combat-reach bridge); the player
 	// self-casts 40617/40603 have no player-side CastSpell bridge and are
 	// applied via AddAura (their whole effect is the aura); the berserk and
@@ -5186,8 +5192,9 @@ func init() {
 	// the bridgeable UpdateAI arms — inferno 35268
 	// non-triggered DoCastVictim 10s/10s and fire tail 35278
 	// non-triggered DoCast(me) self-cast 500ms/500ms. The
-	// Reset() ApplySpellImmune / SetSpeedRate legs, the
-	// Check_Timer instance-boss-state despawn check, and the
+	// Reset() ApplySpellImmune legs are PORTED (creature:ApplySpellImmune
+	// bridge — see boss_nethermancer_sepethrea.lua); the SetSpeedRate leg,
+	// the Check_Timer instance-boss-state despawn check, and the
 	// onlyonce MoveChase(random-target) leg have no bridges —
 	// see lua_scripts/mechanar/boss_nethermancer_sepethrea.lua.
 	RegisterLuaBoss("npc_ragin_flames", 22323)
@@ -6805,7 +6812,9 @@ func init() {
 	// whose legs are documented-only); OnDied triggered self-cast
 	// drop journal 26096; zero Talk lines. Documented-only (no
 	// bridges): JustSummoned illusion arms (AttackStart on a random
-	// target, ApplySpellImmune magic-damage, SummonList
+	// target, ApplySpellImmune magic-damage — the immunity bridge exists
+	// (creature:ApplySpellImmune) but has no summoned bearer (see
+	// boss_jandice_barov.lua), SummonList
 	// tracking/DespawnAll), the NOT_SELECTABLE flag / SetDisplayId
 	// (11686 invisible, 11073 Jandice model) / ModifyThreatByPercent
 	// (victim, -99) legs, UpdateAI UNIT_STATE_CASTING gates;
