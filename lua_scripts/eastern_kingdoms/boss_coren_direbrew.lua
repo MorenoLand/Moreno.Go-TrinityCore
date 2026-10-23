@@ -37,10 +37,11 @@
 -- Gossip (vael precedent — RegisterCreatureGossipEvent exists and
 -- fires inline in gossip.go): OnGossipHello offers the fight and
 -- apologize options; OnGossipSelect FIGHT closes the menu — the C++
--- arms (Talk(SAY_INSULT), DoAction(ACTION_START_FIGHT) ->
--- SetImmuneToPC(false) + SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
--- + DoZoneInCombat) have no bridges, so the fight starts when a
--- player pulls. APOLOGIZE closes the menu C++-exact. The option/menu
+-- arms (Talk(SAY_INSULT 3), SetImmuneToPC(false),
+-- SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON 736)) are PORTED below
+-- (ingvar precedent: faction/flag bridges live); the DoZoneInCombat +
+-- antagonist DoAction relay stay out (no bridges), so the fight still
+-- starts when a player pulls. APOLOGIZE closes the menu C++-exact. The option/menu
 -- texts are approximated — the real strings live in the DB
 -- broadcast_text rows (vael precedent).
 -- Unmodeled: intro phase (MoveInLineOfSight -> PHASE_INTRO event
@@ -79,6 +80,11 @@
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
 
 local ENTRY_COREN = 23872
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h (Unit.cpp SetImmuneToPC)
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
+local FACTION_GOBLIN_DARK_IRON_BAR_PATRON = 736 -- SharedDefines.h:249
 
 local SPELL_MOLE_MACHINE_TARGET_PICKER = 47691
 local SPELL_DIREBREW_DISARM_PRE_CAST = 47407
@@ -163,6 +169,10 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset() (boss_coren_direbrew.cpp:138-141): SetImmuneToPC(true) +
+    -- SetFaction(FACTION_FRIENDLY) — both bridged (ingvar precedent).
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    creature:SetFaction(FACTION_FRIENDLY)
 end
 
 local function onGossipHello(event, player, creature)
@@ -178,12 +188,14 @@ local function onGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipClearMenu()
         player:GossipComplete()
-        -- C++ GOSSIP_OPTION_FIGHT: Talk(SAY_INSULT) +
-        -- DoAction(ACTION_START_FIGHT) -> SetImmuneToPC(false) +
-        -- SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON) +
-        -- DoZoneInCombat + antagonist ACTION_ANTAGONIST_HOSTILE relay —
-        -- no Talk/faction/immune/DoAction bridges (vael precedent); the
-        -- fight starts when a player pulls.
+        -- C++ GOSSIP_OPTION_FIGHT (boss_coren_direbrew.cpp:128 + DoAction
+        -- ACTION_START_FIGHT :168-171): Talk(SAY_INSULT 3) +
+        -- SetImmuneToPC(false) + SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
+        -- — all bridged (ingvar precedent); DoZoneInCombat + the antagonist
+        -- ACTION_ANTAGONIST_HOSTILE relay stay out (no bridges).
+        creature:Talk(3)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipClearMenu()
         player:GossipComplete()
