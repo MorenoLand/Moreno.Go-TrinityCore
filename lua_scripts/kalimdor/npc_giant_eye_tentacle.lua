@@ -53,6 +53,12 @@ local function onEnterCombat(event, creature, target)
     timers[guid]["beam"] = CreateLuaEvent(function()
         onGreenBeam(creature, guid)
     end, 500)
+    -- boss_cthun.cpp:1240: npc_giant_eye_tentacleAI JustEngagedWith
+    -- tail — me-form DoZoneInCombat() on the live bridge
+    -- (algalon/mandokir precedent; 2026-10-23 re-triage). C++ runtime
+    -- order: Reset arms (the beam timer above) run before the engage
+    -- arm, so it sits last.
+    creature:DoZoneInCombat()
 end
 
 local function onLeaveCombat(event, creature)

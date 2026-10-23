@@ -75,9 +75,11 @@
 --   GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura
 --   (the moroes precedent — the stale "no instance bridge" claim
 --   for this leg is retracted). The CheckRequiredBosses evade
---   branch, DoCastSpellOnPlayers, DoZoneInCombat and
+--   branch, DoCastSpellOnPlayers and
 --   instance->SetBossState(IN_PROGRESS) legs have no instance
---   bridge; the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY 70572)
+--   bridge (DoZoneInCombat :289 is PORTED 2026-10-23 via the live
+--   creature:DoZoneInCombat bridge — C++ arm order, after
+--   me->setActive(true)); the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY 70572)
 --   exploit leg rides the unbridged intro DoAction machine (see
 --   documented-only).
 -- EVENT_SUMMON_BLOOD_BEAST (:493-502) — DoCastSelf(
@@ -346,9 +348,10 @@ end
 
 -- C++ :275-313 JustEngagedWith: Talk(SAY_AGGRO 7) (:302), then the
 -- five combat scheduler seeds (:304-308). The CheckRequiredBosses
--- evade branch, DoCastSpellOnPlayers, DoZoneInCombat,
+-- evade branch, DoCastSpellOnPlayers,
 -- instance->SetBossState(IN_PROGRESS) and
--- DoRemoveAurasDueToSpellOnPlayers legs have no instance bridge;
+-- DoRemoveAurasDueToSpellOnPlayers legs have no instance bridge
+-- (DoZoneInCombat :289 is PORTED 2026-10-23, C++ arm order);
 -- the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY) exploit leg
 -- (:293-298) rides the unbridged intro DoAction machine.
 -- C++ JustEngagedWith starts with `if (_dead) return;` (:277-278): after
@@ -365,6 +368,9 @@ local function saurfangJustEngagedWith(event, creature, target)
         return
     end
     initState(guid)
+    -- C++ :289 — me-form DoZoneInCombat after me->setActive(true), before
+    -- events.Reset/SetPhase and SetImmuneToPC(false) (C++ arm order).
+    creature:DoZoneInCombat()
     creature:RemoveFlag(59, 0x100) -- C++ :293 (JustEngagedWith SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC, after events.Reset/SetPhase)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "beasts", 30000, function() onSummonBloodBeast(creature, guid) end)

@@ -106,9 +106,10 @@
 -- no-SetData-bridge queue.
 -- DamageTaken else-leg (lines 421-426): the REACT_AGGRESSIVE
 -- arm is PORTED in hodirDamageTaken (!IsInCombat gate; ev9 fires
--- pre-aggro so the gate is reachable); DoZoneInCombat /
--- AttackStart(who) have no bridges — the engine converges on the
--- same tick via triggerCreatureAggro.
+-- pre-aggro so the gate is reachable); DoZoneInCombat (:425) is
+-- PORTED 2026-10-23 via the live bridge (C++ arm order — after
+-- SetReactState); AttackStart(who) has no bridge — the engine
+-- converges on the same tick via triggerCreatureAggro.
 -- gettingColdInHere UpdateAI leg (lines 491-499:
 -- PvE-combat-ref iteration, SPELL_BITING_COLD_TRIGGERED
 -- 62039 aura-stack check, SetData(DATA_GETTING_COLD_IN_HERE))
@@ -418,6 +419,9 @@ local function hodirDamageTaken(event, creature, attacker, damage)
         -- bridges — the engine converges on the same tick
         -- (triggerCreatureAggro starts combat with the attacker).
         creature:SetReactState(REACT_AGGRESSIVE)
+        -- C++ :425 — me-form DoZoneInCombat after SetReactState
+        -- (C++ arm order; AttackStart(who) still has no bridge).
+        creature:DoZoneInCombat()
     end
 end
 

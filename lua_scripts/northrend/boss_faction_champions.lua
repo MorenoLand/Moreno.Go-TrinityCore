@@ -29,9 +29,14 @@
 --   unported; only the HealthBelowPct defensive arm per site fires.
 -- - boss_faction_championsAI base: EVENT_THREAT 5s + heroic
 --   EVENT_REMOVE_CC 5s (instance-gated), UpdateThreat/UpdatePower,
---   RemoveCC, JustEngagedWith SPELL_ANTI_AOE + SetCombatPulseDelay(5) +
---   DoZoneInCombat, AttackStart model, boundary — instance/threat-motion
---   model absent.
+--   RemoveCC, JustEngagedWith: SPELL_ANTI_AOE + SetCombatPulseDelay(5)
+--   + setActive legs have no bridges, but the JustEngagedWith
+--   DoZoneInCombat leg is PORTED 2026-10-23
+--   (creature:DoZoneInCombat, C++ arm order; the old "no bridge" claim
+--   was stale — bridge live at engine/world/lua_creature_events.go);
+--   the SetData(2, IN_PROGRESS) -> summons.DoZoneInCombat() leg stays
+--   out (summons-container relay + instance-script model absent).
+--   AttackStart model, boundary — instance/threat-motion model absent.
 -- - EVENT_HEAL_HAND_OF_PROTECTION / EVENT_DPS_HAND_OF_PROTECTION
 --   (cross-target DoCast(target, ...) friendly-select arms — random-friend
 --   bridge; out of the single defensive-arm scope).
@@ -155,6 +160,15 @@ local function championEnterCombat(event, creature, target)
     if championCfg == nil then
         return
     end
+    -- C++ boss_faction_championsAI::JustEngagedWith (:644-651):
+    -- DoCast(me, SPELL_ANTI_AOE 68595) + SetCombatPulseDelay(5) +
+    -- setActive(true) legs have no bridges (instance/threat-motion
+    -- model absent); DoZoneInCombat() is PORTED 2026-10-23
+    -- (creature:DoZoneInCombat, C++ arm order; bridge live at
+    -- engine/world/lua_creature_events.go); the SetData(2, IN_PROGRESS)
+    -- -> summons.DoZoneInCombat() machine leg stays out (summons-container
+    -- relay + instance-script model absent).
+    creature:DoZoneInCombat()
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "def", math.random(championCfg.initMin, championCfg.initMax), function()

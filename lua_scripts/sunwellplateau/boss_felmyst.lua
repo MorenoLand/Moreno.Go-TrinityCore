@@ -196,12 +196,15 @@ local function felmystBerserkTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: triggered self-cast of the two pull auras
--- + the ground-phase schedule. The setActive/DoZoneInCombat arms
--- have no bridges and SetBossState(IN_PROGRESS) is blocked on the
--- instance-script model.
+-- + the ground-phase schedule. The setActive arm has no bridge and
+-- SetBossState(IN_PROGRESS) is blocked on the instance-script model;
+-- the DoZoneInCombat arm is ported below (bridge live 2026-10-23).
 local function felmystEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ boss_felmyst.cpp:160-169: berserk schedule, setActive(true),
+    -- DoZoneInCombat() (bridge live 2026-10-23), then the two aura self-casts.
+    creature:DoZoneInCombat()
     creature:CastSpell(creature, AURA_SUNWELL_RADIANCE, true)
     creature:CastSpell(creature, AURA_NOXIOUS_FUMES, true)
     schedule(guid, "cleave", math.random(5000, 10000), function()

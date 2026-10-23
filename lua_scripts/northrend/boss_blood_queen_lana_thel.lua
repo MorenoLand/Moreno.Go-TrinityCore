@@ -37,9 +37,13 @@
 -- DOCUMENTED-BLOCKED (no registration beyond entry 37955):
 -- boss_blood_queen_lana_thel JustEngagedWith — instance legs
 -- (instance->CheckRequiredBosses / DoCastSpellOnPlayers(
--- LIGHT_S_HAMMER_TELEPORT) / DoZoneInCombat / instance->
+-- LIGHT_S_HAMMER_TELEPORT) / instance->
 -- SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, IN_PROGRESS)) have no
--- instance bridge; PORTED (2026-10-13): the three triggered
+-- instance bridge; PORTED (2026-10-23): DoZoneInCombat (:184,
+-- me-form) via the live creature:DoZoneInCombat bridge
+-- (engine/world/lua_creature_events.go:426; the mandokir/algalon
+-- event-1 precedent) — C++ arm order (before Talk(SAY_AGGRO));
+-- PORTED (2026-10-13): the three triggered
 -- self-cast auras (:188-190) — curator engage-cast precedent.
 -- boss_blood_queen_lana_thel JustDied — DoCastAOE(
 -- SPELL_BLOOD_INFUSION_CREDIT) leg: cast bridge exists
@@ -260,6 +264,9 @@ end
 local function lanaThelJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ :184 — me-form DoZoneInCombat after me->setActive(true), before
+    -- Talk(SAY_AGGRO) (C++ arm order; the mandokir/algalon event-1 precedent).
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (:184): CleanAuras() after Talk(SAY_AGGRO) /
     -- SetBossState(IN_PROGRESS) (no instance bridge), before the

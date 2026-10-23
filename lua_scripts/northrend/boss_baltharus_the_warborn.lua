@@ -295,10 +295,13 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
 -- DoZoneInCombat(); events.Reset();
 -- events.ScheduleEvent(EVENT_CLEAVE, 11s);
 -- events.ScheduleEvent(EVENT_BLADE_TEMPEST, 15s);
--- events.ScheduleEvent(EVENT_ENERVATING_BRAND, 10s). The clone's cleave
+-- events.ScheduleEvent(EVENT_ENERVATING_BRAND, 10s). The DoZoneInCombat
+-- leg is PORTED 2026-10-23 (creature:DoZoneInCombat, first in arm order;
+-- bridge live engine/world/lua_creature_events.go). The clone's cleave
 -- is DoCastVictim (:296-299) = the boss's cleaveTick; brand (:304-308)
 -- is the same no-brand pool = enervatingBrandTick.
 local function cloneEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- C++ :257, first in arm order (live bridge lua_creature_events.go; 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "cleave", 11000, function()

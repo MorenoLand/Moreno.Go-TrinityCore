@@ -39,8 +39,10 @@
 -- apologize options; OnGossipSelect FIGHT closes the menu — the C++
 -- arms (Talk(SAY_INSULT 3), SetImmuneToPC(false),
 -- SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON 736)) are PORTED below
--- (ingvar precedent: faction/flag bridges live); the DoZoneInCombat +
--- antagonist DoAction relay stay out (no bridges), so the fight still
+-- (ingvar precedent: faction/flag bridges live); the antagonist
+-- ACTION_ANTAGONIST_HOSTILE relay stays out (no DoAction bridge).
+-- Coren's own DoAction DoZoneInCombat arm (:172) is ported in
+-- onGossipSelect below (bridge live 2026-10-23), so the fight still
 -- starts when a player pulls. APOLOGIZE closes the menu C++-exact. The option/menu
 -- texts are approximated — the real strings live in the DB
 -- broadcast_text rows (vael precedent).
@@ -191,11 +193,13 @@ local function onGossipSelect(event, player, creature, sender, action)
         -- C++ GOSSIP_OPTION_FIGHT (boss_coren_direbrew.cpp:128 + DoAction
         -- ACTION_START_FIGHT :168-171): Talk(SAY_INSULT 3) +
         -- SetImmuneToPC(false) + SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
-        -- — all bridged (ingvar precedent); DoZoneInCombat + the antagonist
-        -- ACTION_ANTAGONIST_HOSTILE relay stay out (no bridges).
+        -- — all bridged (ingvar precedent); DoZoneInCombat ported below in
+        -- C++ arm order (bridge live 2026-10-23); the antagonist
+        -- ACTION_ANTAGONIST_HOSTILE relay stays out (no DoAction bridge).
         creature:Talk(3)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
         creature:SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
+        creature:DoZoneInCombat() -- boss_coren_direbrew.cpp:172
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipClearMenu()
         player:GossipComplete()

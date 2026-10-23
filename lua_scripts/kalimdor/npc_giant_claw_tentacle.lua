@@ -85,6 +85,12 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "hamstring", 2000, function()
         onHamstring(creature, guid)
     end)
+    -- boss_cthun.cpp:1125: npc_giant_claw_tentacleAI JustEngagedWith
+    -- tail — me-form DoZoneInCombat() on the live bridge
+    -- (algalon/mandokir precedent; 2026-10-23 re-triage). C++ runtime
+    -- order: Reset arms (the timers above) run before the engage arm,
+    -- so it sits last.
+    creature:DoZoneInCombat()
 end
 
 local function onLeaveCombat(event, creature)

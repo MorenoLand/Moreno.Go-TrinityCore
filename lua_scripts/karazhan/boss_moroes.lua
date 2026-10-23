@@ -232,6 +232,11 @@ local function moroesEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     moroesInitState(guid)
+    -- C++ boss_moroes.cpp:155+164: JustEngagedWith calls StartEvent()
+    -- (SetBossState IN_PROGRESS + DoZoneInCombat()) then Talk(SAY_AGGRO),
+    -- AddsAttack(), DoZoneInCombat() — one ported call in arm order (the
+    -- AddsAttack cross-creature leg stays out, documented below).
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
     schedule(guid, "blind", 35000, function() onBlind(creature, guid) end)

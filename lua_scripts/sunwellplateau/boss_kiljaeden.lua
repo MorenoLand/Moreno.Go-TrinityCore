@@ -169,9 +169,9 @@
 -- Deliberate deviations (standing gaps): no instance-script model
 -- — boss admission via the luaBossAI shim (the SetBossState(
 -- DATA_KILJAEDEN, NOT_STARTED/IN_PROGRESS/DONE) arms, the
--- JustEngagedWith DoZoneInCombat arm, the deceiver/controller
--- SetBossState arms and the DATA_MURU offcombat gate are
--- skipped); no cross-creature bridge — the kalecgos/anveena
+-- deceiver/controller SetBossState arms and the DATA_MURU offcombat
+-- gate are skipped — the JustEngagedWith DoZoneInCombat arm is ported
+-- below, bridge live 2026-10-23); no cross-creature bridge — the kalecgos/anveena
 -- speech rows, the controller<->deceiver death-count/threat/
 -- Reset relays, the KJ->kalecgos EmpowerOrb/ResetOrbs/
 -- SetRingOfBlueFlames calls and the reflection summon-side
@@ -578,6 +578,7 @@ end
 -- ================= Kil'jaeden (25315) =================
 
 local function kjEnterCombat(event, creature)
+    creature:DoZoneInCombat() -- boss_kiljaeden.cpp:657 (JustEngagedWith sole arm; bridge live 2026-10-23)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kiljaeden.cpp:525 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)

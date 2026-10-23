@@ -173,6 +173,7 @@ local function akilzonResetState(guid)
 end
 
 local function akilzonEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- boss_akilzon.cpp:411 (JustEngagedWith sole arm; bridge live 2026-10-23)
     local guid = creature:GetGUID()
     akilzonResetState(guid)
     creature:Talk(SAY_AGGRO)
@@ -231,8 +232,8 @@ RegisterCreatureEvent(ENTRY_AKILZON, 23, akilzonReset)
 -- modeled as a direct timer cast on a random alive player every {5s,10s}.
 -- MoveInLineOfSight is suppressed in C++ (empty override) and Reset's
 -- SetDisableGravity ports via the creature:SetDisableGravity bridge
--- (akilzonReset); JustEngagedWith's DoZoneInCombat has
--- no bridge.
+-- (akilzonReset); JustEngagedWith's DoZoneInCombat is ported below
+-- (bridge live 2026-10-23).
 -- C++ npc_akilzon_eagle UpdateAI (boss_akilzon.cpp:439):
 -- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form) — picks from
 -- the eagle's threat list, not players only. The target feeds the

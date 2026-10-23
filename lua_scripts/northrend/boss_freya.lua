@@ -154,7 +154,9 @@
 -- DOCUMENTED-ONLY (in this header; no registrations beyond
 -- entries 32906 / 32915 / 32914 / 32913):
 -- Freya JustEngagedWith companion legs (:342-391) —
--- DoZoneInCombat; elder scan (instance GetGuidData + alive
+-- DoZoneInCombat (:345) PORTED 2026-10-23 via the live bridge
+-- (C++ arm order — before the elder scan); elder scan (instance
+-- GetGuidData + alive
 -- checks) -> SPELL_DRAINED_OF_POWER 62467 on the elder,
 -- essence casts, RemoveLootMode, elder AttackStart + threat;
 -- the Talk choice (SAY_AGGRO 0 vs SAY_AGGRO_WITH_ELDER 1);
@@ -364,6 +366,9 @@ end
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ :345 — me-form DoZoneInCombat after BossAI::JustEngagedWith,
+    -- before the elder scan (C++ arm order).
+    creature:DoZoneInCombat()
     -- C++ JustEngagedWith (boss_freya.cpp:379-382): elderCount == 0 ->
     -- Talk(SAY_AGGRO), else Talk(SAY_AGGRO_WITH_ELDER); elderCount is
     -- the alive-elder count (C++: Elder[n] && Elder[n]->IsAlive(),

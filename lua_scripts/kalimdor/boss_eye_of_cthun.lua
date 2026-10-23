@@ -8,10 +8,15 @@
 -- NPC_CTHUN_PORTAL = 15896 (temple_of_ahnqiraj.h:58-60);
 -- DATA_CTHUN = 5, DATA_CTHUN_PHASE = 20 (temple_of_ahnqiraj.h:35,52).
 --
--- DOCUMENT-ONLY: no arms are wired. The boss body is a
+-- DOCUMENTATION + one wired arm: the JustEngagedWith DoZoneInCombat
+-- leg (boss_cthun.cpp:224-228) ports below on the live bridge
+-- (algalon/mandokir precedent; 2026-10-23 re-triage — the old
+-- "no instance bridge" blocker applies only to the phase SetData leg).
+-- The boss body is otherwise a
 -- instance-phase-machine + summon/angle/DoAction script with no
 -- workable bridge for any of its four SelectTarget sites below, so
--- this file documents the gaps per site instead of porting them.
+-- this file documents the remaining gaps per site instead of porting
+-- them.
 -- (Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied; timers via CreateLuaEvent — none used here because every
 -- arm is gated or driven by unbridged machinery.)
@@ -68,8 +73,10 @@
 -- Surrounding machinery, also unbridged (for the record, not
 -- wired): Reset (:210-:220, RemoveAurasDueToSpell + SetVisible +
 -- FindNearestCreature(NPC_CTHUN_PORTAL) passive — FindNearestCreature
--- and SetVisible have no bridge); JustEngagedWith (:224-:228,
--- DoZoneInCombat + phase SetData — no instance bridge);
+-- and SetVisible have no bridge); JustEngagedWith (:224-:228): the
+-- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
+-- re-triage) — only the instance->SetData(DATA_CTHUN_PHASE,
+-- PHASE_EYE_GREEN_BEAM) leg stays out (no instance bridge);
 -- EyeTentacleTimer 45s 8-spot spawn block (:247-:263, summon
 -- bridge blocker); PhaseTimer transitions (:303-:335 green->red,
 -- :363-:383 red->green — phase SetData legs, no bridge);
@@ -84,3 +91,17 @@
 -- RegisterLuaBoss bindings in engine/world/boss_ai.go). This file
 -- exists so the eye body (15589) has its four unported sites named
 -- per site with their blockers, instead of an undocumented hole.
+-- 2026-10-23: one arm wired (below).
+
+local ENTRY = 15589
+
+-- boss_cthun.cpp:224-228: eye_of_cthunAI::JustEngagedWith is
+-- DoZoneInCombat() + instance->SetData(DATA_CTHUN_PHASE,
+-- PHASE_EYE_GREEN_BEAM). The SetData leg stays out (no instance
+-- bridge); the me-form DoZoneInCombat() leg ports here on the live
+-- bridge (algalon/mandokir precedent).
+local function onEnterCombat(event, creature, target)
+    creature:DoZoneInCombat()
+end
+
+RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

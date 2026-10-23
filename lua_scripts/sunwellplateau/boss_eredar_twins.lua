@@ -128,8 +128,7 @@
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_EREDAR_TWINS book-
--- keeping, DoZoneInCombat, sister AttackStart/respawn/threat relays
--- skipped); no cross-creature bridge — the sister-death detection
+-- keeping, sister AttackStart/respawn/threat relays skipped); no cross-creature bridge — the sister-death detection
 -- (instance->GetCreature(DATA_*), Talk(YELL_SISTER_*_DEAD), empower
 -- 45366 self-cast, the sister-phase spell arms) and the SetBossState
 -- (DONE) gates plus the alythess intro cross-Talk are unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
@@ -306,6 +305,7 @@ end
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
 local function sacrolashEnterCombat(event, creature)
+    creature:DoZoneInCombat() -- boss_eredar_twins.cpp:136 (JustEngagedWith arm 1; bridge live 2026-10-23)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
@@ -423,6 +423,7 @@ end
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
 local function alythessEnterCombat(event, creature)
+    creature:DoZoneInCombat() -- boss_eredar_twins.cpp:392 (JustEngagedWith arm 1; bridge live 2026-10-23)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
     local guid = creature:GetGUID()

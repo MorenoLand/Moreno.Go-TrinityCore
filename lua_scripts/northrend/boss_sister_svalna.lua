@@ -116,13 +116,15 @@
 --   HealthBelowPct(20) gate) and the IsUndead random-target legs
 --   (EVENT_BRANDON_HAMMER_OF_BETRAYAL, EVENT_GRONDEL_CONFLAGRATION)
 --   stay parked (not in the docast-missing scan set).
--- npc_crok_scourgebane::JustEngagedWith (:859-863) —
---   me->SetHomePosition(*me) (:861) ported in crokEnterCombat
---   (event-surface SetHomePosition); the if (IsUndead)
---   DoZoneInCombat() leg (:862-863) stays out — re-evaluated
---   2026-10-23 against the live bridge: IsUndead-gated on the
---   unported latch (set-arm rides the setDeathState/UpdateEntry
---   machine) — documented-only.
+-- (CORRECTION 2026-10-23: boss_sister_svalna.cpp:859-863 is
+-- npc_argent_captainAI::JustEngagedWith, NOT crok's — crok
+-- (npc_crok_scourgebane :526-809, EscortAI) has NO JustEngagedWith
+-- override in C++; the SetHomePosition port formerly in crokEnterCombat
+-- was a fabricated leg and is REMOVED. The captain leg itself —
+-- SetHomePosition :861 (ported) + the IsUndead-gated DoZoneInCombat
+-- :862-863 (stays out: dead latch, set-arm rides the unported
+-- setDeathState/UpdateEntry machine) — lives in
+-- npc_argent_captains.lua.)
 -- npc_crok_scourgebane::CanAIAttack x2 (:792-796, :866-870) — the
 --   Y > 2660 Frostwing-Halls gate ("do not see targets inside
 --   Frostwing Halls when we are not there") stays out: creature:GetY
@@ -524,10 +526,12 @@ local function onCrokDeathStrike(creature, guid)
         function() onCrokDeathStrike(creature, guid) end)
 end
 
+-- crok has NO JustEngagedWith in C++ (npc_crok_scourgebane :526-809,
+-- EscortAI, no override); the scourge/death-strike seeds below re-key
+-- the DoAction gauntlet arms (:547-548) to combat start (svalna precedent).
 local function crokEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     schedule(guid, "scourge", {7500, 12500},
         function() onCrokScourgeStrike(creature, guid) end)
     schedule(guid, "death", {25000, 30000},

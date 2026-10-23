@@ -89,8 +89,10 @@
 --   by construction" phrasing is retracted: the blocker is the unported
 --   toggle pair, not the flag bridge. Initialize (_hopelessnessCount =
 --   0, :67) is the per-GUID state seed on enter combat.
--- JustEngagedWith :79 DoZoneInCombat / :80 instance->SetBossState
---   IN_PROGRESS — no bridge.
+-- JustEngagedWith :79 DoZoneInCombat — PORTED 2026-10-23
+-- (creature:DoZoneInCombat, in arm order after Talk; bridge live at
+-- engine/world/lua_creature_events.go; the old "no bridge" claim was
+-- stale) / :80 instance->SetBossState IN_PROGRESS — no bridge.
 -- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — no unit-state
 --   bridge; timers fire unconditionally (the maiden precedent; creature
 --   casts are packet-visual in Go).
@@ -216,12 +218,14 @@ end
 
 -- C++ :78-84 JustEngagedWith: Talk(SAY_AGGRO) unconditional; the three
 -- ScheduleEvent seeds (23000 / 9000 / {21000,39000}ms). The
--- DoZoneInCombat and instance->SetBossState IN_PROGRESS legs (:79-80)
--- have no bridge.
+-- DoZoneInCombat leg (:79) is PORTED 2026-10-23 — creature:DoZoneInCombat
+-- in arm order after Talk (bridge live engine/world/lua_creature_events.go);
+-- instance->SetBossState IN_PROGRESS (:80) has no bridge.
 local function falricEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
     creature:Talk(SAY_AGGRO)
+    creature:DoZoneInCombat() -- C++ :79, in arm order after Talk (2026-10-23)
     schedule(guid, "quivering", 23000, function() onQuiveringStrike(creature, guid) end)
     schedule(guid, "despair", 9000, function() onImpendingDespair(creature, guid) end)
     schedule(guid, "horror", {21000, 39000}, function() onDefilingHorror(creature, guid) end)

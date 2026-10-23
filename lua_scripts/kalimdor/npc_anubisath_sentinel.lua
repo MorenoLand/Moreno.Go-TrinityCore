@@ -10,10 +10,14 @@
 -- uniform 1-9 pick, matching C++ rand32()%9 on a fresh dedup set)
 -- and self-casts it (GainSentinelAbility -> AddAura(id, me)).
 -- Zero Talk() in C++.
+-- Ported: the JustEngagedWith tail creature:DoZoneInCombat()
+-- (mob_anubisath_sentinel.cpp:243, me-form on the live bridge —
+-- 2026-10-23 re-triage; the old "buddy machinery" blocker was
+-- inapplicable to this leg, no cross-AI/grid read is needed).
 -- Documented-only: the whole buddy machinery (AddSentinelsNear grid
 -- scan, GiveBuddyMyList/SendMyListToBuddies/CallBuddiesToAttack,
 -- gatherOthersWhenAggro, cross-AI selectAbility dedup, JustDied
--- 50% heal + ability transfer, Reset buddy respawn, DoZoneInCombat) —
+-- 50% heal + ability transfer, Reset buddy respawn) —
 -- no ObjectAccessor / cross-AI / GetCreatureListWithEntryInGrid /
 -- AttackStart bridge exists in Lua. The Shadow Storm SDComment
 -- (storm should only hit targets outside melee range) is an aura-level
@@ -36,6 +40,13 @@ local function onEnterCombat(event, creature, target)
     -- C++ re-picks a random ability on EVERY engage (see header).
     local ability = BUFFS[math.random(#BUFFS)]
     creature:CastSpell(creature, ability)
+    -- mob_anubisath_sentinel.cpp:243: JustEngagedWith tail — me-form
+    -- DoZoneInCombat() on the live bridge (algalon/mandokir precedent;
+    -- 2026-10-23 re-triage). The old "buddy machinery" blocker is
+    -- inapplicable to this leg: no ObjectAccessor / cross-AI read is
+    -- needed — the bridge engages the zone directly. C++ arm order:
+    -- GetOtherSentinels (unported) -> GainSentinelAbility -> this.
+    creature:DoZoneInCombat()
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

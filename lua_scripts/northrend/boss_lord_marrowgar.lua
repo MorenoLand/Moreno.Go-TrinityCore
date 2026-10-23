@@ -49,8 +49,10 @@
 --
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_lord_marrowgar JustEngagedWith — Talk(SAY_AGGRO 1) (event 1 —
--- the auriaya engage-port precedent; the me->setActive(true),
--- DoZoneInCombat, instance->SetBossState IN_PROGRESS and five
+-- the auriaya engage-port precedent; PORTED 2026-10-23:
+-- DoZoneInCombat (:162, me-form) via the live bridge — C++ arm
+-- order, after Talk; the me->setActive(true),
+-- instance->SetBossState IN_PROGRESS and five
 -- ScheduleEvent legs have no bridge).
 -- boss_lord_marrowgar KilledUnit — Talk(SAY_KILL 4) player-gated
 -- (event 3 — the razuvious player-gated variant precedent; the
@@ -176,6 +178,9 @@ local function marrowgarJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ :162 — me-form DoZoneInCombat after Talk(SAY_AGGRO) and
+    -- me->setActive(true) (C++ arm order).
+    creature:DoZoneInCombat()
     schedule(guid, "enrage", 600000, function() onEnrage(creature, guid) end)
 end
 

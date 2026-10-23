@@ -73,9 +73,11 @@
 -- through on empty (C++ DoCast on nullptr casts — the burn
 -- nil-skip was wrong, removed this run); the
 -- InterruptNonMeleeSpells arm is blocked.
--- All five: OnEnterCombat(1) resets per-GUID state and re-arms
--- the combat timers (the DoZoneInCombat arms have no zone-combat
--- bridge; the SetBossState(IN_PROGRESS) arms are blocked on the
+-- All five: OnEnterCombat(1) resets per-GUID state, ports
+-- DoZoneInCombat (creature:DoZoneInCombat, live bridge
+-- engine/world/lua_creature_events.go, 2026-10-23; C++ arm order:
+-- DoZoneInCombat first) and re-arms the combat timers (the
+-- SetBossState(IN_PROGRESS) arms are blocked on the
 -- instance-script model). OnDied(4): Maulgar Talk(SAY_DEATH);
 -- the ogre JustDied cross-creature DoAction relays and the
 -- SetBossState(DONE) arms are blocked — timers are cancelled
@@ -299,14 +301,16 @@ local function maulgarArmCombat(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + the three combat arms
--- and the phase-2 poller; the DoZoneInCombat and
--- SetBossState(IN_PROGRESS) arms are blocked. The AttackStart mutual
+-- and the phase-2 poller; DoZoneInCombat is PORTED (C++ arm order:
+-- DoZoneInCombat first, before Talk) and the
+-- SetBossState(IN_PROGRESS) arm is blocked. The AttackStart mutual
 -- SetInCombatWith pairing (boss_high_king_maulgar.cpp:250-251) has no
 -- bridge — engine triggerCreatureAggro converges the engage.
 local function maulgarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
+    creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:134: engage every player on the map (live bridge 2026-10-23)
     creature:Talk(SAY_AGGRO)
     maulgarArmCombat(creature, guid)
 end
@@ -397,12 +401,14 @@ local function olmArmCombat(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: DoZoneInCombat (no zone-combat bridge)
--- + SetBossState(IN_PROGRESS) (blocked) + the three combat
+-- C++ JustEngagedWith: DoZoneInCombat PORTED (C++ arm order:
+-- DoZoneInCombat first; boss_high_king_maulgar.cpp:257) +
+-- SetBossState(IN_PROGRESS) (blocked) + the three combat
 -- arms.
 local function olmEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     olmResetState(guid)
+    creature:DoZoneInCombat()
     olmArmCombat(creature, guid)
 end
 
@@ -475,6 +481,7 @@ end
 local function kigglerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     kigglerResetState(guid)
+    creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:344, C++ arm order
     schedule(guid, "polymorph", 5000, function()
         kigglerPolymorph(creature, guid)
     end)
@@ -538,6 +545,7 @@ end
 local function blindeyeEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     blindeyeResetState(guid)
+    creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:436, C++ arm order
     schedule(guid, "shield", 5000, function()
         blindeyeShield(creature, guid)
     end)
@@ -634,6 +642,7 @@ local function kroshEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_high_king_maulgar.cpp:533: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     kroshResetState(guid)
+    creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:519, C++ JustEngagedWith arm order
     schedule(guid, "fireball", 1000, function()
         kroshFireball(creature, guid)
     end)

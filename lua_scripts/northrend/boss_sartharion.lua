@@ -26,10 +26,11 @@
 -- table, cancel on events 2/4/23; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_SARTHARION_AGGRO 0) + the three timer
+-- JustEngagedWith — Talk(SAY_SARTHARION_AGGRO 0) + DoZoneInCombat
+-- (PORTED 2026-10-23, C++ :170 in arm order after Talk) + the three timer
 -- casts (event 1; the BossAI::JustEngagedWith bookkeeping
 -- (setActive / CheckRequiredBosses / SetBossState IN_PROGRESS),
--- DoZoneInCombat, and the FetchDragons machine (PowerOf Tenebron /
+-- and the FetchDragons machine (PowerOf Tenebron /
 -- Shadron / Vesperon casts 61248 / 58105 / 61251, WILL_OF_SARTHARION
 -- 61254, drake loot-mode ladder, MotionMaster MovePoints to the
 -- drake init positions, UNIT_FLAG_NON_ATTACKABLE legs — all gated
@@ -181,7 +182,9 @@ end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (setActive /
 -- CheckRequiredBosses / SetBossState IN_PROGRESS) + Talk(AGGRO)
--- + DoZoneInCombat + FetchDragons (drake power-aura casts, loot
+-- + DoZoneInCombat (PORTED 2026-10-23 — creature:DoZoneInCombat, the old
+-- "no bridge" claim was stale; bridge live at
+-- engine/world/lua_creature_events.go:426) + FetchDragons (drake power-aura casts, loot
 -- modes, drake init MovePoints, non-attackable flags) +
 -- ScheduleEvent x9 — the Talk and the three timer casts are
 -- bridgeable; the rest are machine legs with no bridges.
@@ -190,6 +193,7 @@ end
 -- No cross-AI SetData bridge and the target AIs are unported — dropped, documented.
 local function sartharionEnterCombat(event, creature, target)
     creature:Talk(SAY_SARTHARION_AGGRO)
+    creature:DoZoneInCombat() -- C++ :170, in arm order after Talk (live bridge lua_creature_events.go; 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "cleave", 7000, function()

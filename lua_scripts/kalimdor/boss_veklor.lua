@@ -63,6 +63,13 @@
 --   The !pOtherBoss->IsInCombat() aggro gate and the cross-AI
 --   DontYellWhenDead death latch have no cross-AI bridge, so
 --   aggro/death sounds play per-creature; zero Talk() in C++.
+-- - JustEngagedWith other-twin pull (boss_twinemperors.cpp:165):
+--   PORTED — the other twin is reached via the bridged
+--   creature:FindNearestCreature(ENTRY_VEKNILASH, 150.0) idiom and
+--   other:DoZoneInCombat() fires behind the bridged
+--   other:IsInCombat() gate; the sibling otherAI->AttackStart(who)
+--   leg has no bridge (motion leg, standing). 2026-10-23 re-triage;
+--   the old "no cross-AI bridge" claim for this leg is retracted.
 local ENTRY = 15276
 local ENTRY_VEKNILASH = 15275 -- temple_of_ahnqiraj.h:75
 
@@ -204,6 +211,19 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "berserk", 900000, function()
         onBerserk(creature, guid)
     end)
+    -- C++ boss_twinemperors.cpp:165: JustEngagedWith pulls the other
+    -- twin into the fight when it is not yet in combat
+    -- (!pOtherBoss->IsInCombat() gate). GetOtherBoss resolves to the
+    -- FindNearestCreature(ENTRY_VEKNILASH, 150.0) idiom (the same one
+    -- onDamageTaken uses); the otherAI->AttackStart(who) leg has no
+    -- bridge, but other:DoZoneInCombat() engages the twin with every
+    -- alive player in the zone — the arm's effect. No recursion: the
+    -- twin's own event-1 handler hits the same gate and finds this
+    -- creature already in combat.
+    local other = creature:FindNearestCreature(ENTRY_VEKNILASH, 150.0)
+    if other ~= nil and not other:IsInCombat() then
+        other:DoZoneInCombat()
+    end
 end
 
 local function onLeaveCombat(event, creature)

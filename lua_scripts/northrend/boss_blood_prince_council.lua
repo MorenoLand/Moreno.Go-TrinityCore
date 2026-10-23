@@ -62,9 +62,10 @@
 -- plus the SetCombatPulseDelay(5) arm (PORTED — creature:SetCombatPulseDelay
 -- bridge, lua_creature_events.go; event 1, C++ arm order)
 -- and the Reset's SetCombatPulseDelay(0) + SetImmuneToPC(false) (:447/:449)
--- arms (PORTED — event 23, C++ arm order); the setActive/DoZoneInCombat legs
--- stay out (re-evaluated 2026-10-23 against the live bridge — the
--- controller is not in hand):
+-- arms (PORTED — event 23, C++ arm order); the setActive leg has no bridge
+-- (CORRECTION 2026-10-23: the DoZoneInCombat(controller) :459-460 leg IS
+-- ported in each member's event-1 handler — controller gathered via
+-- GetCreaturesInGrid, illidari-council precedent):
 -- keleseth: EVENT_BERSERK 600000ms (:622), EVENT_SHADOW_RESONANCE
 -- {10000,15000}ms (:623), EVENT_SHADOW_LANCE 2000ms (:624);
 -- taldaram: EVENT_BERSERK 600000ms (:689), EVENT_GLITTERING_SPARKS
@@ -203,6 +204,7 @@ local ENTRY_KELESETH = 37972
 local ENTRY_TALDARAM = 37973
 local ENTRY_VALANAR = 37970
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
+local ENTRY_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248 (NPC_BLOOD_ORB_CONTROLLER)
 
 -- Texts enum: SAY_KELESETH_SPECIAL = 2, EMOTE_KELESETH_BERSERK = 4,
 -- EMOTE_TALDARAM_BERSERK = 5, SAY_TALDARAM_SPECIAL = 2,
@@ -362,9 +364,17 @@ end
 -- EVENT_BERSERK 600000ms, EVENT_SHADOW_RESONANCE {10000,15000}ms,
 -- EVENT_SHADOW_LANCE 2000ms + the IsHeroic-gated shadow-prison
 -- legs :628-629 (creature:IsHeroic() now bridged).
--- JustEngagedWith (:455) otherwise has no bridgeable leg.
+-- JustEngagedWith (:455): the DoZoneInCombat(controller) leg is PORTED
+-- in the member handlers (below); setActive/ScheduleEvents have no bridge.
 local function kelesethEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ :459-460: DoZoneInCombat(controller) — engage the controller
+    -- (entry 38008) in the zone; gathered via GetCreaturesInGrid (the
+    -- illidari-council member precedent); the C++ ObjectAccessor nil-guard
+    -- is the empty-gather no-op; bridge live 2026-10-23; C++ arm order kept.
+    for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
+        controller:DoZoneInCombat()
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -381,7 +391,14 @@ end
 -- EVENT_CONJURE_FLAME 20000ms + the IsHeroic-gated shadow-prison
 -- leg :693 (creature:IsHeroic() now bridged).
 local function taldaramEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ :459-460: DoZoneInCombat(controller) — engage the controller
+    -- (entry 38008) in the zone; gathered via GetCreaturesInGrid (the
+    -- illidari-council member precedent); the C++ ObjectAccessor nil-guard
+    -- is the empty-gather no-op; bridge live 2026-10-23; C++ arm order kept.
+    for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
+        controller:DoZoneInCombat()
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then
@@ -472,7 +489,14 @@ local function nucleusReset(event, creature)
 end
 
 local function valanarEnterCombat(event, creature)
-    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; setActive leg has no bridge; DoZoneInCombat(controller) re-evaluated 2026-10-23 — STAY-OUT: controller not in hand)
+    creature:SetCombatPulseDelay(5) -- boss_blood_prince_council.cpp:457 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
+    -- C++ :459-460: DoZoneInCombat(controller) — engage the controller
+    -- (entry 38008) in the zone; gathered via GetCreaturesInGrid (the
+    -- illidari-council member precedent); the C++ ObjectAccessor nil-guard
+    -- is the empty-gather no-op; bridge live 2026-10-23; C++ arm order kept.
+    for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
+        controller:DoZoneInCombat()
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then

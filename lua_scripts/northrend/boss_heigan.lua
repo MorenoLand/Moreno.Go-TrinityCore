@@ -68,9 +68,12 @@
 -- phase-blocked pendings — the latch-skip in the disrupt/fever
 -- callbacks converges to the same next-fire times), SetReactState(
 -- REACT_AGGRESSIVE) (bridged). CastStop() is vacuous — every cast in
--- this file is instant, nothing channels; DoZoneInCombat() has no
--- bridge (combat never left Lua-side — threat list intact — the only
--- delta is adds that were never in combat, marginal; documented).
+-- this file is instant, nothing channels; DoZoneInCombat() (:186)
+-- is PORTED 2026-10-23 in onDanceEnd via the live bridge
+-- (engine/world/lua_creature_events.go:426) — the old "no bridge"
+-- claim is retracted (combat never left Lua-side — threat list
+-- intact — but C++ explicitly zones-in the whole map here, so the
+-- port is C++-exact).
 -- The old "no DoCastAOE bridge" claims are superseded by the
 -- phase-gating verdict (Oct-13 ICC strip convention).
 -- Unmodeled (no bridges — documented, not wired):
@@ -159,6 +162,9 @@ local function onDanceEnd(creature, guid)
     schedule(guid, "fever", {15000, 20000}, function() onFever(creature, guid) end)
     schedule(guid, "dance", 90000, function() onDance(creature, guid) end)
     creature:SetReactState(REACT_AGGRESSIVE)
+    -- C++ :186 (EVENT_DANCE_END) — me-form DoZoneInCombat after
+    -- SetReactState(REACT_AGGRESSIVE) (C++ arm order; CastStop vacuous here).
+    creature:DoZoneInCombat()
 end
 
 onDance = function(creature, guid)

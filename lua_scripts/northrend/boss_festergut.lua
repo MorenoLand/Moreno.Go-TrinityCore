@@ -89,9 +89,11 @@
 -- achievement_im_on_a_boat precedent).
 -- boss_festergut JustEngagedWith legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
--- FindNearestCreature(NPC_GAS_DUMMY) / DoZoneInCombat /
+-- FindNearestCreature(NPC_GAS_DUMMY) /
 -- professor->AI()->DoAction(ACTION_FESTERGUT_COMBAT) — have no
--- instance / DoAction bridge; JustDied _JustDied + DoAction(
+-- instance / DoAction bridge (DoZoneInCombat :128 is PORTED
+-- 2026-10-23 via the live bridge — C++ arm order, last in the
+-- handler); JustDied _JustDied + DoAction(
 -- ACTION_FESTERGUT_DEATH) + RemoveBlight legs, JustReachedHome
 -- instance->SetBossState(FAIL), EnterEvadeMode cross-AI professor
 -- EnterEvadeMode — no instance / DoAction bridge.
@@ -317,6 +319,9 @@ local function festergutJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ :128 — me-form DoZoneInCombat last in JustEngagedWith (after
+    -- Talk(SAY_AGGRO) / gas-dummy / professor DoAction legs); C++ arm order.
+    creature:DoZoneInCombat()
     schedule(guid, "gastric_bloat", {12500, 15000}, function() onGastricBloat(creature, guid) end)
     schedule(guid, "berserk", 300000, function() onBerserk(creature, guid) end)
     inhale[guid] = 0

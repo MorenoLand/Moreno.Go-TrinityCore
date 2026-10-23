@@ -86,11 +86,10 @@
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
 -- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as
 --   RemoveFlag(59, 0x300) in onStartFight (the keepCombat=false combat-end
---   leg drops, no bridge); the DoZoneInCombat (:220) + despawn
---   NPC_CROWN_APOTHECARY 36885 in grid sibling arms stay out —
---   2026-10-23 re-evaluation: the DoZoneInCombat fires from the
---   UpdateAI EVENT_START_FIGHT timer (not a JustEngagedWith arm), and the
---   despawn rides the unbridged grid search; bridges don't cover them.
+--   leg drops, no bridge); the DoZoneInCombat (:220) leg IS PORTED
+--   (2026-10-23 — plain me-call in C++ order after RemoveFlag, bridge
+--   live); the despawn NPC_CROWN_APOTHECARY 36885 in grid sibling stays
+--   out (unbridged grid search).
 -- - CALL_BAXTER/FRYE: summons.DoAction(ACTION_START_FIGHT,
 --   EntryCheckPredicate) + summons.DoZoneInCombat(BAXTER) relay — no
 --   bridges (2026-10-23 re-evaluation: the relay is a summons-container
@@ -228,11 +227,13 @@ end
 -- leg (boss_apothecary_hummel.cpp:219) ports first, in C++ arm order, as
 -- the flag twin RemoveFlag(UNIT_FIELD_FLAGS 59, 0x100|0x200 = 0x300)
 -- (Unit.cpp:8440-8451; SetImmuneToPC-sweep precedent): the keepCombat=false
--- combat-end leg has no bridge (dropped), and so do the sibling
--- DoZoneInCombat() (EVENT_START_FIGHT timer arm, not JustEngagedWith)
--- + NPC_CROWN_APOTHECARY grid-despawn arms (2026-10-23 re-eval).
+-- combat-end leg has no bridge (dropped); the DoZoneInCombat() arm
+-- :220 IS PORTED below (C++ order, bridge live 2026-10-23); the
+-- NPC_CROWN_APOTHECARY grid-despawn sibling stays out (no
+-- GetCreatureListWithEntryInGrid bridge, 2026-10-23 re-eval).
 local function onStartFight(creature, guid)
     creature:RemoveFlag(59, 0x300)
+    creature:DoZoneInCombat() -- boss_apothecary_hummel.cpp:220 (EVENT_START_FIGHT arm 2, C++ order after SetImmuneToAll(false); bridge live 2026-10-23)
     schedule(guid, "baxter", 6000, function() onCallBaxter(creature, guid) end)
     schedule(guid, "frye", 14000, function() onCallFrye(creature, guid) end)
     schedule(guid, "perfume", 3640, function() onPerfumeSpray(creature, guid) end)

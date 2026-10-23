@@ -60,10 +60,10 @@
 -- JustDied's add KillSelf arm have no bearer (no AttackStart /
 -- EnterEvadeMode / Kill bridges — the keleseth guard-AttackStart and
 -- KillSelf-axis precedents); the 5s ResetTimer room-
--- check EnterEvadeMode has no bearer; the add base AI's DoZoneInCombat
--- and its GetBossState(IN_PROGRESS) evade gate have no bridge (no
+-- check EnterEvadeMode has no bearer; the add base AI's
+-- GetBossState(IN_PROGRESS) evade gate has no bridge (no
 -- instance-script model, so the BOSS_HEXLORD encounter bookkeeping never
--- runs); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
+-- runs) — its DoZoneInCombat arm is ported below (bridge live 2026-10-23); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
 -- bridge, so a missing siphon target is a no-op; the shadow-priest
 -- HasSpell(15473) redirect is ported via the player:HasSpell bridge;
 -- the C++ druid PlayerClass special case (class 11 -> index 11 of
@@ -403,8 +403,9 @@ RegisterCreatureEvent(ENTRY_HEXLORD, 4, hexlordDied)
 RegisterCreatureEvent(ENTRY_HEXLORD, 23, hexlordReset)
 
 -- The eight hexlord adds. The base boss_hexlord_addAI contributes only
--- DoZoneInCombat and the GetBossState(IN_PROGRESS) evade gate, both with
--- no bridge (no instance-script model), so each add is just its C++ cast
+-- the GetBossState(IN_PROGRESS) evade gate, which has no bridge (no
+-- instance-script model) — its DoZoneInCombat is ported in addEnterCombat
+-- below (bridge live 2026-10-23) — so each add is just its C++ cast
 -- timers; melee is engine-driven. Table-driven: each arm is first delay,
 -- repeat range, and fire closure.
 
@@ -504,6 +505,7 @@ addArmFire = function(creature, guid, arm)
 end
 
 local function addEnterCombat(event, creature)
+    creature:DoZoneInCombat() -- boss_hexlord.cpp:227 (boss_hexlord_addAI::JustEngagedWith sole arm; bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     local arms = ADD_ARMS[creature:GetEntry()]

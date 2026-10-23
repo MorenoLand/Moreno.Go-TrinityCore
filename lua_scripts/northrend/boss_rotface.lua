@@ -52,9 +52,10 @@
 -- live — boss_ai.go:1904).
 -- boss_rotface JustEngagedWith instance legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
--- DoZoneInCombat (no instance bridge) and
 -- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) (no-DoAction
--- bridge; the krick ACTION_OUTRO precedent); JustDied leg
+-- bridge; the krick ACTION_OUTRO precedent); DoZoneInCombat (:138)
+-- is PORTED 2026-10-23 via the live bridge (C++ arm order — after
+-- Talk, before the proc self-cast); JustDied leg
 -- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — no DoAction
 -- bridge; JustDied's DoRemoveAurasDueToSpellOnPlayers(
 -- MUTATED_INFECTION) is PORTED (2026-10-23) via GetPlayersInWorld +
@@ -208,6 +209,9 @@ local function rotfaceJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     infection[guid] = nil
     creature:Talk(SAY_AGGRO)
+    -- C++ :138 — me-form DoZoneInCombat after Talk(SAY_AGGRO) / professor
+    -- DoAction, before the DoCastSelf(proc) leg (C++ arm order).
+    creature:DoZoneInCombat()
     -- C++ :139 — DoCastSelf(SPELL_GREEN_ABOMINATION_HITTIN__YA_PROC, true)
     -- (triggered self-cast).
     creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)

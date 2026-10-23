@@ -474,10 +474,21 @@ local function channelerLeaveCombat(event, creature)
     chanState[guid] = nil
 end
 
+-- C++ npc_hellfire_channelerAI::JustSummoned (boss_magtheridon.cpp:356-362):
+-- the magtheridon->AI()->JustSummoned(summon) relay is cross-creature
+-- blocked (header); the C++ DoZoneInCombat(summon) arm ports via the
+-- summon-object receiver (mandokir precedent — DoZoneInCombat twins
+-- CreatureAI.cpp:73-103 on any creature object; broggok
+-- onJustSummoned precedent for the event-19 shape).
+local function channelerJustSummoned(_, creature, summon)
+    summon:DoZoneInCombat()
+end
+
 RegisterCreatureEvent(ENTRY_CHANNELER, 1, channelerEnterCombat)
 RegisterCreatureEvent(ENTRY_CHANNELER, 2, channelerLeaveCombat)
 RegisterCreatureEvent(ENTRY_CHANNELER, 4, channelerDied)
 RegisterCreatureEvent(ENTRY_CHANNELER, 23, channelerReset)
+RegisterCreatureEvent(ENTRY_CHANNELER, 19, channelerJustSummoned)
 
 -- ================= Magtheridon Room (17516) =================
 

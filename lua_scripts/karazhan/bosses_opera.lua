@@ -24,8 +24,10 @@
 -- now (2026-10-22 summon bridge — creature:SummonCreature on the handler
 -- surface); the cyclone summon still has no bearer. The C++ aggro legs
 -- (AttackStart / Attack have no bridge; DoZoneInCombat is bridged since
--- 2026-10-23 but the summon legs call it on the summon — different
--- creature, stay out per triage rule), so summons idle
+-- 2026-10-23 and Romulo's summon-leg DoZoneInCombat(pRomulo) IS ported
+-- in the SummonRomuloTimer leg below — receiver-agnostic bridge, the
+-- summon object in hand; other summon legs still idle until the engine
+-- aggros them), so most summons idle
 -- until the engine aggros them — npc_tito (17548), boss_crone (18168),
 -- boss_bigbadwolf (17521) and boss_romulo (17533) are all registered, so
 -- a spawned one fights correctly once engaged (aran-elemental
@@ -1214,15 +1216,15 @@ local function julianneDamageTaken(event, creature, attacker, damage)
                 -- C++ arm order: RomuloGUID latch (raj.romulo/romuloGuid),
                 -- ENSURE_AI JulianneGUID + Phase = PHASE_ROMULO (the
                 -- shared raj table — single-instance convention),
-                -- DoZoneInCombat (bridged 2026-10-23 but STAY-OUT:
-                -- bosses_opera.cpp:1411 calls it on the summon —
-                -- different creature; he stands until the engine
-                -- aggros him, documented gap),
+                -- DoZoneInCombat(pRomulo) :1411 PORTED below (bridge live
+                -- 2026-10-23 — receiver-agnostic creature method; the summon
+                -- object is in hand, C++ order kept: before SetFaction),
                 -- SetFaction(FACTION_MONSTER_2) (bridged, ported).
                 local summon = creature:SummonCreature(ENTRY_ROMULO,
                     ROMULO_X, ROMULO_Y, creature:GetZ(), creature:GetO(),
                     0, 7200000)
                 if summon ~= nil then
+                    summon:DoZoneInCombat()
                     summon:SetFaction(FACTION_MONSTER_2)
                     raj.romulo = summon
                     raj.romuloGuid = summon:GetGUID()
