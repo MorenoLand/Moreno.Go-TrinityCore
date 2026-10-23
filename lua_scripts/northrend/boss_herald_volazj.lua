@@ -39,7 +39,10 @@
 -- C++ DamageTaken 66%/33% health-crossing -> DoCastSelf(Insanity
 -- 57496) (event 9, pre-damage damage arg; InterruptNonMeleeSpells
 -- (false) has no bridge — documented; NOT_SELECTABLE damage=0
--- leg needs creature:HasFlag — no HasFlag bridge (documented only).
+-- leg reads creature:HasFlag (bridged, lua_creature_events.go:1765)
+-- but the flag is never set in the ported model — the only SetFlag
+-- leg rides the unported SpellHitTarget insanity machine, so the
+-- read would be dead code (documented only).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith _instance->DoStartTimedAchievement(
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_QUICK_DEMISE_START_EVENT
@@ -49,7 +52,8 @@
 -- DoCast(target, Shiver 57949) (15s repeat): the random-target
 -- SelectTarget bridge is absent (cairne/kazzak precedent).
 -- DamageTaken: UNIT_FLAG_NOT_SELECTABLE damage-nullification leg
--- (no creature:HasFlag bridge); the 66%/33% crossing arm is
+-- (creature:HasFlag bridged, but the flag is never set in the
+-- ported model — documented only); the 66%/33% crossing arm is
 -- PORTED below (event 9; the old "no health-pct bridge (doomwalker
 -- precedent)" claim was stale — event 9 carries pre-damage damage
 -- and creature:GetHealth()/GetMaxHealth() are bridged);

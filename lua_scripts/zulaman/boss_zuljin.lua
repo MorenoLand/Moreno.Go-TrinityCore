@@ -101,8 +101,9 @@ local SPELL_SPIRIT_AURA = 42466
 -- C++ boss_zuljin.cpp:263-275 SpawnAdds — the 4 animal spirits
 -- (SpiritInfo[4]: 23878 bear / 23880 eagle / 23877 lynx / 23879
 -- dragonhawk) summoned TEMPSUMMON_DEAD_DESPAWN (Lua type 6) with a
--- triggered SPELL_SPIRIT_AURA self-cast and UNIT_FLAG_NON_ATTACKABLE
--- (0x2, UNIT_FIELD_FLAGS = 59).
+-- triggered SPELL_SPIRIT_AURA self-cast, UNIT_FLAG_NON_ATTACKABLE
+-- (0x2, UNIT_FIELD_FLAGS = 59) set, and UNIT_FLAG_NOT_SELECTABLE
+-- (0x02000000) cleared (cpp:271 — the template may carry it).
 local ZULJIN_SPIRITS = {
     {23878, 147.87, 706.51, 45.11, 3.04},
     {23880, 88.950, 705.49, 45.11, 6.11},
@@ -499,6 +500,7 @@ local function zuljinEnterCombat(event, creature, target)
         if spirit then
             spirit:CastSpell(spirit, SPELL_SPIRIT_AURA, true)
             spirit:SetFlag(59, 0x2)
+            spirit:RemoveFlag(59, 0x02000000) -- boss_zuljin.cpp:271: NOT_SELECTABLE cleared after the aura+flag legs
         end
     end
     schedule(timers, guid, "intro", 37000, function()

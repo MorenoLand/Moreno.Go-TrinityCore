@@ -160,7 +160,9 @@ end
 -- the self-contained rule.
 
 -- npc_guardian (C++ :1127-1153) — DOCUMENTED-ONLY.
--- Arms: Reset :1133-1136 (UNIT_FLAG_NON_ATTACKABLE — no SetFlag bridge);
+-- Arms: Reset :1126-1129 (UNIT_FLAG_NON_ATTACKABLE — creature:SetFlag is
+-- bridged (lua_creature_events.go:1840) but this NPC has no Lua port at
+-- all: ScriptName binding only, no entry const in the C++ tree);
 -- UpdateAI :1141-1148 (UpdateVictim gate; isAttackReady ->
 -- DoCastVictim(SPELL_DEATHTOUCH 5, triggered); resetAttackTimer).
 -- No melee-swing-timing bridge exists (isAttackReady / resetAttackTimer not

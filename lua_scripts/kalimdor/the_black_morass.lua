@@ -40,8 +40,12 @@
 --   NPC_INFINITE_EXECUTIONER 18994, NPC_INFINITE_VANQUISHER 18995}
 --   while TYPE_MEDIVH == IN_PROGRESS -> who->StopMoving() +
 --   who->CastSpell(me, SPELL_CORRUPT 31326 / SPELL_CORRUPT_AEONUS
---   37853 for NPC_AEONUS 17881, false) — no StopMoving bridge and no
---   cast-by-other-actor bridge (aeonus MoveInLineOfSight precedent).
+--   37853 for NPC_AEONUS 17881, false) — creature:StopMoving is bridged
+--   (lua_creature_events.go:604), but Go event 27 is player-only and
+--   aggro-scan-fired (lua_creature_events.go:2571: who is sess.luaPlayer,
+--   nil -> return false), so a unit `who` never reaches Lua, and the
+--   who->CastSpell(me,...) cross-actor cast stays unbridged (aeonus
+--   MoveInLineOfSight precedent).
 -- - npc_medivh_bm AttackStart: entirely commented out in C++ (no-op).
 -- - npc_medivh_bm JustEngagedWith: empty in C++ (no-op).
 -- - npc_medivh_bm SpellHit: SPELL_CORRUPT_AEONUS hit ->
