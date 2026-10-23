@@ -503,14 +503,30 @@ const (
 
 	// Summon categories for the generic-summon CheckCast leg
 	// (Spell.cpp:5798-5817, SharedDefines.h:3296).
-	summonCategoryWild   = 0 // SUMMON_CATEGORY_WILD (SharedDefines.h:3298)
-	summonCategoryPet    = 2 // SUMMON_CATEGORY_PET
-	summonCategoryPuppet = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
+	summonCategoryWild    = 0 // SUMMON_CATEGORY_WILD (SharedDefines.h:3298)
+	summonCategoryAlly    = 1 // SUMMON_CATEGORY_ALLY
+	summonCategoryPet     = 2 // SUMMON_CATEGORY_PET
+	summonCategoryPuppet  = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
+	summonCategoryVehicle = 4 // SUMMON_CATEGORY_VEHICLE — no vehicle model on the creature-cast path
+	summonCategoryUnk     = 5 // SUMMON_CATEGORY_UNK
 
 	// Summon titles for the generic-summon effect arm
 	// (SpellEffects.cpp:2319-2342, SharedDefines.h:3305-3321).
-	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM
-	summonTitleLightwell = 11 // SUMMON_TYPE_LIGHTWELL
+	summonTitlePet       = 1  // SUMMON_TYPE_PET — SummonGuardian arm, no pet model
+	summonTitleGuardian  = 2  // SUMMON_TYPE_GUARDIAN — SummonGuardian arm
+	summonTitleMinion    = 3  // SUMMON_TYPE_MINION — SummonGuardian arm
+	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM — totem arm, no totem model on this path
+	summonTitleMinipet   = 5  // SUMMON_TYPE_MINIPET — no minipet model
+	summonTitleGuardian2 = 6  // SUMMON_TYPE_GUARDIAN2 — SummonGuardian arm
+	summonTitleVehicle   = 9  // SUMMON_TYPE_VEHICLE — no vehicle model
+	summonTitleVehicle2  = 10 // SUMMON_TYPE_VEHICLE2 — no vehicle model
+	summonTitleLightwell = 11 // SUMMON_TYPE_LIGHTWELL — totem arm, no totem model on this path
+
+	// Temp summon types in the bridge's 0-based scheme (lua_creature_events.go
+	// SummonCreature bridge comment): 0 TIMED_OR_DEAD_DESPAWN ...
+	// 7 MANUAL_DESPAWN.
+	tempSummonTimedDespawn = 2 // C++ TEMPSUMMON_TIMED_DESPAWN (3)
+	tempSummonDeadDespawn  = 6 // C++ TEMPSUMMON_DEAD_DESPAWN (7)
 
 	// Implicit targets for the open-lock CheckCast leg (Spell.cpp:5725-5791,
 	// SharedDefines.h:1459-1462).

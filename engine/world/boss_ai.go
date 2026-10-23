@@ -2044,6 +2044,14 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectSummonType (SpellEffects.cpp:2194-2440) for a creature
+	// caster: the HIT-mode arm spawning SPELL_EFFECT_SUMMON creature
+	// entries. Placed after the InstaKill leg, matching the other
+	// effect-grouped arms above (C++ runs effects in index order;
+	// documented approximation). Gated on spellKnown like the tail.
+	if spellKnown {
+		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -2374,6 +2382,101 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		s.creatureInstaKillVictim(ctx, m, guid)
+	}
+}
+
+// creatureEffectSummonType mirrors Spell::EffectSummonType
+// (SpellEffects.cpp:2194-2440) for a creature caster: the HIT-mode arm that
+// spawns the effect's MiscValue creature entry at the cast's dest position
+// (the Go creature path's resolved dest, else the caster's position). Like
+// the Transmitted/InstaKill legs above, C++ executes effects in effect-index
+// order; this path groups by effect instead (documented approximation).
+// Only the default WILD/ALLY/UNK leg (SpellEffects.cpp:2319-2341) is
+// bridged: the SummonGuardian (pet/guardian/minion titles, Flags&512),
+// charm (PUPPET), vehicle, totem/lightwell, and minipet arms have no Go
+// model — the multi-summon property-ID list (SpellEffects.cpp:2225-2242)
+// keys on the effect's damage value, which this path does not model, so
+// numSummons is always 1 (documented delta). The timed/dead summon-type
+// choice (SpellEffects.cpp:2322) uses the bridge's 0-based scheme; the
+// ALLY owner/faction stamp (2333-2337), the Eluna::JustSummoned fire
+// (CreatureHooks.cpp:165-171 — the shared summonTempCreature funnel fires
+// CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) on the caster), and the
+// ExecuteLogEffectSummonObject SMSG_SPELLLOGEXECUTE write (SpellEffects.cpp
+// spell log convention, Transmitted-leg format) are twinned.
+func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	lvl := m.Level
+	if lvl == 0 {
+		lvl = 80
+	}
+	var duration int32
+	if spell.DurationIndex > 0 {
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			duration = dur
+		}
+	}
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		if eff.Effect != spellEffectSummon {
+			continue
+		}
+		entry := uint32(0)
+		if eff.MiscValue > 0 {
+			entry = uint32(eff.MiscValue)
+		}
+		if entry == 0 {
+			continue
+		}
+		props, found, err := s.Data.SummonProperties(uint32(eff.MiscValueB))
+		if err != nil || !found {
+			continue
+		}
+		switch props.Control {
+		case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		default:
+			continue // PET/PUPPET/VEHICLE: guardian, charm, vehicle arms unmodeled
+		}
+		if props.Flags&512 != 0 {
+			continue // SummonGuardian arm (SpellEffects.cpp:2248-2251)
+		}
+		switch props.Title {
+		case summonTitlePet, summonTitleGuardian, summonTitleMinion, summonTitleGuardian2:
+			continue // SummonGuardian arms (SpellEffects.cpp:2255-2259)
+		case summonTitleTotem, summonTitleLightwell, summonTitleMinipet, summonTitleVehicle, summonTitleVehicle2:
+			continue // totem/lightwell/minipet/vehicle arms unmodeled
+		}
+		// Default leg (SpellEffects.cpp:2319-2341): timed when the spell
+		// duration is positive, dead-despawn otherwise.
+		summonType := uint8(tempSummonDeadDespawn)
+		var despawnMs uint32
+		if duration > 0 {
+			summonType = uint8(tempSummonTimedDespawn)
+			despawnMs = uint32(duration)
+		}
+		x, y, z := m.X, m.Y, m.Z
+		if hasDest {
+			x, y, z = dx, dy, dz
+		}
+		summoned := s.summonTempCreature(ctx, m, entry, x, y, z, m.Orientation, summonType, despawnMs)
+		if summoned == nil {
+			continue
+		}
+		if props.Control == summonCategoryAlly {
+			s.motionMu.Lock()
+			summoned.OwnerGUID = m.GUID
+			summoned.Faction = m.Faction
+			s.motionMu.Unlock()
+		}
+		log := protocol.NewBuffer(32)
+		log.WritePackedGUID(m.GUID)
+		log.WriteU32(spell.ID)
+		log.WriteU32(1)
+		log.WriteU32(spellEffectSummon)
+		log.WriteU32(1)
+		log.WritePackedGUID(summoned.GUID)
+		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
 	}
 }
 

@@ -51,6 +51,98 @@ func backArcTarget(args []any) (x, y float32, guid uint64, ok bool) {
 	return x, y, 0, true
 }
 
+// summonTempCreature is the shared spawn funnel behind the creature
+// SummonCreature bridge below (Creature::SummonCreature -> TempSummon::InitSummon,
+// TemporarySummon.cpp:168-244): spawns a temporary creature of the given
+// entry at (x, y, z, o) on the summoner's map/instance. summonType is the
+// bridge's 0-based TempSummonType scheme (0 TIMED_OR_DEAD_DESPAWN ... 7
+// MANUAL_DESPAWN); despawnMs arms the timer only for the timed family
+// (0-3). The all-zero x/y/z close-point and o==0 orientation fallbacks,
+// the instance create-block broadcast, and the
+// CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) fire on the summoner
+// (Eluna::JustSummoned, CreatureHooks.cpp:165-171) all live here. Unknown
+// entries return nil (C++ logs and returns null for a missing template).
+// The summon is NOT auto-aggroed: C++ arms call DoZoneInCombat/AttackStart
+// explicitly, so ported arms must do the same.
+func (s *Server) summonTempCreature(ctx context.Context, motion *creatureMotion, entry uint32, x, y, z, o float32, summonType uint8, despawnMs uint32) *creatureMotion {
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return nil
+	}
+	var exists int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
+		return nil
+	}
+	s.motionMu.Lock()
+	mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
+	sx, sy, sz, summonerO := motion.X, motion.Y, motion.Z, motion.Orientation
+	reach := float64(motion.CombatReach)
+	s.motionMu.Unlock()
+	// Object.cpp:2059-2062 — the C++ float overload falls back to a
+	// close point (GetClosePoint(combatReach): summoner position
+	// offset by combat reach in facing direction, z = summoner z;
+	// the collision/ground folds have no Go model, documented) when
+	// x, y, and z are all 0, and to the summoner's orientation when
+	// o is 0 (anubarak's scarab arm passes the 4-arg default
+	// o=0.0f intending exactly this).
+	if x == 0 && y == 0 && z == 0 {
+		// GetClosePoint(x,y,z,GetCombatReach()) ->
+		// GetNearPoint(nullptr,x,y,z,R,O) -> GetNearPoint2D adds
+		// effectiveReach (R) on top of distance2d (R): 2*R in facing
+		// direction (Object.cpp:2059,3307-3311). The collision/ground
+		// folds and the LoS retry loop have no Go model, documented.
+		x = sx + float32(2*reach*math.Cos(float64(summonerO)))
+		y = sy + float32(2*reach*math.Sin(float64(summonerO)))
+		z = sz
+	}
+	if o == 0 {
+		o = summonerO
+	}
+	var walkSpeed, runSpeed float64 = 1.0, 1.14286
+	_ = s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(speed_walk, 1), COALESCE(speed_run, 1) FROM creature_template WHERE entry = ?",
+		entry).Scan(&walkSpeed, &runSpeed)
+	low := s.nextDynamicCreatureLowGUID()
+	summoned := s.motionFor(ctx, low, entry, mapID, instanceID, x, y, z, o, 0, 0, float32(walkSpeed), float32(runSpeed), 0)
+	if summoned == nil {
+		return nil
+	}
+	s.motionMu.Lock()
+	summoned.OwnerGUID = ownerGUID
+	summoned.TempSummonType = summonType
+	// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
+	// the summon type: only the timed family (0/1/2/3) arms the timer
+	// at spawn. The corpse/dead family (4/5/6) starts its timer at
+	// death — unmodeled here (documented delta) — and MANUAL (7) has
+	// no timer.
+	if despawnMs > 0 && summonType <= 3 {
+		summoned.TempSummonLifetime = time.Duration(despawnMs) * time.Millisecond
+		summoned.TempSummonExpiresAt = time.Now().Add(summoned.TempSummonLifetime)
+	}
+	stats := s.loadCreatureStats(ctx, entry)
+	spawn := creatureSpawn{
+		GUID: low, RawGUID: summoned.GUID, Entry: entry, Map: mapID,
+		X: x, Y: y, Z: z, Orientation: o,
+		Model: stats.Model, Faction: summoned.Faction, NPCFlags: stats.NPCFlags,
+		UnitFlags: stats.UnitFlags, Level: stats.Level,
+		Health: stats.Health, MaxHealth: stats.MaxHealth,
+		Scale: stats.Scale, Mana: stats.Mana,
+		WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed),
+	}
+	s.motionMu.Unlock()
+	// Re-create the object client-side: the create block goes to the
+	// whole instance (respawnEvadedCreature pattern), not just nearby
+	// players — C++ AddToWorld notifies the full map.
+	s.applyCreatureMotionToSpawn(playerState{Map: mapID, InstanceID: instanceID}, &spawn)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
+	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+		s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+	}
+	s.fireCreatureSummoned(ctx, motion, scripting.CreatureEventOnJustSummonedCreature, summoned)
+	return summoned
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -816,81 +908,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				return nil, err
 			}
 		}
-		if s.WorldStore == nil || s.WorldStore.DB == nil {
-			return []any{nil}, nil
-		}
-		var exists int64
-		if err := s.WorldStore.DB.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
-			return []any{nil}, nil
-		}
-		s.motionMu.Lock()
-		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
-		sx, sy, sz, summonerO := motion.X, motion.Y, motion.Z, motion.Orientation
-		reach := float64(motion.CombatReach)
-		s.motionMu.Unlock()
-		// Object.cpp:2059-2062 — the C++ float overload falls back to a
-		// close point (GetClosePoint(combatReach): summoner position
-		// offset by combat reach in facing direction, z = summoner z;
-		// the collision/ground folds have no Go model, documented) when
-		// x, y, and z are all 0, and to the summoner's orientation when
-		// o is 0 (anubarak's scarab arm passes the 4-arg default
-		// o=0.0f intending exactly this).
-		if x == 0 && y == 0 && z == 0 {
-			// GetClosePoint(x,y,z,GetCombatReach()) ->
-			// GetNearPoint(nullptr,x,y,z,R,O) -> GetNearPoint2D adds
-			// effectiveReach (R) on top of distance2d (R): 2*R in facing
-			// direction (Object.cpp:2059,3307-3311). The collision/ground
-			// folds and the LoS retry loop have no Go model, documented.
-			x = sx + float32(2*reach*math.Cos(float64(summonerO)))
-			y = sy + float32(2*reach*math.Sin(float64(summonerO)))
-			z = sz
-		}
-		if o == 0 {
-			o = summonerO
-		}
-		var walkSpeed, runSpeed float64 = 1.0, 1.14286
-		_ = s.WorldStore.DB.QueryRowContext(ctx,
-			"SELECT COALESCE(speed_walk, 1), COALESCE(speed_run, 1) FROM creature_template WHERE entry = ?",
-			entry).Scan(&walkSpeed, &runSpeed)
-		low := s.nextDynamicCreatureLowGUID()
-		summoned := s.motionFor(ctx, low, entry, mapID, instanceID, x, y, z, o, 0, 0, float32(walkSpeed), float32(runSpeed), 0)
+		summoned := s.summonTempCreature(ctx, motion, entry, x, y, z, o, uint8(summonType), despawnMs)
 		if summoned == nil {
 			return []any{nil}, nil
 		}
-		s.motionMu.Lock()
-		summoned.OwnerGUID = ownerGUID
-		summoned.TempSummonType = uint8(summonType)
-		// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
-		// the summon type: only the timed family (0/1/2/3) arms the timer
-		// at spawn. The corpse/dead family (4/5/6) starts its timer at
-		// death — unmodeled here (documented delta) — and MANUAL (7) has
-		// no timer.
-		if despawnMs > 0 && summonType <= 3 {
-			summoned.TempSummonLifetime = time.Duration(despawnMs) * time.Millisecond
-			summoned.TempSummonExpiresAt = time.Now().Add(summoned.TempSummonLifetime)
-		}
-		stats := s.loadCreatureStats(ctx, entry)
-		spawn := creatureSpawn{
-			GUID: low, RawGUID: summoned.GUID, Entry: entry, Map: mapID,
-			X: x, Y: y, Z: z, Orientation: o,
-			Model: stats.Model, Faction: summoned.Faction, NPCFlags: stats.NPCFlags,
-			UnitFlags: stats.UnitFlags, Level: stats.Level,
-			Health: stats.Health, MaxHealth: stats.MaxHealth,
-			Scale: stats.Scale, Mana: stats.Mana,
-			WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed),
-		}
-		s.motionMu.Unlock()
-		// Re-create the object client-side: the create block goes to the
-		// whole instance (respawnEvadedCreature pattern), not just nearby
-		// players — C++ AddToWorld notifies the full map.
-		s.applyCreatureMotionToSpawn(playerState{Map: mapID, InstanceID: instanceID}, &spawn)
-		updates := protocol.NewUpdateData()
-		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
-		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-			s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
-		}
-		s.fireCreatureSummoned(ctx, motion, scripting.CreatureEventOnJustSummonedCreature, summoned)
 		return []any{s.luaMotionCreature(summoned)}, nil
 	}
 	// SummonGameObject is WorldObject::SummonGameObject

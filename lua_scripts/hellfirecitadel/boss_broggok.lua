@@ -60,11 +60,12 @@
 -- ATTACKABLE), SetImmuneToAll(false) and the RESET arm's
 -- mirror flips unmodeled (thespia/kalithresh precedent); no
 -- DoZoneInCombat bridge — the ACTIVATE DoZoneInCombat arm
--- unmodeled; no summon bridge — the JustSummoned arms for
--- NPC_BROGGOK_POISON_CLOUD 17662 (react passive + CastSpell
--- SPELL_POISON_CLOUD_PASSIVE 30914 + summons.Summon) and
--- NPC_INCOMBAT_TRIGGER 16006 (react passive + DoZoneInCombat
--- + summons.Summon) unmodeled (steamrigger precedent);
+-- unmodeled; the JustSummoned arms for NPC_BROGGOK_POISON_CLOUD
+-- 17662 (react passive + CastSpell SPELL_POISON_CLOUD_PASSIVE 30914)
+-- and NPC_INCOMBAT_TRIGGER 16006 (react passive) are PORTED in
+-- onJustSummoned via the spell-summon EffectSummonType bridge
+-- (event 19) — the C++ summons.Summon list and the trigger's
+-- DoZoneInCombat arm stay unbridged (steamrigger precedent);
 -- ACTION_PREPARE_BROGGOK's DoCastSelf(SPELL_SUMMON_INCOMBAT_
 -- TRIGGER 26837) fires only cross-creature from the lever
 -- gossip — unreachable in this model, documented only; the
@@ -86,6 +87,12 @@
 local SPELL_SLIME_SPRAY = 30913
 local SPELL_POISON_BOLT = 30917
 local SPELL_POISON_CLOUD = 30916
+local SPELL_POISON_CLOUD_PASSIVE = 30914
+
+local NPC_POISON_CLOUD = 17662
+local NPC_INCOMBAT_TRIGGER = 16006
+
+local REACT_PASSIVE = 0
 
 local SAY_AGGRO = 0
 
@@ -147,8 +154,10 @@ local function bossTick(creature, guid)
 
     -- Poison cloud 30916: 5s init then 20s — non-triggered
     -- DoCastSelf (C++ DoCast(me), C++-exact), re-arm 20s
-    -- regardless (C++-exact). The summoned NPC_BROGGOK_POISON_
-    -- CLOUD (17662) JustSummoned arms are summon-bridgeless.
+    -- regardless (C++-exact). The spell's SPELL_EFFECT_SUMMON leg
+    -- spawns NPC_BROGGOK_POISON_CLOUD (17662) through the creature
+    -- cast path's EffectSummonType twin, which fires event 19 —
+    -- the cloud's JustSummoned arm is ported in onJustSummoned below.
     if st.poisonCloud <= 1000 then
         creature:CastSpell(creature, SPELL_POISON_CLOUD)
         st.poisonCloud = 20000
@@ -156,6 +165,29 @@ local function bossTick(creature, guid)
         st.poisonCloud = st.poisonCloud - 1000
     end
 end
+
+-- C++ boss_broggokAI::JustSummoned (boss_broggok.cpp:76-90):
+-- the poison cloud's SPELL_EFFECT_SUMMON leg spawns 17662 through
+-- the creature cast path's EffectSummonType twin, which fires
+-- event 19 on the summoner (Eluna::JustSummoned, C++-exact).
+-- Cloud arm: SetReactState(REACT_PASSIVE) + triggered self-cast of
+-- SPELL_POISON_CLOUD_PASSIVE 30914 (C++-exact; the C++ summons.Summon
+-- list has no bridge — steamrigger precedent). In-combat trigger arm
+-- (entry 16006, from SPELL_SUMMON_INCOMBAT_TRIGGER 26837 — fires only
+-- via the instance-gated ACTION_PREPARE_BROGGOK cast, documented
+-- above): SetReactState(REACT_PASSIVE) ported; the C++ DoZoneInCombat
+-- arm has no bridge and the summons.Summon list has no bridge.
+local function onJustSummoned(_, creature, summon)
+    local entry = summon:GetEntry()
+    if entry == NPC_POISON_CLOUD then
+        summon:SetReactState(REACT_PASSIVE)
+        summon:CastSpell(summon, SPELL_POISON_CLOUD_PASSIVE, true)
+    elseif entry == NPC_INCOMBAT_TRIGGER then
+        summon:SetReactState(REACT_PASSIVE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_BROGGOK, 19, onJustSummoned)
 
 RegisterCreatureEvent(ENTRY_BROGGOK, 1, function(_, creature)
     local guid = creature:GetGUID()
