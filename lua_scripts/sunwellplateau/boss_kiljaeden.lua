@@ -74,11 +74,17 @@
 -- * fire bloom: RemoveAura(45442) + non-triggered DoCastAOE(45641)
 --   (self-cast, kalecgos convention); repeat 40s (25s in
 --   sacrifice); soul flay re-armed 1s.
--- * shield orb: the (Phase-1) shield-orb summons have no summon
---   bridge — skipped; the soul-flay 2s re-arm is a real side
---   effect and is kept; repeat {30s,60s}.
+-- * shield orb: the (Phase-1) shield-orb summons (summon bridge live)
+--   stay out — the orb AI is movement-driven (MovePoint orbit :1256,
+--   no movement bridge) and picks its shadow-bolt target via
+--   instance->GetGuidData(DATA_PLAYER_GUID) (no instance bridge); a
+--   summoned orb would be frozen and targetless; the soul-flay 2s
+--   re-arm is a real side effect and is kept; repeat {30s,60s}.
 -- * shadow spike (phase 3+): Talk(SAY_KJ_REFLECTION); the 4
---   sinister-reflection summons have no summon bridge — skipped;
+--   sinister-reflection summons (summon bridge live) stay out on the
+--   paired SetDisplayId + AttackStart(target) legs (:683-684,
+--   unbridged cross-creature combat relay — the reflection's sole
+--   role is attacking the picked target);
 --   non-triggered DoCastAOE(46680) (self-cast); ChangeTimers(true,
 --   30000) — all timers deactivated, 30s wait; on resume the
 --   shadow-spike timer stays deactivated (C++-exact — its timer
@@ -452,8 +458,10 @@ local function fireTimer(creature, st, name)
         st.t.firebloom = (phase == PHASE_SACRIFICE) and 25000 or 40000
         st.t.soulflay = 1000
     elseif name == "shieldorb" then
-        -- The (Phase-1) shield-orb summons have no summon bridge —
-        -- skipped; the soul-flay re-arm is a real side effect.
+        -- The (Phase-1) shield-orb summons stay out — orb AI needs
+        -- MovePoint orbit (:1256, no movement bridge) + instance
+        -- GetGuidData(DATA_PLAYER_GUID) (no instance bridge); the
+        -- soul-flay re-arm is a real side effect.
         st.t.shieldorb = math.random(30000, 60000)
         st.t.soulflay = 2000
     elseif name == "shadowspike" then

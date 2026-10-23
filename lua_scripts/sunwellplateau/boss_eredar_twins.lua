@@ -118,9 +118,13 @@
 -- C++ per-tick HasAura arm — DoCast(me,45263) takes no triggered
 -- arg — approximated). The 15s KillSelf arm has no
 -- kill bridge — the image persists past 15s in this model. The
--- sacrolash-side DoSpawnCreature summon has no summon bridge, so
--- images arrive only via DB-side spawns — registered anyway for
--- its own verifiable AI arms (felmyst-trail convention).
+-- sacrolash-side DoSpawnCreature summon (plain SummonCreature offset
+-- wrapper — the summon bridge is live) stays out on the paired
+-- AddThreat(target, 1000000.0f, temp) + AttackStart(target) legs
+-- (:281-282, unbridged cross-creature combat relay; the image's sole
+-- role is attacking the picked target) — images arrive only via
+-- DB-side spawns — registered anyway for its own verifiable AI
+-- arms (felmyst-trail convention).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_EREDAR_TWINS book-

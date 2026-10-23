@@ -45,8 +45,12 @@
 -- 3. Summon treants 34727 — 45s init then 45s: the six
 --    me->SummonCreature(CREATURE_TREANT 19949, treant_pos
 --    [i]..., TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 25s) casts
---    have no summon bridge (steamrigger precedent) — only
---    Talk(SAY_SUMMON) is modeled — re-arm 45s (C++-exact).
+--    are summon-bridgeable but stay out — the paired ENSURE_AI
+--    treantAI->WarpGuid = me->GetGUID() cross-creature AI write
+--    has no bridge and the treants' behavior (MoveFollow(Warp)
+--    + heal-and-KillSelf on arrival, no movement bridge) is
+--    unmodeled; treants never fight, so summoning guts the arm —
+--    only Talk(SAY_SUMMON) is modeled — re-arm 45s (C++-exact).
 --    Melee is engine-driven.
 -- OnTargetDied(3): Talk(SAY_SLAY) unconditionally (no
 -- player gate, C++-exact). OnDied(4): Talk(SAY_DEATH) +
@@ -64,8 +68,9 @@
 -- shim (instance_the_botanica.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_WARP_SPLINTER
 -- = 4 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); no summon bridge — the six SummonTreants
--- SummonCreature calls unmodeled (steamrigger precedent);
+-- skipped); the six SummonTreants SummonCreature calls stay out
+-- on the paired WarpGuid cross-AI write (not 'no summon bridge'
+-- — the summon bridge is live);
 -- no movement bridge — the treant MoveFollow(Warp) arm and
 -- the boss-side SetSpeedRate(MOVE_RUN, 0.7f) unmodeled
 -- (omor precedent); no cross-creature bridge — the treant
@@ -145,11 +150,11 @@ local function combatTick(creature, guid)
         st.arcaneVolley = st.arcaneVolley - 1000
     end
 
-    -- 3. Summon treants arm: the six SummonCreature casts
-    -- are skipped (no summon bridge — steamrigger
-    -- precedent); only Talk(SAY_SUMMON) is modeled (the C++
-    -- talks at the end of SummonTreants, C++-exact), re-arm
-    -- 45s.
+    -- 3. Summon treants arm: the six SummonCreature casts stay
+    -- out on the unbridgeable WarpGuid write + treant MoveFollow/
+    -- heal behavior (not 'no summon bridge' — the bridge is live);
+    -- only Talk(SAY_SUMMON) is modeled (the C++ talks at the end
+    -- of SummonTreants, C++-exact), re-arm 45s.
     if st.summonTreants <= 1000 then
         creature:Talk(SAY_SUMMON)
         st.summonTreants = 45000

@@ -41,10 +41,12 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — instance_the_underbog.cpp is a
 -- placeholder and stays blocked on the instance-script model;
--- no summon bridge — the boss's SummonCreature(17990) arm
--- unmodeled, so these mushrooms spawn only via DB/world
--- placement or engine summon paths outside this port; no
--- SpellScript/AuraScript scripts in this file.
+-- the boss's SummonCreature(17990) arm is ported in
+-- theunderbog/boss_hungarfen.lua bossTick (creature:SummonCreature
+-- bridge, Eluna type 2/TIMED_DESPAWN 22s — correct twin of C++
+-- TEMPSUMMON_TIMED_DESPAWN, 22s — settled 2026-10-23) — 'no summon
+-- bridge' is stale; mushrooms spawn via the boss port or DB/world
+-- placement; no SpellScript/AuraScript scripts in this file.
 
 local SPELL_PUTRID_MUSHROOM = 31690
 local SPELL_SPORE_CLOUD = 34168

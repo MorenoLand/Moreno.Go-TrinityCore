@@ -33,8 +33,14 @@
 -- Fight shape (C++-exact for the modeled arms): Kalecgos (24850).
 -- OnEnterCombat: per-GUID reset (_isEnraged=false, _isBanished=false),
 -- Talk(SAY_EVIL_AGGRO); the SummonCreature(NPC_KALECGOS_HUMAN) arm
--- has no summon bridge — the human AI is registered on its own
--- entry (DB-side spawn/summon, creature_template binding). Arcane
+-- (summon bridge is live) stays out — the human is summoned only
+-- to be wired into combat via the paired sathrovarr->SetInCombatWith
+-- / kalecgosHuman->SetInCombatWith relay (:218-222, no cross-creature
+-- bridge); the human never self-engages (UpdateAI early-returns
+-- without a victim, DamageTaken nullifies non-Sathrovarr damage),
+-- so a relay-less summon would be an idle invulnerable statue —
+-- the human AI is registered on its own entry (DB-side spawn/summon,
+-- creature_template binding). Arcane
 -- buffet 45018 8s: 20% Talk(SAY_ARCANE_BUFFET) + DoCastAOE
 -- (self-position cast — vaelastrasz convention), repeat 8s. Frost
 -- breath 44799 15s: DoCastAOE, repeat 15s. Tail lash 45122 25s then
@@ -289,7 +295,9 @@ local function kalecgosCheckTimer(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(SAY_EVIL_AGGRO) + the six initial arms.
--- The human-summon arm has no summon bridge.
+-- The human-summon arm (summon bridge live) stays out — the arm's
+-- entire purpose is the unbridged SetInCombatWith relay; summoning
+-- without it guts the arm.
 local function kalecgosEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

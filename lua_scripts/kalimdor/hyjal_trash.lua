@@ -74,9 +74,11 @@
 --   (hyjal_trash.cpp:418-530): spawn captures the native display, sets
 --   UNIT_FLAG_NOT_SELECTABLE + MODEL_INVIS 11686 (Delay = rand32()%30000,
 --   1ms floor — CreateLuaEvent rejects 0, magmus precedent); after Delay
---   the SPELL_METEOR 33814 visual fires as a triggered self-cast (the
---   world-trigger 21987 summon has no summon bridge — the cast is the
---   DoCast(me, spell, true) twin); 2000ms later the reveal clears
+--   the SPELL_METEOR 33814 visual fires as a triggered self-cast
+--   (DoCast(me, spell, true) twin — the world-trigger 21987
+--   existed only to deliver the cast from the offset position, so
+--   the twin is position-faithful; the SetVisible(false) arm has
+--   no bridge); 2000ms later the reveal clears
 --   NOT_SELECTABLE and restores the native display (the RestoreDisplayId
 --   idiom: SetDisplayId(GetDisplayId-at-spawn)), setting CanMove. The
 --   ctor's RemoveFlag(NON_ATTACKABLE) is a no-op here (no escort machine

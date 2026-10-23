@@ -230,7 +230,10 @@ end
 -- (boss_kirtonos_the_herald.cpp:290-294): me->UseDoorOrButton() (bridged,
 -- ported below) + me->PlayDirectSound(SOUND_SCREECH, 0) +
 -- player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
--- TEMPSUMMON_DEAD_DESPAWN, 15min) (no summon bridge — skipped).
+-- TEMPSUMMON_DEAD_DESPAWN, 15min) — skipped: the creature-side
+-- summon bridge is live but the C++ summoner is the PLAYER
+-- (go_brazier_of_the_heraldAI::OnGossipHello, :293) and there is
+-- no player:SummonCreature bridge.
 -- C++ returns true (handled: native GO use suppressed) == Lua true
 -- (Eluna GOSSIP_EVENT_ON_HELLO: only a Lua false lets native use
 -- proceed; see engine/world/gameobject_hooks.go).

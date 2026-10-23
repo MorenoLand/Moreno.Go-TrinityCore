@@ -10,9 +10,11 @@
 -- under BossAI(DATA_GIZRUL_THE_SLAVENER = 6). The creature_template
 -- ScriptName binding is DB-side (no TDB in this workspace), but the entry
 -- itself is C++-verifiable so the port is registered (gyth / rend_blackhand
--- precedent). Note: halycon's JustDied summon of this creature was
--- unbridgeable (no SummonCreature bridge), but Gizrul's own entry is
--- verifiable here, so registration is valid.
+-- precedent). Note: halycon's JustDied summon of this creature (JustDied ->
+-- me->SummonCreature(10268, SummonLocation, TEMPSUMMON_TIMED_
+-- DESPAWN, 5min) then Talk) is ported in eastern_kingdoms/
+-- boss_halycon.lua:97 (onDied) — 'unbridgeable' is stale, so
+-- Gizrul's own entry is verifiable here and registration is valid.
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
 -- (blackrock_spire.h); the combat arms have no instance state.
 -- Reset() _Reset() / JustDied _JustDied() are internal machinery

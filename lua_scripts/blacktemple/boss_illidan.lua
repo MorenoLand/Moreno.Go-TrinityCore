@@ -83,9 +83,14 @@
 -- the maiev DoAction(ACTION_START_OUTRO) and the summon-despawn
 -- arms have no cross-creature/summon bridges — skipped. 90% health
 -- & phase<PHASE_MINIONS: Talk(SAY_ILLIDAN_MINION) + the 30s
--- minions-weave cycle; the weave fires empty (no summon bridge —
--- hexlord convention) and the akama DoAction(ACTION_START_MINIONS)
--- relay has no cross-creature bridge — skipped. 65% & phase<
+-- minions-weave cycle; the weave fires empty — the SummonCreature
+-- bridge is live, but each illidari elite is paired with a summon-
+-- side AttackStart/AddThreat on Akama via instance GUID (npc_
+-- illidari_elite::Reset, boss_illidan.cpp:1791-1797, unbridged
+-- cross-creature relay) and CanAIAttack gates everything but Akama;
+-- the elites' only role is attacking the unported Akama, so the arm
+-- stays out (kalecgos precedent). The akama DoAction(
+-- ACTION_START_MINIONS) relay has no cross-creature bridge — skipped. 65% & phase<
 -- PHASE_2: the phase-1 timers are canceled and the air-phase timer
 -- chain starts (fly 1s -> warglaive point 6s -> throw warglaive
 -- 39849 2s, non-triggered self-cast -> throw warglaive 2 39635 1s,
@@ -94,8 +99,13 @@
 -- {2s,4s} non-triggered on a random alive player in the instance
 -- within 150 yd (C++ SelectTarget(Random, 0, 150.0f, true)) / eye
 -- blast {1s,30s} one-shot: Talk(SAY_ILLIDAN_EYE_BLAST) — the db-
--- target summon and the 39908 cast on it have no summon bridge,
--- skipped / dark barrage 40585 50% {1s,20s} one-shot, non-
+-- target summon (SummonCreature now bridged, boss_illidan.cpp:906)
+-- stays out: the db target is a moving beam vehicle whose purpose
+-- is the summon-side MovePoint sweep (POINT_DB_TARGET, :910 — no
+-- movement bridge) with unmodeled _pillarIndex/pillar positions;
+-- without the sweep the arm is gutted (kiljaeden shield-orb
+-- precedent), so the 39908 beam cast on it is skipped with it /
+-- dark barrage 40585 50% {1s,20s} one-shot, non-
 -- triggered on a random alive player within 150 yd, then re-arm
 -- eye blast 5s and re-arm the pillar timer 30s (C++ adds 30s to
 -- the pending pillar time — approximated, documented); the liftoff
@@ -227,9 +237,15 @@
 -- skipped); no movement bridge — the illidan liftoff/pillar/
 -- glaive-point/middle MovePoints and the akama spline chains are
 -- unmodeled (the illidan air-phase timer chain is kept, the
--- positions are not); no summon bridge — the warglaive/db-target/
--- maiev/shadow-demon/cage-trap/blade-tear/spirit/minion summons
--- never spawn; stale 'no gossip bridge' retracted (bridged) — the
+-- positions are not); 'no summon bridge' is stale as a blanket
+-- statement (the bridge is live): per-arm — db-target stays out on
+-- the unbridged MovePoint sweep (:910); minion (illidari elite) on
+-- the summon-side AttackStart via instance GUID (:1791-1797);
+-- maiev/shadow-demon/cage-trap/blade-tear are spell-effect summons
+-- (no dispatch bridge); spirits have no direct summon arm (akama
+-- JustSummoned only captures GUIDs); warglaive blade triggers are
+-- DB-spawned (no summon arm at all); stale 'no gossip bridge'
+-- retracted (bridged) — the
 -- akama intro stays out on the movement/instance machine;
 -- no equipment/gravity/threat/immune/sound/despawn bridges —
 -- those arms are skipped (flag bridge is live: SetFlag/RemoveFlag on

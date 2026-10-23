@@ -77,7 +77,11 @@
 --   cast would double-trap, so the arm stays out.
 -- - Reset's sliver-pet leg (me->SummonCreature(NPC_SLIVER 24552, ...)
 --   + JustSummoned m_uiPetGUID tracking + ObjectAccessor re-acquire)
---   — no summon bridge (razorgore precedent).
+--   — stays out: no GUID-liveness bridge (Reset re-acquires the pet
+--   via ObjectAccessor::GetUnit(m_uiPetGUID), :1053 — without it the
+--   port would duplicate slivers every reset) and no JustSummoned
+--   handler bridge for the m_uiPetGUID tracking (:1060-1063) —
+--   the summon bridge itself is live (razorgore precedent retired).
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature

@@ -109,7 +109,12 @@ local function onSpawnOrReset(_, creature)
     -- C++ npc_blessed_bannerAI::Reset(): DoCast(SPELL_THREAT_PULSE) +
     -- Talk(BANNER_SAY) (zone_icecrown.cpp). Alive-gated so the death-leg
     -- ev23 fire (banner self-despawns in JustDied) is not phantom; the
-    -- 3s EVENT_SPAWN summon leg is unported (no summon bridge).
+    -- 3s EVENT_SPAWN summon leg is unported — each of the 7 DoSummon
+    -- calls pairs with summon->GetMotionMaster()->MovePoint(0,
+    -- XPos[1]) (scripted walk-in, no movement bridge — NPCs would
+    -- strand at spawn points) and the GUID-latch tracking
+    -- (guidDalfors/guidPriest/guidMason) is unmodeled — the blocker
+    -- is movement, not the summon bridge.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_THREAT_PULSE)
         creature:Talk(BANNER_SAY)

@@ -8303,8 +8303,9 @@ func init() {
 	// DoCast(random player) 8s/8s, entangling roots DoCastVictim 2s/20s,
 	// corrupt forces self-cast 30s/20s (InterruptNonMeleeSpells leg has no
 	// interrupt bridge); the JustDied summon of 13716 (Celebras the
-	// Redeemed) has no summon bridge — documented in
-	// lua_scripts/kalimdor/boss_celebras_the_cursed.lua, not wired.
+	// Redeemed) is ported (creature:SummonCreature bridge, 2026-10-23 —
+	// 'has no summon bridge' retracted) — see
+	// lua_scripts/kalimdor/boss_celebras_the_cursed.lua.
 	RegisterLuaBoss("boss_celebras_the_cursed", 12225)
 	// boss_landslide: Maraudon, entry 12203 (classicdb-cited; no NPC_
 	// constant in the C++ tree — celebras / vishas / gelihast

@@ -45,8 +45,9 @@
 --    REVIVE arm — TRIGGERED DoCast(me, SPELL_REBIRTH 34342,
 --    true) (C++-exact) + phase = 2 + melt armor 60000 /
 --    charge 7000 / dive bomb 40000+rand()%5000 (the flame-
---    patch summon arm has no summon bridge — steamrigger
---    precedent — so its timer is not tracked; the WE_DIE /
+--    patch summon arm stays out on the paired summon-side
+--    self-cast SPELL_FLAME_PATCH 35380 (:444) — no summon-
+--    object drive — so its timer is not tracked; the WE_DIE /
 --    WE_REVIVE MovePoint/Interrupt legs stay unbridged — the WE_DIE
 --    5.0f speed arm rides the unbridged MovePoint (SetSpeedRate is
 --    bridged but the motion leg is not); the DoZoneInCombat arm is
@@ -75,8 +76,11 @@
 --    land (+1s — C++ WaitTimer = 1000 + floor(dist/80*1000),
 --    dist in {3.0, 5.0} -> {1037, 1062}ms, 1s granularity
 --    exact); summon (+2s, C++-exact) — the two CREATURE_EMBER_
---    OF_ALAR 19551 summons have no summon bridge (steamrigger
---    precedent), only the TRIGGERED DoCast(me, SPELL_REBIRTH_
+--    OF_ALAR 19551 summons (DoSpawnCreature is a plain
+--    SummonCreature wrapper — bridge live) stay out on the
+--    paired boss_alar::JustSummoned AttackStart relay (:204-
+--    208, unbridged cross-creature relay; embers' role is
+--    combat); only the TRIGGERED DoCast(me, SPELL_REBIRTH_
 --    2 35369, true) is bridged (C++-exact; the bounding-
 --    radius/display/flag arms have no bridges — unmodeled).
 -- 4. Phase 1 arms: platforms-move cycle — 0 init, cur_wp = 4
@@ -104,8 +108,9 @@
 --    40000+rand()%5000: starts the dive chain above, re-arm
 --    40000+rand()%5000 (C++-exact); flame patch — 30s: the
 --    whole arm is a CREATURE_FLAME_PATCH_ALAR 20602 summon +
---    summon-side setup/cast (no summon bridge — steamrigger
---    precedent), unmodeled; the DoMeleeAttackIfReady flame-
+--    summon-side setup/cast (stays out on the paired summon-
+--    side self-cast SPELL_FLAME_PATCH 35380, :444 — no summon-
+--    object drive), unmodeled; the DoMeleeAttackIfReady flame-
 --    buffet arm (SPELL_FLAME_BUFFET 34121 — no victim in melee
 --    range) has no attack-timer/melee-range bridge — melee is
 --    engine-driven, unmodeled.
@@ -134,10 +139,12 @@
 -- — the phase-1 platform MovePoints, the ForceMove re-issue,
 -- the WE_DIE waypoint[5] MovePoint, the dive-bomb waypoint[4]
 -- MovePoint and the WE_DIVE UpdatePosition teleport unmodeled
--- (omor / nightbane precedents); no summon bridge — the
--- phase-1 ember DoSpawnCreature, the dive-bomb two-ember
--- DoSpawnCreature and the whole flame-patch arm unmodeled
--- (steamrigger precedent); npc_ember_of_alar (19551)
+-- (omor / nightbane precedents); 'no summon bridge' is stale
+-- (the bridge is live) — per-arm: phase-1 ember DoSpawnCreature
+-- (:376) and dive-bomb two-ember DoSpawnCreature (:335-337) stay
+-- out on the paired JustSummoned AttackStart relay (:204-208,
+-- unbridged; embers' role is combat); flame-patch arm stays out
+-- on the paired summon-side self-cast (:444); npc_ember_of_alar (19551)
 -- documented only, not registered — its DamageTaken latch
 -- (TRIGGERED SPELL_EMBER_BLAST 34133 + the 3% Al'ar health
 -- cut via instance->GetGuidData(DATA_ALAR)) sits behind the
@@ -433,8 +440,9 @@ local function combatTick(creature, guid)
         else
             st.diveBomb = st.diveBomb - 1000
         end
-        -- Flame patch arm: summon-only, no summon bridge —
-        -- unmodeled (steamrigger precedent).
+        -- Flame patch arm: summon-only, stays out on the paired
+        -- summon-side self-cast SPELL_FLAME_PATCH 35380 (:444) —
+        -- unmodeled.
     end
 end
 

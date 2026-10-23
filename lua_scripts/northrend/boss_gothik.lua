@@ -51,13 +51,20 @@
 -- boss_gothik: Reset — SetReactState(REACT_PASSIVE) + instance->
 -- SetData(DATA_GOTHIK_GATE, GO_STATE_ACTIVE) — instance / GO-state
 -- blocked (no bridges); the react-state leg is bridgeable in isolation
--- but Reset is unported, so it stays out with the rest; JustSummoned / SummonedCreatureDespawn —
--- no summon bridge; EVENT_SUMMON — the waves10/waves25 wave tables +
--- CGUID_TRIGGER (127618) spawn-offset layout (rider center-back/north,
--- knight north/center-front/south, trainee south/center-front/north)
--- + DoSummon via trigger spawn IDs — no summon bridge + RAID_MODE
--- difficulty gate (kelidan precedent); EVENT_DOORS_UNLOCK —
--- summon-iteration gate machine — no summon bridge; EVENT_PHASE_TWO
+-- but Reset is unported, so it stays out with the rest; JustSummoned /
+-- SummonedCreatureDespawn — summons.Summon/summons.Despawn + cross-AI
+-- DoAction + instance GetGuidData (summon-list/cross-AI/instance
+-- blocked, not 'no summon bridge'); EVENT_SUMMON — the waves10/waves25
+-- wave tables + CGUID_TRIGGER (127618) spawn-offset layout (rider
+-- center-back/north, knight north/center-front/south, trainee
+-- south/center-front/north) + DoSummon via trigger spawn IDs (DB
+-- spawn-ID trigger lookups via trigger->GetSpawnId(), :462-480 — no
+-- spawn-ID bridge, coords not in C++; DoSummon itself is a plain
+-- SummonCreature twin; the RAID_MODE parenthetical is stale —
+-- IsHeroic() is bridged); EVENT_DOORS_UNLOCK — iterates the `summons`
+-- LIST via ObjectAccessor::GetCreature checking IsAlive/IsInCombat
+-- (summon-list/ObjectAccessor bridge blocker, not the SummonCreature
+-- bridge); EVENT_PHASE_TWO
 -- — SetPhase(PHASE_TWO) + SetReactState(REACT_PASSIVE) +
 -- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE 28026) 2-arg
 -- (non-triggered) + Talk(
@@ -128,8 +135,11 @@
 -- urandms(14,18)=14-18s repeat — stays OUT: entry-blocked.
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
 -- ANCHOR_2_x -> SKULLS_x -> DoSummon) — event 14 fires but the arm
--- roots at a DoSummon skull-pile selection via CGUID_TRIGGER +
--- urand(8,12) — no summon bridge; stays OUT.
+-- roots at the ANCHOR_2_x skull-pile selection via CGUID_TRIGGER +
+-- urand(8,12) (no spawn-ID bridge — DB lookup); the SKULLS_x ->
+-- DoSummon(NPC_DEAD_TRAINEE/KNIGHT/RIDER/HORSE, me, 0.0f, 15s) legs
+-- (:941-952) and the ANCHOR_1_x -> DoCastAOE(ANCHOR_2_x, true) legs
+-- are bridgeable in isolation but unreachable — stays OUT.
 -- spell_gothik_shadow_bolt_volley (SpellScript 27831: FilterTargets
 -- removes shadow-marked targets) — no SpellScript binding bridge
 -- (razelikh precedent) — joins the SpellScript/AuraScript queue.

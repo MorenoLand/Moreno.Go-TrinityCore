@@ -196,7 +196,7 @@ local function darkfallenEngage(entry, creature)
                 local victim = creature:GetVictim()
                 if victim then
                     creature:SummonCreature(NPC_VAMPIRIC_FIEND,
-                        victim:GetX(), victim:GetY(), victim:GetZ(), 0, 4, 0)
+                        victim:GetX(), victim:GetY(), victim:GetZ(), victim:GetO(), 4, 0)
                 end
                 schedule(guid, "fiend", 30000, 0, fiendTick)
             end

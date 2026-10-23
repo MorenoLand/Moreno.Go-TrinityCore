@@ -66,8 +66,13 @@
 -- leg: JustSummoned -> summon->SetReactState(REACT_PASSIVE) (lines 651
 -- lightning orb / 670 dark-rune trash / 674 Sif) and the TrashJumpEvent
 -- re-arm to REACT_AGGRESSIVE (line 401 — m_Events BasicEvent, no bridge);
--- no summon bridge, and SetReactState IS bridged (frozen_core precedent)
--- so the blocker is the summon machine, not the call.
+-- the 'no summon bridge / summon machine' wording is stale — creature:
+-- SummonCreature fires CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19)
+-- on the summoner (lua_creature_events.go:766) and SetReactState IS
+-- bridged (frozen_core precedent) — the arms stay out on the
+-- TrashJumpEvent legs (:386-410): stage-1 DoZoneInCombat + SetBoundary
+-- (no DoZoneInCombat bridge) and the SPELL_LEAP movement — without
+-- them the pre-phase adds would stand passive forever.
 -- boss_thorimAI EVENT_BERSERK (lines 750+) — phase-conditional Talk(SAY_WIPE
 -- 6 / SAY_BERSERK 5) + triggered casts; DoAction(ACTION_BERSERK)-gated
 -- reschedule; no DoAction / berserk bridge.

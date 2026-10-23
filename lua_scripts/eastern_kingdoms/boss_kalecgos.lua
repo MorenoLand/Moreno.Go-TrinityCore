@@ -97,8 +97,10 @@
 --   strand an unkillable boss, so it stays documented-only.
 -- - JustEngagedWith's SummonCreature(NPC_KALECGOS_HUMAN,
 --   KalecgosSummonPos, TEMPSUMMON_CORPSE_TIMED_DESPAWN) +
---   SetInCombatWith legs (no summon bridge — gurtogg precedent
---   class); the human registers independently for 24891.
+--   SetInCombatWith legs — the bridge is live but the arm's
+--   purpose is the unbridged SetInCombatWith relay; the human
+--   never self-engages (kalecgos precedent class); the human
+--   registers independently for 24891.
 -- - KilledUnit Talk legs (dragon 50% Talk(1), sathrovarr Talk(1)):
 --   "no KilledUnit bridge" claim is STALE — CREATURE_EVENT_ON_TARGET_DIED
 --   (event 3) is bridged (lua_creature_events.go:438); the canonical port

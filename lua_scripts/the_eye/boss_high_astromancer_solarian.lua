@@ -135,8 +135,12 @@
 -- shim (instance_the_eye.cpp stays blocked on the instance-
 -- script model; the BossAI ctor DATA_HIGH_ASTROMANCER_
 -- SOLARIAN = 2 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); no summon bridge — the spotlight / agent /
--- priest summons unmodeled (steamrigger precedent); no
+-- skipped); 'no summon bridge' is stale (the bridge is live) —
+-- per-arm: agent (18925)/priest (18806) stay out on the paired
+-- Summoned->AI()->AttackStart(random target) legs (:184,
+-- unbridged cross-creature relay; their role is combat);
+-- spotlight (18928) stays out on the paired summon-side
+-- self-cast SPELL_SPOTLIGHT 25824 (:322); no
 -- movement bridge — the UpdatePosition teleports, the
 -- StopMoving/AttackStop and the AppearDelay machine
 -- unmodeled (omor precedent); no visibility/armor bridge — the phase

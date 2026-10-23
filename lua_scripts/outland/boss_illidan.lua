@@ -114,8 +114,13 @@
 -- 11728 — no-music bridge) / EVENT_QUIET_SUICIDE (:1019-1030,
 -- DoCastSelf 3617 triggered + cross-creature akama DoAction +
 -- summons.DespawnIf instance-GUID) — no bridges.
--- EVENT_MINIONS_WEAVE (:845-849, SummonMinions() — no summon bridge;
--- ACTION_START_MINIONS_WEAVE-gated) — no bridges.
+-- EVENT_MINIONS_WEAVE (:845-849, SummonMinions() — the SummonCreature
+-- bridge is live (blacktemple/boss_illidan.lua triage: SummonCreature(
+-- NPC_ILLIDARI_ELITE 23226, MinionsSpawnPositions[i], CORPSE_TIMED,
+-- 6s)) but the arm stays out on the paired summon-side legs:
+-- npc_illidari_elite::Reset AttackStart/AddThreat on Akama via
+-- instance GUID (:1791-1797, unbridged) and CanAIAttack gating
+-- everything but Akama; ACTION_START_MINIONS_WEAVE-gated.
 -- SetControlled(ROOT) legs (:464 Reset; :738 DamageTaken 30% demon-exit;
 -- :761 EVENT_CANCEL_DEMON_FORM special-events; :947 EVENT_DEMON demon
 -- machine) all ride unported hooks/machines in this audit record: stay

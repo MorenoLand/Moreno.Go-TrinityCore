@@ -279,9 +279,10 @@ RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
 -- ported, so the lua boss stays in combat ~2.5s past enrage. The evade
 -- SetSheath(SHEATH_STATE_UNARMED) leg IS ported (algalonReset, bridge
 -- landed 2026-10-20). (3)
--- EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs) is
--- not ported: the summon leg has no bridge (the arlokk precedent) and a
--- Talk-only port would fire with no stars. (4) EVENT_BIG_BANG stays out:
+-- (3) EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs)
+-- is PORTED (2026-10-23, creature:SummonCreature bridge — 'no summon
+-- bridge' retracted) — collapsingstar key cancel on phase-2. (4)
+-- EVENT_BIG_BANG stays out:
 -- the arm sets PHASE_BIG_BANG, orders constellation DoActions via a
 -- grid search and reschedules the phase restore — phase-machine legs block
 -- it (gothik precedent). (5) npc_living_constellation's
