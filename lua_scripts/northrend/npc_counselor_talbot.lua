@@ -26,11 +26,13 @@
 --   50992); re-arm urand(12000,18000).
 -- - OnLeaveCombat / OnDied / OnReset: cancel GUID-keyed timers
 --   (C++ events.Reset() residue).
+-- - The UpdateAI `if (me->GetAreaId() == 4125)` gate (:889):
+--   creature:GetAreaId() (engine/world/lua_creature_events.go,
+--   Map::GetZoneAndAreaId twin) — the three combat-start seeds run
+--   only inside area 4125. Talbot is stationary at his summon
+--   coords, so combat-start evaluation is C++-exact; behaviorally
+--   nil in practice (fixed-coords quest summon).
 -- Unmodeled (documented-only, no bridges):
--- - UpdateAI's `if (me->GetAreaId() == 4125)` gate (:889): no GetAreaId
---   bridge. Talbot is a TEMPSUMMON_CORPSE_TIMED_DESPAWN at fixed quest
---   coords (:513) — he cannot be in combat outside the staging area,
---   so the missing gate has no behavioral delta in practice.
 -- - bCheck / FindNearestCreature(NPC_LERYSSA 25251, NPC_GENERAL_ARLOS
 --   25250, 50.0f) GUID latch (:876-886): FindNearestCreature IS
 --   bridged (lua_creature_events.go:1154, alive-only built in —
@@ -123,12 +125,18 @@ end
 -- C++ Initialize()/Reset(): SHADOWBOLT urand(5s,12s), DEFLECTION
 -- urand(20s,25s), SOULBLAST urand(12s,18s). Timers only tick
 -- UpdateVictim-gated in C++, so seeding at combat start is faithful.
+-- C++ wraps the three pumps in `if (me->GetAreaId() == 4125)`
+-- (:889); Talbot is stationary at his summon coords, so evaluating
+-- the gate once at combat start is C++-exact (formally; behaviorally
+-- nil — he cannot fight outside the staging area).
 local function onEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "shadow_bolt", math.random(5000, 12000), function() onShadowBolt(creature, guid) end)
-    schedule(guid, "deflection", math.random(20000, 25000), function() onDeflection(creature, guid) end)
-    schedule(guid, "soul_blast", math.random(12000, 18000), function() onSoulBlast(creature, guid) end)
+    if creature:GetAreaId() == 4125 then
+        schedule(guid, "shadow_bolt", math.random(5000, 12000), function() onShadowBolt(creature, guid) end)
+        schedule(guid, "deflection", math.random(20000, 25000), function() onDeflection(creature, guid) end)
+        schedule(guid, "soul_blast", math.random(12000, 18000), function() onSoulBlast(creature, guid) end)
+    end
 end
 
 local function onLeaveCombat(event, creature)

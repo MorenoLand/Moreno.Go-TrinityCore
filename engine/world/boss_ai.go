@@ -5654,8 +5654,9 @@ func init() {
 	// npc_guardian_pavilion (MoveInLineOfSight trespasser machine:
 	// GetAreaId 4676/4677 gates, HasAura 63987/63986 gates,
 	// GetTeamId branch, player self-cast) sits behind the
-	// proximity / area-ID / HasAura / team / player-self-cast
-	// bridges. npc_tournament_training_dummy (entries
+	// proximity / HasAura / team / player-self-cast bridges (the
+	// area-ID bridge is live — lua_creature_events.go — but the
+	// proximity / facing / team legs still block the machine). npc_tournament_training_dummy (entries
 	// 33272/33229/33243 verifiable) — the SetControlled(STUNNED)
 	// leg has no unit-state bridge; DamageTaken zeroing, the
 	// SpellHit 62544/62626/62874 credit machines, the HasAura-
@@ -12025,8 +12026,9 @@ func init() {
 	// arms (ShadowBolt 15537 urand(5s,12s), Deflection 51009
 	// urand(20s,25s), SoulBlast 50992 urand(12s,18s), all non-triggered
 	// DoCastVictim; UpdateVictim-gated in C++ so combat-start seeding
-	// is faithful). The GetAreaId()==4125 gate is unbridged but
-	// behaviorally nil — Talbot is a fixed-coords quest summon.
+	// is faithful). The GetAreaId()==4125 gate is bridged
+	// (lua_creature_events.go) and ported; behaviorally nil — Talbot
+	// is a fixed-coords quest summon.
 	// bCheck/FindNearestCreature GUID latch, MovementInform thassarian
 	// latch, and JustDied ObjectAccessor/motion/reward legs are
 	// documented-only (no bridges). Entry 25301 verifiable from the

@@ -40,10 +40,11 @@
 -- (:1657/:1672) toggle PLAYER_FLAGS_NO_XP_GAIN via player
 -- HasFlag/SetFlag/RemoveFlag: no player flag bridges.
 -- npc_firework (:1760-1996) — Reset (:1938): FindNearestGameObject,
--- SendCustomAnim, SetOrientation, GetZoneId, FindNearestCreature,
--- sSpellMgr lookup — unbridged (creature:SummonCreature and
--- creature:SummonGameObject ARE bridged since 2026-10-22 but the
--- launcher/zone legs block the Reset arm). The lone bridgeable
+-- SendCustomAnim, SetOrientation, FindNearestCreature,
+-- sSpellMgr lookup — unbridged (GetZoneId IS bridged since
+-- 2026-10-23 — lua_creature_events.go — but the launcher legs still
+-- block the Reset arm; creature:SummonCreature and
+-- creature:SummonGameObject ARE bridged since 2026-10-22). The lone bridgeable
 -- fragment (DoCast lunar fortune 26522) cannot
 -- fire without the launcher/zone legs.
 -- npc_spring_rabbit (:2002-2100) — UpdateAI (:2057) timer pump is

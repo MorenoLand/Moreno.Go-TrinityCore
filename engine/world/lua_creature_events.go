@@ -592,6 +592,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
 		return nil, nil
 	}
+	// GetZoneId/GetAreaId are Unit::GetZoneId()/GetAreaId() via
+	// Map::GetZoneAndAreaId (Map.cpp:2641): the area id resolves from
+	// the creature's map + position (WMO area, then the .map area grid,
+	// then the map's default AreaTableID) and the zone id is the area's
+	// ParentAreaID when set. The Go twin is Server.zoneAndAreaID
+	// (terrain.go), the same resolution creatures use for spell-area
+	// checks (checkMotionSpellCheckLocation). Both return 0 when the
+	// position cannot be resolved — the C++ fail-open twin of an
+	// absent area row. No phase-mask leg: the Go grid model has none.
+	methods["GetZoneId"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, x, y, z := motion.Map, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		zoneID, _ := s.zoneAndAreaID(mapID, x, y, z, 0)
+		return []any{zoneID}, nil
+	}
+	methods["GetAreaId"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, x, y, z := motion.Map, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		_, areaID := s.zoneAndAreaID(mapID, x, y, z, 0)
+		return []any{areaID}, nil
+	}
 	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
 	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,

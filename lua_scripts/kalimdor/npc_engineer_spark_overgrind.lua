@@ -15,6 +15,18 @@
 --   combat, re-armed on leave combat. C++ resumes a partially
 --   elapsed timer after combat; the Lua port re-arms full delay.
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
+-- - IsTreeEvent latch (GetAreaId() == AREA_COVE 3579 / AREA_ISLE
+--   3639, zone_azuremyst_isle.cpp:212-216, latched at construct and
+--   Reset): creature:GetAreaId() (engine/world/lua_creature_events.go,
+--   Map::GetZoneAndAreaId twin). The dynamite seed (enter combat) and
+--   the emote re-arms (leave combat / reset) skip when the latch is
+--   set — C++ UpdateAI returns before both pumps when IsTreeEvent
+--   (:251-252), so the tree-event Spark never casts or emotes;
+--   JustEngagedWith's Talk stays unconditional (:219-222). Known
+--   engine-driven deviation: C++ also skips DoMeleeAttackIfReady on
+--   the early return, but melee is engine-driven in Go (ouro
+--   precedent) and not Lua-gatable — a deliberately attacked
+--   tree-event Spark fights back in Go where C++ stands still.
 -- - Reset's UNIT_NPC_FLAGS restore (zone_azuremyst_isle.cpp:224):
 --   constructor-captured value cached per GUID, restored via
 --   creature:SetNPCFlags() (engine/world/lua_objects.go:657) — C++
@@ -23,11 +35,6 @@
 --   gossip-select flip still needs Attack — zero Lua usage — so the
 --   arm stays documented-only).
 -- Documented-only (no bridges):
--- - IsTreeEvent gate (GetAreaId() == 3579 cove / 3639 isle returns
---   before combat entirely): GetAreaId has no Lua bridge (talbot
---   precedent, npc_blessed_banner.lua comment). The geezle-event
---   Spark therefore still attacks on the live wire; tree-event area
---   gating is unmodeled.
 -- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
 --   + Attack): gossip IS bridged (RegisterCreatureGossipEvent — the
 --   "gossip bridge absent" claim was stale; live at
@@ -71,6 +78,24 @@ local timers = {}
 -- guid -> AI-constructor-captured UNIT_NPC_FLAGS
 -- (zone_azuremyst_isle.cpp:205: NpcFlags = creature->GetUInt32Value(UNIT_NPC_FLAGS))
 local npcFlags = {}
+
+-- guid -> Initialize() IsTreeEvent latch
+-- (zone_azuremyst_isle.cpp:212-216: GetAreaId() == AREA_COVE (3579)
+-- or AREA_ISLE (3639)), latched at construct and at every Reset.
+local treeEvent = {}
+
+-- C++ Initialize() latch; event 23 fires on spawn, so the onReset
+-- capture below equals the C++ constructor capture. The helper
+-- recomputes live on a cache miss — a stationary NPC never changes
+-- areas mid-life, so this equals the latch.
+local function isTreeEvent(creature, guid)
+    local latched = treeEvent[guid]
+    if latched == nil then
+        latched = (creature:GetAreaId() == 3579 or creature:GetAreaId() == 3639)
+        treeEvent[guid] = latched
+    end
+    return latched
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -118,17 +143,28 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(ATTACK_YELL, target)
-    schedule(guid, "dynamite", DYNAMITE_DELAY_MS, function()
-        onDynamite(creature, guid)
-    end)
+    -- C++ UpdateAI returns before the dynamite pump when IsTreeEvent
+    -- (zone_azuremyst_isle.cpp:251-252): the tree-event Spark never
+    -- casts. JustEngagedWith's Talk above is unconditional in C++
+    -- (:219-222), so it stays outside the gate.
+    if not isTreeEvent(creature, guid) then
+        schedule(guid, "dynamite", DYNAMITE_DELAY_MS, function()
+            onDynamite(creature, guid)
+        end)
+    end
 end
 
 local function onLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "emote", math.random(EMOTE_MIN_MS, EMOTE_MAX_MS), function()
-        onEmote(creature, guid)
-    end)
+    -- C++ emote pump runs only when !IsInCombat() && !IsTreeEvent
+    -- (zone_azuremyst_isle.cpp:242-249): the tree-event Spark never
+    -- emotes either.
+    if not isTreeEvent(creature, guid) then
+        schedule(guid, "emote", math.random(EMOTE_MIN_MS, EMOTE_MAX_MS), function()
+            onEmote(creature, guid)
+        end)
+    end
 end
 
 -- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
@@ -155,10 +191,14 @@ local function onReset(event, creature)
         npcFlags[guid] = creature:GetNPCFlags()
     end
     creature:SetNPCFlags(npcFlags[guid])
+    -- C++ Reset -> Initialize() re-latches IsTreeEvent (:212-216, :221).
+    treeEvent[guid] = (creature:GetAreaId() == 3579 or creature:GetAreaId() == 3639)
     -- C++ UpdateAI never runs while dead (zone_azuremyst_isle.cpp:238-261);
     -- a death-reset (23 fires before 4 on the kill path) must not re-arm
     -- the emote timer, or the corpse Talks every 120-150s until respawn.
-    if not creature:IsDead() then
+    -- The emote re-arm is also IsTreeEvent-gated (:242): the tree-event
+    -- Spark never emotes.
+    if not creature:IsDead() and not treeEvent[guid] then
         schedule(guid, "emote", math.random(EMOTE_MIN_MS, EMOTE_MAX_MS), function()
             onEmote(creature, guid)
         end)

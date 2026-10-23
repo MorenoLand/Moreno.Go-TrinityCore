@@ -58,8 +58,9 @@
 -- npc_guardian_pavilion — the trespasser machine is entirely
 -- MoveInLineOfSight-driven (no proximity hook — Smeed /
 -- mageguard_dalaran precedent): GetAreaId() != 4676 (Sunreaver)
--- && != 4677 (Silver Covenant) gate (no area-ID bridge —
--- talbot precedent), IsHostileTo + isInBackInMap(who, 5.0f)
+-- && != 4677 (Silver Covenant) gate (area-ID bridge is live —
+-- lua_creature_events.go — but the proximity / facing / team legs
+-- below still block the machine), IsHostileTo + isInBackInMap(who, 5.0f)
 -- gates (no proximity / facing bridges), HasAura(63987/63986)
 -- trespasser gates (player:HasAura is bridged — lua_player.go:203;
 -- still blocked by the proximity / area-ID / facing / team /
