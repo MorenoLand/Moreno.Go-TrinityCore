@@ -42,9 +42,12 @@
 -- boss admission via the luaBossAI shim (BossAI::_Reset/
 -- JustEngagedWith and the DATA_CHROMAGGUS bookkeeping arms skipped);
 -- the go_chromaggus_lever GameObjectScript (door open + boss-state
--- set + JustEngagedWith on lever gossip) has no gameobject bridge and
--- is not registered (broodlord suppression-device convention) — the
--- fight starts on pull instead of on the lever.
+-- set + JustEngagedWith on lever gossip) is not registered: the GO
+-- gossip bridge (RegisterGameObjectGossipEvent) + SetGoState exist, but
+-- the lever's instance SetBossState leg has no instance bridge and the
+-- fight can't be meaningfully lever-gated (broodlord suppression-device
+-- convention) — the fight starts on pull instead of on the lever
+-- (2026-10-23 re-key of the stale "no gameobject bridge" claim).
 
 local ENTRY_CHROMAGGUS = 14020
 

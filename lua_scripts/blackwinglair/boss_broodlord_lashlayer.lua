@@ -4,8 +4,12 @@
 -- (DATA_BROODLORD_LASHLAYER = 2, third boss), :55 (NPC_BROODLORD =
 -- 12017). Creature entry: 12017 Broodlord Lashlayer (C++ ScriptName
 -- "boss_broodlord" per AddSC_boss_broodlord). The go_suppression_device
--- GameObjectScript from the same C++ file has no Lua bridge (no
--- gameobject model) and is not registered.
+-- GameObjectScript from the same C++ file is not registered: the
+-- RegisterGameObjectEvent bridge and the GO GetGoState/SetGoState surface
+-- exist (lua_objects.go:1080/1095), but the device's GameObjectAI
+-- OnAIUpdate/OnLootState legs have no engine fire sites and the JustDied
+-- device scan rides the unbridged grid enumeration — machine unmodeled
+-- (2026-10-23 re-key of the stale "no gameobject model" claim).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -31,7 +35,10 @@
 -- only the 1s re-arm cycle is kept, inert (renataki visible-timer
 -- convention); the JustDied GetGameObjectListWithEntryInGrid
 -- suppression-device scan and the DoAction(ACTION_DEACTIVATE) arms
--- have no gameobject bridge — the devices stay active after the kill;
+-- stay out on the unbridged grid enumeration + unmodeled GameObjectAI
+-- UpdateAI/OnLootState legs (the blanket "no gameobject bridge" claim
+-- was stale — RegisterGameObjectEvent + GO SetGoState exist) — the
+-- devices stay active after the kill;
 -- the whole go_suppression_device machine (0-5s first suppression
 -- aura 22247 cast, 5s cycle, disarm-deactivate, 30-120s re-activate,
 -- DoAction deactivation) is not modeled (standing gameobject gap).
@@ -158,7 +165,8 @@ end
 
 local function broodlordDied(event, creature, killer)
     -- C++ JustDied: the suppression-device scan + DoAction
-    -- deactivation has no gameobject bridge (see header).
+    -- deactivation stays out on the unbridged grid enumeration +
+    -- unmodeled GameObjectAI UpdateAI/OnLootState legs (see header).
     broodlordResetState(creature:GetGUID())
 end
 

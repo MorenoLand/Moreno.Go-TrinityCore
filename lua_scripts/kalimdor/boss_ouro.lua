@@ -37,10 +37,11 @@
 --   creature:RemoveFlag(59, ...) and creature:SetFaction(...) before
 --   the victim Ground Rupture 26100 (DoCastVictim, C++-verbatim) +
 --   submerged flag cleared + Submerge re-armed.
--- Unmodeled (documented-only, no bridges):
 -- - ChangeTarget while submerged (urand(5000,8000) init ->
---   urand(10000,20000)): SelectTarget Random + DoTeleportTo —
---   SelectTarget/DoTeleportTo have zero Lua usage, documented-only.
+--   urand(10000,20000)): PORTED 2026-10-23 (onChangeTarget — random
+--   alive-player pick + creature:Teleport; stale "zero Lua usage"
+--   claims retracted).
+-- Unmodeled (documented-only, no bridges):
 -- - Spawn_Timer (urand(10000,20000) init): initialized in
 --   Initialize() but NEVER referenced in UpdateAI — dead in C++.
 -- - Enrage bool: set false in Initialize(), never read anywhere
@@ -164,6 +165,34 @@ local function onBack(creature, guid)
     end)
 end
 
+-- C++ ChangeTarget_Timer (Submerged, boss_ouro.cpp:123-129):
+-- SelectTarget(Random, 0) -> DoTeleportTo(target X/Y/Z); re-arm
+-- urand(10000,20000) regardless of the Submerged gate (C++-exact —
+-- the timer keeps decrementing while unsubmerged). The teleport half
+-- is creature:Teleport (NearTeleportTo twin, lua_creature_events.go:523
+-- — the stale "DoTeleportTo has zero Lua usage" claim retracted); the
+-- random pick uses the alive-players-in-instance convention (shirrak
+-- inhibit precedent). Orientation is preserved (C++ passes no o).
+local function onChangeTarget(creature, guid)
+    local s = st(guid)
+    if s and s.submerged then
+        local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+        local pool = {}
+        for _, p in ipairs(GetPlayersInWorld()) do
+            if p:GetMapId() == mapId and p:GetInstanceId() == instanceId and not p:IsDead() then
+                pool[#pool + 1] = p
+            end
+        end
+        if #pool > 0 then
+            local target = pool[math.random(#pool)]
+            creature:Teleport(target:GetX(), target:GetY(), target:GetZ(), creature:GetO())
+        end
+    end
+    schedule(guid, "changetarget", math.random(10000, 20000), function()
+        onChangeTarget(creature, guid)
+    end)
+end
+
 -- C++ Submerge_Timer (!Submerged): emote + SetFlag(UNIT_FLAG_NOT_SELECTABLE)
 -- + SetFaction(FACTION_FRIENDLY) port via creature:PerformEmote(374),
 -- creature:SetFlag(59, ...) and creature:SetFaction(...); the Dirt Mound
@@ -203,6 +232,10 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "submerge", math.random(90000, 150000), function()
         onSubmerge(creature, guid)
+    end)
+    -- C++ Initialize(): ChangeTarget_Timer = urand(5000,8000).
+    schedule(guid, "changetarget", math.random(5000, 8000), function()
+        onChangeTarget(creature, guid)
     end)
 end
 

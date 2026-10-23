@@ -176,6 +176,9 @@
 
 local ENTRY_FJOLA = 34497
 local ENTRY_EYDIS = 34496
+-- NPC_BULLET_CONTROLLER (boss_twin_valkyr.cpp:60) — summoned by Fjola's
+-- JustEngagedWith (:446) at ToCCommonLoc[1] (Center: 563.673/139.571/
+-- 393.837, trial_of_the_crusader.cpp:184-190), TEMPSUMMON_MANUAL_DESPAWN.
 
 -- boss_twin_valkyr.h:50-51 / Trinity SetEquipmentSlots(load=false, ...) with
 -- EQUIP_UNEQUIP=0 (slot zeroed) and EQUIP_NO_CHANGE->0xFFFFFFFF (slot skipped,
@@ -291,6 +294,14 @@ local sisterDeaths = 0
 local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
     return function(event, creature, target)
         sisterDeaths = 0
+        -- C++ boss_fjolaAI::JustEngagedWith (boss_twin_valkyr.cpp:442-448):
+        -- SummonCreature(NPC_BULLET_CONTROLLER 34743, ToCCommonLoc[1],
+        -- 0.0, TEMPSUMMON_MANUAL_DESPAWN) lands before the
+        -- boss_twin_baseAI engage legs (Talk + surge below) — C++-exact;
+        -- Fjola-only (eydis AI has no summon).
+        if creature:GetEntry() == ENTRY_FJOLA then
+            creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
+        end
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
         creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; DoZoneInCombat/AddAura/sister Empathy/setActive legs have no bridge)

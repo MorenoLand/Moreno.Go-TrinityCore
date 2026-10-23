@@ -49,27 +49,26 @@
 -- the Lua per-GUID timer tables reset on 2/4/23 (the gargolmar
 -- precedent); the inhibit timer restarts (immediate fire) on 23
 -- to mirror the C++ Inhibitmagic_Timer = 0 re-latch.
--- DOCUMENTED-ONLY (in this header; only entry 18371 registered):
+-- PORTED arms (C++-exact for the modeled legs):
 -- boss_shirrak_the_dead_watcherAI::UpdateAI FocusFire block
--- (:160-172) — SelectTarget(Random, 1): UnitAI.h:162-174 — for
--- Random the offset skips the first <offset> entries in MaxThreat
--- order, so this is a random pick among the threat list EXCLUDING
--- the top-threat entry (the ikiss offset-1 precedent), then the
--- C++ player-type + IsAlive gates. The arm then summons
--- NPC_FOCUS_FIRE 18374 at the target's position
--- (TEMPSUMMON_TIMED_DESPAWN, 5500ms) + Talk(EMOTE_FOCUSED 0,
--- target) — stays OUT: no SummonCreature bridge (the shaffar
--- "shirrak precedent" — confirmed zero SummonCreature bindings in
--- the Lua-facing engine this run); the emote without its flare
--- would be a phantom, so the whole arm is documented, not wired.
+-- (:150-163) — PORTED 2026-10-23 (focusfireTick, event 1; init 17000,
+-- re-arm 15000 + rand32() % 5000): SelectTarget(Random, 1) = random pick
+-- among the threat list EXCLUDING the top-threat entry (UnitAI.h:162-174;
+-- the ikiss offset-1 precedent via GetAITargets, threat-sorted), then the
+-- C++ player-type + IsAlive gates — then SummonCreature(NPC_FOCUS_FIRE
+-- 18374) at the target's position, TEMPSUMMON_TIMED_DESPAWN 5500ms +
+-- Talk(EMOTE_FOCUSED 0, target) (C++ arm order). The stale "no
+-- SummonCreature bridge (shirrak precedent)" claim was retracted —
+-- creature:SummonCreature is bridged (lua_creature_events.go:728). The
+-- FocusedTargetGUID latch feeds only the unbridged AttackStart leg —
+-- not kept.
+-- npc_focus_fire (18374) — registered for JustSummoned (event 19, the
+-- yor precedent): the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered
+-- self-cast + SetFaction(summoner faction, pending-slot idiom) legs are
+-- PORTED 2026-10-23; SetLevel / UNIT_STATE_ROOT / AttackStart have no
+-- bridges — stay out.
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
--- npc_focus_fire (18374) — NOT registered (nothing can summon it
--- without the summon bridge; the yor precedent). Transcribed from
--- boss_shirrak_the_dead_watcher.cpp:180-225 for the record:
--- JustSummoned — summoned:CastSpell(summoned,
--- SPELL_FOCUS_FIRE_VISUAL 42075, false) (triggered self-cast) +
--- SetFaction(me->GetFaction()) + SetLevel(me->GetLevel()) +
--- AddUnitState(UNIT_STATE_ROOT) + AI()->AttackStart(focused target
+-- DOCUMENTED-ONLY (in this header; entries 18371 + 18374 registered):
 -- via FocusedTargetGUID) — no cast/root/cross-creature bridges
 -- (the maladaar JustSummoned-coordination precedent);
 -- UpdateAI fiery machine — FieryBlast_Timer 3000+rand(1000) init,
@@ -82,8 +81,17 @@ local ENTRY_SHIRRAK = 18371 -- DB-side; wowhead-TBC-verified this run
 local SPELL_INHIBITMAGIC   = 32264 -- boss_shirrak_the_dead_watcher.cpp:32
 local SPELL_ATTRACTMAGIC   = 32265 -- boss_shirrak_the_dead_watcher.cpp:33
 local SPELL_CARNIVOROUSBITE = 36383 -- boss_shirrak_the_dead_watcher.cpp:34
+local SPELL_FOCUS_FIRE_VISUAL = 42075 -- boss_shirrak_the_dead_watcher.cpp:38
+local EMOTE_FOCUSED = 0 -- Talk id, boss_shirrak_the_dead_watcher.cpp:36
+local NPC_FOCUS_FIRE = 18374 -- boss_shirrak_the_dead_watcher.cpp:43
 
 local timers = {}
+
+-- Pending-slot for the FocusFire JustSummoned faction leg: set
+-- synchronously around the SummonCreature call (event 19 fires inside
+-- the call), read by focusFireSummoned. Declared here so the local
+-- exists before any assignment (malown shadowing rule).
+local pendingFocusFireFaction
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -144,6 +152,55 @@ local function attractTick(creature, guid)
     end)
 end
 
+-- C++ FocusFire block (boss_shirrak_the_dead_watcher.cpp:150-163):
+-- SelectTarget(Random, 1) — random pick among the threat list EXCLUDING
+-- the top-threat entry (UnitAI.h:162-174; the ikiss offset-1 precedent —
+-- GetAITargets is threat-sorted, lua_creature_events.go:1018), then the
+-- C++ player-type + IsAlive gates — then SummonCreature(NPC_FOCUS_FIRE
+-- 18374) at the target's position, TEMPSUMMON_TIMED_DESPAWN 5500ms +
+-- Talk(EMOTE_FOCUSED 0, target) (C++ arm order); re-arm
+-- 15000 + rand32() % 5000. The FocusedTargetGUID latch feeds only the
+-- unbridged AttackStart leg (no cross-AI bridge) — not kept.
+local function focusfireTick(creature, guid)
+    local candidates = {}
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local t = targets[i]
+        if t and t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        local target = candidates[math.random(#candidates)]
+        -- The JustSummoned visual/faction legs need the summoner's faction;
+        -- the summon bridge fires event 19 synchronously inside this call
+        -- (lua_creature_events.go: fireCreatureSummoned), so the pending
+        -- slot is exact.
+        pendingFocusFireFaction = creature:GetFaction()
+        creature:SummonCreature(NPC_FOCUS_FIRE, target:GetX(), target:GetY(),
+            target:GetZ(), 0, 2, 5500)
+        pendingFocusFireFaction = nil
+        creature:Talk(EMOTE_FOCUSED, target)
+    end
+    schedule(guid, "focusfire", 15000 + math.random(0, 4999), function()
+        focusfireTick(creature, guid)
+    end)
+end
+
+-- C++ JustSummoned (boss_shirrak_the_dead_watcher.cpp:94-107), entry-gated:
+-- the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered self-cast + SetFaction
+-- (summoner faction, via the pending slot — no creature:GetOwner bridge)
+-- legs are bridged; SetLevel / UNIT_STATE_ROOT / AttackStart have no
+-- bridges (the root/attack legs stay out).
+local function focusFireSummoned(event, creature)
+    if creature:GetEntry() == NPC_FOCUS_FIRE then
+        creature:CastSpell(creature, SPELL_FOCUS_FIRE_VISUAL)
+        if pendingFocusFireFaction then
+            creature:SetFaction(pendingFocusFireFaction)
+        end
+    end
+end
+
 local function cancelKeys(guid, keys)
     local per = timers[guid]
     if per then
@@ -156,7 +213,7 @@ local function cancelKeys(guid, keys)
     end
 end
 
-local combatKeys = { "attract", "carnivorous" }
+local combatKeys = { "attract", "carnivorous", "focusfire" }
 
 -- C++ UpdateVictim-gated combat timers start here (event 1); the
 -- C++ JustEngagedWith body is empty. The inhibit timer is
@@ -169,6 +226,10 @@ local function shirrakEnterCombat(event, creature, target)
     end)
     schedule(guid, "carnivorous", 10000, function()
         carnivorousTick(creature, guid)
+    end)
+    -- C++ Initialize(): FocusFire_Timer = 17000.
+    schedule(guid, "focusfire", 17000, function()
+        focusfireTick(creature, guid)
     end)
 end
 
@@ -207,3 +268,6 @@ RegisterCreatureEvent(ENTRY_SHIRRAK, 4, shirrakDied)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 5, shirrakSpawn)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 23, shirrakReset)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 37, shirrakRemove)
+-- NPC_FOCUS_FIRE 18374 exists only via the FocusFire summon above; its
+-- JustSummoned visual/faction setup is ported (the yor precedent).
+RegisterCreatureEvent(NPC_FOCUS_FIRE, 19, focusFireSummoned)

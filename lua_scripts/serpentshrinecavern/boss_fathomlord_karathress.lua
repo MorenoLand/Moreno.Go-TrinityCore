@@ -100,10 +100,12 @@
 -- instance GUIDs, which have no bridge: only the caster itself
 -- is resolvable, so the heal is cast on self (documented
 -- deviation — the advisor heal support is cross-creature
--- blocked); the cyclone 30-40s arm is unmodeled (the C++
--- SPELL_SUMMON_CYCLONE cast is commented out as broken, and the
--- SummonCreature(22104) + flag/scale/faction/cast/AttackStart
--- chain has no summon/flag/cross-creature bridges). OnDied(4):
+-- blocked). (Correction 2026-10-23: the cyclone 30-40s arm was
+-- misattributed to Caribdis here — it is boss_fathomlord_
+-- karathressAI's own UpdateAI arm (boss_fathomlord_karathress.
+-- cpp:656-673), PORTED in karathressTick; the commented-out
+-- DoCast(SPELL_SUMMON_CYCLONE) is the boss's own dead line.)
+-- OnDied(4):
 -- cleanup (EventCaribdisDeath relay blocked). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- Deliberate deviations (all await engine bridges): no
@@ -117,9 +119,9 @@
 -- relays (EventSharkkis/Tidalvess/CaribdisDeath: Talk(SAY_GAIN_
 -- ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455 / TIDALVESS
 -- 38452 / CARIBDIS 38451) unmodeled; no summon bridge — the
--- sharkkis pet spawns and the caribdis cyclone summon chain stay
--- unmodeled (the Seer Olum quest-10944 summon is PORTED in
--- karathressDied); no movement/
+-- sharkkis pet spawns stay unmodeled (the Seer Olum quest-10944
+-- summon is PORTED in karathressDied; the boss's own cyclone 30-40s
+-- arm is PORTED in karathressTick); no movement/
 -- threat/cross-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
@@ -135,6 +137,7 @@ local SPELL_CATACLYSMIC_BOLT = 38441
 local SPELL_SEAR_NOVA = 38445
 local SPELL_ENRAGE = 24318
 local SPELL_BLESSING_OF_THE_TIDES = 38449
+local SPELL_CYCLONE_CYCLONE = 29538 -- boss_fathomlord_karathress.cpp:60
 
 local SOUND_GAIN_BLESSING_OF_TIDES = 11278
 
@@ -156,6 +159,9 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 5
 local SAY_DEATH = 6
 
+local CREATURE_CYCLONE = 22104 -- boss_fathomlord_karathress.cpp:56
+local UNIT_FIELD_FLAGS = 59 -- SharedDefines.h
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- SharedDefines.h
 local ENTRY_KARATHRESS = 21214
 local ENTRY_SHARKKIS = 21966
 local ENTRY_TIDALVESS = 21965
@@ -211,12 +217,14 @@ local function resetState(stateTable, guid)
 end
 
 -- C++ Initialize(): cataclysmic bolt 10000, enrage 600000, sear
--- nova 20000 + rand32() % 40000, BlessingOfTides false.
+-- nova 20000 + rand32() % 40000, cyclone 30000 + rand32() % 10000,
+-- BlessingOfTides false.
 local function freshKarathressState()
     return {
         cataclysmicBolt = 10000,
         enrage = 600000,
         searNova = 20000 + math.random(0, 39999),
+        cyclone = 30000 + math.random(0, 9999),
         blessingOfTides = false,
     }
 end
@@ -251,6 +259,26 @@ local function karathressTick(creature, guid)
     if st.enrage <= 0 then
         creature:CastSpell(creature, SPELL_ENRAGE)
         st.enrage = 90000
+    end
+
+    -- Cyclone: 30-40s — SummonCreature(CREATURE_CYCLONE 22104) at self
+    -- position, random orientation 0-4, TEMPSUMMON_TIMED_DESPAWN 15s
+    -- (C++ boss_fathomlord_karathress.cpp:656-673, C++ arm order: the
+    -- timer re-arms before the summon). The SetObjectScale(3.0) leg has
+    -- no bridge; the AttackStart leg has no cross-AI bridge. The
+    -- SetFlag(NOT_SELECTABLE) / SetFaction / triggered self-cast
+    -- SPELL_CYCLONE_CYCLONE 29538 legs are bridged — PORTED 2026-10-23.
+    st.cyclone = st.cyclone - 1000
+    if st.cyclone <= 0 then
+        local cyclone = creature:SummonCreature(CREATURE_CYCLONE,
+            creature:GetX(), creature:GetY(), creature:GetZ(),
+            math.random(0, 4), 2, 15000)
+        if cyclone then
+            cyclone:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            cyclone:SetFaction(creature:GetFaction())
+            cyclone:CastSpell(cyclone, SPELL_CYCLONE_CYCLONE, true)
+        end
+        st.cyclone = 30000 + math.random(0, 9999)
     end
 
     -- Blessing of the Tides: once-guarded at <=75% health. The
@@ -423,8 +451,9 @@ local function tidalvessReset(event, creature)
 end
 
 -- C++ Initialize(): water bolt volley 35000, tidal surge 15000
--- + rand32() % 5000, heal 55000, cyclone 30000 + rand32() %
--- 10000 (cyclone arm summon-blocked).
+-- + rand32() % 5000, heal 55000. (Correction 2026-10-23: the
+-- cyclone 30-40s arm was misattributed to Caribdis — it belongs to
+-- boss_fathomlord_karathressAI, PORTED in karathressTick.)
 local function freshCaribdisState()
     return {
         waterBoltVolley = 35000,

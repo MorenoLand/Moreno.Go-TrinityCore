@@ -77,12 +77,12 @@
 -- northrend precedents: gal_darah, eck, elder_nadox, eadric, lord_jaraxxus,
 -- nexus_commanders) — the vehicle (EnterVehicle/ExitVehicle) legs have no
 -- bridge: arm blocked.
--- EVENT_SCORCH (:262-:268) — Talk(SAY_SCORCH 3) +
--- SummonCreature(NPC_GROUND_SCORCH 33221) at victim + DoCast(
--- SPELL_SCORCH 62546) self; 25s init / 25s re-arm — the Talk + self-cast +
--- re-arm legs are individually bridgeable via CreateLuaEvent, but the
--- SummonCreature leg (the arm's damage mechanism) has no bridge: arm
--- blocked, unported.
+-- EVENT_SCORCH (:262-:268) — PORTED 2026-10-23 (scorchTick, event 1;
+-- 25s init / 25s re-arm): Talk(SAY_SCORCH 3) + SummonCreature(
+-- NPC_GROUND_SCORCH 33221) at victim + non-triggered DoCast(
+-- SPELL_SCORCH 62546) self (C++ arm order); the stale "the SummonCreature
+-- leg has no bridge" claim was retracted — creature:SummonCreature is
+-- bridged (lua_creature_events.go:728).
 -- EVENT_CONSTRUCT (:270-:275) — Talk(SAY_SUMMON 1) +
 -- DoSummon(NPC_IRON_CONSTRUCT 33121, random spawn point) +
 -- DoCast(SPELL_STRENGHT 64473) self + DoCast(me, SPELL_ACTIVATE_
@@ -102,17 +102,16 @@
 -- IsInWater machine — aura-stack (GetStackAmount) and water-state
 -- (IsInWater) have no bridges (both verified absent this run); no Talk arms
 -- anywhere.
--- npc_scorch_ground (NPC_GROUND_SCORCH 33221 local enum —
--- entry-verifiable but bridge-blocked — no registration):
--- MoveInLineOfSight heat tracking + UpdateAI AddAura(SPELL_
--- HEAT 65667) 1s machine — proximity IS bridged (creature event 27) and
--- HasAura/AddAura are bridged, so the old "no proximity / aura bridge"
--- claim is stale; the real blocker is the spawn: SummonCreature has no
--- bridge, so the entry never exists in Lua and no event-23 registration is
--- needed. Reset DoCast(me, SPELL_GROUND 62548) would be bridgeable alone;
--- no Talk arms anywhere. The constructor's SetControlled(true, ROOT) /
--- UNIT_FLAG_NOT_SELECTABLE / PACIFIED / SetDisplayId(16925) legs
--- (boss_ignis.cpp:387) ride the same unspawned entry — stay out.
+-- npc_scorch_ground (NPC_GROUND_SCORCH 33221 — now spawned by the
+-- ported EVENT_SCORCH arm): MoveInLineOfSight heat tracking + UpdateAI
+-- AddAura(SPELL_HEAT 65667) 1s machine — proximity IS bridged (creature
+-- event 27) and HasAura/AddAura are bridged, so the old "no proximity /
+-- aura bridge" claim is stale; the stale "the real blocker is the spawn:
+-- SummonCreature has no bridge" claim was retracted 2026-10-23 (the
+-- summon bridge is live) — the heat machine stays out on the
+-- SetControlled(true, ROOT) / PACIFIED legs (boss_ignis.cpp:387, no
+-- bridges), documented-only. Reset DoCast(me, SPELL_GROUND 62548) would
+-- be bridgeable alone; no Talk arms anywhere.
 -- spell_ignis_slag_pot (62717) — periodic-dummy AuraScript
 -- (SPELL_SLAG_POT_DAMAGE 65722 on tick; OnRemove casts SPELL_
 -- SLAG_IMBUED 62836 when target alive) — no AuraScript bridge;
@@ -127,10 +126,14 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 4
 local SAY_DEATH = 6
 local SAY_BERSERK = 5
+local SAY_SCORCH = 3 -- boss_ignis.cpp:264
 local EMOTE_JETS = 7
 
 local SPELL_FLAME_JETS = 62680
 local SPELL_BERSERK = 47008
+local SPELL_SCORCH = 62546 -- boss_ignis.cpp:267
+
+local NPC_GROUND_SCORCH = 33221 -- boss_ignis.cpp:266
 
 local timers = {}
 
@@ -178,12 +181,35 @@ end
 -- C++ JustEngagedWith: BossAI passthrough + ScheduleEvent legs
 -- + DoStartTimedAchievement — the Talk and the two bridgeable
 -- timer casts ride here; the rest have no bridges.
+-- C++ EVENT_SCORCH (boss_ignis.cpp:262-268): Talk(SAY_SCORCH 3) +
+-- SummonCreature(NPC_GROUND_SCORCH 33221) at the victim's position,
+-- TEMPSUMMON_TIMED_DESPAWN 45s + non-triggered DoCast(SPELL_SCORCH
+-- 62546) self; 25s init / 25s re-arm (C++-exact). The stale "the
+-- SummonCreature leg has no bridge" claim was retracted 2026-10-23 —
+-- creature:SummonCreature is bridged (lua_creature_events.go:728).
+local function scorchTick(creature, guid)
+    creature:Talk(SAY_SCORCH)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:SummonCreature(NPC_GROUND_SCORCH, victim:GetX(),
+            victim:GetY(), victim:GetZ(), 0, 2, 45000)
+    end
+    creature:CastSpell(creature, SPELL_SCORCH)
+    schedule(guid, "scorch", 25000, function()
+        scorchTick(creature, guid)
+    end)
+end
+
 local function ignisEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "jet", 30000, function()
         jetTick(creature, guid)
+    end)
+    -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_SCORCH, 25s).
+    schedule(guid, "scorch", 25000, function()
+        scorchTick(creature, guid)
     end)
     schedule(guid, "berserk", 480000, function()
         berserkTick(creature, guid)

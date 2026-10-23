@@ -44,10 +44,10 @@
 --    OnDamageTaken): 5s (the C++ WE_DIE arm) then the WE_
 --    REVIVE arm — TRIGGERED DoCast(me, SPELL_REBIRTH 34342,
 --    true) (C++-exact) + phase = 2 + melt armor 60000 /
---    charge 7000 / dive bomb 40000+rand()%5000 (the flame-
---    patch summon arm stays out on the paired summon-side
---    self-cast SPELL_FLAME_PATCH 35380 (:444) — no summon-
---    object drive — so its timer is not tracked; the WE_DIE /
+--    charge 7000 / dive bomb 40000+rand()%5000 / flame patch
+--    30000 (PORTED 2026-10-23 — the stale "no summon-object
+--    drive" claim was retracted: creature:SummonCreature is
+--    bridged, lua_creature_events.go:728); the WE_DIE /
 --    WE_REVIVE MovePoint/Interrupt legs stay unbridged — the WE_DIE
 --    5.0f speed arm rides the unbridged MovePoint (SetSpeedRate is
 --    bridged but the motion leg is not); the DoZoneInCombat arm is
@@ -69,9 +69,11 @@
 --    a random alive player in the instance (C++ SelectTarget
 --    (Random, 0), thespia precedent; the RemoveAurasDueToSpell
 --    arm is ported below (stale "no aura bridge" claim
---    retracted — creature RemoveAura is bridged) and the
---    UpdatePosition teleport has no movement bridge —
---    unmodeled), no target -> evade
+--    retracted — creature RemoveAura is bridged); the UpdatePosition
+--    teleport is PORTED 2026-10-23 via creature:Teleport (NearTeleportTo
+--    twin, lua_creature_events.go:523 — stale "no movement bridge"
+--    claim retracted) + StopMoving, with the C++ dist-based wait,
+--    no target -> evade
 --    (C++ EnterEvadeMode — the evade hooks land the reset);
 --    land (+1s — C++ WaitTimer = 1000 + floor(dist/80*1000),
 --    dist in {3.0, 5.0} -> {1037, 1062}ms, 1s granularity
@@ -106,11 +108,12 @@
 --    non-triggered DoCastVictim(SPELL_MELT_ARMOR 35410)
 --    (C++-exact), re-arm 60000 (C++-exact); dive bomb —
 --    40000+rand()%5000: starts the dive chain above, re-arm
---    40000+rand()%5000 (C++-exact); flame patch — 30s: the
---    whole arm is a CREATURE_FLAME_PATCH_ALAR 20602 summon +
---    summon-side setup/cast (stays out on the paired summon-
---    side self-cast SPELL_FLAME_PATCH 35380, :444 — no summon-
---    object drive), unmodeled; the DoMeleeAttackIfReady flame-
+--    40000+rand()%5000 (C++-exact); flame patch — 30s: PORTED
+--    2026-10-23 (CREATURE_FLAME_PATCH_ALAR 20602 summon + NOT_SELECTABLE
+--    flag + SetDisplayId(11686) + SetFaction + non-triggered self-cast
+--    SPELL_FLAME_PATCH 35380; the SetObjectScale(x2.5)/SetLevel legs have
+--    no bridges) — the stale "no summon-object drive" claim retracted;
+--    the DoMeleeAttackIfReady flame-
 --    buffet arm (SPELL_FLAME_BUFFET 34121 — no victim in melee
 --    range) has no attack-timer/melee-range bridge — melee is
 --    engine-driven, unmodeled.
@@ -137,10 +140,10 @@
 -- script model; the BossAI ctor DATA_ALAR = 1 bookkeeping in
 -- Reset/JustEngagedWith/JustDied skipped); no movement bridge
 -- — the phase-1 platform MovePoints, the ForceMove re-issue,
--- the WE_DIE waypoint[5] MovePoint, the dive-bomb waypoint[4]
--- MovePoint and the WE_DIVE UpdatePosition teleport unmodeled
--- (omor / nightbane precedents); 'no summon bridge' is stale
--- (the bridge is live) — per-arm: phase-1 ember DoSpawnCreature
+-- the WE_DIE waypoint[5] MovePoint and the dive-bomb waypoint[4]
+-- MovePoint stay unbridged (omor / nightbane precedents); the WE_DIVE
+-- UpdatePosition teleport is PORTED via creature:Teleport + StopMoving;
+-- 'no summon bridge' is stale (the bridge is live) — per-arm: phase-1 ember DoSpawnCreature
 -- (:376) and dive-bomb two-ember DoSpawnCreature (:335-337) stay
 -- out on the paired JustSummoned AttackStart relay (:204-208,
 -- unbridged; embers' role is combat); flame-patch arm stays out
@@ -180,6 +183,11 @@ local SPELL_BERSERK = 45078
 -- bridged (engine/world/lua_creature_events.go:690/725).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- SharedDefines.h
+-- CREATURE_FLAME_PATCH_ALAR / SPELL_FLAME_PATCH — the phase-2 flame-patch
+-- summon arm (boss_alar.cpp:432-447).
+local CREATURE_FLAME_PATCH_ALAR = 20602
+local SPELL_FLAME_PATCH = 35380
 
 local ENTRY_ALAR = 19514
 
@@ -288,7 +296,18 @@ local function advanceDive(creature, guid)
         end
         creature:RemoveAura(SPELL_DIVE_BOMB_VISUAL)
         creature:CastSpell(target, SPELL_DIVE_BOMB, true)
-        st.dive = { step = "land", wait = 1000 }
+        -- C++ WE_DIVE (boss_alar.cpp:314-322): after the cast, WaitTimer =
+        -- 1000 + floor(dist/80*1000) where dist is 5.0 when Alar is within
+        -- 5.0 (3D) of the target, else 3.0; then UpdatePosition to the
+        -- target's position — creature:Teleport (NearTeleportTo twin) —
+        -- and StopMoving() (both bridged).
+        local dist = 3.0
+        if creature:IsWithinDist3d(target, 5.0) then
+            dist = 5.0
+        end
+        creature:Teleport(target:GetX(), target:GetY(), target:GetZ(), 0.0)
+        creature:StopMoving()
+        st.dive = { step = "land", wait = 1000 + math.floor(dist / 80 * 1000) }
     elseif step == "land" then
         -- WE_LAND -> WE_SUMMON after 2s (C++-exact).
         st.dive = { step = "summon", wait = 2000 }
@@ -352,6 +371,7 @@ local function combatTick(creature, guid)
             st.meltArmor = 60000
             st.charge = 7000
             st.diveBomb = 40000 + math.random(0, 4999)
+            st.flamePatch = 30000 -- boss_alar.cpp:303 (WE_REVIVE arm)
         else
             st.revive = st.revive - 1000
         end
@@ -440,9 +460,28 @@ local function combatTick(creature, guid)
         else
             st.diveBomb = st.diveBomb - 1000
         end
-        -- Flame patch arm: summon-only, stays out on the paired
-        -- summon-side self-cast SPELL_FLAME_PATCH 35380 (:444) —
-        -- unmodeled.
+        -- Flame patch arm — 30s: SummonCreature(CREATURE_FLAME_PATCH_ALAR
+        -- 20602) at the random target's position, TEMPSUMMON_TIMED_DESPAWN
+        -- 2min (C++ boss_alar.cpp:432-447, C++ arm order). The summon-side
+        -- SetObjectScale(x2.5) and SetLevel legs have no bridges; the
+        -- SetFlag(NOT_SELECTABLE) / SetDisplayId(11686) / SetFaction /
+        -- non-triggered self-cast SPELL_FLAME_PATCH 35380 legs are bridged.
+        if st.flamePatch <= 1000 then
+            local target = randomAlivePlayer(creature)
+            if target then
+                local flame = creature:SummonCreature(CREATURE_FLAME_PATCH_ALAR,
+                    target:GetX(), target:GetY(), target:GetZ(), 0, 2, 120000)
+                if flame then
+                    flame:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+                    flame:SetDisplayId(11686)
+                    flame:SetFaction(creature:GetFaction())
+                    flame:CastSpell(flame, SPELL_FLAME_PATCH)
+                end
+            end
+            st.flamePatch = 30000
+        else
+            st.flamePatch = st.flamePatch - 1000
+        end
     end
 end
 
