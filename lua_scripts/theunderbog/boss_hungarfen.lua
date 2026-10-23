@@ -62,6 +62,10 @@ local SPELL_FOUL_SPORES = 31673
 local SPELL_ACID_GEYSER = 38739
 
 local ENTRY_HUNGARFEN = 17770
+-- boss_hungarfen.cpp:91 — the summoned mushroom entry literal
+-- (17990); was referenced but never defined in this file (nil
+-- global at the SummonCreature call — the summon never fired).
+local ENTRY_UNDERBOG_MUSHROOM = 17990
 
 local timers = {}
 local states = {}

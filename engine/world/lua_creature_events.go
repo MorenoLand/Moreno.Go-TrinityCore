@@ -677,9 +677,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// 3 TIMED_DESPAWN_OUT_OF_COMBAT, 4 CORPSE_DESPAWN, 5 CORPSE_TIMED_DESPAWN,
 	// 6 DEAD_DESPAWN, 7 MANUAL_DESPAWN) and defaults to 7; despawnTimer is
 	// milliseconds, default 0. All-zero x/y/z falls back to a close point
-	// at the summoner (Object.cpp:2059-2060 twin, the SummonGameObject
-	// fallback above); an o of 0 falls back to the summoner's orientation
-	// (Object.cpp:2061-2062 twin). C++ InitStats (TemporarySummon.cpp:168-183)
+	// 2*combatReach in facing direction (Object.cpp:2059-2060 twin, the
+	// SummonGameObject fallback above); an o of 0 falls back to the
+	// summoner's orientation (Object.cpp:2061-2062 twin). C++ InitStats
+	// (TemporarySummon.cpp:168-183)
 	// stamps the template's level/stats — the motionFor funnel does the
 	// same from creature_template — and TempSummon::InitSummon fires
 	// Eluna::JustSummoned (CreatureHooks.cpp:165-171), twinned here as
@@ -747,8 +748,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		// o is 0 (anubarak's scarab arm passes the 4-arg default
 		// o=0.0f intending exactly this).
 		if x == 0 && y == 0 && z == 0 {
-			x = sx + float32(reach*math.Cos(float64(summonerO)))
-			y = sy + float32(reach*math.Sin(float64(summonerO)))
+			// GetClosePoint(x,y,z,GetCombatReach()) ->
+			// GetNearPoint(nullptr,x,y,z,R,O) -> GetNearPoint2D adds
+			// effectiveReach (R) on top of distance2d (R): 2*R in facing
+			// direction (Object.cpp:2059,3307-3311). The collision/ground
+			// folds and the LoS retry loop have no Go model, documented.
+			x = sx + float32(2*reach*math.Cos(float64(summonerO)))
+			y = sy + float32(2*reach*math.Sin(float64(summonerO)))
 			z = sz
 		}
 		if o == 0 {
@@ -804,10 +810,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// GUID. Eluna CreatureMethods::SummonGameObject signature
 	// (entry, x, y, z, o, respawnTime); respawnTime is seconds, default 0.
 	// A missing template logs and returns nil (C++ TC_LOG_ERROR + null).
-	// All-zero coords fall back to a close point at the summoner
-	// (Object.cpp:2095-2099 -> GetClosePoint(combatReach) = summoner
-	// position offset by combat reach in facing direction; the
-	// collision/ground folds have no Go model, documented). The summon
+	// All-zero coords fall back to a close point 2*combatReach in facing
+	// direction at the summoner (Object.cpp:2095-2099 ->
+	// GetClosePoint(combatReach) -> GetNearPoint2D: effectiveReach (R) on
+	// top of distance2d (R); the collision/ground folds have no Go model,
+	// documented). The summon
 	// type is the C++ default GO_SUMMON_TIMED_OR_CORPSE_DESPAWN: a positive
 	// respawnTime despawns the object when it elapses (time.AfterFunc, the
 	// gobject-add-temp precedent; the respawn scheduler is unmodeled), 0
@@ -857,8 +864,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		reach := float64(motion.CombatReach)
 		s.motionMu.Unlock()
 		if x == 0 && y == 0 && z == 0 {
-			x = sx + float32(reach*math.Cos(float64(so)))
-			y = sy + float32(reach*math.Sin(float64(so)))
+			// 2*R in facing direction: GetClosePoint(x,y,z,GetCombatReach())
+			// -> GetNearPoint2D adds effectiveReach (R) on top of distance2d
+			// (R) (Object.cpp:2095-2099,3307-3311). ang falls back to the
+			// summoner orientation only in the all-zero branch (Object.cpp:
+			// 2099), twinned here. Collision/ground folds unmodeled.
+			x = sx + float32(2*reach*math.Cos(float64(so)))
+			y = sy + float32(2*reach*math.Sin(float64(so)))
 			z, o = sz, so
 		}
 		lowGUID := s.nextDynamicGameObjectLowGUID()

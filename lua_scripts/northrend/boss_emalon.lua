@@ -75,9 +75,11 @@
 -- — minion corpses stay on the normal corpse sweep.
 -- boss_emalonAI::JustSummoned (:93-100) — minion AttackStart leg: no
 -- bridge.
--- npc_tempest_minionAI::JustDied (:207-217) — instance->
--- GetGuidData(DATA_EMALON) respawn leg (Emalon re-summons the minion,
--- Talk EMOTE_MINION_RESPAWN 1): instance-script bridge missing.
+-- npc_tempest_minionAI::JustDied (:207-217) — PORTED (minionJustDied,
+-- event 4): the instance->GetGuidData(DATA_EMALON) leg is twinned by an
+-- alive-entry grid lookup (overchargeTick idiom); Emalon summons the
+-- replacement (all-zero coords -> 2*combatReach close-point fallback,
+-- type 4) and the dying minion talks EMOTE_MINION_RESPAWN (1).
 -- npc_tempest_minionAI::UpdateAI overcharge self-stack loop
 -- (:242-263) — STAYS OUT (not for the old "no stack-count bridge"
 -- reason: creature:GetStackAmount is bridged since this run,
@@ -93,6 +95,7 @@ local ENTRY_TEMPEST_MINION = 33998
 
 local EMOTE_BERSERK = 2
 local EMOTE_OVERCHARGE = 0
+local EMOTE_MINION_RESPAWN = 1
 
 local SPELL_CHAIN_LIGHTNING = 64213
 local SPELL_LIGHTNING_NOVA = 64216
@@ -273,7 +276,27 @@ local function minionCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_tempest_minionAI::JustDied (boss_emalon.cpp:207-217): if
+-- Emalon is alive, EMALON summons the replacement minion
+-- (SummonCreature(NPC_TEMPEST_MINION, 0,0,0,0,
+-- TEMPSUMMON_CORPSE_DESPAWN (4)) — all-zero coords hit the
+-- 2*combatReach close-point fallback of the summoner, i.e. Emalon)
+-- and the dying minion talks EMOTE_MINION_RESPAWN (1). The
+-- instance-GUID leg is twinned by an alive-entry grid lookup (the
+-- overchargeTick idiom).
+local function minionJustDied(event, creature)
+    local bosses = creature:GetCreaturesInGrid(ENTRY_EMALON, 100)
+    for _, emalon in ipairs(bosses) do
+        if not emalon:IsDead() then
+            emalon:SummonCreature(ENTRY_TEMPEST_MINION, 0, 0, 0, 0, 4)
+            creature:Talk(EMOTE_MINION_RESPAWN)
+            return
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_TEMPEST_MINION, 1, minionEnterCombat)
 RegisterCreatureEvent(ENTRY_TEMPEST_MINION, 2, minionCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_TEMPEST_MINION, 4, minionCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_TEMPEST_MINION, 23, minionCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_TEMPEST_MINION, 4, minionJustDied)
