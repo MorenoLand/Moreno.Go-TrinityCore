@@ -333,7 +333,8 @@ end
 -- the phase gate reduces to the one-shot latch. UpdateAI health arms
 -- are post-damage — the nefarian onDamageTaken form: fire only when
 -- post-damage health is alive (>0) and HealthBelowPct(30) on it
--- (C++ integer form: health*100 <= 30*max). The
+-- (C++ integer form: health < CountPctFromMaxHealth(30) — strict <,
+-- Unit.h:872; boundary-exact to 1hp modulo the pct floor).
 -- spell_anubarak_leeching_swarm AuraScript periodic life-leech has no
 -- AuraScript bridge — the cast ports, the scripted periodic effect is
 -- a documented deviation (gurtogg bloodboil precedent).
@@ -348,7 +349,7 @@ local function anubarakDamageTaken(event, creature, attacker, damage)
         return
     end
     local postDamage = creature:GetHealth() - damage
-    if postDamage > 0 and postDamage * 100 <= maxHealth * 30 then
+    if postDamage > 0 and postDamage * 100 < maxHealth * 30 then
         anubarakState[guid] = { reachedPhase3 = true }
         creature:CastSpell(creature, SPELL_LEECHING_SWARM)
         creature:Talk(EMOTE_LEECHING_SWARM)
