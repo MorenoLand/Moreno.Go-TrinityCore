@@ -51,16 +51,18 @@
 -- boss_grandmaster_vorpilAI::Reset — _Reset() + Initialize()
 -- (_helpYell only; _intro is ctor-set and survives evade) —
 -- no-instance bridge — documented-only.
--- boss_grandmaster_vorpilAI::spawnVoidTraveler — SummonCreature
--- (NPC_VOID_TRAVELER 19226, random VoidPortalCoords) + the one-shot
--- _helpYell Talk(SAY_HELP 2) (line 123) — rides the
--- EVENT_SUMMON_TRAVELER timer machine — no SummonCreature
--- binding — documented-only (the timer leg bridges; the summon
--- leg doesn't).
--- boss_grandmaster_vorpilAI::SummonPortals — 5x SummonCreature
--- (NPC_VOID_PORTAL 19224 at VoidPortalCoords) + SPELL_VOID_PORTAL_VISUAL
--- 33569 visual cast — no-summon / no-cast bridges —
--- documented-only.
+-- boss_grandmaster_vorpilAI::spawnVoidTraveler — PORTED as travelerTick
+-- on the live SummonCreature bridge (lua_creature_events.go:877):
+-- SummonCreature(NPC_VOID_TRAVELER 19226, random VoidPortalCoords)
+-- (TEMPSUMMON_CORPSE_TIMED_DESPAWN, 5s — Lua type 5) + the one-shot
+-- _helpYell Talk(SAY_HELP 2) latch; 10s cycle with an ADDITIONAL 5s
+-- event below 20% health (ScheduleEvent is a plain multimap insert —
+-- the 5s and 90s seeds both pend).
+-- boss_grandmaster_vorpilAI::SummonPortals — PORTED on the live
+-- SummonCreature bridge: 5x SummonCreature(NPC_VOID_PORTAL 19224 at
+-- VoidPortalCoords) (TEMPSUMMON_CORPSE_DESPAWN — Lua type 4) +
+-- triggered SPELL_VOID_PORTAL_VISUAL 33569 self-cast each (DoCastAOE
+-- self-cast convention).
 -- boss_grandmaster_vorpilAI::UpdateAI — the remaining timer
 -- machine (EVENT_SHADOWBOLT_VOLLEY + heroic-only EVENT_BANISH
 -- ported above) stays out on evidence-based legs, not the old
@@ -79,14 +81,15 @@
 -- cycle; player teleports via player:TeleportNear, boss reposition via
 -- creature:Teleport, triggered draw-shadows + rain-of-fire casts, 6s
 -- volley reschedule — see the port note above JustEngagedWith);
--- EVENT_SUMMON_TRAVELER (spawnVoidTraveler →
--- SummonCreature(NPC_VOID_TRAVELER 19226, TEMPSUMMON_CORPSE_TIMED_DESPAWN,
--- 5s) — no Summon binding; effective first traveler ~5s
+-- EVENT_SUMMON_TRAVELER — PORTED as travelerTick (see the port note
+-- above JustEngagedWith): SummonCreature(NPC_VOID_TRAVELER 19226,
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN, 5s); effective first traveler ~5s
 -- (SummonPortals() schedules EVENT_SUMMON_TRAVELER at 5s —
 -- ScheduleEvent is a plain multimap insert, so the 5s and 90s events
 -- both pend), 10s cycle with an ADDITIONAL 5s event scheduled below
 -- 20% health (not a 5s replacement); the SAY_HELP (2) one-shot
--- _helpYell latch rides the same machine); DoMeleeAttackIfReady is
+-- _helpYell latch rides the same machine (re-armed on Reset via
+-- Initialize, the ctor/Reset note above); DoMeleeAttackIfReady is
 -- engine-driven in Go.
 -- npc_voidtraveler (NPC_VOID_TRAVELER = 19226) — zero Talk calls;
 -- the UpdateAI follow/sacrifice machine: Vorpil lookup via
@@ -113,12 +116,27 @@ local SPELL_SHADOWBOLT_VOLLEY = 33841
 local SPELL_BANISH = 38791
 local SPELL_DRAW_SHADOWS = 33563
 local SPELL_RAIN_OF_FIRE = 33617
+local SPELL_VOID_PORTAL_VISUAL = 33569
+
+local ENTRY_VOID_PORTAL = 19224
+local ENTRY_VOID_TRAVELER = 19226
+local SAY_HELP = 2
+
+-- C++ VoidPortalCoords[5] (boss_grandmaster_vorpil.cpp:44-51).
+local VOID_PORTAL_COORDS = {
+    {-283.5894, -239.5718, 12.7},
+    {-306.5853, -258.4539, 12.7},
+    {-295.8789, -269.0899, 12.7},
+    {-209.3401, -262.7564, 17.1},
+    {-261.4533, -297.3298, 17.1},
+}
 
 -- VorpilPosition (boss_grandmaster_vorpil.cpp:65).
 local VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O = -252.8820, -264.3030, 17.1, 0.0
 
 local timers = {}
 local introSeen = {} -- per-GUID _intro latch (C++ _intro, :159)
+local helpYellSeen = {} -- per-GUID _helpYell latch (C++; re-armed on Reset)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -214,6 +232,34 @@ local function drawShadowsTick(creature, guid)
     end)
 end
 
+-- C++ boss_grandmaster_vorpilAI::spawnVoidTraveler (:118-126): summon
+-- NPC_VOID_TRAVELER at a random VoidPortalCoords entry
+-- (TEMPSUMMON_CORPSE_TIMED_DESPAWN, 5s — Lua type 5) plus the one-shot
+-- _helpYell Talk(SAY_HELP 2) latch, then the EVENT_SUMMON_TRAVELER
+-- re-arm: 10s always, plus an ADDITIONAL 5s event below 20% health
+-- (ScheduleEvent is a plain multimap insert — the 5s is not a 5s
+-- replacement, the vorpil 10:56 precedent). The traveler's own
+-- follow/sacrifice AI (npc_voidtraveler) has no bridge — the summoned
+-- travelers stand (documented-only in the header).
+local travelerSeq = {}
+local function travelerTick(creature, guid)
+    local c = VOID_PORTAL_COORDS[math.random(5)]
+    creature:SummonCreature(ENTRY_VOID_TRAVELER, c[1], c[2], c[3], 0, 5, 5000)
+    if not helpYellSeen[guid] then
+        helpYellSeen[guid] = true
+        creature:Talk(SAY_HELP)
+    end
+    schedule(guid, "traveler", 10000, function()
+        travelerTick(creature, guid)
+    end)
+    if creature:GetHealthPct() < 20 then
+        travelerSeq[guid] = (travelerSeq[guid] or 0) + 1
+        schedule(guid, "traveler_rage_" .. travelerSeq[guid], 5000, function()
+            travelerTick(creature, guid)
+        end)
+    end
+end
+
 -- C++ boss_grandmaster_vorpilAI::JustEngagedWith:
 -- events.ScheduleEvent(EVENT_SHADOWBOLT_VOLLEY, 7s, 14s);
 -- if (IsHeroic()) events.ScheduleEvent(EVENT_BANISH, 15s);
@@ -222,13 +268,30 @@ end
 -- Talk(SAY_AGGRO); SummonPortals(); — the auriaya precedent
 -- (event 1; the EVENT_SHADOWBOLT_VOLLEY leg is ported above and the
 -- heroic-only EVENT_BANISH leg is ported as banishTick seeded under
--- creature:IsHeroic(); the remaining ScheduleEvent legs
--- (summon_traveler) + SummonPortals() ride the
--- documented-only bridges — see the header).
+-- creature:IsHeroic(). EVENT_SUMMON_TRAVELER is scheduled at 90s AND
+-- SummonPortals() schedules it at 5s — both pend, the EventMap multimap
+-- precedent, so both seeds are planted below). SummonPortals() (:108-115):
+-- 5 NPC_VOID_PORTAL summons at VoidPortalCoords
+-- (TEMPSUMMON_CORPSE_DESPAWN — Lua type 4; the 50min C++ timer is moot
+-- for corpse-despawn) each with a triggered SPELL_VOID_PORTAL_VISUAL
+-- self-cast (DoCastAOE self-cast convention).
 local function vorpilEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    for i = 1, 5 do
+        local c = VOID_PORTAL_COORDS[i]
+        local portal = creature:SummonCreature(ENTRY_VOID_PORTAL, c[1], c[2], c[3], 0, 4)
+        if portal then
+            portal:CastSpell(portal, SPELL_VOID_PORTAL_VISUAL, true)
+        end
+    end
+    schedule(guid, "traveler", 5000, function()
+        travelerTick(creature, guid)
+    end)
+    schedule(guid, "traveler90", 90000, function()
+        travelerTick(creature, guid)
+    end)
     schedule(guid, "volley", {7000, 14000}, function()
         shadowboltVolleyTick(creature, guid)
     end)
@@ -285,6 +348,9 @@ local function vorpilReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     introSeen[guid] = nil
+    -- C++ Reset -> Initialize() re-arms _helpYell (but not _intro, which
+    -- is ctor-set — the header's Reset note).
+    helpYellSeen[guid] = nil
 end
 
 -- C++ boss_grandmaster_vorpilAI::MoveInLineOfSight (:155-161):

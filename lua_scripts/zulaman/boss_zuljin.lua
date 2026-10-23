@@ -36,12 +36,14 @@
 -- on a 500ms loop, lynx rush 9 triggered 43153 hits — then returns to
 -- the tank. While a sequence is active the phase-transition check is
 -- paused (C++ !TankGUID gate) and DoMeleeAttackIfReady is skipped.
--- Deviations from C++: no summon model — the four animal spirits, the
--- four feather vortices, and the column-of-fire pillars never spawn, so
--- SpawnAdds, the spirit Siphon Soul 43501 casts, the spirit death-state
--- arms (incl. JustDied's), and the vortex summon/cleanup arms are
--- skipped (the vortex AI is still registered so any spawned 24136
--- zaps back correctly); the teleport is ported below via
+-- Deviations from C++: JustEngagedWith's SpawnAdds IS ported on the live
+-- SummonCreature bridge (the 4 animal spirits, aura + NON_ATTACKABLE —
+-- the mandokir chained-spirit precedent); the four feather vortices and
+-- the column-of-fire pillars never spawn, so the spirit Siphon Soul
+-- 43501 casts, the spirit death-state arms (incl. JustDied's
+-- UNIT_STAND_STATE_DEAD — no SetUInt32Value bridge), and the vortex
+-- summon/cleanup arms are skipped (the vortex AI is still registered so
+-- any spawned 24136 zaps back correctly); the teleport is ported below via
 -- creature:Teleport (120.148811, 703.713684, 45.111477, 100) on
 -- phase change; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
 -- via creature:SetEquipmentSlots (33975 on reset, 0 on phase change); no
@@ -94,6 +96,19 @@ local SPELL_FLAME_WHIRL = 43213
 local SPELL_FLAME_BREATH = 43215
 local SPELL_SUMMON_PILLAR = 43216
 local SPELL_BERSERK = 45078
+local SPELL_SPIRIT_AURA = 42466
+
+-- C++ boss_zuljin.cpp:263-275 SpawnAdds — the 4 animal spirits
+-- (SpiritInfo[4]: 23878 bear / 23880 eagle / 23877 lynx / 23879
+-- dragonhawk) summoned TEMPSUMMON_DEAD_DESPAWN (Lua type 6) with a
+-- triggered SPELL_SPIRIT_AURA self-cast and UNIT_FLAG_NON_ATTACKABLE
+-- (0x2, UNIT_FIELD_FLAGS = 59).
+local ZULJIN_SPIRITS = {
+    {23878, 147.87, 706.51, 45.11, 3.04},
+    {23880, 88.950, 705.49, 45.11, 6.11},
+    {23877, 137.23, 725.98, 45.11, 3.71},
+    {23879, 104.29, 726.43, 45.11, 5.43},
+}
 
 -- Indexed by the OLD (0-based) phase, like C++ Transform[Phase]: the
 -- transform aura cast when leaving that phase for the next form.
@@ -468,14 +483,24 @@ local function zuljinResetState(guid)
                     sequence = nil, seqCount = 0 }
 end
 
--- C++ JustEngagedWith: Talk YELL_INTRO, SpawnAdds (no summon model),
--- EnterPhase(0) (no-op).
+-- C++ JustEngagedWith: Talk YELL_INTRO, SpawnAdds, EnterPhase(0)
+-- (no-op). SpawnAdds summons the 4 animal spirits with their aura and
+-- NON_ATTACKABLE flag (see ZULJIN_SPIRITS above); the spirits have no
+-- C++ CreatureScript — they stand as aura totems, like C++ (the
+-- mandokir chained-spirit precedent).
 local function zuljinEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     zuljinResetState(guid)
     local st = zuljinState(guid)
     st.introActive = true
     creature:Talk(YELL_INTRO)
+    for _, info in ipairs(ZULJIN_SPIRITS) do
+        local spirit = creature:SummonCreature(info[1], info[2], info[3], info[4], info[5], 6)
+        if spirit then
+            spirit:CastSpell(spirit, SPELL_SPIRIT_AURA, true)
+            spirit:SetFlag(59, 0x2)
+        end
+    end
     schedule(timers, guid, "intro", 37000, function()
         onIntro(creature, guid)
     end)

@@ -46,12 +46,20 @@
 -- then 12s on victim; Koragg — mighty blow 43592 / cold stare 43593
 -- are upstream-dead (timers never decrement, boss_hexlord.cpp:984-993)
 -- and are not modeled.
--- The adds never spawn in this build (no summon model) but are
--- registered so any that exist fight correctly.
--- Deviations from C++: no summon model — the four adds never spawn, so
--- Reset's SpawnAdds, JustEngagedWith's add AttackStart arm (with its
+-- The four adds spawn on Reset via the live SummonCreature bridge
+-- (lua_creature_events.go:877): the ctor's SelectAddEntry picks 4 of the
+-- 8 once (C++ RandomResize) and Reset's SpawnAdds respawns the missing/
+-- dead ones at (Pos_X[i], 921.2795, 33.8883, 1.5696)
+-- (TEMPSUMMON_DEAD_DESPAWN, Lua type 6); a living add's
+-- EnterEvadeMode+reposition+StopMoving leg has no
+-- EnterEvadeMode/UpdatePosition bridge, so living adds stay in place.
+-- The eight adds' class AIs are registered in this file so the summons
+-- fight.
+-- Deviations from C++: JustEngagedWith's add AttackStart arm (with its
 -- EnterEvadeMode fallback), the 5s CheckAddState re-engage arm, and
--- JustDied's add KillSelf arm have no bearer; the 5s ResetTimer room-
+-- JustDied's add KillSelf arm have no bearer (no AttackStart /
+-- EnterEvadeMode / Kill bridges — the keleseth guard-AttackStart and
+-- KillSelf-axis precedents); the 5s ResetTimer room-
 -- check EnterEvadeMode has no bearer; the add base AI's DoZoneInCombat
 -- and its GetBossState(IN_PROGRESS) evade gate have no bridge (no
 -- instance-script model, so the BOSS_HEXLORD encounter bookkeeping never
@@ -300,8 +308,10 @@ local function hexlordEnterCombat(event, creature)
     cancelTimers(timers, guid)
     state[guid] = { drainDeadline = os.time() + 60, playerClass = nil, playerGuid = nil }
     creature:Talk(YELL_AGGRO)
-    -- The C++ JustEngagedWith add AttackStart arm has no bearer (no
-    -- summon model).
+    -- The C++ JustEngagedWith add AttackStart arm (with its
+    -- EnterEvadeMode fallback) has no bearer — no AttackStart /
+    -- EnterEvadeMode bridges (the keleseth guard-AttackStart precedent);
+    -- the adds engage via the engine's own aggro.
     schedule(timers, guid, "spirit", 20000, function()
         onSpiritBolts(creature, guid)
     end)
@@ -330,15 +340,60 @@ local function hexlordDied(event, creature)
     cancelTimers(timers, guid)
     state[guid] = nil
     creature:Talk(YELL_DEATH)
-    -- The C++ JustDied add KillSelf arm has no bearer (no summon model).
+    -- C++ JustDied's add KillSelf arm (boss_hexlord.cpp:326-331) has no
+    -- bearer (no Kill bridge — the KillSelf axis).
 end
+
+-- C++ boss_hexlord.cpp:134-141: Pos_X[4], POS_Y 921.2795, POS_Z 33.8883,
+-- ORIENT 1.5696; AddEntryList[8] = 24240..24247 (AddCount 8). The ctor
+-- calls SelectAddEntry() once — RandomResize to 4 — and the 4 picks
+-- persist on the AI across resets, so they live in a table outside
+-- state (state is wiped on Reset/leave/death).
+local HEXLORD_SPAWN_X = {112.8827, 107.8827, 122.8827, 127.8827}
+local HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O = 921.2795, 33.8883, 1.5696
+local HEXLORD_ADD_POOL = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
+local hexlordAddIds = {}
 
 local function hexlordReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     state[guid] = nil
-    -- C++ Reset's SpawnAdds has no bearer (no summon model); timers
-    -- re-arm on the next combat.
+    -- C++ Reset (boss_hexlord.cpp:282-288): _Reset(); Initialize();
+    -- SpawnAdds(). SpawnAdds (:344-364): for each of the 4 picked
+    -- adds, respawn at (Pos_X[i], POS_Y, POS_Z, ORIENT)
+    -- (TEMPSUMMON_DEAD_DESPAWN, Lua type 6) when the add is missing or
+    -- dead (a dead add is set DEAD first — the corpse is swept here by
+    -- entry); a living add gets EnterEvadeMode + reposition +
+    -- StopMoving, which has no bearer (no EnterEvadeMode/UpdatePosition
+    -- bridges — living adds are left in place, documented below).
+    -- Timers re-arm on the next combat.
+    if hexlordAddIds[guid] == nil then
+        local pool = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
+        local picked = {}
+        for i = 1, 4 do
+            local idx = math.random(#pool)
+            picked[i] = pool[idx]
+            table.remove(pool, idx)
+        end
+        hexlordAddIds[guid] = picked
+    end
+    local ids = hexlordAddIds[guid]
+    for i = 1, 4 do
+        local entry = ids[i]
+        local alive = false
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+            if not add:IsDead() then
+                alive = true
+                break
+            end
+        end
+        if not alive then
+            for _, add in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+                add:Despawn()
+            end
+            creature:SummonCreature(entry, HEXLORD_SPAWN_X[i], HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O, 6)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_HEXLORD, 1, hexlordEnterCombat)

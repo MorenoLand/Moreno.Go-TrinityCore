@@ -15,17 +15,37 @@
 -- instance-script model — Reset/aggro/death do not SetBossState and the
 -- guest "evade while the encounter is not IN_PROGRESS" arm is skipped
 -- (encounter admission still binds through the luaBossAI shim in
--- engine/world/boss_ai.go); no Go summon model, so SpawnAdds/DeSpawnAdds
--- are no-ops and the four guests never enter the world — their hooks only
--- fire when the creatures exist; the healer guests' AcquireGUID/
+-- engine/world/boss_ai.go); Reset's SpawnAdds / JustDied's DeSpawnAdds
+-- are ported on the live SummonCreature bridge
+-- (lua_creature_events.go:877; Lua type = C++ TempSummonType - 1, the
+-- Object.cpp:2109 twin): the first Reset picks 4 random distinct guests
+-- of the 6 (C++ RandomResize), later resets respawn the same four at
+-- Locations[i] (CORPSE_TIMED_DESPAWN, 10s) after a by-entry despawn
+-- sweep (no GUID->creature lookup — the ossirian onReset precedent);
+-- the six guests' class AIs are registered in this file so the summons
+-- fight. The healer guests' AcquireGUID/
 -- SelectGuestTarget need instance GetGuidData, so they target themselves;
 -- JustDied's DoRemoveAurasDueToSpellOnPlayers(GARROTE) is ported (arm
 -- order after Talk(SAY_DEATH), boss_moroes.cpp:181) via GetPlayersInWorld
 -- + mapId/instanceId filter and player:RemoveAura (bridged).
+-- JustEngagedWith's AddsAttack and UpdateAI's 5s CheckAdds re-aggro arm
+-- (AttackStart on the boss's victim for adds without one) have no
+-- AttackStart/DoZoneInCombat/EnterEvadeMode bridges (the keleseth
+-- guard-AttackStart precedent) — the adds engage via the engine's own
+-- aggro.
 
 local ENTRY_MOROES = 15687
 local ENTRY_DOROTHEA, ENTRY_RAFE, ENTRY_CATRIONA = 17007, 19872, 19873
 local ENTRY_KEIRA, ENTRY_ROBIN, ENTRY_CRISPIN = 19874, 19875, 19876
+
+-- C++ boss_moroes.cpp:86-94 (Adds[6]) and :78-84 (Locations[4]).
+local MOROES_GUEST_POOL = {17007, 19872, 19873, 19874, 19875, 19876}
+local MOROES_GUEST_LOCS = {
+    {-10991.0, -1884.33, 81.73, 0.614315},
+    {-10989.4, -1885.88, 81.73, 0.904913},
+    {-10978.1, -1887.07, 81.73, 2.035550},
+    {-10975.9, -1885.81, 81.73, 2.253890},
+}
 
 local SAY_AGGRO, SAY_SPECIAL, SAY_KILL, SAY_DEATH = 0, 1, 2, 3
 
@@ -132,7 +152,26 @@ end
 local moroesState = {}
 
 local function moroesInitState(guid)
-    moroesState[guid] = {enrage = false, invanish = false}
+    -- C++ boss_moroesAI ctor memsets AddId to 0; AddId persists on the AI
+    -- across Reset/engage/death (only the ctor clears it), so the 4
+    -- picked guests survive state re-inits.
+    local prev = moroesState[guid]
+    moroesState[guid] = {
+        enrage = false,
+        invanish = false,
+        addIds = prev ~= nil and prev.addIds or nil,
+    }
+end
+
+-- C++ boss_moroes.cpp:213-222 DeSpawnAdds — DespawnOrUnsummon each add by
+-- GUID. Lua has no GUID->creature lookup, so the adds are despawned by
+-- entry sweep in grid range (the ossirian onReset precedent).
+local function despawnAdds(creature)
+    for _, entry in ipairs(MOROES_GUEST_POOL) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+            add:Despawn()
+        end
+    end
 end
 
 local function onGarrote(creature, guid)
@@ -197,6 +236,13 @@ local function moroesEnterCombat(event, creature, target)
     schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
     schedule(guid, "blind", 35000, function() onBlind(creature, guid) end)
     schedule(guid, "gouge", 23000, function() onGouge(creature, guid) end)
+    -- C++ JustEngagedWith's AddsAttack (boss_moroes.cpp:224-238) —
+    -- temp->AI()->AttackStart(me->GetVictim()) + DoZoneInCombat(temp)
+    -- for each live add, EnterEvadeMode() if any add is missing — has
+    -- no bearer: no AttackStart / DoZoneInCombat / EnterEvadeMode
+    -- bridges (the keleseth guard-AttackStart precedent). The four
+    -- summoned guests run their registered class AIs and engage via
+    -- the engine's own aggro.
 end
 
 -- Enrage: C++ UpdateAI checks HealthBelowPct(30) on the post-damage health
@@ -232,6 +278,35 @@ local function moroesReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     moroesInitState(guid)
+    -- Go fires event 23 on evade and on the death path (before event 4);
+    -- the death path is guarded like the overgrind precedent (C++ Reset
+    -- only runs SpawnAdds when the boss is alive, boss_moroes.cpp:146).
+    if creature:IsDead() then
+        return
+    end
+    -- C++ Reset (boss_moroes.cpp:143-149): Initialize(); if
+    -- (me->IsAlive()) SpawnAdds(). SpawnAdds (:184-211) first
+    -- DeSpawnAdds, then on the first Reset picks 4 random distinct
+    -- guests of the 6 (RandomResize) and summons each at Locations[i]
+    -- (TEMPSUMMON_CORPSE_TIMED_DESPAWN, 10s); later resets respawn the
+    -- same four by AddId. Lua type 5 = C++ type - 1 (Object.cpp:2109
+    -- twin, the 12:04 summonleg precedent).
+    despawnAdds(creature)
+    local state = moroesState[guid]
+    if state.addIds == nil then
+        local pool = {17007, 19872, 19873, 19874, 19875, 19876}
+        local picked = {}
+        for i = 1, 4 do
+            local idx = math.random(#pool)
+            picked[i] = pool[idx]
+            table.remove(pool, idx)
+        end
+        state.addIds = picked
+    end
+    for i = 1, 4 do
+        local loc = MOROES_GUEST_LOCS[i]
+        creature:SummonCreature(state.addIds[i], loc[1], loc[2], loc[3], loc[4], 5, 10000)
+    end
 end
 
 local function moroesTargetDied(event, creature, victim)
@@ -243,9 +318,13 @@ local function moroesDied(event, creature, killer)
     cancelTimers(guid)
     moroesInitState(guid)
     creature:Talk(SAY_DEATH)
+    -- C++-exact arm order: instance->SetBossState(DONE) rides the
+    -- no-instance bridge; DeSpawnAdds (boss_moroes.cpp:175) ports here,
+    -- then DoRemoveAurasDueToSpellOnPlayers(SPELL_GARROTE) (:181).
+    despawnAdds(creature)
     -- C++-exact arm order: instance->DoRemoveAurasDueToSpellOnPlayers(
-    -- SPELL_GARROTE) (boss_moroes.cpp:181) — the SetBossState/DeSpawnAdds
-    -- legs ride the no-instance/no-summon bridges. No death filter: C++
+    -- SPELL_GARROTE) (boss_moroes.cpp:181) — the SetBossState leg rides
+    -- the no-instance bridge. No death filter: C++
     -- iterates every instance player (mapId/instanceId match, maiden
     -- precedent); player:RemoveAura is bridged (lua_player.go:219).
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
