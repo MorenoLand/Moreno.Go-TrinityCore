@@ -72,8 +72,11 @@
 -- npc_giant_spotlight — the 5-minute EVENT_DESPAWN machine
 -- (FindNearestGameObject(GO_ELUNE_TRAP_1 180876 /
 -- GO_ELUNE_TRAP_2 180877) -> RemoveFromWorld +
--- FindNearestCreature(NPC_OMEN 15467) -> DespawnOrUnsummon)
--- is behind the no-world-search / no-despawn bridges —
+-- FindNearestCreature(NPC_OMEN 15467) -> DespawnOrUnsummon):
+-- the GO RemoveFromWorld + creature-side FindNearestGameObject bridges
+-- exist (lua_objects.go:1091; creature:FindNearestGameObject, 2026-10-23),
+-- but the spotlight is unregistered — its entry is the spell-summon
+-- 26392, unverifiable from the C++ tree (DB ScriptName binding only) —
 -- documented-only.
 -- Zone set status: zone_moonglade.cpp closed (npc_clintar_
 -- spirit — quest-10965 escort machine documented-only;

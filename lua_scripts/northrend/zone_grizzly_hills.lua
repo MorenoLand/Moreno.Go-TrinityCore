@@ -52,11 +52,37 @@
 -- registered in boss_ai.go and carries no NPC_ entry constant anywhere
 -- in the C++ tree (DB ScriptName binding only, unverifiable —
 -- wounded-skirmisher precedent); stays out as unregistered AI.
+-- Ported (find-nearest-gameobject axis): npc_tallhorn_stag
+-- (zone_grizzly_hills.cpp:339-390 — npc_tallhorn_stag : public
+-- CreatureScript, registered in AddSC_zone_grizzly_hills()). Entry
+-- NPC_TALLHORN_STAG = 26363 comes from the C++ AmberpineWoodsman enum
+-- (zone_grizzly_hills.cpp:403-405), so the registration is C++-verifiable.
+-- Ported: the Reset/UpdateAI _phase arm (:373-388) — the first UpdateAI tick
+-- after Reset runs it exactly once (_phase 1 -> 0). It checks for the haunch
+-- GO (OBJECT_HAUNCH = 188665, 2.0yd); when found the stag plays dead:
+-- SetStandState(UNIT_STAND_STATE_DEAD = 7), SetImmuneToPC(true) (bridged as
+-- creature:SetFlag(59, 0x100) — UNIT_FLAG_IMMUNE_TO_PC; the engine honors
+-- 0x100 in the PC-targeting gate, creaturemotion.go:4213), and
+-- SetUInt32Value(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD) (bridged as
+-- creature:SetFlag(79, 0x20) — UNIT_DYNFLAG_DEAD is 0x20, kill.go:45; C++
+-- sets the raw field while the twin ORs the bit, identical on the
+-- zero-initialized spawn). The GO layout is static between Reset and the
+-- first AI tick, so running the check synchronously on OnSpawn(5) /
+-- OnReset(23) is C++-exact; the arm is idempotent, so both Reset call sites
+-- are safe. The UpdateVictim/DoMeleeAttackIfReady tail is default engine
+-- behavior — no port needed.
 local ENTRY_LAKE_FROG = 33211
 local ENTRY_LAKE_FROG_QUEST = 33224
 local UNIT_NPC_FLAGS_FIELD = 82
 local UNIT_NPC_FLAG_GOSSIP = 1
 local SPELL_SUMMON_ASHWOOD_BRAND = 62554
+local ENTRY_TALLHORN_STAG = 26363
+local OBJECT_HAUNCH = 188665
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+local UNIT_DYNAMIC_FLAGS_FIELD = 79
+local UNIT_DYNFLAG_DEAD = 0x20
+local UNIT_STAND_STATE_DEAD = 7
 
 local ITEM_WARTS_B_GONE_LIP_BALM = 44986
 local SPELL_WARTSBGONE_LIP_BALM = 62574
@@ -160,3 +186,16 @@ RegisterCreatureEvent(ENTRY_LAKE_FROG, 4, lakeFrogDied)
 RegisterCreatureEvent(ENTRY_LAKE_FROG_QUEST, 4, lakeFrogDied)
 RegisterCreatureEvent(ENTRY_LAKE_FROG, 23, lakeFrogReset)
 RegisterCreatureEvent(ENTRY_LAKE_FROG_QUEST, 23, lakeFrogReset)
+
+-- npc_tallhorn_stagAI::Reset -> Initialize (_phase = 1); the first
+-- UpdateAI tick then evaluates the _phase arm once (:373-388).
+local function tallhornStagReset(_, creature)
+    if creature:FindNearestGameObject(OBJECT_HAUNCH, 2.0) ~= nil then
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetFlag(UNIT_DYNAMIC_FLAGS_FIELD, UNIT_DYNFLAG_DEAD)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_TALLHORN_STAG, 5, tallhornStagReset)
+RegisterCreatureEvent(ENTRY_TALLHORN_STAG, 23, tallhornStagReset)

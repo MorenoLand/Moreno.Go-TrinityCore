@@ -75,9 +75,9 @@
 -- the Vesperon InterruptNonMeleeSpells + 32747 cast leg, the
 -- Talk(WHISPER_OPEN_PORTAL 6 / WHISPER_OPENED_PORTAL 7) legs
 -- (portal-entry Talk — no bridgeable combat event), the
--- portal SetRespawnTime(30000) leg — no summon / cast /
--- GO-respawn bridges (creature-search IS bridged —
--- lua_creature_events.go:1204 — but the arm is GO-gated);
+-- portal SetRespawnTime(30000) leg — no cast / GO-respawn bridges
+-- (the summon + creature-search bridges exist — creature:SummonCreature
+-- and creature:FindNearestGameObject — but the arm is GO-respawn-gated);
 -- the UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_HATCH_EGGS 30s); UpdateAI EVENT_HATCH_EGGS ->

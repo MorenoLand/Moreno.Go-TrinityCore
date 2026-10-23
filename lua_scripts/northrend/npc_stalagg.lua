@@ -36,12 +36,15 @@
 -- variant). All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- npc_stalagg: InitializeAI — the tesla-coil GO SetGoState(GO_STATE_
--- ACTIVE) leg + powerSurgeTimer init — no GO-state bridge; the ctor
+-- ACTIVE) leg + powerSurgeTimer init — GO SetGoState exists and the
+-- creature-side find is bridged (creature:FindNearestGameObject,
+-- 2026-10-23), but InitializeAI has no Lua event; the ctor
 -- SetBoundary(instance->GetBossBoundary(BOSS_THADDIUS)) — no
 -- boundary bridge; EnterEvadeMode — thaddius->AI()->DoAction(
 -- ACTION_STALAGG_RESET) — no cross-AI bridge; BeginResetEncounter —
--- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days) — no
--- GO/despawn bridges; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
+-- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days) — GO-state /
+-- despawn legs bridged, but BeginResetEncounter rides the unbridged
+-- cross-AI DoAction machine; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
 -- routes to BeginResetEncounter — no bridge; DoAction(
 -- ACTION_STALAGG_REVIVED) — the full revive machine (SetFullHealth
 -- + STAND + REACT_AGGRESSIVE + NOT_SELECTABLE removal + root

@@ -50,10 +50,12 @@
 -- the gender-gated sound arm (SetData, Type 1) stays out
 -- (no SetData bridge; the go_amberpine_outhouse gossip caller is
 -- not ported).
--- npc_tallhorn_stag + npc_amberpine_woodsman (Amberpine woodsman
--- skinning event): zero Talk; UpdateAI NPC_NPC_FLAGS /
--- UNIT_NPC_EMOTESTATE state machine (0.2f FindNearestCreature
--- 26363) — no-quest-state bridge.
+-- npc_tallhorn_stag — PORTED in lua_scripts/northrend/
+-- zone_grizzly_hills.lua (2026-10-23): the Reset/UpdateAI _phase haunch
+-- arm via the new creature:FindNearestGameObject bridge.
+-- npc_amberpine_woodsman (Amberpine woodsman skinning event): zero Talk;
+-- UpdateAI UNIT_NPC_EMOTESTATE state machine (0.2f FindNearestCreature
+-- 26363) — unregistered AI (no C++ entry constant), stays out.
 -- npc_wounded_skirmisher (Overwhelmed 12288): SpellHit
 -- SPELL_RENEW_SKIRMISHER 48812 -> Talk(SAY_RANDOM) + DoCast
 -- SPELL_KILL_CREDIT 48813 — bridgeable (event 14 SpellHit + cast), but

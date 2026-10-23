@@ -61,8 +61,10 @@
 --   ~130 RP event handlers (Talks, Talk-lines 0-40, emotes, casts,
 --   summons, FindNearestCreature/SetFacingTo facing legs, GO state
 --   changes, instance SetData/GetData legs), and EnterEvadeMode (trace
---   only). No spline-chain / summon-with-position / instance-data /
---   nearby-creature / gameobject bridges exist.
+--   only). No spline-chain / instance-data bridges exist; the summon /
+--   nearby-creature / GO-state bridges DO (creature:SummonCreature,
+--   creature:FindNearestCreature, GO SetGoState) — the ~130 RP arms stay
+--   out on the unported RP event machine, not on the bridges.
 -- - JustAppeared: DoCastSelf(SPELL_DEVOTION_AURA 52442) — ports on
 --   event 5 below (the old "no spawn/appear bridge" note predates the ev5
 --   spawn bridge, which fires at the exact C++ JustAppeared moments).

@@ -1204,6 +1204,45 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 	return s.server.luaGameObjectObject(nearest)
 }
 
+// nearestGameObjectByEntry is the entry-filtered, 3D twin of
+// nearestGameObject for the creature surface's FindNearestGameObject:
+// WorldObject::FindNearestGameObject (Object.cpp) searches the grid for the
+// nearest gameobject of entry within range using the 3D distance metric.
+// The engine's GO model is the static gameobject spawn table, so the search
+// covers DB spawns only (dynamic GOs have no model here). Instance-hidden
+// objects are skipped, matching the unfiltered twin.
+func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instanceID uint32, x, y, z float32, entry uint32, distance float32) *scripting.Object {
+	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var nearest luaGameObjectState
+	nearestDistance := float32(math.MaxFloat32)
+	for rows.Next() {
+		var candidate luaGameObjectState
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z); err != nil {
+			continue
+		}
+		candidate.Map = mapID
+		candidate.InstanceID = instanceID
+		candidate.GoState, candidate.LootState = 1, 1
+		candidate.GUID = gameObjectGUID(candidate.LowGUID, candidate.Entry)
+		if srv.isGameObjectHiddenInInstance(candidate.Map, candidate.InstanceID, candidate.GUID) {
+			continue
+		}
+		dx, dy, dz := float64(candidate.X-x), float64(candidate.Y-y), float64(candidate.Z-z)
+		currentDistance := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
+		if currentDistance <= distance && currentDistance < nearestDistance {
+			nearest, nearestDistance = candidate, currentDistance
+		}
+	}
+	if nearest.GUID == 0 {
+		return nil
+	}
+	return srv.luaGameObjectObject(nearest)
+}
+
 func (s *Server) isGameObjectHidden(guid uint64) bool {
 	s.objectsMu.RLock()
 	_, hidden := s.hiddenGameObjects[guid]

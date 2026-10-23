@@ -5525,7 +5525,8 @@ func init() {
 	// yell only — Talk(SAY_MARZON_2 1) on OnEnterCombat (C++-
 	// exact); the summoner-AttackStart gate (IsSummon /
 	// GetSummonerUnit) awaits the summon bridge; EnterEvadeMode's
-	// DisappearAndDie pair awaits the despawn bridge; Reset's
+	// self-DisappearAndDie pair is ported via event-2 Despawn()
+	// (npc_marzon_silent_blade.lua); Reset's
 	// RestoreFaction awaits the faction bridge; MovementInform's
 	// cross-AI escort-phase latch awaits the movement bridge;
 	// entry 1755 verifiable from the C++ LordGregorLescovar enum
@@ -5599,8 +5600,8 @@ func init() {
 	// (JustEngagedWith cross-creature Emily Talk only — no
 	// cross-creature Talk bridge), npc_outhouse_bunny
 	// (SpellHit 48382 emote/cast arms — no SpellHit bridge),
-	// npc_tallhorn_stag + npc_amberpine_woodsman (Talk-free
-	// emote-state machine), npc_wounded_skirmisher (SpellHit
+	// npc_amberpine_woodsman (Talk-free emote-state machine —
+	// unregistered AI, no C++ entry constant), npc_wounded_skirmisher (SpellHit
 	// 48812 Talk(SAY_RANDOM) + 48813 — no SpellHit bridge),
 	// npc_venture_co_straggler (EVENT_STRAGGLER_2 timer Talk(SAY_SEO)
 	// + MovePoint chain — no-timer bridge; SpellHit 49075 —
@@ -7092,9 +7093,11 @@ func init() {
 	// (invisibility), GUID latch, immediate EVENT_CHECK_POSSESSED;
 	// check leg via GetPlayerByGUID (nil = chain dies, C++-exact):
 	// !HasAura(17246) or HealthBelowPct(50) -> strip auras, re-arm
-	// possess 20s-30s random, else repeat 1s. Documented-only (no
-	// bridges): Reset's instance-wide DoRemoveAurasDueToSpellOnPlayers
-	// (17244/17246), JustDied instance->SetData(TYPE_BARONESS, IN_PROGRESS)
+	// possess 20s-30s random, else repeat 1s. Reset's instance-wide
+	// DoRemoveAurasDueToSpellOnPlayers (17244/17246) is ported in onReset
+	// (event 23 — GetPlayersInWorld + mapId/instanceId filter,
+	// player:RemoveAura); documented-only: JustDied
+	// instance->SetData(TYPE_BARONESS, IN_PROGRESS)
 	// (IN_PROGRESS-not-DONE C++ quirk, nerubenkan precedent),
 	// UpdateVictim/UNIT_STATE_CASTING gates, melee engine-driven.
 	RegisterLuaBoss("boss_baroness_anastari", 10436)
@@ -11565,7 +11568,9 @@ func init() {
 	// the EVENT_INTRO_TALK leg is scheduled from DoAction
 	// ACTION_ENTER_COMBAT — no-DoAction bridge);
 	// SAY_VALITHRIA_PLAYER_DEATH 5 is declared but never referenced by a
-	// Talk() call (dead text evidence); the lich king controller's Reset
+	// Talk() call (dead text evidence); InitializeAI's _spawnHealth arm
+	// (curhealth via GetCreatureData(spawnId)) rides the unbridged
+	// InitializeAI + DB legs; the lich king controller's Reset
 	// scheduler / JustSummoned / UpdateAI summoner machine legs have no
 	// bridges; npc_green_dragon_combat_trigger / npc_risen_archmage /
 	// npc_blazing_skeleton / npc_suppresser / npc_blistering_zombie /

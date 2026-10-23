@@ -1986,6 +1986,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{s.luaMotionCreature(best)}, nil
 	}
+	// FindNearestGameObject(entry, dist) is
+	// WorldObject::FindNearestGameObject (Object.cpp): the nearest
+	// gameobject of entry within dist yards (3D metric) in the same
+	// map+instance; nil when none. DB-spawn model only (see
+	// nearestGameObjectByEntry). Backs the tallhorn-stag haunch arm and the
+	// 8 HEADER-ONLY FindNearestGameObject sites the 2026-10-23 triage queued
+	// for re-key.
+	methods["FindNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if dist32 < 0 {
+			return []any{nil}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		return []any{s.nearestGameObjectByEntry(ctx, mapID, instanceID, x, y, z, entry, dist32)}, nil
+	}
 	// GetCreaturesInGrid(entry, dist) is
 	// WorldObject::GetCreatureListWithEntryInGrid: every creature of entry
 	// within dist yards (2D, both combat reaches added — the C++

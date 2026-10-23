@@ -61,8 +61,10 @@
 -- spell, false), but entries are not in the C++ tree and the SmartAI
 -- menu-hello leg lives in SmartAI, not this script.
 -- npc_train_wrecker (:2207-2311) — UpdateAI (:2234)/MovementInform
--- (:2292): FindNearestGameObject, MovePoint/MoveJump, HandleEmoteCommand,
--- target->AI()->DoAction — none bridged; no entry in C++ tree.
+-- (:2292): FindNearestGameObject (bridged — creature:
+-- FindNearestGameObject, 2026-10-23), MovePoint/MoveJump, HandleEmoteCommand
+-- (bridged — creature:PerformEmote), target->AI()->DoAction — the movement
+-- + cross-AI legs stay out; no entry in C++ tree.
 -- npc_argent_squire_gruntling (:2314-2500) — ScheduleTasks (:2338):
 -- GetOwner + aura SetDuration, both unbridged; OnGossipSelect (:2426):
 -- creature SetFlag/RemoveFlag UNIT_NPC_FLAGS (no SetFlag bridge) and
