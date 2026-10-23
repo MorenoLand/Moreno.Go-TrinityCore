@@ -266,15 +266,14 @@ local function dorotheeFear(creature, guid)
 end
 
 -- C++ boss_dorothee::boss_dorotheeAI::SummonTito
--- (bosses_opera.cpp:300-309): summon Tito (17548) at my position (C++
--- all-zero coords -> close point at the summoner, Object.cpp:2059),
--- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 30s = 30000ms, then
--- Talk(SAY_DOROTHEE_SUMMON). The ENSURE_AI DorotheeGUID write is the
--- titoDorothee module link above; pTito->AI()->AttackStart(victim) has
--- no bridge (documented gap).
+-- (bosses_opera.cpp:300-309): summon Tito (17548); C++ passes
+-- all-zero coords, which ride the bridge's Object.cpp:2059-2060
+-- close-point fallback (C++-exact). TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3),
+-- 30s = 30000ms, then Talk(SAY_DOROTHEE_SUMMON). The ENSURE_AI
+-- DorotheeGUID write is the titoDorothee module link above;
+-- pTito->AI()->AttackStart(victim) has no bridge (documented gap).
 local function dorotheeSummonTito(creature, guid)
-    local tito = creature:SummonCreature(ENTRY_TITO, creature:GetX(),
-        creature:GetY(), creature:GetZ(), creature:GetO(), 3, 30000)
+    local tito = creature:SummonCreature(ENTRY_TITO, 0, 0, 0, 0, 3, 30000)
     if tito ~= nil then
         creature:Talk(DOROTHEE_SAY_SUMMON)
         titoDorothee[tito:GetGUID()] = guid

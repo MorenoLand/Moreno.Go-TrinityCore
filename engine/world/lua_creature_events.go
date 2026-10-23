@@ -676,8 +676,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// TIMED_OR_DEAD_DESPAWN, 1 TIMED_OR_CORPSE_DESPAWN, 2 TIMED_DESPAWN,
 	// 3 TIMED_DESPAWN_OUT_OF_COMBAT, 4 CORPSE_DESPAWN, 5 CORPSE_TIMED_DESPAWN,
 	// 6 DEAD_DESPAWN, 7 MANUAL_DESPAWN) and defaults to 7; despawnTimer is
-	// milliseconds, default 0. An o of 0 falls back to the summoner's
-	// orientation (Object.cpp:2061-2062 twin). C++ InitStats (TemporarySummon.cpp:168-183)
+	// milliseconds, default 0. All-zero x/y/z falls back to a close point
+	// at the summoner (Object.cpp:2059-2060 twin, the SummonGameObject
+	// fallback above); an o of 0 falls back to the summoner's orientation
+	// (Object.cpp:2061-2062 twin). C++ InitStats (TemporarySummon.cpp:168-183)
 	// stamps the template's level/stats — the motionFor funnel does the
 	// same from creature_template — and TempSummon::InitSummon fires
 	// Eluna::JustSummoned (CreatureHooks.cpp:165-171), twinned here as
@@ -734,11 +736,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
-		summonerO := motion.Orientation
+		sx, sy, sz, summonerO := motion.X, motion.Y, motion.Z, motion.Orientation
+		reach := float64(motion.CombatReach)
 		s.motionMu.Unlock()
-		// Object.cpp:2061-2062 — the C++ float overload falls back to the
-		// summoner's orientation when o is 0 (anubarak's scarab arm passes
-		// the 4-arg default o=0.0f intending exactly this).
+		// Object.cpp:2059-2062 — the C++ float overload falls back to a
+		// close point (GetClosePoint(combatReach): summoner position
+		// offset by combat reach in facing direction, z = summoner z;
+		// the collision/ground folds have no Go model, documented) when
+		// x, y, and z are all 0, and to the summoner's orientation when
+		// o is 0 (anubarak's scarab arm passes the 4-arg default
+		// o=0.0f intending exactly this).
+		if x == 0 && y == 0 && z == 0 {
+			x = sx + float32(reach*math.Cos(float64(summonerO)))
+			y = sy + float32(reach*math.Sin(float64(summonerO)))
+			z = sz
+		}
 		if o == 0 {
 			o = summonerO
 		}

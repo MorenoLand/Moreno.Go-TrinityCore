@@ -282,16 +282,15 @@ onNormalCast = function(creature, guid)
             st.elementalsSpawned = true
             -- C++ boss_shade_of_aran.cpp:419-431: 4x SummonCreature(
             -- CREATURE_WATER_ELEMENTAL = 17167, 0,0,0,0,
-            -- TEMPSUMMON_TIMED_DESPAWN (2), 90s = 90000ms). C++ all-zero
-            -- coords fall back to a close point at the summoner
-            -- (Object.cpp:2059). unit->Attack(me->GetVictim(), true) has
-            -- no bridge (the elementals idle until the engine aggros
+            -- TEMPSUMMON_TIMED_DESPAWN (2), 90s = 90000ms). The all-zero
+            -- coords ride the bridge's Object.cpp:2059-2060 close-point
+            -- fallback (C++-exact). unit->Attack(me->GetVictim(), true)
+            -- has no bridge (the elementals idle until the engine aggros
             -- them — documented gap); unit->SetFaction(me->GetFaction())
             -- is bridged and ported C++-exact.
             for _ = 1, 4 do
                 local elemental = creature:SummonCreature(ENTRY_WATER_ELEMENTAL,
-                    creature:GetX(), creature:GetY(), creature:GetZ(),
-                    creature:GetO(), 2, 90000)
+                    0, 0, 0, 0, 2, 90000)
                 if elemental ~= nil then
                     elemental:SetFaction(creature:GetFaction())
                 end
