@@ -55,7 +55,8 @@
 -- MOVE_RUN, 12.0f) — the speed leg is ported via creature:SetSpeedRate
 -- as the rate 12.0/7.0 (baseMoveSpeed[MOVE_RUN] = 7.0 yd/s, Unit.cpp);
 -- SummonedCreatureDies
--- — summons.Despawn — no summon bridge; EVENT_DECIMATE's 20x
+-- — summons.Despawn (single, of an already-dead zombie) is SummonList
+-- housekeeping, vacuous with no Lua summon list to drain; EVENT_DECIMATE's 20x
 -- EVENT_SEARCH_ZOMBIE_MULTI scheduling machine (DoCastAOE(
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) per zombie) — no summon/zombie-list
 -- bridge; the STATE_GLUTH_EATING 4s deferral — no state bridge;

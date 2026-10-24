@@ -89,8 +89,9 @@
 -- -> DoCast(Marked for Death 67882), urand(5000,7000) — random-target
 -- bridge absent.
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)
--- + ClearUnitState(ROOT | STUNNED) — no summon / display / unit-state
--- bridges; JustSummoned — summons.Summon + cross-AI AttackStart(me->
+-- + ClearUnitState(ROOT | STUNNED) — the despawn leg stays out: the
+-- ghoul entry is unverifiable (DB-side SPELL_ARMY_DEAD summon) so no
+-- grid twin exists; display/root legs are bridged (see DamageTaken). JustSummoned — summons.Summon + cross-AI AttackStart(me->
 -- GetVictim()) (summon STRAND absent, standing). Melee gated on
 -- !HasUnitState(ROOT) && !HealthBelowPct(1) — the ROOT leg has no unit-state bridge (GetHealthPct() IS bridged, object.go:107 — but the arm is conjunctive on unbridged !HasUnitState(ROOT)); melee plays
 -- engine-driven unconditionally in this port.

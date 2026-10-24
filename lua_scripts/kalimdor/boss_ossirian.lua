@@ -58,6 +58,10 @@
 --   The arm stays unported on its real blockers: FindNearestCreature
 --   (unbridged) + cross-AI DoAction(ACTION_TRIGGER_WEAKNESS) (unbridged).
 --   go:SetLootState is bridged but is not the arm's driver.
+--   Refined: FindNearestCreature IS bridged on creatures, but the GO
+--   gossip handler's objects (player + GO) carry no creature lookup,
+--   so the TriggerGUID receiver is unreachable from the handler; the
+--   instance GetBossState(IN_PROGRESS) guard is unbridged too.
 -- - MoveInLineOfSight SAY_INTRO: Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
 --   is live (lua_creature_events.go:531-560, shaffar/vorpil/ikiss/maladaar
 --   precedent) — ported below with a per-GUID one-shot SaidIntro latch

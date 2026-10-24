@@ -76,7 +76,10 @@
 -- Reset / Initialize / EnterEvadeMode — _Reset() +
 -- events.SetPhase(PHASE_1) + SetReactState(REACT_DEFENSIVE) +
 -- DoStopTimedAchievement(MUST_DECONSTRUCT_FASTER 21027) +
--- summons.DespawnAll — no bridges.
+-- summons.DespawnAll — stays out: the summons are spell-spawned
+-- (scrapbot/pummeller/boombot/life-spark/void-zone), no Lua summon
+-- tracking exists to drain, and their entries are not verifiable
+-- from boss_xt002.cpp; the arm also rides _DespawnAtEvade.
 -- DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge).
 -- GetData(DATA_HARD_MODE 1 / DATA_HEALTH_RECOVERED 2 /
 -- DATA_GRAVITY_BOMB_CASUALTY 3 — no GetData bridge; consumers:

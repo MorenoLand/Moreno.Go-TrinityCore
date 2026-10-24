@@ -72,10 +72,10 @@
 -- UpdateAI melee is engine-driven (C++ DoMeleeAttackIfReady).
 -- OnDied(4): timer cleanup only (the _JustDied + muru->
 -- DisappearAndDie arms are blocked on the instance-script/
--- cross-creature/kill bridges). OnReset(23)/OnLeaveCombat(2):
--- timer cleanup (the EnterEvadeMode muru relay, DoResetPortals,
--- summons.DespawnAll and DespawnOrUnsummon arms have no cross-
--- creature/enumeration/summon/despawn bridges — below).
+-- cross-creature/kill bridges). OnReset(23): timer cleanup + cosmetic
+-- spawn (below). OnLeaveCombat(2): the EnterEvadeMode arm, PORTED
+-- (below) — muru relay stays out (instance GetCreature), the rest
+-- rides bridged calls.
 -- The entropius JustSummoned arms (NPC_DARK_FIENDS -> visual
 -- 45936; NPC_DARKNESS -> REACT_PASSIVE + 46282 self-cast +
 -- triggered 46263 summon-darkfiend) are summon-blocked —
@@ -337,6 +337,31 @@ local function entropiusCleanup(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_entropiusAI::EnterEvadeMode (boss_muru.cpp:183-193), in
+-- C++ arm order: muru relay (instance GetCreature, stays out) +
+-- DoResetPortals + summons.DespawnAll + me->DespawnOrUnsummon.
+-- DoResetPortals is the 100yd entry-25770 aura strip (same loop as
+-- entropiusNegativeEnergy, without its cast); DespawnAll is twinned
+-- by grid sweep over the two entries entropius's JustSummoned
+-- tracks (NPC_DARK_FIENDS 25744, NPC_DARKNESS 25879 — ossirian
+-- onReset grid-despawn precedent). Go event 2 fires from
+-- triggerCreatureEvade, i.e. the evade path; return nothing, since
+-- a true return would veto the base evade. Event 4 keeps
+-- entropiusCleanup: C++ JustDied despawns no summons.
+local function entropiusLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+    for _, portal in ipairs(creature:GetCreaturesInGrid(ENTRY_PORTAL, 100)) do
+        portal:RemoveAllAuras()
+    end
+    for _, fiend in ipairs(creature:GetCreaturesInGrid(ENTRY_DARK_FIEND, 500)) do
+        fiend:Despawn()
+    end
+    for _, darkness in ipairs(creature:GetCreaturesInGrid(ENTRY_BLACKHOLE, 500)) do
+        darkness:Despawn()
+    end
+    creature:Despawn()
+end
+
 -- C++ Reset (boss_muru.cpp:144-148): triggered self-cast 46223 — spawn/evade-only,
 -- never runs on death; the cast does not belong on the corpse.
 local function entropiusReset(event, creature)
@@ -348,7 +373,7 @@ local function entropiusReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 1, entropiusEnterCombat)
-RegisterCreatureEvent(ENTRY_ENTROPIUS, 2, entropiusCleanup)
+RegisterCreatureEvent(ENTRY_ENTROPIUS, 2, entropiusLeaveCombat)
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 4, entropiusCleanup)
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 23, entropiusReset)
 
