@@ -569,6 +569,30 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.ThreatMgr.ScaleThreat(victimGUID, float32(0.01*float64(100+pct)))
 		return nil, nil
 	}
+	// AddThreat is ScriptedAI::AddThreat (ScriptedCreature.cpp:202-209):
+	// who defaults to me, lowering to ThreatManager::AddThreat with
+	// ignoreModifiers/ignoreRedirects. The target may be a creature/player
+	// object or a raw GUID (luaObjectGUID); a nil/unknown victim no-ops.
+	// Go's AddThreat runs its eager victim-switch gate at the 130%
+	// threshold (inMelee=false, threat.go), where C++ defers selection
+	// to UpdateVictim — a 1000000.0f add switches either way. The
+	// who-redirect leg (3rd C++ arg, e.g. malchezaar axe) is not
+	// expressible here; this bridge is self-threat only.
+	methods["AddThreat"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 || motion.ThreatMgr == nil {
+			return nil, nil
+		}
+		victimGUID := luaObjectGUID(args[0])
+		if victimGUID == 0 {
+			return nil, nil
+		}
+		amount, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+		return nil, nil
+	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554):
 	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are fire-and-forget
 	// (no in-flight cast state on the creature — the 2026-10-20 caststate

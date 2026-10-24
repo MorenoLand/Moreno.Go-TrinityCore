@@ -737,8 +737,12 @@ RegisterCreatureEvent(ENTRY_CRONE, 24, croneReachHome)
 -- The Big Bad Wolf (boss_bigbadwolf, C++ ScriptName for 17521): chase
 -- every 30s — Talk(SAY_WOLF_HOOD = 2) + triggered Little Red Riding Hood
 -- 30768 on a random alive player within 100 yd, then a 20s chase during
--- which fear/swipe are frozen (no threat model: the GetThreat/
--- ModifyThreatByPercent/AddThreat juggling is skipped), then 40s calm.
+-- which fear/swipe are frozen, then 40s calm. The chase threat juggling
+-- is ported (bosses_opera.cpp:925-948): GetThreat store + -100% cut +
+-- AddThreat 1000000 on chase start, stored HoodGUID/TempThreat restored
+-- (-100% gate + AddThreat) on chase end via the GetPlayersInWorld GUID
+-- scan (shade_of_aran precedent; nil when the Hood target left = the
+-- C++ GetUnit nil arm).
 -- Terrifying howl 30752 on the victim every 25-35s; wide swipe 30761 on
 -- the victim every 25-30s (first 5s); neither ticks while chasing.
 -- The death sound (9275) is ported via PlayDirectSound in wolfDied;
@@ -810,6 +814,14 @@ local function wolfChase(creature, guid)
         if target then
             creature:Talk(WOLF_SAY_HOOD)
             creature:CastSpell(target, SPELL_LITTLE_RED_RIDING_HOOD, true)
+            -- C++ arm order: store TempThreat, -100% cut gated on it,
+            -- HoodGUID store, AddThreat 1000000.
+            st.tempThreat = creature:GetThreat(target)
+            if st.tempThreat ~= 0 then
+                creature:ModifyThreatByPercent(target, -100)
+            end
+            st.hoodGUID = target:GetGUID()
+            creature:AddThreat(target, 1000000)
             st.chasing = true
             -- Freeze fear/swipe with remainders (C++-exact).
             local now = os.time()
@@ -824,6 +836,26 @@ local function wolfChase(creature, guid)
         end)
     else
         st.chasing = false
+        -- C++ chase-end order: HoodGUID lookup, clear, -100% gate,
+        -- AddThreat(TempThreat), TempThreat = 0.
+        local hood = nil
+        if st.hoodGUID ~= nil then
+            for _, p in ipairs(GetPlayersInWorld()) do
+                if p:GetGUID() == st.hoodGUID and p:GetMapId() == creature:GetMapId()
+                        and p:GetInstanceId() == creature:GetInstanceId() then
+                    hood = p
+                    break
+                end
+            end
+        end
+        if hood ~= nil then
+            st.hoodGUID = nil
+            if creature:GetThreat(hood) ~= 0 then
+                creature:ModifyThreatByPercent(hood, -100)
+            end
+            creature:AddThreat(hood, st.tempThreat or 0)
+            st.tempThreat = 0
+        end
         -- Restore the banked remainders; CreateLuaEvent floors at 1ms
         -- (nightbane precedent).
         wolfArmFear(creature, guid, math.max(st.fearRemain * 1000, 1))
