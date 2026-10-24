@@ -49,29 +49,29 @@
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
 -- boss_ick JustEngagedWith (:163-173) — seeds EVENT_MIGHTY_KICK 20s (:170)
 --   and EVENT_SPECIAL {30s,35s} (:173). The krick->AI()->Talk(SAY_KRICK_AGGRO 0)
---   leg (:167-168) is instance-driven Talk on another creature's AI (no
---   instance bridge); the EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds
---   (:171-172) belong to krick-cast arms with no cross-creature bridge —
---   documented-only below.
+--   leg (:167-168) is PORTED in ickEnterCombat below (FindNearestCreature
+--   boss Talk, mrfloppy/emily precedent); the EVENT_TOXIC_WASTE 5s /
+--   EVENT_SHADOW_BOLT 10s seeds (:171-172) belong to krick-cast arms —
+--   obtained-object CastSpell is bridged, but the SelectTarget playerOnly
+--   pick for krick's cast is unverified — documented-only below.
 -- EVENT_MIGHTY_KICK (:249-252) — DoCastVictim(SPELL_MIGHTY_KICK 69021),
 --   non-triggered victim-cast; re-arm 25s (:251).
 -- EVENT_SPECIAL (:253-257) — RAND(EVENT_EXPLOSIVE_BARRAGE, EVENT_POISON_NOVA,
 --   EVENT_PURSUIT) scheduled at 1s (:255; uniform math.random(3) keeping the
 --   C++ argument order); re-arm {23s,28s} (:256).
--- EVENT_EXPLOSIVE_BARRAGE (:258-267) — DoCastAOE(SPELL_EXPLOSIVE_BARRAGE_ICK
---   69263) = non-triggered self-cast (:264); one-shot (no re-arm; fires only
---   via EVENT_SPECIAL picks). The krick->AI()->Talk(SAY_KRICK_BARRAGE_1 2 /
---   SAY_KRICK_BARRAGE_2 3) (:261-262) and krick->CastSpell(krick,
---   SPELL_EXPLOSIVE_BARRAGE_KRICK 69012, true) (:263) legs are cross-creature
---   with no bridge.
--- EVENT_POISON_NOVA (:268-274) — Talk(SAY_ICK_POISON_NOVA 0) (:272, Ick's own
---   Talk) + DoCastAOE(SPELL_POISON_NOVA 68989) = non-triggered self-cast
---   (:273); one-shot. The krick->AI()->Talk(SAY_KRICK_POISON_NOVA 4) leg
---   (:269-270) is cross-creature with no bridge.
--- EVENT_PURSUIT (:275-279) — DoCastSelf(SPELL_PURSUIT 68987,
---   { SPELLVALUE_MAX_TARGETS, 1 }) = non-triggered self-cast (:278); one-shot.
---   The krick->AI()->Talk(SAY_KRICK_CHASE 5) leg (:276-277) is cross-creature
---   with no bridge.
+-- EVENT_EXPLOSIVE_BARRAGE (:258-267) — PORTED (krick-presence gate wraps
+--   Talk(SAY_KRICK_BARRAGE_1 2) + Talk(SAY_KRICK_BARRAGE_2 3) (:261-262) +
+--   krick->CastSpell(krick, SPELL_EXPLOSIVE_BARRAGE_KRICK 69012, true) (:263)
+--   + DoCastAOE(SPELL_EXPLOSIVE_BARRAGE_ICK 69263) (:264), C++ order;
+--   DelayEvents outside the gate (:266); one-shot, fires only via
+--   EVENT_SPECIAL picks).
+-- EVENT_POISON_NOVA (:268-274) — PORTED: krick->AI()->Talk(
+--   SAY_KRICK_POISON_NOVA 4) (:269-270) first, then Talk(SAY_ICK_POISON_NOVA 0)
+--   (:272, Ick's own Talk) + DoCastAOE(SPELL_POISON_NOVA 68989) (:273),
+--   C++ order; one-shot.
+-- EVENT_PURSUIT (:275-279) — PORTED: krick->AI()->Talk(SAY_KRICK_CHASE 5)
+--   (:276-277) first, then DoCastSelf(SPELL_PURSUIT 68987,
+--   { SPELLVALUE_MAX_TARGETS, 1 }) (:278), C++ order; one-shot.
 -- boss_ick JustDied / LeaveCombat / Reset (:176-189, :147-161) — timer
 --   cancellation only; the vehicle RemoveAllPassengers, ForceCombatStop(krick)
 --   and krick->AI()->DoAction(ACTION_OUTRO) legs (:180-187) have no bridge.
@@ -81,10 +81,11 @@
 -- DOCUMENTED-ONLY (no bridge):
 -- EVENT_TOXIC_WASTE (:233-240) — krick->CastSpell(target, SPELL_TOXIC_WASTE
 --   69024) on a SelectTarget(Random, 0, playerOnly) target (:236-237): the
---   caster is Krick and there is no cross-creature bridge.
+--   caster is Krick; obtained-object CastSpell is bridged, but the
+--   SelectTarget playerOnly pick for krick's cast is unverified.
 -- EVENT_SHADOW_BOLT (:241-248) — krick->CastSpell(target, SPELL_SHADOW_BOLT
 --   69028) on a SelectTarget(Random, 1, playerOnly) target (:244-245): same,
---   no cross-creature bridge.
+--   obtained-object CastSpell bridged, SelectTarget pick unverified.
 -- boss_ick DoAction (:191-217) — ACTION_STORE_OLD_TARGET /
 --   ACTION_RESET_THREAT threat store/reset machine: no DoAction /
 --   threat-manager bridge.
@@ -145,6 +146,10 @@ local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
 local REACT_PASSIVE = 0
 
 local SAY_KRICK_SLAY = 1
+local SAY_KRICK_BARRAGE_1 = 2
+local SAY_KRICK_BARRAGE_2 = 3
+local SAY_KRICK_POISON_NOVA = 4
+local SAY_KRICK_CHASE = 5
 local SAY_KRICK_AGGRO = 0 -- boss_krickandick.cpp:56
 local SAY_ICK_POISON_NOVA = 0
 
@@ -152,6 +157,7 @@ local SPELL_MIGHTY_KICK = 69021
 local SPELL_EXPLOSIVE_BARRAGE_ICK = 69263
 local SPELL_POISON_NOVA = 68989
 local SPELL_PURSUIT = 68987
+local SPELL_EXPLOSIVE_BARRAGE_KRICK = 69012
 
 local timers = {}
 
@@ -237,19 +243,31 @@ end
 
 -- C++ :258-267 EVENT_EXPLOSIVE_BARRAGE: DoCastAOE(SPELL_EXPLOSIVE_BARRAGE_ICK)
 -- = non-triggered self-cast (:264); one-shot — fires only via EVENT_SPECIAL
--- picks, no re-arm. The krick-presence gate (:259) and the krick Talk /
--- triggered self-cast legs (:261-263) have no cross-creature bridge (see
--- header). C++ :266 events.DelayEvents(20s) pushes every other armed timer
+-- picks, no re-arm. The krick-presence gate (:259) wraps the krick Talk /
+-- triggered self-cast legs (:261-263) — PORTED below via FindNearestCreature
+-- (aggro precedent); the ick cast rides inside the same gate per C++.
+-- C++ :266 events.DelayEvents(20s) pushes every other armed timer
 -- out 20s (delayTimers, thekal precedent).
 local function onExplosiveBarrage(creature, guid)
-    creature:CastSpell(creature, SPELL_EXPLOSIVE_BARRAGE_ICK)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        krick:Talk(SAY_KRICK_BARRAGE_1)
+        krick:Talk(SAY_KRICK_BARRAGE_2)
+        krick:CastSpell(krick, SPELL_EXPLOSIVE_BARRAGE_KRICK, true)
+        creature:CastSpell(creature, SPELL_EXPLOSIVE_BARRAGE_ICK)
+    end
     delayTimers(guid, 20000)
 end
 
 -- C++ :268-274 EVENT_POISON_NOVA: Talk(SAY_ICK_POISON_NOVA) (Ick's own Talk)
 -- + DoCastAOE(SPELL_POISON_NOVA) = non-triggered self-cast; one-shot. The
--- krick->AI()->Talk(SAY_KRICK_POISON_NOVA) leg (:269-270) has no bridge.
+-- krick->AI()->Talk(SAY_KRICK_POISON_NOVA) leg (:269-270) is PORTED below
+-- (krick Talk first, C++ order :269-272).
 local function onPoisonNova(creature, guid)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        krick:Talk(SAY_KRICK_POISON_NOVA)
+    end
     creature:Talk(SAY_ICK_POISON_NOVA)
     creature:CastSpell(creature, SPELL_POISON_NOVA)
 end
@@ -258,8 +276,12 @@ end
 -- { SPELLVALUE_MAX_TARGETS, 1 }) = non-triggered self-cast; one-shot. The
 -- custom max-targets leg and the pursuit threat/fixate machine have no
 -- bridge (see header); the krick->AI()->Talk(SAY_KRICK_CHASE) leg (:276-277)
--- has no bridge.
+-- is PORTED below (krick Talk first, C++ order :276-278).
 local function onPursuit(creature, guid)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        krick:Talk(SAY_KRICK_CHASE)
+    end
     creature:CastSpell(creature, SPELL_PURSUIT)
 end
 

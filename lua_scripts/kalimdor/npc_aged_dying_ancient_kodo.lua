@@ -36,10 +36,12 @@
 -- movement / despawn bridges (terestian precedent) —
 -- unmodeled; MoveInLineOfSight (the Smeed 11596 proximity
 -- latch -> SPELL_KODO_KOMBO_GOSSIP 18362 triggered self-cast
--- + smeed Talk(SAY_SMEED_HOME 0)) has no proximity-detection
--- bridge (azshara depth-charge precedent) and the directed
--- cross-creature Talk has no bridge (omor precedent) —
--- unmodeled; OnGossipHello: stale 'no gossip bridge' retracted
+-- + smeed Talk(SAY_SMEED_HOME 0)) stays out on trigger grounds, not
+-- on Talk grounds: Go ev27 fires only from the aggro-engage branch
+-- and Smeed never engages, so the 10.0 proximity latch can never
+-- fire (the Talk leg itself IS bridged — obtained-object Talk via
+-- FindNearestCreature, the krick/darnavan precedent — but it has no
+-- trigger to hang on); OnGossipHello: stale 'no gossip bridge' retracted
 -- (RegisterCreatureGossipEvent bridged) — stays unmodeled: the
 -- UNIT_NPC_FLAG_GOSSIP flag is only set by the unported 18362
 -- SpellHit arm, so the hello can never fire.

@@ -91,8 +91,9 @@
 --   (UpdateEntry(REANIMATED_FANATIC) + feign + clear-debuffs + full-heal
 --   triggered + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE) at 2s;
 --   RemoveAuras + RemoveFlag + SetReactState(AGGRESSIVE) + shroud at 6s).
---   Only the instance-legged ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD
---   13) stays out (no instance bridge).
+--   The ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD 13) leg is
+--   PORTED in both reanimate6 arms below (FindNearestCreature boss
+--   Talk, darnavan precedent).
 -- npc_cult_adherent (37949, icecrown_citadel.h:178) — same Reset→engage
 --   re-key (:693-710): SPELL_DEATHCHILL 5s/2500ms victim-cast —
 --   entry-conditional DoCastVictim(SPELL_DEATHCHILL_BLAST 70906) when
@@ -113,8 +114,8 @@
 --   DARK_MARTYRDOM_T (SetReactState/AttackStop/CastSpell); the :724-752
 --   2s/6s reanimate scheduler (UpdateEntry(REANIMATED_ADHERENT) + feign +
 --   clear-debuffs + full-heal triggered + SetFlag at 2s; RemoveAuras +
---   RemoveFlag + SetReactState(AGGRESSIVE) + shroud at 6s). Only the
---   instance-legged boss Talk(SAY_ANIMATE_DEAD) stays out (no bridges).
+--   RemoveFlag + SetReactState(AGGRESSIVE) + shroud at 6s). The boss
+--   Talk(SAY_ANIMATE_DEAD) leg is PORTED in the reanimate6 arm below.
 --   SPELL_CURSE_OF_TORPOR 71237 (:706-710, ported): DoCast(target,
 --   non-triggered) on SelectTarget(Random, 1) (offset 1 skips the
 --   MaxThreat head, UnitAI.h:172-174 — tank-skip unbridged, the
@@ -177,9 +178,9 @@
 -- MoveIdle (no motion bridge).
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
--- npc_cult_adherent summon-death scheduler legs (still out — the
--- instance-legged boss Talk has no bridge; the UpdateEntry/SetFlag legs
--- are PORTED 2026-10-22).
+-- npc_cult_adherent summon-death scheduler legs — PORTED in both
+-- reanimate6 arms (FindNearestCreature boss Talk); the UpdateEntry /
+-- SetFlag legs are PORTED 2026-10-22.
 -- SummonedCreatureDies _cultistQueue.remove (boss_lady_deathwhisper.cpp)
 -- — the event-21 dispatch IS bridged (2026-10-24), but the C++
 -- _cultistQueue itself is not modeled (the port's DoImproveCultist twin
@@ -194,10 +195,9 @@
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
 -- (engine/world/spells.go:11709-11730, boss_ai.go:2052-2096) and the
 -- Creature::UpdateEntry twin is bridged (lua_creature_events.go), so the
--- earlier "no SpellHit/UpdateEntry bridge" claims were stale. The only
--- SpellHit stay-out is the instance-legged
--- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) (no instance bridge),
--- as is the darnavan SHATTERING_THROW conditional leg
+-- earlier "no SpellHit/UpdateEntry bridge" claims were stale. The
+-- SAY_ANIMATE_DEAD boss Talk is PORTED in both reanimate6 arms; the
+-- remaining SpellHit stay-out is the darnavan SHATTERING_THROW conditional leg
 -- (:893-898, immunity gate — no bridge); darnavan CHARGE leg PORTED
 -- (charge-poll). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
 -- but always returns false for creatures (no cast state,
@@ -246,6 +246,7 @@ local EMOTE_PHASE_2 = 9 -- :44
 local SAY_DARNAVAN_AGGRO = 0
 local SAY_DARK_EMPOWERMENT = 11 -- boss_lady_deathwhisper.cpp:46
 local SAY_DARK_TRANSFORMATION = 12 -- boss_lady_deathwhisper.cpp:47
+local SAY_ANIMATE_DEAD = 13 -- boss_lady_deathwhisper.cpp:48
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_MANA_BARRIER = 70842
@@ -755,8 +756,9 @@ end
 -- DARK_MARTYRDOM rides SetReactState/AttackStop — AttackStop bridged
 -- 2026-10-22 (PORTED below); the
 -- :640-660 2s/6s reanimate scheduler legs are PORTED below (UpdateEntry
--- + SetFlag + DoZoneInCombat all bridged); only the instance-legged
--- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) stays out.
+-- + SetFlag + DoZoneInCombat all bridged); the instance-legged
+-- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) leg is PORTED in the
+-- reanimate6 arm (FindNearestCreature boss Talk).
 local function fanaticSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_TRANSFORMATION_T then
         -- C++ :623 InterruptNonMeleeSpells(true) before DoCastSelf;
@@ -792,8 +794,9 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- SetReactState(AGGRESSIVE) + DoZoneInCombat(me). No shroud
         -- here in C++ (:641-658) — SHROUD_OF_THE_OCCULT is the
         -- adherent 6s arm only (:732-750). The ladyDeathwhisper->AI()->Talk(
-        -- SAY_ANIMATE_DEAD 13) leg has no
-        -- instance bridge (documented).
+        -- SAY_ANIMATE_DEAD 13) leg is PORTED in the reanimate6 arm below —
+        -- boss Talk via FindNearestCreature (darnavan precedent; nil-guard
+        -- mirrors the C++ instance GetCreature lookup).
         local guid = creature:GetGUID()
         schedule(guid, "reanimate2", 2000, function()
             creature:UpdateEntry(ENTRY_REANIMATED_FANATIC)
@@ -809,6 +812,10 @@ local function fanaticSpellHit(event, creature, caster, spellId)
                 UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
             creature:SetReactState(REACT_AGGRESSIVE)
             creature:DoZoneInCombat()
+            local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
+            if boss ~= nil then
+                boss:Talk(SAY_ANIMATE_DEAD)
+            end
         end)
     end
 end
@@ -989,8 +996,8 @@ local function adherentSpellHit(event, creature, caster, spellId)
         -- STUNNED|UNK_29|NOT_SELECTABLE); 6s -> RemoveAurasDueToSpell(
         -- PERMANENT_FEIGN_DEATH) + RemoveFlag + SetReactState(AGGRESSIVE)
         -- + DoCastSelf(SHROUD_OF_THE_OCCULT) + DoZoneInCombat(me).
-        -- The boss Talk(SAY_ANIMATE_DEAD) leg has no instance bridge
-        -- (documented).
+        -- The boss Talk(SAY_ANIMATE_DEAD) leg is PORTED in the reanimate6
+        -- arm below (FindNearestCreature boss Talk, darnavan precedent).
         local guid = creature:GetGUID()
         schedule(guid, "reanimate2", 2000, function()
             creature:UpdateEntry(ENTRY_REANIMATED_ADHERENT)
@@ -1007,6 +1014,10 @@ local function adherentSpellHit(event, creature, caster, spellId)
             creature:SetReactState(REACT_AGGRESSIVE)
             creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
             creature:DoZoneInCombat()
+            local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
+            if boss ~= nil then
+                boss:Talk(SAY_ANIMATE_DEAD)
+            end
         end)
     end
 end
