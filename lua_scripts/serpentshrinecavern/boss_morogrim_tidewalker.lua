@@ -33,9 +33,13 @@
 -- earthquakeArm=true, re-arm 10000; second fire -> Talk(SAY_
 -- SUMMON) + Talk(EMOTE_EARTHQUAKE), earthquakeArm=false,
 -- re-arm 40000 + rand32()%5000 (C++-exact; the 10x Tidewalker
--- Lurker summons at the MurlocCords coords + the AttackStart
--- relay have no summon/cross-creature bridges — unmodeled,
--- below). Tidal wave 37730 10s then 20s -> DoCastVictim (C++-
+-- Lurker summons at the MurlocCords coords stay unmodeled —
+-- re-keyed 2026-10-24: creature:SummonCreature is live, but each
+-- C++ lurker AttackStarts a separately random target and no
+-- AttackStart bridge exists, so a summon-only half would leave
+-- idle murlocs C++ never produces (solarian precedent); the
+-- engine LOS-aggro scan does not replicate per-lurker random
+-- targeting). Tidal wave 37730 10s then 20s -> DoCastVictim (C++-
 -- exact). Phase 1 (!phase2): watery grave 30s -> Talk(SAY_
 -- SUMMON_BUBL) + Talk(EMOTE_WATERY_GRAVE), re-arm 30000 (C++-
 -- exact; the 4-target distinct pick, the waterfall teleport and
@@ -74,7 +78,8 @@
 -- (the DATA_MOROGRIMTIDEWALKEREVENT NOT_STARTED/IN_PROGRESS/
 -- DONE bookkeeping and the JustEngagedWith Playercount arm
 -- skipped); no summon bridge — the 10x Tidewalker Lurker
--- (21920) summons at the MurlocCords coords unmodeled; no
+-- (21920) summons at the MurlocCords coords unmodeled (SummonCreature
+-- live; blocker is the per-lurker AttackStart(random) relay, no bridge);
 -- cross-creature bridge — the murloc AttackStart relay
 -- unmodeled; no player bridges — the watery-grave waterfall
 -- teleport + the player-side triggered casts (38023/38024/

@@ -28,7 +28,8 @@
 -- delusion curse, C++-exact order; nil-target ticks cast nothing but
 -- keep the schedule) / teleport 5s then {15s,23s} on a random alive
 -- player within 100 yd (DoTeleportPlayer to TeleportLoc via
--- Player:TeleportNear; the -100% threat wipe has no bridge and the 10
+-- Player:TeleportNear; the -100% threat wipe is PORTED 2026-10-24
+-- (ModifyThreatByPercent, victim-gated, C++ order) and the 10
 -- sacrificed-troll 14826 summons are skipped — the summon leg is bridged
 -- but their AttackStart leg is not, and a summon-only half would leave
 -- idle trolls C++ never produces).

@@ -59,13 +59,16 @@
 -- PctDamaged(50, damage) — health after this hit strictly
 -- below 50% (majordomo / shahraz precedent): phase = false
 -- + Talk(EMOTE_SUMMON) + Talk(SAY_SUMMON) (C++-exact). The
--- non-triggered DoCast(me, SPELL_SUMMON_REINFORCEMENTS
--- 34803) arm is a dummy spell whose only effect is the
--- unmodeled SpellScript's four SummonCreature calls —
--- the summons have no summon bridge (steamrigger precedent),
--- so the cast itself is unmodeled; only the talks and the
--- latch are bridged. The C++ JustSummoned override is the
--- unreachable summon bookkeeping — unmodeled.
+-- DoCast(me, SPELL_SUMMON_REINFORCEMENTS 34803) arm is a dummy
+-- spell whose whole body is the SpellScript's four direct
+-- SummonCreature calls (boss_commander_sarannis.cpp:164-179),
+-- replicated below in C++ order (mender Pos[0], reservist
+-- Pos[1]/Pos[2], heroic reservist Pos[3]; TEMPSUMMON_CORPSE_
+-- DESPAWN = bridge type 4, mandokir precedent). The bloodwarders
+-- have no custom AI in C++ — they engage via default LOS aggro,
+-- which the Go engine aggro scan replicates — so unlike the
+-- AttackStart-gated morogrim trolls this summon needs no relay.
+-- The C++ JustSummoned override is BossAI bookkeeping only.
 -- OnTargetDied(3): Talk(SAY_KILL) unconditionally (no player
 -- gate, C++-exact). OnDied(4): Talk(SAY_DEATH) + cleanup
 -- (the _JustDied arm is instance-blocked). OnLeave
@@ -96,6 +99,15 @@
 local SPELL_ARCANE_RESONANCE = 34794
 local SPELL_ARCANE_DEVASTATION = 34799
 local SPELL_SUMMON_REINFORCEMENTS = 34803
+
+local NPC_SUMMONED_BLOODWARDER_MENDER = 20083
+local NPC_SUMMONED_BLOODWARDER_RESERVIST = 20078
+local POS_SUMMON_REINFORCEMENTS = {
+    { 160.4483, 287.6435, -3.887904, 2.3841 },
+    { 153.4406, 289.9929, -4.736916, 2.3841 },
+    { 154.4137, 292.8956, -4.683603, 2.3841 },
+    { 157.1544, 294.2599, -4.726504, 2.3841 },
+}
 
 local SAY_AGGRO = 0
 local SAY_KILL = 1
@@ -200,13 +212,10 @@ end)
 -- C++ DamageTaken: the phase latch — HealthBelowPctDamaged
 -- (50, damage) — health after this hit strictly below 50%
 -- (majordomo / shahraz precedent): phase = false + Talk(
--- EMOTE_SUMMON) + Talk(SAY_SUMMON) (C++-exact). The DoCast
--- (me, SPELL_SUMMON_REINFORCEMENTS) arm is unmodeled — the
--- dummy spell's only effect is the SpellScript's
--- GetCaster()->SummonCreature calls (boss_commander_sarannis.cpp:
--- 164-179; no SpellScript bridge, steamrigger precedent — the
--- stale "no summon bridge" phrasing is retracted, creature:
--- SummonCreature is live but can't see inside a spell script).
+-- EMOTE_SUMMON) + Talk(SAY_SUMMON) (C++-exact) + the spell
+-- script's four SummonCreature calls replicated directly
+-- (boss_commander_sarannis.cpp:164-179 — no SpellScript bridge
+-- is needed because the script body is fully C++-visible).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = combatStates[guid]
@@ -222,6 +231,13 @@ RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacke
         st.phase = false
         creature:Talk(EMOTE_SUMMON)
         creature:Talk(SAY_SUMMON)
+        local pos = POS_SUMMON_REINFORCEMENTS
+        creature:SummonCreature(NPC_SUMMONED_BLOODWARDER_MENDER, pos[1][1], pos[1][2], pos[1][3], pos[1][4], 4)
+        creature:SummonCreature(NPC_SUMMONED_BLOODWARDER_RESERVIST, pos[2][1], pos[2][2], pos[2][3], pos[2][4], 4)
+        creature:SummonCreature(NPC_SUMMONED_BLOODWARDER_RESERVIST, pos[3][1], pos[3][2], pos[3][3], pos[3][4], 4)
+        if creature:IsHeroic() then
+            creature:SummonCreature(NPC_SUMMONED_BLOODWARDER_RESERVIST, pos[4][1], pos[4][2], pos[4][3], pos[4][4], 4)
+        end
     end
 end)
 

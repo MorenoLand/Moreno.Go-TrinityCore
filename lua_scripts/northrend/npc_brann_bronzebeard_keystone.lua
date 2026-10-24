@@ -24,14 +24,17 @@
 -- 58854; 10 Talk(SAY_BRANN_2 1, player) + KilledMonsterCredit
 -- (31810); 11 SetFacingTo(2.932153) + Talk(SAY_BRANN_3 2, player);
 -- 13 DisappearAndDie via the halazzi Despawn twin.
+-- Step 11's GameObject Delete leg stays out, refined 2026-10-24:
+-- no GO-by-GUID lookup exists, and FindNearestGameObject is
+-- DB-table-only (lua_objects.go nearestGameObjectByEntry queries
+-- the gameobject table), so the Lua-summoned signals are not
+-- findable by entry either — the five signals persist past step
+-- 11 instead of despawning (their summon legs port).
 -- Stays out, documented: steps 2 and 12 are movement-only
 -- (SetWalk + MovePoint) and MovePoint/SetWalk have no bridge on
 -- the creature event surface (storm_cloud precedent) — those steps
 -- are pure delays preserving step timing; the MotionMaster Clear
--- in step 12 likewise has no bridge. Step 11's GameObject Delete
--- leg stays out: SummonGameObject returns a GUID and no
--- GO-by-GUID lookup bridge exists, so the five signals persist
--- past step 11 instead of despawning (their summon legs port).
+-- in step 12 likewise has no bridge.
 -- The C++ signal orientations are carried as the Lua o argument
 -- (the quaternion leg has no Lua twin). OnDied(4)/OnReset(23)
 -- cancel the chain and drop state, the twin of the C++ Reset
@@ -151,7 +154,9 @@ runStep = function(creature, guid, step)
         if player then
             creature:Talk(SAY_BRANN_3, player)
         end
-        -- Signal Delete leg stays out: no GO-by-GUID bridge.
+        -- Signal Delete leg stays out: no GO-by-GUID bridge, and
+        -- FindNearestGameObject is DB-table-only (summoned signals
+        -- are not findable by entry).
         scheduleStep(creature, guid, 12, 6000)
     elseif step == 12 then
         -- MotionMaster Clear + SetWalk(false) + MovePoint: no
