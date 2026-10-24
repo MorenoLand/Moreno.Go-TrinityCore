@@ -30,11 +30,11 @@
 -- (16809): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize() values (blastWave 0 / blastCount 0 / fear
 -- 8000 / burningMaul 25000 / thunderclap 15000 /
--- resetThreat 30000 — the C++ JustEngagedWith override only
--- summons the heads, talks through the left head and pokes
--- the instance, all summon/cross-creature/instance blocked,
--- so the Initialize() schedule lands on the only engagement
--- hook this model has) + 1s scheduler pump (a port of
+-- resetThreat 30000 — the C++ JustEngagedWith override summons
+-- the heads, talks through the left head and pokes the instance
+-- (summons + aggro yell PORTED below; only the instance arm
+-- stays out), so the Initialize() schedule lands on the only
+-- engagement hook this model has) + 1s scheduler pump (a port of
 -- UpdateAI in C++ arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump).
@@ -49,8 +49,9 @@
 -- C++-exact), re-arm 40000, blastWave = 16000, blastCount = 1
 -- (C++-exact); reset threat 30s init then {25s,40s} —
 -- random-player pick + ResetAllThreat + AddThreat(pick, 0.0)
--- PORTED (DoYellForThreat head-talk stays out: heads never
--- exist in this model), re-arm
+-- PORTED (the DoYellForThreat Delay_Timer head-talk machine
+-- stays out on GUID-relay grounds; the heads themselves are
+-- now summoned at pull), re-arm
 -- regardless (C++-exact); fear 30584: 8s init then {15s,35s}
 -- — non-triggered self-cast (C++ DoCast(me), C++-exact),
 -- re-arm {15s,35s} regardless (C++-exact); thunderclap
@@ -72,11 +73,12 @@
 -- the JustEngagedWith SetBossState(DATA_OMROGG, IN_PROGRESS)
 -- arm, the Reset SetData(DATA_OMROGG, NOT_STARTED) arm and
 -- the DATA_KARGATH cross-boss assist arms in instance_
--- shattered_halls.cpp are instance gated); no summon bridge
--- — the JustEngagedWith SummonCreature(NPC_LEFT_HEAD/
--- NPC_RIGHT_HEAD, TEMPSUMMON_DEAD_DESPAWN) calls never fire
--- and the JustSummoned GUID tracking + SetVisible(false)
--- setup is unreachable (steamrigger precedent); no
+-- shattered_halls.cpp are instance gated); the JustEngagedWith
+-- SummonCreature(NPC_LEFT_HEAD/NPC_RIGHT_HEAD,
+-- TEMPSUMMON_DEAD_DESPAWN) calls + JustSummoned SetVisible
+-- (false) + left-head GoCombat aggro yell are PORTED in the
+-- OnEnterCombat handler (the GUID tracking itself is unneeded:
+-- the Delay_Timer yell machine it feeds stays out); no
 -- ObjectAccessor/cross-creature bridge — the whole Delay_
 -- Timer yell machine (4s init, 3.5s re-arm; the AggroYell/
 -- ThreatYell/ThreatYell2/KillingYell flags set only via the
@@ -85,7 +87,8 @@
 -- its talk text ids belong to the head entries (19523/
 -- 19524), so the lines cannot be re-pointed at the boss
 -- without changing the spoken text — the machine is
--- unmodeled rather than ticked dead; npc_omrogg_heads
+-- unmodeled rather than ticked dead (the initial aggro yell
+-- is PORTED via the summoned left head's own handle); npc_omrogg_heads
 -- documented only, not registered — its SetData -> 4s
 -- EVENT_DEATH_YELL -> Talk(YELL_DIE_R) + setDeathState arm
 -- is reachable only via the boss JustDied ObjectAccessor
@@ -111,6 +114,9 @@ local EMOTE_ENRAGE = 2
 
 local ENTRY_OMROGG = 16809
 
+local NPC_LEFT_HEAD = 19523
+local NPC_RIGHT_HEAD = 19524
+
 local timers = {}
 local states = {}
 
@@ -127,9 +133,10 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
--- C++ Initialize() values (the JustEngagedWith summon +
--- head-talk + SetBossState arms are summon/cross-creature/
--- instance blocked, so the schedule lands on OnEnterCombat):
+-- C++ Initialize() values (the JustEngagedWith head summons +
+-- aggro yell are PORTED in the OnEnterCombat handler below;
+-- only the instance SetBossState arm stays out, so the schedule
+-- lands on OnEnterCombat):
 -- blastWave 0, blastCount 0, fear 8000, burningMaul 25000,
 -- thunderclap 15000, resetThreat 30000.
 local function freshState()
@@ -205,8 +212,8 @@ local function bossTick(creature, guid)
     -- Random, 0) + ResetAllThreat + AddThreat(pick, 0.0) in C++
     -- order; nil pick leaves the list untouched (C++ gates the
     -- whole block on SelectTarget non-nil); the DoYellForThreat
-    -- head-talk stays out (heads never exist in this model;
-    -- talk ids belong to entries 19523/19524). Re-arm
+    -- head-talk stays out (the Delay_Timer machine rides GUID
+    -- relays; talk ids belong to entries 19523/19524). Re-arm
     -- regardless (C++-exact).
     if st.resetThreat <= 1000 then
         local pick = randomPlayer(creature)
@@ -245,14 +252,32 @@ RegisterCreatureEvent(ENTRY_OMROGG, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()
+    -- C++ JustEngagedWith (boss_warbringer_omrogg.cpp:202-213):
+    -- SummonCreature both heads at the boss (all-zero coords hit
+    -- the bridge's near-summoner fallback), JustSummoned
+    -- SetVisible(false) on each, then the left head talks a random
+    -- GoCombat line (ids 0-2, all LEFT_HEAD); the instance
+    -- SetBossState arm stays out, as does the Delay_Timer yell
+    -- machine (GUID relays, below).
+    local leftHead = creature:SummonCreature(NPC_LEFT_HEAD, 0, 0, 0, 0, 6)
+    if leftHead then
+        leftHead:SetVisible(false)
+    end
+    local rightHead = creature:SummonCreature(NPC_RIGHT_HEAD, 0, 0, 0, 0, 6)
+    if rightHead then
+        rightHead:SetVisible(false)
+    end
+    if leftHead then
+        leftHead:Talk(math.random(0, 2))
+    end
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)
     end, 1000, 0)
 end)
 
--- No event 3: the C++ KilledUnit override is entirely head-
--- gated (returns without the heads), so it is unreachable in
--- this model (broggok precedent).
+-- No event 3: the C++ KilledUnit override rides the head GUID
+-- relays (broggok precedent), so the Delay_Timer killing-yell
+-- machine stays out even though the heads now exist.
 
 RegisterCreatureEvent(ENTRY_OMROGG, 2, function(_, creature)
     resetBoss(creature:GetGUID())

@@ -118,10 +118,11 @@
 -- the evade-mode event reset and the advisor respawn arms
 -- skipped); advisor-death relays PORTED below (FindNearestCreature
 -- + Talk(SAY_GAIN_ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455
--- / TIDALVESS 38452 / CARIBDIS 38451); no summon bridge — the
--- sharkkis pet spawns are PORTED in sharkkisTick (the Seer Olum
--- quest-10944 summon is PORTED in karathressDied; the boss's own
--- cyclone 30-40s arm is PORTED in karathressTick); no movement/
+-- / TIDALVESS 38452 / CARIBDIS 38451); the summon bridge is
+-- live and the sharkkis pet spawns are PORTED in sharkkisTick
+-- (the Seer Olum quest-10944 summon is PORTED in karathressDied;
+-- the boss's own cyclone 30-40s arm is PORTED in karathressTick);
+-- the remaining totem arms stay out as spell-effect casts; no movement/
 -- threat/cross-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random

@@ -83,13 +83,10 @@
 -- shim (instance_the_botanica.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_COMMANDER_
 -- SARANNIS = 0 bookkeeping in Reset/JustEngagedWith/
--- JustDied skipped); no summon bridge — the SPELL_SUMMON_
--- REINFORCEMENTS dummy spell's four SummonCreature calls
--- (NPC_SUMMONED_BLOODWARDER_MENDER 20083 + two/three NPC_
--- SUMMONED_BLOODWARDER_RESERVIST 20078 at the
--- PosSummonReinforcements coordinates) and the C++
--- JustSummoned summon bookkeeping unmodeled (steamrigger
--- precedent); no SpellScript bridge — spell_commander_
+-- JustDied skipped); the SPELL_SUMMON_REINFORCEMENTS dummy
+-- spell's four SummonCreature calls are PORTED in the
+-- OnDamageTaken latch above (the C++ JustSummoned override is
+-- BossAI bookkeeping only); no SpellScript bridge — spell_commander_
 -- sarannis_summon_reinforcements (HandleCast dummy-effect
 -- summons, heroic fourth summon at position [3]) documented
 -- only, not bridged; no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UpdateAI

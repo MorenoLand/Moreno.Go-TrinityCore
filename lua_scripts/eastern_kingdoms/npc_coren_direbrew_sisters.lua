@@ -35,10 +35,11 @@
 -- boss_coren_direbrew.lua). The control-aura ticks are unported
 -- AuraScripts (hellfire_peninsula precedent); only the engage casts
 -- are ported.
--- Caveat: the DamageTaken sister summons in boss_coren_direbrew.cpp
--- (:182-194) have no summon bridge, so these entries never spawn from
--- Coren's script in the port; the AI file is the faithful home for the
--- engage arm when an entry is engaged by other means (GM spawn).
+-- Note: the DamageTaken sister summons in boss_coren_direbrew.cpp
+-- (:182-194) are PORTED in boss_coren_direbrew.lua (summonSister:
+-- SummonCreature(26764/26822, boss pos, type 6) + DoZoneInCombat
+-- on the 66%/33% event-9 latches, with the 1s event-21 respawn
+-- re-arms); this file stays the home for the engage arm only.
 
 local ENTRY_ILSA_DIREBREW = 26764
 local ENTRY_URSULA_DIREBREW = 26822
