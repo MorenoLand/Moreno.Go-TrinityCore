@@ -41,7 +41,9 @@
 -- the mandokir chained-spirit precedent); the four feather vortices and
 -- the column-of-fire pillars never spawn, so the spirit Siphon Soul
 -- 43501 casts, the spirit death-state arms (incl. JustDied's
--- UNIT_STAND_STATE_DEAD — no SetUInt32Value bridge), and the vortex
+-- UNIT_STAND_STATE_DEAD — SetStandState is bridged, the old "no
+-- SetUInt32Value bridge" note was stale, but the arm is vacuous since
+-- the spirits never spawn), and the vortex
 -- summon/cleanup arms are skipped (the vortex AI is still registered so
 -- any spawned 24136 zaps back correctly); the teleport is ported below via
 -- creature:Teleport (120.148811, 703.713684, 45.111477, 100) on

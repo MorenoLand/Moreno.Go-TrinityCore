@@ -638,14 +638,15 @@ end
 -- method set (StopSpellCast lives only on the session-scoped gossip
 -- creature; Go creature casts are packet-only with no cast state, so
 -- the interrupt is a net no-op anyway — engine/world/lua_objects.go).
--- BLOCKED arms in the same switch: the :626-629 UpdateEntry
--- (NPC_DEFORMED_FANATIC) leg stays out (no UpdateEntry bridge) while
--- the FULL_HEAL self-cast is PORTED (above); :631-635
+-- PORTED arms in the same switch: the :626-629 UpdateEntry
+-- (NPC_DEFORMED_FANATIC) leg is PORTED below (UpdateEntry bridge live
+-- since 2026-10-22; the old "no UpdateEntry bridge" note was stale);
+-- :631-635
 -- DARK_MARTYRDOM rides SetReactState/AttackStop — AttackStop bridged
 -- 2026-10-22 (PORTED below); the
--- :640-660 2s/6s reanimate scheduler legs ride UpdateEntry +
--- SetFlag(UNIT_FIELD_FLAGS) + the instance-legged
--- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) (no instance bridge).
+-- :640-660 2s/6s reanimate scheduler legs are PORTED below (UpdateEntry
+-- + SetFlag + DoZoneInCombat all bridged); only the instance-legged
+-- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) stays out.
 local function fanaticSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_TRANSFORMATION_T then
         creature:CastSpell(creature, SPELL_DARK_TRANSFORMATION)
@@ -673,8 +674,9 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- DoCastSelf(CLEAR_ALL_DEBUFFS) + DoCastSelf(FULL_HEAL, triggered)
         -- + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE); 6s ->
         -- RemoveAurasDueToSpell(PERMANENT_FEIGN_DEATH) + RemoveFlag +
-        -- SetReactState(AGGRESSIVE) + DoCastSelf(SHROUD_OF_THE_OCCULT).
-        -- The ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD 13) leg has no
+        -- SetReactState(AGGRESSIVE) + DoCastSelf(SHROUD_OF_THE_OCCULT)
+        -- + DoZoneInCombat(me). The ladyDeathwhisper->AI()->Talk(
+        -- SAY_ANIMATE_DEAD 13) leg has no
         -- instance bridge (documented).
         local guid = creature:GetGUID()
         schedule(guid, "reanimate2", 2000, function()
@@ -691,6 +693,7 @@ local function fanaticSpellHit(event, creature, caster, spellId)
                 UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
             creature:SetReactState(REACT_AGGRESSIVE)
             creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+            creature:DoZoneInCombat()
         end)
     end
 end
@@ -870,8 +873,9 @@ local function adherentSpellHit(event, creature, caster, spellId)
         -- + feign + clear debuffs + full heal (triggered) + SetFlag(
         -- STUNNED|UNK_29|NOT_SELECTABLE); 6s -> RemoveAurasDueToSpell(
         -- PERMANENT_FEIGN_DEATH) + RemoveFlag + SetReactState(AGGRESSIVE)
-        -- + DoCastSelf(SHROUD_OF_THE_OCCULT). The boss Talk(SAY_ANIMATE_DEAD)
-        -- leg has no instance bridge (documented).
+        -- + DoCastSelf(SHROUD_OF_THE_OCCULT) + DoZoneInCombat(me).
+        -- The boss Talk(SAY_ANIMATE_DEAD) leg has no instance bridge
+        -- (documented).
         local guid = creature:GetGUID()
         schedule(guid, "reanimate2", 2000, function()
             creature:UpdateEntry(ENTRY_REANIMATED_ADHERENT)
@@ -887,6 +891,7 @@ local function adherentSpellHit(event, creature, caster, spellId)
                 UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
             creature:SetReactState(REACT_AGGRESSIVE)
             creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+            creature:DoZoneInCombat()
         end)
     end
 end

@@ -70,11 +70,14 @@ local function castFireblast(creature, guid)
 end
 
 -- C++ SummonSpirit x4 (DoSpawnCreature(9178) + AttackStart): the
--- positional-spawn primitive has no bridge, so the event keeps its
--- C++-exact schedule (24s init, 30s repeat) with the spawn leg
--- unmodeled.
+-- positional spawn itself IS expressible via creature:SummonCreature
+-- (the old "no DoSpawnCreature bridge" note was stale) but the
+-- AttackStart(victim) leg has no bridge and 9178 has no Lua bearer, so
+-- a summon-only half would leave idle spirits C++ never produces —
+-- the event keeps its C++-exact schedule (24s init, 30s repeat) with
+-- the spawn leg unmodeled.
 local function summonSpiritsTick(guid)
-    -- no DoSpawnCreature bridge (standing) — NPC_BURNING_SPIRIT
+    -- no AttackStart bridge (standing) — NPC_BURNING_SPIRIT
     -- 9178 summons unmodeled; the schedule stays C++-exact.
     schedule(guid, "spirits", 30000, function()
         summonSpiritsTick(guid)

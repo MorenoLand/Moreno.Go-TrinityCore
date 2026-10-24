@@ -36,8 +36,9 @@
 -- no quest-status / aura-count / kill-credit bridges; the JustEngagedWith
 -- empty override; Reset's REACT_PASSIVE leg (zone_borean_tundra.cpp
 -- :1204-:1209) IS ported via berylSorcererSpawnOrReset below — the C++
--- != REACT_PASSIVE gate has no GetReactState bridge; the set itself is
--- a no-op when already passive.
+-- != REACT_PASSIVE gate needs no GetReactState bridge: setting PASSIVE
+-- unconditionally is C++-exact (a set when already passive is a no-op),
+-- so the old "no GetReactState bridge" note is moot, not a deviation.
 -- Go: RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478) — the
 -- no-op AI neutralizes the default combat behavior for this passive
 -- NPC (storm_cloud / blessed_banner zone-script precedent).

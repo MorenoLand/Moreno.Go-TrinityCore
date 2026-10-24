@@ -132,8 +132,13 @@
 --   + self-cast 44233) -> PREPARE again 11s (Talk SAY_GRAVITY_LAPSE_2).
 --   Still out, with exact blockers: the SpellHitTarget arm (44224 hits ->
 --   counter-indexed directional teleports 44219-44223 + 400ms delayed
---   damage/fly self-casts on player targets) — no SpellHitTarget bridge
---   and Go dispatches no spell-effect teleports; the arcane-sphere
+--   damage/fly self-casts on player targets) — event 15 IS live (gruul /
+--   svala precedent; the old "no SpellHitTarget bridge" note was stale),
+--   but the teleport spells need spell-effect dispatch (DBC-gated, Go
+--   casts are packet-only), the damage/fly legs need a player self-cast
+--   (no player:CastSpell bridge), and the CLEAR_FLIGHT leg is vacuous
+--   in-port (lifted-player auras never exist) with AoE hit-player
+--   iteration unmodeled (gruul precedent); the arcane-sphere
 --   MoveFollow arms — spheres never spawn (no SPELL_EFFECT_SUMMON
 --   dispatch), so summons.DespawnEntry(24708) is vacuous; the
 --   RemoveAurasDueToSpell legs — the CLEAR_FLIGHT cast is ported but
