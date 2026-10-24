@@ -43,15 +43,19 @@
 -- cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- npc_feugen: InitializeAI — the tesla-coil GO SetGoState(GO_STATE_
--- ACTIVE) leg + timer inits — GO SetGoState exists and the
--- creature-side find is bridged (creature:FindNearestGameObject,
--- 2026-10-23), but InitializeAI has no Lua event; the ctor
+-- ACTIVE) leg is PORTED in feugenSpawn (ev5 fires on spawn, so the
+-- "no Lua event" claim was stale) + timer inits — GO SetGoState
+-- exists and the creature-side find is bridged
+-- (creature:FindNearestGameObject, 2026-10-23); the ctor
 -- SetBoundary(instance->GetBossBoundary(BOSS_THADDIUS)) — no
 -- boundary bridge; EnterEvadeMode — thaddius->AI()->DoAction(
 -- ACTION_FEUGEN_RESET) — no cross-AI bridge; BeginResetEncounter —
 -- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days) — GO-state /
 -- despawn legs bridged, but BeginResetEncounter rides the unbridged
--- cross-AI DoAction machine; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
+-- cross-AI DoAction machine, and ev23 already models the full
+-- evade->despawn->respawn cycle whose C++ end state is ACTIVE (fresh
+-- AI InitializeAI), so a bare READY on ev23 would strand the coil
+-- READY — the transient READY is unobservable; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
 -- routes to BeginResetEncounter — no bridge; DoAction(
 -- ACTION_FEUGEN_REVIVED) — the full revive machine (SetFullHealth
 -- + STAND + REACT_AGGRESSIVE + NOT_SELECTABLE removal + root
@@ -124,6 +128,7 @@ local EMOTE_TESLA_LINK_BREAKS = 0
 local OVERLOAD_DISTANCE = 28
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+local GO_CONS_NOX_TESLA_FEUGEN = 181477
 
 -- C++ SelectTarget(SelectTargetMethod::Random): random alive player
 -- from the threat list (gerstahn randomPlayerTarget precedent —
@@ -227,6 +232,12 @@ local function feugenSpawn(event, creature)
     local guid = creature:GetGUID()
     feugenOverload[guid] = nil
     feugenRefreshBeam[guid] = true
+    -- C++ InitializeAI (boss_thaddius.cpp:724-728): myCoilGO() =
+    -- FindNearestGameObject(GO_CONS_NOX_TESLA_FEUGEN, 1000.0f) ->
+    -- SetGoState(GO_STATE_ACTIVE); ev5 is the spawn/InitializeAI
+    -- analog (this handler already models the ctor latch inits).
+    local coil = creature:FindNearestGameObject(GO_CONS_NOX_TESLA_FEUGEN, 1000.0)
+    if coil then coil:SetGoState(0) end -- GO_STATE_ACTIVE
 end
 
 -- UnitDefines.h react states / SharedDefines.h stand states and unit flags

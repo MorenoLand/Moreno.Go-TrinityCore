@@ -108,6 +108,10 @@
 --   intro-end seeds (EVENT_INTRO_DESPAWN_ARTHAS :339-345: 7s /
 --   {10s,20s}) land at enter combat (intro-collapse deviation, the
 --   garfrost forge-jump precedent).
+-- boss_svala intro-end mirror (:339): mirror SetGoState(GO_STATE_ACTIVE)
+--   PORTED at enter combat (intro-collapse point, C++ order: mirror
+--   leg before the timer seeds); intro-start mirror READY (:196)
+--   stays out (no intro-start bearer in the collapsed model).
 -- EVENT_SINISTER_STRIKE (:350-353) — DoCastVictim(SPELL_SINSTER_STRIKE
 --   15667), non-triggered, init 7s / re-arm {5s,9s}, NORMAL-gated via
 --   the sacrificed latch (re-arm guard kills the chain on the latch,
@@ -196,6 +200,7 @@
 local ENTRY_SVALA_SORROWGRAVE = 26668
 local ENTRY_SCOURGE_HULK = 26555
 local ENTRY_RITUAL_CHANNELER = 27281
+local GO_UTGARDE_MIRROR = 191745
 
 local SAY_AGGRO = 2
 local SAY_SLAY = 3
@@ -407,6 +412,15 @@ local function svalaEnterCombat(event, creature, target)
     -- post-intro NORMAL form: the C++ intro-end seeds
     -- (EVENT_INTRO_DESPAWN_ARTHAS :339-345: 7s / {10s,20s}) land here
     -- (intro-collapse deviation, garfrost forge-jump precedent).
+    -- C++ intro-end order puts the mirror leg first (:339): the
+    -- Utgarde mirror (entry unique in the instance, instance
+    -- GetGuidData in C++) -> SetGoState(GO_STATE_ACTIVE), before the
+    -- timer seeds. The intro-start mirror READY (:196, MoveInLOS
+    -- IDLE->INTRO) stays out: the collapsed model has no intro-start
+    -- bearer, and engage IS the post-intro point, so a READY here
+    -- would invert C++ order.
+    local mirror = creature:FindNearestGameObject(GO_UTGARDE_MIRROR, 100.0)
+    if mirror then mirror:SetGoState(0) end -- GO_STATE_ACTIVE
     enterNormalPhase(creature, guid)
 end
 
