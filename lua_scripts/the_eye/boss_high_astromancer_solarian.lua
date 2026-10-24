@@ -49,8 +49,9 @@
 -- 15000 / fear 20000 / void bolt 10000 / phase = 1 — the
 -- BossAI ctor DATA_HIGH_ASTROMANCER_SOLARIAN = 2 arm is
 -- instance-blocked, unbridgeable; the ctor defaultarmor /
--- defaultsize arms have no armor bridge; the scale arm is now
--- bridged (creature:SetScale, lua_creature_events.go) and ported
+-- defaultsize arms: the armor arm is ported below via
+-- creature:GetArmor (armor bridge, lua_creature_events.go) and the
+-- scale arm is bridged (creature:SetScale) and ported
 -- below) + Talk(SAY_AGGRO) + 1s scheduler pump.
 -- Pump (C++ UpdateAI arm order — Phase == 1 branch):
 -- 1. Blinding light arm — 41s init then 45s: BlindingLight =
@@ -105,8 +106,8 @@
 -- ported (2026-10-23 — the stale "paired with the reveal" rationale is
 -- retracted: the Lua model never goes invisible, so the reveal is
 -- vacuous, exactly like the display/scale arms); the
--- SetArmor(31000) arm has no armor bridge — unmodeled
--- (netherspite precedent); the
+-- SetArmor(31000) arm IS ported below via creature:SetArmor
+-- (armor bridge, lua_creature_events.go); the
 -- SetDisplayId(MODEL_VOIDWALKER 18988) arm IS ported (the stale
 -- "paired with the reveal" rationale retracted 2026-10-21 — the Lua
 -- model never goes invisible, so the phase-4 reveal is vacuous,
@@ -128,7 +129,7 @@
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
--- gargolmar precedent; the SetArmor arm has no bridge (stays out);
+-- gargolmar precedent; the SetArmor arm IS ported below (armor bridge);
 -- the RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms and
 -- the SetDisplayId restore ARE ported (2026-10-23 — visibility bridge
 -- is live; the stale "no visibility bridge / paired with the reveal"
@@ -153,8 +154,8 @@
 -- bridgeable and StopMoving/AttackStop bridges are live, but the
 -- AppearDelay machine stays unmodeled (omor precedent) with the
 -- unbridged motion-master Clear and the unported phase 2/3 machine;
--- no armor bridge — the SetArmor arms stay out (netherspite
--- precedent); the phase 2/3 SetVisible/SetFlag(NOT_SELECTABLE)
+-- the SetArmor arms ARE ported (phase-4 set + Reset restore,
+-- armor bridge, lua_creature_events.go); the phase 2/3 SetVisible/SetFlag(NOT_SELECTABLE)
 -- machine legs stay out with the machine (their bridges are live —
 -- see the phase-2/3 note above); the phase-4/reset
 -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
@@ -179,6 +180,7 @@ local ENTRY_SOLARIAN = 18805
 
 local MODEL_HUMAN = 18239 -- boss_astromancer.cpp:72
 local MODEL_VOIDWALKER = 18988 -- boss_astromancer.cpp:73
+local WV_ARMOR = 31000 -- boss_astromancer.cpp:78
 local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END+0x35)
 local UNIT_FLAG_NOT_SELECTABLE = 33554432 -- 0x02000000, UnitDefines.h:149
 
@@ -190,6 +192,11 @@ local SAY_VOIDB = 6
 
 local solarianState = {}
 local solarianPump = {}
+-- C++ ctor capture (boss_astromancer.cpp:105): defaultarmor read once
+-- per GUID at first combat entry; nothing changes armor pre-combat,
+-- so the first-enterCombat read is the ctor value, and it survives
+-- evade/death cycles (Reset restores it, JustDied does not touch it).
+local solarianDefaultArmor = {}
 
 local function cancelPump(guid)
     local id = solarianPump[guid]
@@ -353,8 +360,8 @@ local function combatTick(creature, guid)
     -- guarantee arms port below (2026-10-23 — the stale "no
     -- visibility bridge / paired with the reveal" claims are
     -- retracted), then Talk(SAY_VOIDA) + Talk(SAY_VOIDB)
-    -- (C++-exact); the SetArmor arm has no bridge — unmodeled
-    -- (netherspite precedent); the display arm (MODEL_VOIDWALKER)
+    -- (C++-exact); the SetArmor arm is ported below via
+    -- creature:SetArmor (armor bridge); the display arm (MODEL_VOIDWALKER)
     -- is ported below; the scale arm is ported below via
     -- creature:SetScale.
     if st.phase ~= 4 then
@@ -373,6 +380,9 @@ local function combatTick(creature, guid)
             creature:SetVisible(true)
             creature:Talk(SAY_VOIDA)
             creature:Talk(SAY_VOIDB)
+            -- C++ arm order (boss_astromancer.cpp:404-406): SetArmor
+            -- before SetDisplayId/SetObjectScale.
+            creature:SetArmor(WV_ARMOR)
             -- C++ arm order: SetDisplayId(MODEL_VOIDWALKER) before
             -- SetObjectScale(defaultsize*2.5f).
             creature:SetDisplayId(MODEL_VOIDWALKER)
@@ -389,12 +399,16 @@ end
 -- rand()%5000 / wrath-of-the-astromancer 15000 / fear 20000 /
 -- void bolt 10000 / phase = 1 (the BossAI ctor DATA_HIGH_
 -- ASTROMANCER_SOLARIAN = 2 arm is instance-blocked,
--- unbridgeable; the ctor defaultarmor/defaultsize arms have
--- no armor bridge — the defaultsize capture is subsumed by
--- GetScale's template-base read now that the scale bridge exists).
+-- unbridgeable; the ctor defaultarmor arm is captured below via
+-- creature:GetArmor (armor bridge) and the defaultsize capture is
+-- subsumed by GetScale's template-base read now that the scale
+-- bridge exists).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 1, function(_, creature)
     local guid = creature:GetGUID()
     cancelPump(guid)
+    if solarianDefaultArmor[guid] == nil then
+        solarianDefaultArmor[guid] = creature:GetArmor()
+    end
     creature:Talk(SAY_AGGRO)
     solarianState[guid] = {
         phase = 1,
@@ -441,11 +455,16 @@ end)
 -- clear and the SetDisplayId(MODEL_HUMAN) restore as
 -- SetDisplayId(MODEL_HUMAN); the RemoveFlag(NOT_SELECTABLE) +
 -- SetVisible(true) guarantee arms are ported too (2026-10-23 —
--- the stale "no visibility bridge" claim is retracted); only
--- the SetArmor arm stays out (no armor bridge).
+-- the stale "no visibility bridge" claim is retracted); the
+-- SetArmor(defaultarmor) arm IS ported below (armor bridge).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
-    -- C++ Reset() arm order (boss_astromancer.cpp:151-155): SetArmor
-    -- has no bridge; RemoveFlag(NOT_SELECTABLE) + SetVisible(true) are
+    -- C++ Reset() arm order (boss_astromancer.cpp:151-155):
+    -- SetArmor(defaultarmor) first, then RemoveFlag + SetVisible.
+    local defaultArmor = solarianDefaultArmor[creature:GetGUID()]
+    if defaultArmor then
+        creature:SetArmor(defaultArmor)
+    end
+    -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) are
     -- vacuous here (flag never set, never hidden) but C++-exact — the
     -- stale "no visibility bridge / paired with the reveal" rationale
     -- retracted 2026-10-23; then the scale clear and SetDisplayId restore.

@@ -719,6 +719,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
 		return nil, nil
 	}
+	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):
+	// the stored base armor from the creature motion, before the aura fold
+	// the damage path applies (liveCreatureArmor, creature_auras.go).
+	methods["GetArmor"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		armor := motion.Armor
+		s.motionMu.Unlock()
+		return []any{armor}, nil
+	}
+	// SetArmor is Unit::SetArmor (Unit.h:861: SetResistance(SPELL_SCHOOL_NORMAL)):
+	// writes the stored base armor and broadcasts UNIT_FIELD_RESISTANCES,
+	// the same field the aura-change twin (recomputeCreatureArmorOnAuraChange)
+	// refreshes. Lets Lua port SetArmor arms such as solarian's phase-4
+	// WV_ARMOR set and Reset restore.
+	methods["SetArmor"] = func(_ context.Context, args []any) ([]any, error) {
+		armor, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Armor = armor
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldResistances: armor})
+		return nil, nil
+	}
 	// SetPower is Unit::SetPower (Unit.cpp): writes UNIT_FIELD_POWER1+type,
 	// clamped to the type's max (C++ clamps via std::min against
 	// GetMaxPower), then broadcasts the update field. powerType is validated

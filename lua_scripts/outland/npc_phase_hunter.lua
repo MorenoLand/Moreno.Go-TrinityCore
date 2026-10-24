@@ -87,11 +87,13 @@
 -- aura-state / unit-state bridge — the phase-slip arm
 -- (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or UNIT_STATE_
 -- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) unmodeled
--- (netherspite cast-state precedent); no quest bridge — the
--- Weak latch (Talk(EMOTE_WEAK 0) at HealthBelowPct(WeakPct
--- 25-40) while the engaging player's quest 10190 is
+-- (netherspite cast-state precedent); no quest-INCOMPLETE status
+-- bridge — the Weak latch (Talk(EMOTE_WEAK 0) at HealthBelowPct
+-- (WeakPct 25-40) while the engaging player's quest 10190 is
 -- incomplete) and the whole drained arm sit behind quest-
--- status and HasAura(34219) gates (hellfire quest
+-- status and HasAura(34219) gates (FailQuest/CompleteQuest are
+-- bridged, but the status check is not — HasQuest is presence-only,
+-- so it would also fire for rewarded players; hellfire quest
 -- precedent); Talk(EMOTE_WEAK) fires nowhere in this model
 -- (millhouse SAY_ICEBLOCK precedent).
 -- Zone set status: zone_netherstorm.cpp closed — commander_

@@ -119,8 +119,9 @@
 -- leg IS bridged (RemoveFlag(59, 0x100)) and ported in C++ order at
 -- magtheridonEnterCombat (boss_magtheridon.cpp:254); the channeler REACT_DEFENSIVE arm
 -- is PORTED 2026-10-20 (creature:SetReactState);
--- no distance bridge — the
--- quake/blaze SPELLVALUE target-count args stay unmodeled; the
+-- the quake/blaze SPELLVALUE target-count args stay unmodeled
+-- (cast-arg, not a distance computation — the old 'no distance
+-- bridge' wording was imprecise; GetDistance IS bridged, object.go); the
 -- DoSelectBelowHpPctFriendly dark-mending pick is PORTED below
 -- (channelerCheckFriend: 1s pump, 17256/30yd/HealthBelowPct(51)
 -- grid pick, non-triggered 30528, {10s,20s} re-enable latch;

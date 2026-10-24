@@ -77,10 +77,11 @@
 -- channelers-dead activation: REACT_AGGRESSIVE +
 -- RemoveFlag(NON_ATTACKABLE) + SetImmuneToAll(false) + AttackStart
 -- (killer)) and GetChanneled unmodeled, so SAY_ADD_AGGRO is
--- unreachable in this model; no react bridge — the
+-- unreachable in this model; the
 -- pre-fight passive/non-attackable channeling state stays
 -- unmodeled (the Reset() SetImmuneToAll(true) apply is paired
--- with the unbridgeable ChannelerDied clear — porting the apply
+-- with the unbridgeable ChannelerDied clear — SetReactState itself
+-- IS bridged, so the pair stays out on the clear leg, not react) — porting the apply
 -- alone would leave the boss permanently immune and unpullable,
 -- so the pair stays out; the stale 'no flag/immune bridges'
 -- claim is retracted — the SetFlag/RemoveFlag(59) surface IS

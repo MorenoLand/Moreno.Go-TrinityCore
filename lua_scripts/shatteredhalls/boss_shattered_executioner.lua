@@ -39,8 +39,9 @@
 -- convention: C++ `DoCast(SPELL_CLEAVE)` single-arg casts
 -- on the victim), re-arm {5s,7s} regardless (C++-exact).
 -- OnDied(4): cleanup (the _JustDied arm is instance-
--- blocked; the quest-completion arms have no quest bridge —
--- see below). OnLeaveCombat(2)/OnReset(23): cancel the pump,
+-- blocked; the quest-completion arms are blocked on the
+-- instance DATA_PRISONERS_EXECUTED guard alone (CompleteQuest is
+-- bridged — see below). OnLeaveCombat(2)/OnReset(23): cancel the pump,
 -- drop per-GUID state (the Reset() observable remainder —
 -- cleaveTimer = 500 — lands on OnEnterCombat per the
 -- schedule precedent; the _Reset arm is instance-blocked).
