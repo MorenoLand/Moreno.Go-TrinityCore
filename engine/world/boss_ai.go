@@ -5516,6 +5516,14 @@ func init() {
 	// dragonblight, grizzly_hills, howling_fjord, icecrown,
 	// sholazar_basin, storm_peaks, wintergrasp closed); the
 	// Northrend zone set is now CLOSED.
+	// Late-resolved quest_arms residuals (entries wowhead-verified
+	// this tick; the arms were parked entry-unverifiable): the
+	// etymidian OnQuestReward Talk arm and the injured-goblin
+	// OnQuestAccept Talk arm — see lua_scripts/kalimdor/
+	// npc_the_etymidian.lua and lua_scripts/northrend/
+	// npc_injured_goblin.lua.
+	RegisterLuaBoss("npc_the_etymidian", 28092)
+	RegisterLuaBoss("npc_injured_goblin", 29434)
 	// npc_av_marshal_or_warmaster (Alterac Valley zone script) — the first
 	// unit of the Eastern Kingdoms pass (eastern_kingdoms_script_loader.cpp
 	// order: AddSC_alterac_valley; boss_balinda follows). The combat event
