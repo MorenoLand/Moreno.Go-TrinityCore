@@ -20,8 +20,8 @@
 --     model) with victim fallback, triggered cast, then Talk
 --     SAY_FEAST_PROWLER(1); panther transform at {15s,20s} (one-shot).
 --   transform: non-triggered self-cast 24190 (panther transform);
---     unequip/weapon/AttackStop/threat/passive/flag arms have no
---     bridge; self-cast 24222 (vanish visual) then 24223 (vanish);
+--     unequip/weapon/AttackStop/threat/passive/flag arms PORTED
+--     (see onTransform); self-cast 24222 (vanish visual) then 24223 (vanish);
 --     1s later self-cast 24235 (super invis), move to a random spot
 --     (no movement model — the boss just stays invisible);
 --     9s later re-cast 24223 + 24235; {7s,10s} later re-appear:
@@ -56,9 +56,8 @@
 -- ported (:285 — ResetAllThreat bridged); equipment PORTED
 -- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
 -- the Reset dagger restore + EVENT_TRANSFORM unequip +
--- EVENT_TRANSFORM_BACK re-equip arms; no
--- flag bridge — the NON_ATTACKABLE/NOT_SELECTABLE arms skipped
--- (the phase stays damageable); the REACT_PASSIVE arm is PORTED
+-- EVENT_TRANSFORM_BACK re-equip arms; flag
+-- arms PORTED (see onTransform / onVanish2); the REACT_PASSIVE arm is PORTED
 -- (creature:SetReactState, 2026-10-20); no stat-modifier
 -- bridge — the C++ damage +/-35% hack skipped; no movement model —
 -- the Reset MovePoint, vanish MovePoint, and AttackStart arms skipped;

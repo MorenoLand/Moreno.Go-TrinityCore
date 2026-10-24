@@ -8268,8 +8268,9 @@ func init() {
 	// NPC_ constant in the C++ tree — vishas precedent). ScriptedAI
 	// (not BossAI); AddSC_razorfen_downs also registers
 	// npc_idol_room_spawner (SetData-only summon machine — no summon
-	// bridge) and go_gong (SendCustomAnim + instance SetData — no
-	// instance-data bridge), both documented-only, zero registrations.
+	// bridge, documented-only, unregistered) and go_gong (OnGossipHello
+	// SendCustomAnim(0) ported in npc_belnistrasz.lua; instance
+	// SetData(DATA_WAVE) leg stays out — no instance-data bridge).
 	// Ported arms in lua_scripts/kalimdor/npc_belnistrasz.lua:
 	// Reset refreshes Arcane Intellect 13326 under the C++ HasAura
 	// guard (the gossip-questgiver flag re-set has no bridge);

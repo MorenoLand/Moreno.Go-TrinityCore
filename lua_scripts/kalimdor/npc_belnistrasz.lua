@@ -76,11 +76,13 @@
 --   SetData summoning 4 trash entries (Withered Battle Boar 7333,
 --   Death's Head Geomancer 7335, Withered Quilguard 7329,
 --   Plaguemaw the Rotting 7356) — zero bridges, no registration.
--- - go_gong ("go_gong", GO 148917): OnGossipHello -> SendCustomAnim(0)
---   + instance SetData(DATA_WAVE 5, IN_PROGRESS) — no instance-data
---   bridge, zero bridges, no registration.
+-- - go_gong ("go_gong", GO 148917): OnGossipHello PORTED below
+--   (go:SendCustomAnim(0), bridged lua_objects.go); the instance
+--   SetData(DATA_WAVE 5, IN_PROGRESS) leg stays out (no instance-data
+--   bridge) — the anim is transient, no persistent wrong state.
 
 local ENTRY_BELNISTRASZ = 8516
+local GO_GONG = 148917 -- razorfen_downs.cpp:373 (go_gong)
 
 local SAY_QUEST_ACCEPTED = 0
 local SAY_AGGRO          = 6
@@ -269,3 +271,13 @@ RegisterCreatureEvent(ENTRY_BELNISTRASZ, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_BELNISTRASZ, 4, onDied)
 RegisterCreatureEvent(ENTRY_BELNISTRASZ, 23, onReset)
 RegisterCreatureEvent(ENTRY_BELNISTRASZ, 31, onQuestAccept)
+
+-- C++ go_gong::OnGossipHello (razorfen_downs.cpp:383-389): SendCustomAnim(0)
+-- PORTED; instance->SetData(DATA_WAVE, IN_PROGRESS) stays out (no
+-- instance-data bridge); C++ returns true (handled) == Lua true.
+local function onGongGossip(_, player, go)
+    go:SendCustomAnim(0)
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_GONG, 1, onGongGossip)
