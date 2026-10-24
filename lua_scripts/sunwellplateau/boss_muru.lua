@@ -44,11 +44,11 @@
 -- ported), triggered self-cast open all portals 46177, then 6s later
 -- triggered self-cast summon entropius 46217 (C++-exact ordering).
 -- The SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) arm stays
--- out deliberately: SetFlag(59, x) IS bridged, but the co-dependent
--- entropius summon (46217) never resolves on the Go creature-cast
--- path (only the InstaKill/Transmitted effect arms are bridged
--- there), so the flag alone would leave muru unselectable at 1 HP
--- with no entropius — a soft-lock (one-sided-port class). OnDied(4):
+-- out deliberately: SetFlag(59, x) IS bridged, but the flag is set 6s
+-- BEFORE the co-dependent entropius summon (46217) resolves, so a
+-- failed summon would leave muru unselectable at 1 HP with no
+-- entropius — a soft-lock (one-sided-port class). The post-summon
+-- JustSummoned arm itself is ported (muruJustSummoned, ev19). OnDied(4):
 -- timer/state cleanup only (the _JustDied arm is blocked on the
 -- instance-script model). OnReset(23)/OnLeaveCombat(2): timer/
 -- state cleanup (the RemoveFlag(NOT_SELECTABLE) arm is vacuous —
@@ -255,9 +255,11 @@ end
 -- 6s-delayed triggered 46217. The UNIT_FLAG_NOT_SELECTABLE arm is
 -- deliberately unported (not a flag-bridge gap — SetFlag IS bridged):
 -- it is one-sided co-dependent with the delayed DoCast(46217) entropius
--- summon, whose SPELL_EFFECT_SUMMON never resolves on the Go
--- creature-cast path; the flag alone would leave muru permanently
--- unselectable at 1 HP (soft-lock).
+-- summon: the flag is set pre-summon, so a failed summon strands muru
+-- unselectable at 1 HP (soft-lock). The post-summon JustSummoned arm
+-- is ported (muruJustSummoned, ev19); the EffectSummonType arm exists
+-- on the Go cast path (boss_ai.go creatureEffectSummonType, spellKnown
+-- + SummonProperties gates).
 local function muruDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
@@ -299,10 +301,25 @@ local function muruReset(event, creature)
     creature:SetVisible(true)
 end
 
+local function muruJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_ENTROPIUS then
+        return
+    end
+    creature:SetVisible(false)
+    local st = muruState[creature:GetGUID()]
+    if st then
+        st.entropiusGUID = summon:GetGUID()
+        if st.hasEnraged then
+            summon:CastSpell(summon, SPELL_ENRAGE, true)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MURU, 1, muruEnterCombat)
 RegisterCreatureEvent(ENTRY_MURU, 2, muruLeaveCombat)
 RegisterCreatureEvent(ENTRY_MURU, 4, muruDied)
 RegisterCreatureEvent(ENTRY_MURU, 9, muruDamageTaken)
+RegisterCreatureEvent(ENTRY_MURU, 19, muruJustSummoned)
 RegisterCreatureEvent(ENTRY_MURU, 23, muruReset)
 
 -- ================= Entropius (25840) =================
