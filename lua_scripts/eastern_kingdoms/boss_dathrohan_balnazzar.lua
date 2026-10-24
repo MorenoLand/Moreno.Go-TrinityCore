@@ -43,11 +43,14 @@
 --   MINDCONTROL 15690 10s->15s (DoCastVictim).
 -- - Reset/LeaveCombat/Died clear timers + transform latch (C++ Reset
 --   calls Initialize; the UpdateEntry(NPC_DATHROHAN) revert leg is
---   documented-only).
+--   ported in onReset, gated on the Balnazzar entry).
 -- Unmodeled (documented-only, no bridges):
 -- - Transform's `if (IsNonMeleeSpellCast(false)) InterruptNonMeleeSpells
---   (false)` gate and me->UpdateEntry(NPC_BALNAZZAR) — no casting-state
---   or entry-update bridges (jandice/barthilas display-ID precedent).
+--   (false)` gate — no casting-state bridge (jandice/barthilas
+--   display-ID precedent). The UpdateEntry(NPC_BALNAZZAR) leg is
+--   ported in doTransform, with the Balnazzar-entry 2/4/23 handlers
+--   registered so wipe/death/reset still fire after the transform
+--   (ingvar precedent; dispatch is entry-keyed).
 -- - JustDied: 8x SummonCreature(NPC_ZOMBIE = 10698 "probably incorrect",
 --   TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 1h) at the file's m_aSummonPoint
 --   coords — PORTED in onDied (ZOMBIE_POINTS); positions C++-exact:
@@ -69,6 +72,7 @@
 -- NPC_DATHROHAN = 10812, NPC_BALNAZZAR = 10813, NPC_ZOMBIE = 10698.
 
 local ENTRY_DATHROHAN = 10812
+local ENTRY_BALNAZZAR = 10813
 
 local SPELL_CRUSADERSHAMMER = 17286
 local SPELL_CRUSADERSTRIKE = 17281
@@ -222,7 +226,9 @@ end
 
 -- C++ transform leg: HealthBelowPct(40) -> InterruptNonMeleeSpells (no
 -- bridge) -> DoCast(me, SPELL_BALNAZZARTRANSFORM) -> UpdateEntry
--- (NPC_BALNAZZAR) (no bridge) -> transformed = true. The shared
+-- (NPC_BALNAZZAR, ported; dispatch is entry-keyed so the Balnazzar
+-- entry registers the 2/4/23 handlers, ingvar precedent) ->
+-- transformed = true. The shared
 -- mindblast timer is kept pending exactly like the C++ member; the
 -- Dathrohan-only arms and the transform poll stop.
 local function doTransform(creature, guid)
@@ -236,6 +242,7 @@ local function doTransform(creature, guid)
     cancelTimer(guid, "holy")
     cancelTimer(guid, "transformcheck")
     creature:CastSpell(creature, SPELL_BALNAZZARTRANSFORM)
+    creature:UpdateEntry(ENTRY_BALNAZZAR)
     schedule(guid, "shadowshock", 4000,
         function() onShadowShock(creature, guid) end)
     schedule(guid, "psychicscream", 16000,
@@ -310,9 +317,15 @@ end
 
 local function onReset(event, creature)
     clearState(creature:GetGUID())
+    if creature:GetEntry() == ENTRY_BALNAZZAR then
+        creature:UpdateEntry(ENTRY_DATHROHAN)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_DATHROHAN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 23, onReset)
+RegisterCreatureEvent(ENTRY_BALNAZZAR, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY_BALNAZZAR, 4, onDied)
+RegisterCreatureEvent(ENTRY_BALNAZZAR, 23, onReset)
