@@ -5,7 +5,7 @@
 -- constant in scholomance.h — RegisterLuaBoss binds the
 -- creature_template ScriptName "boss_jandice_barov" DB-side; entry
 -- wotlk.wowhead-verified: 10503. Eluna creature events: 1
--- OnEnterCombat, 2 OnLeaveCombat, 4 OnDied, 23 OnReset. Timers via
+-- OnEnterCombat, 2 OnLeaveCombat, 4 OnDied, 19 OnJustSummoned, 23 OnReset. Timers via
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat:
@@ -18,11 +18,16 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
--- bridges): JustSummoned arms (illusion AttackStart on a random
--- target, ApplySpellImmune(0, IMMUNITY_DAMAGE, MAGIC, true) — no
--- summoned-AI/random-target bridge; the spell-immune bridge exists
--- but has no summoned bearer, kormok/herod
--- precedent) and the Summons SummonList/DespawnAll tracking;
+-- bridges): JustSummoned AttackStart on a random target (no
+-- random-target bridge) and the Summons SummonList/DespawnAll
+-- tracking. PORTED 2026-10-24: JustSummoned ApplySpellImmune(0,
+-- IMMUNITY_DAMAGE, MAGIC, true) via event 19 — the 'no summoned
+-- bearer' claim was STALE (ev19 passes the summoned creature as a
+-- full method object, lua_creature_events.go fireCreatureSummoned;
+-- spell-effect summons route via the summonTempCreature funnel,
+-- boss_ai.go creatureEffectSummonType; bronjahm precedent). C++
+-- JustSummoned is ungated, so the handler is ungated too (Jandice
+-- summons only illusions).
 -- EVENT_ILLUSION's SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 -- + SetDisplayId(11686 invisible model) legs PORTED 2026-10-20
 -- (flag/display bridges live — handler-surface SetFlag/RemoveFlag
@@ -38,6 +43,9 @@ local ENTRY_JANDICE_BAROV = 10503
 local SPELL_CURSE_OF_BLOOD = 24673
 local SPELL_ILLUSION = 17773
 local SPELL_DROP_JOURNAL = 26096
+
+local IMMUNITY_OP_DAMAGE = 3
+local SPELL_SCHOOL_MASK_MAGIC = 126
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
@@ -138,7 +146,17 @@ local function jandiceBarovReset(event, creature)
     jandiceBarovResetState(creature:GetGUID())
 end
 
+-- C++ JustSummoned (boss_jandice_barov.cpp:52-58): illusion
+-- AttackStart on a random target (no random-target bridge — stays
+-- out) + summoned->ApplySpellImmune(0, IMMUNITY_DAMAGE, MAGIC, true).
+-- C++ JustSummoned carries no entry gate, so neither does this
+-- handler: Jandice summons only illusions (spell 17773).
+local function jandiceJustSummoned(event, creature, summon)
+    summon:ApplySpellImmune(0, IMMUNITY_OP_DAMAGE, SPELL_SCHOOL_MASK_MAGIC, true)
+end
+
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 1, jandiceBarovEnterCombat)
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 2, jandiceBarovLeaveCombat)
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 4, jandiceBarovDied)
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 23, jandiceBarovReset)
+RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 19, jandiceJustSummoned)
