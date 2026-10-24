@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -1148,6 +1149,75 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["GetX"] = luaNoArgs(func() any { return state.X })
 	methods["GetY"] = luaNoArgs(func() any { return state.Y })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
+	// GetZoneId/GetAreaId are WorldObject::GetZoneId()/GetAreaId() via
+	// Map::GetZoneAndAreaId (Map.cpp:2641), the same Server.zoneAndAreaID
+	// twin the creature surface uses (lua_creature_events.go): the area
+	// resolves from the GO's map + position and the zone is the area's
+	// ParentAreaID when set. Backs the brewfest area dispatch
+	// (go_scripts.cpp:931-1051) and the bells zone->soundId init
+	// (:1282-1325). Both return 0 when the position cannot be resolved.
+	methods["GetZoneId"] = func(_ context.Context, _ []any) ([]any, error) {
+		zoneID, _ := srv.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, 0)
+		return []any{zoneID}, nil
+	}
+	methods["GetAreaId"] = func(_ context.Context, _ []any) ([]any, error) {
+		_, areaID := srv.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, 0)
+		return []any{areaID}, nil
+	}
+	// IsHolidayActive is GameEventMgr::IsHolidayActive
+	// (GameEventMgr.cpp:1847): true when any currently active game event
+	// carries this holiday id, false for HOLIDAY_NONE. The Go twin reads
+	// the cached active-holiday set (conditions.go, refreshed at most once
+	// a minute). Backs the *_music holiday gates (go_scripts.cpp:931-1230).
+	methods["IsHolidayActive"] = func(ctx context.Context, args []any) ([]any, error) {
+		holiday, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if holiday == 0 {
+			return []any{false}, nil
+		}
+		_, active := srv.cachedActiveGameHolidays(ctx)[int64(holiday)]
+		return []any{active}, nil
+	}
+	// GetCreaturesInGrid(entry, dist) is
+	// WorldObject::GetCreatureListWithEntryInGrid, the gameobject-surface
+	// twin of the creature bridge (lua_creature_events.go): every creature
+	// of entry within dist yards (2D, candidate combat reach added —
+	// GridNotifiers.h; gameobjects carry no combat reach, so the source
+	// reach is 0) in the same map+instance, as a Lua array of creature
+	// objects (GUID-sorted for determinism). Backs the veil-skith cage
+	// child search (go_scripts.cpp:691-709).
+	methods["GetCreaturesInGrid"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		dist := float64(dist32)
+		srv.motionMu.Lock()
+		var matches []*creatureMotion
+		for _, m := range srv.motionMapLocked(state.Map, state.InstanceID) {
+			if m.Entry != entry {
+				continue
+			}
+			dx := float64(m.X - state.X)
+			dy := float64(m.Y - state.Y)
+			if d := math.Sqrt(dx*dx + dy*dy); d <= dist+float64(m.combatReachOrDefault()) {
+				matches = append(matches, m)
+			}
+		}
+		srv.motionMu.Unlock()
+		sort.Slice(matches, func(i, j int) bool { return matches[i].GUID < matches[j].GUID })
+		out := make([]any, 0, len(matches))
+		for _, m := range matches {
+			out = append(out, srv.luaMotionCreature(m))
+		}
+		return []any{out}, nil
+	}
 	// FindNearestCreature(entry, dist) is the gameobject-surface twin of
 	// the player/creature bridges (WorldObject::FindNearestCreature):
 	// the nearest live creature of entry within dist yards (3D gate with
