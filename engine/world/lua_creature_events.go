@@ -200,6 +200,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetOwner returns the owning player object for a pet/guardian motion
+	// (Unit::GetOwner, Unit.h) or nil when the motion has no owner or the
+	// owner session is gone. Lets Lua port owner-targeted arms such as
+	// the ebon gargoyle's JustDied owner-aura strip; the ev4 killer arg
+	// is the killer session's player, not the owner, so handlers must not
+	// use it as the owner.
+	methods["GetOwner"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		ownerGUID := motion.OwnerGUID
+		s.motionMu.Unlock()
+		if ownerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if owner := s.findSessionByGUID(ownerGUID); owner != nil {
+			return []any{owner.luaPlayer()}, nil
+		}
+		return []any{nil}, nil
+	}
 	methods["IsInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
 		inCombat := motion.InCombat
