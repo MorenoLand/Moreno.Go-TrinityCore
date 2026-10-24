@@ -463,7 +463,8 @@ local function combatTick(creature, guid)
         -- Flame patch arm — 30s: SummonCreature(CREATURE_FLAME_PATCH_ALAR
         -- 20602) at the random target's position, TEMPSUMMON_TIMED_DESPAWN
         -- 2min (C++ boss_alar.cpp:432-447, C++ arm order). The summon-side
-        -- SetObjectScale(x2.5) and SetLevel legs have no bridges; the
+        -- SetObjectScale leg PORTED 2026-10-24 (SetScale twin, relative
+        -- x2.5 via GetScale; C++ order kept) and SetLevel leg has no bridge; the
         -- SetFlag(NOT_SELECTABLE) / SetDisplayId(11686) / SetFaction /
         -- non-triggered self-cast SPELL_FLAME_PATCH 35380 legs are bridged.
         if st.flamePatch <= 1000 then
@@ -473,6 +474,7 @@ local function combatTick(creature, guid)
                     target:GetX(), target:GetY(), target:GetZ(), 0, 2, 120000)
                 if flame then
                     flame:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+                    flame:SetScale(flame:GetScale() * 2.5)
                     flame:SetDisplayId(11686)
                     flame:SetFaction(creature:GetFaction())
                     flame:CastSpell(flame, SPELL_FLAME_PATCH)

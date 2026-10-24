@@ -26,9 +26,9 @@
 -- spell) = DoCastSelf (phase_hunter / gluth precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- npc_stalagg: JustEngagedWith Talk(SAY_STALAGG_AGGRO 0) (event 1;
--- the thaddius->AI()->DoAction(ACTION_STALAGG_AGGRO) cross-AI leg +
--- the feugen AddThreat(who, 0.0f) leg have no bridge — documented,
--- not wired); UpdateAI powerSurgeTimer — DoCastSelf(SPELL_STALAGG_
+-- the thaddius->AI()->DoAction(ACTION_STALAGG_AGGRO) cross-AI leg stays
+-- out (no bridge); the feugen AddThreat(who, 0.0f) leg is PORTED
+-- 2026-10-24 in stalaggEnterCombat); UpdateAI powerSurgeTimer — DoCastSelf(SPELL_STALAGG_
 -- POWERSURGE 28134), 10s init, urandms(25,30) repeat (math.random
 -- 25-30 per amanitar/black_knight/gluth precedent); KilledUnit
 -- Talk(SAY_STALAGG_SLAY 1) (event 3 — C++-GATED: victim->
@@ -92,6 +92,7 @@
 -- latch (see powerSurgeTick).
 
 local ENTRY_STALAGG = 15929
+local ENTRY_FEUGEN = 15930
 
 local SAY_STALAGG_AGGRO = 0
 local SAY_STALAGG_SLAY = 1
@@ -186,6 +187,13 @@ end
 -- bridge — documented, not wired.
 local function stalaggEnterCombat(event, creature, target)
     creature:Talk(SAY_STALAGG_AGGRO)
+    -- C++ JustEngagedWith :567-569: twin AddThreat(who, 0.0f, feugen);
+    -- the instance-GUID fetch rides the entry-search precedent
+    -- (darnavan/krick); IsEngaged() == IsInCombat() (Unit.h:1031).
+    local feugen = creature:FindNearestCreature(ENTRY_FEUGEN, 500.0)
+    if feugen and not feugen:IsInCombat() then
+        feugen:AddThreat(target, 0)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "powersurge", 10000, function()

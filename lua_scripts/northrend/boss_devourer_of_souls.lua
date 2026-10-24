@@ -365,8 +365,9 @@ end
 -- no other events during wailing souls); starts the 15-tick chain at
 -- 3000ms (:309). The beam choreography ports: SetFacingToObject :288
 -- (atan2 idiom + SetFacingTo), beamAngle SetFacingTo :314 per tick,
--- SetReactState (REACT_PASSIVE) :299; InterruptNonMeleeSpells :297 and
--- motion Clear :304 have no bridge and stay out. SetTarget(Empty) :302 is
+-- SetReactState (REACT_PASSIVE) :299; InterruptNonMeleeSpells :297 PORTED
+-- 2026-10-24 (no-op twin) and motion Clear :304 has no bridge, stays out.
+-- SetTarget(Empty) :302 is
 -- PORTED (2026-10-20, creature:SetTarget bridge) and
 -- SetControlled(true, UNIT_STATE_ROOT) :305 via creature:SetRooted.
 -- Plain assignment to the forward-declared slot (see above).
@@ -402,9 +403,12 @@ wailingSoulsEvent = function(creature, guid)
         state.beamAngle = face
         creature:CastSpell(creature, SPELL_WAILING_SOULS_BEAM)
     end
+    -- C++ :297 InterruptNonMeleeSpells(false) -- the "no bridge" claim is
+    -- stale: the handler-surface twin is a no-op (svala precedent), so the
+    -- call is C++-exact in order (beam cast, interrupt, react-state).
+    creature:InterruptNonMeleeSpells(false)
     -- C++ :299 SetReactState(REACT_PASSIVE) -- the 13:00 "no bridge" claim
-    -- is stale: creature:SetReactState is bridged (lua_creature_events.go);
-    -- InterruptNonMeleeSpells (:297) stays out (no bridge).
+    -- is stale: creature:SetReactState is bridged (lua_creature_events.go).
     creature:SetReactState(REACT_PASSIVE)
     -- C++ :302 SetTarget(ObjectGuid::Empty) — "remove any target" after the
     -- beam, before the motion Clear; ported 2026-10-20 via the

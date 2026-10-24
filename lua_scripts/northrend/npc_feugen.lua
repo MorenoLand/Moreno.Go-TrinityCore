@@ -26,9 +26,9 @@
 -- spell) = DoCastSelf (phase_hunter / gluth precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- npc_feugen: JustEngagedWith Talk(SAY_FEUGEN_AGGRO 0) (event 1;
--- the thaddius->AI()->DoAction(ACTION_FEUGEN_AGGRO) cross-AI leg +
--- the stalagg AddThreat(who, 0.0f) leg have no bridge — documented,
--- not wired); UpdateAI staticFieldTimer — DoCastSelf(SPELL_FEUGEN_
+-- the thaddius->AI()->DoAction(ACTION_FEUGEN_AGGRO) cross-AI leg stays
+-- out (no bridge); the stalagg AddThreat(who, 0.0f) leg is PORTED
+-- 2026-10-24 in feugenEnterCombat); UpdateAI staticFieldTimer — DoCastSelf(SPELL_FEUGEN_
 -- STATICFIELD 28135), 6s init, 6s repeat; KilledUnit Talk(
 -- SAY_FEUGEN_SLAY 1) (event 3 — C++-GATED: victim->GetTypeId() ==
 -- TYPEID_PLAYER — nalorakk/kelthuzad player-gate variant). The
@@ -102,6 +102,7 @@
 -- (see staticFieldTick).
 
 local ENTRY_FEUGEN = 15930
+local ENTRY_STALAGG = 15929
 
 local SAY_FEUGEN_AGGRO = 0
 local SAY_FEUGEN_SLAY = 1
@@ -197,6 +198,13 @@ end
 -- bridge — documented, not wired.
 local function feugenEnterCombat(event, creature, target)
     creature:Talk(SAY_FEUGEN_AGGRO)
+    -- C++ JustEngagedWith :818-820: twin AddThreat(who, 0.0f, stalagg);
+    -- the instance-GUID fetch rides the entry-search precedent
+    -- (darnavan/krick); gate is C++-literal IsInCombat().
+    local stalagg = creature:FindNearestCreature(ENTRY_STALAGG, 500.0)
+    if stalagg and not stalagg:IsInCombat() then
+        stalagg:AddThreat(target, 0)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "staticfield", 6000, function()
