@@ -5524,6 +5524,16 @@ func init() {
 	// npc_injured_goblin.lua.
 	RegisterLuaBoss("npc_the_etymidian", 28092)
 	RegisterLuaBoss("npc_injured_goblin", 29434)
+	// npc_brann_bronzebeard_keystone (Storm Peaks zone script, quest
+	// 13285 "Forging the Keystone" — the TaskScheduler-census deferred
+	// 13-event chain): OnGossipSelect starts the chain and the timed
+	// Talk / voice-resurrection / signal-summon / kill-credit /
+	// facing / Despawn steps port (zone_storm_peaks.cpp:474-624) —
+	// see lua_scripts/northrend/npc_brann_bronzebeard_keystone.lua.
+	// The SetWalk/MovePoint locomotion steps and the step-11 signal
+	// Delete leg stay documented-only (no movement or GO-by-GUID
+	// bridge). Entry 31810 verifiable from the file's own enum.
+	RegisterLuaBoss("npc_brann_bronzebeard_keystone", 31810)
 	// npc_av_marshal_or_warmaster (Alterac Valley zone script) — the first
 	// unit of the Eastern Kingdoms pass (eastern_kingdoms_script_loader.cpp
 	// order: AddSC_alterac_valley; boss_balinda follows). The combat event
