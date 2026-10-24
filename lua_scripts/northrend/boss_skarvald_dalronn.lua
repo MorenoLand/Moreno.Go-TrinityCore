@@ -100,13 +100,16 @@
 -- PORTED 2026-10-21: the Talk + RemoveFlag legs are C++-exact under the
 -- twin_valkyr per-pull death-counter model (first ev4 of the pull takes
 -- the other-alive branch, second the both-dead branch; counter reset on
--- engage since ev23 fires ahead of ev4 on the death path). STILL OUT:
--- the cross-creature DoAction legs (no DoAction bridge), the triggered
+-- engage since ev23 fires ahead of ev4 on the death path). PORTED
+-- 2026-10-24: the ACTION_OTHER_JUST_DIED leg — first-death handler relays
+-- via relayDeathResponse (FindNearestCreature survivor + 2s timer keyed by
+-- the survivor's GUID, maulgar precedent). STILL OUT: the triggered
 -- ghost summon (summon leg), the summons-despawn leg, and _JustDied().
 -- DoAction(ACTION_OTHER_JUST_DIED) (lines 144-157) — schedules
 -- EVENT_DEATH_RESPONSE (2s) -> Talk(SAY_DEATH_RESPONSE 4) (lines
--- 159-163); DoAction-gated, no bridge. ACTION_DESPAWN_SUMMONS
--- (summons.DespawnAll()) — no bridge.
+-- 159-163); ports via relayDeathResponse (no DoAction bridge needed —
+-- bare-Talk receiver + bridged FindNearestCreature lookup).
+-- ACTION_DESPAWN_SUMMONS (summons.DespawnAll()) — no bridge.
 -- Dalronn EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,
 -- SPELL_SUMMON_SKELETONS 52611) self-cast summon, heroic-gated init
 -- 10s, repeat {10s,30s} — summon leg, BLOCKED per doctrine.
@@ -120,6 +123,7 @@ local SAY_AGGRO = 0
 local SAY_DEATH = 1
 local SAY_DIED_FIRST = 2
 local SAY_KILL = 3
+local SAY_DEATH_RESPONSE = 4
 
 local SPELL_CHARGE = 43651
 local SPELL_STONE_STRIKE = 48583
@@ -242,20 +246,39 @@ local function skarvaldLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ generic_boss_controllerAI::JustDied (lines 119-137) + DoAction
+-- (ACTION_OTHER_JUST_DIED) (lines 144-157): the first death of the pull
+-- schedules EVENT_DEATH_RESPONSE (2s) on the surviving boss, which then
+-- Talks SAY_DEATH_RESPONSE. No DoAction bridge exists, but the receiver
+-- lookup is the bridged FindNearestCreature (maulgar precedent) and the
+-- receiver leg is a bare Talk, so the relay ports: the 2s timer is keyed
+-- by the survivor's GUID, so the survivor's own ev2/ev4/ev23 cancelTimers
+-- drops it if the survivor dies or leaves combat first (C++ _JustDied
+-- resets the survivor's events on its own death). Nil survivor (dead or
+-- absent — the bridge skips Health==0 entries) means no relay, matching
+-- the C++ otherBoss->IsAlive() gate.
+local function relayDeathResponse(creature, otherEntry)
+    local survivor = creature:FindNearestCreature(otherEntry, 100.0)
+    if survivor ~= nil then
+        schedule(survivor:GetGUID(), "deathresponse", 2000, function() survivor:Talk(SAY_DEATH_RESPONSE) end)
+    end
+end
+
 local function skarvaldDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     -- C++ generic_boss_controllerAI::JustDied (lines 119-137): first death
     -- of the pull takes the other-alive branch — Talk(SAY_DIED_FIRST),
     -- then RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE); second
-    -- death takes the both-dead branch — Talk(SAY_DEATH). The cross-AI
-    -- DoAction legs, the ghost-summon DoCast and the summons-despawn leg
-    -- stay out (no DoAction/summon bridges).
+    -- death takes the both-dead branch — Talk(SAY_DEATH). The ghost-summon
+    -- DoCast and the summons-despawn leg stay out (no summon bridges);
+    -- the OTHER_JUST_DIED leg ports via relayDeathResponse.
     bossDeaths = bossDeaths + 1
     if bossDeaths >= 2 then
         creature:Talk(SAY_DEATH)
     else
         creature:Talk(SAY_DIED_FIRST)
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        relayDeathResponse(creature, ENTRY_DALRONN)
     end
 end
 
@@ -334,13 +357,15 @@ local function dalronnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     -- Same C++ generic_boss_controllerAI::JustDied model as skarvaldDied:
     -- first death of the pull takes the other-alive branch, second the
-    -- both-dead branch; cross-AI DoAction / summon legs stay out.
+    -- both-dead branch; summon legs stay out, OTHER_JUST_DIED ports via
+    -- relayDeathResponse.
     bossDeaths = bossDeaths + 1
     if bossDeaths >= 2 then
         creature:Talk(SAY_DEATH)
     else
         creature:Talk(SAY_DIED_FIRST)
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        relayDeathResponse(creature, ENTRY_SKARVALD)
     end
 end
 
