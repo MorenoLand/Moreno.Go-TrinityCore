@@ -64,8 +64,8 @@
 -- Enslaved Soul: OnReset: triggered self-cast enslaved soul
 -- passive 41535 (C++-exact; the REACT_PASSIVE and 3s
 -- REACT_AGGRESSIVE arms are PORTED 2026-10-20 — creature:SetReactState;
--- the reliquary->JustSummoned link and the DoZoneInCombat arms have
--- no instance bridge). OnDamageTaken(9):
+-- the reliquary->JustSummoned link has no instance bridge; the
+-- 3s DoZoneInCombat scheduler arm is PORTED below). OnDamageTaken(9):
 -- lethal damage is rewritten to 0 (C++ damage = 0, C++-exact)
 -- with the once-guard in per-GUID state, plus the triggered
 -- self-cast soul release 41542 (the AttackStop/MotionMaster-clear
@@ -248,8 +248,8 @@ end
 -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535
 -- (C++-exact). The REACT_PASSIVE and 3s REACT_AGGRESSIVE arms are
 -- PORTED 2026-10-20 — creature:SetReactState; the reliquary
--- JustSummoned link and the DoZoneInCombat scheduler arm have
--- no instance/cross-creature bridges.
+-- JustSummoned link has no instance bridge; the DoZoneInCombat
+-- scheduler arm is PORTED (self-call, bridge live).
 local function soulReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -264,10 +264,13 @@ local function soulReset(event, creature)
         creature:CastSpell(creature, SPELL_ENSLAVED_SOUL_PASSIVE, true)
     end
     -- C++ boss_reliquary_of_souls.cpp:603: 3s scheduler ->
-    -- SetReactState(REACT_AGGRESSIVE). The DoZoneInCombat co-arm has no
-    -- bridge and stays out (react arm only); cancelTimers covers cleanup.
+    -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat() (C++ arm
+    -- order; the self-call needs no instance bridge — creature:
+    -- DoZoneInCombat is bridged, lua_creature_events.go:461 — only
+    -- the reliquary->JustSummoned link stays out, instance-gated).
     schedule(guid, "soulAggressive", 3000, function()
         creature:SetReactState(2) -- REACT_AGGRESSIVE
+        creature:DoZoneInCombat()
     end)
 end
 
