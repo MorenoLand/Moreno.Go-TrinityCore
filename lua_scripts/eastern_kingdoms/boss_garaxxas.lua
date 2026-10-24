@@ -75,13 +75,16 @@
 --   within-ATTACK_DISTANCE gate is now bridgeable but the
 --   gameobject one-trap-at-a-time check is not; a straight 15000ms
 --   cast would double-trap, so the arm stays out.
--- - Reset's sliver-pet leg (me->SummonCreature(NPC_SLIVER 24552, ...)
---   + JustSummoned m_uiPetGUID tracking + ObjectAccessor re-acquire)
---   — stays out: no GUID-liveness bridge (Reset re-acquires the pet
---   via ObjectAccessor::GetUnit(m_uiPetGUID), :1053 — without it the
---   port would duplicate slivers every reset; JustSummoned is event
---   19 and IS bridged, so only the liveness check blocks) —
---   the summon bridge itself is live (razorgore precedent retired).
+-- - Reset's sliver-pet leg PORTED (boss_priestess_delrissa.cpp:1050-
+--   1057): the ObjectAccessor::GetUnit(m_uiPetGUID) liveness check
+--   is twinned by FindNearestCreature(24552, 100.0) — the sliver
+--   spawns at Garaxxas's feet (all-zero coords fall back to the
+--   close point) and has no follow/move AI in-port, so a live pet
+--   is always nearby; absent -> SummonCreature(24552, 0,0,0,0, Go
+--   type 4 = TEMPSUMMON_CORPSE_DESPAWN). Event 23 fires on the evade
+--   path and on the respawn path (fireCreatureSpawned fires 23 too),
+--   matching both C++ Reset call sites Go models; no event-5 leg
+--   (C++ AIM_Initialize calls InitializeAI, not Reset).
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -101,6 +104,7 @@ local SPELL_CONCUSSIVE_SHOT = 27634
 local SPELL_MULTI_SHOT = 31942
 local SPELL_WING_CLIP = 44286
 local SPELL_HEALING_POTION = 15503
+local NPC_SLIVER = 24552
 
 local ENTRY_GARAXXAS = 24555
 
@@ -192,6 +196,18 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_garaxxasAI::Reset (boss_priestess_delrissa.cpp:1050-1057):
+-- re-summon the sliver pet only when the stored pet is gone (see the
+-- header note for the FindNearestCreature liveness twin). Returns
+-- nothing: a true return would veto the whole evade (creaturemotion
+-- evade path), and C++ Reset never vetoes.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:FindNearestCreature(NPC_SLIVER, 100.0) == nil then
+        creature:SummonCreature(NPC_SLIVER, 0.0, 0.0, 0.0, 0.0, 4)
+    end
+end
+
 local function onDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
     if usedPotion[guid] then
@@ -216,4 +232,4 @@ RegisterCreatureEvent(ENTRY_GARAXXAS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_GARAXXAS, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_GARAXXAS, 4, onDied)
 RegisterCreatureEvent(ENTRY_GARAXXAS, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_GARAXXAS, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_GARAXXAS, 23, onReset)

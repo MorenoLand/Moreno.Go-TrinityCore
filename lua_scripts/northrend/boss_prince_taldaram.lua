@@ -22,34 +22,23 @@
 -- precedent; C++ casts on the victim with the "random target?" note, not
 -- triggered); KilledUnit Talk(SAY_SLAY 3) player-gated (event 3,
 -- victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
--- Talk(SAY_DEATH 4) (event 4). The embrace-target latch on KilledUnit
--- (clearing _embraceTargetGUID) is unmodeled — the GUID bridge is absent.
--- Unmodeled (no bridges — documented, not wired):
--- EVENT_VANISH (25-35s init/repeat): gated on
--- GetThreatManager().GetThreatListSize() > 1 — no threat-list bridge on
--- the Lua surface — and the leg drives SelectTarget(Random, 0, 100.0f,
--- true) for the embrace target — the random-target pool uses the
--- randomPlayer idiom (eck/faerlina; the old "absent random-target
--- bridge (cairne/kazzak precedent)" claim is STALE) — but the
--- threat-list-size gate has no bridge, so the whole vanish/feed machine
--- (EVENT_START_FEEDING Shadowstep 55966 + Embrace of the Vampyr 55959 +
--- Talk(SAY_FEED 5), EVENT_DONE_FEEDING, _embraceTargetGUID via
--- ObjectAccessor::GetUnit, RemoveAurasDueToSpell(VANISH 55964),
--- CastStop) is documented-only; porting the timer without the
--- threat-list gate would fire Vanish when solo, failing the C++-exact
--- port bar.
--- DamageTaken embrace-damage latch (_embraceTakenDamage vs
--- DATA_EMBRACE_DMG 20000 / heroic 40000 -> Clear + CastStop) —
--- documented-only: CREATURE_EVENT_ON_DAMAGE_TAKEN (9) and
--- creature:IsHeroic() ARE now bridged (the old "no DamageTaken hook
--- (npc_unkor_the_ruthless precedent)" and "no difficulty bridge
--- (kelidan breaker precedent)" claims are STALE), but the latch stays
--- unported — the embrace-target setter (the vanish SelectTarget leg,
--- C++ :196-197) has no threat-list bridge, so _embraceTargetGUID would
--- always be nil and the ported latch permanently inert.
--- The UpdateAI vanish-evade check (HasAura(VANISH 55964) +
--- IsThreatListEmpty -> EnterEvadeMode) — threat-list + evade bridges
--- absent — documented-only.
+-- Talk(SAY_DEATH 4) (event 4); KilledUnit embrace clear PORTED (event 3:
+-- victim GUID == stored embrace target GUID -> clear, before Talk).
+-- Ported vanish/feed machine (C++ :191-243): EVENT_VANISH (25-35s
+-- init/repeat) gated on #GetAITargets() > 1 (GetThreatListSize twin),
+-- pick = random alive threat-list player within 100yd (SelectTarget
+-- Random,0,100,true twin; the stored player object replaces the
+-- ObjectAccessor::GetUnit lookup), Talk(SAY_VANISH 6) + DoCastSelf
+-- (VANISH 55964) + START_FEEDING in 2s; START_FEEDING removes VANISH,
+-- casts Shadowstep 55966 + Embrace 55959, Talk(SAY_FEED 5), DONE_FEEDING
+-- in 20s (target clear only — the damage counter persists across feeds
+-- per C++); DamageTaken latch (event 9): accumulate while the embrace
+-- target is alive, past 20000 / heroic 40000 -> clear target (CastStop
+-- vacuous in Go's packet-visual cast model, heigan precedent).
+-- Deviations: C++ DelayEvents(500ms) on VANISH has no Lua twin
+-- (independent CreateLuaEvent timers); the UpdateAI vanish-evade check
+-- stays out (EnterEvadeMode has no Lua bridge, 2026-10-21).
+-- Unmodeled (documented, not wired):
 -- Reset CheckSpheres()/RemovePrison()/SummonCreatureGroup legs (sphere
 -- data DATA_SPHERE_1/2, prison flags, UNIT_FLAG_NOT_SELECTABLE removal,
 -- NPC_JEDOGA_CONTROLLER despawn, SPELL_HOVER_FALL 60425, MoveLand, GO
@@ -92,11 +81,30 @@ local ENTRY_PRINCE_TALDARAM = 29308
 local SAY_AGGRO = 2
 local SAY_SLAY  = 3
 local SAY_DEATH = 4
+local SAY_FEED  = 5
+local SAY_VANISH = 6
 
 local SPELL_BLOODTHIRST          = 55968
 local SPELL_CONJURE_FLAME_SPHERE = 55931
+local SPELL_VANISH               = 55964
+local SPELL_SHADOWSTEP           = 55966
+local SPELL_EMBRACE_OF_THE_VAMPYR = 55959
 
 local timers = {}
+
+-- C++ _embraceTargetGUID / _embraceTakenDamage: the target is stored as
+-- the player object itself (the ObjectAccessor::GetUnit lookup has no
+-- bridge, but the vanish pick already holds the object). Both clear on
+-- engage/leave/died/reset (C++ Reset); DONE_FEEDING, the threshold trip
+-- and KilledUnit clear the target ONLY — the counter persists across
+-- feeds per C++ (it is never reset outside Reset).
+local embraceTarget = {}
+local embraceDamage = {}
+
+local function clearEmbrace(guid)
+    embraceTarget[guid] = nil
+    embraceDamage[guid] = nil
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -139,9 +147,55 @@ local function conjureTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_START_FEEDING: RemoveAurasDueToSpell(VANISH) unconditionally,
+-- then, if the embrace target still resolves, Shadowstep + Embrace casts
+-- + Talk(SAY_FEED) + DONE_FEEDING in 20s. No alive check here (C++ has
+-- none — GetEmbraceTarget returns the unit regardless of liveness).
+local function startFeedingTick(creature, guid)
+    creature:RemoveAura(SPELL_VANISH)
+    local target = embraceTarget[guid]
+    if target then
+        creature:CastSpell(target, SPELL_SHADOWSTEP)
+        creature:CastSpell(target, SPELL_EMBRACE_OF_THE_VAMPYR)
+        creature:Talk(SAY_FEED)
+        schedule(guid, "donefeeding", 20000, function()
+            embraceTarget[guid] = nil
+        end)
+    end
+end
+
+-- C++ EVENT_VANISH: gate GetThreatListSize() > 1 (GetAITargets twin);
+-- pick SelectTarget(Random, 0, 100, true) = a random alive threat-list
+-- player within 100yd. The pick is optional in C++ (the if only stores
+-- the GUID): Talk + Vanish cast + START_FEEDING schedule fire even
+-- when no target is picked. C++ DelayEvents(500ms) has no Lua twin.
+local function vanishTick(creature, guid)
+    local targets = creature:GetAITargets()
+    if #targets > 1 then
+        local candidates = {}
+        for _, t in ipairs(targets) do
+            if t:GetObjectType() == "Player" and not t:IsDead() and creature:GetDistance(t) <= 100 then
+                candidates[#candidates + 1] = t
+            end
+        end
+        if #candidates > 0 then
+            embraceTarget[guid] = candidates[math.random(#candidates)]
+        end
+        creature:Talk(SAY_VANISH)
+        creature:CastSpell(creature, SPELL_VANISH)
+        schedule(guid, "startfeeding", 2000, function()
+            startFeedingTick(creature, guid)
+        end)
+    end
+    schedule(guid, "vanish", {25000, 35000}, function()
+        vanishTick(creature, guid)
+    end)
+end
+
 local function taldaramEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    clearEmbrace(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "bloodthirst", 10000, function()
         bloodthirstTick(creature, guid)
@@ -149,25 +203,59 @@ local function taldaramEnterCombat(event, creature, target)
     schedule(guid, "conjure", 5000, function()
         conjureTick(creature, guid)
     end)
+    schedule(guid, "vanish", {25000, 35000}, function()
+        vanishTick(creature, guid)
+    end)
 end
 
 local function taldaramLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearEmbrace(guid)
 end
 
 local function taldaramTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
+        local guid = creature:GetGUID()
+        local target = embraceTarget[guid]
+        if target ~= nil and victim:GetGUID() == target:GetGUID() then
+            embraceTarget[guid] = nil
+        end
         creature:Talk(SAY_SLAY)
     end
 end
 
 local function taldaramDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearEmbrace(guid)
     creature:Talk(SAY_DEATH)
 end
 
 local function taldaramReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearEmbrace(guid)
+end
+
+-- C++ DamageTaken embrace latch: accumulate while the embrace target
+-- resolves and is alive; past DATA_EMBRACE_DMG (20000 / heroic 40000)
+-- clear the target (CastStop vacuous in Go's packet-visual cast model).
+-- Damage passes through unchanged (no return, garaxxas precedent).
+local function taldaramDamageTaken(_, creature, _, damage)
+    local guid = creature:GetGUID()
+    local target = embraceTarget[guid]
+    if target and not target:IsDead() then
+        local total = (embraceDamage[guid] or 0) + damage
+        embraceDamage[guid] = total
+        local threshold = 20000
+        if creature:IsHeroic() then
+            threshold = 40000
+        end
+        if total > threshold then
+            embraceTarget[guid] = nil
+        end
+    end
 end
 
 -- C++ boss_prince_taldaramAI ctor (boss_prince_taldaram.cpp:95-100):
@@ -183,5 +271,6 @@ RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 2, taldaramLeaveCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 3, taldaramTargetDied)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 4, taldaramDied)
+RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 9, taldaramDamageTaken)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 5, taldaramSpawn)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 23, taldaramReset)

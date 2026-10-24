@@ -89,10 +89,15 @@
 --   bridged) but the whole OUTRO chain rides the unbridged
 --   SummonedCreatureDespawn trigger, so the leg stays stranded;
 --   DoCastSelf 53627's trigger is stranded).
--- - EVENT_CHECK_PLAYER (quest-accept _playerGUID capture +
---   ObjectAccessor::GetPlayer + player alive/distance check
---   + player->FailQuest(QUEST_BLOODY_BREAKOUT) — no bridges;
---   dark-rider / death_knight_initiate precedents).
+-- - EVENT_CHECK_PLAYER (C++ :267-281: dead-or-beyond-30yd player ->
+--   _summons.DespawnAll + DespawnOrUnsummon(1s) + FailQuest) — the
+--   _playerGUID capture (OnGossipHello, :115) + GetPlayer lookup
+--   (GetPlayersInWorld GUID scan, black stalker precedent) + 30yd
+--   gate + Despawn all have Lua twins; sole blockers are
+--   player:FailQuest (no Lua surface, engine failQuest internal
+--   only) and the summon-list DespawnAll — porting Despawn alone
+--   would strand the quest (giver gone, quest active). Dark-rider /
+--   death_knight_initiate precedents.
 -- - MovementInform's POINT_ID_6 Mount(NPC_KOLTIRA_MOUNT 25445)
 --   arm (no MovementInform bridge; Mount bridge live — the arm rides the
 --   unbridged MovementInform, so it stays out).
