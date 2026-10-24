@@ -131,8 +131,9 @@
 --   (cancelGroup = the phase-group semantics) and SetCombatMovement
 --   (false) models the C++ stand-down (done in the 0s-scheduled
 --   EVENT_RITUAL_PREPARATION).
--- EVENT_RITUAL_STRIKE skeleton (:376-382) — StopMoving / MoveIdle have
---   no bridge; InterruptNonMeleeSpells(true) is bridged. The triggered
+-- EVENT_RITUAL_STRIKE skeleton (:376-382) — StopMoving PORTED below
+--   (bridge live, lua_creature_events.go); MoveIdle has no bridge;
+--   InterruptNonMeleeSpells(true) is bridged. The triggered
 --   self-cast of SPELL_RITUAL_STRIKE_TRIGGER (48331) lands 48277 on
 --   Svala via its unbridged SpellScript — collapsed to the direct
 --   48277 hit so the C++-exact SpellHitTarget phase arm fires (event
@@ -333,8 +334,9 @@ local function enterNormalPhase(creature, guid)
     end)
 end
 
--- C++ EVENT_RITUAL_STRIKE skeleton (:376-382): StopMoving / MoveIdle
--- have no bridge; InterruptNonMeleeSpells(true) is bridged. The
+-- C++ EVENT_RITUAL_STRIKE skeleton (:376-382): StopMoving PORTED below
+-- (bridge live, lua_creature_events.go); MoveIdle has no bridge;
+-- InterruptNonMeleeSpells(true) is bridged. The
 -- triggered self-cast of SPELL_RITUAL_STRIKE_TRIGGER (48331) lands
 -- SPELL_RITUAL_STRIKE_EFF_1 (48277) on Svala via its unbridged
 -- SpellScript — collapsed to the direct 48277 hit so the C++-exact
@@ -347,6 +349,9 @@ local function onRitualStrike(creature, guid)
     if not st or not st.sacrificed then
         return
     end
+    -- C++ boss_svala.cpp:377-380 order: StopMoving, MoveIdle (no bridge),
+    -- InterruptNonMeleeSpells(true), triggered cast.
+    creature:StopMoving()
     creature:InterruptNonMeleeSpells(true)
     creature:CastSpell(creature, SPELL_RITUAL_STRIKE_EFF_1, true)
 end
