@@ -95,8 +95,9 @@
 -- tick's DoCast, exactly as in C++.
 -- EnterEvadeMode summons.DespawnAll + _DespawnAtEvade (:111-:115) — no
 -- despawn bridge (terestian precedent) — documented-only.
--- JustEngagedWith InterruptNonMeleeSpells — no bridge; BossAI
--- _Reset/_JustDied instance bookkeeping has no bridge.
+-- JustEngagedWith InterruptNonMeleeSpells(false) — PORTED below
+-- (no-op twin, curator precedent); BossAI _Reset/_JustDied
+-- instance bookkeeping has no bridge.
 -- C++ threat-list caveat (shared with the keleseth/thorim/beast ports):
 -- C++ SelectTarget draws from the threat list; the bridge draws from
 -- GetPlayersInWorld in range, which can include nearby unengaged players.
@@ -315,11 +316,13 @@ transformTick = function(creature, guid)
 end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith + Talk(SAY_AGGRO) +
--- InterruptNonMeleeSpells (no bridge) + SetPhase(PHASE_TROLL) (:121-:126).
+-- InterruptNonMeleeSpells(false) (ported below, no-op twin) +
+-- SetPhase(PHASE_TROLL) (:121-:126).
 local function galDarahEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:InterruptNonMeleeSpells(false)
     phaseState[guid] = { phase = PHASE_TROLL, counter = 0 }
     scheduleTrollPhase(creature, guid)
 end

@@ -35,7 +35,8 @@
 -- 16s repeat (ungated UpdateVictim arm); the
 -- spell_eadric_radiance target filter (front 2.5f / 40y cone) has
 -- no SpellScript bridge — modeled as the plain self-cast AOE.
--- uiHammerJusticeTimer — InterruptNonMeleeSpells (unwired, no bridge)
+-- uiHammerJusticeTimer — InterruptNonMeleeSpells(true) PORTED below
+-- (no-op twin, unconditional per C++)
 -- + SelectTarget(Random, 0, 250, true) -> DoCast(target, Hammer of
 -- Justice 66863) + DoCast(target, Hammer of the Righteous 66867),
 -- 25s init / 25s repeat — PORTED (the "random-target SelectTarget
@@ -235,13 +236,14 @@ local function randomPlayer(creature, maxDist)
     return candidates[math.random(#candidates)]
 end
 
--- C++ uiHammerJusticeTimer: InterruptNonMeleeSpells (no interrupt
--- bridge — maiden precedent, documented unwired) + SelectTarget ->
+-- C++ uiHammerJusticeTimer: InterruptNonMeleeSpells(true) (no-op
+-- twin, fired unconditionally even with no candidate) + SelectTarget ->
 -- DoCast(target, Hammer of Justice 66863) + DoCast(target, Hammer of
 -- the Righteous 66867), non-triggered; 25s init, 25s repeat. No cast
 -- when no candidate (C++ SelectTarget returns null on an empty
 -- threat list).
 local function hammerJusticeTick(creature, guid)
+    creature:InterruptNonMeleeSpells(true)
     local target = randomPlayer(creature, 250)
     if target then
         creature:CastSpell(target, SPELL_HAMMER_JUSTICE)

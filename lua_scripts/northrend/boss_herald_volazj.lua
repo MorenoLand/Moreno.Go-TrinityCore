@@ -57,7 +57,8 @@
 -- PORTED below (event 9; the old "no health-pct bridge (doomwalker
 -- precedent)" claim was stale — event 9 carries pre-damage damage
 -- and creature:GetHealth()/GetMaxHealth() are bridged);
--- me->InterruptNonMeleeSpells(false) still has no bridge.
+-- me->InterruptNonMeleeSpells(false) — PORTED below (no-op twin,
+-- curator precedent).
 -- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — stays
 -- out on reachability grounds: the only 57496 cast is the
 -- ported 66%/33% self-cast, whose hit target is the boss itself,
@@ -241,7 +242,7 @@ end
 -- C++ DamageTaken (cpp:114-134): GetHealthPct(damage) with
 -- damage > health -> 0 and integer division
 -- (100*(health-damage)/maxHealth). Downward crossing of 66% or 33%
--- -> me->InterruptNonMeleeSpells(false) (no bridge, documented)
+-- -> me->InterruptNonMeleeSpells(false) (ported below, no-op twin)
 -- + DoCast(me, SPELL_INSANITY, false) = self-cast, non-triggered
 -- (vaelastrasz convention: CastSpell(creature, spell) = DoCastSelf).
 -- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg needs the absent flag
@@ -266,6 +267,7 @@ local function volazjDamageTaken(event, creature, attacker, damage)
     local pre = pctAfter(0)
     local post = pctAfter(damage)
     if (pre >= 66 and post < 66) or (pre >= 33 and post < 33) then
+        creature:InterruptNonMeleeSpells(false)
         creature:CastSpell(creature, SPELL_INSANITY)
     end
 end

@@ -326,7 +326,7 @@ end
 
 local function reset(event, creature)
     cancelTimers(creature:GetGUID())
-    creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg has no bridge)
+    creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg stays out on the paired-arm rule — see header)
 end
 
 RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)
