@@ -503,8 +503,8 @@ RegisterCreatureEvent(ENTRY_JANALAI, 23, janalaiReset)
 
 -- npc_janalai_firebomb (23920, C++ ScriptName for the entry): SpellHit on
 -- FIRE_BOMB_THROW 42628 -> triggered self-cast FIRE_BOMB_DUMMY 42629.
--- Fire bombs never spawn in this build (no summon model), but the AI is
--- registered so any that exist react correctly.
+-- Fire bombs spawn from the boss bomb phase (onBombPhase FireWall +
+-- SpawnBombs summons), so summoned bombs react correctly.
 local function firebombSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_FIRE_BOMB_THROW then
         creature:CastSpell(creature, SPELL_FIRE_BOMB_DUMMY, true)

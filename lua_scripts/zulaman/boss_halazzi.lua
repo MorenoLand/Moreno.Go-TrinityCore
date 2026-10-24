@@ -29,8 +29,9 @@
 -- Deviations from C++: the spirit lynx IS summoned now (2026-10-24
 -- summon bridge — DoSpawnCreature at boss +5,+5, type 4; the
 -- commented-out SPELL_SUMMON_LYNX stays unmodeled), the merge-walk has no movement model
--- (MoveFollow/Clear have no bridge), so the merge completes on a 2s timer
--- instead of the 6-yd proximity check; the lynx-health merge arm IS
+-- (MoveFollow/Clear have no bridge), so the merge completes on the C++
+-- 1s proximity poll (6-yd IsWithinDistInMap check, boss_halazzi.cpp:292-304)
+-- plus a 2s timer fallback for lynxes that never close distance; the lynx-health merge arm IS
 -- ported now (2026-10-24, lynx summoned since 07:27), the lynx
 -- DisappearAndDie on lynx/enrage entry IS ported (Despawn twin), and
 -- the merge-entry NON_ATTACKABLE flag IS ported (SetFlag twin); the transform-completion signal (SPELL_TRANSFORM_SPLIT2
@@ -157,7 +158,7 @@ local function cancelPhaseTimers(guid)
         return
     end
     for _, key in ipairs({ "frenzy", "saberlash", "shock", "totem", "check",
-            "splitwait", "mergewait" }) do
+            "splitwait", "mergewait", "mergepoll" }) do
         if per[key] then
             RemoveEventById(per[key])
             per[key] = nil
@@ -253,9 +254,11 @@ local function onTotem(creature, guid)
 end
 
 -- C++ merge completion (MoveFollow both ways until within 6 yd): no
--- movement model, so the merge completes on a timer. TransformCount
--- increments here — C++ increments it when the lynx exists; the lynx
--- never exists here, so the counter moves with the (unavoidable) merge.
+-- movement model, so the merge completes on the 1s proximity poll
+-- (onMergePoll) or the 2s timer fallback. TransformCount increments
+-- here — C++ increments it in EnterPhase(PHASE_MERGE) when the lynx
+-- exists; the timer fallback moves it unconditionally so a missing
+-- lynx cannot soft-lock the merge.
 local function onMergeComplete(creature, guid)
     local st = halazziState(guid)
     if st.phase ~= PHASE_MERGE then
@@ -269,11 +272,34 @@ local function onMergeComplete(creature, guid)
     end
 end
 
+-- C++ PHASE_MERGE 1s check (boss_halazzi.cpp:292-304): each tick the
+-- lynx and boss MoveFollow each other and the merge completes when
+-- within 6 yd. MoveFollow has no bridge, so a 1s proximity poll twins
+-- the check (IsWithinDistInMap bridged via the generic object
+-- fallback: same-map gate, raw 3D distance with no combat-reach
+-- subtraction — a small conservative deviation); the 2s mergewait
+-- timer stays as the fallback for lynxes that never close distance.
+local function onMergePoll(creature, guid)
+    local st = halazziState(guid)
+    if st.phase ~= PHASE_MERGE then
+        return
+    end
+    local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
+    if lynx and creature:IsWithinDistInMap(lynx, 6.0) then
+        onMergeComplete(creature, guid)
+        return
+    end
+    schedule(timers, guid, "mergepoll", 1000, function()
+        onMergePoll(creature, guid)
+    end)
+end
+
 -- C++ EnterPhase(PHASE_MERGE) (boss_halazzi.cpp:182-193): when the
 -- lynx is found, Talk(SAY_MERGE), NON_ATTACKABLE flag, MoveFollow
 -- both ways, ++TransformCount. The flag leg is ported (SetFlag twin,
--- zuljin precedent); the MoveFollow walk stays timer-approximated
--- (no movement bridge), and Talk stays unconditional so a missing
+-- zuljin precedent); the MoveFollow walk is approximated by the 1s
+-- proximity poll plus the 2s timer fallback (no movement bridge),
+-- and Talk stays unconditional so a missing
 -- lynx (failed summon) cannot soft-lock the merge -- C++ would stall
 -- in MERGE with no lynx, while the timer always completes here.
 -- TransformCount still increments in onMergeComplete (see there).
@@ -288,6 +314,9 @@ local function startMerge(creature, guid)
     end
     schedule(timers, guid, "mergewait", 2000, function()
         onMergeComplete(creature, guid)
+    end)
+    schedule(timers, guid, "mergepoll", 1000, function()
+        onMergePoll(creature, guid)
     end)
 end
 

@@ -38,14 +38,14 @@
 -- paused (C++ !TankGUID gate) and DoMeleeAttackIfReady is skipped.
 -- Deviations from C++: JustEngagedWith's SpawnAdds IS ported on the live
 -- SummonCreature bridge (the 4 animal spirits, aura + NON_ATTACKABLE —
--- the mandokir chained-spirit precedent); the four feather vortices and
--- the column-of-fire pillars never spawn, so the spirit Siphon Soul
--- 43501 casts, the spirit death-state arms (incl. JustDied's
--- UNIT_STAND_STATE_DEAD — SetStandState is bridged, the old "no
--- SetUInt32Value bridge" note was stale, but the arm is vacuous since
--- the spirits never spawn), and the vortex
--- summon/cleanup arms are skipped (the vortex AI is still registered so
--- any spawned 24136 zaps back correctly); the teleport is ported below via
+-- the mandokir chained-spirit precedent); the four feather vortices
+-- ARE ported below (eagle-phase transform summons + lynx-phase
+-- cleanup sweep, 2026-10-24) while the column-of-fire pillars never
+-- spawn, so the spirit Siphon Soul 43501 casts and the spirit
+-- death-state arms (incl. JustDied's UNIT_STAND_STATE_DEAD —
+-- SetStandState is bridged, the old "no SetUInt32Value bridge" note
+-- was stale, but the arm is vacuous since the spirits never spawn)
+-- are skipped; the teleport is ported below via
 -- creature:Teleport (120.148811, 703.713684, 45.111477, 100) on
 -- phase change; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
 -- via creature:SetEquipmentSlots (33975 on reset, 0 on phase change); no
@@ -90,6 +90,8 @@ local SPELL_WHIRLWIND = 17207
 local SPELL_GRIEVOUS_THROW = 43093
 local SPELL_CREEPING_PARALYSIS = 43095
 local SPELL_ENERGY_STORM = 43983
+local SPELL_CYCLONE_PASSIVE = 43120
+local SPELL_CYCLONE_VISUAL = 43119
 local SPELL_ZAP_INFORM = 42577
 local SPELL_ZAP_DAMAGE = 43137
 local SPELL_CLAW_RAGE_DAMAGE = 43150
@@ -455,8 +457,29 @@ local function enterPhase(creature, guid, next)
     end
     if next == PHASE_EAGLE then
         creature:CastSpell(creature, SPELL_ENERGY_STORM, true)
+        -- C++ EnterPhase case 2 (boss_zuljin.cpp:322-331): 4 feather
+        -- vortices DoSpawnCreature at the boss (0,0,0,0 offsets = boss
+        -- position), each triggered CYCLONE_PASSIVE + CYCLONE_VISUAL
+        -- self-cast, NOT_SELECTABLE flag, MOVE_RUN 1.0;
+        -- AttackStart/DoZoneInCombat stay out (vortex AI registered,
+        -- idles until engine aggro, halazzi-lynx precedent).
+        local bx, by, bz, bo = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+        for _ = 1, 4 do
+            local vortex = creature:SummonCreature(ENTRY_VORTEX, bx, by, bz, bo, 4, 0)
+            if vortex then
+                vortex:CastSpell(vortex, SPELL_CYCLONE_PASSIVE, true)
+                vortex:CastSpell(vortex, SPELL_CYCLONE_VISUAL, true)
+                vortex:SetFlag(59, 0x02000000)
+                vortex:SetSpeedRate(1, 1.0)
+            end
+        end
     elseif next == PHASE_LYNX then
         creature:RemoveAura(SPELL_ENERGY_STORM)
+        -- C++ EnterPhase case 3 (boss_zuljin.cpp:340-341): storm
+        -- removal then summons.DespawnEntry(vortex) — grid sweep twin.
+        for _, vortex in ipairs(creature:GetCreaturesInGrid(ENTRY_VORTEX, 100)) do
+            vortex:Despawn()
+        end
         schedule(timers, guid, "clawrage", 5000, function()
             onClawRage(creature, guid)
         end)
@@ -579,8 +602,8 @@ RegisterCreatureEvent(ENTRY_ZULJIN, 23, zuljinReset)
 
 -- npc_zuljin_vortex (24136, C++ ScriptName "npc_zuljin_vortex"):
 -- SpellHit on ZAP_INFORM 42577 -> triggered 43137 on the caster.
--- Vortices never spawn in this build (no summon model), but the AI is
--- registered so any that exist zap back correctly. The C++ UpdateAI
+-- Vortices spawn from the eagle-phase transform (enterPhase summons,
+-- 2026-10-24) and despawn on lynx entry. The C++ UpdateAI
 -- melee-range re-target has no bridge (no AttackStart) and is not
 -- modeled.
 local function vortexSpellHit(event, creature, caster, spellId)
