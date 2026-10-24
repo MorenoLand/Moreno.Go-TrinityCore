@@ -308,7 +308,8 @@ end
 -- the header deviation): EMOTE_BREAKS_FREE + SAY_FREE,
 -- RemoveAura(30205), RemoveFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) (EVENT_RELEASED, boss_magtheridon.cpp:253;
--- the paired SetImmuneToPC(false) leg has no bridge, stays out),
+-- the paired SetImmuneToPC(false) leg is PORTED below (RemoveFlag(59,
+-- 0x100), C++ order after the NOT_SELECTABLE clear),
 -- phase released, the C++ timer set.
 local function magtheridonEnterCombat(event, creature)
     local guid = creature:GetGUID()

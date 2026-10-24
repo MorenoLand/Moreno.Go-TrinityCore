@@ -85,8 +85,10 @@
 -- (:189-219 summon x4 + DoCast(TeleportSpells) cycle); the
 -- Teleport/AttackStop/StopMoving/SetDisableGravity/SetCanFly/
 -- SetReactState/SetRooted legs ARE all bridged now — the machine
--- stays out on DelayEvents(10s), the TELEPORT_BACK AttackStart leg,
--- and the unported _platform cycle trigger; unmodeled.
+-- stays out on the TELEPORT_BACK AttackStart leg and the unported
+-- _platform cycle trigger; DelayEvents itself is NOT the blocker (it is
+-- modelable via the thekal delayTimers due-timestamp idiom) — the machine
+-- stays out on trigger + AttackStart; unmodeled.
 -- DamageTaken — _isInCenter-gated NearTeleportTo(1124.0432,
 -- 1078.2109, 508.3597, 5.4623) on lethal damage — Teleport is
 -- bridged; the blocker is the _isInCenter state, which rides the

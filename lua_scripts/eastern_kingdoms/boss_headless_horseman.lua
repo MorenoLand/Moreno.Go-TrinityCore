@@ -93,7 +93,10 @@
 --   IS bridged — frozen_core precedent, lua_creature_events.go:524;
 --   the JustReachedHome REACT_AGGRESSIVE leg is a no-op in the Lua
 --   model since the REACT_PASSIVE phase-machine leg is unported),
---   SetImmuneToPC (no bridge). HandleInitialSetup's
+--   SetImmuneToPC (twin bridged — SetFlag/RemoveFlag(59, 0x100); the Reset
+--   clear stays out on its _introDone gate: _introDone is set only by the
+--   unported POINT_HORSEMAN_FINISH_PATH flight-path leg, so no clear can
+--   fire in the Lua model). HandleInitialSetup's
 --   DoCastSelf(42413/43877) self-casts were
 --   "stranded halves" (rageclaw/phoenix_tk precedent) only before the ev5
 --   spawn bridge landed; they now port on event 5 below, which fires at the

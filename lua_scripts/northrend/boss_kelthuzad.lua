@@ -146,8 +146,9 @@
 -- ACTION_KELTHUZAD_DIED Talk(EMOTE_GUARDIAN_FLEE 0) + flee/
 -- DespawnOrUnsummon(30s) / MoveTargetedHome legs — Despawn,
 -- CombatStop, StopMoving, RemoveAllAuras and SetReactState are
--- all bridged; the blockers are the DoAction trigger (no bridge),
--- MoveTargetedHome (no bridge) and SetImmuneToPC (no bridge);
+-- all bridged (SetImmuneToPC(true) = SetFlag(59, 0x100), nefarian/opera
+-- twin — it drops as a blocker); the blockers are the DoAction trigger
+-- (no bridge) and MoveTargetedHome (no bridge);
 -- EMOTE_GUARDIAN_APPEAR 1 rides the DoAction visibility timer,
 -- not a bridge gap.
 -- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835):

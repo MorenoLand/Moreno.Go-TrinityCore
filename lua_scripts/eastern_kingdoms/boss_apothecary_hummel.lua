@@ -70,10 +70,12 @@
 --   in onReset, and the per-GUID latch is cleared in Lua).
 -- - EnterEvadeMode: summons.DespawnAll + _DespawnAtEvade(10s) — no
 --   summon/evade bridges; Lua cancels timers on 2.
--- - DoAction: SetImmuneToPC(true) leg + summons.DoAction(ACTION_START_EVENT,
---   DummyEntryCheckPredicate) relay stay out (no immune-clear leg ported
---   for the boss; no summon-relay bridge); the SetFaction(FACTION_MONSTER)
---   leg is PORTED in startEvent, the ported DoAction surrogate.
+-- - DoAction: the SetImmuneToPC(true) leg is PORTED in startEvent (SetFlag
+--   (59, 0x100), C++ order before SetFaction; the clear leg is PORTED in
+--   onStartFight as RemoveFlag(59, 0x300)); the summons.DoAction
+--   (ACTION_START_EVENT, DummyEntryCheckPredicate) relay stays out (no
+--   summon-relay bridge); the SetFaction(FACTION_MONSTER) leg is PORTED in
+--   startEvent, the ported DoAction surrogate.
 -- - DamageTaken SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
 --   UNIT_FLAG_NOT_SELECTABLE) leg — PORTED (2026-10-20); the
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
@@ -266,10 +268,12 @@ local function startEvent(creature)
         return
     end
     st.phase = PHASE_INTRO
-    -- C++ DoAction(ACTION_START_EVENT) (boss_apothecary_hummel.cpp:141):
-    -- SetFaction(FACTION_MONSTER); the SetImmuneToPC(true) leg stays out
-    -- (no immune-clear leg is ported for the boss) and the summons.DoAction
+    -- C++ DoAction(ACTION_START_EVENT) (boss_apothecary_hummel.cpp:140-141),
+    -- in C++ order: SetImmuneToPC(true) = SetFlag(59, 0x100), then
+    -- SetFaction(FACTION_MONSTER); the clear leg is PORTED in onStartFight
+    -- (RemoveFlag(59, 0x300) at EVENT_START_FIGHT); the summons.DoAction
     -- relay stays out (no bridge).
+    creature:SetFlag(59, 0x100)
     creature:SetFaction(FACTION_MONSTER)
     schedule(guid, "say", 1, function()
         creature:Talk(SAY_INTRO_0)
