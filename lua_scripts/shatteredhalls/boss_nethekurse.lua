@@ -85,21 +85,29 @@
 -- unmodeled — their paired removal rides the unported peon-relay /
 -- intro-timer machine, and porting SetFlag alone would strand the
 -- bit (thespia/kalithresh precedent);
--- no summon bridge — the shadow-fissure summon of the
--- fissure NPC never fires and the JustSummoned setup
--- (SetFaction + NON_ATTACKABLE/NOT_SELECTABLE flags +
--- triggered TEMPORARY_VISUAL 39312 + CONSUMPTION 30497 with
--- original-caster args) is unreachable (steamrigger
--- precedent); npc_lesser_shadow_fissure documented only,
--- not registered — all four of its AI overrides are empty
--- (ahune bunny empty-skeleton precedent); H_SPELL_DEATH_COIL
+-- summon bridge live, but spell 30496 has no Go spell-effect
+-- producer (zero engine hits) — the fissure NPC never spawns
+-- in Go, so the JustSummoned setup (SetFaction +
+-- NON_ATTACKABLE/NOT_SELECTABLE flags + triggered TEMPORARY_
+-- VISUAL 39312 + CONSUMPTION 30497 with original-caster
+-- args) is unreachable on producer grounds, not bridge
+-- grounds (steamrigger precedent); npc_lesser_shadow_fissure
+-- documented only, not registered — all four of its AI
+-- overrides are empty (ahune bunny empty-skeleton precedent); H_SPELL_DEATH_COIL
 -- 30741 / H_SPELL_SHADOW_SLAM 35953 are unused C++ enum
 -- members (both casts are unconditional, C++-exact); no
 -- movement bridge — the AttackStart DoStartNoMovement/
--- DoStartMovement arms unmodeled (thespia precedent); no
--- unit-state bridge — the C++ phase-2 branch skips DoMelee
--- AttackIfReady entirely (no melee during the dark-spin
--- phase) and there is no bridge to suppress engine melee;
+-- DoStartMovement arms unmodeled: DoStartMovement is the
+-- engine-default chase, and DoStartNoMovement is
+-- AttackStart-gated in C++ (fires only on the next
+-- AttackStart, not at the phase flip), so a mid-combat
+-- SetCombatMovement(false) would diverge until retarget
+-- (SetCombatMovement itself is bridged — novos engage-time
+-- precedent, thespia precedent); phase-2 melee suppression
+-- PORTED 2026-10-24 via SetMeleeAttack(false) at the flip —
+-- the old "no bridge to suppress engine melee" claim was
+-- stale (SetMeleeAttack is bridged and honored in the
+-- combat-tick swing gate);
 -- no SpellScript/AuraScript scripts in this file.
 
 local SPELL_DEATH_COIL = 30500
@@ -219,6 +227,11 @@ local function bossTick(creature, guid)
         -- arm order — after the timers, same tick).
         if creature:GetHealthPct() <= 20 then
             st.phase = true
+            -- C++ phase-2 branch skips DoMeleeAttackIfReady every
+            -- tick (boss_nethekurse.cpp:240-256 has no melee arm);
+            -- SetMeleeAttack(false) is the bridged twin, honored
+            -- in the combat-tick swing gate (novos precedent).
+            creature:SetMeleeAttack(false)
         end
     end
 end
@@ -227,6 +240,10 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()
+    -- Restore phase-1 melee: the SetMeleeAttack(false) flag
+    -- persists on the motion past evade, so re-engage must
+    -- re-allow swings (phase 1 calls DoMeleeAttackIfReady).
+    creature:SetMeleeAttack(true)
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)

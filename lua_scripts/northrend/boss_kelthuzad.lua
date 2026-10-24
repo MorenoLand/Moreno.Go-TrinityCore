@@ -134,16 +134,26 @@
 -- bridge; the react-state leg is bridgeable in isolation but rides the
 -- unported pocket machine);
 -- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) —
--- no bridge. npc_kelthuzad_guardian (16441 — entry-unverifiable,
--- entry-blocked): ACTION_JUST_SUMMONED visibility/react/combat-pulse
--- legs (no visibility/react bridges); UpdateAI _bloodTapTimer
--- DoCastVictim(SPELL_BLOOD_TAP 28470) — moroes-ready in isolation but
--- entry-blocked — joins the bridgeable-but-entry-blocked queue;
+-- no bridge. npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
+-- boss_kelthuzad.cpp:139 NPC_GUARDIAN; the old "entry-unverifiable"
+-- claim was wrong): ACTION_JUST_SUMMONED visibility/react/combat-pulse
+-- legs are bridged in isolation (SetVisible/SetReactState/
+-- SetCombatPulseDelay all live) but the trigger is boss DoAction
+-- (no bridge) and the producer is SummonCreatureGroup (no bridge)
+-- — guardians never spawn in Go, so no guardian arm can fire;
+-- UpdateAI _bloodTapTimer DoCastVictim(SPELL_BLOOD_TAP 28470) —
+-- moroes-ready in isolation but trigger/producer-blocked;
 -- ACTION_KELTHUZAD_DIED Talk(EMOTE_GUARDIAN_FLEE 0) + flee/
--- DespawnOrUnsummon(30s) / MoveTargetedHome legs — no motion/despawn
--- bridges; EMOTE_GUARDIAN_APPEAR 1 — visibility bridge absent.
--- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835) is
--- bridgeable in isolation (Despawn) but joins the entry-blocked queue.
+-- DespawnOrUnsummon(30s) / MoveTargetedHome legs — Despawn,
+-- CombatStop, StopMoving, RemoveAllAuras and SetReactState are
+-- all bridged; the blockers are the DoAction trigger (no bridge),
+-- MoveTargetedHome (no bridge) and SetImmuneToPC (no bridge);
+-- EMOTE_GUARDIAN_APPEAR 1 rides the DoAction visibility timer,
+-- not a bridge gap.
+-- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835):
+-- ev24 is live, but unreachable — MoveTargetedHome never runs,
+-- so home-arrival never fires; trigger-chain-blocked, not
+-- entry-blocked.
 -- spell_kelthuzad_chains (AuraScript 28410): scale-mod apply/remove
 -- handlers — no AuraScript binding bridge (razelikh precedent) — joins
 -- the SpellScript/AuraScript queue.

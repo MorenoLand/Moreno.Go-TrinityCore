@@ -61,8 +61,11 @@
 -- (3246.57, 551.263, 58.6164, 4.66003) legs are PORTED in
 -- sartharionReset 2026-10-20 (C++ :152-155 order exact);
 -- DrakeRespawn (instance-boss-state-gated drake respawn +
--- MoveTargetedHome + UNIT_FLAG_NON_ATTACKABLE legs — no
--- instance / motion bridges);
+-- MoveTargetedHome + UNIT_FLAG_NON_ATTACKABLE legs —
+-- MoveTargetedHome still has no bridge, and the NON_ATTACKABLE
+-- SetFlag leg is bridged but stranded: the arm is gated on
+-- instance boss state + the drake respawn producer, so the
+-- flag leg alone cannot run);
 -- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) — no instance bridge.
 -- JustReachedHome — _Reset() bookkeeping — no bridge.
 -- AddDrakeLootMode — LOOT_MODE_HARD_MODE_1/2/3 ladder — no
