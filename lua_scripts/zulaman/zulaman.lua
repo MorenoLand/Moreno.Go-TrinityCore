@@ -16,8 +16,10 @@
 -- The npc_harrison_jones script from the same C++ file is NOT registered:
 -- its OnGossipSelect gates on the creature's GossipMenuId and its entire
 -- gong-event machine is MovePath/MovePoint waypoint work (no movement
--- model), SetEntry/SetDisplayId/SetFacingTo/equipment/emote arms (no
--- bridge), instance GetGameObject/SetData arms (no instance-script
+-- model); the SetEntry (UpdateEntry bridged) / SetDisplayId /
+-- SetFacingTo / equipment (SetEquipmentSlots bridged) / emote
+-- (PerformEmote bridged) arms ride that unported machine, not a
+-- missing bridge — verdict unchanged. Instance GetGameObject/SetData arms (no instance-script
 -- model), and GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
 -- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, which has

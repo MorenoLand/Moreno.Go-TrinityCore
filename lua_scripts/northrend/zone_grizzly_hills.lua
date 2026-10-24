@@ -25,11 +25,14 @@
 -- UpdateAI followup (:699-701 — the follower despawns once FROG_LOVE fades;
 -- the aura lasts 60s) rides a 61s one-shot CreateLuaEvent, rechecked until
 -- the aura is gone (C++ polls it every UpdateAI tick).
--- Stays out (no bridges): MoveFollow / MoveIdle / SetFacingToObject, and
--- the 33224 EVENT_LAKEFROG_1..5 maiden-transform chain (DoCast
--- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, SetEntry 33220, maiden
--- Talk SAY_MAIDEN_0/1, gossip-flag windows) — the gossip flag can never be
--- re-set without it.
+-- Ported 2026-10-24: the 33224 quest-frog branch — SetFacingToObject
+-- via the atan2 + SetFacingTo twin + the EVENT_LAKEFROG_1..5
+-- maiden-transform chain (DoCast 62550, UpdateEntry 33220, maiden
+-- Talk SAY_MAIDEN_0/1, gossip-flag windows, despawn 4s after the last
+-- Talk); the old "no bridges" line was stale — SetFacingTo,
+-- UpdateEntry, SetFlag/RemoveFlag and Talk are all live on the
+-- creature surface. Stays out: MoveFollow (no movement bridge) and
+-- MoveIdle (vacuous — the frog stands still).
 -- npc_venture_co_straggler (zone_grizzly_hills.cpp:562-651) — NOT
 -- registered: no entry constant anywhere in the C++ tree (DB ScriptName
 -- binding only, unverifiable — wounded-skirmisher precedent), so no
@@ -90,6 +93,10 @@ local SPELL_FROG_LOVE = 62537
 local SPELL_WARTS = 62581
 local SPELL_FROG_KISS = 62536
 local TEXT_EMOTE_KISS = 58
+local ENTRY_MAIDEN_OF_ASHWOOD_LAKE = 33220
+local SPELL_MAIDEN_TRANSFORM = 62550
+local SAY_MAIDEN_0 = 0
+local SAY_MAIDEN_1 = 1
 
 local timers = {}
 local frogKissLatched = {}
@@ -139,6 +146,49 @@ local function frogLoveWatch(creature, guid)
     end
 end
 
+-- C++ EVENT_LAKEFROG_1..5 chain (zone_grizzly_hills.cpp:721-743),
+-- defined tail-first so no forward declaration is needed. Cadence:
+-- 1 transform + entry change 2s after the kiss, 2 Talk 2s later,
+-- 3 gossip flag 3s later, 4 flag removed 25s later, 5 Talk 2s later
+-- + despawn 4s after that Talk.
+local function lakeFrogChain5(creature, guid)
+    creature:Talk(SAY_MAIDEN_1)
+    schedule(guid, "lakefrogdespawn", 4000, function()
+        timers[guid] = nil
+        frogKissLatched[guid] = nil
+        creature:Despawn()
+    end)
+end
+
+local function lakeFrogChain4(creature, guid)
+    creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+    schedule(guid, "lakefrog5", 2000, function()
+        lakeFrogChain5(creature, guid)
+    end)
+end
+
+local function lakeFrogChain3(creature, guid)
+    creature:SetFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+    schedule(guid, "lakefrog4", 25000, function()
+        lakeFrogChain4(creature, guid)
+    end)
+end
+
+local function lakeFrogChain2(creature, guid)
+    creature:Talk(SAY_MAIDEN_0)
+    schedule(guid, "lakefrog3", 3000, function()
+        lakeFrogChain3(creature, guid)
+    end)
+end
+
+local function lakeFrogChain1(creature, guid)
+    creature:CastSpell(creature, SPELL_MAIDEN_TRANSFORM)
+    creature:UpdateEntry(ENTRY_MAIDEN_OF_ASHWOOD_LAKE)
+    schedule(guid, "lakefrog2", 2000, function()
+        lakeFrogChain2(creature, guid)
+    end)
+end
+
 local function lakeFrogReceiveEmote(_, creature, player, textEmote)
     local guid = creature:GetGUIDLow()
     if frogKissLatched[guid] then
@@ -155,9 +205,21 @@ local function lakeFrogReceiveEmote(_, creature, player, textEmote)
                 schedule(guid, "fadinglove", 61000, function()
                     frogLoveWatch(creature, guid)
                 end)
+            elseif creature:GetEntry() == ENTRY_LAKE_FROG_QUEST then
+                -- C++ :766-775 quest-frog branch: MoveIdle is vacuous
+                -- (no movement model — the frog stands still) +
+                -- SetFacingToObject(player) via the atan2 + SetFacingTo
+                -- twin (zuljin/devourer precedent), then the
+                -- EVENT_LAKEFROG_1 chain 2s later (defined above).
+                local dx = player:GetX() - creature:GetX()
+                local dy = player:GetY() - creature:GetY()
+                local face = math.atan2(dy, dx)
+                if face < 0 then face = face + 2 * math.pi end
+                creature:SetFacingTo(face)
+                schedule(guid, "lakefrog1", 2000, function()
+                    lakeFrogChain1(creature, guid)
+                end)
             end
-            -- 33224's MoveIdle/SetFacingToObject + EVENT_LAKEFROG chain:
-            -- motion/transform legs unbridged (see header).
             frogKissLatched[guid] = true
         end
     end
@@ -180,6 +242,13 @@ end
 RegisterCreatureEvent(ENTRY_LAKE_FROG_QUEST, 5, lakeFrogSpawn)
 RegisterCreatureGossipEvent(ENTRY_LAKE_FROG, 2, lakeFrogGossipSelect)
 RegisterCreatureGossipEvent(ENTRY_LAKE_FROG_QUEST, 2, lakeFrogGossipSelect)
+-- The maiden is the same AI after UpdateEntry (C++ SetEntry keeps the
+-- object), so its gossip select + died/reset handlers ride the same
+-- functions; the died/reset pair also cancels a mid-chain kill's
+-- pending timers instead of casting on a dead object.
+RegisterCreatureGossipEvent(ENTRY_MAIDEN_OF_ASHWOOD_LAKE, 2, lakeFrogGossipSelect)
+RegisterCreatureEvent(ENTRY_MAIDEN_OF_ASHWOOD_LAKE, 4, lakeFrogDied)
+RegisterCreatureEvent(ENTRY_MAIDEN_OF_ASHWOOD_LAKE, 23, lakeFrogReset)
 RegisterCreatureEvent(ENTRY_LAKE_FROG, 8, lakeFrogReceiveEmote)
 RegisterCreatureEvent(ENTRY_LAKE_FROG_QUEST, 8, lakeFrogReceiveEmote)
 RegisterCreatureEvent(ENTRY_LAKE_FROG, 4, lakeFrogDied)

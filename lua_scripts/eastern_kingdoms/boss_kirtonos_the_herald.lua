@@ -60,8 +60,8 @@
 -- - IsSummonedBy + MovementInform INTRO_1..6 choreography: MovePath(
 --   KIRTONOS_PATH = 105061) and MovePoint (no MotionMaster bridge —
 --   selin_fireheart precedent); the gate SetGoState(GO_STATE_READY) arm
---   (instance-model blocked); SetFacingTo / SetWalk / SetDisableGravity
---   (no bridges); Talk(EMOTE_SUMMONED = 0) and the EMOTE_ONESHOT_ROAR
+--   (instance-model blocked); SetFacingTo (bridged) / SetWalk (no bridge)
+--   / SetDisableGravity (bridged); Talk(EMOTE_SUMMONED = 0) and the EMOTE_ONESHOT_ROAR
 --   (emote legs fire inside the unmodeled intro); the INTRO_5 staff equip
 --   arm fires inside the same unmodeled intro choreography (the combat
 --   transform-toggle staff legs are ported in onTransform); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
