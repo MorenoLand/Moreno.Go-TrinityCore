@@ -51,8 +51,9 @@
 -- (no _platform / random-shuffle-group state bridge, no summon
 -- bridge (summon STRAND absent)).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) ports via
--- creature:SetRooted(false) (uromReset); SetDisableGravity(false) has
--- no bridge and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua
+-- creature:SetRooted(false) (uromReset); SetDisableGravity(false) is
+-- bridged AND ported in uromReset (the old "no bridge" line was
+-- stale) and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua
 -- never sets REACT_PASSIVE); the ungated DoCastSelf(
 -- SPELL_EVOCATE 51602) leg is ported on OnReset(23) (the Reset bullet's
 -- earlier "no cast bridge" line was stale — creature:CastSpell is
@@ -63,10 +64,12 @@
 -- bridge).
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
 -- Mode + NearTeleportTo(1118.3101, 1080.3800, 508.3610, 4.25) or
--- MoveTargetedHome + Reset + events.Reset — no evade / teleport /
--- motion bridges.
+-- MoveTargetedHome + Reset + events.Reset — EnterEvadeMode itself
+-- and MoveTargetedHome have no bridge (the Teleport/StopMoving legs
+-- are bridged but never fire without the evade trigger).
 -- AttackStart — z-position-gated DoStartNoMovement vs BossAI::
--- AttackStart — no position / movement bridges.
+-- AttackStart — AttackStart/DoStartNoMovement itself has no bridge;
+-- that, not movement, is the blocker.
 -- UpdateAI — the full teleport event machine: EVENT_TELEPORT (30s)
 -- DelayEvents(10s) + REACT_PASSIVE + AttackStop + StopMoving +
 -- SetDisableGravity(true) + SetCanFly(true) + SetControlled(true,
@@ -79,12 +82,15 @@
 -- DoCast(SPELL_TIME_BOMB 51121) 20s repeat — timer-event and cast
 -- ARE bridged (this file ports Reset/JustReachedHome casts on
 -- events 23/24), but the arm is gated on the center _platform leg
--- (:189-219 summon x4 + DoCast(TeleportSpells) cycle) with
--- teleport / react-state / gravity / controlled-state legs — no
--- bridges; unmodeled.
+-- (:189-219 summon x4 + DoCast(TeleportSpells) cycle); the
+-- Teleport/AttackStop/StopMoving/SetDisableGravity/SetCanFly/
+-- SetReactState/SetRooted legs ARE all bridged now — the machine
+-- stays out on DelayEvents(10s), the TELEPORT_BACK AttackStart leg,
+-- and the unported _platform cycle trigger; unmodeled.
 -- DamageTaken — _isInCenter-gated NearTeleportTo(1124.0432,
--- 1078.2109, 508.3597, 5.4623) on lethal damage — state- and
--- health-gated, no bridges.
+-- 1078.2109, 508.3597, 5.4623) on lethal damage — Teleport is
+-- bridged; the blocker is the _isInCenter state, which rides the
+-- unported _platform machine, plus the lethal-damage gate.
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
 -- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-

@@ -441,8 +441,10 @@ local function hexlordReset(event, creature)
     -- (TEMPSUMMON_DEAD_DESPAWN, Lua type 6) when the add is missing or
     -- dead (a dead add is set DEAD first — the corpse is swept here by
     -- entry); a living add gets EnterEvadeMode + reposition +
-    -- StopMoving, which has no bearer (no EnterEvadeMode/UpdatePosition
-    -- bridges — living adds are left in place, documented below).
+    -- StopMoving — the reposition/StopMoving legs are ported via
+    -- grid-add Teleport + StopMoving (Teleport is the NearTeleportTo
+    -- twin: UpdatePosition + spline clear; EnterEvadeMode itself has
+    -- no bridge, so threat/combat state is untouched).
     -- Timers re-arm on the next combat.
     if hexlordAddIds[guid] == nil then
         local pool = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
@@ -469,6 +471,13 @@ local function hexlordReset(event, creature)
                 add:Despawn()
             end
             creature:SummonCreature(entry, HEXLORD_SPAWN_X[i], HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O, 6)
+        else
+            for _, add in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+                if not add:IsDead() then
+                    add:Teleport(HEXLORD_SPAWN_X[i], HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O)
+                    add:StopMoving()
+                end
+            end
         end
     end
 end

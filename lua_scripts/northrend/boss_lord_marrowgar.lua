@@ -68,11 +68,14 @@
 -- target gates (the festergut/rotface/putricide/sindragosa berserk
 -- precedent; TRIGGERED self-cast).
 -- DOCUMENTED-ONLY (in this header; entries 36612 + 36619 registered):
--- npc_coldflame (36672) exposes zero own Talk lines; its legs
--- (IsSummonedBy vehicle/cast/teleport legs, UpdateAI
--- EVENT_COLDFLAME_TRIGGER machine, PassengerBoarded spline leg) have no
--- bridges — not registered (the bronjahm npc_corrupted_soul_fragment
--- precedent). npc_bone_spike (36619): the JustDied/KilledUnit
+-- npc_coldflame (36672) exposes zero own Talk lines; its IsSummonedBy
+-- legs are cross-AI position (GetLastColdflamePosition /
+-- DATA_COLDFLAME_GUID player lookup) + GetNearPoint2D — Teleport and
+-- DoCast ARE bridged but the computed position is not — plus the
+-- UpdateAI EVENT_COLDFLAME_TRIGGER machine; not registered (the
+-- bronjahm npc_corrupted_soul_fragment precedent). The vehicle legs
+-- (RIDE_VEHICLE cast + PassengerBoarded spline) belong to bone_spike's
+-- IsSummonedBy below, not to coldflame. npc_bone_spike (36619): the JustDied/KilledUnit
 -- DespawnOrUnsummon legs PORT (event 4 / event 3, below); the JustDied
 -- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()
 -- (no bridge, stays out); the rest (IsSummonedBy vehicle/cast/teleport

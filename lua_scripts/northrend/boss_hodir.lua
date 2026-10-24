@@ -148,11 +148,11 @@
 -- SPELL_BLOCK_OF_ICE 61969, true) (line 243), NearTeleportTo
 -- teleport legs, DoAction(ACTION_CHEESE_THE_FREEZE) (lines
 -- 246-247); UpdateAI despawn/die checks (lines 209-232) —
--- summon / teleport legs have no bridges (stale "no despawn
--- bridge" wording: creature:Despawn() IS bridged, but the
--- bearer is an unregistered summon add and the arm rides the
--- summon machine, paired with gameobject-removal legs); no
--- registration.
+-- summon legs have no bridge (stale "no despawn / no teleport"
+-- wording: creature:Despawn() and creature:Teleport ARE bridged,
+-- but the bearer is an unregistered summon add and the arm rides
+-- the summon machine, paired with gameobject-removal legs and a
+-- DoAction leg); no registration.
 -- npc_ice_blockAI — IsSummonedBy: DoCast(target,
 -- SPELL_FLASH_FREEZE_HELPER 61990, true) (line 292);
 -- DamageTaken -> hodir REACT_AGGRESSIVE / DoZoneInCombat /

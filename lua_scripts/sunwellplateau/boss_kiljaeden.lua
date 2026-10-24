@@ -183,8 +183,9 @@
 -- and their JustDied DespawnAll is PORTED in kjDied (2026-10-22);
 -- no GameObjectAI bridge
 -- — go_orb_of_the_blue_flight (gossip summon + vengeance cast)
--- is not registered; no movement/teleport bridge — the shield-
--- orb circle-movement/MovementInform/DoTeleportTo arms are unmodeled;
+-- is not registered; Teleport IS bridged (creature:Teleport) but the
+-- shield-orb arms ride unregistered entries plus the
+-- circle-movement/MovementInform machine, so they stay unmodeled;
 -- SetCombatMovement bridge live (lua_creature_events.go:1301) — KJ's own
 -- ctor arm PORTED in kjEnterCombat (boss_kiljaeden.cpp:525); the controller
 -- (25608) + felfire-portal arms are unregistered entries and the
