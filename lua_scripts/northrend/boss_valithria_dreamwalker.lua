@@ -50,7 +50,9 @@
 -- event 11 (fireCreatureHealReceived): the 100% leg ports Talk +
 -- DoCastSelf(SPELL_ACHIEVEMENT_CHECK 72706) + DoCastAOE(
 -- SPELL_DREAMWALKERS_RAGE 71189, self-cast twin) + 3500ms
--- EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP 71196); still out:
+-- EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP 71196) + its SpellHit
+-- consequence (CLEAR_ALL + REPUTATION + invisible + NOT_SELECTABLE +
+-- 4s despawn, event 14 valithriaSpellHit); still out:
 -- hasLootRecipient/SetLootRecipient(healer), LowerPlayerDamageReq,
 -- instance->SendEncounterUnit, Initialize, lichKing EnterEvadeMode
 -- (instance GUID), and the NOT_STARTED first-heal combat-start leg
@@ -133,6 +135,12 @@ local SAY_VALITHRIA_SUCCESS = 7
 
 local SPELL_DREAMWALKERS_RAGE = 71189
 local SPELL_DREAM_SLIP = 71196
+local SPELL_CLEAR_ALL = 71721
+local SPELL_REPUTATION_BOSS_KILL = 73843
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local MODEL_INVISIBLE = 11686
 local SPELL_ACHIEVEMENT_CHECK = 72706
 
 local SPELL_ACID_BURST = 70744
@@ -368,6 +376,29 @@ local function valithriaHealReceived(_, creature, _, heal)
     end
 end
 
+-- C++ boss_valithria_dreamwalker::SpellHit (:376-393) — fires on the
+-- DREAM_SLIP self-cast hit via event 14 (moorabi precedent: ev14 fires
+-- once per hit target, self-cast included; handler filters on spellId).
+-- C++ order: DoCastSelf(CLEAR_ALL) + DoCastSelf(REPUTATION, triggered)
+-- + SetDisplayId(11686) + SetFlag(NOT_SELECTABLE) +
+-- DespawnOrUnsummon(4s, lich_king_escape one-shot CreateLuaEvent
+-- precedent). Trigger Kill + lichKing chest legs stay out (instance
+-- GetGuidData + cross-AI gates). If ev14 never fires for this cast
+-- (spell-data gap), the arm is inert — no regression vs the old
+-- cast-only timer.
+local function valithriaSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_DREAM_SLIP then
+        return
+    end
+    creature:CastSpell(creature, SPELL_CLEAR_ALL)
+    creature:CastSpell(creature, SPELL_REPUTATION_BOSS_KILL, true)
+    creature:SetDisplayId(MODEL_INVISIBLE)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 4000)
+end
+
 local function valithriaReset(event, creature)
     cancelTimers(creature:GetGUID())
     valithriaState[creature:GetGUID()] = nil
@@ -400,6 +431,7 @@ end
 RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 11, valithriaHealReceived)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 14, valithriaSpellHit)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
 RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)

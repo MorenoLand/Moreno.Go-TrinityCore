@@ -45,8 +45,14 @@
 -- the instance->SetBossState(IN_PROGRESS) companion leg has no bridge).
 -- The remaining JustEngagedWith legs (the later-pull SetFlag
 -- NOT_SELECTABLE, SetImmuneToNPC, summons.DespawnEntry(NPC_AZEROTH),
--- instance->SetData, BossAI::JustEngagedWith passthrough)
--- have no bridges; InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
+-- instance->SetData, BossAI::JustEngagedWith passthrough) stay out:
+-- the set leg is bridgeable but the boss sits REACT_PASSIVE from
+-- Reset through the intro, and C++ itself notes (EVENT_INTRO_TIMER_DONE)
+-- that PASSIVE + NOT_SELECTABLE at combat start makes the creature
+-- immediately evade — setting it at engage would risk the same evade
+-- cancelling the intro timers before the clear tick; only the
+-- intro-timer clear is ported (see introdefensive).
+-- InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
 -- is an explicit no-op for creatures (lua_objects.go:332).
 -- (CORRECTION 2026-10-23: the :384 first-pull DoZoneInCombat leg IS
 -- ported below — creature:DoZoneInCombat() is bridged
@@ -147,6 +153,9 @@
 -- unmodeled-achievement queue.
 
 local ENTRY_ALGALON = 32871
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local SAY_ALGALON_START_TIMER = 3
 local SAY_ALGALON_AGGRO = 4
@@ -416,11 +425,16 @@ local function algalonTimersStart(event, creature)
     -- SetSheath(SHEATH_STATE_MELEE), RemoveFlag(NOT_SELECTABLE),
     -- SetImmuneToNPC(false), SetReactState(REACT_DEFENSIVE) (:566),
     -- DoCastAOE(SUPERMASSIVE_FAIL) + the AttackStart workaround +
-    -- the REACT_PASSIVE constellation summons. Only the react flip is
-    -- modeled — the rest rides the unported intro machinery. Without
-    -- it the boss keeps the algalonReset REACT_PASSIVE while engaged
-    -- and the engine's isCreaturePassive gate never lets it attack.
+    -- the REACT_PASSIVE constellation summons. The flag clear rides
+    -- this tick in C++ order (before the react flip); it is safe
+    -- without the unported JustEngagedWith set leg (a clear can never
+    -- strand combat, unlike a set). SetSheath / SetImmuneToNPC /
+    -- DoCastAOE still ride the unported intro machinery. Without
+    -- the react flip the boss keeps the algalonReset REACT_PASSIVE
+    -- while engaged and the engine's isCreaturePassive gate never
+    -- lets it attack.
     schedule(guid, "introdefensive", introDelay, function()
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         creature:SetReactState(1) -- REACT_DEFENSIVE
     end)
     schedule(guid, "quantumstrike", 3500 + introDelay, function()
