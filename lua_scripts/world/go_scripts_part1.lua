@@ -5,8 +5,11 @@
 -- Bridge verification (grep against the CURRENT runtime, 2026-10-18):
 --   * RegisterGameObjectGossipEvent(entry, 1, fn) hello arm fires as
 --     (event, player, go) via fireGameObjectGossipHelloHook (gameobject_hooks.go:158);
---     a Lua FALSE return skips native GO use (C++ `return true` handled == Lua false),
---     a Lua TRUE/nil return continues native use (C++ `return false`).
+--     a Lua TRUE/nil return suppresses native GO use (C++ `return true`
+--     handled == Lua true — arlokk gong / belnistrasz polarity), a Lua
+--     FALSE return lets the native arms proceed. Corrected 2026-10-24
+--     (the 2026-10-18 polarity note above was inverted; see
+--     gameobject_hooks.go:133-144 + gameobjects.go:754).
 --   * RegisterGameObjectGossipEvent(entry, 2, fn) select arm fires as
 --     (event, player, go, sender, action[, code]) via fireGameObjectGossipSelectHook
 --     (gameobject_hooks.go:190, wired at gossip.go:705). (The stale
@@ -17,14 +20,18 @@
 --     NOT quest status), player:HasItem (lua_player.go:188), player:GetItemCount,
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
---   * MISSING bridges that block every class here: player:GetQuestStatus,
---     player:GetQuestRewardStatus, player:CastSpell,
+--   * MISSING bridges that block every class here: player:GetQuestRewardStatus,
+--     player:CastSpell,
 --     player:DestroyItemCount, player:HasItemCount (use HasItem/GetItemCount),
 --     player:GetNativeGender, player:IsInSameRaidWith, go:GetGoType,
 --     go:GetOwner, go:CastSpell, go:AddUse, go:SummonCreature,
 --     GetClosestCreatureWithEntry. All verified zero hits in
 --     engine/world/lua_player.go, engine/world/lua_objects.go,
---     engine/scripting/object.go (2026-10-18).
+--     engine/scripting/object.go (2026-10-18). Corrected 2026-10-24:
+--     player:GetQuestStatus left this list — it IS bridged since
+--     2026-10-24 (lua_player.go: NONE 0 / COMPLETE 1 / INCOMPLETE 3 /
+--     FAILED 5 / REWARDED 6); classes below stay blocked on their
+--     other gates + registration.
 --     (2026-10-24: player:SummonCreature landed in lua_player.go; the
 --     classes below stay blocked on their other gates + registration.)
 --   * GO entry IDs come from the C++ tree only; classes whose C++ names no GO
@@ -54,8 +61,9 @@
 --    player->SummonCreature(17716, 8106.11, -7542.06, 151.775, 3.02598,
 --    TEMPSUMMON_DEAD_DESPAWN, 1min) then AttackStart(player). Returns true
 --    (handled; native use suppressed).
---    Blockers: no player:GetQuestStatus bridge; no go:GetGoType bridge;
---    no registration. player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
+--    Blockers: no go:GetGoType bridge; no registration.
+--    player:GetQuestStatus IS bridged since 2026-10-24 and
+--    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -65,8 +73,9 @@
 --    player->GetQuestStatus(4296) == QUEST_STATUS_INCOMPLETE (3),
 --    player->CastSpell(player, 15065, false). Returns true (handled).
 --    C++ TODO notes a "Transcript the Tablet" gossip option pending
---    Trinity support. Blockers: player:GetQuestStatus, player:CastSpell,
---    go:GetGoType all unbridged. DOCUMENTED-ONLY.
+--    Trinity support. Blockers: player:CastSpell, go:GetGoType
+--    unbridged (player:GetQuestStatus IS bridged since 2026-10-24).
+--    DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -131,8 +140,9 @@
 --    -> no registration.
 --    Arm: if player->GetQuestRewardStatus(12790) OR
 --    player->GetQuestStatus(12790) == QUEST_STATUS_INCOMPLETE return false
---    (native use proceeds); else return true. Blocker: both quest-status
---    reads unbridged. DOCUMENTED-ONLY.
+--    (native use proceeds); else return true. Blocker: GetQuestRewardStatus
+--    unbridged (GetQuestStatus IS bridged since 2026-10-24).
+--    DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================

@@ -27,14 +27,20 @@
 --   arm stays documented-only on the quest machine
 --   (GetQuestRewardStatus / AreaExploredOrEventHappens —
 --   ashenvale go_naga_brazier precedent).
--- - npc_shenthul (quest-1654 Shattered Salute emote machine:
---   ReceiveEmote / HandleEmoteCommand / FailQuest /
---   AreaExploredOrEventHappens): the ev8 text-emote input IS bridged
---   (grizzly_hills lakeFrog precedent; fire site
---   engine/world/emote.go:217) and PerformEmote is bridged — but the
---   arm stays documented-only riding the unbridged quest machine
---   (GetQuestStatus / AreaExploredOrEventHappens / FailQuest have no
---   Lua bridges anywhere in engine/scripting or engine/world/lua*).
+-- - npc_shenthul (quest 2460 Shattered Salute emote machine,
+--   zone_orgrimmar.cpp:41-140: ReceiveEmote / HandleEmoteCommand /
+--   FailQuest / AreaExploredOrEventHappens): the ev8 text-emote
+--   input IS bridged (grizzly_hills lakeFrog precedent; fire site
+--   engine/world/emote.go:217), PerformEmote is bridged, the
+--   quest-accept hook fires (event 31, quest_details.go:311), and
+--   player:GetQuestStatus (lua_player.go) + player:FailQuest
+--   (:424) are bridged since 2026-10-24 — corrected 2026-10-24
+--   (the old "no GetQuestStatus/FailQuest bridge" claim is stale,
+--   and the quest id is 2460, not 1654). The arm stays
+--   documented-only on the two remaining blocks: no entry const
+--   in the C++ tree (DB-side ScriptName binding, cannot register)
+--   and AreaExploredOrEventHappens has no Lua bridge (the salute
+--   completion leg itself).
 -- - npc_overlord_runthak_orgrimmar (pre-herald citizen scene:
 --   MoveInLineOfSight 20yd latch + cross-creature GUID Talk machine):
 --   no MoveInLineOfSight-proximity / cross-AI GUID bridges.

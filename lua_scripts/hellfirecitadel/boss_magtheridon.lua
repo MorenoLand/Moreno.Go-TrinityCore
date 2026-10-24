@@ -1,7 +1,7 @@
 -- Magtheridon (Magtheridon's Lair) — Lua port of
 -- src/server/scripts/Outland/HellfireCitadel/MagtheridonsLair/
 -- boss_magtheridon.cpp (boss_magtheridon, npc_hellfire_channeler,
--- npc_magtheridon_room; go_manticron_cube and the three spell_*
+-- npc_magtheridon_room, go_manticron_cube; the three spell_*
 -- scripts documented below, not registered); magtheridons_lair.h
 -- (NPC_MAGTHERIDON = 17257, NPC_HELLFIRE_CHANNELLER = 17256,
 -- NPC_MAGTHERIDON_ROOM = 17516, GO_MANTICRON_CUBE = 181713 —
@@ -96,8 +96,8 @@
 -- OnReset(23): cancel timers, drop per-GUID state. Magtheridon
 -- Room (17516, PassiveAI). OnReset(23): non-triggered self-cast
 -- 30632, then 5s -> non-triggered DoCastAOE self-cast 30631
--- (kalecgos convention). The Go gossip object (181713) and the
--- three spell scripts are unmodeled (standing gaps — below).
+-- (kalecgos convention). The three spell scripts are unmodeled
+-- (standing gaps — below); go_manticron_cube is PORTED below.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the SetBossState/SetData/GetCreature instance arms and the
@@ -141,19 +141,16 @@
 -- shadow_grasp_visual (30166-apply x5 -> triggered 30168
 -- shadow cage; -remove -> remove 30168) unmodeled (standing
 -- gap); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (jeklik convention, above). go_
--- manticron_cube (181713) not registered: the GO gossip bridge
--- exists (RegisterGameObjectGossipEvent) but the cube's only
--- functional arms — the player->FindNearestCreature(17376, 10yd)
--- trigger cast of 30166 and the player's triggered self-cast of
--- 30410 (boss_magtheridon.cpp:469-491, go_manticron_cubeAI::
--- OnGossipHello) — stay unbridgeable: the nearest-creature bridge
--- exists only on the creature handler surface (lua_creature_events.
--- go:1237; player->FindNearestCreature has no bridge), player->
--- CastSpell has no bridge, and the GO AI itself has no registered
--- handler; registering the gossip for the aura gates alone would
--- be a stub (firesworn convention, cf. the karazhan barnes note).
--- Corrected 2026-10-22 (stale "no nearest-creature bridge" claim
--- retracted — the bridge exists, this arm just can't reach it).
+-- manticron_cube (181713, magtheridons_lair.h:67) PORTED below
+-- 2026-10-24: player:FindNearestCreature landed on the player
+-- surface 2026-10-24 (lua_player.go), retiring the 2026-10-22
+-- "player->FindNearestCreature has no bridge" claim; the full
+-- OnGossipHello arm ports (boss_magtheridon.cpp:469-491) — the
+-- player's triggered self-cast of 30410 lands as player:AddAura
+-- (player:CastSpell still has no bridge; the 30410-remove
+-- SpellScript legs stay unmodeled, standing gap). The GO AI itself
+-- has no registered handler, but the arm is a gossip arm, not an
+-- AI-update arm, so no stub is registered.
 
 local ENTRY_MAGTHERIDON = 17257
 local ENTRY_CHANNELER = 17256
@@ -176,6 +173,11 @@ local SPELL_ABYSSAL = 30511
 local SPELL_SOUL_TRANSFER = 30531
 local SPELL_DARK_MENDING = 30528
 local SPELL_SHADOW_CAGE = 30168
+local GO_MANTICRON_CUBE = 181713
+local ENTRY_HELLFIRE_RAID_TRIGGER = 17376
+local SPELL_SHADOW_GRASP_VISUAL = 30166
+local SPELL_SHADOW_GRASP = 30410
+local SPELL_MIND_EXHAUSTION = 44032
 
 local SAY_TAUNT = 0
 local SAY_FREE = 1
@@ -569,3 +571,24 @@ RegisterCreatureEvent(ENTRY_MAGTHERIDON_ROOM, 23, roomReset)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON_ROOM, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_magtheridon.cpp:454: custom UpdateAI never calls DoMeleeAttackIfReady (scheduler-only UpdateAI in C++, never melees)
 end)
+
+-- go_manticron_cube (boss_magtheridon.cpp:469-491, OnGossipHello)
+-- PORTED: aura gate first (HasAura 44032/30410 -> handled, C++ order),
+-- then the nearest live 17376 within 10yd self-casts visual 30166
+-- (C++ trigger->CastSpell(nullptr, 30166) = self-cast, DoCastAOE
+-- convention), then the player's triggered self-cast of 30410 lands
+-- as player:AddAura (player:CastSpell has no bridge). C++ returns
+-- true (handled) == Lua true (arlock gong / belnistrasz polarity).
+local function onManticronCubeGossip(_, player, go)
+    if player:HasAura(SPELL_MIND_EXHAUSTION) or player:HasAura(SPELL_SHADOW_GRASP) then
+        return true
+    end
+    local trigger = player:FindNearestCreature(ENTRY_HELLFIRE_RAID_TRIGGER, 10.0)
+    if trigger then
+        trigger:CastSpell(trigger, SPELL_SHADOW_GRASP_VISUAL)
+    end
+    player:AddAura(SPELL_SHADOW_GRASP)
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_MANTICRON_CUBE, 1, onManticronCubeGossip)

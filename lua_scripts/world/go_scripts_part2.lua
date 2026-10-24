@@ -17,9 +17,12 @@
 --     toy_train pulse).
 --   - SetStandState: engine-internal only, no Lua method (blocks shrine sit).
 --   - CloseGossipMenuFor: zero hits in engine/ (blocks bonfire select tail).
---   - GameObject grid search (GetCreatureListWithEntryInGrid /
---     FindNearestCreature / GetPlayerListInGrid): no bridge (blocks cage
---     children, ribbon pole bunny, brewfest/midsummer per-player dispatch).
+--   - GameObject grid search: LIST search (GetCreatureListWithEntryInGrid)
+--     and GetPlayerListInGrid have no bridge (blocks cage children,
+--     ribbon pole bunny, brewfest/midsummer per-player dispatch);
+--     corrected 2026-10-24 — single-creature player:FindNearestCreature
+--     IS bridged since 2026-10-24 (lua_player.go), but it returns one
+--     nearest creature, not the list the cage arm iterates.
 --   - Creature DoAction / MovePoint / AI()->Talk via a GO-obtained
 --     creature: no bridge (blocks cage children walk+Talk, ribbon pole
 --     ACTION_COSMETIC_FIRES).
@@ -45,10 +48,11 @@
 
 -- DOCUMENTED-ONLY: go_frostblade_shrine (C++ :730-758)
 -- OnGossipHello (:739-753): me->UseDoorOrButton(10) bridged (delay arg);
--- player:HasAura(SPELL_RECENT_MEDITATION 61720) bridged — but the cleansing
--- arm needs player:GetQuestStatus(QUEST_THE_CLEANSING_HORDE 11317 /
--- QUEST_THE_CLEANSING_ALLIANCE 11322, enum :733-736) (no bridge),
--- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) (no bridge), and
+-- player:HasAura(SPELL_RECENT_MEDITATION 61720) bridged and
+-- player:GetQuestStatus(QUEST_THE_CLEANSING_HORDE 11317 /
+-- QUEST_THE_CLEANSING_ALLIANCE 11322, enum :733-736) bridged since
+-- 2026-10-24 — but the cleansing arm still needs
+-- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) (no bridge) and
 -- player:SetStandState(UNIT_STAND_STATE_SIT) (no bridge).
 
 -- DOCUMENTED-ONLY: go_midsummer_bonfire (C++ :769-800)

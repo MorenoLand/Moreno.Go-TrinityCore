@@ -13,8 +13,9 @@
 -- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight orphan phase machine (quest-status-gated
 --   playerGUID / orphanGUID capture, phase 1): ev27 fires from the
---   aggro-engage branch only, and GetQuestStatus has no player
---   surface bridge — the sighting/quest-status legs cannot port.
+--   aggro-engage branch only — corrected 2026-10-24, player:
+--   GetQuestStatus IS bridged since 2026-10-24, so the ev27
+--   engage-only restriction alone blocks the sighting legs.
 
 local ENTRY_THE_ETYMIDIAN = 28092
 
