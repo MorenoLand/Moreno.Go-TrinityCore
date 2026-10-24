@@ -39,8 +39,8 @@
 -- strike — pick = GetAITargets()[2] (C++
 -- SelectTarget(MaxThreat, 1), second-highest threat — curator
 -- convention, threat-sorted list); if pick exists AND gruul is within
--- melee range of his victim (5-yd GetDistance stand-in for
--- IsWithinMeleeRange, venoxis convention) -> DoCast(pick, 33813)
+-- melee range of his victim (creature:IsWithinMeleeRange)
+-- -> DoCast(pick, 33813)
 -- else DoCastVictim(33813); re-arm 8s. Reverberation — triggered
 -- DoCastVictim(36297, C++-exact); re-arm {15s,25s}. Cave in —
 -- DoCast(random alive player, 36240) (C++ SelectTarget(Random, 0),
@@ -76,8 +76,7 @@
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
 -- arms unmodeled; the hurtful-strike MaxThreat
 -- pick is GetAITargets()[2] (curator convention) and the
--- IsWithinMeleeRange gate is a 5-yd GetDistance stand-in
--- (venoxis convention); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
+-- IsWithinMeleeRange gate is creature:IsWithinMeleeRange; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- IsNonMeleeSpellCast queue gate unmodeled, timers fire
 -- unconditionally (jeklik convention); no SpellScript bridge —
 -- the shatter/shatter-effect scripts unmodeled (standing gap).
@@ -187,7 +186,7 @@ local function gruulTick(creature, guid)
             local targets = creature:GetAITargets()
             local pick = targets and targets[2] or nil
             local victim = creature:GetVictim()
-            if pick and victim and creature:GetDistance(victim) <= 5 then
+            if pick and victim and creature:IsWithinMeleeRange(victim) then
                 creature:CastSpell(pick, SPELL_HURTFUL_STRIKE)
             else
                 creature:CastSpell(nil, SPELL_HURTFUL_STRIKE)

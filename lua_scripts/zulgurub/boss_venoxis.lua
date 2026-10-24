@@ -43,8 +43,7 @@
 -- bridged lua_objects.go:389)
 -- the holy-nova SelectTarget(MaxThreat) scan is PORTED via the
 -- threat-ordered GetAITargets list (see onHolyNova below) — the old
--- "(no threat model)" note is retracted — with the 5-yd check
--- standing in for IsWithinMeleeRange; SelectTarget
+-- "(no threat model)" note is retracted; gate is creature:IsWithinMeleeRange; SelectTarget
 -- (Random) targets are random alive players in the instance; the
 -- parasitic-serpent summons 14884 never spawn (no summon model) — only
 -- the 15s re-arm cycle is modeled (jeklik six-bat convention).
@@ -150,7 +149,7 @@ end
 -- C++ EVENT_HOLY_NOVA: phase one; counts the top-10 threat targets
 -- (SelectTarget(MaxThreat, i), i = 0..9) within melee range — ported
 -- via the threat-ordered GetAITargets list, first 10 entries; the 5-yd
--- check stands in for IsWithinMeleeRange as before, and C++ applies no
+-- gate is creature:IsWithinMeleeRange, and C++ applies no
 -- dead filter, so none added (midnight precedent) — and non-triggered
 -- DoCastVictim (23858) only when 3 or more qualify; the re-arm sits
 -- outside the count gate, so it fires {45s,75s} C++-exact either way.
@@ -159,7 +158,7 @@ local function onHolyNova(creature, guid)
     local inMelee = 0
     local targets = creature:GetAITargets()
     for i = 1, math.min(10, #targets) do
-        if creature:GetDistance(targets[i]) <= 5 then
+        if creature:IsWithinMeleeRange(targets[i]) then
             inMelee = inMelee + 1
         end
     end

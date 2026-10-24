@@ -36,9 +36,7 @@
 -- SPELL_RESONANCE 33657) 2-arg (non-triggered), 5s re-arm; if the
 -- victim IS in melee range the event is CONSUMED with no re-arm
 -- (C++ :136-141 — no ScheduleEvent on the fallthrough path).
--- IsWithinMeleeRange is unbridged; the port uses GetDistance2d >
--- 5.0 as the melee-range approximation (DB combat-reach value is
--- unrecoverable from the C++ tree — flagged, not silent).
+-- gate is creature:IsWithinMeleeRange (bridged 2026-10-24).
 -- EVENT_MAGNETIC_PULL — SelectTarget(Random, 0, 0.0f, true) →
 -- DoCast(target, SPELL_MAGNETIC_PULL 33689) 2-arg (non-triggered);
 -- 15-30s init, 15-30s repeat; NO target → 500ms fail-fast retry
@@ -79,11 +77,6 @@ local SPELL_SONIC_BOOM_CAST = 33923 -- boss_murmur.cpp:36
 local SPELL_MURMURS_TOUCH = 33711 -- boss_murmur.cpp:38
 
 local EMOTE_SONIC_BOOM = 0 -- boss_murmur.cpp:40
-
--- Approximation: IsWithinMeleeRange is unbridged; C++ melee range
--- is combat-reach-derived (DB-side). 5.0 is the in-tree standard
--- melee approximation.
-local MELEE_RANGE_APPROX = 5.0
 
 local timers = {}
 
@@ -139,7 +132,7 @@ local resonanceTick
 -- re-arm (C++-exact fallthrough — not a reset to 5s).
 resonanceTick = function(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance2d(victim) > MELEE_RANGE_APPROX then
+    if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(creature, SPELL_RESONANCE)
         schedule(guid, "resonance", 5000, function()
             resonanceTick(creature, guid)

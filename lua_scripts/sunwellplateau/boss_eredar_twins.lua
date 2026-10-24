@@ -495,11 +495,11 @@ local function shadowImageFury(creature, guid)
 end
 
 -- C++ EVENT dark strike: DoCastVictim(45271) only when within
--- melee range of the victim (IsWithinMeleeRange, 5-yd stand-in);
+-- melee range of the victim (creature:IsWithinMeleeRange);
 -- the 3s re-arm fires regardless.
 local function shadowImageDarkStrike(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) <= 5 then
+    if victim and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_DARK_STRIKE)
     end
     schedule(guid, "darkstrike", 3000, function()

@@ -457,12 +457,11 @@ local function capernianTick(creature, guid)
     -- then 4000+rand()%2000 re-arm (C++-exact); scan the threat list for
     -- the first victim in melee range and DoCast non-triggered
     -- SPELL_ARCANE_EXPLOSION (36970) on it; no cast when nobody is in
-    -- range. Melee range is the 5-yd GetDistance stand-in (venoxis/gruul
-    -- convention).
+    -- range. Melee range is creature:IsWithinMeleeRange.
     if st.arcaneExplosion <= 1000 then
         local target = nil
         for _, unit in ipairs(creature:GetAITargets()) do
-            if creature:GetDistance(unit) <= 5 then
+            if creature:IsWithinMeleeRange(unit) then
                 target = unit
                 break
             end

@@ -32,8 +32,8 @@
 --   (zulfarrak.cpp:311-322) via the new creature:SetSheath bridge
 --   (Unit::SetSheath, Unit.h:903). The isAttackReady swing gate has no
 --   bridge, so the Lua check re-arms at SWING_MS=2000 (engine default
---   base attack time); melee-range gate via IsWithinDist(victim, 5.0)
---   (C++ IsWithinMeleeRange = max(reach+reach+4/3, 5.0) -> 5.0 here).
+--   base attack time); melee-range gate is creature:IsWithinMeleeRange
+--   (C++-exact; the old 5.0 assumption is retired).
 --   Melee stays engine-driven (DoMeleeAttackIfReady twin); the shoot
 --   fires at most once per swing, only when the victim is out of range.
 -- - MovementInform: PYRAMID_CAGES_OPEN -> SetData(EVENT_PYRAMID,
@@ -67,10 +67,8 @@ local SPELL_SHOOT = 6660
 -- C++ melee/ranged decision (zulfarrak.cpp:311-322): when the swing timer is
 -- ready and the victim is beyond melee range, Weegli shoots 6660 and shows
 -- the ranged weapon (SHEATH_STATE_RANGED); otherwise he fights melee and
--- shows the melee weapon (SHEATH_STATE_MELEE). IsWithinMeleeRange is
--- max(reach+reach+4/3, NOMINAL_MELEE_RANGE=5.0); weegli-vs-player resolves
--- to 5.0 (1.5+1.5+1.333 = 4.33 < 5.0).
-local MELEE_RANGE_YD = 5.0
+-- shows the melee weapon (SHEATH_STATE_MELEE). Gate is now the
+-- creature:IsWithinMeleeRange bridge (C++-exact).
 -- isAttackReady pacing: the Lua side has no swing-timer bridge, so the
 -- check re-arms at the engine's default base attack time (2000ms —
 -- NULLIF(t.BaseAttackTime, 0) fallback in creaturemotion.go / combat.go);
@@ -122,7 +120,7 @@ end
 local function onSwingCheck(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        if creature:IsWithinDist(victim, MELEE_RANGE_YD) then
+        if creature:IsWithinMeleeRange(victim) then
             creature:SetSheath(1) -- SHEATH_STATE_MELEE
         else
             creature:CastSpell(victim, SPELL_SHOOT) -- DoCastVictim, non-triggered

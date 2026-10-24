@@ -49,9 +49,8 @@
 -- MotionMaster Clear + DoTeleportTo(MIDDLE_X/Y/Z) and the four
 -- shield-generator-channel summons have no movement/teleport/
 -- summon bridges — unmodeled, below). CheckTimer 15s init then
--- 5s: if no alive player in the instance is within 5 yd (the
--- venoxis/gruul 5-yd GetDistance stand-in for the C++ threat-
--- list IsWithinMeleeRange scan — GetAITargets is the bridged
+-- 5s: if no alive player in the instance is within melee range (the
+-- C++ threat-list IsWithinMeleeRange scan — GetAITargets is the bridged
 -- threat list, code already uses it) -> CastShoot
 -- OrMultishot. CastShootOrMultishot: urand(0,1) -> Shoot 40873
 -- or Multishot 38310 DoCastVictim (C++-exact); Talk(SAY_BOWSHOT)
@@ -178,7 +177,6 @@ local ELEMENT_POSITIONS = {
     {-58.9, -901.6, 21.5, 6.0},
 }
 
-local MELEE_RANGE = 5
 local STATIC_CHARGE_RANGE = 200
 local POISON_BOLT_RANGE = 30
 
@@ -342,13 +340,13 @@ local function vashjTick(creature, guid)
         -- CheckTimer (boss_lady_vashj.cpp:438-448): if nobody on the
         -- threat list is in melee range, Shoot/Multishot.
         -- creature:GetAITargets() is the bridged threat list
-        -- (lua_creature_events.go); melee range is the 5-yd GetDistance
-        -- stand-in (venoxis/gruul convention), replacing the retired
+        -- (lua_creature_events.go); melee range is creature:IsWithinMeleeRange,
+        -- replacing the retired
         -- "no threat bridge" instance-player approx 2026-10-23.
         if st.check <= 1000 then
             local inMeleeRange = false
             for _, unit in ipairs(creature:GetAITargets()) do
-                if creature:GetDistance(unit) <= MELEE_RANGE then
+                if creature:IsWithinMeleeRange(unit) then
                     inMeleeRange = true
                     break
                 end

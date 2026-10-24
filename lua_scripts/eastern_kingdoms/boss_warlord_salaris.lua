@@ -171,7 +171,7 @@ end
 -- 10000ms loop, re-arm unconditional at :962 (outside the target-if).
 -- Gate: nobody IsWithinMeleeRange over the combat-manager PvE refs;
 -- the port iterates the threat-list proxy (creature:GetAITargets(),
--- lua_creature_events.go:336-345) with the standard 5yd melee proxy.
+-- lua_creature_events.go:336-345) with creature:IsWithinMeleeRange.
 -- SelectTarget(Random, 0) with C++ defaults (playerOnly=false) draws
 -- from the same threat list, so the target pool is the alive targets
 -- list (jaraxxus randomThreatPlayer idiom, without its playerOnly
@@ -192,7 +192,7 @@ end
 local function interceptTick(creature, guid)
     local inMeleeRange = false
     for _, unit in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance(unit) <= 5.0 then
+        if creature:IsWithinMeleeRange(unit) then
             inMeleeRange = true
             break
         end

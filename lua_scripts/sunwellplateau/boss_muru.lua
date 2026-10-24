@@ -443,6 +443,7 @@ RegisterCreatureEvent(ENTRY_PORTAL, 19, portalJustSummoned)
 -- DAMAGE) + DisappearAndDie. DisappearAndDie is ForcedDespawn(0) on a
 -- summon bearer with no JustDied arm — creature:Despawn() is
 -- C++-exact (stale "no despawn bridge" retracted).
+-- NOTE: C++ gate is IsWithinDist(victim, 5.0f), NOT IsWithinMeleeRange, so the 5yd GetDistance check stays (thresholds differ).
 local function darkFiendProximity(creature, guid)
     local victim = creature:GetVictim()
     if creature:IsAlive() and victim and creature:GetDistance(victim) <= 5
