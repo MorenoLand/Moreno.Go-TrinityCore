@@ -60,13 +60,16 @@
 -- → HARD_MODE_2, case 1 → HARD_MODE_3) unmodeled; no immune
 -- bridge — the Reset() SetImmuneToPC arm (false only when
 -- GetBossState(DATA_KARGATH) == DONE — instance gated)
--- unmodeled (kalithresh precedent); no quest/player-list
+-- unmodeled (kalithresh precedent); no instance-data
 -- bridge — the JustDied arms (if GetData(DATA_PRISONERS_
 -- EXECUTED) > 0 return, else for each instance player:
 -- GetTeam == ALLIANCE ? CompleteQuest(QUEST_IMPRISONED_A =
 -- 9524) : CompleteQuest(QUEST_IMPRISONED_H = 9525) when the
--- quest is incomplete) unmodeled, and the SetData(data ==
--- 1) FailQuest player loop unmodeled; no cross-creature/
+-- quest is incomplete) unmodeled on the instance-data guard alone
+-- (CompleteQuest bridged, lua_player.go:395; the incomplete gate is
+-- subsumed — CompleteQuest no-ops without the quest), and the
+-- SetData(data == 1) FailQuest player loop unmodeled on its
+-- unreachable SetData trigger (FailQuest bridged, lua_player.go:410); no cross-creature/
 -- ObjectAccessor bridge — the SetData(DATA_PRISONERS_
 -- EXECUTED, data <= 3) prisoner-kill arm (GetGuidData(DATA_
 -- FIRST_PRISONER + data - 1) → Unit::Kill) unmodeled;

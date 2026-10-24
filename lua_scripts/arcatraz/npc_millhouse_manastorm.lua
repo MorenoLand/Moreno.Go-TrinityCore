@@ -76,8 +76,8 @@
 -- being a player (C++-exact, kargath 3-arg-handler
 -- convention). OnDied(4): Talk(SAY_DEATH) + cancel both pumps
 -- + drop per-GUID state (the _JustDied arm is instance-
--- blocked; the commented-out FailQuest arm has no quest
--- bridge). OnLeaveCombat(2): cancel the combat pump + drop
+-- blocked; the FailQuest arm is commented out in C++
+-- (arcatraz.cpp:64-66); FailQuest bridged, lua_player.go:410). OnLeaveCombat(2): cancel the combat pump + drop
 -- combat state, and restart the intro machine when it had not
 -- completed (the C++ Reset() re-Initialize()s — Phase = 1 /
 -- Init = false — and the instance DATA_WARDEN_2 gate is

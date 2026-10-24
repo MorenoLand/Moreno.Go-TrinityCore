@@ -11,7 +11,7 @@
 -- willix-the-importer; no NPC_ constant in the C++ tree —
 -- landslide/noxxion/ptheradras/belnistrasz precedent); creature_text
 -- rows back Talk ids 0 and 2.
--- Eluna creature events: 1 OnEnterCombat, 31 OnQuestAccept
+-- Eluna creature events: 1 OnEnterCombat, 4 OnDied, 31 OnQuestAccept
 -- (engine/world/quest_details.go fires it as (event, player,
 -- creature, quest); quest:GetId() wired — luaQuest surface,
 -- lua_creature_events.go). Melee is engine-driven in Go (creature
@@ -24,6 +24,12 @@
 -- - Engage (C++ JustEngagedWith): Talk(SAY_AGGRO1 2), ungated (the
 --   C++ Talk targets the player; the bridge broadcasts — deviation,
 --   documented).
+-- - JustDied (razorfen_kraul.cpp:77-81): GetPlayerForEscort latch
+--   (quest-1144 accept captures the escort player's GUID, mirroring
+--   EscortAI Start's capture) + player:FailQuest(1144) via the
+--   GetPlayersInWorld GUID scan (black-stalker precedent). No
+--   escort-state gate in C++; FailQuest no-ops on a completed or
+--   abandoned quest, so a stale latch is harmless.
 -- Unmodeled (documented-only, no bridges):
 -- - WaypointReached (waypoints 3/4/8/9/13/14/25/31/42/43/45/46):
 --   Talk lines SAY_POINT 1 / SAY_BLUELEAF 3 / SAY_DANGER 4 /
@@ -33,7 +39,6 @@
 --   the whole escort path needs a waypoint/movement bridge plus
 --   summon + quest-credit bridges, none of which exist.
 -- - JustSummoned -> AttackStart (needs SummonCreature + AI bridge).
--- - JustDied -> FailQuest (no quest-fail bridge).
 
 local ENTRY_WILLIX = 4508
 
@@ -42,6 +47,8 @@ local SAY_AGGRO1 = 2
 
 local QUEST_WILLIX_THE_IMPORTER = 1144
 
+local willixEscortPlayer = {}
+
 -- C++ OnQuestAccept for quest 1144: Talk(READY); the EscortAI start
 -- and faction swap have no bridges.
 local function onQuestAccept(event, player, creature, quest)
@@ -49,6 +56,9 @@ local function onQuestAccept(event, player, creature, quest)
         return
     end
     creature:Talk(SAY_READY)
+    if player then
+        willixEscortPlayer[creature:GetGUID()] = player:GetGUID()
+    end
 end
 
 -- C++ JustEngagedWith: ungated Talk(SAY_AGGRO1) (C++ targets the
@@ -57,5 +67,21 @@ local function onEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO1)
 end
 
+local function onDied(_, creature)
+    local guid = creature:GetGUID()
+    local playerGuid = willixEscortPlayer[guid]
+    willixEscortPlayer[guid] = nil
+    if not playerGuid then
+        return
+    end
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetGUID() == playerGuid then
+            plr:FailQuest(QUEST_WILLIX_THE_IMPORTER)
+            return
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_WILLIX, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_WILLIX, 31, onQuestAccept)
+RegisterCreatureEvent(ENTRY_WILLIX, 4, onDied)

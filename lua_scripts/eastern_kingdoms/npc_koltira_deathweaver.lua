@@ -93,9 +93,9 @@
 --   _summons.DespawnAll + DespawnOrUnsummon(1s) + FailQuest) — the
 --   _playerGUID capture (OnGossipHello, :115) + GetPlayer lookup
 --   (GetPlayersInWorld GUID scan, black stalker precedent) + 30yd
---   gate + Despawn all have Lua twins; sole blockers are
---   player:FailQuest (no Lua surface, engine failQuest internal
---   only) and the summon-list DespawnAll — porting Despawn alone
+--   gate + Despawn all have Lua twins; player:FailQuest is bridged
+--   (lua_player.go:410) — sole blocker is the summon-list
+--   DespawnAll — porting Despawn alone
 --   would strand the quest (giver gone, quest active). Dark-rider /
 --   death_knight_initiate precedents.
 -- - MovementInform's POINT_ID_6 Mount(NPC_KOLTIRA_MOUNT 25445)

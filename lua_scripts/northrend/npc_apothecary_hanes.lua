@@ -10,7 +10,7 @@
 -- sources): 23784 (NPC_APOTHECARY_HANES). The creature_template
 -- ScriptName binding is DB-side (no TDB in this workspace).
 -- Eluna creature events: 5 OnSpawn, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset.
+-- 23 OnReset, 31 OnQuestAccept.
 -- Ported arm (C++ UpdateAI head): HealthBelowPct(75) -> 10s
 -- PotTimer -> triggered DoCast(me, SPELL_HEALING_POTION 17534).
 -- The arm is not combat-gated in C++ (it runs in UpdateAI before
@@ -26,10 +26,10 @@
 -- other triggered port. creature:CastSpell(creature, spell, true)
 -- is the vaelastrasz self-cast convention.
 -- Unmodeled: the whole escort cinematic (OnQuestAccept quest-
--- 11241 launch — no quest-accept hook — EscortAI Start, waypoint
+-- 11241 launch — EscortAI Start, waypoint
 -- 1-40 Talk/emote chain, DoCastAOE 42684 burn-crate arms,
 -- SetFaction/SetReactState, GroupEventHappens quest credit)
--- behind the quest-accept / escort / movement / emote / faction
+-- behind the escort / movement / emote / faction
 -- / quest bridges; the EVENT_EMOTE_BEG 25s beg-emote arm is PORTED
 -- below (timer-driven HandleEmoteCommand(EMOTE_ONESHOT_BEG 20) twin
 -- via CreateLuaEvent + creature:PerformEmote — the stale "no emote
@@ -69,8 +69,12 @@ local EMOTE_ONESHOT_BEG = 20 -- SharedDefines.h:1955
 
 local APOTHECARY_HANES_ENTRY = 23784
 
+local QUEST_TRAIL_OF_FIRE = 11241
+
 local hanesState = {}
 local hanesPump = {}
+
+local hanesEscortPlayer = {}
 
 -- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
 -- (ironaya convention) — GetHealthPct() fires up to 1 HP early on the
@@ -181,12 +185,36 @@ local function onReset(_, creature)
     armEmote(creature)
 end
 
+-- C++ OnQuestAccept (zone_howling_fjord.cpp:240-243): quest 11241
+-- starts the escort (StartEscort captures the player GUID); the escort
+-- itself stays unported, but the GUID latch lets JustDied FailQuest the
+-- escort player C++-exactly.
+local function onQuestAccept(_, player, creature, quest)
+    if not quest or quest:GetId() ~= QUEST_TRAIL_OF_FIRE then
+        return
+    end
+    if player then
+        hanesEscortPlayer[creature:GetGUID()] = player:GetGUID()
+    end
+end
+
 -- C++ JustDied: FailQuest(QUEST_TRAIL_OF_FIRE 11241) on the
--- escorted player — no quest bridge (documented-only). Death
+-- escorted player — PORTED below (quest-11241 accept latch +
+-- player:FailQuest bridge, lua_player.go:410). Death
 -- ends the machine: cancel the pump + emote event and drop per-GUID
 -- state (mushroom precedent).
 local function onDied(_, creature)
     local guid = creature:GetGUID()
+    local playerGuid = hanesEscortPlayer[guid]
+    hanesEscortPlayer[guid] = nil
+    if playerGuid then
+        for _, plr in ipairs(GetPlayersInWorld()) do
+            if plr:GetGUID() == playerGuid then
+                plr:FailQuest(QUEST_TRAIL_OF_FIRE)
+                break
+            end
+        end
+    end
     cancelPump(guid)
     cancelEmote(guid)
     hanesState[guid] = nil
@@ -196,3 +224,4 @@ RegisterCreatureEvent(APOTHECARY_HANES_ENTRY, 5, onSpawn)
 RegisterCreatureEvent(APOTHECARY_HANES_ENTRY, 2, onReset)
 RegisterCreatureEvent(APOTHECARY_HANES_ENTRY, 4, onDied)
 RegisterCreatureEvent(APOTHECARY_HANES_ENTRY, 23, onReset)
+RegisterCreatureEvent(APOTHECARY_HANES_ENTRY, 31, onQuestAccept)

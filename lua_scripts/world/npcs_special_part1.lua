@@ -83,15 +83,16 @@
 -- in-file enum Doctor :534-541) — DOCUMENTED-ONLY (summon-machine).
 -- Arms: Reset :646-650; BeginEvent :655-683 (fires from OnQuestAccept :768-772
 -- on quests 6624/6622, loads AllianceCoords 7 / HordeCoords 6 positions);
--- PatientDied :686-708 (FailQuest after 5 deaths — no FailQuest bridge);
+-- PatientDied :686-708 (FailQuest after 5 deaths — bridge live,
+-- lua_player.go:410; arm rides the unbridged DoAction relay);
 -- PatientSaved :710-746 (AreaExploredOrEventHappens at 15 saved — no
 -- bridge); UpdateAI :893-946 (10s summon timer, picks random Coordinates
 -- point, summons 12938/12936/12937 or 12923/12924/12925 via
 -- me->SummonCreature :922 (bridge live — stale "NO SummonCreature
 -- bridge" retracted) — but the machine's heart is the cross-AI write
 -- (Patient->AI()->DoctorGUID + Coord, no bridge), the PatientDied /
--- PatientSaved DoAction relay (no bridge), FailQuest and
--- AreaExploredOrEventHappens (no bridges) — summon alone spawns
+-- PatientSaved DoAction relay (no bridge), FailQuest (bridged,
+-- lua_player.go:410) and AreaExploredOrEventHappens (no bridge) — summon alone spawns
 -- patients the machine can never track.
 -- UNIT_FLAG_NOT_SELECTABLE / UNIT_FLAG_PLAYER_CONTROLLED manipulation
 -- is bridgeable (creature:SetFlag, lua_creature_events.go:1919) — the
@@ -108,10 +109,12 @@
 -- A_RUNTOX/A_RUNTOY/A_RUNTOZ or H_RUNTOX/H_RUNTOY/H_RUNTOZ are not);
 -- UpdateAI :873-888 (world-tick HP decay — could approximate with
 -- SetHealth(GetHealth()-5) on OnAIUpdate 7, but setDeathState has no bridge
--- and the PatientDied -> quest-fail chain has no bridge).
--- The quest credit/fail legs (FailQuest, AreaExploredOrEventHappens) have no
--- bridges, so the doctor machine stays out; the Reset arm below is the
--- self-contained ported fragment.
+-- and the PatientDied -> quest-fail chain rides the unbridged DoAction
+-- relay (FailQuest itself bridged, lua_player.go:410)).
+-- The quest credit/fail legs (FailQuest bridged, lua_player.go:410;
+-- AreaExploredOrEventHappens + DoAction relay unbridged) keep the
+-- doctor machine out; the Reset arm below is the self-contained
+-- ported fragment.
 
 -- npc_injured_patient Reset arm — PORTED (C++ npcs_special.cpp:788-814).
 -- Entries are the literal C++ switch cases (never invented): 12923/12938
