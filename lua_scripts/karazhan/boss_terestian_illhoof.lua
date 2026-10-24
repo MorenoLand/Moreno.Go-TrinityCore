@@ -24,11 +24,11 @@
 -- combat event can arm it), the portal imps' DoZoneInCombat ports via
 -- the portal event-19 handler, and Reset/JustDied/LeaveCombat despawn
 -- portals + imps via a grid sweep (the ACTION_DESPAWN_IMPS DoAction
--- relay has no bridge). The sacrifice's demon-chains summon
--- (SPELL_SUMMON_DEMONCHAINS 30120) never spawns: the chains are cast by
--- the sacrificed player (no player:CastSpell bridge) for an unported
--- chains unit — so that cast is skipped while the non-summon arms
--- (RemoveAura, Talk) stay. The kil'rek summon
+-- relay has no bridge). The sacrifice's demon-chains cast IS ported
+-- (2026-10-24 player:CastSpell bridge): the sacrificed player self-casts
+-- SPELL_SUMMON_DEMONCHAINS 30120 in C++ order, but the summon effect has
+-- no session-path executor yet, so no chains creature spawns and the
+-- sacrifice debuff still runs its full duration (see below). The kil'rek summon
 -- (SPELL_SUMMON_IMP 30066) IS ported: the 2026-10-23 engine gap closure
 -- (4212e3e7) executes SPELL_EFFECT_SUMMON on the creature-cast path, so the
 -- DoCastAOE self-cast spawns 17229 whose npc_kilrek AI is registered below.
@@ -146,12 +146,14 @@ end
 
 -- C++ EVENT_SACRIFICE: random alive player within 100 yd; DoCast(target,
 -- SACRIFICE, triggered); target->CastSpell(target, SUMMON_DEMONCHAINS,
--- triggered) — the chains summon has no bearer, skipped (the sacrifice
--- debuff then runs its full duration). Repeat 42s.
+-- triggered) — ported via player:CastSpell; the summon effect itself has
+-- no session-path executor, so no chains creature spawns and the
+-- sacrifice debuff runs its full duration. Repeat 42s.
 local function onSacrifice(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SACRIFICE, true)
+        target:CastSpell(target, SPELL_SUMMON_DEMONCHAINS, true)
         creature:Talk(SAY_SACRIFICE)
     end
     schedule(timers, guid, "sacrifice", 42000, function()

@@ -39,7 +39,7 @@
 -- model — MovementInform never fires, so the eagle's MovePoint swoop run
 -- is modeled as a direct timer cast; SetDisableGravity and speed-rate
 -- arms are skipped. The 44007 cloud-visual self-cast on the storm target
--- has no bearer (CastSpell is on the creature object only, not players).
+-- is ported via player:CastSpell (2026-10-24 bridge).
 -- The C++ EnterEvadeMode arms (storm target gone) have no bridge, so a
 -- missing storm target is a no-op. No instance-script model — admission
 -- only via the luaBossAI shim. No threat model — "random,1" picks any
@@ -151,8 +151,9 @@ end
 -- C++ EVENT_ELECTRICAL_STORM (boss_akilzon.cpp:264-302): random alive
 -- player within 50 yd; nil target returns out of the case BEFORE the 60s
 -- re-arm (EnterEvadeMode in C++ — no evade bridge, so the storm simply
--- stops). Target casts 44007 on self (no player CastSpell bridge —
--- skipped), boss DoCast(target, 43648) non-triggered; then the cloud leg
+-- stops). Target casts 44007 on self (ported 2026-10-24 via the
+-- player:CastSpell bridge, C++ order: 44007 before the storm cast),
+-- boss DoCast(target, 43648) non-triggered; then the cloud leg
 -- (boss_akilzon.cpp:283-294): me->SummonTrigger(x, y,
 -- me->GetPositionZ()+16, 0, 15s) — WORLD_TRIGGER 12999,
 -- TEMPSUMMON_TIMED_DESPAWN — then SetDisableGravity(true), StopMoving(),
@@ -173,6 +174,7 @@ end
 local function onElectricalStorm(creature, guid)
     local target = randomPlayerInRange(creature, 50)
     if target then
+        target:CastSpell(target, SPELL_CLOUD_VISUAL, true)
         creature:CastSpell(target, SPELL_ELECTRICAL_STORM)
         local cloud = creature:SummonCreature(ENTRY_WORLD_TRIGGER,
             target:GetX(), target:GetY(), creature:GetZ() + 16, 0, 2, 15000)

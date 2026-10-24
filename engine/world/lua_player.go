@@ -296,6 +296,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.applyAura(spell)
 		return nil, nil
 	}
+	// CastSpell(target, spellId[, triggered]) is Unit::CastSpell on the
+	// player caster: the session cast path (castSpellDirect, the
+	// triggered pipeline — TRIGGERED_FULL_MASK, SpellDefines.h:155), the
+	// player twin of the creature CastSpell bridge. A nil/unknown target
+	// falls back to the caster itself (the terestian/akilzon self-cast
+	// arms); a non-triggered flag still rides the session path, whose
+	// power/cast-time legs are unmodeled exactly like the rest of Go's
+	// fire-and-forget cast model. SPELL_EFFECT_SUMMON (28) has no
+	// session-path executor yet, so summon-effect casts fire the
+	// SMSG_SPELL_GO visual but spawn nothing.
+	methods["CastSpell"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CastSpell requires a target and a spell id")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			targetGUID = state.GUID
+		}
+		s.castSpellDirect(ctx, spellID, targetGUID)
+		return nil, nil
+	}
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
