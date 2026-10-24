@@ -41,16 +41,19 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28546):
 -- boss_ionar Reset / Initialize — lSparkList.DespawnAll() +
--- Initialize() flag/timer clears, RemoveFlag legs,
+-- Initialize() flag/timer clears, RemoveFlag legs (PORTED in
+-- ionarCombatEnd — the field-59 flag surface is bridged),
 -- instance->SetBossState(DATA_IONAR, NOT_STARTED) — no summon-list /
--- flag / instance bridges. The SetControlled(false, UNIT_STATE_ROOT)
+-- instance bridges; the flag SET side stays out with the split machine. The SetControlled(false, UNIT_STATE_ROOT)
 -- leg ports via creature:SetRooted(false) (lua_creature_events.go)
 -- and the if (!IsVisible) SetVisible(true) leg via creature:SetVisible,
 -- both in ionarCombatEnd (C++-exact arms).
 -- SpellHit — the SPELL_DISPERSE 52770 split machine (five
 -- SPELL_SUMMON_SPARK 52746 casts, AttackStop, SetVisible(false),
 -- NON_ATTACKABLE+NOT_SELECTABLE flags, UNIT_STATE_ROOT, motion
--- clear/idle) — no cast / visibility / flag / motion bridges.
+-- clear/idle) — the cast / visibility / flag surfaces are live now,
+-- but the split machine itself (spark summons, motion clear/idle)
+-- stays out, so the arm stays with it.
 -- CallBackSparks — ObjectAccessor GUID loop, SetSpeedRate(MOVE_RUN,
 -- 2.0f), MovePoint(DATA_POINT_CALLBACK 0) per alive spark,
 -- DespawnOrUnsummon on dead — no ObjectAccessor / motion bridges.
@@ -110,6 +113,10 @@
 
 local ENTRY_IONAR = 28546
 local ENTRY_SPARK_OF_IONAR = 28926
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
@@ -196,11 +203,14 @@ local function ionarCombatEnd(event, creature)
     -- C++ Reset (boss_ionar.cpp:114-122): lSparkList.DespawnAll() (the
     -- spark summon list is unmodeled) + Initialize() (flag/timer clears,
     -- covered by cancelTimers) + RemoveFlag(NON_ATTACKABLE |
-    -- NOT_SELECTABLE) (the set side is unported, so the clear is
-    -- vacuous) + SetControlled(false, UNIT_STATE_ROOT) (SetRooted
+    -- NOT_SELECTABLE) (PORTED below; the set side rides the unported
+    -- SpellHit DISPERSE split machine, so the clear is a restore)
+    -- + SetControlled(false, UNIT_STATE_ROOT) (SetRooted
     -- bridge, below) + if (!me->IsVisible()) me->SetVisible(true)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656 —
     -- unconditional here is end-state-identical to the C++ gate).
+    -- C++ Reset (:118): RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
     creature:SetRooted(false)
     cancelTimers(creature:GetGUID())

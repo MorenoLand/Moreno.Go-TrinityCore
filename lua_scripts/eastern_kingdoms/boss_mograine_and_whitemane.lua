@@ -95,6 +95,10 @@ local SPELL_CRUSADER_STRIKE = 14518
 local SPELL_HAMMER_OF_JUSTICE = 5589
 local SPELL_RETRIBUTION_AURA = 8990
 
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 local SPELL_HEAL = 12039
 local SPELL_POWER_WORD_SHIELD = 22187
 local SPELL_HOLY_SMITE = 9481
@@ -199,7 +203,8 @@ end
 
 -- C++ Reset: Initialize + _Reset + _killYellTimer.Reset(0s) +
 -- DoCastSelf(retribution aura, triggered) + flag/standstate/react legs
--- (bridgeless legs documented-only).
+-- (PORTED below — all three surfaces bridged; the DamageTaken
+-- fake-death SET side stays out with the unported resurrection machine).
 local function mograineReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -209,6 +214,12 @@ local function mograineReset(event, creature)
     -- death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_RETRIBUTION_AURA, true)
+        -- C++ Reset (:99-101): RemoveFlag(NOT_SELECTABLE | NON_ATTACKABLE)
+        -- + SetStandState(STAND) + SetReactState(AGGRESSIVE) — clears the
+        -- fake-death state on evade (the set side stays out, above).
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
     end
 end
 

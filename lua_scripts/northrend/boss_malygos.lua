@@ -82,8 +82,10 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset / Initialize (gravity / immunity / flags / flight-speed
 -- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
--- SetBossState NOT_STARTED) — no instance / phase /
--- react-state bridges. DoAction (the ~60-action event/phase
+-- SetBossState NOT_STARTED) — the gravity leg + flag-clear +
+-- REACT_PASSIVE legs are ported (malygosReset); immunity /
+-- flight-speed / phase / instance legs stay out (no immune surface,
+-- no speed literal, no phase / instance bridges). DoAction (the ~60-action event/phase
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
 -- intro, vortex legs, surge-of-power legs, respawn handling —
 -- all gated on MotionMaster / instance GUIDs / timed events) —
@@ -189,6 +191,9 @@ local SAY_DEATH = 17
 -- 10-minute berserk timer, so the faithful port casts it once at engage.
 local SPELL_BERSERK = 60670
 
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 -- C++ JustEngagedWith (boss_malygos.cpp :563-:579): me->setActive(true) +
 -- instance->CheckRequiredBosses gate +
 -- instance->SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE)
@@ -224,13 +229,17 @@ local function malygosDied(event, creature, killer)
     end, 5000)
 end
 
--- C++ Reset (boss_malygos.cpp:376): me->SetDisableGravity(true) --
+-- C++ Reset (boss_malygos.cpp:376-385): me->SetDisableGravity(true) --
 -- unconditional leg of boss_malygosAI::Reset (Malygos hovers at spawn /
--- after a wipe). The sibling Reset legs (SetImmuneToAll, flight speed,
--- SetPhase, REACT_PASSIVE, instance boss-state/achievement arms) have
--- no bridges and stay out.
+-- after a wipe). The RemoveFlag(NOT_SELECTABLE) + REACT_PASSIVE legs
+-- are PORTED below (both surfaces bridged; C++ JustEngagedWith sets
+-- no react state, so PASSIVE at Reset strands nothing beyond C++).
+-- The SetImmuneToAll (no Lua surface), flight-speed (member value, no
+-- literal), SetPhase, instance boss-state/achievement legs stay out.
 local function malygosReset(event, creature)
     creature:SetDisableGravity(true)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetReactState(0) -- REACT_PASSIVE
 end
 
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
