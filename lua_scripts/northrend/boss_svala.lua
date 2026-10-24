@@ -216,6 +216,7 @@ local SPELL_SHADOWS_IN_THE_DARK = 59407
 local SPELL_SINSTER_STRIKE = 15667
 local SPELL_CALL_FLAMES = 48258
 local SPELL_RITUAL_STRIKE_EFF_1 = 48277
+local SPELL_SUMMONED_VIS = 64446 -- boss_svala.cpp:46
 
 -- ScriptedCreature.h: EQUIP_UNEQUIP = 0, EQUIP_NO_CHANGE = -1 (the Go
 -- bridge takes uint32, so 0xFFFFFFFF = untouched — malchezaar
@@ -544,6 +545,18 @@ local function hulkDamageTaken(event, creature, attacker, damage)
 end
 
 -- Shared timer wipe for events 2/23/4 on the hulk.
+-- C++ JustSummoned (boss_svala.cpp:179-182): ritual-channeler entry gate
+-- -> summoned self-cast SPELL_SUMMONED_VIS 64446, triggered; the
+-- summons.Summon bookkeeping leg has no Lua twin. LATENT: no Lua path
+-- summons ritual channelers yet (EVENT_SPAWN_RITUAL_CHANNELERS stays
+-- out, SACRIFICING-gated) -- the arm fires correctly if a future path
+-- summons via svala (anubrekhan latent precedent).
+local function svalaJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_RITUAL_CHANNELER then
+        summoned:CastSpell(summoned, SPELL_SUMMONED_VIS, true)
+    end
+end
+
 local function hulkCancelCombatTimers(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -557,6 +570,7 @@ RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 4, svalaJustDied)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 9, svalaDamageTaken)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 15, svalaSpellHitTarget)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 23, svalaWipeCombat)
+RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 19, svalaJustSummoned)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 1, hulkEnterCombat)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 2, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 4, hulkCancelCombatTimers)

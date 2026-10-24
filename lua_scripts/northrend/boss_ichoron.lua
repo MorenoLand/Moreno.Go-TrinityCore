@@ -285,12 +285,25 @@ local function ichoronJustDied(event, creature)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ JustSummoned (boss_ichoron.cpp:173-179): ichor-globule entry gate
+-- -> DoCast(summon, SPELL_WATER_GLOBULE_VISUAL 54260), non-triggered;
+-- the summons.Summon bookkeeping leg has no Lua twin. LATENT: globules
+-- spawn only from the unported spell_ichoron_splatter AuraScript
+-- periodic summon -- the arm fires correctly if a future path summons
+-- via ichoron (anubrekhan latent precedent).
+local function ichoronJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_ICHOR_GLOBULE then
+        summoned:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ICHORON, 1, ichoronEnterCombat)
 RegisterCreatureEvent(ENTRY_ICHORON, 2, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 3, ichoronKilledUnit)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronJustDied)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 23, ichoronReset)
+RegisterCreatureEvent(ENTRY_ICHORON, 19, ichoronJustSummoned)
 
 -- C++ npc_ichor_globule::DamageTaken (boss_ichoron.cpp:279-290):
 -- if (!_splashTriggered && damage >= me->GetHealth()): latch,

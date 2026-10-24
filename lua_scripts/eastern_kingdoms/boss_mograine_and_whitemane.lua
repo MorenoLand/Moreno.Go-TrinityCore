@@ -50,8 +50,10 @@
 -- cheat-death precedent: porting negation alone would strand the boss
 -- unkillable, since the SpellHit(SCARLET_RESURRECTION 9232) 3s/5s
 -- scheduler legs that restore stand state, reschedule crusader/hammer,
--- remove NON_ATTACKABLE, set REACT_AGGRESSIVE and _canDie=true have no
--- SpellHit bridge). JustEngagedWith's CallForHelp(VISIBLE_RANGE) +
+-- remove NON_ATTACKABLE, set REACT_AGGRESSIVE and _canDie=true ride an
+-- unreachable trigger (whitemane's resurrection cast is unported, so
+-- ev14 never fires with 9232; ev14 itself is bridged). JustEngagedWith's
+-- CallForHelp(VISIBLE_RANGE) +
 -- MoveIdle and BossAI::JustEngagedWith + DATA_MOGRAINE_AND_WHITE_EVENT
 -- bookkeeping have no bridges (luaBossAI shim).
 -- Whitemane's sub-50% DamageTaken latch (HealthBelowPctDamaged(50,

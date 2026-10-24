@@ -51,11 +51,15 @@
 -- Reset INTRO_DONE leg — cross-AI GetData/SetData bridge absent
 -- (the Reset RemoveAura(SPELL_FREEZE_ANIM) rides the INTRO_DONE
 -- gate, so it stays out with it).
--- JustSummoned DoZoneInCombat(summon) — the summon-bearer pattern (event
--- 19) exists and the bridge is live (2026-10-23), but the arm rides the
--- unbridged DoAction summon machine (ACTION_SUMMON_ELEMENTAL's Emerge
--- cast has no fire site) and the elemental's entry is unverifiable, so
--- it never spawns — stays out.
+-- JustSummoned DoZoneInCombat(summon) -- PORTED 2026-10-24
+-- (colossusJustSummoned, ev19): the unconditional leg, C++-exact
+-- (summoned:DoZoneInCombat() = CreatureAI::DoZoneInCombat(summon),
+-- CreatureAI.cpp:73-103). The COLOSSUS_PHASE_SECOND_ELEMENTAL_SUMMON
+-- half-health leg stays out (phase lives in the unported DoAction
+-- machine, no phase latch in Lua). LATENT: no Lua path summons
+-- elementals yet (DoAction summon machine unported, elemental entry
+-- unverifiable) -- the arm fires correctly if a future path summons
+-- via the colossus (anubrekhan latent precedent).
 -- boss_drakkari_elemental — ENTRY UNVERIFIABLE (gundrak.h
 -- GDCreatureIds has no NPC_DRAKKARI_ELEMENTAL; the .cpp enum names
 -- only spells/texts; belnistrasz/willix precedent — no invented
@@ -164,7 +168,14 @@ local function colossusReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustSummoned (boss_drakkari_colossus.cpp:218-222): DoZoneInCombat(summon)
+-- unconditionally; the phase-gated half-health leg stays out (see header).
+local function colossusJustSummoned(_, creature, summoned)
+    summoned:DoZoneInCombat()
+end
+
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 1, colossusEnterCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 2, colossusLeaveCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 4, colossusDied)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 23, colossusReset)
+RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 19, colossusJustSummoned)

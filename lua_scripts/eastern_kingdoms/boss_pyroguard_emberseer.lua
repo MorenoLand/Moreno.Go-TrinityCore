@@ -38,9 +38,13 @@
 -- OnEnterCombat(1) — the out-of-combat ticks are unmodeled.
 -- Unmodeled (documented-only): the whole pre-fight event is gated on
 -- instance / SetData bridges that do not exist on the Lua surface
--- (SpellHit IS bridged — event 14 — but the SpellHit arms are dead
--- code in the ported model: 15281 is self-cast by the unported
--- incarcerator machine, and 16048's trigger is unmodeled) —
+-- (SpellHit IS bridged — event 14 — but the SpellHit arms stay out on
+-- trigger-path grounds, verified 2026-10-24: 15281 is self-cast by the
+-- PORTED incarcerator machine (ev5/ev24), but Go's cast path fans out
+-- to the explicit target + chain jumps only (no AoE fan-out), so the
+-- self-cast never lands on emberseer; 16049's trigger is the
+-- aura-periodic trigger of 16048 from the unported EVENT_PRE_FIGHT_2
+-- machine, and Go has no periodic-aura-trigger engine) —
 -- RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
 -- (DATA_BLACKHAND_INCARCERATOR, 1) + SetBossState(NOT_STARTED));
 -- (Reset's UNIT_FLAG_NOT_SELECTABLE + SetImmuneToPC(true) pair IS
