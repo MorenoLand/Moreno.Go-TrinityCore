@@ -61,9 +61,14 @@
 -- legs — _instance->SetData(DATA_FROSTSWORN_GENERAL, NOT_STARTED /
 -- IN_PROGRESS / DONE) — no instance bridge.
 -- npc_frostsworn_general UpdateAI — EVENT_CLONE (:1939-1942)
--- SummonClones machine (:1950-1964: SelectTargetList + SummonCreature
--- + clone/ghost-visual casts + AttackStart) rides the no-summon /
--- no-instance-GetGuidData bridges, so it is documented-only.
+-- SummonClones machine (:1950-1964: SelectTargetList(MaxThreat, 5) +
+-- SummonCreature(NPC_REFLECTION) + player-side clone/ghost-visual
+-- casts + reflection AttackStart). The summon leg itself is now
+-- bridgeable (engine/world/lua_creature_events.go:956) — the old
+-- no-summon claim is retracted — but the machine stays
+-- documented-only on the MaxThreat target list (no threat-list
+-- accessor bridge), the player-side casts (no player-cast bridge)
+-- and AttackStart (no bridge).
 -- (CORRECTION 2026-10-23: the JustEngagedWith DoZoneInCombat leg
 -- (:1908) IS ported below — creature:DoZoneInCombat() is bridged
 -- (engine/world/lua_creature_events.go); the stale "no bridge" claim

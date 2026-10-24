@@ -28,10 +28,12 @@
 -- sources — the drake's own entry lives DB-side only — documented-only
 -- (standing rule: no invented identifiers).
 -- npc_enslaved_netherwing_drake: the Tapped arm's SpellHit gate
--- (event 14 — ev14 IS bridged, nagrand_banner precedent) but the
--- arm's EFFECT legs — SetFaction / movement / gravity — stay
--- unbridged, and the drake has no verifiable entry to register —
--- documented-only.
+-- (event 14 — ev14 IS bridged, nagrand_banner precedent) and the
+-- SetFaction (engine/world/lua_creature_events.go:2076) and
+-- gravity (creature:SetDisableGravity, :800) EFFECT legs are now
+-- bridgeable, but the arm stays documented-only on the
+-- MoveTakeoff/MovementInform legs (no bridges) and the drake's
+-- unverifiable entry (no invented identifiers).
 -- npc_earthmender_wilda: EscortAI (no escort bridge) + OnQuestAccept
 -- (no quest-accept bridge) — documented-only (omor precedent).
 -- npc_torloth_the_magnificent (22076, verifiable from WavesInfo): the

@@ -407,7 +407,13 @@ local function leotherasTick(creature, guid)
         -- is within 30 yd; re-arm sits outside the range gate
         -- (C++-exact). The StopMoving leg fires on EVERY tick the
         -- victim is in range, independent of the blast timer
-        -- (boss_leotheras_the_blind.cpp:505-506).
+        -- (boss_leotheras_the_blind.cpp:505-506). Deviation: the C++
+        -- cast at :519 carries CastSpellExtraArgs().SetOriginalCaster(
+        -- me->GetGUID()).AddSpellBP0(100) — the BP0 override and the
+        -- original-caster tag have no Lua bridge (Lua CastSpell carries
+        -- only the triggered flag; the engine cast path has no
+        -- base-point-override parameter), so the port fires the plain
+        -- DBC-base-point cast.
         local victim = creature:GetVictim()
         if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
             creature:StopMoving()
@@ -535,6 +541,10 @@ local function demonTick(creature, guid)
     -- gate here, unlike the boss form — C++-exact). The StopMoving
     -- leg fires on EVERY tick the victim is in range, independent
     -- of the blast timer (boss_leotheras_the_blind.cpp:665-667).
+    -- Deviation: same as the boss form — the C++ cast at :675 drops
+    -- its CastSpellExtraArgs().SetOriginalCaster(me->GetGUID()).
+    -- AddSpellBP0(100) legs (no BP0 / original-caster bridge on the
+    -- Lua CastSpell surface).
     local victim = creature:GetVictim()
     if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
         creature:StopMoving()

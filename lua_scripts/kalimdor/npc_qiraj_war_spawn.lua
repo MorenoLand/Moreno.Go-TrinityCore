@@ -46,11 +46,14 @@
 -- - Target acquisition (C++ hasTarget/AttackStart via
 --   me->FindNearestCreature(entry, 20, true) — kaldorei infantry
 --   pick a random qiraji entry, qiraji-side picks nearest kaldorei):
---   no creature-lookup bridge on the Lua surface (standing).
+--   the lookup itself is now bridgeable
+--   (creature:FindNearestCreature, engine/world/lua_creature_events.go:2105;
+--   old no-creature-lookup claim retracted), but the arms stay
+--   documented-only — the war-spawn NPCs ride the unported
+--   Anachronos cinematic switch and their entries are unregistered.
 -- - Stoned aura arm: if no Caelestrasz within 60y
---   (FindNearestCreature(NPC_CAELESTRASZ 15380, 60) —
---   creature-lookup bridge absent), DoCast(self, SPELL_STONED
---   33652) every tick: unreachable.
+--   (FindNearestCreature(NPC_CAELESTRASZ 15380, 60)), DoCast(self,
+--   SPELL_STONED 33652) every tick: unreachable (same bar).
 -- - JustDied: PORTED — me->DespawnOrUnsummon() as creature:Despawn()
 --   at the top of onDied (illidari_spawn precedent, C++-exact:
 --   despawn first, then the blocked leg). LiveCounter() on the

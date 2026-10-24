@@ -224,5 +224,15 @@ local function malygosDied(event, creature, killer)
     end, 5000)
 end
 
+-- C++ Reset (boss_malygos.cpp:376): me->SetDisableGravity(true) --
+-- unconditional leg of boss_malygosAI::Reset (Malygos hovers at spawn /
+-- after a wipe). The sibling Reset legs (SetImmuneToAll, flight speed,
+-- SetPhase, REACT_PASSIVE, instance boss-state/achievement arms) have
+-- no bridges and stay out.
+local function malygosReset(event, creature)
+    creature:SetDisableGravity(true)
+end
+
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
+RegisterCreatureEvent(ENTRY_MALYGOS, 23, malygosReset)

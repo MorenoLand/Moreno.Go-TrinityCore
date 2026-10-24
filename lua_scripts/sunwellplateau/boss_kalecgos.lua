@@ -136,9 +136,13 @@
 -- check-timer kalecgos banish/tap-check arms, the kalecgos check-
 -- timer sathrovarr banish/tap-check arm, the kalecgos<->sathrovarr
 -- ACTION_ENRAGE relay and both evade relays are unmodeled; no
--- movement/faction/react bridge — the outro liftoff/MovePoint/
+-- movement/react bridge — the outro liftoff/MovePoint/
 -- invisible/KillSelf chain, the human engage positioning and the
--- enter-evade flag arms are unmodeled; no threat bridge — the
+-- enter-evade flag arms are unmodeled (the faction leg itself,
+-- me->SetFaction(FACTION_FRIENDLY) :319, is now bridgeable via
+-- creature:SetFaction (engine/world/lua_creature_events.go:2076),
+-- but the chain's bearer is sathrovarr's cross-creature DoAction
+-- relay — no bridge — so the chain stays out); no threat bridge — the
 -- NonTankTargetSelector exclusion in both target filters is
 -- unmodeled; the SPELLVALUE_MAX_TARGETS clamp and all SpellScript/
 -- AuraScript targeting arms are unmodeled (standing gaps).
