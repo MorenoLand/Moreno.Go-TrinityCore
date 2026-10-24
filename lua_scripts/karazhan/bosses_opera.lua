@@ -195,22 +195,6 @@ local function alivePlayersInRange(creature, maxDist)
     return found
 end
 
--- C++ Position::HasInArc twin (Position.cpp:120-137): |relative angle| <=
--- arc/2 with the default border 2.0. math.atan2 is the GetAngle twin
--- (nightbane rain-of-bones precedent); creature:GetO() resolves through
--- the object.go generic fallback like GetX/GetY.
-local function inArc(creature, target, arc)
-    local dx = target:GetX() - creature:GetX()
-    local dy = target:GetY() - creature:GetY()
-    local ang = math.atan2(dy, dx)
-    if ang < 0 then ang = ang + 2 * math.pi end
-    local o = creature:GetO()
-    if o < 0 then o = o + 2 * math.pi end
-    local diff = math.abs(ang - o)
-    if diff > math.pi then diff = 2 * math.pi - diff end
-    return diff <= arc / 2
-end
-
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
@@ -1367,7 +1351,10 @@ local function romuloLunge(creature, guid)
     end
     if #pool > 0 then
         local target = pool[math.random(#pool)]
-        if not inArc(creature, target, math.pi) then
+        -- C++ !me->HasInArc(M_PI, target) (bosses_opera.cpp:1337):
+        -- the atan2 inArc twin was retired 2026-10-24 for the live
+        -- creature:IsInBack bridge, twin-exact.
+        if not creature:IsInBack(target) then
             creature:CastSpell(target, SPELL_BACKWARD_LUNGE)
             rajSchedule(guid, "lunge", math.random(15000, 30000), function()
                 romuloLunge(creature, guid)

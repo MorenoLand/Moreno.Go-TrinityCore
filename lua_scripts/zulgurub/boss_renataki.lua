@@ -25,9 +25,8 @@
 -- visual arms are PORTED (2026-10-21): SetEquipmentSlots main-hand
 -- swap + SetDisplayId(11686/15268) + UNIT_FLAG_NOT_SELECTABLE
 -- SetFlag/RemoveFlag (all bridged) — the boss actually goes
--- invisible + unselectable C++-exact; DoTeleportTo has no
--- teleport bridge (jindo convention) — the ambush teleport is skipped
--- and the cast lands on the picked player directly; the aggro-switch
+-- invisible + unselectable C++-exact; DoTeleportTo ports via the
+-- live creature:Teleport bridge (2026-10-24); the aggro-switch
 -- GetThreat/ModifyThreatByPercent(-50) + AttackStart arms have no threat
 -- or movement bridge (grilek convention) — only the 7-20s re-arm cycle
 -- is kept; no instance-script model — boss admission via the luaBossAI
@@ -100,10 +99,12 @@ local function onInvisible(creature, guid)
 end
 
 -- C++ ambush timer: fires every 3s, gated on _invisible; SelectTarget
--- random alive player within 100 yd -> DoTeleportTo (skipped, no
--- teleport bridge) + DoCast(target, 34794) non-triggered; _ambushed =
--- true unconditionally on fire; re-arm 3s C++-exact. Gate-closed ticks
--- do nothing (C++ freeze approximated by continuing the cycle).
+-- random alive player within 100 yd -> DoTeleportTo(target pos)
+-- (:85, self-teleport; the bridge defaults orientation to the current
+-- facing like the C++ default) + DoCast(target, 34794) non-triggered;
+-- _ambushed = true unconditionally on fire; re-arm 3s C++-exact.
+-- Gate-closed ticks do nothing (C++ freeze approximated by continuing
+-- the cycle).
 local function onAmbush(creature, guid)
     local st = renatakiState[guid]
     if st and st.invisible then
@@ -114,8 +115,9 @@ local function onAmbush(creature, guid)
             end
         end
         if #candidates > 0 then
-            creature:CastSpell(candidates[math.random(#candidates)],
-                SPELL_AMBUSH)
+            local target = candidates[math.random(#candidates)]
+            creature:Teleport(target:GetX(), target:GetY(), target:GetZ())
+            creature:CastSpell(target, SPELL_AMBUSH)
         end
         st.ambushed = true
     end

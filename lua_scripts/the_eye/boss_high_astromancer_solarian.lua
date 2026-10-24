@@ -228,21 +228,6 @@ local function randomAlivePlayer(creature)
     return players[math.random(#players)]
 end
 
--- C++ Position::HasInArc twin (Position.cpp:120-137): |relative angle| <=
--- arc/2 with the default border 2.0. math.atan2 is the GetAngle twin;
--- creature:GetO() resolves through the object.go generic fallback.
-local function inArc(creature, target, arc)
-    local dx = target:GetX() - creature:GetX()
-    local dy = target:GetY() - creature:GetY()
-    local ang = math.atan2(dy, dx)
-    if ang < 0 then ang = ang + 2 * math.pi end
-    local o = creature:GetO()
-    if o < 0 then o = o + 2 * math.pi end
-    local diff = math.abs(ang - o)
-    if diff > math.pi then diff = 2 * math.pi - diff end
-    return diff <= arc / 2
-end
-
 -- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random,
 -- 1): any alive player in the instance excluding the current
 -- victim, within `maxDist` yd (nil = no distance limit) —
@@ -307,7 +292,10 @@ local function combatTick(creature, guid)
                 st.blindingLight = false
             else
                 local target = randomAlivePlayer(creature)
-                if target ~= nil and not inArc(creature, target, 2.5) then
+                -- C++ !me->HasInArc(2.5f, target) (boss_astromancer.cpp:257):
+                -- IsInBack(t, arc) = !HasInArc(2*pi - arc), so
+                -- IsInBack(target, 2*pi - 2.5) == !HasInArc(2.5).
+                if target ~= nil and creature:IsInBack(target, 2 * math.pi - 2.5) then
                     target = creature:GetVictim()
                 end
                 if target then
