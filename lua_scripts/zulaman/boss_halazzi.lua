@@ -26,9 +26,9 @@
 -- Talk(SAY_BERSERK), repeat 60s (C++-exact). The damage hook zeroes lethal
 -- damage outside the enrage phase (C++ DamageTaken), and the lynx zeroes
 -- lethal damage unconditionally.
--- Deviations from C++: no summon model — the spirit lynx is never
--- spawned (the commented-out SPELL_SUMMON_LYNX and the C++
--- DoSpawnCreature have no bearer), the merge-walk has no movement model
+-- Deviations from C++: the spirit lynx IS summoned now (2026-10-24
+-- summon bridge — DoSpawnCreature at boss +5,+5, type 4; the
+-- commented-out SPELL_SUMMON_LYNX stays unmodeled), the merge-walk has no movement model
 -- (MoveFollow/Clear have no bridge), so the merge completes on a 2s timer
 -- instead of the 6-yd proximity check, and the lynx-health merge arm has
 -- no bearer; the transform-completion signal (SPELL_TRANSFORM_SPLIT2
@@ -307,7 +307,7 @@ enterPhase = function(creature, guid, nextPhase)
             -- me->Attack(victim, true) + MoveChase have no bridge; engine
             -- melee is continuous.
         end
-        -- The lynx DisappearAndDie has no bearer (the lynx never spawns).
+        -- The lynx DisappearAndDie has no bearer (no despawn bridge).
         creature:SetMaxHealth(600000)
         creature:SetHealth(600000 - 150000 * st.transformCount)
         st.phase = nextPhase
@@ -326,7 +326,15 @@ enterPhase = function(creature, guid, nextPhase)
             end)
         end
     elseif nextPhase == PHASE_HUMAN then
-        -- C++ DoSpawnCreature(SPIRIT_LYNX) skipped — no summon model.
+        -- C++ DoSpawnCreature(SPIRIT_LYNX, 5, 5, 0, 0,
+        -- TEMPSUMMON_CORPSE_DESPAWN, 0s) — DoSpawnCreature adds offsets
+        -- to the boss position (ScriptedCreature.cpp:286-289, janalai
+        -- precedent); type 4, despawnMs 0 (corpse family starts its
+        -- timer at death, unmodeled). JustSummoned AttackStart(victim)
+        -- has no bridge, so the lynx idles until the engine aggros it
+        -- (its npc_halazzi_lynx AI below is registered).
+        creature:SummonCreature(ENTRY_SPIRIT_LYNX, creature:GetX() + 5,
+            creature:GetY() + 5, creature:GetZ(), creature:GetO(), 4, 0)
         -- C++ EnterPhase(PHASE_HUMAN): SetMaxHealth(400000) +
         -- SetHealth(400000) — a full heal, ported C++-exact
         -- (boss_halazzi.cpp:178-179).
@@ -441,7 +449,8 @@ RegisterCreatureEvent(ENTRY_HALAZZI, 23, halazziReset)
 -- 43243 on the victim every 4s. The C++ DamageTaken never-die arm is kept
 -- on the damage hook; the NON_ATTACKABLE AttackStart gate, the lynx
 -- DisappearAndDie, and the merge MoveFollow arms have no bridge (the lynx
--- never spawns from this script, but any spawned 24143 fights correctly).
+-- is summoned by the human-phase arm above, and any spawned 24143 fights
+-- correctly once engaged).
 local function onLynxFrenzy(creature, guid)
     creature:CastSpell(creature, SPELL_LYNX_FRENZY)
     schedule(lynxTimers, guid, "frenzy", math.random(30000, 50000), function()

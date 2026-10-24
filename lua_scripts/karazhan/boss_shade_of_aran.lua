@@ -23,8 +23,8 @@
 -- player pull 32265, mass slow 30035, then 29973), flame wreath (29946 on
 -- up to 3 random players; a 500ms watcher punishes movement beyond 3 yd
 -- from the cast point), or circular blizzard. Below 40% health once, four
--- water elementals; at 12 minutes and every 60s after, shadow-of-Aran
--- berserk (Talk only). The drink/potion/pyroblast mana sequence needs
+-- water elementals; at 12 minutes and every 60s after, 5 shadow-of-Aran
+-- summons (Talk + summon, Attack leg unbridged). The drink/potion/pyroblast mana sequence needs
 -- mana to drain; the repo carries no Spell.dbc, so creature spell costs
 -- resolve to 0 and the mana pool never moves — see deviations.
 -- Deviations from C++: the 4 water elementals (17167) ARE summoned now
@@ -32,11 +32,11 @@
 -- surface; type 2 TIMED_DESPAWN, 90s); unit->Attack(victim, true) has no
 -- bridge, so the elementals idle until the engine aggros them (their
 -- waterbolt AI is registered below for when they engage). The 5
--- shadow-of-Aran summons (18254) and the blizzard creature (17161) still
--- never spawn; the 12-min berserk keeps its Talk structure with the
--- SummonCreature call skipped (blizzard is approximated by casting 29951
--- on self, like the C++ aura the summoned creature would cast on
--- itself). The water elemental AI itself ("npc_aran_elemental") is
+-- shadow-of-Aran summons (18254) and the blizzard creature (17161) ARE
+-- summoned now (2026-10-24 summon bridge — shadows type 3, 5s OOC
+-- grace; blizzard type 2, 25s, self-casts 29951 at summon); their
+-- Attack(victim) legs have no bridge, so both idle until the engine
+-- aggros them (no C++ script exists for either entry). The water elemental AI itself ("npc_aran_elemental") is
 -- registered for entry 17167 below so the summoned elementals cast
 -- waterbolt 31012 every 2-5s once engaged. No
 -- instance-script model — the library-door open/close arms and the
@@ -69,6 +69,8 @@
 
 local ENTRY_SHADE_OF_ARAN = 16524
 local ENTRY_WATER_ELEMENTAL = 17167
+local ENTRY_ARAN_BLIZZARD = 17161
+local ENTRY_SHADOW_OF_ARAN = 18254
 
 local SAY_AGGRO = 0
 local SAY_FLAMEWREATH = 1
@@ -343,10 +345,19 @@ onSuperCast = function(creature, guid)
         startFlameWreath(creature, guid)
     else
         creature:Talk(SAY_BLIZZARD)
-        -- C++ summons the blizzard creature (17161), which casts the
-        -- circular blizzard on itself; no summon model, so Aran casts the
-        -- same visual on himself.
-        creature:CastSpell(creature, SPELL_CIRCULAR_BLIZZARD)
+        -- C++ boss_shade_of_aran.cpp:402-406: SummonCreature(
+        -- CREATURE_ARAN_BLIZZARD = 17161, 0,0,0,0,
+        -- TEMPSUMMON_TIMED_DESPAWN (2), 25s = 25000ms); the all-zero
+        -- coords ride the bridge's Object.cpp:2059-2060 close-point
+        -- fallback (elemental precedent). No C++ script exists for
+        -- 17161 — its sole act is the summon-time self-cast, ported
+        -- here; SetFaction is bridged and ported C++-exact.
+        local blizzard = creature:SummonCreature(ENTRY_ARAN_BLIZZARD,
+            0, 0, 0, 0, 2, 25000)
+        if blizzard ~= nil then
+            blizzard:SetFaction(creature:GetFaction())
+            blizzard:CastSpell(blizzard, SPELL_CIRCULAR_BLIZZARD)
+        end
     end
     schedule(timers, guid, "super", math.random(35000, 40000), function()
         onSuperCast(creature, guid)
@@ -354,8 +365,21 @@ onSuperCast = function(creature, guid)
 end
 
 onBerserk = function(creature, guid)
-    -- C++ summons 5 shadow-of-Aran (18254) on the victim; no summon model —
-    -- only the announcement survives.
+    -- C++ boss_shade_of_aran.cpp:433-443: 5x SummonCreature(
+    -- CREATURE_SHADOW_OF_ARAN = 18254, 0,0,0,0,
+    -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 5s = 5000ms); the
+    -- all-zero coords ride the bridge's close-point fallback and the
+    -- type-3 timer freezes in combat (pet_combat.go expiry twin),
+    -- so the 5s runs only out of combat, C++-exact. No C++ script
+    -- exists for 18254 — unit->Attack(victim) has no bridge, so the
+    -- shadows idle until the engine aggros them (elemental precedent).
+    for _ = 1, 5 do
+        local shadow = creature:SummonCreature(ENTRY_SHADOW_OF_ARAN,
+            0, 0, 0, 0, 3, 5000)
+        if shadow ~= nil then
+            shadow:SetFaction(creature:GetFaction())
+        end
+    end
     creature:Talk(SAY_TIMEOVER)
     schedule(timers, guid, "berserk", 60000, function()
         onBerserk(creature, guid)
