@@ -68,10 +68,13 @@
 -- below still block the machine), IsHostileTo + isInBackInMap(who, 5.0f)
 -- gates (no proximity / facing bridges), HasAura(63987/63986)
 -- trespasser gates (player:HasAura is bridged — lua_player.go:203;
--- still blocked by the proximity / area-ID / facing / team /
+-- still blocked by the proximity / area-ID / facing /
 -- player-self-cast bridges),
--- GetTeamId() == TEAM_ALLIANCE branch (no team bridge —
--- dalaran precedent), who->CastSpell(who, 63987/63986, true)
+-- GetTeamId() == TEAM_ALLIANCE branch (player:GetTeam IS bridged -
+-- lua_player.go:87, teamForRace 0 = Alliance per achievement code;
+-- the stale "no team bridge" note is retracted, the branch gate is
+-- portable but the machine still stays out below),
+-- who->CastSpell(who, 63987/63986, true)
 -- self-cast on the player (no player-self-cast path from a
 -- creature AI — corastrasza precedent) — documented-only. No
 -- NPC_ entry constant in the C++ sources; 63987/63986/4676/

@@ -1012,6 +1012,56 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Respawn is Creature::Respawn (Creature.cpp:2156-2215, force=true
+	// path): a dead creature returns to life at full health. The Go twin
+	// mirrors the instance-respawn restoration in kill.go
+	// (processCreatureRespawns): full health, home position, combat/loot/
+	// tap state cleared, loot state cleared, values broadcast, then
+	// fireCreatureSpawned (event-23 OnReset pre-fire, then event 5) so
+	// the creature's Reset arm runs as C++ ai->Reset() does. A live
+	// creature is a no-op: C++ force-respawn on an alive creature only
+	// cycles it through JUST_DIED and skips the DEAD-gated restore
+	// block. Pending scheduled respawns for the GUID are dropped so
+	// the timer cannot double-fire the restore. The transformed-entry
+	// revert (m_originalEntry) is not modeled: Go tracks no original
+	// entry apart from the current one.
+	methods["Respawn"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
+		if !ok || m.Health > 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		maxHealth := m.MaxHealth
+		if maxHealth == 0 {
+			maxHealth = m.BaseMaxHealth
+		}
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		m.Health, m.MaxHealth = maxHealth, maxHealth
+		m.X, m.Y, m.Z = m.HomeX, m.HomeY, m.HomeZ
+		m.Orientation = m.HomeO
+		m.InCombat, m.Evading, m.TargetGUID, m.Moving = false, false, 0, false
+		m.Looted = false
+		m.TapPlayerGUID, m.TapGroupID = 0, 0
+		m.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+		m.PlayerDamageReq = maxHealth / 2
+		dbGUID := uint32(m.GUID & 0x00FFFFFF)
+		delete(s.creatureRespawns, dbGUID)
+		if respawns := s.instanceCreatureRespawns[instanceAdmissionKey{MapID: m.Map, InstanceID: m.InstanceID}]; respawns != nil {
+			delete(respawns, dbGUID)
+			if len(respawns) == 0 {
+				delete(s.instanceCreatureRespawns, instanceAdmissionKey{MapID: m.Map, InstanceID: m.InstanceID})
+			}
+		}
+		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		s.motionMu.Unlock()
+		s.clearLootState(mapID, instanceID, guid)
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: maxHealth, unitFieldDynamicFlags: 0})
+		s.fireCreatureSpawned(ctx, m)
+		return nil, nil
+	}
 	// Kill is Unit::Kill (Unit.cpp:11188-11387) with the caller as both
 	// killer and victim — the Creature::KillSelf twin. The death runs
 	// through the spell insta-kill victim path (boss_ai.go

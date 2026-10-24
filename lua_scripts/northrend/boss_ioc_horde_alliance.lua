@@ -22,6 +22,8 @@
 
 local ENTRY_HALFORD_WYRMBANE = 34924
 local ENTRY_OVERLORD_AGMAR = 34922
+local ENTRY_KOR_KRON_GUARD = 34918 -- BattlegroundIC.h:35 (Horde guard)
+local ENTRY_SEVENTH_LEGION_INFANTRY = 34919 -- BattlegroundIC.h:36 (Alliance guard)
 
 local SPELL_BRUTAL_STRIKE = 58460 -- BossSpells :34
 local SPELL_CRUSHING_LEAP = 68506 -- BossSpells :36
@@ -131,19 +133,27 @@ local function iocBossJustEngagedWith(event, creature, target)
     schedule(guid, "check_range", 1000, function() onCheckRange(creature, guid) end)
 end
 
--- C++ Reset()/LeaveCombat/JustDied event machinery — cancel/re-arm on
--- combat events (the maiden convention). C++ Reset() also respawns the
--- entry-gated guard list (GetCreatureListWithEntryInGrid + Respawn) —
--- GetCreaturesInGrid IS bridged (lua_creature_events.go:1204) but
--- creature:Respawn() has no bridge (the only Lua Respawn is the
--- GameObject hide/unhide at lua_objects.go:1151) — the guard-respawn
--- leg stays out (documented-only).
+-- C++ Reset() (:52-63): _events.Reset() + entry-gated guard respawn
+-- (GetCreatureListWithEntryInGrid + Respawn, 100.0f) - PORTED 2026-10-24
+-- in iocBossReset (creature:Respawn bridge, lua_creature_events.go;
+-- the stale "only Lua Respawn is the GameObject hide/unhide" note is
+-- retracted - that Respawn lives on the GO surface only). C++ calls
+-- Respawn unconditionally; the bridge no-ops on live guards, matching
+-- the C++ DEAD-gated restore block. LeaveCombat/JustDied carry only
+-- the timer wipe (maiden convention).
 local function iocBossLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
 local function iocBossReset(event, creature)
     cancelTimers(creature:GetGUID())
+    local guardEntry = ENTRY_SEVENTH_LEGION_INFANTRY
+    if creature:GetEntry() ~= ENTRY_HALFORD_WYRMBANE then
+        guardEntry = ENTRY_KOR_KRON_GUARD
+    end
+    for _, guard in ipairs(creature:GetCreaturesInGrid(guardEntry, 100)) do
+        guard:Respawn()
+    end
 end
 
 local function iocBossDied(event, creature, killer)

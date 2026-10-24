@@ -77,10 +77,11 @@
 -- (ACTION_CRAZY_CAT_LADY 0) — no instance / DoAction bridges.
 -- DOCUMENTED-ONLY (no bridgeable arms):
 -- Reset (:139-145) / HandleCats (:147-158) — _Reset() + flag resets
--- + grid RESPAWN of entry 34014 within 500.0f — no respawn bridge
--- (the HandleCats(false) despawn half is ported in auriayaDied;
+-- + grid RESPAWN of entry 34014 within 500.0f — PORTED 2026-10-24
+-- in auriayaReset (creature:Respawn bridge, lua_creature_events.go);
+-- the HandleCats(false) despawn half is ported in auriayaDied;
 -- stale "no grid bridge" retracted — creature:GetCreaturesInGrid is
--- bridged, lua_creature_events.go:1204).
+-- bridged, lua_creature_events.go:1204.
 -- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
 -- 1) / GetData (:195-204, DATA_NINE_LIVES 30763077 /
 -- DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData bridges.
@@ -381,8 +382,24 @@ end
 -- ported below (stale "no grid bridge" retracted:
 -- creature:GetCreaturesInGrid is bridged, lua_creature_events.go:1204;
 -- entry 34014 registered, event 4 already wired). The HandleCats(true)
--- Respawn leg on Reset, the _JustDied() and SendEncounterUnit disengage
--- legs have no instance bridges.
+-- Respawn leg on Reset PORTED 2026-10-24 in auriayaReset; the
+-- _JustDied() and SendEncounterUnit disengage legs have no instance bridges.
+-- C++ boss_auriaya Reset (:139-145): _Reset() (instance state, no
+-- bridge) + flags + HandleCats(true) (:147-158): every dead sanctum
+-- sentry (34014) within 500.0f respawns. GetCreaturesInGrid enumerates
+-- dead motions still in the map (no health filter); IsDead reads the
+-- snapshot Health via the object.go fallback; creature:Respawn restores
+-- full health at home and fires event 23 on the sentry, running its
+-- Reset arm as C++ ai->Reset() does.
+local function auriayaReset(event, creature)
+    cancelCombatTimers(event, creature)
+    for _, sentry in ipairs(creature:GetCreaturesInGrid(ENTRY_SANCTUM_SENTRY, 500)) do
+        if sentry:IsDead() then
+            sentry:Respawn()
+        end
+    end
+end
+
 local function auriayaDied(event, creature, killer)
     creature:PlayDirectSound(SOUND_AURIAYA_DEATH)
     cancelCombatTimers(event, creature)
@@ -395,7 +412,7 @@ RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
 RegisterCreatureEvent(ENTRY_AURIAYA, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_AURIAYA, 3, auriayaTargetDied)
 RegisterCreatureEvent(ENTRY_AURIAYA, 4, auriayaDied)
-RegisterCreatureEvent(ENTRY_AURIAYA, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_AURIAYA, 23, auriayaReset)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, cancelCombatTimers)
