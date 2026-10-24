@@ -20,8 +20,9 @@
 -- mushroom precedent); OnDied(4) carries the JustDied self-despawn
 -- leg (zone_icecrown.cpp:455-459; the Summons.DespawnAll() half stays
 -- out — no summon-list bridge).
--- Unmodeled: SetRegenerateHealth(false) (no regen bridge);
--- EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900 with
+-- Modeled in onSpawnOrReset: SetRegenerateHealth(false) (bridged —
+-- lua_creature_events.go, honored by the Go regen tick).
+-- Unmodeled: EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900 with
 -- MovePoint machines — summon / movement bridges);
 -- EVENT_INTRO_1..3 Talk/facing chain (cross-creature-Talk /
 -- facing bridges); EVENT_MASON_ACTION SetData(1,1) triggers
@@ -98,15 +99,19 @@ local BANNER_SAY = 0
 
 local BLESSED_BANNER_ENTRY = 30891
 
--- C++ Reset() arm in arm order: SetRegenerateHealth(false)
--- unmodeled (no regen bridge) -> non-triggered self-cast
--- SPELL_THREAT_PULSE + Talk(BANNER_SAY). The banner never
+-- C++ Reset() arm in arm order: SetRegenerateHealth(false) (bridged —
+-- lua_creature_events.go, honored by the Go regen tick) -> non-triggered
+-- self-cast SPELL_THREAT_PULSE + Talk(BANNER_SAY). The banner never
 -- engages, so the fragment is one-shot per spawn / reset;
 -- no timers, no per-GUID state.
 -- Died (event 4): the JustDied self-despawn leg ports
 -- (me->DespawnOrUnsummon(), creature:Despawn, bridged); the paired
 -- Summons.DespawnAll() leg has no summon-list bridge (stays out).
 local function onSpawnOrReset(_, creature)
+    -- C++ npc_blessed_bannerAI::Reset(): SetRegenerateHealth(false) first,
+    -- unconditionally (zone_icecrown.cpp:437-443), then the alive-gated
+    -- cast + talk.
+    creature:SetRegenerateHealth(false)
     -- C++ npc_blessed_bannerAI::Reset(): DoCast(SPELL_THREAT_PULSE) +
     -- Talk(BANNER_SAY) (zone_icecrown.cpp). Alive-gated so the death-leg
     -- ev23 fire (banner self-despawns in JustDied) is not phantom; the
