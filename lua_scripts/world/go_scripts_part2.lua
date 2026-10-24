@@ -11,18 +11,26 @@
 --   - IsHolidayActive: zero hits in engine/ — no bridge (blocks all *_music).
 --   - player:GetQuestStatus IS bridged since 2026-10-24 (lua_player.go;
 --     veil_skith_cage gate now portable, frostblade_shrine still cast-blocked).
---   - CastSpell exists ONLY on the creature handler surface
---     (lua_creature_events.go:62) — no player:CastSpell and no
---     gameobject:CastSpell (blocks bonfire, shrine cast, ribbon pole cast,
---     toy_train pulse).
---   - SetStandState: engine-internal only, no Lua method (blocks shrine sit).
---   - CloseGossipMenuFor: zero hits in engine/ (blocks bonfire select tail).
+--   - CastSpell: creature surface (lua_creature_events.go:62) +
+--     player surface bridged 2026-10-24 (lua_player.go:309); no
+--     gameobject:CastSpell (blocks toy_train pulse only — bonfire,
+--     shrine, ribbon-pole casts are player casts, bridged).
+--   - SetStandState: creature surface bridged (lua_creature_events.go:1621)
+--     + player surface bridged 2026-10-24 (lua_player.go); shrine sit
+--     now portable.
+--   - CloseGossipMenuFor: no literal Lua method, but the twin
+--     player:GossipClearMenu + player:GossipComplete IS bridged
+--     (lua_player.go:581-582, vaelastrasz precedent); bonfire select
+--     tail portable via twin.
 --   - GameObject grid search: LIST search (GetCreatureListWithEntryInGrid)
 --     and GetPlayerListInGrid have no bridge (blocks cage children,
---     ribbon pole bunny, brewfest/midsummer per-player dispatch);
+--     brewfest/midsummer per-player dispatch; ribbon-pole bunny is a
+--     single-creature search, bridged — see below);
 --     corrected 2026-10-24 — single-creature player:FindNearestCreature
 --     IS bridged since 2026-10-24 (lua_player.go), but it returns one
---     nearest creature, not the list the cage arm iterates.
+--     nearest creature, not the list the cage arm iterates; GO-surface
+--     FindNearestCreature bridged 2026-10-24 too (lua_objects.go), so
+--     the ribbon-pole bunny search is portable (sole block DoAction).
 --   - Creature DoAction / MovePoint / AI()->Talk via a GO-obtained
 --     creature: no bridge (blocks cage children walk+Talk, ribbon pole
 --     ACTION_COSMETIC_FIRES).
@@ -53,31 +61,33 @@
 -- QUEST_THE_CLEANSING_ALLIANCE 11322, enum :733-736) bridged since
 -- 2026-10-24 — but the cleansing arm still needs
 -- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) bridged
--- 2026-10-24 (lua_player.go:309); the sole remaining block is
--- player:SetStandState(UNIT_STAND_STATE_SIT) (SetStandState is
--- creature-surface only, lua_creature_events.go:1621).
+-- 2026-10-24 (lua_player.go:309); player:SetStandState bridged
+-- 2026-10-24 (lua_player.go) — the arm is now bridge-complete, entry
+-- DB-side only.
 
 -- DOCUMENTED-ONLY: go_midsummer_bonfire (C++ :769-800)
 -- OnGossipSelect (:783-788; gameobject_gossip ON_SELECT=2 fires per
 -- engine/world/gameobject_hooks.go:215): player:CastSpell(player,
 -- STAMP_OUT_BONFIRE_QUEST_COMPLETE 45458, true — enum :764) bridged
--- 2026-10-24 (lua_player.go:309); CloseGossipMenuFor(player) still
--- has no bridge (zero runtime hits). Entry is DB-side (ScriptName).
+-- 2026-10-24 (lua_player.go:309); CloseGossipMenuFor(player) rides the
+-- bridged twin player:GossipClearMenu + player:GossipComplete
+-- (lua_player.go:581-582) — bridge-complete, entry DB-side only.
 
 -- DOCUMENTED-ONLY: go_midsummer_ribbon_pole (C++ :808-834)
--- OnGossipHello (:817-826): needs me:FindNearestCreature(
--- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) (no bridge), creature DoAction(
--- ACTION_COSMETIC_FIRES 0) (no bridge), player:CastSpell(player,
--- RibbonPoleSpells[urand(0,2)] in {29705, 29726, 29727} — enum :811-813)
--- (player:CastSpell bridged 2026-10-24; the GO-surface
--- FindNearestCreature + DoAction legs still block). Entry DB-side.
+-- OnGossipHello (:817-826): me:FindNearestCreature(
+-- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) bridged 2026-10-24 (lua_objects.go),
+-- player:CastSpell(player, RibbonPoleSpells[urand(0,2)] in {29705, 29726,
+-- 29727} — enum :811-813) bridged 2026-10-24; sole block is creature
+-- DoAction(ACTION_COSMETIC_FIRES 0) — no DoAction dispatch exists
+-- (zero hits in lua_creature_events.go). Entry DB-side.
 
 -- DOCUMENTED-ONLY: go_toy_train_set (C++ :839-869)
--- UpdateAI (:851-860): GameObjectEventOnAIUpdate has no fire site; the
--- pulse arm needs gameobject:CastSpell(nullptr, SPELL_TOY_TRAIN_PULSE
--- 61551, true — enum :842) (no bridge; CastSpell is creature-surface only).
--- DoAction (:863-867, "wrecker'd") -> me->Delete(): GO has Despawn/
--- RemoveFromWorld but no Delete bridge. Entry DB-side.
+-- UpdateAI (:851-860): GameObjectEventOnAIUpdate has no fire site
+-- (primary block — the pulse never fires); secondary blocks are
+-- gameobject:CastSpell(nullptr, SPELL_TOY_TRAIN_PULSE 61551, true —
+-- enum :842) (still unbridged; creature/player surfaces only) and the
+-- DoAction (:863-867, "wrecker'd") -> me->Delete() leg (no GO DoAction
+-- dispatch; Despawn/RemoveFromWorld hide, not delete). Entry DB-side.
 
 -- DOCUMENTED-ONLY: go_brewfest_music (C++ :917-1056)
 -- UpdateAI (:931-1051): no AIUpdate fire site; EVENT_BM_SELECT_MUSIC /

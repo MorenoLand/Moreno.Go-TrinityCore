@@ -1148,6 +1148,53 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["GetX"] = luaNoArgs(func() any { return state.X })
 	methods["GetY"] = luaNoArgs(func() any { return state.Y })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
+	// FindNearestCreature(entry, dist) is the gameobject-surface twin of
+	// the player/creature bridges (WorldObject::FindNearestCreature):
+	// the nearest live creature of entry within dist yards (3D gate with
+	// the candidate's combat reach added; gameobjects carry no combat
+	// reach in the Go model, so the source reach is 0; winner by
+	// reach-adjusted distance) on the GO's map+instance; nil when none.
+	// Backs the ribbon-pole bunny search (go_scripts.cpp:817-826).
+	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if dist32 < 0 {
+			return []any{nil}, nil
+		}
+		dist := float64(dist32)
+		srv.motionMu.Lock()
+		var best *creatureMotion
+		bestAdj := dist
+		for _, m := range srv.motionMapLocked(state.Map, state.InstanceID) {
+			if m.Entry != entry || m.Health == 0 {
+				continue
+			}
+			dx := float64(m.X - state.X)
+			dy := float64(m.Y - state.Y)
+			dz := float64(m.Z - state.Z)
+			candReach := float64(m.combatReachOrDefault())
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+candReach {
+				adj := d - candReach
+				if adj < 0 {
+					adj = 0
+				}
+				if best == nil || adj < bestAdj {
+					best, bestAdj = m, adj
+				}
+			}
+		}
+		srv.motionMu.Unlock()
+		if best == nil {
+			return []any{nil}, nil
+		}
+		return []any{srv.luaMotionCreature(best)}, nil
+	}
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
 		srv.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
 		return nil, nil

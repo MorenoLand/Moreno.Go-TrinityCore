@@ -380,6 +380,32 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, err = s.server.CharactersStore.DB.Exec("UPDATE characters SET health = ? WHERE guid = ?", health, state.GUID)
 		return nil, err
 	}
+	// SetStandState is Unit::SetStandState (Unit.cpp:10557-10569):
+	// SetByteValue(UNIT_FIELD_BYTES_1, stand-state byte) + the
+	// SMSG_STANDSTATE_UPDATE send to the player + values-update broadcast
+	// (emote.go handleStandStateChange twin); standing (0) breaks
+	// NOT_SEATED-interrupt auras. Validated 0-9 like the creature twin
+	// (lua_creature_events.go:1621). Backs the frostblade-shrine sit arm
+	// (go_scripts.cpp:739-753).
+	methods["SetStandState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 9 {
+			return nil, fmt.Errorf("SetStandState requires a UNIT_STAND_STATE 0-9, got %d", st)
+		}
+		state.StandState = uint8(st)
+		if st == 0 {
+			s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
+		}
+		merged := uint32(st) | uint32(state.StandFlags)<<16
+		buf := protocol.NewBuffer(1)
+		buf.WriteU8(uint8(st))
+		_ = s.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), buf.Bytes(), true)
+		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: merged})
+		return nil, nil
+	}
 	methods["LearnSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
