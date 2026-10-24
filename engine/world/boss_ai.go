@@ -4006,7 +4006,7 @@ func init() {
 	// lua_scripts/moltencore/boss_baron_geddon.lua. The UpdateAI casting
 	// gates have no bridge (no UNIT_STATE model); the encounter-state
 	// bookkeeping is blocked on the instance-script model; the
-	// armageddon InterruptNonMeleeSpells arm has no bridge; the
+	// armageddon InterruptNonMeleeSpells arm is bridged (no-op twin) and ported; the
 	// spell_baron_geddon_inferno AuraScript has no bridge (no AuraScript
 	// model).
 	RegisterLuaBoss("boss_baron_geddon", 12056)
@@ -4404,7 +4404,7 @@ func init() {
 	// the spell-shield arm and blast wave 60s (random alive
 	// player within 15 yd 2D — IsWithinDist2d bridged; only the
 	// threat-list half of the pick has no bridge; the
-	// InterruptNonMeleeSpells arms have no interrupt bridge).
+	// InterruptNonMeleeSpells arms are bridged (no-op twin) and ported).
 	RegisterLuaBoss("boss_krosh_firehand", 18832)
 	// Olm the Summoner (18834) runs dark decay / summon WFH
 	// 33131 / death coil. The AttackStart MoveChase/threat arm has
@@ -6321,7 +6321,8 @@ func init() {
 	// boss_mr_smite.lua — maiden convention (CreateLuaEvent timers;
 	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate). The
 	// !uiIsMoving ability-halt leg (SetCombatMovement/AttackStop/
-	// InterruptNonMeleeSpells/REACT_PASSIVE) has no bridges, so the
+	// InterruptNonMeleeSpells) is bridged (no-op twin) and ported in the stage arms;
+	// REACT_PASSIVE stays deliberately omitted (see the Lua header), so the
 	// timers keep firing through crossings (documented deviation).
 	// The phase/equip event machine (instance chest DATA_SMITE_CHEST /
 	// GO 144111 via ObjectAccessor, MotionMaster MovePoint, equip-swap
@@ -6992,8 +6993,8 @@ func init() {
 	// (SelectTarget(Random, 0) -> random alive player on map+instance, no
 	// distance bound; nil pick casts nothing, re-arm unconditional) /
 	// mindcontrol 15690 10s->15s. Timers + transform latch cleared on
-	// LeaveCombat/Died/Reset. Documented-only (no bridges): transform's
-	// InterruptNonMeleeSpells gate + UpdateEntry(10813)/Reset's
+	// LeaveCombat/Died/Reset. Documented-only: transform's InterruptNonMeleeSpells gate is bridged
+	// but the arm stays unported on UpdateEntry(10813)/Reset's
 	// UpdateEntry(10812) revert, JustDied's 8x zombie (10698) summons at
 	// the file's m_aSummonPoint coords (1h timed despawn), empty
 	// JustEngagedWith, GetStratholmeAI factory; melee engine-driven.
@@ -7492,8 +7493,7 @@ func init() {
 	// non-triggered init 40s -> 15s) on C++-verbatim timers; melee
 	// engine-driven. The JustDied TYPE_THRALL_EVENT/TYPE_THRALL_PART4
 	// instance leg has no instance-data bridge; Sand Breath's
-	// InterruptNonMeleeSpells arm has no spell-interrupt bridge (maiden
-	// precedent); SAY_ENTER 0 is declared but never Talked in C++; the
+	// InterruptNonMeleeSpells arm is bridged (no-op twin) and ported; SAY_ENTER 0 is declared but never Talked in C++; the
 	// SD%Complete: 60 missing pre-event spawns and uncoordinated escort
 	// speech need summon and EscortAI bridges that do not exist; see
 	// lua_scripts/kalimdor/boss_epoch_hunter.lua.
@@ -7813,7 +7813,8 @@ func init() {
 	// on victim (10-20s -> 12-24s); Poison Bolt 26052 on victim
 	// while Frenzy/Berserk (3s, C++-exact flag gate); Berserk
 	// 26068 + Talk(EMOTE_BERSERK 1) at <31% health via event 9
-	// (latched). Unwired: InterruptNonMeleeSpells (no bridge);
+	// (latched). InterruptNonMeleeSpells arms ported (frenzyback + berserk,
+	// no-op twin). Unwired:
 	// BossAI ctor leg DATA_HUHURAN. Full analysis in
 	// lua_scripts/kalimdor/boss_huhuran.lua.
 	RegisterLuaBoss("boss_huhuran", 15509)
@@ -7891,8 +7892,9 @@ func init() {
 	// rebalance (cross-boss via instance->GetCreature(DATA_VEKLOR)
 	// — no instance bridge); TryHealBrother (cross-boss); the
 	// 30s teleport swap + SetAfterTeleport stun/visual 26638 +
-	// post-teleport re-arm (no position/SelectTarget/InterruptNonMeleeSpells/
-	// ResetThreatList/AttackStart bridges); HandleBugs + Mutate Bug
+	// post-teleport re-arm (no position/SelectTarget/
+	// ResetThreatList/AttackStart bridges; InterruptNonMeleeSpells now bridged
+	// but the swap stays blocked on the rest); HandleBugs + Mutate Bug
 	// 802 (creature grid + SetFaction + AttackStart — no bridges);
 	// Aggro/Kill/Death DoPlaySoundToSet 8661/8662/8660 (no sound
 	// bridge; zero Talk in C++); TwinReset/BossAI ctor leg
@@ -8116,8 +8118,8 @@ func init() {
 	// boss_celebras_the_cursed: Maraudon, entry 12225 (classicdb/tauri-cited;
 	// no NPC_ constant in the C++ tree — vishas/gelihast precedent) — wrath
 	// DoCast(random player) 8s/8s, entangling roots DoCastVictim 2s/20s,
-	// corrupt forces self-cast 30s/20s (InterruptNonMeleeSpells leg has no
-	// interrupt bridge); the JustDied summon of 13716 (Celebras the
+	// corrupt forces self-cast 30s/20s (InterruptNonMeleeSpells leg bridged,
+	// no-op twin, and ported); the JustDied summon of 13716 (Celebras the
 	// Redeemed) is ported (creature:SummonCreature bridge, 2026-10-23 —
 	// 'has no summon bridge' retracted) — see
 	// lua_scripts/kalimdor/boss_celebras_the_cursed.lua.
@@ -8128,8 +8130,8 @@ func init() {
 	// self-cast 2s/8s (both non-triggered), landslide 21808 self-cast
 	// fired on the first below-50% tick then re-armed 60s of
 	// below-50% time (event-9 crossing latch + 1s pump, C++ tick
-	// semantics; InterruptNonMeleeSpells leg has no interrupt
-	// bridge); melee is engine-driven — documented in
+	// semantics; InterruptNonMeleeSpells leg bridged, no-op twin,
+	// and ported in both cast sites); melee is engine-driven — documented in
 	// lua_scripts/kalimdor/boss_landslide.lua, not wired.
 	RegisterLuaBoss("boss_landslide", 12203)
 	// boss_noxxion: Maraudon, entry 13282 (wowhead-cited; no NPC_
@@ -8142,8 +8144,9 @@ func init() {
 	// reappear (SetFaction(MONSTER), RemoveFlag, SetDisplayId(11172));
 	// the C++ 15s timer freeze is modeled by canceling/re-arming the
 	// spell timers (documented skew vs frozen remainders). Unmodeled:
-	// InterruptNonMeleeSpells(false) and the adds' AttackStart(victim)
-	// (no bridges — the adds idle until the engine aggros them).
+	// the adds' AttackStart(victim)
+	// (no bridge — the adds idle until the engine aggros them;
+	// InterruptNonMeleeSpells(false) bridged and ported).
 	RegisterLuaBoss("boss_noxxion", 13282)
 	// boss_princess_theradras: Maraudon, entry 12201 (wowhead-cited; no
 	// NPC_ constant in the C++ tree) — dust field 21909 self-cast
@@ -11855,8 +11858,8 @@ func init() {
 	// logic in lua_scripts/outland/boss_pandemonius.lua: the event-1
 	// void-blast / dark-shell timer arms, the KilledUnit Talk(SAY_KILL
 	// 1) (event 3, the razuvious player-gated precedent), the engage
-	// Talk arm. The InterruptNonMeleeSpells legs have no bridge —
-	// documented-only. Entry 18341 is DB-side (no NPC_ constant in
+	// Talk arm. The InterruptNonMeleeSpells(true) dark-shell leg is bridged (no-op twin)
+	// and ported. Entry 18341 is DB-side (no NPC_ constant in
 	// the C++ tree); ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_pandemonius", 18341)
 	// boss_anzu (Sethekk Halls, Outland dungeon pass) — fight logic in

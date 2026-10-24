@@ -33,9 +33,8 @@
 --   immediately, then a 1s pump that decrements the 60s residual only
 --   while health stays below 50% (C++-exact: the pump idles without
 --   decrementing while above 50% and resumes with the residual).
---   The pre-cast me->InterruptNonMeleeSpells(false) has no
---   spell-interrupt bridge (epoch_hunter / maiden precedent) — the
---   cast still fires.
+--   The pre-cast me->InterruptNonMeleeSpells(false) is bridged
+--   (no-op twin) and ported in both cast sites below.
 -- Unmodeled (documented-only, no bridges):
 -- - The C++ file declares zero Talk lines and no KilledUnit override
 --   — no event-3 registration.
@@ -104,6 +103,7 @@ local function landslidePump(creature, guid)
     if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
         st.timer = st.timer - 1000
         if st.timer <= 0 then
+            creature:InterruptNonMeleeSpells(false)
             creature:CastSpell(creature, SPELL_LANDSLIDE)
             st.timer = 60000
         end
@@ -142,6 +142,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     local postDamage = creature:GetHealth() - damage
     if postDamage > 0 and postDamage < math.floor(maxHealth * 50 / 100) then
         landslide[guid] = { timer = 60000 }
+        creature:InterruptNonMeleeSpells(false)
         creature:CastSpell(creature, SPELL_LANDSLIDE)
         schedule(guid, "landslide_pump", 1000, function()
             landslidePump(creature, guid)

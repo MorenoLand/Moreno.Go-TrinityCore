@@ -32,8 +32,9 @@
 -- lua_creature_events.go:180); SetCombatMovement(false) has a bridge
 -- (lua_creature_events.go:759) but the mid-combat arm is a C++ no-op
 -- (only AttackStart reads the flag) and porting it would diverge via
--- the per-tick gate (10:19); InterruptNonMeleeSpells(false) has no
--- bridge. SetReactState(
+-- the per-tick gate (10:19); InterruptNonMeleeSpells(false) is bridged
+-- (no-op twin, lua_creature_events.go:514) and ported in both stage arms
+-- below. SetReactState(
 -- REACT_PASSIVE) is deliberately OMITTED, not unbridgeable: its restore
 -- (phase 4's SetReactState(REACT_AGGRESSIVE)) rides the unbridged
 -- MovePoint/kneel/equip/stand chain, so a one-sided passive port would
@@ -160,11 +161,13 @@ local function onDamageTaken(_, creature, _, damage)
         -- lua_creature_events.go:180; drops the current swing, threat
         -- untouched, re-engagement rides the assist/aggro paths).
         creature:AttackStop()
+        creature:InterruptNonMeleeSpells(false)
         creature:Talk(SAY_PHASE_1)
     elseif stage == 1 and health <= math.floor(maxHealth * 33 / 100) then
         phaseStage[guid] = 2
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
         creature:AttackStop()
+        creature:InterruptNonMeleeSpells(false)
         creature:Talk(SAY_PHASE_2)
     end
 end

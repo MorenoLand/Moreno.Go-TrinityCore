@@ -37,7 +37,7 @@
 --   init 40s -> 15s.
 -- Unmodeled (documented-only, no bridges):
 -- - Sand Breath's C++ pre-cast me->InterruptNonMeleeSpells(false) arm
---   has no spell-interrupt bridge (maiden precedent).
+--   is bridged (no-op twin) and ported in onSandBreath below.
 -- - JustDied's instance leg: if instance->GetData(TYPE_THRALL_EVENT
 --   = 2) == IN_PROGRESS then instance->SetData(TYPE_THRALL_PART4 = 5,
 --   DONE) — instance-data bridge blocked (standing); the Thrall escort
@@ -101,13 +101,14 @@ local function randomAlivePlayer(creature)
     return found[math.random(#found)]
 end
 
--- C++ SandBreath_Timer: DoCastVictim(31914), non-triggered, init
+-- C++ SandBreath_Timer: InterruptNonMeleeSpells(false) + DoCastVictim(31914), non-triggered, init
 -- {8s,16s} -> {10s,20s} + Talk SAY_BREATH (3) unconditionally (C++
 -- talks even on a nil SelectTarget — same arm as anetheron's Swarm);
 -- jeklik GetVictim + CastSpell convention.
 local function onSandBreath(creature, guid)
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
+        creature:InterruptNonMeleeSpells(false)
         creature:CastSpell(victim, SPELL_SAND_BREATH)
     end
     creature:Talk(SAY_BREATH)

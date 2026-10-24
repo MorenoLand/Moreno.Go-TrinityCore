@@ -35,7 +35,8 @@
 -- randtime(15000, 25000); else re-arm 500ms + DelayEvents(500ms,
 -- DARK_SHELL_EVENT_GROUP) (:96-102).
 -- EVENT_DARK_SHELL (:105-111) — the IsNonMeleeSpellCast /
--- InterruptNonMeleeSpells legs have no bridge (the shaffar blink
+-- InterruptNonMeleeSpells(true) legs: interrupt bridged (no-op twin,
+-- ported); IsNonMeleeSpellCast gate unmodeled (shaffar blink
 -- precedent); Talk(EMOTE_DARK_SHELL 3); DoCast(me,
 -- SPELL_DARK_SHELL 32358) 2-arg (non-triggered) self-cast —
 -- CastSpell(creature, spell); re-arm 20s in the shell group.
@@ -129,10 +130,11 @@ local function voidBlastTick(creature, guid)
     end
 end
 
--- C++ EVENT_DARK_SHELL (:105-111): the interrupt legs have no
--- bridge (documented in the header); Talk + non-triggered
+-- C++ EVENT_DARK_SHELL (:105-111): InterruptNonMeleeSpells(true)
+-- (bridged no-op twin, ported below); Talk + non-triggered
 -- self-cast + 20s re-arm (+ the DelayEvents accumulator).
 local function darkShellTick(creature, guid)
+    creature:InterruptNonMeleeSpells(true)
     creature:Talk(EMOTE_DARK_SHELL)
     creature:CastSpell(creature, SPELL_DARK_SHELL)
     local shift = shellShifts[guid] or 0

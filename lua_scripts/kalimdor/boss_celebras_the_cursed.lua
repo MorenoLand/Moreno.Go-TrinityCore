@@ -34,8 +34,8 @@
 --   20s.
 -- - Corrupt Forces 21968 self-cast (C++ DoCast(me)),
 --   non-triggered, init 30s -> 20s; the C++ pre-cast
---   me->InterruptNonMeleeSpells(false) arm has no spell-interrupt
---   bridge (epoch_hunter / maiden precedent) — the cast still fires.
+--   me->InterruptNonMeleeSpells(false) arm is bridged (no-op twin)
+--   and ported in onCorruptForces below.
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's SummonCreature(13716, death position, 0,
 --   TEMPSUMMON_TIMED_DESPAWN Eluna type 2, 10min) — PORTED in onDied;
@@ -110,10 +110,10 @@ local function onEntanglingRoots(creature, guid)
     end)
 end
 
--- C++ CorruptForces: DoCast(me, 21968), non-triggered, init 30s ->
--- 20s; the pre-cast InterruptNonMeleeSpells(false) has no
--- spell-interrupt bridge (epoch_hunter / maiden precedent).
+-- C++ CorruptForces: InterruptNonMeleeSpells(false) + DoCast(me, 21968), non-triggered, init 30s ->
+-- 20s (pre-cast interrupt bridged no-op twin, ported below).
 local function onCorruptForces(creature, guid)
+    creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(creature, SPELL_CORRUPT_FORCES)
     schedule(guid, "corruptforces", 20000, function()
         onCorruptForces(creature, guid)

@@ -19,9 +19,8 @@
 -- - Frenzy (25-35s): self-cast FRENZY 26051 + Talk(EMOTE_FRENZY_KILL 0);
 --   Frenzy flag latched; FrenzyBack arm re-armed at 15s; on frenzy,
 --   PoisonBolt leg armed at 3s (C++ sets PoisonBolt_Timer = 3000).
--- - FrenzyBack (15s): when Frenzy true -> clear Frenzy. C++ also calls
---   me->InterruptNonMeleeSpells(false) — no bridge (archimonde/azgalor
---   precedent — unmodeled); C++ uint32 underflow freezes the arm while
+-- - FrenzyBack (15s): when Frenzy true -> InterruptNonMeleeSpells(false)
+--   (bridged no-op twin, ported) + clear Frenzy; C++ uint32 underflow freezes the arm while
 --   Frenzy is false, so the 15s repeat arm here is a documented
 --   simplification.
 -- - Wyvern Sting 26180 (18-28s -> 15-32s): random player via
@@ -36,8 +35,8 @@
 --   decremented), so the handler re-arms as a poll until a flag sets.
 --   While frenzy/berserk: DoCastVictim, 3s repeat.
 -- - Berserk (event 9 damage leg, projected health <31%, latched):
---   Talk(EMOTE_BERSERK 1) + self-cast BERSERK 26068. C++ also calls
---   me->InterruptNonMeleeSpells(false) — no bridge.
+--   InterruptNonMeleeSpells(false) (bridged no-op twin, ported) +
+--   Talk(EMOTE_BERSERK 1) + self-cast BERSERK 26068.
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI ctor leg DATA_HUHURAN (temple_of_ahnqiraj.h:33 = 3) and
 --   _Reset() — instance bridge, standing.
@@ -107,11 +106,12 @@ local function onFrenzy(creature, guid)
     end)
 end
 
--- C++ FrenzyBack_Timer 15s: Frenzy -> InterruptNonMeleeSpells (no
--- bridge) + Frenzy = false; -> 15000.
+-- C++ FrenzyBack_Timer 15s: Frenzy -> InterruptNonMeleeSpells(false)
+-- (bridged no-op twin) + Frenzy = false; -> 15000.
 local function onFrenzyBack(creature, guid)
     local s = st(guid)
     if s.frenzy then
+        creature:InterruptNonMeleeSpells(false)
         s.frenzy = false
     end
     schedule(guid, "frenzyback", 15000, function()
@@ -218,8 +218,8 @@ local function onDied(event, creature, killer)
 end
 
 -- C++ UpdateAI per-tick: !Berserk && HealthBelowPct(31) ->
--- InterruptNonMeleeSpells (no bridge) + Talk(EMOTE_BERSERK 1) +
--- DoCast(me, 26068) + Berserk = true (latched). Eluna event 9 is
+-- InterruptNonMeleeSpells(false) (bridged no-op twin, ported below)
+-- + Talk(EMOTE_BERSERK 1) + DoCast(me, 26068) + Berserk = true (latched). Eluna event 9 is
 -- pre-damage, so projected-health check (jeklik/aku_mai convention).
 -- HealthBelowPct(31) is floored strict-< (ironaya convention).
 local function onDamageTaken(event, creature, attacker, damage)
@@ -240,6 +240,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
     if postDamage < math.floor(31 * maxHealth / 100) then
         s.berserk = true
+        creature:InterruptNonMeleeSpells(false)
         creature:Talk(EMOTE_BERSERK)
         creature:CastSpell(creature, SPELL_BERSERK)
     end
