@@ -13,16 +13,17 @@
 -- SPELL_SUMMON_ASTRAL_FLARE_* (30236/30239/30240/30241) are visual-only
 -- casts and the Eluna events 19/22 never fire — the Astral Flare
 -- npc_curator_astral_flare react-state/deselect plumbing (entry 17086) has
--- no Lua-modelable content and is not registered. Mana is tracked
--- Lua-side: each Astral Flare summon drains 10% of max mana exactly as
--- C++ ModifyPower(POWER_MANA, -GetMaxPower/10); the Evocate arm fires when
--- the drain leaves mana strictly below 10%, mirroring C++ GetPower*100/
--- GetMaxPower < 10. Power writes ride the creature:SetPower bridge
--- (lua_creature_events.go), but the Lua-side percent model stays: the
--- engine models no in-combat mana regen, so the deterministic drain clock
--- (10 summons, ~100s) is C++-exact where the live field would drift. The
--- Evocation channel's in-spell mana refill is approximated by restoring
--- mana to 100% after the 20s channel. ApplySpellImmune(arcane damage)
+-- no Lua-modelable content and is not registered. Mana is drained on
+-- the live field: each Astral Flare summon does ModifyPower(POWER_MANA=0,
+-- -floor(GetMaxPower/10)) (C++ boss_curator.cpp:118-120;
+-- creature:ModifyPower bridged at lua_creature_events.go:603, clamping
+-- at 0 and broadcasting UNIT_FIELD_POWER1 like C++); the Evocate arm
+-- fires when floor(newPower*100/maxPower) < 10, the integer form of the
+-- C++ check. The Evocation channel's in-spell mana refill is
+-- approximated by creature:SetPower(0, GetMaxPower()) after the 20s
+-- channel (SetPower clamps to max, lua_creature_events.go:578). The
+-- engine models no in-combat mana regen, so the live field is the
+-- deterministic drain clock (10 summons, ~100s) — no Lua-side model. ApplySpellImmune(arcane damage)
 -- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
 -- and ported at onReset below; InterruptNonMeleeSpells(false) before
 -- Evocation has no bridge (documented-only). Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
@@ -98,11 +99,10 @@ local function onHatefulBolt(creature, guid)
     schedule(guid, "hateful", {7000, 15000}, function() onHatefulBolt(creature, guid) end)
 end
 
+-- C++ Evocation (SPELL_EVOCATION 30254) refills mana in-spell; the 20s
+-- channel end restores the live field to full (SetPower clamps to max).
 local function onEvocateEnd(creature, guid)
-    local st = state[guid]
-    if st then
-        st.mana = 100
-    end
+    creature:SetPower(0, creature:GetMaxPower())
 end
 
 local function onAstralFlare(creature, guid)
@@ -113,13 +113,22 @@ local function onAstralFlare(creature, guid)
     if math.random(2) == 1 then
         creature:Talk(SAY_SUMMON)
     end
-    creature:CastSpell(creature, SPELL_SUMMON_ASTRAL_FLARE[math.random(#SPELL_SUMMON_ASTRAL_FLARE)], true)
-    st.mana = st.mana - 10
-    if st.mana < 10 then
-        creature:Talk(SAY_EVOCATE)
-        creature:CastSpell(creature, SPELL_EVOCATION)
-        schedule(guid, "evocateend", SPELL_EVOCATION_CHANNEL_MS,
-            function() onEvocateEnd(creature, guid) end)
+    -- C++ EVENT_SUMMON_ASTRAL_FLARE (boss_curator.cpp:111-126): the
+    -- summon visual is cast first, then ModifyPower(POWER_MANA,
+    -- -floor(GetMaxPower/10)); the Evocate arm fires when
+    -- GetPower*100/GetMaxPower < 10 (integer form). The whole block is
+    -- skipped when floor(maxPower/10) == 0 (C++ int32-mana gate).
+    local maxMana = creature:GetMaxPower()
+    local drain = math.floor(maxMana / 10)
+    if drain ~= 0 then
+        creature:CastSpell(creature, SPELL_SUMMON_ASTRAL_FLARE[math.random(#SPELL_SUMMON_ASTRAL_FLARE)], true)
+        local newMana = creature:ModifyPower(0, -drain)
+        if math.floor(newMana * 100 / maxMana) < 10 then
+            creature:Talk(SAY_EVOCATE)
+            creature:CastSpell(creature, SPELL_EVOCATION)
+            schedule(guid, "evocateend", SPELL_EVOCATION_CHANNEL_MS,
+                function() onEvocateEnd(creature, guid) end)
+        end
     end
     schedule(guid, "astralflare", 10000, function() onAstralFlare(creature, guid) end)
 end
@@ -131,7 +140,7 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    state[guid] = { infused = false, mana = 100 }
+    state[guid] = { infused = false }
     creature:Talk(SAY_AGGRO)
     schedule(guid, "hateful", 12000, function() onHatefulBolt(creature, guid) end)
     schedule(guid, "astralflare", 10000, function() onAstralFlare(creature, guid) end)
@@ -168,7 +177,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = state[guid]
     if st == nil then
-        st = { infused = false, mana = 100 }
+        st = { infused = false }
         state[guid] = st
     end
     -- C++ DamageTaken reads !HealthAbovePct(15) on current health; the

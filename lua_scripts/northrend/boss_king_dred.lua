@@ -40,37 +40,28 @@
 -- DoCastAOE bridge" claim was wrong (selin_fireheart convention).
 -- No Talk, no JustDied legs —
 -- C++ JustDied is only _JustDied() (instance bookkeeping, no bridge).
--- Unmodeled (no bridges — documented, not wired):
 -- EVENT_RAPTOR_CALL — DoCastVictim(SPELL_RAPTOR_CALL 59416, dummy) +
 -- me->SummonCreature(RAND(NPC_DRAKKARI_GUTRIPPER 26641 /
 -- NPC_DRAKKARI_SCYTHECLAW 26628), GetClosePoint(combatReach/3, 10.0f),
--- TEMPSUMMON_DEAD_DESPAWN 1s), randtime(20s,25s) init, 20-25s repeat
--- — the meaningful leg is the summon: GetClosePoint + SummonCreature
--- ride the absent summon STRAND bridge (standing). The only
--- bridgeable leg is the no-op dummy cast, whose payload is the
--- unbridged summon — arming a timer for the dummy alone would fire a
--- no-effect cast without its C++ payload, so the timer is not armed
--- (genuinely-bridgeable bar).
+-- TEMPSUMMON_DEAD_DESPAWN 1s), randtime(20s,25s) init, 20-25s repeat —
+-- PORTED 2026-10-24 (the stale "absent summon STRAND bridge" claim was
+-- wrong: creature:SummonCreature is bridged, lua_creature_events.go:728;
+-- the position leg rides creature:GetRelativePoint, lua_objects.go:519).
+-- Unmodeled (no bridges — documented, not wired):
 -- UpdateAI HasUnitState(UNIT_STATE_CASTING) skip — no unit-state
 -- bridge.
 -- DoAction(ACTION_RAPTOR_KILLED 1) ++raptorsKilled + GetData(
 -- DATA_RAPTORS_KILLED 2) — no DoAction/GetData bridges
 -- (drakkari_colossus precedent); its only caller is
 -- achievement_king_dred — see below.
--- npc_drakkari_gutripper / npc_drakkari_scytheclaw — ENTRY-VERIFIABLE
--- BUT BRIDGE-BLOCKED (26641 / 26628 — drak_tharon_keep.h
--- NPC_DRAKKARI_GUTRIPPER / NPC_DRAKKARI_SCYTHECLAW, kalecgos pass):
--- zero registration. Both exist in C++ only as the unbridged
--- EVENT_RAPTOR_CALL SummonCreature targets, so wiring them would
--- attach to never-spawned creatures — C++-exact bar fails (amanitar
--- mushrooms precedent). Port-pattern-ready rotation arms: gutripper
--- GutRipTimer urand(10s,15s) -> DoCastVictim(SPELL_GUT_RIP 49710);
--- scytheclaw uiRendTimer urand(10s,15s) -> DoCastVictim(SPELL_REND
--- 13738). JustDied of both is ObjectAccessor::GetCreature(*me,
--- instance->GetGuidData(DATA_KING_DRED))->AI()->DoAction(
--- ACTION_RAPTOR_KILLED) — instance GetGuidData + ObjectAccessor +
--- DoAction bridges absent. Joins the entry-verifiable-but-
--- bridge-blocked queue.
+-- npc_drakkari_gutripper (26641) / npc_drakkari_scytheclaw (26628) —
+-- PORTED 2026-10-24 (they spawn via the now-ported RAPTOR_CALL arm):
+-- ctor/Reset arms GutRipTimer/uiRendTimer = urand(10s,15s) ->
+-- DoCastVictim(SPELL_GUT_RIP 49710 / SPELL_REND 13738, non-triggered),
+-- re-arm urand(10s,15s); melee is engine-driven. JustDied cross-AI
+-- DoAction(ACTION_RAPTOR_KILLED) stays out — ObjectAccessor +
+-- instance-GetGuidData + DoAction have no bridges (the
+-- achievement_king_dred counter with it, documented-only below).
 -- achievement_king_dred — AchievementCriteriaScript (target
 -- ToCreature -> AI()->GetData(DATA_RAPTORS_KILLED) >= 6) — no
 -- achievement-criteria bridge (snakes precedent) + cross-AI GetData
@@ -83,6 +74,12 @@ local SPELL_MANGLING_SLASH = 48873
 local SPELL_PIERCING_SLASH = 48878
 local SPELL_BELLOWING_ROAR = 22686
 local SPELL_FEARSOME_ROAR = 48849
+local SPELL_RAPTOR_CALL = 59416
+local SPELL_GUT_RIP = 49710
+local SPELL_REND = 13738
+
+local NPC_DRAKKARI_GUTRIPPER = 26641
+local NPC_DRAKKARI_SCYTHECLAW = 26628
 
 local timers = {}
 
@@ -155,9 +152,38 @@ local function fearsomeRoarTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_RAPTOR_CALL (boss_king_dred.cpp:144-152): DoCastVictim
+-- (SPELL_RAPTOR_CALL 59416, dummy) + me->SummonCreature(
+-- RAND(NPC_DRAKKARI_GUTRIPPER 26641 / NPC_DRAKKARI_SCYTHECLAW 26628),
+-- GetClosePoint(combatReach/3, 10.0f), orientation 0,
+-- TEMPSUMMON_DEAD_DESPAWN 1s); randtime(20s,25s) init and repeat.
+-- GetClosePoint(size=combatReach/3, dist=10, relAngle=0) =
+-- GetNearPoint(nullptr, 10+combatReach/3, orientation) (Object.cpp:3307)
+-- = creature:GetRelativePoint(10 + reach/3, 0) — the bridge hardcodes
+-- size=0 (lua_creature_events.go:519), so the size leg rides the dist
+-- argument. o=0 falls back to the summoner's orientation on both sides
+-- (Object.cpp:2061-2062 twin); DEAD_DESPAWN is type 6 in the engine's
+-- 0-based summon-type scheme (lua_creature_events.go:936).
+local function raptorCallTick(creature, guid)
+    creature:CastSpell(nil, SPELL_RAPTOR_CALL)
+    local reach = creature:GetCombatReach()
+    local x, y, z = creature:GetRelativePoint(10 + reach / 3, 0)
+    local entry = NPC_DRAKKARI_GUTRIPPER
+    if math.random(2) == 2 then
+        entry = NPC_DRAKKARI_SCYTHECLAW
+    end
+    creature:SummonCreature(entry, x, y, z, 0, 6, 1000)
+    schedule(guid, "raptorcall", {20000, 25000}, function()
+        raptorCallTick(creature, guid)
+    end)
+end
+
 local function kingDredEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "raptorcall", {20000, 25000}, function()
+        raptorCallTick(creature, guid)
+    end)
     schedule(guid, "grievousbite", 20000, function()
         grievousBiteTick(creature, guid)
     end)
@@ -187,7 +213,50 @@ local function kingDredReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_drakkari_gutripperAI / npc_drakkari_scytheclawAI
+-- (boss_king_dred.cpp:179-222 / 227-270): ctor/Reset arm
+-- GutRipTimer/uiRendTimer = urand(10s,15s); UpdateAI fires
+-- DoCastVictim(SPELL_GUT_RIP 49710 / SPELL_REND 13738, non-triggered)
+-- with urand(10s,15s) re-arm; melee is engine-driven. JustSummoned
+-- (event 19) is the spawn twin (the shirrak precedent); the cross-AI
+-- JustDied DoAction(ACTION_RAPTOR_KILLED) leg stays out (no
+-- ObjectAccessor / instance-GetGuidData / DoAction bridges — the
+-- achievement_king_dred counter with it, documented-only above).
+local function raptorRotationTick(creature, guid, key, spell)
+    creature:CastSpell(nil, spell)
+    schedule(guid, key, math.random(10000, 15000), function()
+        raptorRotationTick(creature, guid, key, spell)
+    end)
+end
+
+local function gutripperSummoned(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "gutrip", math.random(10000, 15000), function()
+        raptorRotationTick(creature, guid, "gutrip", SPELL_GUT_RIP)
+    end)
+end
+
+local function scytheclawSummoned(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "rend", math.random(10000, 15000), function()
+        raptorRotationTick(creature, guid, "rend", SPELL_REND)
+    end)
+end
+
+local function raptorGone(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_KING_DRED, 1, kingDredEnterCombat)
 RegisterCreatureEvent(ENTRY_KING_DRED, 2, kingDredLeaveCombat)
 RegisterCreatureEvent(ENTRY_KING_DRED, 4, kingDredDied)
 RegisterCreatureEvent(ENTRY_KING_DRED, 23, kingDredReset)
+
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 19, gutripperSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 2, raptorGone)
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 4, raptorGone)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 19, scytheclawSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 2, raptorGone)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 4, raptorGone)

@@ -36,9 +36,18 @@
 -- instance-driven phase machine) never fire in this model —
 -- solarian SAY_SUMMON1/2 precedent, documented only.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset (Kael'thas does not
--- override DamageTaken in a bridgeable way — no event 9 on
--- him; the advisors' DamageTaken fake-death latch has no
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset, 27
+-- MoveInLineOfSight. Kael'thas's DamageTaken PHASE_NONE SetTarget leg
+-- IS ported (event 9, kaelPreEncounter per-GUID latch below — the old
+-- "does not override DamageTaken / no event 9" claim was wrong;
+-- boss_kaelthas.cpp overrides DamageTaken). The 50% transition arm
+-- (_hasFullPower latch + HealthBelowPctDamaged + AttackStop +
+-- InterruptNonMeleeSpells + CancelEventGroup x2 +
+-- SetPhase(PHASE_TRANSITION) + SetReactState(REACT_PASSIVE) +
+-- MovePoint) stays out: AttackStop/SetReactState are bridged but the
+-- transition choreography (SetPhase, MovePoint, event-group cancel,
+-- spell interrupt) has no bearer, so a lone-leg port would fabricate
+-- phase behavior. The advisors' DamageTaken fake-death latch has no
 -- display/stand/flag/health bridges — unmodeled, see below).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order); melee is engine-driven in Go (creature
