@@ -56,8 +56,9 @@
 -- hasLootRecipient/SetLootRecipient(healer), LowerPlayerDamageReq,
 -- instance->SendEncounterUnit, Initialize, lichKing EnterEvadeMode
 -- (instance GUID), and the NOT_STARTED first-heal combat-start leg
--- (FindNearestCreature archmage + unbridged DoZoneInCombat — the
--- handler Talks nothing on that branch, matching C++);
+-- (FindNearestCreature archmage + archmage:DoZoneInCombat() — PORTED
+-- 2026-10-24 with a once-latch; the handler Talks nothing on that
+-- branch, matching C++);
 -- PORTED (2026-10-13): Talk(SAY_VALITHRIA_25_PERCENT 3) — the
 -- DamageTaken HealthBelowPctDamaged(25, damage) leg with the
 -- _under25PercentTalkDone latch (event 9; ironaya floored-integer
@@ -349,8 +350,9 @@ end
 -- SPELL_ACHIEVEMENT_CHECK) + DoCastAOE(SPELL_DREAMWALKERS_RAGE) +
 -- 3500ms EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP); else 75% +
 -- !_over75PercentTalkDone -> Talk(SAY_VALITHRIA_75_PERCENT); else the
--- NOT_STARTED combat-start leg (archmage DoZoneInCombat, no bridge)
--- Talks nothing, so the handler does nothing on that branch. The
+-- NOT_STARTED combat-start leg (archmage DoZoneInCombat, PORTED
+-- 2026-10-24 below with a once-latch). Talks nothing, so the handler
+-- does nothing else on that branch. The
 -- _done/_over75PercentTalkDone latches live in valithriaState, so the
 -- event-23 reset clears them (C++ Initialize()).
 local function valithriaHealReceived(_, creature, _, heal)
@@ -373,6 +375,12 @@ local function valithriaHealReceived(_, creature, _, heal)
     elseif healed > math.floor(maxHealth * 75 / 100) and not st.over75Done then
         st.over75Done = true
         creature:Talk(SAY_VALITHRIA_75_PERCENT)
+    elseif not st.done and not st.encounterStarted then
+        st.encounterStarted = true
+        local archmage = creature:FindNearestCreature(ENTRY_RISEN_ARCHMAGE, 30.0)
+        if archmage then
+            archmage:DoZoneInCombat()
+        end
     end
 end
 

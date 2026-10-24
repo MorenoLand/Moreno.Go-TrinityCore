@@ -46,12 +46,12 @@
 -- npc_volcano's UpdateAI, not the boss's). Deviations from C++: no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
--- skipped); no threat model — the ResetThreatList/AddThreat
+-- skipped); threat model partial — the ResetThreatList/AddThreat
 -- (1,000,000 on the charge target) arms and the threat-list pick
 -- for hateful strike: ResetAllThreat IS bridged (lua_objects.go)
--- but the arm is intentionally skipped — the C++ pairs it with the
--- unbridged AddThreat(1e6) top-up, and zeroing alone would not fixate
--- the charge target the way the C++ 1e6 entry does; the strike target is
+-- the switch-target pair is PORTED in onSwitchTarget (ResetAllThreat +
+-- AddThreat 1e6, C++ order — the stale "unbridged AddThreat" claim
+-- is retracted); the strike target is
 -- approximated by the highest-health alive player in the instance
 -- within 5 yd (melee range) of the boss; no summon model — the
 -- volcanic summon 40276 spawns volcano adds through the Go spell-effect
@@ -221,16 +221,15 @@ local function onVolcano(creature, guid)
     end)
 end
 
--- C++ EVENT_SWITCH_TARGET: non-triggered charge 41581 on the charge
--- target + Talk(EMOTE_NEW_TARGET); repeat 10s unconditional
--- (C++-exact). The ResetThreatList/AddThreat arms are skipped:
--- ResetAllThreat is bridged (lua_objects.go) but the C++ arm
--- pairs it with the unbridged AddThreat(target, 1e6) top-up — zeroing
--- alone would not fixate the charge target, a state the C++ never
--- produces; only the cast and the Talk are kept. Chase-phase only.
+-- C++ EVENT_SWITCH_TARGET: ResetThreatList + AddThreat(target, 1e6)
+-- + non-triggered charge 41581 on the charge target + Talk(
+-- EMOTE_NEW_TARGET); repeat 10s unconditional (C++-exact).
+-- Chase-phase only.
 local function onSwitchTarget(creature, guid)
     local target = chargeTarget(creature)
     if target then
+        creature:ResetAllThreat()
+        creature:AddThreat(target, 1000000)
         creature:CastSpell(target, SPELL_CHARGE)
         creature:Talk(EMOTE_NEW_TARGET)
     end

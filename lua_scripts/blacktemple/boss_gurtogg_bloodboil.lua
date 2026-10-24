@@ -60,11 +60,11 @@
 -- change phase 60s, the taunt/attack-me immunity-off arms are PORTED
 -- in onChangePhase (creature:ApplySpellImmune bridge), re-arm the
 -- phase-1 schedule; the
--- ModifyThreatByPercent(-100) / AttackStart(oldTarget) /
--- AddThreat(oldThreat) victim-restore arms have no AddThreat/GetThreat
--- bridge (ClearThreatList is bridged but the arms restore threat, not
--- clear it) and are unmodeled, so the GUID state is simply cleared
--- (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
+-- ModifyThreatByPercent(-100) / AddThreat(oldThreat) victim-restore
+-- arms are PORTED in onChangePhase (threat bridges live:
+-- GetThreat/ModifyThreatByPercent/AddThreat); AttackStart(oldTarget)
+-- stays out (no AttackStart bridge — the victim switch rides the
+-- restored threat values), and the GUID state is cleared (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
 -- gate (terestian convention). OnDied(4): _JustDied instance arm is
 -- blocked on the instance-script model; the DoPlaySoundToSet(11439)
 -- arm is ported via creature:PlayDirectSound. OnLeave-
@@ -84,9 +84,9 @@
 -- timers fire unconditionally (jeklik convention); no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith/JustDied/Reset and the
--- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); no threat
--- model — the GetThreat/ModifyThreatByPercent/AddThreat and
--- AttackStart(oldTarget) arms have no bridge; the ApplySpellImmune
+-- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); threat model
+-- partial — the AttackStart(oldTarget) arm has no bridge
+-- (threat legs ported in onStartPhase2/onChangePhase); the ApplySpellImmune
 -- taunt/attack-me arms ARE bridged (lua_creature_events.go:860) and
 -- ported in onStartPhase2, onChangePhase, and gurtoggReset above.
 
@@ -338,6 +338,11 @@ local function onStartPhase2(creature, guid)
         end)
         return
     end
+    local oldVictim = creature:GetVictim()
+    if oldVictim then
+        state[guid].oldTargetGUID = oldVictim:GetGUID()
+        state[guid].oldThreat = creature:GetThreat(oldVictim)
+    end
     state[guid].felRageTarget = target:GetGUID()
     creature:CastSpell(creature, SPELL_FEL_RAGE_SELF, true)
     creature:CastSpell(target, SPELL_FEL_RAGE_TARGET, true)
@@ -378,8 +383,8 @@ end
 -- C++ EVENT_CHANGE_PHASE -> ChangePhase(): phase 1 -> 2 cancels
 -- group 1, re-arms change phase 30s, and arms the phase-2 set;
 -- phase 2 -> 1 cancels group 2, re-arms change phase 60s, arms
--- the phase-1 set; the threat/AttackStart victim-restore arms stay
--- out (no AddThreat/GetThreat bridge) and the ApplySpellImmune
+-- the phase-1 set; the threat victim-restore arms are PORTED below
+-- (AttackStart stays out) and the ApplySpellImmune
 -- immunity-off arms are PORTED in onChangePhase — the GUID state is
 -- cleared (C++ Initialize).
 function onChangePhase(creature, guid)
@@ -390,6 +395,8 @@ function onChangePhase(creature, guid)
     if st.phase == PHASE_1 then
         st.phase = PHASE_2
         st.felRageTarget = nil
+        st.oldTargetGUID = nil
+        st.oldThreat = nil
         cancelGroup(guid, GROUP_PHASE_1)
         schedule(guid, "changephase", 30000, function()
             onChangePhase(creature, guid)
@@ -397,7 +404,12 @@ function onChangePhase(creature, guid)
         schedulePhase2Events(creature, guid)
     else
         st.phase = PHASE_1
+        local rageGuid = st.felRageTarget
+        local oldGuid = st.oldTargetGUID
+        local oldThreat = st.oldThreat
         st.felRageTarget = nil
+        st.oldTargetGUID = nil
+        st.oldThreat = nil
         cancelGroup(guid, GROUP_PHASE_2)
         schedule(guid, "changephase", 60000, function()
             onChangePhase(creature, guid)
@@ -405,10 +417,15 @@ function onChangePhase(creature, guid)
         -- C++ ChangePhase() phase 2 -> 1 :285-286: fel rage ends — the
         -- taunt immunities come off (IMMUNITY_STATE/MOD_TAUNT=11,
         -- IMMUNITY_EFFECT/ATTACK_ME=114, both apply=false), before the
-        -- phase-1 schedule. The victim-restore arms stay out (no
-        -- AddThreat/GetThreat bridge).
+        -- phase-1 schedule. The victim-restore arms are PORTED below
+        -- (ModifyThreatByPercent(-100) on the fel-rage GUID +
+        -- AddThreat(oldThreat) on the stored victim GUID; AttackStart stays out).
         creature:ApplySpellImmune(0, 1, 11, false)
         creature:ApplySpellImmune(0, 0, 114, false)
+        if rageGuid and oldGuid and oldThreat then
+            creature:ModifyThreatByPercent(rageGuid, -100)
+            creature:AddThreat(oldGuid, oldThreat)
+        end
         schedulePhase1Events(creature, guid)
     end
 end

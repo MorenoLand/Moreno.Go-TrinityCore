@@ -99,8 +99,9 @@
 -- :395-415) ride CatsTargetSelector random-target selection; the
 -- DamageTaken (:427-446) feign-death machinery — health (GetHealth/
 -- GetMaxHealth) and aura (creature:HasAura) bridges exist, but the
--- unit stays blocked on unbridged SetReactState/SetAuraStack/flag/
--- AttackStop/threat/gravity legs and no creature entry — NO
+-- unit stays blocked on unbridged SetAuraStack + no creature entry
+-- (SetReactState/AttackStop/flag/threat/gravity bridges are live —
+-- the stale list above is retracted) + random-target selection — NO
 -- registration; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
 -- has no DoAction bridge; no creature entry in C++ evidence —
 -- NO registration.
