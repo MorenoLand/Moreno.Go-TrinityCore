@@ -403,6 +403,35 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, err
 	}
+	// FailQuest mirrors Player::FailQuest (Player.cpp:15529-15577) via the
+	// session failQuest twin (quest_details.go): only an INCOMPLETE quest
+	// (or a COMPLETE timed quest with COMPLETED_AT_START) transitions;
+	// anything else is a no-op, so a wrong raid-size quest id is harmless.
+	methods["FailQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			s.failQuest(lctx, quest)
+		}
+		return nil, nil
+	}
+	// KilledMonsterCredit runs Player::KilledMonsterCredit
+	// (Player.cpp:16636) via the session grantKillCreditMonster twin
+	// (kill.go): timed achievement, KILL_CREATURE criteria, then the quest
+	// loop. targetGUID 0 matches the C++ pRewardSource arm (real_entry ==
+	// entry when the creature GUID is empty).
+	methods["KilledMonsterCredit"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			s.grantKillCreditMonster(lctx, entry, 0)
+		}
+		return nil, nil
+	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
 	methods["SendAreaTriggerMessage"] = s.luaMessageMethod()
 	methods["SendNotification"] = s.luaMessageMethod()

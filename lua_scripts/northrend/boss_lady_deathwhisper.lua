@@ -168,11 +168,12 @@
 -- self-only; Summon Spirits stays out — creature-cast path has no
 -- SPELL_EFFECT_SUMMON delivery leg, the eregos precedent); the
 -- mana-barrier aura legs have no bridge.
--- boss_lady_deathwhisper JustDied — the Full House achievement
--- legs, the DaranavanMoveEvent, faction/ReactState legs, and
--- KilledMonsterCredit(NPC_DARNAVAN_CREDIT) group loop have no
--- bridge; darnavan->AI()->Talk(SAY_DARNAVAN_RESCUED 1) is Talk on
--- another creature riding instance legs (no instance bridge).
+-- boss_lady_deathwhisper JustDied — PORTED 2026-10-24: darnavan
+-- rescue (SetFaction/CombatStop/SetReactState/Talk via FindNearestCreature
+-- liveness twin) + KilledMonsterCredit group loop (player:KilledMonsterCredit
+-- bridge) + npc_darnavan JustDied FailQuest loop (player:FailQuest bridge).
+-- Stay out: Full House achievement legs (instance), DaranavanMoveEvent +
+-- MoveIdle (no motion bridge).
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
 -- npc_cult_adherent summon-death scheduler legs (still out — the
@@ -228,6 +229,12 @@ local ENTRY_REANIMATED_FANATIC = 38009 -- icecrown_citadel.h:177
 local ENTRY_REANIMATED_ADHERENT = 38010 -- icecrown_citadel.h:180
 local ENTRY_DARNAVAN_10 = 38472
 local ENTRY_DARNAVAN_25 = 38485
+local NPC_DARNAVAN_CREDIT_10 = 39091 -- icecrown_citadel.h:156
+local NPC_DARNAVAN_CREDIT_25 = 39092 -- icecrown_citadel.h:157
+local QUEST_DEPROGRAMMING_10 = 24869 -- icecrown_citadel.h:517
+local QUEST_DEPROGRAMMING_25 = 24875 -- icecrown_citadel.h:518
+local SAY_DARNAVAN_RESCUED = 1 -- boss_lady_deathwhisper.cpp:55
+local FACTION_FRIENDLY = 35
 
 local SAY_AGGRO = 7
 local SAY_KILL = 14
@@ -581,10 +588,86 @@ end
 -- C++ boss_lady_deathwhisper::JustDied: Talk(SAY_DEATH) — the sjonnir
 -- JustDied-Talk precedent. cancelTimers stops the 10-min berserk +
 -- deathanddecay + (phase-1) shadowbolt arms from firing on the corpse.
+-- C++ boss_lady_deathwhisper::JustDied darnavan block (:344-383):
+-- raid size has no Lua bridge (Is25ManRaid unbridged), so the 10/25
+-- pair is picked by group size (>10 members = 25-man; solo = 10-man).
+-- C++ IsInMap is twinned as same MapId + same InstanceId.
+local function darnavanIs25Man(player)
+    local group = player:GetGroup()
+    if group == nil then
+        return false
+    end
+    local members = group:GetMembers()
+    return members ~= nil and #members > 10
+end
+
+local function darnavanCredit(killer)
+    local credit
+    if darnavanIs25Man(killer) then
+        credit = NPC_DARNAVAN_CREDIT_25
+    else
+        credit = NPC_DARNAVAN_CREDIT_10
+    end
+    local group = killer:GetGroup()
+    if group ~= nil then
+        local members = group:GetMembers()
+        if members ~= nil then
+            for _, member in ipairs(members) do
+                if member:GetMapId() == killer:GetMapId() and member:GetInstanceId() == killer:GetInstanceId() then
+                    member:KilledMonsterCredit(credit)
+                end
+            end
+        end
+    else
+        killer:KilledMonsterCredit(credit)
+    end
+end
+
 local function deathwhisperJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     improvedCultists[creature:GetGUID()] = nil
     creature:Talk(SAY_DEATH)
+    local darnavan = creature:FindNearestCreature(ENTRY_DARNAVAN_10, 100.0)
+    if darnavan == nil then
+        darnavan = creature:FindNearestCreature(ENTRY_DARNAVAN_25, 100.0)
+    end
+    if darnavan ~= nil and darnavan:GetHealth() > 0 then
+        darnavan:SetFaction(FACTION_FRIENDLY)
+        darnavan:CombatStop(true)
+        darnavan:SetReactState(REACT_PASSIVE)
+        darnavan:Talk(SAY_DARNAVAN_RESCUED)
+        if killer ~= nil and killer:GetObjectType() == "Player" then
+            darnavanCredit(killer)
+        end
+    end
+end
+
+-- C++ npc_darnavan::JustDied (:847-867): group FailQuest loop with the
+-- IsInMap gate, else solo FailQuest. Event 23 fires before event 4
+-- (fireCreatureDied), so darnavanReset already cancelled the timers.
+local function darnavanJustDied(event, creature, killer)
+    if killer == nil or killer:GetObjectType() ~= "Player" then
+        return
+    end
+    local quest
+    if darnavanIs25Man(killer) then
+        quest = QUEST_DEPROGRAMMING_25
+    else
+        quest = QUEST_DEPROGRAMMING_10
+    end
+    local group = killer:GetGroup()
+    if group ~= nil then
+        local members = group:GetMembers()
+        if members ~= nil then
+            for _, member in ipairs(members) do
+                if member:GetMapId() == killer:GetMapId() and member:GetInstanceId() == killer:GetInstanceId() then
+                    member:FailQuest(quest)
+                end
+            end
+        end
+    else
+        killer:FailQuest(quest)
+    end
 end
 
 -- C++ npc_cult_fanatic Reset() scheduler (:601-615), re-keyed to the
@@ -904,3 +987,5 @@ RegisterCreatureEvent(ENTRY_DARNAVAN_10, 23, darnavanReset)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 1, darnavanJustEngagedWith)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 2, darnavanLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 23, darnavanReset)
+RegisterCreatureEvent(ENTRY_DARNAVAN_10, 4, darnavanJustDied)
+RegisterCreatureEvent(ENTRY_DARNAVAN_25, 4, darnavanJustDied)
