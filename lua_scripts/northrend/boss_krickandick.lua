@@ -51,9 +51,9 @@
 --   and EVENT_SPECIAL {30s,35s} (:173). The krick->AI()->Talk(SAY_KRICK_AGGRO 0)
 --   leg (:167-168) is PORTED in ickEnterCombat below (FindNearestCreature
 --   boss Talk, mrfloppy/emily precedent); the EVENT_TOXIC_WASTE 5s /
---   EVENT_SHADOW_BOLT 10s seeds (:171-172) belong to krick-cast arms —
---   obtained-object CastSpell is bridged, but the SelectTarget playerOnly
---   pick for krick's cast is unverified — documented-only below.
+--   EVENT_SHADOW_BOLT 10s seeds (:171-172) are PORTED in ickEnterCombat
+--   below (SelectTarget pick verified 2026-10-24: Random,0 = any
+--   threat-listed player, Random,1 = victim popped first — see handlers).
 -- EVENT_MIGHTY_KICK (:249-252) — DoCastVictim(SPELL_MIGHTY_KICK 69021),
 --   non-triggered victim-cast; re-arm 25s (:251).
 -- EVENT_SPECIAL (:253-257) — RAND(EVENT_EXPLOSIVE_BARRAGE, EVENT_POISON_NOVA,
@@ -79,13 +79,10 @@
 --   (event 3 — the razuvious player-gated variant precedent).
 --
 -- DOCUMENTED-ONLY (no bridge):
--- EVENT_TOXIC_WASTE (:233-240) — krick->CastSpell(target, SPELL_TOXIC_WASTE
---   69024) on a SelectTarget(Random, 0, playerOnly) target (:236-237): the
---   caster is Krick; obtained-object CastSpell is bridged, but the
---   SelectTarget playerOnly pick for krick's cast is unverified.
--- EVENT_SHADOW_BOLT (:241-248) — krick->CastSpell(target, SPELL_SHADOW_BOLT
---   69028) on a SelectTarget(Random, 1, playerOnly) target (:244-245): same,
---   obtained-object CastSpell bridged, SelectTarget pick unverified.
+-- EVENT_TOXIC_WASTE (:233-240) / EVENT_SHADOW_BOLT (:241-248) — PORTED
+--   (2026-10-24): krick->CastSpell(target, 69024 / 69028), non-triggered,
+--   via FindNearestCreature krick (barrage precedent) + the random-player
+--   picks below; re-arms {7s,10s} / 15s unconditional per C++ (:239, :247).
 -- boss_ick DoAction (:191-217) — ACTION_STORE_OLD_TARGET /
 --   ACTION_RESET_THREAT threat store/reset machine: no DoAction /
 --   threat-manager bridge.
@@ -158,6 +155,8 @@ local SPELL_EXPLOSIVE_BARRAGE_ICK = 69263
 local SPELL_POISON_NOVA = 68989
 local SPELL_PURSUIT = 68987
 local SPELL_EXPLOSIVE_BARRAGE_KRICK = 69012
+local SPELL_TOXIC_WASTE = 69024
+local SPELL_SHADOW_BOLT = 69028
 
 local timers = {}
 
@@ -300,15 +299,89 @@ local function onSpecial(creature, guid)
     schedule(guid, "special", {23000, 28000}, function() onSpecial(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 0, 0.0f, true) (:236-237), called on ICK:
+-- random alive player from ick's threat list, no distance limit, tank
+-- included; the GetPlayersInWorld same-map/instance pick is the anomalus
+-- precedent (threat-listed units only in practice; no dead-player leg in
+-- the C++ predicate, the alive filter rides the precedent).
+local function playersInInstance(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    return found
+end
+
+local function randomPlayer(creature)
+    local candidates = playersInInstance(creature)
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ SelectTarget(Random, 1, 0.0f, true) (:244-245): offset 1 pops the
+-- first MaxThreat-ordered entry — the current victim — BEFORE the player
+-- filter (UnitAI.h SelectTarget template), then random among the rest;
+-- the netherspite exclude-victim precedent. A lone-victim tick casts
+-- nothing (C++ returns nil when the list is at most the offset).
+local function randomNonVictimPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local candidates = {}
+    for _, p in ipairs(playersInInstance(creature)) do
+        if p:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ :233-240 EVENT_TOXIC_WASTE: krick-gated non-triggered cast on the
+-- Random,0 pick; re-arm {7s,10s} unconditional (ScheduleEvent outside the
+-- krick gate, :239).
+local function onToxicWaste(creature, guid)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        local target = randomPlayer(creature)
+        if target ~= nil then
+            krick:CastSpell(target, SPELL_TOXIC_WASTE)
+        end
+    end
+    schedule(guid, "toxicwaste", {7000, 10000}, function() onToxicWaste(creature, guid) end)
+end
+
+-- C++ :241-248 EVENT_SHADOW_BOLT: krick-gated non-triggered cast on the
+-- Random,1 pick; re-arm 15s unconditional (:247). The C++ `return` that
+-- skips the rest of the event loop that tick is unmodeled (independent
+-- Lua timers, header deviations note).
+local function onShadowBolt(creature, guid)
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick ~= nil then
+        local target = randomNonVictimPlayer(creature)
+        if target ~= nil then
+            krick:CastSpell(target, SPELL_SHADOW_BOLT)
+        end
+    end
+    schedule(guid, "shadowbolt", 15000, function() onShadowBolt(creature, guid) end)
+end
+
 -- C++ boss_ickAI::JustEngagedWith (:163-173): seeds EVENT_MIGHTY_KICK 20s
 -- (:170) and EVENT_SPECIAL {30s,35s} (:173). The krick->AI()->Talk(
 -- SAY_KRICK_AGGRO 0) leg (:167-168) is PORTED below — cross-creature
 -- Talk bridged via FindNearestCreature (the mrfloppy/emily precedent,
 -- nil-guard mirrors GetKrick()); the stale "no bridge" note is
--- retracted. The BossAI::JustEngagedWith passthrough and the
--- EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds (:171-172)
--- stay out — they belong to krick-cast arms with no cross-creature
--- cast bridge.
+-- retracted. The BossAI::JustEngagedWith passthrough stays out; the
+-- EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds (:171-172) are
+-- PORTED below — cross-creature target-cast rides the barrage precedent
+-- (obtained-object CastSpell) plus the verified SelectTarget picks.
 local function ickEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
@@ -317,6 +390,8 @@ local function ickEnterCombat(event, creature, target)
         krick:Talk(SAY_KRICK_AGGRO)
     end
     schedule(guid, "mightykick", 20000, function() onMightyKick(creature, guid) end)
+    schedule(guid, "toxicwaste", 5000, function() onToxicWaste(creature, guid) end)
+    schedule(guid, "shadowbolt", 10000, function() onShadowBolt(creature, guid) end)
     schedule(guid, "special", {30000, 35000}, function() onSpecial(creature, guid) end)
 end
 
