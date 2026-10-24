@@ -96,9 +96,9 @@
 -- (:201) has no bridge, so fear is not limited to 1 target and Lua's nil
 -- falls back to the victim rather than C++'s self-centered AoE; phase-2
 -- melee keeps swinging (C++ :212 gates DoMeleeAttackIfReady on phase-1;
--- the phase-2 melee stop has no bridge); IsWithinMeleeRange has no bridge
--- — 5 yd via IsWithinDist approximates the phase-1 shadow-bolt melee gate
--- (the kiljaeden precedent); DamageTaken fires pre-application and the C++ arm
+-- the phase-2 melee stop has no bridge); the phase-1 shadow-bolt melee
+-- gate is creature:IsWithinMeleeRange (bridge live since ed086b69);
+-- DamageTaken fires pre-application and the C++ arm
 -- (boss_bronjahm.cpp:117-118) reads the same pre-application health (Unit.cpp:701
 -- runs the hook before the health reduction), so plain GetHealth() is exact;
 -- !HealthAbovePct(30) is health <= floor(max*30/100), inclusive of exactly-30.
@@ -185,14 +185,14 @@ end
 
 -- C++ :174-185 EVENT_SHADOW_BOLT: phase-2 is unconditional victim-cast
 -- with {1000,2000}ms re-arm (:175-178); phase-1 casts only outside melee
--- range (:181-183, 5-yd approximation) with a 2000ms re-arm (:184).
+-- range (:181-183, IsWithinMeleeRange gate) with a 2000ms re-arm (:184).
 local function onShadowBolt(creature, guid)
     if phase2[guid] then
         creature:CastSpell(nil, SPELL_SHADOW_BOLT)
         schedule(guid, "shadowbolt", {1000, 2000}, function() onShadowBolt(creature, guid) end)
     else
         local victim = creature:GetVictim()
-        if victim and not creature:IsWithinDist(victim, 5) then
+        if victim and not creature:IsWithinMeleeRange(victim) then
             creature:CastSpell(nil, SPELL_SHADOW_BOLT)
         end
         schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)

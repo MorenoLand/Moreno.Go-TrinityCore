@@ -231,7 +231,7 @@ end
 -- victim is out of melee range but the timer still re-arms.
 local function fusionPunchTick(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsWithinDist(victim, 5) then
+    if victim and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_FUSION_PUNCH)
     end
     schedule(guid, "fusionpunch", {13000, 22000}, function()

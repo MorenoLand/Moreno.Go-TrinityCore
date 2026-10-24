@@ -876,11 +876,11 @@ local function reflectionHunterShoot(creature, guid)
 end
 
 -- C++-exact quirk: the melee-range arm re-casts MULTI_SHOT, never
--- wing clip (40652). IsWithinMeleeRange has no bridge — 5 yd
--- approximates it.
+-- wing clip (40652). Gate is creature:IsWithinMeleeRange (bridge
+-- live since ed086b69; Unit::IsWithinMeleeRangeAt twin).
 local function reflectionHunterMelee(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsWithinDist(victim, 5) then
+    if victim and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_SR_MULTI_SHOT)
         schedule(guid, "sr0", math.random(6000, 8000), function()
             reflectionHunterMelee(creature, guid)
