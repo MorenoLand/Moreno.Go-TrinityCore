@@ -74,11 +74,13 @@
 --   (hyjal_trash.cpp:418-530): spawn captures the native display, sets
 --   UNIT_FLAG_NOT_SELECTABLE + MODEL_INVIS 11686 (Delay = rand32()%30000,
 --   1ms floor — CreateLuaEvent rejects 0, magmus precedent); after Delay
---   the SPELL_METEOR 33814 visual fires as a triggered self-cast
---   (DoCast(me, spell, true) twin — the world-trigger 21987
---   existed only to deliver the cast from the offset position, so
---   the twin is position-faithful; the SetVisible(false) arm has
---   no bridge); 2000ms later the reveal clears
+--   the SPELL_METEOR 33814 cast fires from a SummonCreature(
+--   NPC_WORLD_TRIGGER_TINY = 21987) at the GetPositionWithOffset
+--   ({8, 8, frand(25,35), 0}) position, TEMPSUMMON_TIMED_DESPAWN 1s —
+--   all four bridges live (SummonCreature lua_creature_events.go:956,
+--   SetVisible/SetFaction/SetDisableGravity); the old "no bridge"
+--   claim was stale. The RelocateOffset math (Position.cpp:36-42)
+--   is twinned inline; 2000ms later the reveal clears
 --   NOT_SELECTABLE and restores the native display (the RestoreDisplayId
 --   idiom: SetDisplayId(GetDisplayId-at-spawn)), setting CanMove. The
 --   ctor's RemoveFlag(NON_ATTACKABLE) is a no-op here (no escort machine
@@ -263,6 +265,7 @@ end
 -- npc_giant_infernal meteor spawn choreography (hyjal_trash.cpp:418-530).
 local MODEL_INVIS = 11686
 local SPELL_METEOR = 33814
+local NPC_WORLD_TRIGGER_TINY = 21987
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
@@ -332,9 +335,28 @@ local function onInfernalSpawn(event, creature)
         if not st then
             return
         end
-        -- The world-trigger summon has no bridge: the meteor visual ports
-        -- as the triggered self-cast twin (DoCast(me, SPELL_METEOR, true)).
-        creature:CastSpell(creature, SPELL_METEOR, true)
+        -- C++ hyjal_trash.cpp:476-484: SummonCreature(NPC_WORLD_TRIGGER_TINY
+        -- = 21987, GetPositionWithOffset({8, 8, frand(25,35), 0}),
+        -- TEMPSUMMON_TIMED_DESPAWN (2), 1s). The summon is bridged
+        -- (lua_creature_events.go:956); GetPositionWithOffset is the pure
+        -- RelocateOffset twin (Position.cpp:36-42): x + ox*cos(o) -
+        -- oy*sin(o), y + oy*cos(o) + ox*sin(o), z + oz, o unchanged.
+        -- The meteor fires from the trigger 25-35yd above, C++-exact; the
+        -- GetMotionMaster()->Clear() leg has no bridge (the waypoint motion
+        -- itself is unported — documented above).
+        local o = creature:GetO()
+        local ox, oy = 8.0, 8.0
+        local tx = creature:GetX() + ox * math.cos(o) - oy * math.sin(o)
+        local ty = creature:GetY() + oy * math.cos(o) + ox * math.sin(o)
+        local tz = creature:GetZ() + 25.0 + math.random() * 10.0
+        local trigger = creature:SummonCreature(NPC_WORLD_TRIGGER_TINY,
+            tx, ty, tz, o, 2, 1000)
+        if trigger ~= nil then
+            trigger:SetVisible(false)
+            trigger:SetFaction(creature:GetFaction())
+            trigger:SetDisableGravity(true)
+            trigger:CastSpell(creature, SPELL_METEOR, true)
+        end
         st.meteor = true
         schedule(guid, "reveal", 2000, function()
             infernalReveal(creature, guid)
