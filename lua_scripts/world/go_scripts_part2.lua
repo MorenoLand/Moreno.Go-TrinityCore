@@ -9,8 +9,8 @@
 --   - GameObjectEventOnAIUpdate (=1, runtime.go) has NO fire site in
 --     engine/ — UpdateAI arms (toy_train, *_music, bells) have no trigger.
 --   - IsHolidayActive: zero hits in engine/ — no bridge (blocks all *_music).
---   - player:GetQuestStatus: zero hits in engine/ — no bridge (blocks
---     veil_skith_cage, frostblade_shrine).
+--   - player:GetQuestStatus IS bridged since 2026-10-24 (lua_player.go;
+--     veil_skith_cage gate now portable, frostblade_shrine still cast-blocked).
 --   - CastSpell exists ONLY on the creature handler surface
 --     (lua_creature_events.go:62) — no player:CastSpell and no
 --     gameobject:CastSpell (blocks bonfire, shrine cast, ribbon pole cast,
@@ -23,7 +23,6 @@
 --   - Creature DoAction / MovePoint / AI()->Talk via a GO-obtained
 --     creature: no bridge (blocks cage children walk+Talk, ribbon pole
 --     ACTION_COSMETIC_FIRES).
---   - player:KilledMonsterCredit: no Lua bridge (blocks cage quest credit).
 --   - GameObject: no GetAreaId/GetZoneId (only GetMapId) — blocks brewfest
 --     area dispatch and bells zone->soundId init.
 --   - No game-event hook in runtime.go at all — go_bells OnGameEvent(73)
@@ -39,9 +38,9 @@
 -- OnGossipHello (:691-709): me->UseDoorOrButton() is bridged, but the arm
 -- is entry-less in-tree (ScriptName "go_veil_skith_cage", DB-side bind) and
 -- the quest arm needs player:GetQuestStatus(QUEST_MISSING_FRIENDS 10852 —
--- enum :678) == QUEST_STATUS_INCOMPLETE (no bridge), grid search for
+-- enum :678) == QUEST_STATUS_INCOMPLETE (bridged 2026-10-24), grid search for
 -- NPC_CAPTIVE_CHILD 22314 (enum :679, no bridge), player:KilledMonsterCredit
--- (no bridge), creature DespawnOrUnsummon/MovePoint/AI()->Talk(SAY_FREE_0 0,
+-- (bridged), creature DespawnOrUnsummon/MovePoint/AI()->Talk(SAY_FREE_0 0,
 -- enum :680) (no bridge).
 
 -- DOCUMENTED-ONLY: go_frostblade_shrine (C++ :730-758)

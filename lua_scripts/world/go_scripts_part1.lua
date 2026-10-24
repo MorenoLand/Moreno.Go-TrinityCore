@@ -198,7 +198,8 @@
 --    Bridged pieces: player:GossipMenuAddItem/GossipSendMenu/SendNotification
 --    and the GO select hook signature (event, player, go, sender, action)
 --    are bridged. Blockers: the hello gate needs player:GetQuestStatus
---    (unbridged — porting without it would offer the option to everyone);
+--    (bridged 2026-10-24 — the gate is portable, but the arm stays unregistered:
+--    no GO entry const);
 --    select needs GetClosestCreatureWithEntry, creature AI SetData,
 --    go:CastSpell, player:GetNativeGender (all unbridged). DOCUMENTED-ONLY.
 -- ============================================================================

@@ -392,6 +392,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{err == nil && count > 0}, err
 	}
+	// GetQuestStatus is Player::GetQuestStatus (Player.cpp:16131-16143)
+	// via the session characterQuestStatus twin (quests.go): NONE 0,
+	// COMPLETE 1, INCOMPLETE 3, FAILED 5, REWARDED 6 (QuestDef.h:101-109).
+	methods["GetQuestStatus"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{int64(0)}, nil
+		}
+		status, _ := s.characterQuestStatus(lctx, quest)
+		return []any{status}, nil
+	}
 	methods["CompleteQuest"] = func(_ context.Context, args []any) ([]any, error) {
 		quest, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -1004,6 +1018,56 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		object := s.nearestGameObject(ctx, state.Map, state.X, state.Y, rangeValue)
 		return []any{object}, nil
+	}
+	// FindNearestCreature(entry, dist) is the player-surface twin of the
+	// creature bridge (lua_creature_events.go:2435): the nearest live
+	// creature of entry within dist yards (3D gate with both combat
+	// reaches added, winner by reach-adjusted distance) on the player's
+	// map+instance; nil when none. Backs the area-trigger dedup arms
+	// (at_scent_larkorwi, at_sentry_point, at_brewfest).
+	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || dist32 < 0 {
+			return []any{nil}, nil
+		}
+		srcReach := float64(state.CombatReach)
+		if srcReach <= 0 {
+			srcReach = 1.5
+		}
+		dist := float64(dist32)
+		s.server.motionMu.Lock()
+		var best *creatureMotion
+		bestAdj := dist
+		for _, m := range s.server.motionMapLocked(state.Map, state.InstanceID) {
+			if m.Entry != entry || m.Health == 0 {
+				continue
+			}
+			dx := float64(m.X - state.X)
+			dy := float64(m.Y - state.Y)
+			dz := float64(m.Z - state.Z)
+			candReach := float64(m.combatReachOrDefault())
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+srcReach+candReach {
+				adj := d - srcReach - candReach
+				if adj < 0 {
+					adj = 0
+				}
+				if best == nil || adj < bestAdj {
+					best, bestAdj = m, adj
+				}
+			}
+		}
+		s.server.motionMu.Unlock()
+		if best == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaMotionCreature(best)}, nil
 	}
 	// SummonCreature is the player-surface twin of the creature bridge
 	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
