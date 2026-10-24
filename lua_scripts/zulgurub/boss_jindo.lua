@@ -28,12 +28,15 @@
 -- delusion curse, C++-exact order; nil-target ticks cast nothing but
 -- keep the schedule) / teleport 5s then {15s,23s} on a random alive
 -- player within 100 yd (DoTeleportPlayer to TeleportLoc via
--- Player:TeleportNear; the -100% threat wipe and the 10 sacrificed-troll
--- 14826 summons have no bridge and are skipped).
+-- Player:TeleportNear; the -100% threat wipe has no bridge and the 10
+-- sacrificed-troll 14826 summons are skipped — the summon leg is bridged
+-- but their AttackStart leg is not, and a summon-only half would leave
+-- idle trolls C++ never produces).
 -- Ward 14987: the C++ AI ticks its heal timer even out of combat
 -- (2s first, then every 3s: DoCast(GetCreature(DATA_JINDO), 24311));
--- with no instance-script bridge the Jin'do lookup has no bearer, so
--- only the 3s re-arm is modeled (hexlord friendly-scan convention).
+-- with no instance-script bridge the Jin'do lookup is approximated by
+-- FindNearestCreature, and the loop is armed from Jin'do's event-19
+-- summon twin (see below), since summoned creatures get no Reset fire.
 -- Shade 14986: Reset self-casts invisibility 24307 (triggered, C++-exact
 -- npc_shade_of_jindoAI::Reset arm) and arms shadow shock 19460 1s then
 -- every 2s on the victim (non-triggered DoCastVictim, C++-exact); nil-victim
@@ -43,16 +46,20 @@
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); no summon model — the brain-wash totem, the healing ward,
--- the shades, and the sacrificed trolls never spawn (the ward and
--- shade are still registered so any that exist fight/react
--- correctly); the ward constructor's REACT_PASSIVE arm and its
--- AttackStart no-op have no bridge (the ward never spawns in this
--- build); the teleport -100% threat wipe and the troll formation
--- coordinates are not used (no threat/summon bridges); no threat model — the hex -80% and
--- teleport -100% ModifyThreatByPercent arms are skipped; no Lua spawn
--- event exists, so the ward's always-on UpdateAI heal loop is
--- approximated with the combat-lifecycle events (1/2/4/23).
+-- skipped); no summon model for the spell path's totem title (the
+-- engine summon path skips totem titles, so 24262 never spawns) — the
+-- healing ward and the shades spawn only if their spells pass the
+-- engine DBC SummonProperties gates (unverifiable from the repo: no
+-- Spell.dbc ships in-tree), and when they do, Jin'do's event-19 twin
+-- arms their loops; the ward constructor's REACT_PASSIVE arm and its
+-- AttackStart no-op have no bridge; the teleport -100% threat wipe and
+-- the troll formation coordinates are not used (no threat bridge, and
+-- the trolls' AttackStart leg has no bridge — a summon-only half would
+-- leave idle trolls C++ never produces); no threat model — the hex -80% and
+-- teleport -100% ModifyThreatByPercent arms are skipped; summoned
+-- creatures get no Reset/Spawn fire, so the ward's always-on UpdateAI
+-- heal loop and the shade's Reset invisibility are armed from Jin'do's
+-- event-19 summon twin instead of the combat-lifecycle events.
 
 local ENTRY_JINDO = 11380
 local ENTRY_SHADE = 14986
@@ -271,11 +278,17 @@ RegisterCreatureEvent(ENTRY_SHADE, 23, shadeReset)
 
 -- npc_healing_ward (14987): C++ heals GetCreature(DATA_JINDO) with
 -- 24311 every 3s (first tick 2s). The instance lookup has no bridge —
--- only the 3s re-arm cycle is modeled (cast skipped). The ward never
--- spawns in this build (no summon model), so these hooks exist for
--- completeness; the combat-lifecycle events approximate the C++
--- always-on UpdateAI loop (no spawn-event bridge).
+-- FindNearestCreature(11380, 100.0) approximates it (a ward summoned by
+-- the spell path spawns at Jin'do's position, so the summoner is the
+-- nearest live Jin'do; nil when none, re-arm kept, C++-exact). The
+-- always-on UpdateAI loop is armed from Jin'do's event-19 summon twin
+-- below (summoned creatures get no Reset/Spawn fire); the combat-
+-- lifecycle events cover the ward if it ever enters combat.
 local function onWardHeal(creature, guid)
+    local jindo = creature:FindNearestCreature(ENTRY_JINDO, 100.0)
+    if jindo then
+        creature:CastSpell(jindo, SPELL_HEAL)
+    end
     schedule(guid, "heal", 3000, function()
         onWardHeal(creature, guid)
     end)
@@ -306,3 +319,26 @@ RegisterCreatureEvent(ENTRY_WARD, 1, wardEnterCombat)
 RegisterCreatureEvent(ENTRY_WARD, 2, wardLeaveCombat)
 RegisterCreatureEvent(ENTRY_WARD, 4, wardDied)
 RegisterCreatureEvent(ENTRY_WARD, 23, wardReset)
+
+-- Jin'do's JustSummoned twin (event 19, broggok precedent): the engine
+-- spell-summon path fires event 19 on the caster via the shared
+-- summonTempCreature funnel. A summoned ward gets no Reset/Spawn fire,
+-- so its always-on heal loop is armed here (first tick 2s, C++-exact;
+-- same "heal" key as wardEnterCombat, so the two arming paths cannot
+-- double-schedule). A summoned shade gets no Reset fire either, so its
+-- Reset invisibility cast lands here instead (evade-time Reset still
+-- casts via shadeReset). The brain-wash totem never reaches this
+-- handler: the engine summon path skips totem titles outright.
+local function jindoSummoned(_, _, summoned)
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_WARD then
+        local guid = summoned:GetGUID()
+        schedule(guid, "heal", 2000, function()
+            onWardHeal(summoned, guid)
+        end)
+    elseif entry == ENTRY_SHADE then
+        summoned:CastSpell(summoned, SPELL_INVISIBLE, true)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_JINDO, 19, jindoSummoned)

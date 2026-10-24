@@ -33,11 +33,11 @@
 -- timer: each flagged creature casts the resurrect visual 24171 on
 -- itself (non-triggered DoCastSelf, C++-exact), drops the feign-death
 -- aura, clears the immune flags (RemoveFlag bridge) and is healed to
--- full. Phase change: root (no bridge), drop feign death, full
+-- full. Phase change: root (SetRooted bridge), drop feign death, full
 -- health, self-cast 24171 -> 1s -> Talk(TALK_TIGER_PHASE=0) -> 1s ->
 -- self-cast 24169 (tiger form; the immune-flag removal and
--- ResetThreatList are ported, the +40% damage stat modifier and the
--- unroot arms have no bridge)
+-- ResetThreatList are ported, the +40% damage stat modifier has no
+-- bridge; the unroot arm is ported via SetRooted)
 -- and arm force punch 24189 4s then {16s,21s} on the victim (triggered
 -- DoCastVictim, C++-exact) / charge 24193 — C++ schedules
 -- EVENT_SPELL_CHARGE (8) at 12s but the switch case reads EVENT_CHARGE
@@ -86,9 +86,9 @@
 -- ModifyThreatByPercent arms stay skipped (no bridge); no movement
 -- model — the charge
 -- AttackStart arm skipped (charge is inert anyway, see above); no
--- SetControlled bridge — the phase-change root/unroot arms skipped and
--- the _isChangingPhase melee skip has no bearer (melee is
--- engine-driven); no summon model — the SPELL_SUMMONTIGERS tigers never
+-- SetControlled bridge — the phase-change root/unroot arms are PORTED
+-- via SetRooted (lua_creature_events.go) and only the _isChangingPhase
+-- melee skip has no bearer (melee is engine-driven); no summon model — the SPELL_SUMMONTIGERS tigers never
 -- spawn; thekal's JustDied KillSelf of the two adds has no kill bridge —
 -- their timers are canceled instead; Lor'Khan's greater-heal 100-yd
 -- range check is skipped.
