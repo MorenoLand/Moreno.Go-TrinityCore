@@ -41,8 +41,9 @@
 -- - Enrage: one-shot at 600s (C++ EnrageTimer < diff && !enraged, then
 --   EnrageTimer = 600000 with enraged = true so it never refires):
 --   triggered self-cast Berserk 26662 (aku_mai triggered-form
---   convention). me->InterruptNonMeleeSpells(false) has no bridge
---   (maiden precedent).
+--   convention). me->InterruptNonMeleeSpells(false) is bridged on the
+--   event-creature surface as the no-op twin (svala precedent) —
+--   PORTED 2026-10-24.
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_ONSLAY (1); no TYPEID gate in C++ (shade_of_aran precedent).
 -- - Death (C++ JustDied, non-instance leg): hyjal_trashAI::JustDied is
@@ -184,9 +185,10 @@ local function onCleave(creature, guid)
     end)
 end
 
--- C++ EnrageTimer: one-shot at 600s (InterruptNonMeleeSpells arm has no
--- bridge), then triggered self-cast Berserk 26662 (aku_mai convention).
+-- C++ EnrageTimer: one-shot at 600s (InterruptNonMeleeSpells(false)
+-- before the cast, C++ order), then triggered self-cast Berserk 26662.
 local function onEnrage(creature, guid)
+    creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 

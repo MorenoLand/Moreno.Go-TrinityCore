@@ -80,8 +80,9 @@
 --   claim was stale; engine/world/spells.go:11709-11730, boss_ai.go:2052-2096):
 --   case SPELL_DARK_TRANSFORMATION_T (70895, :622-625) —
 --   DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered; the
---   InterruptNonMeleeSpells(true) leg has no bridge on the
---   event-creature method set (net no-op in Go: packet-only casts).
+--   InterruptNonMeleeSpells(true) leg is bridged on the
+--   event-creature method set as the no-op twin (net no-op in Go:
+--   packet-only casts) — PORTED 2026-10-24.
 --   RE-KEY 2026-10-22: the remaining fanatic SpellHit legs are PORTED —
 --   the :626-629 FULL_HEAL self-cast + UpdateEntry(NPC_DEFORMED_FANATIC)
 --   (Creature::UpdateEntry twin bridged 2026-10-22); the :630-634
@@ -163,11 +164,11 @@
 -- phase-2 transition (mana-power gate, event-9 latch, per-GUID
 -- PHASE_ONE latch, damage -= mana via event-9 return) + Frostbolt /
 -- Frostbolt Volley GROUP_TWO seeds are PORTED 2026-10-14
--- (deathwhisperDamageTaken; Touch of Insignificance stays out —
--- victim-targeted AddAura has no bridge, the Lua AddAura is
--- self-only; Summon Spirits stays out — creature-cast path has no
--- SPELL_EFFECT_SUMMON delivery leg, the eregos precedent); the
--- mana-barrier aura legs have no bridge.
+-- (deathwhisperDamageTaken; Touch of Insignificance PORTED 2026-10-24
+-- (victim:AddAura lands on the victim object, gurtogg precedent — the
+-- old "self-only" wording was wrong for victim objects); Summon Spirits
+-- stays out — creature-cast path has no SPELL_EFFECT_SUMMON delivery
+-- leg, the eregos precedent); the mana-barrier aura legs have no bridge.
 -- boss_lady_deathwhisper JustDied — PORTED 2026-10-24: darnavan
 -- rescue (SetFaction/CombatStop/SetReactState/Talk via FindNearestCreature
 -- liveness twin) + KilledMonsterCredit group loop (player:KilledMonsterCredit
@@ -252,6 +253,7 @@ local SPELL_SHADOW_CHANNELING = 43897 -- :226 Reset self-cast
 local POWER_MANA = 0 -- Powers enum (Unit.h): MANA 0
 local SPELL_FROSTBOLT = 71420 -- :66
 local SPELL_FROSTBOLT_VOLLEY = 72905 -- :67
+local SPELL_TOUCH_OF_INSIGNIFICANCE = 71204 -- boss_lady_deathwhisper.cpp:68
 local SPELL_DARK_TRANSFORMATION_T = 70895 -- :71 (boss trigger)
 local SPELL_DARK_TRANSFORMATION = 70900 -- :86
 local SPELL_FULL_HEAL = 17683 -- :82 (fanatic self-cast :627)
@@ -455,6 +457,21 @@ local function frostboltVolleyTick(creature, guid)
     end)
 end
 
+local function touchTick(creature, guid)
+    -- C++ :433-438 GROUP_TWO: Schedule(6s, 9s), if GetVictim()
+    -- AddAura(SPELL_TOUCH_OF_INSIGNIFICANCE, EnsureVictim()), Repeat().
+    -- Victim-targeted AddAura is bridged: the aura lands on the object
+    -- the method is called on (gurtogg fel-rage / brutallus burn
+    -- precedent), not on the handler creature.
+    local victim = creature:GetVictim()
+    if victim and not victim:IsDead() then
+        victim:AddAura(SPELL_TOUCH_OF_INSIGNIFICANCE)
+    end
+    schedule(guid, "touch", math.random(6000, 9000), function()
+        touchTick(creature, guid)
+    end)
+end
+
 local function deathwhisperDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if deathwhisperPhase[guid] == 3 then
@@ -497,6 +514,9 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         end)
         schedule(guid, "frostboltvolley", 20000, function()
             frostboltVolleyTick(creature, guid)
+        end)
+        schedule(guid, "touch", math.random(6000, 9000), function()
+            touchTick(creature, guid)
         end)
         -- C++ DamageTaken :449-450: on heroic mode the phase-2
         -- transition makes her immune to taunt effects
@@ -717,10 +737,10 @@ end
 -- unlike the moorabi Talk arm.
 -- PORTED arm — case SPELL_DARK_TRANSFORMATION_T (70895, :622-625):
 -- DoCastSelf(SPELL_DARK_TRANSFORMATION 70900) non-triggered.
--- InterruptNonMeleeSpells(true) has no bridge on the event-creature
--- method set (StopSpellCast lives only on the session-scoped gossip
--- creature; Go creature casts are packet-only with no cast state, so
--- the interrupt is a net no-op anyway — engine/world/lua_objects.go).
+-- InterruptNonMeleeSpells(true) is bridged on the event-creature
+-- method set (lua_creature_events.go) as the fire-and-forget no-op
+-- twin (svala precedent); Go creature casts are packet-only with no
+-- cast state, so the interrupt is a net no-op anyway.
 -- PORTED arms in the same switch: the :626-629 UpdateEntry
 -- (NPC_DEFORMED_FANATIC) leg is PORTED below (UpdateEntry bridge live
 -- since 2026-10-22; the old "no UpdateEntry bridge" note was stale);
@@ -732,6 +752,10 @@ end
 -- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) stays out.
 local function fanaticSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_TRANSFORMATION_T then
+        -- C++ :623 InterruptNonMeleeSpells(true) before DoCastSelf;
+        -- bridged on the event-creature surface (lua_creature_events.go)
+        -- as the fire-and-forget no-op twin (svala precedent).
+        creature:InterruptNonMeleeSpells(true)
         creature:CastSpell(creature, SPELL_DARK_TRANSFORMATION)
     elseif spellId == SPELL_DARK_TRANSFORMATION then
         -- C++ :626-629 — DoCastSelf(SPELL_FULL_HEAL 17683) non-triggered
@@ -744,10 +768,11 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         creature:UpdateEntry(ENTRY_DEFORMED_FANATIC)
     elseif spellId == SPELL_DARK_MARTYRDOM_T then
         -- C++ :630-634 — me->SetReactState(REACT_PASSIVE) ->
-        -- InterruptNonMeleeSpells(true) (no bridge; Go creature casts are
-        -- packet-only, the interrupt is a net no-op) -> me->AttackStop()
+        -- InterruptNonMeleeSpells(true) (bridged no-op twin) ->
+        -- me->AttackStop()
         -- -> DoCastSelf(SPELL_DARK_MARTYRDOM_FANATIC) non-triggered.
         creature:SetReactState(REACT_PASSIVE)
+        creature:InterruptNonMeleeSpells(true)
         creature:AttackStop()
         creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_FANATIC)
     elseif spellId == SPELL_DARK_MARTYRDOM_FANATIC then
@@ -941,10 +966,10 @@ local function adherentSpellHit(event, creature, caster, spellId)
         creature:UpdateEntry(ENTRY_EMPOWERED_ADHERENT)
     elseif spellId == SPELL_DARK_MARTYRDOM_T then
         -- C++ :719-723 — me->SetReactState(REACT_PASSIVE) ->
-        -- InterruptNonMeleeSpells(true) (no bridge; Go creature casts are
-        -- packet-only, the interrupt is a net no-op) -> me->AttackStop()
-        -- -> DoCastSelf(SPELL_DARK_MARTYRDOM_ADHERENT) non-triggered.
+        -- InterruptNonMeleeSpells(true) (bridged no-op twin) ->
+        -- me->AttackStop() -> DoCastSelf(SPELL_DARK_MARTYRDOM_ADHERENT).
         creature:SetReactState(REACT_PASSIVE)
+        creature:InterruptNonMeleeSpells(true)
         creature:AttackStop()
         creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_ADHERENT)
     elseif spellId == SPELL_DARK_MARTYRDOM_ADHERENT
