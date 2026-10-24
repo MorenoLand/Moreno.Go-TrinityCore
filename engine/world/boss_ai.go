@@ -135,6 +135,12 @@ func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatur
 	if healer != nil && healer.BossAI != nil {
 		healer.BossAI.HealDone(ctx, s, healer, victimGUID, addhealth)
 	}
+	// Lua-scripted bosses have no BossAI, so they observe heals only through
+	// the Go-side heal event, fired after the native hooks so existing hook
+	// order is undisturbed. Read-only: the event cannot rewrite addhealth.
+	if victim != nil && addhealth != nil {
+		s.fireCreatureHealReceived(ctx, victim, healer, *addhealth)
+	}
 }
 
 // fireDealDamageAIHooks mirrors the AI-hook arm of Unit::DealDamage

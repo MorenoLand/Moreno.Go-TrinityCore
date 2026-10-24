@@ -209,8 +209,11 @@ const (
 // RegisterUniqueCreatureEvent. The world engine fires these through
 // TriggerCreatureEvent; scripts use the raw event numbers. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/GlobalMethods.h CreatureEvents,
-// hooks fired in LuaEngine/CreatureHooks.cpp): 11, 16-18, 25, 28-29, 32-33
-// are UNUSED in C++ and carry no Go constant.
+// hooks fired in LuaEngine/CreatureHooks.cpp): 16-18, 25, 28-29, 32-33
+// are UNUSED in C++ and carry no Go constant. 11 is likewise unused by
+// C++ Eluna (CreatureHooks has no heal hook); Go uses it for
+// CreatureEventOnHealReceived, a Go-side extension fired from the
+// Unit::DealHeal AI-hook arm, not a C++ Eluna event.
 const (
 	CreatureEventOnEnterCombat             = 1
 	CreatureEventOnLeaveCombat             = 2
@@ -222,6 +225,7 @@ const (
 	CreatureEventOnReceiveEmote            = 8
 	CreatureEventOnDamageTaken             = 9
 	CreatureEventOnPreCombat               = 10
+	CreatureEventOnHealReceived            = 11
 	CreatureEventOnOwnerAttacked           = 12
 	CreatureEventOnOwnerAttackedAt         = 13
 	CreatureEventOnHitBySpell              = 14

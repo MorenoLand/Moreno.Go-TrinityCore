@@ -45,12 +45,17 @@
 -- boss_valithria_dreamwalker exposes zero bridgeable arms — NOT registered
 -- (the bronjahm npc_corrupted_soul_fragment precedent), 8 Talk() calls
 -- all on unbridged legs:
--- Talk(SAY_VALITHRIA_SUCCESS 7) rides the HealReceived 100%-heal leg with
--- the _done flag (no HealReceived bridge; the DoCastSelf/DoCastAOE /
--- instance->SendEncounterUnit / RemoveAuras / hasLootRecipient +
--- SetLootRecipient(healer) legs have no bridges);
--- Talk(SAY_VALITHRIA_75_PERCENT 2) rides the HealReceived 75%-threshold leg
--- with the _over75PercentTalkDone flag (no HealReceived bridge);
+-- PORTED (2026-10-24): Talk(SAY_VALITHRIA_SUCCESS 7) + Talk(
+-- SAY_VALITHRIA_75_PERCENT 2) ride the HealReceived legs via Go-side
+-- event 11 (fireCreatureHealReceived): the 100% leg ports Talk +
+-- DoCastSelf(SPELL_ACHIEVEMENT_CHECK 72706) + DoCastAOE(
+-- SPELL_DREAMWALKERS_RAGE 71189, self-cast twin) + 3500ms
+-- EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP 71196); still out:
+-- hasLootRecipient/SetLootRecipient(healer), LowerPlayerDamageReq,
+-- instance->SendEncounterUnit, Initialize, lichKing EnterEvadeMode
+-- (instance GUID), and the NOT_STARTED first-heal combat-start leg
+-- (FindNearestCreature archmage + unbridged DoZoneInCombat — the
+-- handler Talks nothing on that branch, matching C++);
 -- PORTED (2026-10-13): Talk(SAY_VALITHRIA_25_PERCENT 3) — the
 -- DamageTaken HealthBelowPctDamaged(25, damage) leg with the
 -- _under25PercentTalkDone latch (event 9; ironaya floored-integer
@@ -121,8 +126,14 @@ local ENTRY_BLISTERING_ZOMBIE = 37934
 local ENTRY_GLUTTONOUS_ABOMINATION = 37886
 
 local SAY_LICH_KING_INTRO = 0
+local SAY_VALITHRIA_75_PERCENT = 2
 local SAY_VALITHRIA_25_PERCENT = 3
 local SAY_VALITHRIA_DEATH = 4
+local SAY_VALITHRIA_SUCCESS = 7
+
+local SPELL_DREAMWALKERS_RAGE = 71189
+local SPELL_DREAM_SLIP = 71196
+local SPELL_ACHIEVEMENT_CHECK = 72706
 
 local SPELL_ACID_BURST = 70744
 local SPELL_ROT_WORM_SPAWNER = 70675
@@ -323,7 +334,42 @@ local function valithriaDamageTaken(_, creature, _, damage)
     return false, damage
 end
 
+-- C++ boss_valithria_dreamwalker::HealReceived (:316-341) — strict
+-- HealthAbovePctHealed (Unit.h:875: health + heal > floor(max*pct/100),
+-- pre-clamp addhealth, ahead of the health gain) chained exactly as C++:
+-- 100% + !_done -> Talk(SAY_VALITHRIA_SUCCESS) + DoCastSelf(
+-- SPELL_ACHIEVEMENT_CHECK) + DoCastAOE(SPELL_DREAMWALKERS_RAGE) +
+-- 3500ms EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP); else 75% +
+-- !_over75PercentTalkDone -> Talk(SAY_VALITHRIA_75_PERCENT); else the
+-- NOT_STARTED combat-start leg (archmage DoZoneInCombat, no bridge)
+-- Talks nothing, so the handler does nothing on that branch. The
+-- _done/_over75PercentTalkDone latches live in valithriaState, so the
+-- event-23 reset clears them (C++ Initialize()).
+local function valithriaHealReceived(_, creature, _, heal)
+    local guid = creature:GetGUID()
+    local st = valithriaState[guid] or {}
+    valithriaState[guid] = st
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local healed = creature:GetHealth() + heal
+    if healed > math.floor(maxHealth * 100 / 100) and not st.done then
+        st.done = true
+        creature:Talk(SAY_VALITHRIA_SUCCESS)
+        creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK)
+        creature:CastSpell(creature, SPELL_DREAMWALKERS_RAGE)
+        schedule(guid, "dream_slip", 3500, function()
+            creature:CastSpell(creature, SPELL_DREAM_SLIP)
+        end)
+    elseif healed > math.floor(maxHealth * 75 / 100) and not st.over75Done then
+        st.over75Done = true
+        creature:Talk(SAY_VALITHRIA_75_PERCENT)
+    end
+end
+
 local function valithriaReset(event, creature)
+    cancelTimers(creature:GetGUID())
     valithriaState[creature:GetGUID()] = nil
     -- C++ boss_valithria_dreamwalker.cpp:288: me->SetReactState(REACT_PASSIVE)
     -- (Reset init arm; no flip anywhere in C++).
@@ -353,6 +399,7 @@ end
 
 RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 11, valithriaHealReceived)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
 RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)

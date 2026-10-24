@@ -2664,6 +2664,28 @@ func (s *Server) fireCreatureDamageTaken(ctx context.Context, motion *creatureMo
 	return damage
 }
 
+// fireCreatureHealReceived dispatches Go-side CREATURE_EVENT_ON_HEAL_RECEIVED
+// (11) for the creature ahead of the health gain, mirroring the AI-hook arm
+// of Unit::DealHeal (Unit.cpp:6299-6304): the victim AI's HealReceived fires
+// on the pre-clamp addhealth. C++ Eluna has no heal hook, so this event is a
+// Go extension, not a C++ Eluna event; it is read-only — handler returns are
+// ignored, unlike DamageTaken's rewrite, because no Lua consumer adjusts heals
+// and C++ HealReceived's heal-adjustment capability has no Eluna twin to
+// mirror. Args are (event, creature, healer, heal); the healer is the healer
+// creature object, or nil when the healer is a player (no player object is
+// available at the fire site). Fires only for entry handlers; unique-handler
+// dispatch is unnecessary here because no per-GUID heal consumer exists.
+func (s *Server) fireCreatureHealReceived(ctx context.Context, victim, healer *creatureMotion, heal uint32) {
+	if s == nil || victim == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	var healerObj any
+	if healer != nil {
+		healerObj = s.luaMotionCreature(healer)
+	}
+	s.fireCreatureLuaEvent(ctx, victim, scripting.CreatureEventOnHealReceived, healerObj, heal)
+}
+
 // fireCreatureCorpseRemoved dispatches Eluna CREATURE_EVENT_ON_CORPSE_REMOVED
 // (26) with the pending respawn delay. C++ (Eluna::CorpseRemoved,
 // CreatureHooks.cpp:236-265, fired from Creature::RemoveCorpse via
