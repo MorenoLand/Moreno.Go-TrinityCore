@@ -166,6 +166,8 @@ local KAEL_SAY_SLAY = 9
 local KAEL_SAY_DEATH = 13
 
 local ENTRY_KAELTHAS = 19622
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local ENTRY_THALADRED = 20064
 local ENTRY_SANGUINAR = 20060
 local ENTRY_CAPERNIAN = 20062
@@ -261,8 +263,12 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 9, function(_, creature, attacker)
 end)
 
 -- C++ Reset equivalent for the latch (the ctor / DATA_KAELTHAS
--- bookkeeping has no instance bridge).
+-- bookkeeping has no instance bridge) + C++ boss_kaelthasAI::Reset
+-- (boss_kaelthas.cpp:458): RemoveFlag NOT_SELECTABLE, unconditional
+-- (the DoAction PREPARE_ADVISORS / emotestate / gravity / scale legs
+-- stay out with their unbridged machines).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     kaelPreEncounter[creature:GetGUID()] = nil
 end)
 

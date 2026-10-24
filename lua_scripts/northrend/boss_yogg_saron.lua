@@ -571,6 +571,8 @@ local ENTRY_INFLUENCE_TENTACLE = 33943
 local ENTRY_SUIT_OF_ARMOR = 33433
 local ENTRY_OMINOUS_CLOUD = 33292
 local ENTRY_BRAIN_OF_YOGG_SARON = 33890
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local ENTRY_TURNED_CHAMPION = 33962
 local ENTRY_OBSERVATION_RING_KEEPER_HODIR = 33213
 local ENTRY_OBSERVATION_RING_KEEPER_FREYA = 33241
@@ -689,13 +691,16 @@ local function ominousCloudReset(event, creature)
     end
 end
 
--- C++ boss_brain_of_yogg_saronAI::Reset (:1061-1066): DoCast(me,
--- SPELL_MATCH_HEALTH 64066) (2-arg, non-triggered, ungated) —
--- event 23. The RemoveFlag/SetImmuneToPC/_summons.DespawnAll legs
--- and DamageTaken legs (:1070-1080, triggered casts + DoAction
--- machine) stay out.
+-- C++ boss_brain_of_yogg_saronAI::Reset (:1061-1066): RemoveFlag
+-- NOT_SELECTABLE + DoCast(me, SPELL_MATCH_HEALTH 64066)
+-- (2-arg, non-triggered, ungated) — event 23. The
+-- SetImmuneToPC/_summons.DespawnAll legs and DamageTaken legs
+-- (:1070-1080, triggered casts + DoAction machine) stay out.
 local function brainReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset: RemoveFlag NOT_SELECTABLE (:1063), ungated,
+    -- before the MATCH_HEALTH cast (:1065).
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     -- C++ Reset: DoCast(me, MATCH_HEALTH)
     -- (boss_yogg_saron.cpp:1065). Alive-gated.
     if creature:IsAlive() then

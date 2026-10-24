@@ -122,6 +122,8 @@
 -- no SpellScript / AuraScript / ConditionScript / achievement bridges.
 
 local ENTRY_THORIM = 32865
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_RENAME = 0x00000010
 local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
 local ENTRY_DARK_RUNE_WARBRINGER = 32877
@@ -226,6 +228,24 @@ end
 local function thorimTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
+    end
+end
+
+-- C++ boss_thorimAI::DamageTaken else-if (boss_thorim.cpp:940-943):
+-- HealthBelowPctDamaged(1, damage) -> damage = 0 + FinishEncounter().
+-- Only the SetFlag(UNIT_FLAG_RENAME) leg (:579) is ported here; the
+-- faction/credit/attack-stop/Talk legs of FinishEncounter stay out.
+-- The phase-1 jumpdown branch is the else-if's guard in C++, but it
+-- cannot fire this arm: Thorim enters phase 1 at full health, so no
+-- single hit can cross 99% of max health — the arm is effectively
+-- phase-2-only. The RENAME set is idempotent, so no latch is needed
+-- (repeated sub-1% hits re-zero, the same outcome as C++'s
+-- friendly-faction leg, which has no bridge).
+local function thorimDamageTaken(event, creature, attacker, damage)
+    local postDamage = creature:GetHealth() - damage
+    if postDamage < creature:GetMaxHealth() / 100 then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
+        return false, 0
     end
 end
 
@@ -352,6 +372,7 @@ RegisterCreatureEvent(ENTRY_THORIM, 1, thorimEnterCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 2, thorimLeaveCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 3, thorimTargetDied)
 RegisterCreatureEvent(ENTRY_THORIM, 4, thorimDied)
+RegisterCreatureEvent(ENTRY_THORIM, 9, thorimDamageTaken)
 RegisterCreatureEvent(ENTRY_THORIM, 23, thorimReset)
 
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 1, colossusEnterCombat)

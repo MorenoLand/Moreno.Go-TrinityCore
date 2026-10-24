@@ -126,6 +126,10 @@ local SAY_DEATH = 2
 local SAY_ENRAGE = 4
 
 local SPELL_WATER_BLAST = 54237
+local SPELL_WATER_GLOBULE_VISUAL = 54260
+local SPELL_WATER_GLOBULE_TRANSFORM = 54268
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local SPELL_WATER_BOLT_VOLLEY = 54241
 local SPELL_THREAT_PROC = 61732
 local SPELL_FRENZY = 54312
@@ -315,9 +319,24 @@ local function ichorGlobuleCleanup(event, creature)
     ichorSplashLatch[creature:GetGUID()] = nil
 end
 
+-- C++ npc_ichor_globuleAI::SpellHit (boss_ichoron.cpp:253-264):
+-- caster->ToUnit() gate + spellId == WATER_GLOBULE_VISUAL ->
+-- DoCast(me, WATER_GLOBULE_TRANSFORM) + RemoveFlag NOT_SELECTABLE.
+-- The MoveFollow(unitCaster) leg stays out (no motion bridge).
+-- Inert today like the globule DamageTaken port: globules spawn
+-- from the unported spell_ichoron_splatter AuraScript.
+local function ichorGlobuleSpellHit(event, creature, caster, spellId)
+    if caster == nil or spellId ~= SPELL_WATER_GLOBULE_VISUAL then
+        return
+    end
+    creature:CastSpell(creature, SPELL_WATER_GLOBULE_TRANSFORM)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 2, ichorGlobuleCleanup)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 4, ichorGlobuleCleanup)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 9, ichorGlobuleDamageTaken)
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 14, ichorGlobuleSpellHit)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 23, ichorGlobuleCleanup)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_ichoron.cpp:291: empty UpdateAI in C++ (never melees)
