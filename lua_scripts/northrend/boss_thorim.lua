@@ -73,7 +73,7 @@
 -- the 'no summon bridge / summon machine' wording is stale — creature:
 -- SummonCreature fires CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19)
 -- on the summoner (lua_creature_events.go:766) and SetReactState IS
--- bridged (frozen_core precedent) — the arms stay out on the
+-- bridged (frozen_core precedent) — the dark-rune arms stay out on the
 -- TrashJumpEvent legs (:386-410): stage-1 DoZoneInCombat + SetBoundary
 -- and the SPELL_LEAP movement — without them the pre-phase adds would
 -- stand passive forever (2026-10-23: re-evaluated against the live
@@ -131,6 +131,8 @@ local UNIT_FLAG_RENAME = 0x00000010
 local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
 local ENTRY_DARK_RUNE_WARBRINGER = 32877
+local ENTRY_LIGHTNING_ORB = 33138 -- ulduar.h:189
+local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
 local SAY_SLAY = 4
@@ -375,12 +377,26 @@ local function giantDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustSummoned NPC_LIGHTNING_ORB (boss_thorim.cpp:649-663):
+-- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_LIGHTNING_DESTRUCTION
+-- 62393, triggered) in C++ order; the spline-path movement leg has no bridge.
+-- LATENT: orbs spawn only from the unported SPELL_SUMMON_LIGHTNING_ORB 62391
+-- spell-summon (anubrekhan latent precedent). NOTE: TrashJumpEvent (:386-410)
+-- clears only dark-rune trash, not the orb — the orb stays passive in C++ too.
+local function thorimJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_LIGHTNING_ORB then
+        summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:CastSpell(summoned, SPELL_LIGHTNING_DESTRUCTION, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THORIM, 1, thorimEnterCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 2, thorimLeaveCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 3, thorimTargetDied)
 RegisterCreatureEvent(ENTRY_THORIM, 4, thorimDied)
 RegisterCreatureEvent(ENTRY_THORIM, 9, thorimDamageTaken)
 RegisterCreatureEvent(ENTRY_THORIM, 23, thorimReset)
+RegisterCreatureEvent(ENTRY_THORIM, 19, thorimJustSummoned)
 
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 1, colossusEnterCombat)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 2, colossusLeaveCombat)

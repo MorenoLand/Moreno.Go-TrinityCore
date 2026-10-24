@@ -66,8 +66,10 @@
 -- boss_anubarak_trial JustSummoned NPC_BURROW 34862 leg —
 -- SetDisplayId (display bridge live 2026-10-20) +
 -- SetReactState(REACT_PASSIVE) (react bridge exists) +
--- Churning Ground self-cast (rides the unbridged summon — the
--- summon never exists, the true blocker); JustSummoned
+-- Churning Ground self-cast — PORTED 2026-10-24 (anubarakJustSummoned,
+-- ev19, LATENT per the anubrekhan precedent: burrows spawn only from
+-- the unported EVENT_SUMMON_NERUBIAN spell-summon, so the arm fires
+-- only if a future path summons via anubarak); JustSummoned
 -- NPC_SPIKE 34660 leg —
 -- SelectTarget(Random,0,0.0f,true) -> EngageWithTarget (no
 -- random-target SelectTarget bridge — cairne/kazzak precedent) +
@@ -224,6 +226,8 @@ local ENTRY_SWARM_SCARAB = 34605
 local ENTRY_SPIKE = 34660
 local NPC_FROST_SPHERE = 34606
 local NPC_BURROWER = 34607
+local NPC_BURROW = 34862 -- boss_anubarak_trial.cpp:52
+local SPELL_CHURNING_GROUND = 66969 -- boss_anubarak_trial.cpp:74
 local FACTION_PREY = 31 -- SharedDefines.h
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -377,9 +381,25 @@ local function anubarakReachHome(event, creature)
     end
 end
 
+-- C++ JustSummoned NPC_BURROW (boss_anubarak_trial.cpp:253-257):
+-- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_CHURNING_GROUND
+-- 66969, non-triggered) + SetDisplayId(Modelid2) in C++ order; the
+-- _burrowGUID push is summons bookkeeping with no Lua twin. LATENT:
+-- burrows spawn only from the unported EVENT_SUMMON_NERUBIAN spell-summon
+-- (anubrekhan latent precedent). The spike case stays out (random-target
+-- EngageWithTarget + Talk unbridged).
+local function anubarakJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == NPC_BURROW then
+        summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:CastSpell(summoned, SPELL_CHURNING_GROUND)
+        summoned:SetDisplayId(summoned:GetTemplateModelId(2))
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 24, anubarakReachHome)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 9, anubarakDamageTaken)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 19, anubarakJustSummoned)
 
 RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)

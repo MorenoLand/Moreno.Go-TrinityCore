@@ -111,8 +111,9 @@
 -- JustSummoned — BossAI::JustSummoned + NPC_PLANAR_ANOMALY
 -- 30879: CombatStop + REACT_PASSIVE ARE bridged 2026-10-24
 -- (lua_creature_events.go); MoveRandom(100.0f) still has no bridge
--- — and the arm stays out on summon delivery regardless (the
--- anomalies are never delivered, so event 16 could never fire). SummonedCreatureDespawn —
+-- — PORTED 2026-10-24 (eregosJustSummoned, ev19, LATENT per the
+-- anubrekhan precedent: anomalies are never delivered yet, so the arm
+-- fires only if a future path summons via eregos). SummonedCreatureDespawn —
 -- NPC_PLANAR_ANOMALY: CastSpell(summon, SPELL_PLANAR_BLAST
 -- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — stays
 -- out on the missing summon delivery, not on the hook: event 20
@@ -133,6 +134,7 @@
 -- joins the unmodeled-achievement queue.
 
 local ENTRY_EREGOS = 27656
+local ENTRY_PLANAR_ANOMALY = 30879 -- boss_eregos.cpp:59
 
 local SAY_AGGRO = 1
 local SAY_KILL = 3
@@ -259,8 +261,21 @@ local function eregosDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustSummoned NPC_PLANAR_ANOMALY (boss_eregos.cpp:160-170):
+-- CombatStop(true) + SetReactState(REACT_PASSIVE) in C++ order; the
+-- MoveRandom(100.0f) leg has no bridge. LATENT: anomalies spawn only
+-- from the unported SPELL_PLANAR_ANOMALIES 57959 spell-summon
+-- (anubrekhan latent precedent).
+local function eregosJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
+        summoned:CombatStop(true)
+        summoned:SetReactState(0) -- REACT_PASSIVE
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EREGOS, 1, eregosEnterCombat)
 RegisterCreatureEvent(ENTRY_EREGOS, 2, eregosCombatEnd)
 RegisterCreatureEvent(ENTRY_EREGOS, 3, eregosTargetDied)
 RegisterCreatureEvent(ENTRY_EREGOS, 4, eregosDied)
 RegisterCreatureEvent(ENTRY_EREGOS, 23, eregosCombatEnd)
+RegisterCreatureEvent(ENTRY_EREGOS, 19, eregosJustSummoned)

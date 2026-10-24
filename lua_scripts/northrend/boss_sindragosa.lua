@@ -121,6 +121,7 @@ local ENTRY_SINDRAGOSA = 36853
 local ENTRY_SPINESTALKER = 37534 -- icecrown_citadel.h:305
 local ENTRY_RIMEFANG = 37533 -- icecrown_citadel.h:306
 local ENTRY_FROSTWARDEN_HANDLER = 37531 -- icecrown_citadel.h:307
+local ENTRY_FROST_BOMB = 37186 -- icecrown_citadel.h:310
 
 local SAY_AGGRO = 0
 local SAY_KILL = 8
@@ -131,6 +132,8 @@ local SAY_PHASE_2 = 6
 
 local SPELL_TANK_MARKER = 71039
 local SPELL_MYSTIC_BUFFET = 70128
+local SPELL_FROST_BOMB_VISUAL = 70022 -- boss_sindragosa.cpp:74
+local SPELL_BIRTH_NO_VISUAL = 40031 -- boss_sindragosa.cpp:75
 local SPELL_ICE_TOMB_TARGET = 69712
 
 local sindragosaThirdPhase = {}
@@ -409,6 +412,19 @@ local function addReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustSummoned NPC_FROST_BOMB (boss_sindragosa.cpp:413-421):
+-- CastSpell(summon, SPELL_FROST_BOMB_VISUAL 70022, triggered) +
+-- CastSpell(summon, SPELL_BIRTH_NO_VISUAL 40031, triggered) in C++ order;
+-- the 5500ms FrostBombExplosion BasicEvent (SPELL_FROST_BOMB 69845 +
+-- visual removal) has no bridge. LATENT: frost bombs spawn only from the
+-- unported air-phase summon machine (anubrekhan latent precedent).
+local function sindragosaJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_FROST_BOMB then
+        summoned:CastSpell(summoned, SPELL_FROST_BOMB_VISUAL, true)
+        summoned:CastSpell(summoned, SPELL_BIRTH_NO_VISUAL, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 1, sindragosaJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 2, sindragosaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
@@ -416,6 +432,7 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 9, sindragosaDamageTaken)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 24, sindragosaReachHome)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 19, sindragosaJustSummoned)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 1, spinestalkerEnterCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 23, addReset)
