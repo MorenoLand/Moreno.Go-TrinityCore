@@ -801,8 +801,9 @@ end
 -- triggered self-cast shadow prison 40647, Talk 500ms, summon
 -- maiev (cast kept, summon unmodeled) 9s, confront text 9s,
 -- resume combat 13s re-arming the phase-4 schedule. The REACT_
--- PASSIVE arm is PORTED 2026-10-20 — creature:SetReactState; the
--- flag and summon-DoAction arms have no bridges.
+-- PASSIVE, AttackStop and flag arms are PORTED —
+-- creature:SetReactState, creature:AttackStop, creature:SetFlag;
+-- the summon-DoAction arm has no bridge.
 local function startPhase4(creature, guid)
     cancelPhaseSchedule(guid)
     -- The air-phase timers are canceled here too: the both-flames-
@@ -813,13 +814,16 @@ local function startPhase4(creature, guid)
     cancelAirPhase(guid)
     creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
     -- C++ boss_illidan.cpp:626: me->SetReactState(REACT_PASSIVE)
-    -- (ACTION_START_PHASE_4: the summons.DoAction/AttackStop/SetFlag co-arms
-    -- stay out on no-bridge grounds; the flip fires unconditionally here).
+    -- (ACTION_START_PHASE_4: the summons.DoAction co-arm stays out
+    -- on no-bridge grounds; the flip fires unconditionally here).
     creature:SetReactState(0) -- REACT_PASSIVE
+    -- C++ boss_illidan.cpp:627: me->AttackStop(), in C++ arm order
+    -- between the react flip and the flag set.
+    creature:AttackStop()
     -- C++ boss_illidan.cpp:628: SetFlag(UNIT_FIELD_FLAGS,
-    -- UNIT_FLAG_NOT_SELECTABLE), in C++ arm order after the react
-    -- flip (AttackStop has no bridge); he lands but cannot be
-    -- targeted until Maiev's confrontation ends.
+    -- UNIT_FLAG_NOT_SELECTABLE), in C++ arm order after the
+    -- AttackStop; he lands but cannot be targeted until Maiev's
+    -- confrontation ends.
     creature:SetFlag(59, 0x2000000)
     schedule(guid, "shadowPrisonText", 500, function()
         creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
@@ -935,13 +939,17 @@ local function illidanDamageTaken(event, creature, attacker, damage)
         state.phase = PHASE_4
         if state.isDemon then
             state.isDemon = false
-            -- C++ boss_illidan.cpp:751-753 order: _isDemon=false,
+            -- C++ boss_illidan.cpp:751-754 order: _isDemon=false,
             -- SetControlled(false, UNIT_STATE_ROOT), then the
-            -- demon event-group cancel (the interrupt arm has no
-            -- bridge; the pending 72s cancel-demon timer is kept,
-            -- C++-exact).
+            -- demon event-group cancel, then the interrupt arm
+            -- (ported below; the pending 72s cancel-demon timer
+            -- is kept, C++-exact).
             creature:SetRooted(false)
             cancelPhaseSchedule(guid)
+            -- C++ boss_illidan.cpp:754:
+            -- me->InterruptNonMeleeSpells(false), between the demon
+            -- event-group cancel and the transform self-cast.
+            creature:InterruptNonMeleeSpells(false)
             creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1,
                 true)
             schedule(guid, "phase4delayed", 12000, function()

@@ -30,8 +30,8 @@
 -- melee during the fly-phase timer chain exactly like C++ (no melee
 -- while airborne); the gravity flips port via the bridged
 -- creature:SetDisableGravity (liftoff on, touchdown off), while
--- AttackStop (ported above) and the interrupt-casts leg (no bridge)
--- split. No gameobject event dispatch
+-- AttackStop and the interrupt-casts leg (both ported at
+-- startPhaseFly below) split. No gameobject event dispatch
 -- exists in the engine, so the go_blackened_urn gossip arm (entry 194092)
 -- and the intro (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
 -- are not modeled: the port starts directly at the landing combat state.
@@ -305,6 +305,10 @@ local function startPhaseFly(creature, guid)
     st.phase = PHASE_FLY
     creature:Talk(YELL_FLY_PHASE)
     cancelPrefix(guid, "g_")
+    -- C++ StartPhaseFly (boss_nightbane.cpp:257):
+    -- me->InterruptNonMeleeSpells(false), between the ground-group
+    -- cancel and the liftoff emote.
+    creature:InterruptNonMeleeSpells(false)
     -- C++ StartPhaseFly (boss_nightbane.cpp:258):
     -- me->HandleEmoteCommand(EMOTE_ONESHOT_LIFTOFF) (SharedDefines.h:2003,
     -- value 254), between the interrupt and the gravity legs.
