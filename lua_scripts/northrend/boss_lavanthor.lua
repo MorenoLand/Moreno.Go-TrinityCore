@@ -45,9 +45,9 @@
 -- stale — IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- the cyanigosa mana-destruction port).
 -- DOCUMENTED DEVIATIONS:
--- The SelectTarget distance filters (40.0f :68, 50.0f :81) have no
--- bridge — the randomPlayer pool (alive same-map/instance players,
--- the keleseth / thorim precedent) ignores distance.
+-- The SelectTarget distance filters are PORTED (firebolt 40.0f :68
+-- player-only, lava-burn 50.0f :81) via the GetDistance filter on
+-- randomPlayer (cyanigosa / eadric precedent).
 -- C++ SelectTarget defaults playerOnly=FALSE (UnitAI.h:170), so the
 -- lava-burn pool (:82) can include pets/totems; Lua's player-only
 -- enumeration is the documented approximation (the tuten_kash
@@ -91,16 +91,17 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance; the distance filters are
--- unbridged (documented in the header; the keleseth / thorim
--- precedent).
-local function randomPlayer(creature)
+-- players on the same map/instance; maxDist narrows to the C++
+-- distance filter (cyanigosa / eadric precedent: creature:GetDistance
+-- on the player object); nil maxDist keeps the unfiltered pool.
+local function randomPlayer(creature, maxDist)
     local mapId = creature:GetMapId()
     local instanceId = creature:GetInstanceId()
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+                and not plr:IsDead()
+                and (not maxDist or creature:GetDistance(plr) <= maxDist) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -113,7 +114,7 @@ end
 -- C++ ScheduleTasks firebolt leg (:67-72): DoCast(target,
 -- SPELL_FIREBOLT), 2-arg = non-triggered; init 1s, re-arm 5-13s.
 local function fireboltTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomPlayer(creature, 40.0)
     if target then
         creature:CastSpell(target, SPELL_FIREBOLT)
     end
@@ -135,7 +136,7 @@ end
 -- C++ ScheduleTasks lava-burn leg (:80-85): DoCast(target,
 -- SPELL_LAVA_BURN), 2-arg = non-triggered; init 10s, re-arm 15-23s.
 local function lavaBurnTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomPlayer(creature, 50.0)
     if target then
         creature:CastSpell(target, SPELL_LAVA_BURN)
     end

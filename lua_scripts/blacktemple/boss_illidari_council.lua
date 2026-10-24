@@ -140,10 +140,11 @@
 -- (BossAI::JustEngagedWith/JustDied/Reset, the DATA_ILLIDARI_
 -- COUNCIL and DATA_GATHIOS/ZEREVOR/MALANDE/VERAS bookkeeping
 -- arms skipped); Talk(SAY_COUNCIL_COMNT) cross-member comments
--- and the controller's Talk-on-random-member arms have no cross-
--- creature bridge — skipped; no creature enumeration bridge —
--- the controller's SendEncounterUnit arms and the member lookup
--- arms (instance->GetCreature(DATA_*)) have no bearer; no summon
+-- and the controller's Talk-on-random-member arms are PORTED via
+-- GetCreaturesInGrid (KilledUnit section below); the controller's
+-- SendEncounterUnit arms (encounter-frame UI) and the member
+-- EnterEvadeMode relay (boss_illidari_council.cpp:274) have no
+-- bearer — no instance/evade bridge; no summon
 -- bridge — SummonCreatureGroup(SUMMON_COUNCIL_GROUP) unmodeled;
 -- the 41342 shared-rule Nil-target cast has no heal-hook bearer;
 -- the boundary/setActive arms have no

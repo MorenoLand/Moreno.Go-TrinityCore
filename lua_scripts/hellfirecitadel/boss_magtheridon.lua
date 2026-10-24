@@ -120,8 +120,11 @@
 -- magtheridonEnterCombat (boss_magtheridon.cpp:254); the channeler REACT_DEFENSIVE arm
 -- is PORTED 2026-10-20 (creature:SetReactState);
 -- no distance bridge — the
--- quake/blaze SPELLVALUE target-count args and the DoSelectBelowHpPctFriendly
--- dark-mending pick (no creature-enumeration bridge) unmodeled
+-- quake/blaze SPELLVALUE target-count args stay unmodeled; the
+-- DoSelectBelowHpPctFriendly dark-mending pick is PORTED below
+-- (channelerCheckFriend: 1s pump, 17256/30yd/HealthBelowPct(51)
+-- grid pick, non-triggered 30528, {10s,20s} re-enable latch;
+-- boss_magtheridon.cpp:395-407, GridNotifiers.h:855-867)
 -- (the channeler InterruptNonMeleeSpells leg is PORTED above);
 -- the "no SpellHitTarget bridge / event 15 never fires" claim is
 -- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
@@ -170,6 +173,7 @@ local SPELL_SHADOW_BOLT_VOLLEY = 30510
 local SPELL_FEAR = 30530
 local SPELL_ABYSSAL = 30511
 local SPELL_SOUL_TRANSFER = 30531
+local SPELL_DARK_MENDING = 30528
 local SPELL_SHADOW_CAGE = 30168
 
 local SAY_TAUNT = 0
@@ -187,6 +191,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- boss_magtheridon.cpp:253
 local timers = {}
 local magState = {}
 local chanState = {}
+local chanCanMend = {}
 local roomTimers = {}
 
 local function cancelTimers(guid)
@@ -429,6 +434,7 @@ local function channelerReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = nil
+    chanCanMend[guid] = nil
     -- C++ Reset: non-triggered self-cast (Reset-only arm,
     -- boss_magtheridon.cpp). Event 23 fires on death too (engine
     -- reset-then-died order) but C++ Reset() never runs on death,
@@ -441,6 +447,38 @@ local function channelerReset(event, creature)
     end
 end
 
+-- C++ npc_hellfire_channelerAI::EVENT_CHECK_FRIEND (boss_magtheridon.cpp:395-403,
+-- init 1s, Repeat 1s): if _canCastDarkMending, target =
+-- DoSelectBelowHpPctFriendlyWithEntry(17256, 30.0f, 51, false) -> friendly
+-- 17256 within 30yd, alive, in combat, HealthBelowPct(51)
+-- (GridNotifiers.h:855-867); non-triggered DoCast(30528), latch false,
+-- EVENT_DARK_MENDING {10s,20s} re-enables. C++ pick is grid-visit-last
+-- (unspecified order); Lua takes the first GUID-sorted grid match.
+-- Hostility gate vacuous: entry-filtered 17256 peers share faction
+-- (IsHostileTo has no creature-surface bridge). UpdateAI casting gate
+-- unmodeled (jeklik convention).
+local function channelerCheckFriend(creature, guid)
+    if chanCanMend[guid] then
+        local target = nil
+        for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_CHANNELER, 30.0)) do
+            if not other:IsDead() and other:IsInCombat() and other:GetHealthPct() < 51 then
+                target = other
+                break
+            end
+        end
+        if target then
+            creature:CastSpell(target, SPELL_DARK_MENDING)
+            chanCanMend[guid] = false
+            schedule(guid, "darkmending", math.random(10000, 20000), function()
+                chanCanMend[guid] = true
+            end)
+        end
+    end
+    schedule(guid, "checkfriend", 1000, function()
+        channelerCheckFriend(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: the magtheridon DoAction relay is
 -- cross-creature blocked (header); the interrupt arm is PORTED
 -- (boss_magtheridon.cpp:335, first in arm order).
@@ -449,6 +487,10 @@ local function channelerEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = true
+    chanCanMend[guid] = true
+    schedule(guid, "checkfriend", 1000, function()
+        channelerCheckFriend(creature, guid)
+    end)
     schedule(guid, "shadowbolt", 20000, function()
         channelerShadowBolt(creature, guid)
     end)
@@ -468,12 +510,14 @@ local function channelerDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = nil
+    chanCanMend[guid] = nil
 end
 
 local function channelerLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = nil
+    chanCanMend[guid] = nil
 end
 
 -- C++ npc_hellfire_channelerAI::JustSummoned (boss_magtheridon.cpp:356-362):
