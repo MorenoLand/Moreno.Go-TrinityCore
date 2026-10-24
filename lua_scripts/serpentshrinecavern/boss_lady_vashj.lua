@@ -99,7 +99,8 @@
 -- NOT_SELECTABLE flag — are PORTED below via a new ev23
 -- registration (display/flag bridges live 2026-10-20)),
 -- and the tainted-elemental
--- JustDied -> EventTaintedElementalDeath relay (unmodeled); no
+-- JustDied -> EventTaintedElementalDeath relay PORTED below
+-- (FindNearestCreature + timer clamp); no
 -- threat bridge — the melee-range check is the 5-yd player
 -- stand-in; the JustEngagedWith AddThreat(0.1f) arm is dropped;
 -- no item bridges for item_tainted_core (Tainted Core 31088):
@@ -391,8 +392,8 @@ local function vashjTick(creature, guid)
         -- Tainted elementals (:488-495): SummonCreature(TAINTED_
         -- ELEMENTAL 22009 at ElementPos[rand8], TEMPSUMMON_DEAD_DESPAWN
         -- Eluna type 6); re-arm 120000 (C++-exact). Delta: the
-        -- EventTaintedElementalDeath 50s-after-death re-arm has no
-        -- cross-AI bridge — unmodeled.
+        -- EventTaintedElementalDeath 50s-after-death clamp is PORTED
+        -- in elementalDied below (FindNearestCreature + min(timer, 50000)).
         if st.taintedElemental <= 1000 then
             local pos = ELEMENT_POSITIONS[math.random(1, 8)]
             creature:SummonCreature(ENTRY_TAINTED_ELEMENTAL,
@@ -538,9 +539,27 @@ local function elementalCleanup(event, creature)
     resetElemental(creature:GetGUID())
 end
 
+-- C++ npc_tainted_elemental::JustDied (boss_lady_vashj.cpp:685):
+-- instance->GetGuidData(DATA_LADYVASHJ) -> EventTaintedElementalDeath
+-- -> TaintedElementalTimer = min(timer, 50000) ("the next will spawn
+-- 50 seconds after the previous one's death"). The receiver lookup is
+-- bridged: FindNearestCreature (maulgar precedent) returns the live
+-- vashj, nil when dead or absent; vashjState is shared in-file, so the
+-- clamp lands directly on the pump's countdown.
+local function elementalDied(event, creature)
+    resetElemental(creature:GetGUID())
+    local vashj = creature:FindNearestCreature(ENTRY_LADY_VASHJ, 100.0)
+    if vashj ~= nil then
+        local st = vashjState[vashj:GetGUID()]
+        if st ~= nil and st.taintedElemental ~= nil and st.taintedElemental > 50000 then
+            st.taintedElemental = 50000
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 1, elementalEnterCombat)
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 2, elementalCleanup)
-RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 4, elementalCleanup)
+RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 4, elementalDied)
 RegisterCreatureEvent(ENTRY_TAINTED_ELEMENTAL, 23, elementalCleanup)
 
 -- C++ npc_shield_generator_channel::Reset (boss_lady_vashj.cpp:853-859):

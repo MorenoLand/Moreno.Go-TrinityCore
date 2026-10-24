@@ -16,8 +16,8 @@
 -- gate in C++, C++-exact), SAY_DEATH=6 (death). SAY_GAIN_
 -- BLESSING=1 is defined but never called in C++ (documented
 -- only); SAY_GAIN_ABILITY1..3 (2/3/4) fire in the
--- EventSharkkis/Tidalvess/CaribdisDeath relays, which are
--- cross-creature blocked (below). The advisors have no Talk
+-- EventSharkkis/Tidalvess/CaribdisDeath relays, PORTED
+-- below via FindNearestCreature (maulgar precedent). The advisors have no Talk
 -- calls in C++. Eluna creature events: 1 OnEnterCombat, 2
 -- OnLeaveCombat, 3 OnTargetDied, 4 OnDied, 23 OnReset. Timers
 -- via CreateLuaEvent (per-GUID named schedule helper); melee is
@@ -42,9 +42,8 @@
 -- repeat, non-triggered self-cast (C++-exact). Blessing of the
 -- Tides: once-guarded at <=75% health (C++-exact) — non-
 -- triggered self-cast 38449; the C++ "at least one advisor
--- alive" precondition has no cross-creature bridge (the advisor
--- DoAction EventSharkkis/Tidalvess/CaribdisDeath relays and the
--- advisors' GUID bookkeeping live in the instance script), and
+-- alive" precondition has no cross-creature bridge (the advisors'
+-- GUID bookkeeping lives in the instance script), and
 -- the me->Yell(raw string) arm has no raw-text speech bridge
 -- (gurtogg convention) — documented; DoPlaySoundToSet(11278) is
 -- ported via creature:PlayDirectSound.
@@ -66,8 +65,8 @@
 -- bridge); the 10s one-shot pet arm (DoSpawnCreature lurker
 -- 22119 / sporebat 22120, pet_id by urand(0,1)) has no summon
 -- bridge — unmodeled (firesworn convention). OnDied(4):
--- cleanup — the JustDied EventSharkkisDeath relay into
--- Karathress is cross-creature blocked. OnLeaveCombat(2)/
+-- cleanup + PORTED JustDied EventSharkkisDeath relay into
+-- Karathress (FindNearestCreature + Talk + self-cast). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the evade-
 -- side pet KillSelf arm is summon-blocked).
 -- Tidalvess (21965). OnEnterCombat(1): per-GUID scheduler reset
@@ -86,7 +85,7 @@
 -- then 30s, non-triggered self-cast; earthbind totem 38304 45s
 -- then 45s, non-triggered self-cast (cast despite the C++
 -- "Spell obsolete" comment — C++-exact). OnDied(4): cleanup
--- (EventTidalvessDeath relay blocked). OnLeaveCombat(2)/
+-- (EventTidalvessDeath relay PORTED — see relayAdvisorDeath). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- Caribdis (21964). OnEnterCombat(1): per-GUID scheduler reset
 -- to the C++ Initialize() values + 1s pump. Pump: water bolt
@@ -106,7 +105,7 @@
 -- cpp:656-673), PORTED in karathressTick; the commented-out
 -- DoCast(SPELL_SUMMON_CYCLONE) is the boss's own dead line.)
 -- OnDied(4):
--- cleanup (EventCaribdisDeath relay blocked). OnLeaveCombat(2)/
+-- cleanup + PORTED EventCaribdisDeath relay (relayAdvisorDeath). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
@@ -115,10 +114,9 @@
 -- DATA_KARATHRESS/DATA_SHARKKIS/DATA_TIDALVESS/DATA_CARIBDIS
 -- advisor GUID bookkeeping, the starter-target re-engage arm,
 -- the evade-mode event reset and the advisor respawn arms
--- skipped); no cross-creature bridge — the advisor-death DoAction
--- relays (EventSharkkis/Tidalvess/CaribdisDeath: Talk(SAY_GAIN_
--- ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455 / TIDALVESS
--- 38452 / CARIBDIS 38451) unmodeled; no summon bridge — the
+-- skipped); advisor-death relays PORTED below (FindNearestCreature
+-- + Talk(SAY_GAIN_ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455
+-- / TIDALVESS 38452 / CARIBDIS 38451); no summon bridge — the
 -- sharkkis pet spawns stay unmodeled (the Seer Olum quest-10944
 -- summon is PORTED in karathressDied; the boss's own cyclone 30-40s
 -- arm is PORTED in karathressTick); no movement/
@@ -155,9 +153,16 @@ local SPELL_WATER_BOLT_VOLLEY = 38335
 local SPELL_TIDAL_SURGE = 38358
 local SPELL_HEAL = 38330
 
+local SPELL_POWER_OF_SHARKKIS = 38455 -- boss_fathomlord_karathress.cpp:45
+local SPELL_POWER_OF_TIDALVESS = 38452 -- boss_fathomlord_karathress.cpp:46
+local SPELL_POWER_OF_CARIBDIS = 38451 -- boss_fathomlord_karathress.cpp:47
+
 local SAY_AGGRO = 0
 local SAY_SLAY = 5
 local SAY_DEATH = 6
+local SAY_GAIN_ABILITY1 = 2 -- boss_fathomlord_karathress.cpp:37
+local SAY_GAIN_ABILITY2 = 3 -- boss_fathomlord_karathress.cpp:38
+local SAY_GAIN_ABILITY3 = 4 -- boss_fathomlord_karathress.cpp:39
 
 local CREATURE_CYCLONE = 22104 -- boss_fathomlord_karathress.cpp:56
 local UNIT_FIELD_FLAGS = 59 -- SharedDefines.h
@@ -373,8 +378,25 @@ local function sharkkisLeaveCombat(event, creature)
     resetState(sharkkisState, creature:GetGUID())
 end
 
+-- C++ advisor JustDied (boss_fathomlord_karathress.cpp:355/:487/:609):
+-- instance->GetGuidData(DATA_KARATHRESS) -> EventSharkkis/Tidalvess/
+-- CaribdisDeath -> Talk(SAY_GAIN_ABILITY1..3) + non-triggered self-cast
+-- POWER_OF_SHARKKIS/TIDALVESS/CARIBDIS (:163/:169/:175). No DoAction
+-- bridge exists, but the receiver lookup is bridged: FindNearestCreature
+-- (maulgar precedent) returns the live karathress in the same
+-- map+instance, nil when dead or absent (the bridge skips Health==0
+-- entries); 100.0 covers the shared chamber (skarvald precedent).
+local function relayAdvisorDeath(creature, say, spell)
+    local karathress = creature:FindNearestCreature(ENTRY_KARATHRESS, 100.0)
+    if karathress ~= nil then
+        karathress:Talk(say)
+        karathress:CastSpell(karathress, spell)
+    end
+end
+
 local function sharkkisDied(event, creature, killer)
     resetState(sharkkisState, creature:GetGUID())
+    relayAdvisorDeath(creature, SAY_GAIN_ABILITY1, SPELL_POWER_OF_SHARKKIS)
 end
 
 local function sharkkisReset(event, creature)
@@ -444,6 +466,7 @@ end
 
 local function tidalvessDied(event, creature, killer)
     resetState(tidalvessState, creature:GetGUID())
+    relayAdvisorDeath(creature, SAY_GAIN_ABILITY2, SPELL_POWER_OF_TIDALVESS)
 end
 
 local function tidalvessReset(event, creature)
@@ -505,6 +528,7 @@ end
 
 local function caribdisDied(event, creature, killer)
     resetState(caribdisState, creature:GetGUID())
+    relayAdvisorDeath(creature, SAY_GAIN_ABILITY3, SPELL_POWER_OF_CARIBDIS)
 end
 
 local function caribdisReset(event, creature)
