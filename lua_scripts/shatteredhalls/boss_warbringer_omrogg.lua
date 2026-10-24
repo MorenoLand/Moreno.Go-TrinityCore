@@ -48,11 +48,9 @@
 -- Talk(EMOTE_ENRAGE), non-triggered self-cast (C++ DoCast(me),
 -- C++-exact), re-arm 40000, blastWave = 16000, blastCount = 1
 -- (C++-exact); reset threat 30s init then {25s,40s} —
--- bookkeeping only (the C++ arm's DoYellForThreat head-talk
--- sequence and AddThreat have no bridges — ResetThreatList's
--- ResetAllThreat twin IS bridged (lua_creature_events.go)
--- but the arm stays out on the unbridged legs — so the
--- pick-and-reset is unmodeled), re-arm
+-- random-player pick + ResetAllThreat + AddThreat(pick, 0.0)
+-- PORTED (DoYellForThreat head-talk stays out: heads never
+-- exist in this model), re-arm
 -- regardless (C++-exact); fear 30584: 8s init then {15s,35s}
 -- — non-triggered self-cast (C++ DoCast(me), C++-exact),
 -- re-arm {15s,35s} regardless (C++-exact); thunderclap
@@ -93,10 +91,10 @@
 -- is reachable only via the boss JustDied ObjectAccessor
 -- relay, and its Reset/JustEngagedWith overrides are empty
 -- (ahune bunny / nethekurse fissure precedent); the
--- ResetThreatList/AddThreat arms unmodeled (timer bookkeeping
--- exact) — AddThreat has no bridge; ResetThreatList's
--- ResetAllThreat twin is bridged (lua_creature_events.go)
--- but the arm stays out on the unbridged legs; H_SPELL_BURNING_MAUL 36056 is an
+-- DoYellForThreat head-talk arm stays out (heads never exist
+-- in this model; talk ids belong to entries 19523/19524) while
+-- its threat legs are PORTED (random-player pick +
+-- ResetAllThreat + AddThreat(pick, 0.0)); H_SPELL_BURNING_MAUL 36056 is an
 -- unused C++ enum member (the cast is unconditional, C++-
 -- exact); the ScriptData "Heroic enabled. Spell timing
 -- may need additional tweaks" (SD%Complete: 85) is an
@@ -145,6 +143,24 @@ local function freshState()
     }
 end
 
+-- Random alive player in this map instance (kaelthas
+-- randomPlayer idiom; C++ SelectTarget(Random, 0) equivalent
+-- for the threat arms below).
+local function randomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -184,12 +200,20 @@ local function bossTick(creature, guid)
         st.burningMaul = st.burningMaul - 1000
     end
 
-    -- Reset threat: 30s init then {25s,40s} — bookkeeping
-    -- only (the DoYellForThreat head-talk sequence and AddThreat
-    -- have no bridges; ResetThreatList's ResetAllThreat twin IS
-    -- bridged (lua_creature_events.go) but the arm stays out on the
-    -- unbridged legs), re-arm regardless (C++-exact).
+    -- Reset threat: 30s init then {25s,40s} — random alive
+    -- player pick (kaelthas randomPlayer idiom; C++ SelectTarget
+    -- Random, 0) + ResetAllThreat + AddThreat(pick, 0.0) in C++
+    -- order; nil pick leaves the list untouched (C++ gates the
+    -- whole block on SelectTarget non-nil); the DoYellForThreat
+    -- head-talk stays out (heads never exist in this model;
+    -- talk ids belong to entries 19523/19524). Re-arm
+    -- regardless (C++-exact).
     if st.resetThreat <= 1000 then
+        local pick = randomPlayer(creature)
+        if pick ~= nil then
+            creature:ResetAllThreat()
+            creature:AddThreat(pick, 0.0)
+        end
         st.resetThreat = math.random(25000, 39999)
     else
         st.resetThreat = st.resetThreat - 1000
