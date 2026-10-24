@@ -109,8 +109,10 @@
 -- AuraScript below — porting Talk+cancel alone would leave the
 -- normal rotation dead with no re-arm. Documented-only.
 -- JustSummoned — BossAI::JustSummoned + NPC_PLANAR_ANOMALY
--- 30879: CombatStop + REACT_PASSIVE + MoveRandom(100.0f) — no
--- motion / react-state bridges. SummonedCreatureDespawn —
+-- 30879: CombatStop + REACT_PASSIVE ARE bridged 2026-10-24
+-- (lua_creature_events.go); MoveRandom(100.0f) still has no bridge
+-- — and the arm stays out on summon delivery regardless (the
+-- anomalies are never delivered, so event 16 could never fire). SummonedCreatureDespawn —
 -- NPC_PLANAR_ANOMALY: CastSpell(summon, SPELL_PLANAR_BLAST
 -- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — stays
 -- out on the missing summon delivery, not on the hook: event 20

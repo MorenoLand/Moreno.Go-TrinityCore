@@ -88,18 +88,17 @@
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
 -- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-
--- OUT, decided 2026-10-14, re-keyed 2026-10-22: the arm's
--- LeaveCombat-teardown purpose is unbridged. creature:AttackStop()
--- was bridged 2026-10-22 (8feec4cd) but is NOT a substitute — the C++
--- arm needs full CombatStop (TargetGUID + ThreatMgr + InCombat clear,
--- Unit.cpp:5809; AttackStop stops the swing only) plus the
--- EngagementOver evade machine, both still unbridged (19:29 demand
--- verdict: zero clean CombatStop callers, bridge not built). No
--- aura-application bridge on the Lua creature object, and the trigger
--- path (StartAttack's self-cast of the menagerie spells) is itself
--- unported, so event 14 could never fire these IDs. SetHomePosition
--- IS bridged (lua_creature_events.go) but a lone home-position write
--- without the teardown would strand the add in combat.
+-- OUT, decided 2026-10-14, re-keyed 2026-10-24: CombatStop IS
+-- bridged now (lua_creature_events.go) and its InCombat=false covers
+-- EngagementOver's Go analog (CreatureAI.cpp:282: _isEngaged=false +
+-- AtDisengage, a no-op virtual) — the teardown no longer blocks.
+-- The arm STAYS OUT on its trigger alone: the StartAttack platform
+-- machine (summons + the teleport casts that produce the menagerie
+-- SpellHit) is unported — this file registers no JustEngagedWith /
+-- StartAttack handler (events 3/4/23/24 only) — so event 14 could
+-- never fire these IDs. SetHomePosition IS bridged, and the teardown
+-- is bridged too; porting the SpellHit arm without its trigger would
+-- be dead code. No aura-application bridge on the Lua creature object.
 -- spell_urom_frostbomb — AuraScript OnPeriodic (EFFECT_1 SPELL_AURA_
 -- PERIODIC_DAMAGE): heroic + IsInCombat gate -> caster CastSpell(
 -- target, SPELL_FROST_BUFFET 58025) — no AuraScript bridge (the

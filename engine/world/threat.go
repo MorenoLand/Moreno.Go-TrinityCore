@@ -1136,6 +1136,64 @@ func (s *Server) evadeCreaturesTargeting(ctx context.Context, mapID, instanceID 
 	}
 }
 
+// removeCreatureAttackers mirrors the RemoveAllAttackers half of
+// Unit::CombatStop (Unit.cpp:5815, 5867-5878): every attacker of the given
+// creature stops attacking it. Creature attackers (motion.TargetGUID ==
+// guid, pets included — pets ride the motion map) drop their victim and
+// get SMSG_ATTACK_STOP for the (attacker, victim) pair plus the visual
+// target clear; player attackers get the session-side attack stop
+// (sendAttackStop + attackTarget clear, the damage_shield death
+// precedent). Attackers keep their own threat tables and InCombat here
+// — the EndAllPvECombat legs (own-table clear, RemoveMeFromThreatLists)
+// are the CombatStop caller's job, not this helper's, so
+// RemoveAllAttackers stays usable on its own (freya's own JustDied calls
+// it without CombatStop).
+func (s *Server) removeCreatureAttackers(mapID, instanceID uint32, guid uint64) {
+	if s == nil || guid == 0 {
+		return
+	}
+	var attackers []uint64
+	s.motionMu.Lock()
+	for mGUID, m := range s.motionMapLocked(mapID, instanceID) {
+		if m == nil || m.TargetGUID != guid {
+			continue
+		}
+		attackers = append(attackers, mGUID)
+	}
+	s.motionMu.Unlock()
+	for _, attackerGUID := range attackers {
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(mapID, instanceID, attackerGUID)
+		if m == nil || m.TargetGUID != guid {
+			s.motionMu.Unlock()
+			continue
+		}
+		m.TargetGUID = 0
+		s.motionMu.Unlock()
+		stopPkt := buildAttackStop(attackerGUID, guid, false)
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		if fresh := s.findCreatureMotion(mapID, instanceID, attackerGUID); fresh != nil {
+			s.clearCreatureVisualTarget(fresh)
+		}
+	}
+	s.sessionsMu.RLock()
+	var players []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID || sess.attackTarget != guid {
+			continue
+		}
+		players = append(players, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range players {
+		if sess.attackTarget != guid {
+			continue
+		}
+		_ = sess.sendAttackStop(guid, false)
+		sess.attackTarget = 0
+	}
+}
+
 // zeroThreatOnAllLists mirrors the dungeon/non-player arm of
 // Spell::EffectSanctuary (SpellEffects.cpp:3767-3770): every threat list in
 // the map/instance carrying the unit scales its entry to 0

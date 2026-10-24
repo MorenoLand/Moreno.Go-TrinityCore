@@ -673,7 +673,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// for the (attacker, victim) pair, the visual target
 	// (UNIT_FIELD_TARGET) cleared, and the no-call-assistance flag reset.
 	// Threat, TargetGUID and InCombat are untouched (that teardown is
-	// Unit::CombatStop, Unit.cpp:5809 — no Lua bridge). The
+	// Unit::CombatStop, Unit.cpp:5809 — see CombatStop below). The
 	// InterruptSpell(CURRENT_MELEE_SPELL) leg is vacuous in Go (melee
 	// swings carry no cast state); the victim-side _removeAttacker leg
 	// rides the packet, matching the evade path's broadcast-only
@@ -691,6 +691,64 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		stopPkt := buildAttackStop(guid, target, false)
 		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
 		s.clearCreatureVisualTarget(motion)
+		return nil, nil
+	}
+	// CombatStop is Unit::CombatStop (Unit.cpp:5809-5825) for handler
+	// creatures: in C++ order, InterruptNonMeleeSpells(false) when
+	// includingCast (the Go cast-state gate is motion.CastingUntil, the
+	// evade precedent at creaturemotion.go:2191), AttackStop (own victim
+	// dropped, SMSG_ATTACK_STOP, visual target cleared, assistance flag
+	// reset), RemoveAllAttackers (every attacker stops — see
+	// removeCreatureAttackers), then the mutualPvP=false leg,
+	// CombatManager::EndAllPvECombat (CombatManager.cpp:344-350):
+	// RemoveMeFromThreatLists + ClearAllThreat + InCombat=false.
+	// NOT carried: the player-only SendAttackSwingCancelAttack (this
+	// method exists only on creature objects), SuppressPvPCombat (Go has
+	// no PvP-suppression model outside sanctuary handling), health
+	// restore / home walk / aura clear (those are EnterEvadeMode legs,
+	// not CombatStop's), and no Lua hooks fire (C++ CombatStop fires
+	// none — OnLeaveCombat belongs to EnterEvadeMode). The first arg is
+	// the optional includingCast flag (default false, the C++ default).
+	methods["CombatStop"] = func(_ context.Context, args []any) ([]any, error) {
+		includingCast := false
+		if len(args) >= 1 {
+			if b, ok := args[0].(bool); ok {
+				includingCast = b
+			}
+		}
+		s.motionMu.Lock()
+		victim := motion.TargetGUID
+		if includingCast {
+			motion.CastingUntil = time.Time{}
+		}
+		motion.TargetGUID = 0
+		motion.AlreadyCallAssistance = false
+		motion.AssistAt = time.Time{}
+		motion.AssistVictim = 0
+		motion.Assistants = nil
+		motion.InCombat = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		if victim != 0 {
+			stopPkt := buildAttackStop(guid, victim, false)
+			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		}
+		s.clearCreatureVisualTarget(motion)
+		s.removeCreatureAttackers(mapID, instanceID, guid)
+		s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+		s.broadcastThreatClearInInstance(mapID, instanceID, guid)
+		return nil, nil
+	}
+	// RemoveAllAttackers is Unit::RemoveAllAttackers (Unit.cpp:5867-5878)
+	// on its own: the CombatStop attacker leg without the self teardown
+	// — freya's own JustDied calls it without CombatStop, so the two
+	// stay separate methods (see removeCreatureAttackers).
+	methods["RemoveAllAttackers"] = func(_ context.Context, _ []any) ([]any, error) {
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.removeCreatureAttackers(mapID, instanceID, guid)
 		return nil, nil
 	}
 	// StopMoving is Unit::StopMoving (Unit.cpp:10499-10511): the moving
