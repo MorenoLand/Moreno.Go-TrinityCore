@@ -9573,6 +9573,78 @@ func init() {
 	// AfterRemove final-damage leg (no SpellScript bridge).
 	RegisterLuaBoss("boss_loatheb", 16011)
 
+	// Noth the Plaguebringer (15954, Naxxramas, Plague Quarter) —
+	// lua_scripts/northrend/boss_noth.lua. Entry from the
+	// creature_template table (wowhead classic npc=15954 link;
+	// 25-man difficulty entry 29615 not registered).
+	// Ported arms (C++-exact): JustEngagedWith Talk(0) +
+	// EnterPhaseGround (DoZoneInCombat + GROUND_ATTACKABLE
+	// 2s + BALCONY 90s/110s/180s + CURSE randtime(10s,25s) +
+	// WARRIOR randtime(20s,30s) + 25-man BLINK
+	// randtime(20s,30s)); CURSE DoCastAOE-lowered self-cast
+	// 29213, randtime(50s,70s); WARRIOR Talk(1) + Talk(4) +
+	// CastSummon(RAID(2,3),0,0) with the C++ HandleSummon
+	// shuffle verbatim, 40s; BLINK cripple 29212 triggered
+	// self-cast + random blink 29208-29211 self-cast +
+	// ResetAllThreat, 40s; BALCONY phase + PASSIVE + SetFlag
+	// NOT_SELECTABLE + AttackStop + StopMoving +
+	// RemoveAllAuras + BALCONY_TELEPORT 3s (Talk 6 + 29216)
+	// + WAVE randtime(5s,8s) + GROUND 70s/97s/120s; WAVE
+	// Talk(5) + CastSummon by balconyCount, randtime(30s,45s);
+	// GROUND balconyCount++ + TELEPORT_BACK 29231 + Talk(7)
+	// + EnterPhaseGround; GROUND_ATTACKABLE RemoveFlag +
+	// AGGRESSIVE; JustSummoned SetFarVisible + DoZoneInCombat;
+	// KilledUnit Talk(2) player-gated; JustDied Talk(3);
+	// DamageTaken balcony-phase lethal -> SetHealth(1) +
+	// return false, 0. DOCUMENTED-BLOCKED: instance
+	// bookkeeping; EnterPhaseGround IsThreatened evade leg;
+	// EnterEvadeMode balcony teleport-back (modeled in Reset,
+	// phase-gated); JustSummoned setActive; justBlinked
+	// MoveChase workaround (no motion bridge); summons
+	// tracking; 25-man via victim-group-size proxy.
+	RegisterLuaBoss("boss_noth", 15954)
+
+	// The Four Horsemen (Thane 16064, Lady 16065, Baron 30549,
+	// Sir 16063, Naxxramas, Military Quarter) —
+	// lua_scripts/northrend/boss_four_horsemen.lua. Entries
+	// from naxxramas.h NAXCreaturesIds (25-man difficulty
+	// entries 30603/30601/30600/30602 not registered).
+	// Ported arms (C++-exact for all modeled arms): Reset
+	// AGGRESSIVE + SetCombatMovement(false) +
+	// SetCombatPulseDelay(0); JustEngagedWith Talk(0) +
+	// SetCombatPulseDelay(5) + BeginFighting schedules;
+	// all BERSERK 10min one-shot (26662 triggered self-cast);
+	// baron/thane MARK 24s/12s (28834/28832), lady/sir MARK
+	// 24s/15s (28833/28835), all triggered self-cast; baron
+	// UNHOLY_SHADOW randtime(3s,7s)/randtime(10s,30s) victim
+	// 28882 + SpellHitTarget Talk(2); thane METEOR
+	// randtime(10s,25s)/randtime(13s,17s) random player
+	// within 20yd 28884 + SpellHitTarget Talk(2) with
+	// _shouldSay latch; lady VOIDZONE randtime(5s,10s)/
+	// randtime(12s,18s) random player within 45yd 28863
+	// triggered + Talk(2), plus 2s filler pump (nearest
+	// within 45yd SHADOW_BOLT 57374, else UNYIELDING_PAIN
+	// 57381 + Talk(7)); sir HOLYWRATH randtime(13s,18s)/
+	// randtime(10s,18s) nearest player within 45yd 28883
+	// triggered + SpellHitTarget Talk(2) with _shouldSay
+	// latch, plus 2s filler pump (nearest within 45yd
+	// HOLY_BOLT 57376, else CONDEMNATION 57377 + Talk(7));
+	// baron/thane BeginFighting SetCombatMovement(true) +
+	// AGGRESSIVE; KilledUnit Talk(3) player-gated; JustDied
+	// Talk(4). DOCUMENTED-BLOCKED: the whole encounter
+	// choreography (instance boss state, BeginEncounter
+	// threat sharing, MovePoint corner paths, MovementInform
+	// chain, BEGIN_FIGHTING gating — fight starts on engage
+	// in Lua, a timing deviation); BeginFighting AttackStart
+	// legs; lady/sir threat-empty evade legs; JustDied
+	// instance/achievement legs; mark AuraScript +
+	// consumption SpellScript (no SpellScript bridge);
+	// Reset ResetLootMode + summons.DespawnAll.
+	RegisterLuaBoss("boss_four_horsemen_baron", 30549)
+	RegisterLuaBoss("boss_four_horsemen_thane", 16064)
+	RegisterLuaBoss("boss_four_horsemen_lady", 16065)
+	RegisterLuaBoss("boss_four_horsemen_sir", 16063)
+
 	// instance_naxxramas.cpp audit (2026-10-18): pure InstanceMapScript
 	// (map 533, "instance_naxxramas") — 16-boss GUID latches, door/
 	// boundary/port GO data, achievement 7600/7601 + Immortal/Undying
@@ -9603,6 +9675,36 @@ func init() {
 	// commanders (twin_valkyr shared-handler precedent).
 	RegisterLuaBoss("boss_nexus_commanders", 26796)
 	RegisterLuaBoss("boss_nexus_commanders", 26798)
+
+	// Grand Magus Telestra (26731), The Nexus —
+	// lua_scripts/northrend/boss_magus_telestra.lua. Entry from
+	// checkpoint kg-49 (wowhead-only; no NPC_ const in the C++
+	// tree). Ported arms (C++-exact at 1s pump granularity):
+	// JustEngagedWith Talk(0) + 1s UpdateAI pump (shared
+	// uiCooldown freezes all timers; split/waiting branches
+	// return early); waiting branch StopMoving + AttackStop
+	// per tick, 4s, then RemoveFlag NOT_SELECTABLE; Phase 1/3
+	// merge branch (all magi dead via FindNearestCreature
+	// 100yd poll — Go event 20 fires only on timed expiry,
+	// never on death — DoCastSelf TELESTRA_BACK 47714 +
+	// SetVisible(true) + Phase 2/4 + waiting 4s + Talk 3);
+	// Phase 0 HealthBelowPct(50) split + heroic Phase 2
+	// HealthBelowPct(10) split (RemoveAllAuras +
+	// SetVisible(false) + SetFlag NOT_SELECTABLE + summon
+	// fire 26928 / frost 26930 / arcane 26929 magi with
+	// visual self-casts + Talk 4); ICE_NOVA 7s/15s random
+	// threat target 47772, GRAVITY_WELL 15s victim 47756,
+	// FIREBOMB 0s/2s random threat target 47773, all
+	// non-triggered (heroic H_ spell ids unused by the C++
+	// arms, like C++). KilledUnit Talk(1) player-gated;
+	// JustDied Talk(2) + SetVisible(true). DOCUMENTED-BLOCKED:
+	// instance bookkeeping; heroic Winter Veil hat aura (no
+	// game-event bridge); split CastStop; merge room-center
+	// UpdatePosition (no position-set bridge); magi AttackStart
+	// relay + magi spellcasting (no AI class in the C++ file,
+	// DB-side SmartAI); DoAction/GetData split-personality
+	// achievement legs (no achievement bridge).
+	RegisterLuaBoss("boss_magus_telestra", 26731)
 
 	// Anomalus (26763), The Nexus —
 	// lua_scripts/northrend/boss_anomalus.lua.
