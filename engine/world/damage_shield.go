@@ -456,12 +456,6 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			m.ThreatMgr.ClearThreat()
 		}
 		s.motionMu.Unlock()
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand. Queued hooks
-		// fire on the lethal path too — C++ runs DamageTaken ahead of the
-		// lethal leg, so a killing strike still triggers them.
-		s.drainBossSummonHooks(ctx, m, m.BossAI)
 		s.stopCreatureMotionInInstance(key.Map, key.InstanceID, key.GUID, m.X, m.Y, m.Z)
 		s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{
 			unitFieldHealth:       0,
@@ -522,10 +516,6 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		}
 	}
 	s.motionMu.Unlock()
-	// Deferred Eluna summon hooks queued by boss OnDamageTaken — see the
-	// lethal path above; the fire must run after the unlock since Lua
-	// handler methods lock motionMu on demand.
-	s.drainBossSummonHooks(ctx, m, m.BossAI)
 	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
 	// the health leg; the breakable-CC drain rides the taken proc pass.
 	s.stripCreatureRecursiveDirectDamageAuras(key, spellID, damage, m.MaxHealth)

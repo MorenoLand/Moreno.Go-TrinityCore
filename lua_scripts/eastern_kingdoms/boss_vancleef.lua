@@ -40,16 +40,34 @@
 --   never on death; Go's 23 fires on respawn and evade, matching this
 --   boss's C++ Reset path); the triggered flag is exact via CastSpell's
 --   third arg (moroes precedent).
--- Deviations from C++: the 50%-leg DoCastSelf(5200) spell's entire effect
--- is summoning allies — no summon bridge exists on the Lua surface
--- (dark-rider precedent), so only the cast arm is ported (creature casts
--- are packet-visual, maiden precedent); the allies never materialize.
+-- - Reset's SummonBlackguards() (boss_vancleef.cpp:86-90: DoSummon(
+--   NPC_BLACKGUARD = 636, the two BlackguardPositions, 1min,
+--   TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2) -> onReset (23, alive-gated)
+--   + onSpawn (5, guarded) via creature:SummonCreature(636, x, y, z,
+--   o, 5, 60000) (bridge: lua_creature_events.go:956; type 5 =
+--   CORPSE_TIMED_DESPAWN per the bridge's TempSummonType enum). The
+--   summons are tracked per boss guid and despawned via
+--   creature:Despawn (bridge: lua_creature_events.go:706) on evade
+--   (EnterEvadeMode's summons.DespawnAll(), boss_vancleef.cpp:78-84)
+--   and on death (BossAI::_JustDied's summons.DespawnAll(),
+--   ScriptedCreature.cpp:516) — Go fires 23 ahead of 2/4, so the
+--   despawn rides onReset with the re-summon alive-gated. The 1min
+--   idle-despawn of CORPSE_TIMED_DESPAWN is a documented bridge delta
+--   (the spawn timer arms only for the timed family;
+--   lua_creature_events.go:67).
+-- Deviations from C++: the 50%-leg DoCastSelf(5200) spell's summon
+-- effect rides the unbridged SPELL_EFFECT_SUMMON machine (the
+-- creature:SummonCreature bridge exists, but the summoned positions
+-- are spell data, not C++ — boss_vancleef.cpp only casts the spell),
+-- so only Talk + the cast arm are ported (creature casts are
+-- packet-visual, maiden precedent); the allies never materialize.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - SummonBlackguards()'s DoSummon(NPC_BLACKGUARD = 636, the two
---   BlackguardPositions, 1min, TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2 — no
---   summon bridge (dark-rider precedent).
--- - EnterEvadeMode's summons.DespawnAll() + _DespawnAtEvade() — no
---   summon/despawn bridge (dark-rider precedent).
+-- - JustEngagedWith's summons.DoZoneInCombat() (boss_vancleef.cpp:69)
+--   — no bridge (dark-rider precedent); the blackguards aggro via the
+--   normal proximity scan.
+-- - EnterEvadeMode's _DespawnAtEvade() (boss_vancleef.cpp:78-84) — no
+--   bridge; the boss stays in world on evade (its summons ARE
+--   despawned, see above).
 
 local SPELL_DUAL_WIELD = 674
 local SPELL_THRASH = 12787
@@ -63,8 +81,16 @@ local SAY_KILL = 4
 local SAY_THREE = 5
 
 local ENTRY_VANCLEEF = 639
+local ENTRY_BLACKGUARD = 636 -- NPC_BLACKGUARD (deadmines.h:78)
+
+-- BlackguardPositions (boss_vancleef.cpp:40-43, TDB coords).
+local BLACKGUARD_POSITIONS = {
+    { -78.2791, -824.784, 40.0007, 2.93215 },
+    { -77.8071, -815.097, 40.0188, 3.26377 },
+}
 
 local latch = {}
+local blackguards = {}
 
 local function initState(guid)
     latch[guid] = { guards = false, h25 = false, h33 = false, h66 = false }
@@ -72,6 +98,39 @@ end
 
 local function clearState(guid)
     latch[guid] = nil
+end
+
+-- C++ Reset's SummonBlackguards() (boss_vancleef.cpp:86-90).
+local function summonBlackguards(creature)
+    local guid = creature:GetGUID()
+    if blackguards[guid] then
+        return
+    end
+    local list = {}
+    for _, pos in ipairs(BLACKGUARD_POSITIONS) do
+        -- TEMPSUMMON_CORPSE_TIMED_DESPAWN = 5, 1min (boss_vancleef.cpp:89).
+        local bg = creature:SummonCreature(ENTRY_BLACKGUARD, pos[1], pos[2], pos[3], pos[4], 5, 60000)
+        if bg then
+            table.insert(list, bg)
+        end
+    end
+    if #list > 0 then
+        blackguards[guid] = list
+    end
+end
+
+-- C++ EnterEvadeMode's summons.DespawnAll() (boss_vancleef.cpp:78-84)
+-- + BossAI::_JustDied's summons.DespawnAll() (ScriptedCreature.cpp:516).
+local function despawnBlackguards(creature)
+    local guid = creature:GetGUID()
+    local list = blackguards[guid]
+    if not list then
+        return
+    end
+    blackguards[guid] = nil
+    for _, bg in ipairs(list) do
+        bg:Despawn()
+    end
 end
 
 local function onDamageTaken(_, creature, _, damage)
@@ -117,16 +176,32 @@ local function onEnterCombat(_, creature)
     creature:Talk(SAY_AGGRO)
 end
 
-local function onCombatEnd(_, creature)
+local function onLeaveCombat(_, creature)
+    clearState(creature:GetGUID())
+end
+
+local function onDied(_, creature)
+    -- C++ BossAI::_JustDied's summons.DespawnAll()
+    -- (ScriptedCreature.cpp:516); the 23-ahead-of-4 despawn in onReset
+    -- already ran, so this is a guard.
+    despawnBlackguards(creature)
     clearState(creature:GetGUID())
 end
 
 local function onSpawn(_, creature)
     initState(creature:GetGUID())
+    -- C++ Reset runs at spawn (Creature::Respawn -> ai->Reset(),
+    -- Creature.cpp:2198); Go fires 23 ahead of 5 on the spawn funnel
+    -- (fireCreatureSpawned), so this guarded call is usually a no-op.
+    summonBlackguards(creature)
 end
 
 local function onReset(_, creature)
     initState(creature:GetGUID())
+    -- Go fires 23 ahead of 2 (evade) and ahead of 4 (death), so the
+    -- C++ EnterEvadeMode/_JustDied summon-despawn arms ride here; the
+    -- re-summon is alive-gated like the casts below.
+    despawnBlackguards(creature)
     -- C++ Reset's one-shot triggered self-casts (jindo/magmadar
     -- precedent): alive-gated, since C++ Reset runs at spawn and on
     -- evade, never on death — while Go's 23 also fires on death
@@ -134,13 +209,14 @@ local function onReset(_, creature)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
         creature:CastSpell(creature, SPELL_THRASH, true)
+        summonBlackguards(creature)
     end
 end
 
 RegisterCreatureEvent(ENTRY_VANCLEEF, 1, onEnterCombat)
-RegisterCreatureEvent(ENTRY_VANCLEEF, 2, onCombatEnd)
+RegisterCreatureEvent(ENTRY_VANCLEEF, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_VANCLEEF, 3, onTargetDied)
-RegisterCreatureEvent(ENTRY_VANCLEEF, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_VANCLEEF, 4, onDied)
 RegisterCreatureEvent(ENTRY_VANCLEEF, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_VANCLEEF, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_VANCLEEF, 23, onReset)

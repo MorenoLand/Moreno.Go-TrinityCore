@@ -23,29 +23,29 @@ import (
 // alive-only call sites match. The !IsAlive() early return is vacuous.
 // SetCombatPulseDelay(0) is bridged (creature:SetCombatPulseDelay,
 // lua_creature_events.go); ResetLootMode() has no Go model — no bridge.
-// events.Reset() is bridged per-AI: every implementation re-arms its own
-// flags/timers in OnReset (vancleef 5 flags, mrSmite phase + 2 timers,
-// rhahkZor slamTimer, taragaman 2 timers, kresh shieldUsed); luaBossAI is a
-// no-op — its Lua script owns state via the Lua On_Reset event (23) the
-// engine fires. summons.DespawnAll() is bridged for vancleefAI, the only
-// implementation tracking summons, via despawnSummons; C++
-// boss_vancleef::Reset additionally re-summons its blackguards
-// (SummonBlackguards, boss_vancleef.cpp:83-87) — no Go analog, Go's
-// blackguards are 50%-arm spawns only (deliberate divergence from this C++
-// tree's reset-summon design). scheduler.CancelAll() needs no bridge — the
-// AIs are tick-driven and OnReset re-arms their timers. The instance
-// SetBossState(NOT_STARTED) arm has no boss-state model; Go's analog is
-// clearInstanceEncounter on evade (creaturemotion.go:626).
+// events.Reset() is bridged per-AI: every Go-native implementation re-arms
+// its own flags/timers in OnReset (rhahkZor slamTimer, taragaman 2 timers,
+// kresh shieldUsed); luaBossAI is a no-op — its Lua script owns state via
+// the Lua On_Reset event (23) the engine fires (vancleef/mr_smite are
+// Lua-driven; their former Go AIs were deleted as unreachable).
+// summons.DespawnAll() for Lua-tracked summons rides the Lua event-4/23
+// fires — vancleef's blackguards despawn on evade/death and Reset
+// re-summons them via its SummonBlackguards arm (boss_vancleef.cpp:86-90,
+// ported through the creature:SummonCreature bridge). scheduler.CancelAll()
+// needs no bridge — the AIs are tick-driven and OnReset re-arms their
+// timers. The instance SetBossState(NOT_STARTED) arm has no boss-state
+// model; Go's analog is clearInstanceEncounter on evade
+// (creaturemotion.go:626).
 // _JustDied (512-518) vs OnDied — bridged: BossAI._JustDied's events.Reset()
 // is covered per-AI (flags/timers linger until the respawn OnReset re-arms
 // them; stale timers stay inert via the OnUpdate !InCombat guard the kill
 // paths set), scheduler.CancelAll() needs no bridge (tick-driven AIs),
-// and summons.DespawnAll() is bridged by vancleefAI, the only implementation
-// tracking summons, via despawnSummons. The instance SetBossState(DONE) arm
+// and summons.DespawnAll() rides the Lua event-4 fire for Lua-tracked
+// summons (vancleef's blackguards). The instance SetBossState(DONE) arm
 // has no state model; the kill sites clear encounter-active tracking
 // (combat.go:566/879, spells.go:7446/12646) — the pet owner-gone branch
-// (pet_combat.go:578-585) skips the encounter clear and the event-4 Lua
-// fire, but still runs OnDied so the native summon cleanup fires. Lua keeps
+// fires the Lua 23+4 pair itself before the native OnDied, so Lua summon
+// cleanup runs there too. Lua keeps
 // Eluna parity (fireCreatureDied fires Lua event 23 On_Reset then event 4
 // On_Died) with the native hook fired right after, matching the
 // Eluna-first/native-second order used at respawn (kill.go:865).
@@ -61,18 +61,20 @@ import (
 // SetCombatPulseDelay(5) is bridged (creature:SetCombatPulseDelay,
 // lua_creature_events.go); setActive(true) has no Go model — no bridge;
 // DoZoneInCombat() has no engine analog — no bridge (the C++ vancleef
-// summons.DoZoneInCombat() arm likewise; Go's 50%-arm blackguards spawn
-// already in combat). ScheduleTasks() needs no aggro-time bridge: every
+// summons.DoZoneInCombat() arm likewise; the Reset-summoned blackguards
+// aggro via the proximity scan). ScheduleTasks() needs no aggro-time
+// bridge: every
 // Go AI arms its timers in its constructor, and getBossAIForCreature runs
 // lazily at first engagement (creaturemotion.go:461 and the combat.go /
 // spells.go combat sites), with OnUpdate decrementing only while InCombat —
 // outcome-equivalent to C++ spawn-time arming. C++ boss_mr_smite's
-// JustEngagedWith is empty (boss_mr_smite.cpp:105-107), so Go likewise
-// re-arms nothing in OnAggro. mrSmite initial values mirror Initialize()
-// (boss_mr_smite.cpp:70-80): trash urand(5000,9000), slam 9000; repeat
-// arms mirror UpdateAI (:125-139): trash urand(6000,15500), slam 11000,
-// with the bCheckChances 84% cast gate (:109-114) bridged — the timer
-// re-arms even when the cast is skipped, matching C++. rhahkZor (644) and
+// JustEngagedWith is empty (boss_mr_smite.cpp:105-107), so the Lua port
+// likewise schedules nothing on engage. mr_smite's timers mirror
+// Initialize() (boss_mr_smite.cpp:70-80): trash urand(5000,9000), slam
+// 9000; repeat arms mirror UpdateAI (:125-139): trash urand(6000,15500),
+// slam 11000, with the bCheckChances 84% cast gate (:109-114) bridged —
+// the timer re-arms even when the cast is skipped, matching C++.
+// rhahkZor (644) and
 // taragaman (11520) have no script files in this C++ tree — their logic is
 // TDB smart_scripts rows — so their constructor values (slam 12s; fire
 // nova 8s init/9s repeat, uppercut 12s) stand as transcribed; SmartAI's
@@ -163,162 +165,6 @@ func getBossAIForCreature(motion *creatureMotion, scriptName string) BossAI {
 		return factory(motion)
 	}
 	return nil
-}
-
-// -------------------------------------------------------------
-// Edwin VanCleef (Entry 639, Script: boss_vancleef)
-// Reference: src/server/scripts/EasternKingdoms/Deadmines/boss_vancleef.cpp
-// -------------------------------------------------------------
-type vancleefAI struct {
-	motion       *creatureMotion
-	guardsCalled bool
-	health66     bool
-	health50     bool
-	health33     bool
-	health25     bool
-	summons      []uint64
-	// pendingSummonHooks accumulates summons spawned by the 50% arm while the
-	// damage path holds motionMu; their Eluna hook fires after the caller's
-	// unlock via firePendingSummonHooks (Lua handler methods lock motionMu
-	// on demand, so the fire must never run under it).
-	pendingSummonHooks []*creatureMotion
-}
-
-func newVanCleefAI(m *creatureMotion) BossAI {
-	return &vancleefAI{motion: m}
-}
-
-func (ai *vancleefAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {
-	ai.guardsCalled = false
-	ai.health66 = false
-	ai.health50 = false
-	ai.health33 = false
-	ai.health25 = false
-	ai.despawnSummons(ctx, s, m)
-}
-
-// firePendingSummonHooks dispatches Eluna CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE
-// (19) for the summons queued by the 50% arm. Call only after the damage path
-// releases motionMu. The boolean veto gates only the empty ScriptedAI::
-// JustSummoned base (see fireCreatureSummoned), so it is discarded.
-func (ai *vancleefAI) firePendingSummonHooks(ctx context.Context, s *Server, m *creatureMotion) {
-	if len(ai.pendingSummonHooks) == 0 {
-		return
-	}
-	pending := ai.pendingSummonHooks
-	ai.pendingSummonHooks = nil
-	for _, summon := range pending {
-		s.fireCreatureSummoned(ctx, m, scripting.CreatureEventOnJustSummonedCreature, summon)
-	}
-}
-
-// drainBossSummonHooks fires deferred Eluna summon hooks queued by a boss AI's
-// damage handling. Only vancleefAI queues today; the rest are no-ops. Call
-// after the damage path releases motionMu.
-func (s *Server) drainBossSummonHooks(ctx context.Context, owner *creatureMotion, ai BossAI) {
-	if vc, ok := ai.(*vancleefAI); ok {
-		vc.firePendingSummonHooks(ctx, s, owner)
-	}
-}
-
-func (ai *vancleefAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
-	// SAY_AGGRO = 0: "None may challenge the Brotherhood!"
-	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 0, 0)
-}
-
-func (ai *vancleefAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
-	if m.MaxHealth == 0 {
-		return
-	}
-	hpPct := float32(m.Health) / float32(m.MaxHealth) * 100.0
-
-	// 50% HP: Summons 2 Defias Blackguards
-	if !ai.guardsCalled && hpPct <= 50.0 {
-		ai.guardsCalled = true
-		ai.health50 = true
-		// SAY_SUMMON = 2: "%s calls more of his allies out of the shadows."
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 2, 0)
-		s.castCreatureSpell(ctx, m, 5200, m.GUID) // SPELL_VANCLEEFS_ALLIES
-
-		// Spawn 2 Blackguards (Entry 636) near VanCleef. The damage paths
-		// (combat.go, spells.go) hold s.motionMu across OnDamageTaken, so
-		// this arm uses the caller-held lock and must not relock it. The
-		// Eluna CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) fire is
-		// deferred to firePendingSummonHooks after the caller's unlock —
-		// TempSummon::InitSummon (TemporarySummon.cpp:229-244) fires
-		// Eluna::JustSummoned (CreatureHooks.cpp:165-171, args
-		// (event, creature, summon)) once the summon exists.
-		for i := 0; i < 2; i++ {
-			bgGUID := uint64(0xF130000000000000) | uint64(636)<<24 | uint64(rand.Intn(90000)+10000)
-			offset := float32((i+1)*2) - 3.0
-			bgMotion := &creatureMotion{
-				GUID:       bgGUID,
-				DisplayID:  s.loadCreatureStats(ctx, 636).Model,
-				LootMode:   lootModeDefault,
-				Entry:      636,
-				Map:        m.Map,
-				InstanceID: m.InstanceID,
-				HomeX:      m.X + offset,
-				HomeY:      m.Y + offset,
-				HomeZ:      m.Z,
-				X:          m.X + offset,
-				Y:          m.Y + offset,
-				Z:          m.Z,
-				Speed:      2.5,
-				RunSpeed:   7.0,
-				Health:     150,
-				MaxHealth:  150,
-				AttackTime: 2000,
-				Faction:    m.Faction,
-				Level:      18,
-				InCombat:   true,
-				TargetGUID: m.TargetGUID,
-			}
-			bgMotion.ThreatMgr = NewThreatManager(bgMotion)
-			// C++ summons DoZoneInCombat (boss_vancleef.cpp:69) acquire via the
-			// normal engage path, which seeds 0.0f threat
-			// (Unit::EngageWithTarget, Unit.cpp:8429-8438).
-			bgMotion.ThreatMgr.AddThreat(m.TargetGUID, 0.0, true)
-			s.motionMapLocked(m.Map, m.InstanceID)[bgGUID] = bgMotion
-			ai.summons = append(ai.summons, bgGUID)
-			ai.pendingSummonHooks = append(ai.pendingSummonHooks, bgMotion)
-			s.broadcastMonsterMoveInInstance(m.Map, m.InstanceID, bgGUID, bgMotion.X, bgMotion.Y, bgMotion.Z, bgMotion.X, bgMotion.Y, bgMotion.Z, 0, false, 0, false)
-		}
-	}
-
-	// boss_vancleef.cpp:99-113: the quote arms are an else-if chain — one
-	// Talk per DamageTaken call, lowest threshold first.
-	if !ai.health25 && hpPct <= 25.0 {
-		ai.health25 = true
-		// SAY_THREE = 5: "The Brotherhood shall prevail!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 5, 0)
-	} else if !ai.health33 && hpPct <= 33.0 {
-		ai.health33 = true
-		// SAY_TWO = 3: "Fools! Our cause is righteous!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 3, 0)
-	} else if !ai.health66 && hpPct <= 66.0 {
-		ai.health66 = true
-		// SAY_ONE = 1: "Lapdogs, all of you!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 1, 0)
-	}
-}
-
-// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
-func (ai *vancleefAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
-}
-
-func (ai *vancleefAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
-}
-
-// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
-// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
-// it, so this stays a no-op like the heal legs above.
-func (ai *vancleefAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
-}
-
-func (ai *vancleefAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
-	// SAY_KILL = 4: "And stay down!"
-	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Edwin VanCleef", 4, 0)
 }
 
 // evadeDespawn records a BossAI::_DespawnAtEvade removal awaiting its
@@ -442,177 +288,6 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	}
 }
 
-func (ai *vancleefAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
-	// BossAI::EnterEvadeMode (boss_vancleef.cpp:78-84): summons.DespawnAll()
-	// + _DespawnAtEvade() (ScriptedCreature.cpp:596-617): DespawnOrUnsummon
-	// (0s, 30s) + instance SetBossState(FAIL). Go has no instance boss-state
-	// model (documented at boss_ai.go:17-66), so the FAIL arm is a documented
-	// delta; the despawn twin removes the boss from the world for the C++
-	// 30s and re-arms it through respawnEvadedBoss below. The evade
-	// funnel's home-return is skipped via EvadeDespawnUntil (see
-	// triggerCreatureEvade).
-	ai.despawnSummons(ctx, s, m)
-	ai.OnReset(ctx, s, m)
-	if s != nil && m != nil {
-		s.despawnAtEvade(ctx, m, 30*time.Second)
-	}
-}
-
-// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518): the
-// summons.DespawnAll() arm, the only per-AI-relevant leg for this
-// implementation. events.Reset()/scheduler.CancelAll() need no bridge —
-// flags/timers re-arm at the respawn OnReset and stale ticks are inert
-// while !InCombat.
-func (ai *vancleefAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
-	ai.despawnSummons(ctx, s, m)
-}
-
-func (ai *vancleefAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
-}
-
-func (ai *vancleefAI) despawnSummons(ctx context.Context, s *Server, owner *creatureMotion) {
-	if s == nil || owner == nil {
-		return
-	}
-	s.motionMu.Lock()
-	motions := s.motionMapLocked(owner.Map, owner.InstanceID)
-	var despawned []*creatureMotion
-	for _, guid := range ai.summons {
-		if m, ok := motions[guid]; ok {
-			despawned = append(despawned, m)
-		}
-		delete(motions, guid)
-	}
-	ai.summons = nil
-	s.motionMu.Unlock()
-	// Eluna::SummonedCreatureDespawn (CreatureHooks.cpp:174-181),
-	// CREATURE_EVENT_ON_SUMMONED_CREATURE_DESPAWN (20), args
-	// (event, creature, summon), is fired by TempSummon::UnSummon
-	// (TemporarySummon.cpp:274-284) before the summon leaves the world;
-	// Go fires per summon after the unlock since the Lua handlers' object
-	// methods lock motionMu on demand. The boolean veto gates only the
-	// empty ScriptedAI::SummonedCreatureDespawn base, so it is discarded
-	// (see fireCreatureSummoned).
-	for _, m := range despawned {
-		s.fireCreatureSummoned(ctx, owner, scripting.CreatureEventOnSummonedCreatureDespawn, m)
-	}
-	// Eluna::OnRemoveFromWorld (CreatureHooks.cpp:80-85,
-	// CREATURE_EVENT_ON_REMOVE (37), args (event, creature)) fires from
-	// Creature::RemoveFromWorld (Creature.cpp:314) — after the
-	// SummonedCreatureDespawn leg above (TemporarySummon.cpp:280 precedes
-	// the world removal). The boolean is discarded (CallAllFunctions).
-	for _, m := range despawned {
-		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
-	}
-}
-
-// -------------------------------------------------------------
-// Mr. Smite (Entry 646, Script: boss_mr_smite)
-// Reference: src/server/scripts/EasternKingdoms/Deadmines/boss_mr_smite.cpp
-// -------------------------------------------------------------
-type mrSmiteAI struct {
-	motion     *creatureMotion
-	phase      uint8
-	trashTimer time.Duration
-	slamTimer  time.Duration
-}
-
-func newMrSmiteAI(m *creatureMotion) BossAI {
-	// C++ Initialize() (boss_mr_smite.cpp:70-80) runs from both the
-	// constructor and Reset(): uiTrashTimer = urand(5000,9000) (inclusive),
-	// uiSlamTimer = 9000.
-	return &mrSmiteAI{
-		motion:     m,
-		trashTimer: time.Duration(5000+rand.Intn(4001)) * time.Millisecond,
-		slamTimer:  9 * time.Second,
-	}
-}
-
-func (ai *mrSmiteAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {
-	ai.phase = 0
-	ai.trashTimer = time.Duration(5000+rand.Intn(4001)) * time.Millisecond
-	ai.slamTimer = 9 * time.Second
-}
-
-func (ai *mrSmiteAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
-	// boss_mr_smite.cpp:105-107: JustEngagedWith is empty — the C++ tree
-	// has no aggro yell (only SAY_PHASE_1/2 at :157/:160), so the former
-	// "check out that noise" broadcast was fabricated.
-}
-
-func (ai *mrSmiteAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
-	if m.MaxHealth == 0 {
-		return
-	}
-	hpPct := float32(m.Health) / float32(m.MaxHealth) * 100.0
-
-	// Phase 1 -> Phase 2 at 66% HP
-	if ai.phase == 0 && hpPct <= 66.0 {
-		ai.phase = 1
-		// Stun players with Smite Stomp (Spell 6432)
-		s.castCreatureSpell(ctx, m, 6432, m.TargetGUID)
-		// SAY_PHASE_1 = 2: "You landlubbers are tougher than I thought, I'll have to Improvise!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Mr. Smite", 2, 0)
-	} else if ai.phase == 1 && hpPct <= 33.0 {
-		ai.phase = 2
-		// Stun players with Smite Stomp (Spell 6432)
-		s.castCreatureSpell(ctx, m, 6432, m.TargetGUID)
-		// SAY_PHASE_2 = 3: "D'ah! Now you're making me angry!"
-		s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Mr. Smite", 3, 0)
-	}
-}
-
-// UnitAI::HealReceived/HealDone base no-ops (UnitAI.h:307-310).
-func (ai *mrSmiteAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
-}
-
-func (ai *mrSmiteAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
-}
-
-// UnitAI::DamageDealt base no-op (UnitAI.h:300): fired on the attacker's
-// AI from Unit::DealDamage (Unit.cpp:704). No script in this tree overrides
-// it, so this stays a no-op like the heal legs above.
-func (ai *mrSmiteAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
-}
-
-func (ai *mrSmiteAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
-}
-
-func (ai *mrSmiteAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
-	ai.OnReset(ctx, s, m)
-}
-
-// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — this
-// implementation tracks no summons and its timers re-arm at the respawn
-// OnReset, so no cleanup is needed; events.Reset()/scheduler.CancelAll()
-// need no bridge (tick-driven AI, inert while !InCombat).
-func (ai *mrSmiteAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
-}
-
-func (ai *mrSmiteAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
-	if !m.InCombat || m.TargetGUID == 0 {
-		return
-	}
-	ai.trashTimer -= diff
-	if ai.trashTimer <= 0 {
-		// urand(6000,15500) inclusive, re-armed even when bCheckChances
-		// skips the cast (boss_mr_smite.cpp:125-131).
-		ai.trashTimer = time.Duration(6000+rand.Intn(9501)) * time.Millisecond
-		if rand.Intn(100) > 15 { // bCheckChances (109-114): urand(0,99) <= 15 skips
-			s.castCreatureSpell(ctx, m, 3391, m.TargetGUID) // SPELL_TRASH
-		}
-	}
-
-	ai.slamTimer -= diff
-	if ai.slamTimer <= 0 {
-		// 11000 re-armed even when bCheckChances skips the cast (:133-137).
-		ai.slamTimer = 11 * time.Second
-		if rand.Intn(100) > 15 { // bCheckChances (109-114)
-			s.castCreatureSpell(ctx, m, 6435, m.TargetGUID) // SPELL_SMITE_SLAM
-		}
-	}
-}
-
 // -------------------------------------------------------------
 // Rhahk'Zor (Entry 644)
 // Reference: smart_scripts for entry 644
@@ -662,7 +337,7 @@ func (ai *rhahkZorAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 }
 
 // OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
-// per-AI cleanup needed (see mrSmiteAI.OnDied).
+// per-AI cleanup needed (this AI tracks no summons).
 func (ai *rhahkZorAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
 }
 
@@ -726,7 +401,7 @@ func (ai *taragamanAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion
 }
 
 // OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
-// per-AI cleanup needed (see mrSmiteAI.OnDied).
+// per-AI cleanup needed (this AI tracks no summons).
 func (ai *taragamanAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
 }
 
@@ -798,7 +473,7 @@ func (ai *kreshAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {
 }
 
 // OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
-// per-AI cleanup needed (see mrSmiteAI.OnDied).
+// per-AI cleanup needed (this AI tracks no summons).
 func (ai *kreshAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
 }
 
@@ -2554,10 +2229,6 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// qualifies). Fires outside the motion lock — the Eluna hook re-enters
 	// it on demand.
 	s.triggerPetDefensive(ctx, tm.Map, tm.InstanceID, tm.GUID, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
-	// Deferred Eluna summon hooks queued by boss OnDamageTaken fire after
-	// the unlock (Lua handler methods lock motionMu on demand) — the
-	// spells.go lethal path's order.
-	s.drainBossSummonHooks(ctx, tm, tm.BossAI)
 	s.stopCreatureMotionInInstance(tm.Map, tm.InstanceID, tm.GUID, tm.X, tm.Y, tm.Z)
 	s.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{
 		unitFieldHealth:       0,
@@ -4076,8 +3747,6 @@ func RegisterLuaBoss(scriptName string, entry uint32) {
 }
 
 func init() {
-	RegisterBossAI("boss_vancleef", 639, newVanCleefAI)
-	RegisterBossAI("boss_mr_smite", 646, newMrSmiteAI)
 	RegisterBossAI("boss_rhahkzor", 644, newRhahkZorAI)
 	RegisterBossAI("boss_taragaman", 11520, newTaragamanAI)
 	RegisterBossAI("boss_kresh", 3653, newKreshAI)

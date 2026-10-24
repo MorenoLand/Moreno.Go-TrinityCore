@@ -1621,12 +1621,6 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			}
 		}
 		s.motionMu.Unlock()
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand.
-		if cMotion != nil {
-			s.drainBossSummonHooks(ctx, cMotion, cMotion.BossAI)
-		}
 		if killed {
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): pet attacker → pet arm
 			// + branch arm double dispatch (Unit.cpp pet arm + 11385-11387),
@@ -1667,9 +1661,16 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				// BossAI::_JustDied (ScriptedCreature.cpp:512-518): this
-				// path skips onCreatureKilled, so the native death hook must
-				// fire here — vancleefAI.OnDied despawns the 50%-arm
-				// blackguards even when the pet owner is gone mid-tick.
+				// path skips onCreatureKilled, so the death hooks must fire
+				// here — Lua 23+4 first (Eluna parity, kill.go:772), then
+				// the native hook. Lua-scripted bosses keep their
+				// summon cleanup on the event-4 fire (e.g. vancleef's
+				// blackguards) even when the pet owner is gone mid-tick.
+				// luaPlayer() is nil-safe for the gone owner; the killer
+				// arg is informational on this path.
+				if owner != nil {
+					owner.fireCreatureDied(ctx, victim)
+				}
 				if victim.BossAI != nil {
 					victim.BossAI.OnDied(ctx, s, victim)
 				}
@@ -5108,12 +5109,6 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	s.server.motionMu.Unlock()
-	// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-	// VanCleef's 50% summon arm): the fire must run after the unlock
-	// since Lua handler methods lock motionMu on demand.
-	if targetMotion != nil {
-		s.server.drainBossSummonHooks(ctx, targetMotion, targetMotion.BossAI)
-	}
 	if targetMotion == nil {
 		return
 	}

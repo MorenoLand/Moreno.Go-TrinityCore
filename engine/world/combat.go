@@ -1359,7 +1359,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	// Unit::DealDamage (Unit.cpp:699-704): the AI hooks fire at the top of
 	// DealDamage — ahead of the lethal leg — on every path, including killing
-	// blows. Fired under motionMu: the hook arms (vancleefAI) mutate motion
+	// blows. Fired under motionMu: the hook arms mutate motion
 	// state directly. The lethal leg decides on the post-hook damage against
 	// the locked motion health (the pre-lock snapshot is stale once hooks
 	// run); when the motion is gone the snapshot decides, as before.
@@ -1404,15 +1404,6 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 		s.server.motionMu.Unlock()
-
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand. Queued hooks
-		// fire on the lethal path too — C++ runs DamageTaken ahead of the
-		// lethal leg, so a killing blow still triggers them.
-		if motion != nil {
-			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
-		}
 
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -1499,13 +1490,6 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 		s.server.motionMu.Unlock()
-
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand.
-		if motion != nil {
-			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
-		}
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
@@ -2138,7 +2122,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 
 	// Unit::DealDamage (Unit.cpp:699-704): the AI hooks fire at the top of
 	// DealDamage — ahead of the lethal leg — on every path, including killing
-	// blows. Fired under motionMu: the hook arms (vancleefAI) mutate motion
+	// blows. Fired under motionMu: the hook arms mutate motion
 	// state directly. The lethal leg decides on the post-hook damage against
 	// the locked motion health (the pre-lock snapshot is stale once hooks
 	// run); when the motion is gone the snapshot decides, as before.
@@ -2183,15 +2167,6 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		s.server.motionMu.Unlock()
-
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand. Queued hooks
-		// fire on the lethal path too — C++ runs DamageTaken ahead of the
-		// lethal leg, so a killing blow still triggers them.
-		if motion != nil {
-			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
-		}
 
 		s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -2279,13 +2254,6 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		s.server.motionMu.Unlock()
-
-		// Deferred Eluna summon hooks queued by boss OnDamageTaken (e.g.
-		// VanCleef's 50% summon arm): the fire must run after the unlock
-		// since Lua handler methods lock motionMu on demand.
-		if motion != nil {
-			s.server.drainBossSummonHooks(ctx, motion, motion.BossAI)
-		}
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
