@@ -12132,6 +12132,16 @@ func init() {
 	// AOE 66351, despawn +1s). Entry 34362 wowhead-only (Ulduar page;
 	// 27679 rejected as MoP-era).
 	RegisterLuaBoss("npc_mimiron_proximity_mine", 34362)
+	// npc_mimiron_flames (Ulduar, Mimiron hard-mode fire) — ported arm
+	// in lua_scripts/northrend/npc_mimiron_flames.lua: Reset-seeded
+	// one-shot spread cast (4s, AOE 64562). Entries 34363
+	// "Flames (Initial)" (spell 64563 summon link) + 34121
+	// "Flames (Spread)" (spell 64564 summon link), wowhead-only;
+	// both share the AI (the spread chain needs every patch to
+	// cast 64562). IN_PROGRESS despawn gate stays documented-only
+	// (no instance boss-state bridge).
+	RegisterLuaBoss("npc_mimiron_flames", 34363)
+	RegisterLuaBoss("npc_mimiron_flames", 34121)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
