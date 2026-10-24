@@ -2560,6 +2560,39 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{float64(reach)}, nil
 	}
+	// IsWithinMeleeRange is Unit::IsWithinMeleeRange (Unit.h:798) =
+	// IsWithinMeleeRangeAt(GetPosition(), obj) (Unit.cpp:599-612): same map
+	// and phase, 3D distance <= GetMeleeRange(obj) = max(self reach +
+	// target reach + 4.0/3.0, NOMINAL_MELEE_RANGE 5.0) (Unit.cpp:614-618),
+	// via the combat.go calcMeleeRange twin. The target resolves through
+	// combatTargetByGUID (live position + reach, 1.5 default), so a nil,
+	// off-map, or unresolvable target reads false, matching C++'s null /
+	// IsInMap false legs; phase itself has no object field and is unmodeled.
+	methods["IsWithinMeleeRange"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("target is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return []any{false}, nil
+		}
+		guid, _ := objectUint64Field(target, "GUID")
+		if guid == 0 {
+			return []any{false}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, sx, sy, sz, selfReach := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.combatReachOrDefault()
+		s.motionMu.Unlock()
+		resolved, ok := s.combatTargetByGUID(ctx, mapID, instanceID, guid)
+		if !ok || resolved.Map != mapID {
+			return []any{false}, nil
+		}
+		dx := float64(sx - resolved.X)
+		dy := float64(sy - resolved.Y)
+		dz := float64(sz - resolved.Z)
+		dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		return []any{inMeleeThreatRange(selfReach, resolved.CombatReach, dist)}, nil
+	}
 	// SetHomePosition is CreatureMethods::SetHomePosition
 	// (CreatureMethods.h:655-669): Creature::SetHomePosition(x, y, z, o)
 	// (Creature.h:294) relocates m_homePosition ONLY — the live

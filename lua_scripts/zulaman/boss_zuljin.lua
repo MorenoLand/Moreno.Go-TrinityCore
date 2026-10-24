@@ -60,8 +60,8 @@
 -- is active spin-waits on a 500ms retry (the C++ TankGUID gate: the
 -- expired starter re-fires every UpdateAI tick until the active sequence
 -- ends, then starts immediately);
--- the C++ melee-range gate on each sequence hit is approximated with
--- GetDistance <= 5 (no IsWithinMeleeRange bridge); the claw-loop
+-- the C++ melee-range gate on each sequence hit is ported via
+-- creature:IsWithinMeleeRange (lua_creature_events.go); the claw-loop
 -- isTargetableForAttack chain is ported (bridged on the player and
 -- handler-creature surfaces; C++ checkFakeDeath default true); the no-target
 -- EnterEvadeMode arm has no
@@ -274,7 +274,7 @@ onSeqLoop = function(creature, guid)
     else
         target = randomPlayer(creature)
     end
-    if target == nil or creature:GetDistance(target) > MELEE_RANGE then
+    if target == nil or not creature:IsWithinMeleeRange(target) then
         if target == nil then
             st.sequence = nil
             schedule(timers, guid, seq == "claw" and "clawrage" or "lynxrush",

@@ -47,8 +47,8 @@
 -- 0 and the gate stays open; orbital strike 30637 — 25s init
 -- then {14s,16s}, target = victim when within melee range else
 -- a random alive player in the instance (the C++
--- IsWithinMeleeRange gate is approximated with GetDistance <=
--- 5, no IsWithinMeleeRange bridge, zuljin precedent; C++
+-- IsWithinMeleeRange gate is ported via creature:IsWithinMeleeRange
+-- (lua_creature_events.go); C++
 -- SelectTarget(Random, 0), thespia precedent), nil pick casts
 -- nothing, the TYPEID_PLAYER gate is C++-exact (kargath
 -- GetObjectType convention — the timer is NOT re-armed when
@@ -101,9 +101,9 @@
 -- shadow-whip pullback machine's MOVEMENTFLAG_FALLING_FAR gate
 -- is unbridgeable, so the shadow whip never fires (the
 -- ScriptData temporary-solution caveat is upstream,
--- documented, not bridged); the IsWithinMeleeRange gate on
--- orbital strike is approximated with GetDistance <= 5 (no
--- IsWithinMeleeRange bridge, zuljin precedent); no movement
+-- documented, not bridged); the orbital-strike
+-- IsWithinMeleeRange gate is ported via creature:IsWithinMeleeRange
+-- (lua_creature_events.go); no movement
 -- bridge — the SetCombatMovement(false) arm PORTED 2026-10-22
 -- (creature:SetCombatMovement, lua_creature_events.go — C++
 -- boss_omor_the_unscarred.cpp:64 ctor); the
@@ -127,7 +127,6 @@ local SAY_WIPE = 5
 
 local ENTRY_OMOR = 17308
 
-local MELEE_RANGE = 5
 
 local timers = {}
 local states = {}
@@ -233,9 +232,8 @@ local function bossTick(creature, guid)
     else
         -- Orbital strike 30637: 25s init then {14s,16s} —
         -- target = victim when within melee range else a
-        -- random alive player in the instance (GetDistance <=
-        -- 5 stands in for the C++ IsWithinMeleeRange gate,
-        -- zuljin precedent; C++ SelectTarget(Random, 0),
+        -- random alive player in the instance (creature:IsWithinMeleeRange
+        -- ports the C++ gate, lua_creature_events.go; C++ SelectTarget(Random, 0),
         -- thespia precedent). The TYPEID_PLAYER gate is C++-
         -- exact (kargath GetObjectType convention) — the timer
         -- is NOT re-armed when the gate fails, so the arm
@@ -243,7 +241,7 @@ local function bossTick(creature, guid)
         if st.orbitalStrike <= 1000 then
             local target
             local victim = creature:GetVictim()
-            if victim and creature:GetDistance(victim) <= MELEE_RANGE then
+            if victim and creature:IsWithinMeleeRange(victim) then
                 target = victim
             else
                 target = randomPlayer(creature)

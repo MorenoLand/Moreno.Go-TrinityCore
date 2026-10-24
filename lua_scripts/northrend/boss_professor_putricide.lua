@@ -52,7 +52,8 @@
 -- — OUT: the random-target leg is bridged (GetPlayersInWorld +
 -- math.random, nightbane/midnight precedent); the true blockers are
 -- the P1->P2 tear-gas phase machine (boss_professor_putricide.cpp:524-525)
--- and the Is25ManRaid branch (:631; no Is25Man bridge).
+-- and the Is25ManRaid branch (:631; Is25ManRaid is bridged, so the
+-- tear-gas phase machine is the sole blocker).
 -- Talk(EMOTE_CHOKING_GAS_BOMB 10) rides EVENT_CHOKING_GAS_BOMB
 -- (:652-655) — OUT: P2/P3 phase-gated (:526). Talk(
 -- SAY_FESTERGUT_DEATH 1) rides EVENT_FESTERGUT_DIES (:579-581)
