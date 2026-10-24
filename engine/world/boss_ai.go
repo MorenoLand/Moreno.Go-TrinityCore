@@ -12113,6 +12113,25 @@ func init() {
 	// IsInBack unbridged for handler creatures).
 	RegisterLuaBoss("npc_mageguard_dalaran", 29254)
 	RegisterLuaBoss("npc_mageguard_dalaran", 29255)
+	// npc_mimiron_assault_bot (Ulduar, Mimiron ACU phase) — ported arm
+	// in lua_scripts/northrend/npc_mimiron_assault_bot.lua: engage-seeded
+	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668).
+	// Entry 34057 wowhead-only (no C++ NPC_ constant for this add).
+	// ROOT retarget arm stays documented-only (no HasUnitState /
+	// AttackStart bridge).
+	RegisterLuaBoss("npc_mimiron_assault_bot", 34057)
+	// npc_mimiron_frost_bomb (Ulduar, Mimiron VX-001 phase) — ported arms
+	// in lua_scripts/northrend/npc_mimiron_frost_bomb.lua: Reset-seeded
+	// explosion chain (10s AOE 64626, +3s AOE 65354, despawn +3s).
+	// Entry 34149 wowhead-only (spell 64627 summon link; no C++ NPC_
+	// constant for this add).
+	RegisterLuaBoss("npc_mimiron_frost_bomb", 34149)
+	// npc_mimiron_proximity_mine (Ulduar, Mimiron Leviathan phase) —
+	// ported arms in lua_scripts/northrend/npc_mimiron_proximity_mine.lua:
+	// Reset-seeded arm chain (1.5s self 65345, +33.5s HasAura-gated
+	// AOE 66351, despawn +1s). Entry 34362 wowhead-only (Ulduar page;
+	// 27679 rejected as MoP-era).
+	RegisterLuaBoss("npc_mimiron_proximity_mine", 34362)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
