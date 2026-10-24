@@ -14,20 +14,22 @@
 -- and applies the color buffs; empowerment every 90s. Banish phase roots
 -- the boss and casts Netherbreath every 5-7s. Void Zone every 15s and the
 -- 9-minute berserk tick in both phases.
--- Deviations from C++: the engine has no summon model, so the portal
--- creatures (PortalID 17369/17367/17368), their PortalVisual auras, and the
--- beamer workaround creatures never exist — portal positions are tracked
--- as virtual coordinates and the PortalBeam visual casts are skipped.
--- No instance-script model, so HandleDoors (the massive door) is skipped
--- and DATA_NETHERSPITE is admission-only via the luaBossAI shim in
--- engine/world/boss_ai.go. No threat model, so the red beam's
--- AddThreat(target, 100000) arm is skipped (the beam buff itself is
--- applied). No UNIT_STATE_CASTING model, so the phase switch fires
--- unconditionally instead of waiting for IsNonMeleeSpellCast(false)
--- (same convention as the other Karazhan Lua ports). After the first
--- banish phase, Netherbreath re-arms on a random 5-7s instead of the
--- C++ leftover timer value (unmodelable without persisting the
--- decremented member across phases in C++-exact form).
+-- Deviations from C++: portal creatures ARE summoned now (2026-10-24
+-- SummonCreature bridge): SummonPortals spawns PortalID 17369/17367/
+-- 17368 at the C++-exact random placement with PortalVisual auras, and
+-- UpdatePortals runs the beamer workaround (old beamer casts PortalBeam
+-- on the new target and dies, fresh beamer summoned + casts). Beam
+-- geometry still reads the stored spawn coordinates, so a nil summon
+-- (missing template) degrades to virtual coordinates instead of
+-- dropping the buffs. Red-beam AddThreat(100000) is ported (AddThreat
+-- bridge). No instance-script model, so HandleDoors (the massive door)
+-- is skipped. No UNIT_STATE_CASTING model, so the phase switch fires
+-- unconditionally instead of waiting for IsNonMeleeSpellCast(false).
+-- DATA_NETHERSPITE is admission-only via the luaBossAI shim in
+-- engine/world/boss_ai.go. After the first banish phase, Netherbreath
+-- re-arms on a random 5-7s instead of the C++ leftover timer value
+-- (unmodelable without persisting the decremented member across
+-- phases in C++-exact form).
 
 local ENTRY_NETHERSPITE = 15689
 
@@ -52,6 +54,9 @@ local PORTAL_COORD = {
 local PLAYER_BUFF = { 30421, 30422, 30423 }
 local NETHER_BUFF = { 30466, 30467, 30468 }
 local PLAYER_DEBUFF = { 38637, 38638, 38639 }
+local PORTAL_ID = { 17369, 17367, 17368 }
+local PORTAL_VISUAL = { 30487, 30490, 30491 }
+local PORTAL_BEAM = { 30465, 30464, 30463 }
 
 local PHASE_PORTAL_MS = 60000
 local PHASE_BANISH_MS = 30000
@@ -147,7 +152,7 @@ local function isBetween(bx, by, px, py, portalX, portalY)
 end
 
 -- C++ SummonPortals placement: r = rand32() % 4; blue never on the left.
-local function summonPortals(guid)
+local function summonPortals(creature, guid)
     local state = netherState[guid]
     if state == nil then
         return
@@ -158,15 +163,44 @@ local function summonPortals(guid)
     pos[2] = (r % 2 == 1) and 1 or (r > 1 and 3 or 2)        -- green
     pos[3] = (r > 1) and 2 or 3                             -- blue
     state.portals = {}
+    state.beamers = {}
+    state.beamTarget = {}
     for j = 1, 3 do
-        state.portals[j] = PORTAL_COORD[pos[j]]
+        local coord = PORTAL_COORD[pos[j]]
+        -- C++ SummonPortals: SummonCreature(PortalID, coord, 0,
+        -- TEMPSUMMON_TIMED_DESPAWN, 1min) + AddAura(PortalVisual).
+        -- The object is kept for the beamer machine; the coordinates
+        -- stay authoritative for the beam geometry, so a nil summon
+        -- (missing template) degrades to virtual coordinates instead
+        -- of dropping the buffs. Go maps o = 0 to the summoner's
+        -- orientation (bridge note); portals are static, so the
+        -- divergence is cosmetic only.
+        local portal = creature:SummonCreature(PORTAL_ID[j], coord[1],
+            coord[2], coord[3], 0, 2, 60000)
+        if portal then
+            portal:AddAura(PORTAL_VISUAL[j])
+        end
+        state.portals[j] = { x = coord[1], y = coord[2], z = coord[3], obj = portal }
     end
 end
 
-local function destroyPortals(guid)
+-- C++ DestroyPortals: DisappearAndDie on every portal + beamer via
+-- GUID lookup; the grid sweep is the Lua twin (Despawn is the removal
+-- twin; portals and beamers share PortalID entries, so one sweep per
+-- entry removes both).
+local function destroyPortals(creature, guid)
+    if creature ~= nil then
+        for j = 1, 3 do
+            for _, portal in ipairs(creature:GetCreaturesInGrid(PORTAL_ID[j], 100)) do
+                portal:Despawn()
+            end
+        end
+    end
     local state = netherState[guid]
     if state ~= nil then
         state.portals = nil
+        state.beamers = nil
+        state.beamTarget = nil
     end
 end
 
@@ -179,15 +213,15 @@ local function updatePortals(creature, guid)
     local bx, by = creature:GetX(), creature:GetY()
     for j = 1, 3 do
         local portal = state.portals[j]
-        local bossDist = dist2d(bx, by, portal[1], portal[2])
+        local bossDist = dist2d(bx, by, portal.x, portal.y)
         local best, bestDist = nil, bossDist
         for _, p in ipairs(playersInInstance(creature)) do
             if not p:HasAura(PLAYER_DEBUFF[j])
                     and not p:HasAura(PLAYER_BUFF[(j % 3) + 1])
                     and not p:HasAura(PLAYER_BUFF[((j + 1) % 3) + 1]) then
                 local px, py = p:GetX(), p:GetY()
-                if isBetween(bx, by, px, py, portal[1], portal[2]) then
-                    local d = dist2d(px, py, portal[1], portal[2])
+                if isBetween(bx, by, px, py, portal.x, portal.y) then
+                    local d = dist2d(px, py, portal.x, portal.y)
                     if d < bestDist then
                         best, bestDist = p, d
                     end
@@ -196,12 +230,41 @@ local function updatePortals(creature, guid)
         end
         if best ~= nil then
             best:AddAura(PLAYER_BUFF[j])
-            -- C++ AddThreat(best, 100000) on the red beam has no bridge.
+            -- C++ red beam: AddThreat(target, 100000) when the boss's
+            -- victim is not the target (UpdatePortals, every 1s tick).
+            if j == 1 then
+                local victim = creature:GetVictim()
+                if victim == nil or victim:GetGUID() ~= best:GetGUID() then
+                    creature:AddThreat(best, 100000)
+                end
+            end
         else
             creature:AddAura(NETHER_BUFF[j])
         end
-        -- The beamer visual cast (PortalBeam) needs a summoned portal
-        -- creature; no summon model, skipped.
+        -- C++ beamer workaround, on beam-target switch only: the old
+        -- beamer casts PortalBeam on the new target and dies, then the
+        -- portal summons a fresh beamer that casts PortalBeam on the
+        -- target. BeamTarget starts empty, so the first tick switches
+        -- (C++-exact). No player target means the boss is the target.
+        local target = best or creature
+        if state.beamTarget[j] ~= target:GetGUID() then
+            state.beamTarget[j] = target:GetGUID()
+            local portalObj = portal.obj
+            if portalObj ~= nil then
+                local oldBeamer = state.beamers[j]
+                if oldBeamer ~= nil then
+                    oldBeamer:CastSpell(target, PORTAL_BEAM[j], false)
+                    oldBeamer:Despawn()
+                    state.beamers[j] = nil
+                end
+                local beamer = portalObj:SummonCreature(PORTAL_ID[j],
+                    portal.x, portal.y, portal.z, portalObj:GetO(), 2, 60000)
+                if beamer ~= nil then
+                    beamer:CastSpell(target, PORTAL_BEAM[j], false)
+                    state.beamers[j] = beamer
+                end
+            end
+        end
     end
     schedule(guid, "portalTick", 1000, function() updatePortals(creature, guid) end)
 end
@@ -223,7 +286,7 @@ local function switchToPortal(creature, guid)
     end
     creature:RemoveAura(SPELL_BANISH_ROOT)
     creature:RemoveAura(SPELL_BANISH_VISUAL)
-    summonPortals(guid)
+    summonPortals(creature, guid)
     state.portalPhase = true
     cancelPhaseTimers(guid)
     schedule(guid, "portalTick", 10000, function() updatePortals(creature, guid) end)
@@ -241,7 +304,7 @@ local function switchToBanish(creature, guid)
     creature:RemoveAura(SPELL_NETHERBURN_AURA)
     creature:CastSpell(creature, SPELL_BANISH_VISUAL, true)
     creature:CastSpell(creature, SPELL_BANISH_ROOT, true)
-    destroyPortals(guid)
+    destroyPortals(creature, guid)
     state.portalPhase = false
     for j = 1, 3 do
         creature:RemoveAura(NETHER_BUFF[j])
@@ -342,13 +405,14 @@ end
 local function netherspiteLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    destroyPortals(creature, guid)
     netherspiteInitState(guid)
 end
 
 local function netherspiteDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    destroyPortals(guid)
+    destroyPortals(creature, guid)
     -- C++ JustDied: HandleDoors(true) (no instance-script model, skipped).
 end
 
@@ -356,7 +420,7 @@ local function netherspiteReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     netherspiteInitState(guid)
-    destroyPortals(guid)
+    destroyPortals(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_NETHERSPITE, 1, netherspiteEnterCombat)

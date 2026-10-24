@@ -30,8 +30,10 @@
 -- summon bridge — DoSpawnCreature at boss +5,+5, type 4; the
 -- commented-out SPELL_SUMMON_LYNX stays unmodeled), the merge-walk has no movement model
 -- (MoveFollow/Clear have no bridge), so the merge completes on a 2s timer
--- instead of the 6-yd proximity check, and the lynx-health merge arm has
--- no bearer; the transform-completion signal (SPELL_TRANSFORM_SPLIT2
+-- instead of the 6-yd proximity check; the lynx-health merge arm IS
+-- ported now (2026-10-24, lynx summoned since 07:27), the lynx
+-- DisappearAndDie on lynx/enrage entry IS ported (Despawn twin), and
+-- the merge-entry NON_ATTACKABLE flag IS ported (SetFlag twin); the transform-completion signal (SPELL_TRANSFORM_SPLIT2
 -- 43573 SpellHit) has no firing hook — the engine's event 14 fires only
 -- for player casts (the boss's own split self-cast is visual-only on the
 -- bridge), so an event-14 guard for 43573 is kept but the actual human
@@ -48,6 +50,8 @@
 -- bridge (engine combat is continuous).
 
 local ENTRY_HALAZZI = 23577
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local ENTRY_SPIRIT_LYNX = 24143
 
 local PHASE_NONE = 0
@@ -265,9 +269,31 @@ local function onMergeComplete(creature, guid)
     end
 end
 
+-- C++ EnterPhase(PHASE_MERGE) (boss_halazzi.cpp:182-193): when the
+-- lynx is found, Talk(SAY_MERGE), NON_ATTACKABLE flag, MoveFollow
+-- both ways, ++TransformCount. The flag leg is ported (SetFlag twin,
+-- zuljin precedent); the MoveFollow walk stays timer-approximated
+-- (no movement bridge), and Talk stays unconditional so a missing
+-- lynx (failed summon) cannot soft-lock the merge -- C++ would stall
+-- in MERGE with no lynx, while the timer always completes here.
+-- TransformCount still increments in onMergeComplete (see there).
+local function startMerge(creature, guid)
+    local st = halazziState(guid)
+    st.phase = PHASE_MERGE
+    cancelPhaseTimers(guid)
+    creature:Talk(SAY_MERGE)
+    local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
+    if lynx then
+        lynx:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    end
+    schedule(timers, guid, "mergewait", 2000, function()
+        onMergeComplete(creature, guid)
+    end)
+end
+
 -- C++ 1s check timer: lynx phase -> split below 25%*(3-TransformCount);
--- human phase -> merge below 20% boss health (the lynx-health arm has no
--- bearer since the lynx never spawns).
+-- human phase -> merge below 20% boss health, or below 20% lynx health
+-- when the lynx exists (boss_halazzi.cpp:281-282, second arm).
 local function onCheck(creature, guid)
     local st = halazziState(guid)
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
@@ -277,15 +303,14 @@ local function onCheck(creature, guid)
         end
     elseif st.phase == PHASE_HUMAN and maxHealth > 0 then
         if health <= math.floor(maxHealth * 20 / 100) then  -- C++: !HealthAbovePct(20), fires at <=20%
-            st.phase = PHASE_MERGE
-            cancelPhaseTimers(guid)
-            creature:Talk(SAY_MERGE)
-            -- No MoveFollow bridge: the merge walk is approximated by the
-            -- timer; C++ increments TransformCount when the lynx is found,
-            -- done in onMergeComplete here.
-            schedule(timers, guid, "mergewait", 2000, function()
-                onMergeComplete(creature, guid)
-            end)
+            startMerge(creature, guid)
+        else
+            -- C++ human check, second arm (boss_halazzi.cpp:281-282):
+            -- merge when the lynx exists and is not above 20% health.
+            local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
+            if lynx and lynx:GetHealthPct() <= 20 then
+                startMerge(creature, guid)
+            end
         end
     end
     if halazziState(guid).phase ~= PHASE_NONE then
@@ -307,7 +332,13 @@ enterPhase = function(creature, guid, nextPhase)
             -- me->Attack(victim, true) + MoveChase have no bridge; engine
             -- melee is continuous.
         end
-        -- The lynx DisappearAndDie has no bearer (no despawn bridge).
+        -- C++ EnterPhase LYNX/ENRAGE: lynx DisappearAndDie via
+        -- LynxGUID (boss_halazzi.cpp:162-163); FindNearestCreature
+        -- is the GUID-lookup twin, Despawn the removal twin.
+        local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
+        if lynx then
+            lynx:Despawn()
+        end
         creature:SetMaxHealth(600000)
         creature:SetHealth(600000 - 150000 * st.transformCount)
         st.phase = nextPhase
@@ -447,10 +478,11 @@ RegisterCreatureEvent(ENTRY_HALAZZI, 23, halazziReset)
 
 -- npc_halazzi_lynx: frenzy 43290 self-cast every {30s,50s}, shred armor
 -- 43243 on the victim every 4s. The C++ DamageTaken never-die arm is kept
--- on the damage hook; the NON_ATTACKABLE AttackStart gate, the lynx
--- DisappearAndDie, and the merge MoveFollow arms have no bridge (the lynx
--- is summoned by the human-phase arm above, and any spawned 24143 fights
--- correctly once engaged).
+-- on the damage hook; the NON_ATTACKABLE AttackStart gate and the
+-- merge MoveFollow arms have no bridge (the lynx is summoned by the
+-- human-phase arm above, and any spawned 24143 fights correctly once
+-- engaged). The merge-entry NON_ATTACKABLE flag and the lynx/enrage
+-- entry DisappearAndDie are ported boss-side (see enterPhase).
 local function onLynxFrenzy(creature, guid)
     creature:CastSpell(creature, SPELL_LYNX_FRENZY)
     schedule(lynxTimers, guid, "frenzy", math.random(30000, 50000), function()
