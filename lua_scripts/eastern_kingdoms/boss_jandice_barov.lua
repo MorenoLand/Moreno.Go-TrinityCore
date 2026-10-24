@@ -27,8 +27,8 @@
 -- + SetDisplayId(11686 invisible model) legs PORTED 2026-10-20
 -- (flag/display bridges live — handler-surface SetFlag/RemoveFlag
 -- on UNIT_FIELD_FLAGS=59, creature:SetDisplayId); the
--- ModifyThreatByPercent(victim, -99) leg has no threat bridge —
--- documented-only. EVENT_SET_VISIBILITY's RemoveFlag +
+-- ModifyThreatByPercent(victim, -99) leg PORTED 2026-10-24
+-- (threat bridge live). EVENT_SET_VISIBILITY's RemoveFlag +
 -- SetDisplayId(11073 Jandice model) legs PORTED 2026-10-20.
 -- EVENT_CLEAVE is declared in the C++ enum but never scheduled.
 -- Spell 17773's summon effect is engine-driven.
@@ -89,14 +89,17 @@ end
 
 -- C++ EVENT_ILLUSION: non-triggered DoCast(17773) on self; re-arm
 -- 25s; schedule EVENT_SET_VISIBILITY 3s. The flag/display legs are
--- ported below; the threat leg has no bridge (see header) and is
--- documented-only.
+-- ported below; the threat leg is PORTED below (see header).
 local function onIllusion(creature, guid)
     creature:CastSpell(creature, SPELL_ILLUSION)
     -- C++ arm order: cast, SetFlag(NOT_SELECTABLE),
-    -- SetDisplayId(11686 invisible).
+    -- SetDisplayId(11686 invisible), ModifyThreatByPercent(victim, -99).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetDisplayId(11686)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:ModifyThreatByPercent(victim, -99)
+    end
     schedule(guid, "set_visibility", 3000, function()
         onSetVisibility(creature, guid)
     end)

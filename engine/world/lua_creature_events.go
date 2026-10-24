@@ -530,6 +530,45 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// GetThreat is ThreatManager::GetThreat (ThreatManager.h:117,260):
+	// the victim's effective threat (base + temp modifier, floored at
+	// zero). A nil/unknown victim reads 0, matching the C++ gate
+	// pattern if (GetThreat(victim)) used by the BWL wingbuffet /
+	// knockback arms.
+	methods["GetThreat"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || motion.ThreatMgr == nil {
+			return []any{float32(0)}, nil
+		}
+		if victimGUID := luaObjectGUID(args[0]); victimGUID != 0 {
+			return []any{motion.ThreatMgr.GetThreat(victimGUID)}, nil
+		}
+		return []any{float32(0)}, nil
+	}
+	// ModifyThreatByPercent is ThreatManager::ModifyThreatByPercent
+	// (ThreatManager.h:143): pct == 0 no-ops, otherwise
+	// ScaleThreat(victim, 0.01*(100+pct)). The target may be a
+	// creature/player object or a raw GUID (luaObjectGUID, the
+	// CastSpell pattern); a nil/unknown victim no-ops. A victim
+	// switch propagates to motion.TargetGUID on the motion tick
+	// (creaturemotion.go), like every other threat mutation.
+	methods["ModifyThreatByPercent"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 || motion.ThreatMgr == nil {
+			return nil, nil
+		}
+		victimGUID := luaObjectGUID(args[0])
+		if victimGUID == 0 {
+			return nil, nil
+		}
+		pct, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if pct == 0 {
+			return nil, nil
+		}
+		motion.ThreatMgr.ScaleThreat(victimGUID, float32(0.01*float64(100+pct)))
+		return nil, nil
+	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554):
 	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are fire-and-forget
 	// (no in-flight cast state on the creature — the 2026-10-20 caststate

@@ -21,8 +21,8 @@
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the DATA_FLAMEGOR bookkeeping arms skipped); the wingbuffet-arm
--- GetThreat + ModifyThreatByPercent(victim, -75) has no bridge (no
--- threat model) — the cast still lands and the 30s re-arm is kept.
+-- GetThreat + ModifyThreatByPercent(victim, -75) PORTED 2026-10-24
+-- (threat bridge live) — the cast lands and the 30s re-arm is kept.
 
 local ENTRY_FLAMEGOR = 11981
 
@@ -69,11 +69,15 @@ local function onShadowflame(creature, guid)
 end
 
 -- C++ EVENT_WINGBUFFET: non-triggered DoCastVictim(23339) + -75%
--- threat on the victim (threat arm has no bridge); re-arm 30s.
+-- threat on the victim (threat arm PORTED 2026-10-24); re-arm 30s.
 local function onWingBuffet(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WINGBUFFET)
+        -- C++ arm order: cast, then GetThreat gate + -75%.
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -75)
+        end
     end
     schedule(guid, "wingbuffet", 30000, function()
         onWingBuffet(creature, guid)

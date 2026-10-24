@@ -421,6 +421,41 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// GetThreat / ModifyThreatByPercent are the session-surface twins
+	// of the handler-surface bridges (lua_creature_events.go):
+	// ThreatManager::GetThreat and ModifyThreatByPercent
+	// (ThreatManager.h:117,143).
+	methods["GetThreat"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{float32(0)}, nil
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
+			if victimGUID := luaObjectGUID(args[0]); victimGUID != 0 {
+				return []any{motion.ThreatMgr.GetThreat(victimGUID)}, nil
+			}
+		}
+		return []any{float32(0)}, nil
+	}
+	methods["ModifyThreatByPercent"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, nil
+		}
+		victimGUID := luaObjectGUID(args[0])
+		if victimGUID == 0 {
+			return nil, nil
+		}
+		pct, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if pct == 0 {
+			return nil, nil
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
+			motion.ThreatMgr.ScaleThreat(victimGUID, float32(0.01*float64(100+pct)))
+		}
+		return nil, nil
+	}
 	// luaAngleTarget resolves the target of the WorldObject angle methods
 	// (WorldObjectMethods.h): either a WorldObject Lua object (player,
 	// creature, gameobject — all carry X/Y fields) or raw x, y numbers

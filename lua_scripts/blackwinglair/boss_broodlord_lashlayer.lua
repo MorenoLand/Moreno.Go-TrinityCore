@@ -27,8 +27,8 @@
 -- convention); no instance-script model — boss admission via the
 -- luaBossAI shim (_Reset/BossAI::JustEngagedWith and the
 -- DATA_BROODLORD_LASHLAYER bookkeeping arms skipped); the
--- knockback-arm ModifyThreatByPercent(victim, -50) has no bridge (no
--- threat model) — the cast still lands and the 15-30s re-arm is kept;
+-- knockback-arm ModifyThreatByPercent(victim, -50) PORTED 2026-10-24
+-- (threat bridge live) — the cast still lands and the 15-30s re-arm is kept;
 -- the EVENT_CHECK home-distance > 150 yd leash check and the
 -- Talk(SAY_LEASH=1) + EnterEvadeMode(EVADE_REASON_BOUNDARY) arms have
 -- no bridges (no home-position/distance bridge, no evade bridge) —
@@ -114,11 +114,15 @@ local function onMortalStrike(creature, guid)
 end
 
 -- C++ EVENT_KNOCKBACK: non-triggered DoCastVictim(25778) + -50% threat on
--- the victim (threat arm has no bridge); re-arm {15s,30s}.
+-- the victim (threat arm PORTED 2026-10-24); re-arm {15s,30s}.
 local function onKnockback(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCKBACK)
+        -- C++ arm order: cast, then GetThreat gate + -50%.
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -50)
+        end
     end
     schedule(guid, "knockback", math.random(15000, 30000), function()
         onKnockback(creature, guid)
