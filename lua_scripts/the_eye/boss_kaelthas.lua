@@ -203,7 +203,9 @@ local function randomPlayer(creature)
 end
 
 -- Kael'thas (19622): the phase machine is unmodeled (see
--- header); the only bridgeable arms are the two Talk arms.
+-- header); the ported bridgeable arms are the two Talk arms
+-- plus the two pre-encounter SetTarget arms (MoveInLineOfSight
+-- / DamageTaken PHASE_NONE legs, per-GUID latch below).
 -- C++ KilledUnit: Talk(SAY_SLAY) unconditionally (no player
 -- gate, C++-exact).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 3, function(_, creature)
@@ -214,6 +216,47 @@ end)
 -- instance-blocked).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 4, function(_, creature)
     creature:Talk(KAEL_SAY_DEATH)
+end)
+
+-- Kael'thas (19622): pre-encounter visual-target arms
+-- (boss_kaelthas.cpp:561-585). The PHASE_NONE gate is modeled
+-- as a per-GUID latch (the instance-driven phase machine is
+-- unmodeled — see header): each arm fires once, then clears the
+-- latch exactly where C++ advances out of PHASE_NONE.
+local kaelPreEncounter = {}
+
+-- C++ MoveInLineOfSight: PHASE_NONE + target within 30yd ->
+-- SetTarget (the DoAction / SetInCombatWith / AddThreat legs
+-- have no bridge — documented).
+RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
+    local guid = creature:GetGUID()
+    if kaelPreEncounter[guid] == false then
+        return
+    end
+    if unit ~= nil and creature:GetDistance(unit) <= 30.0 then
+        creature:SetTarget(unit)
+        kaelPreEncounter[guid] = false
+    end
+end)
+
+-- C++ DamageTaken: PHASE_NONE + attacker -> SetTarget(attacker)
+-- (the 50% transition machine — MovePoint / AttackStop legs —
+-- has no bearer; documented in the header).
+RegisterCreatureEvent(ENTRY_KAELTHAS, 9, function(_, creature, attacker)
+    local guid = creature:GetGUID()
+    if kaelPreEncounter[guid] == false then
+        return
+    end
+    if attacker ~= nil then
+        creature:SetTarget(attacker)
+        kaelPreEncounter[guid] = false
+    end
+end)
+
+-- C++ Reset equivalent for the latch (the ctor / DATA_KAELTHAS
+-- bookkeeping has no instance bridge).
+RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
+    kaelPreEncounter[creature:GetGUID()] = nil
 end)
 
 -- Thaladred the Darkener (20064): C++ UpdateAI in arm order
