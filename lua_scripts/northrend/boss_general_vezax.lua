@@ -106,9 +106,9 @@
 -- npc_saronite_vapors / boss_saronite_animus below).
 -- CheckShamanisticRage — PORTED at engage (map-player-scan via
 -- GetPlayersInWorld + map/instance filter -> player:HasSpell
--- (30823) -> creature:CastSpell(player, 68415) non-triggered; the C++
--- player->CastSpell self-cast is unbridgeable — no player:CastSpell
--- bridge exists — so the caster deviates from C++).
+-- (30823) -> player:CastSpell(player, 68415, false) non-triggered
+-- (player:CastSpell bridged 2026-10-24, lua_player.go:309 — caster
+-- now C++-exact).
 -- EVENT_SARONITE_VAPORS (:194-208) — DoCast
 -- (SPELL_SUMMON_SARONITE_VAPORS 63081) self-cast (2-arg
 -- DoCast(uint32) resolves SELF — UnitAI.cpp:113), 30s init
@@ -297,21 +297,17 @@ end
 -- non-triggered. The "no map-player-scan bridge" claim is stale —
 -- GetPlayersInWorld + map/instance filter is the in-tree bridge
 -- (gal_darah precedent); player:HasSpell is live
--- (engine/world/lua_player.go:145). player:CastSpell is NOT live
--- (CastSpell is registered for creature objects only,
--- engine/world/lua_creature_events.go:60) — the creature casts on the
--- player instead (caster deviates from C++). No alive gate — C++-exact
+-- (engine/world/lua_player.go:145). player:CastSpell is live (lua_player.go:309) — the player casts
+-- on itself, C++-exact. No alive gate — C++-exact
 -- (C++ has none).
 local function checkShamanisticRage(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
                 and plr:HasSpell(SPELL_SHAMANTIC_RAGE) then
-            -- C++: player->CastSpell(player, 68415, false) — but
-            -- player:CastSpell has no bridge (CastSpell is creature-only,
-            -- engine/world/lua_creature_events.go:60); the creature casts
-            -- on the player instead (caster deviates from C++).
-            creature:CastSpell(plr, SPELL_CORRUPTED_RAGE)
+            -- C++: player->CastSpell(player, 68415, false) — now live
+            -- via player:CastSpell (lua_player.go:309).
+            plr:CastSpell(plr, SPELL_CORRUPTED_RAGE, false)
         end
     end
 end

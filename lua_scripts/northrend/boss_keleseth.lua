@@ -65,10 +65,12 @@
 -- 42672, true) -> CastSpell(target, 42672, true); target->CastSpell
 -- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> creature:CastSpell
 -- (target, 42714, true) — the C++ comment says "checked from sniffs -
--- the player casts the spell", but player:CastSpell has no bridge
--- (CastSpell is creature-only, engine/world/lua_creature_events.go:60),
--- so the caster deviates from C++ (the moroes GARROTE target-self-cast
--- shape is unbridgeable); repeat {14s,19s} regardless of target found,
+-- the player casts the spell"; player:CastSpell is bridged
+-- (lua_player.go:309) but the creature cast STAYS: 42714 is a
+-- summon-family spell and the session path executes no
+-- SPELL_EFFECT_SUMMON while the creature path does (kurinnaxx
+-- precedent) — switching would lose the tomb summon; repeat
+-- {14s,19s} regardless of target found,
 -- C++-exact.
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
 -- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
@@ -201,11 +203,10 @@ local function frostTombTick(creature, guid)
         creature:Talk(SAY_FROST_TOMB_EMOTE, target)
         creature:CastSpell(target, SPELL_FROST_TOMB_STUN, true)
         -- C++ comment: "checked from sniffs - the player casts the
-        -- spell" — but player:CastSpell has no bridge (CastSpell is
-        -- registered for creature objects only,
-        -- engine/world/lua_creature_events.go:60); the target-self-cast
-        -- would nil-call and kill this timer chain, so the creature
-        -- casts on the target instead (caster deviates from C++).
+        -- spell" — player:CastSpell is bridged (lua_player.go:309),
+        -- but the creature cast stays: 42714 is summon-family and
+        -- the session path executes no SPELL_EFFECT_SUMMON, so
+        -- switching would lose the tomb summon (caster deviates).
         creature:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
     end
     schedule(guid, "frosttomb", {14000, 19000}, function()

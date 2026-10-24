@@ -128,11 +128,13 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
                 local p = GetPlayerByGUID(pGUID)
                 if p then
                     -- C++ :223-224 temp->CastSpell(temp, ..., true) —
-                    -- explicit TRIGGERED_FULL_MASK. But player:CastSpell
-                    -- has no bridge (CastSpell is creature-only,
-                    -- engine/world/lua_creature_events.go:60); the
-                    -- creature casts on the player instead (caster
-                    -- deviates from C++).
+                    -- explicit TRIGGERED_FULL_MASK. player:CastSpell
+                    -- is bridged (lua_player.go:309) but the creature
+                    -- cast STAYS: the pair's point is the banish
+                    -- teleport, and the session path's teleport-effect
+                    -- delivery is unverified — switching a teleport arm
+                    -- on an unverified leg risks its whole effect
+                    -- (caster deviates from C++).
                     creature:CastSpell(p, SPELL_EXILE, true)
                     creature:CastSpell(p, SPELL_BANISH_TELEPORT, true)
                 end

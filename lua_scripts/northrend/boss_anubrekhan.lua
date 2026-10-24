@@ -165,19 +165,20 @@ end
 
 -- C++ KilledUnit (boss_anubrekhan.cpp:143-149): TYPEID_PLAYER-gated
 -- victim->CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR,
--- me->GetGUID()) + unconditional Talk(SAY_SLAY 2). victim:CastSpell
--- has no bridge (player object), so the boss casts on the victim
--- instead (moroes convention); the original-caster GUID attribution
--- of the 3rd arg is unbridgeable.
+-- me->GetGUID()) + unconditional Talk(SAY_SLAY 2). player:CastSpell
+-- is bridged (lua_player.go:309) but the boss cast STAYS: 29105
+-- spawns 5 corpse scarabs (summon effect) and the session cast path
+-- executes no SPELL_EFFECT_SUMMON while the creature path does
+-- (kurinnaxx precedent) — switching would lose the scarabs; the
+-- original-caster GUID attribution is likewise unbridgeable.
 local function anubrekhanTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         -- C++ boss_anubrekhan.cpp:146: victim->CastSpell(victim,
         -- SPELL_SUMMON_CORPSE_SCARABS_PLR, me->GetGUID()) — but
-        -- player:CastSpell has no bridge (CastSpell is registered for
-        -- creature objects only, engine/world/lua_creature_events.go:65),
-        -- so the victim-self-cast would nil-call on the first player
-        -- kill; the boss casts on the victim instead (caster deviates
-        -- from C++; the original-caster GUID attribution is unbridgeable).
+        -- player:CastSpell is bridged (lua_player.go:309), but the
+        -- boss cast stays: 29105 spawns scarabs (summon effect, no
+        -- session-path executor) and the C++ origCaster attribution
+        -- has no Lua slot (caster deviates from C++).
         -- The C++ CastSpellExtraArgs(origCaster) ctor sets
         -- TRIGGERED_FULL_MASK (SpellDefines.h:167), so triggered=true.
         creature:CastSpell(victim, SPELL_SUMMON_CORPSE_SCARABS_PLR, true)

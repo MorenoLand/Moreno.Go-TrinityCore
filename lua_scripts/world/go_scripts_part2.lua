@@ -52,21 +52,25 @@
 -- player:GetQuestStatus(QUEST_THE_CLEANSING_HORDE 11317 /
 -- QUEST_THE_CLEANSING_ALLIANCE 11322, enum :733-736) bridged since
 -- 2026-10-24 — but the cleansing arm still needs
--- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) (no bridge) and
--- player:SetStandState(UNIT_STAND_STATE_SIT) (no bridge).
+-- player:CastSpell(player, SPELL_CLEANSING_SOUL 43351) bridged
+-- 2026-10-24 (lua_player.go:309); the sole remaining block is
+-- player:SetStandState(UNIT_STAND_STATE_SIT) (SetStandState is
+-- creature-surface only, lua_creature_events.go:1621).
 
 -- DOCUMENTED-ONLY: go_midsummer_bonfire (C++ :769-800)
 -- OnGossipSelect (:783-788; gameobject_gossip ON_SELECT=2 fires per
 -- engine/world/gameobject_hooks.go:215): player:CastSpell(player,
--- STAMP_OUT_BONFIRE_QUEST_COMPLETE 45458, true — enum :764) (no bridge) and
--- CloseGossipMenuFor(player) (no bridge). Entry is DB-side (ScriptName).
+-- STAMP_OUT_BONFIRE_QUEST_COMPLETE 45458, true — enum :764) bridged
+-- 2026-10-24 (lua_player.go:309); CloseGossipMenuFor(player) still
+-- has no bridge (zero runtime hits). Entry is DB-side (ScriptName).
 
 -- DOCUMENTED-ONLY: go_midsummer_ribbon_pole (C++ :808-834)
 -- OnGossipHello (:817-826): needs me:FindNearestCreature(
 -- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) (no bridge), creature DoAction(
 -- ACTION_COSMETIC_FIRES 0) (no bridge), player:CastSpell(player,
 -- RibbonPoleSpells[urand(0,2)] in {29705, 29726, 29727} — enum :811-813)
--- (no bridge). Entry DB-side.
+-- (player:CastSpell bridged 2026-10-24; the GO-surface
+-- FindNearestCreature + DoAction legs still block). Entry DB-side.
 
 -- DOCUMENTED-ONLY: go_toy_train_set (C++ :839-869)
 -- UpdateAI (:851-860): GameObjectEventOnAIUpdate has no fire site; the
