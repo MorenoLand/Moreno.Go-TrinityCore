@@ -19,13 +19,18 @@
 --   AttackStop + SetFaction(FRIENDLY 35) + PerformEmote
 --   (EMOTE_ONESHOT_SALUTE 66).
 -- Unmodeled (documented-only, no bridges):
--- - DoFriend's MoveIdle (no Lua bridge) and UpdateAI's 120s
---   friend revert via EnterEvadeMode (no Lua bridge, 2026-10-21
---   standing note): the friend state persists until Reset instead
---   of reverting after 120s.
--- - EngagementOver (no Lua bridge anywhere in-tree): CombatStop +
---   AttackStop are the twins; the friendly faction flip keeps the
---   creature from re-engaging.
+-- - DoFriend's MoveIdle (no Lua bridge). The 120s friend revert
+--   IS ported: DoFriend schedules a 120s one-shot running the
+--   Reset legs (UpdateAI's EnterEvadeMode ends in Reset(),
+--   CreatureAI.cpp); the evade home-walk / aura-clear legs stay
+--   out, as in Reset.
+-- - EngagementOver is the inline tail of the ported DoFriend arm
+--   (zone_the_barrens.cpp calls it right after CombatStop): it
+--   only flips _isEngaged + AtDisengage (ATTACK_PLAYER clear,
+--   tapped-flag restore — no Go model, no effect for this
+--   non-pet creature). The disengage core (InCombat=false,
+--   threat clear, target drop) is the ported CombatStop(true)
+--   above, so there is no separate missing arm.
 -- - Melee is engine-driven in Go, like C++ DoMeleeAttackIfReady.
 
 local ENTRY_FIZZULE = 7233
@@ -40,6 +45,29 @@ local FACTION_FRIENDLY = 35
 
 local state = {}
 local factionNorm = {}
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
 
 local function fizzuleSpawn(event, creature)
     factionNorm[creature:GetGUID()] = creature:GetFaction()
@@ -47,6 +75,7 @@ end
 
 local function fizzuleReset(event, creature)
     local guid = creature:GetGUID()
+    cancelTimers(guid)
     state[guid] = { isFriend = false, flareCount = 0 }
     local norm = factionNorm[guid]
     if norm ~= nil then
@@ -85,6 +114,9 @@ local function fizzuleReceiveEmote(event, creature, player, textEmote)
         creature:AttackStop()
         creature:SetFaction(FACTION_FRIENDLY)
         creature:PerformEmote(EMOTE_ONESHOT_SALUTE)
+        schedule(guid, "revert", 120000, function()
+            fizzuleReset(nil, creature)
+        end)
     end
 end
 

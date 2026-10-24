@@ -30,11 +30,18 @@
 --   is dungeon-gated, so it no-ops in Hellfire Peninsula). The
 --   cast pumps still run from the gossip chain and land once the
 --   player attacks (player-initiated combat supplies the victim).
--- - EVENT_EVADE's EnterEvadeMode (no Lua bridge, 2026-10-21
---   standing note): the 60s post-defeat evade never fires, so the
---   defeated flags persist until Reset.
--- - EngagementOver (no Lua bridge anywhere in-tree): CombatStop +
---   AttackStop are the twins.
+-- - EVENT_EVADE IS ported: the defeat branch schedules a 60s
+--   one-shot running the Reset legs (EnterEvadeMode ends in
+--   Reset(), CreatureAI.cpp). The EnterEvadeMode bridge itself
+--   is still absent (2026-10-21 standing note) and the evade
+--   home-walk legs stay out, as in Reset.
+-- - EngagementOver is the inline tail of the ported DamageTaken
+--   arm (zone_hellfire_peninsula.cpp calls it right after
+--   CombatStop): it only flips _isEngaged + AtDisengage
+--   (ATTACK_PLAYER clear, tapped-flag restore — no Go model, no
+--   effect for this non-pet creature). The disengage core
+--   (InCombat=false, threat clear, target drop) is the ported
+--   CombatStop(true) above, so there is no separate missing arm.
 
 local ENTRY_ALEDIS = 20159
 
@@ -171,6 +178,9 @@ local function aledisDamageTaken(event, creature, attacker, damage)
         creature:SetFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
         creature:Talk(SAY_DEFEATED)
+        schedule(guid, "evade", 60000, function()
+            aledisReset(nil, creature)
+        end)
         return false, 0
     end
     return false, damage

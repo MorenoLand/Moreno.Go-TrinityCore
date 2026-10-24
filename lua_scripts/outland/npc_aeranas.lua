@@ -22,9 +22,14 @@
 --   (SAY_FREE 1) + combat pumps cancelled. Fires once per
 --   engagement (freed latch, cleared on Reset).
 -- Unmodeled (documented-only, no bridges):
--- - EngagementOver (no Lua bridge anywhere in-tree): CombatStop +
---   AttackStop are the twins; the friendly faction flip keeps the
---   creature from re-engaging.
+-- - EngagementOver is the inline tail of the ported 30% arm
+--   (zone_hellfire_peninsula.cpp calls it right after CombatStop):
+--   it only flips _isEngaged + AtDisengage (ATTACK_PLAYER clear,
+--   tapped-flag restore — no Go model, no effect for this
+--   non-pet creature). The disengage core (InCombat=false,
+--   threat clear, target drop) is the ported CombatStop(true)
+--   above, so there is no separate missing arm; the friendly
+--   faction flip keeps the creature from re-engaging.
 -- - The C++ faction-timer quirk: if the 30% arm fires before the
 --   8s faction timer, C++ still flips the faction to MONSTER_2
 --   when it expires. The Lua timer is left running likewise, so
