@@ -88,7 +88,8 @@
 -- Random, 1) — teron convention; nil pick keeps the schedule,
 -- burn convention); abyssal 30511 30s then 60s, non-triggered
 -- DoCastVictim (jeklik convention). The InterruptNonMeleeSpells
--- arm has no interrupt bridge (krosh convention). OnDied(4):
+-- arm is PORTED (InterruptNonMeleeSpells(false) first in
+-- channelerEnterCombat, boss_magtheridon.cpp:335). OnDied(4):
 -- non-triggered DoCastAOE self-cast soul transfer 30531
 -- (kalecgos convention) + cleanup (the "Hit Kill" DoAction
 -- relay is cross-creature blocked). OnLeaveCombat(2)/
@@ -118,10 +119,10 @@
 -- leg IS bridged (RemoveFlag(59, 0x100)) and ported in C++ order at
 -- magtheridonEnterCombat (boss_magtheridon.cpp:254); the channeler REACT_DEFENSIVE arm
 -- is PORTED 2026-10-20 (creature:SetReactState);
--- no interrupt/distance bridges — the
--- quake/blaze SPELLVALUE target-count args, the channeler
--- InterruptNonMeleeSpells and the DoSelectBelowHpPctFriendly
--- dark-mending pick (no creature-enumeration bridge) unmodeled;
+-- no distance bridge — the
+-- quake/blaze SPELLVALUE target-count args and the DoSelectBelowHpPctFriendly
+-- dark-mending pick (no creature-enumeration bridge) unmodeled
+-- (the channeler InterruptNonMeleeSpells leg is PORTED above);
 -- the "no SpellHitTarget bridge / event 15 never fires" claim is
 -- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
 -- (boss_ai.go:2097-2115; the arugal precedent). The boss's
@@ -441,9 +442,10 @@ local function channelerReset(event, creature)
 end
 
 -- C++ JustEngagedWith: the magtheridon DoAction relay is
--- cross-creature blocked (header); the interrupt arm has no
--- bridge; the self-contained timers arm normally.
+-- cross-creature blocked (header); the interrupt arm is PORTED
+-- (boss_magtheridon.cpp:335, first in arm order).
 local function channelerEnterCombat(event, creature)
+    creature:InterruptNonMeleeSpells(false)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = true

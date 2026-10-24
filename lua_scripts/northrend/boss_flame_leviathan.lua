@@ -32,8 +32,8 @@
 -- true) triggered self-cast; EVENT_REPAIR 4s later (:433-:437):
 -- Talk(EMOTE_REPAIR 14) + reschedules EVENT_SHUTDOWN 150s. Only the 150s
 -- timer path is modeled — the early 4s path is gated on the SpellHit-driven
--- Shutdown counter (SPELL_OVERLOAD_CIRCUIT 62399 vehicle spellclick leg, no
--- bridge). NOTE: DelayEvents(20s, 0) at :431 is a C++ no-op
+-- Shutdown counter (SPELL_OVERLOAD_CIRCUIT 62399 vehicle spellclick leg;
+-- threshold + aura-removal blocked, interrupt leg now bridged). NOTE: DelayEvents(20s, 0) at :431 is a C++ no-op
 -- (EventMap.cpp:111 early-returns on group 0), so the shutdown arm
 -- is fully C++-exact as ported.
 -- The systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
@@ -62,12 +62,14 @@
 -- CreatureEventOnHitBySpell is bridged; the arms stay out on their own
 -- machines: SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
 -- no vehicle bridge; SPELL_ELECTROSHOCK 62522
--- InterruptSpell(CURRENT_CHANNELED_SPELL) — no interrupt bridge
--- (CastSpell itself is bridged; the arm interrupts, it doesn't cast);
+-- InterruptSpell(CURRENT_CHANNELED_SPELL) — no InterruptSpell Lua
+-- method (the InterruptNonMeleeSpells bridge does not cover it);
 -- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown — the only consumer is the
 -- early-4s shutdown (ScheduleEvent(EVENT_SHUTDOWN, 4s) +
--- InterruptNonMeleeSpells, unbridged), so the counter alone is dead
--- state.
+-- InterruptNonMeleeSpells, now bridged) — still blocked on the
+-- RAID_MODE 2/4-seat threshold (no raid-size bridge) and the
+-- unbridged RemoveAurasDueToSpell leg, so the counter alone
+-- stays dead state.
 -- MovementInform (boss_flame_leviathan.cpp:570-576) — the
 -- ACTION_MOVE_TO_CENTER_POSITION arrival leg (SetReactState(REACT_AGGRESSIVE)
 -- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE | STUNNED)) rides the
@@ -203,7 +205,8 @@ end
 -- Talk(EMOTE_OVERLOAD) + me->CastSpell(me, SPELL_SYSTEMS_SHUTDOWN, true)
 -- triggered self-cast; then EVENT_REPAIR at 4s (:433-:437): Talk(EMOTE_REPAIR)
 -- + reschedules EVENT_SHUTDOWN 150s. Only the timer path is modeled; the
--- early 4s path rides the SpellHit-driven Shutdown counter (no bridge).
+-- early 4s path rides the SpellHit-driven Shutdown counter
+-- (threshold + aura-removal blocked; interrupt leg bridged).
 -- DelayEvents(20s, 0) is a C++ no-op (EventMap.cpp:111 early-returns on
 -- group 0), so nothing needs emulation — C++-exact.
 local shutdownTick

@@ -38,9 +38,9 @@
 -- magtheridon/ragnaros-intro convention. + 1s scheduler pump
 -- (a port of UpdateAI — 1s granularity is exact for the 45s/
 -- 18s/15s/2s/60s/120s timers). Pump, !Submerged arm: phase 120s
--- -> DoCast self 37550 non-triggered (C++ DoCast default),
--- phase=60000, submerged=true (the InterruptNonMeleeSpells arm
--- has no interrupt bridge — krosh convention). Spout 45s ->
+-- -> InterruptNonMeleeSpells(false) + DoCast self 37550
+-- non-triggered (C++ DoCast default), phase=60000,
+-- submerged=true (boss_lurker_below.cpp:240). Spout 45s ->
 -- Talk(EMOTE_SPOUT), re-arm 45000, whirl=20000 (whirl directly
 -- after spout, C++-exact), rot=20000, return (C++-exact — the
 -- MoveRotate 20s + react-passive arms have no
@@ -118,11 +118,11 @@
 -- ambusher/guardian summons unmodeled; no movement bridge —
 -- the spout MoveRotate 20s machine, the rot-arc spout picks
 -- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water-on-
--- creature/react/flag/display/interrupt/evade bridges — the
+-- creature/react/flag/display/evade bridges — the
 -- arc+distance+water spout target pick, the react passive/
--- aggressive flips, the visibility/flag/immune reset arms, the
--- InterruptNonMeleeSpells arm and the evade/zone-combat arms
--- unmodeled; the shoot-bow 1100 BP0 arg has no bridge (cast
+-- aggressive flips, the visibility/flag/immune reset arms and
+-- the evade/zone-combat arms unmodeled (the submerge/emerge
+-- InterruptNonMeleeSpells legs are PORTED in the pump); the shoot-bow 1100 BP0 arg has no bridge (cast
 -- without it); SPELL_KNOCKBACK 19813 defined but unused in
 -- C++ — documented only; NPC_COILFANG_GUARDIAN (21873) has no
 -- AI class in this file — documented only, not registered; no
@@ -258,11 +258,11 @@ local function lurkerTick(creature, guid)
     end
 
     if not st.submerged then
-        -- Phase 120s -> submerge: self-cast 37550
-        -- non-triggered (C++ DoCast default), phase=60s,
-        -- submerged (the InterruptNonMeleeSpells arm has no
-        -- interrupt bridge — krosh convention).
+        -- Phase 120s -> submerge: InterruptNonMeleeSpells(false)
+        -- then self-cast 37550 non-triggered (C++ DoCast default),
+        -- phase=60s, submerged (boss_lurker_below.cpp:240).
         if st.phase <= 1000 then
+            creature:InterruptNonMeleeSpells(false)
             creature:CastSpell(creature, SPELL_SUBMERGE)
             st.phase = 60000
             st.submerged = true
@@ -355,8 +355,8 @@ local function lurkerTick(creature, guid)
             end
         end
     else
-        -- Submerged arm: phase 60s -> emerge: remove auras,
-        -- triggered self-cast 20568 (C++-exact), spout=3s
+        -- Submerged arm: phase 60s -> emerge: interrupt, remove
+        -- auras, triggered self-cast 20568 (C++-exact), spout=3s
         -- (C++ "directly cast Spout after emerging!"), phase
         -- back to 120s (the 9x summon arm is summon-blocked;
         -- the submerged/emerge flag arms are ported — header). The
@@ -365,6 +365,7 @@ local function lurkerTick(creature, guid)
         -- unconditionally (jeklik convention).
         if st.phase <= 1000 then
             st.submerged = false
+            creature:InterruptNonMeleeSpells(false) -- boss_lurker_below.cpp:349
             creature:RemoveAllAuras()
             -- boss_lurker_below.cpp:351 — SetImmuneToPC(false)
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)

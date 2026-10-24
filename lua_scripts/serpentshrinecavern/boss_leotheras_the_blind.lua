@@ -43,9 +43,9 @@
 -- (the MotionMaster Clear/MoveChase half has no movement bridge —
 -- unmodeled; the ResetThreatList half is PORTED below via
 -- creature:ResetAllThreat). Berserk
--- 26662 600s one-shot (EnrageUsed-guarded): non-triggered self-
--- cast (C++-exact; the InterruptNonMeleeSpells arm has no
--- interrupt bridge — krosh convention). Nightelf form: whirlwind
+-- 26662 600s one-shot (EnrageUsed-guarded): InterruptNonMeleeSpells(false)
+-- then non-triggered self-cast (C++-exact, boss_leotheras_the_blind.cpp:469).
+-- Nightelf form: whirlwind
 -- 37640 — if the aura is absent and the timer fires -> non-
 -- triggered self-cast 37640, whirlwind=2000, needThreatReset=true
 -- (C++-exact); switch-to-demon (only while !isFinalForm) 45s ->
@@ -111,9 +111,10 @@
 -- engine melee applies).
 -- npc_greyheart_spellbinder (21806): OnEnterCombat(1): per-GUID
 -- reset (mindblast {3s,8s} / earthshock {5s,10s}) + 1s pump
--- (the JustEngagedWith InterruptNonMeleeSpells + instance Set-
--- GuidData(DATA_LEOTHERAS_EVENT_STARTER) arms are interrupt/
--- instance blocked). Pump: mind blast 37531 — timer {3s,8s} init
+-- (the JustEngagedWith InterruptNonMeleeSpells leg is PORTED
+-- (boss_leotheras_the_blind.cpp:731, first in binderEnterCombat);
+-- the instance SetGuidData(DATA_LEOTHERAS_EVENT_STARTER) arm
+-- stays instance blocked). Pump: mind blast 37531 — timer {3s,8s} init
 -- then {10s,15s}: CastSpell(random alive player, 37531) (C++
 -- SelectTarget(Random, 0) — no player-only gate, teron/krosh
 -- convention; nil pick casts nothing, re-arm regardless —
@@ -184,9 +185,9 @@
 -- the spell-
 -- binder leotherasGUID relay, the inner-demon victim binding,
 -- the ConsumingMadness 37749 demon casts and the demon-copy
--- despawn unmodeled; no interrupt bridge (krosh convention) —
--- the berserk InterruptNonMeleeSpells and the spellbinder
--- JustEngagedWith interrupt unmodeled; no player-aura bridges —
+-- despawn unmodeled; the berserk InterruptNonMeleeSpells and the
+-- spellbinder JustEngagedWith interrupt are PORTED (above);
+-- no player-aura bridges —
 -- the whisper AddAura(37676) and the cube-note player-CastSpell
 -- gap (the earthshock caster scan is PORTED above via
 -- player:IsCasting).
@@ -362,6 +363,7 @@ local function leotherasTick(creature, guid)
     -- 600000 timer reaches exactly 1000 then 0, firing on the 0
     -- tick — `<= 1000` fired ~1s early.
     if st.berserk < 1000 and not st.enrageUsed then
+        creature:InterruptNonMeleeSpells(false) -- boss_leotheras_the_blind.cpp:469
         creature:CastSpell(creature, SPELL_BERSERK)
         st.enrageUsed = true
     elseif st.berserk >= 1000 then
@@ -642,6 +644,7 @@ local function binderTick(creature, guid)
 end
 
 local function binderEnterCombat(event, creature)
+    creature:InterruptNonMeleeSpells(false) -- boss_leotheras_the_blind.cpp:731
     local guid = creature:GetGUID()
     resetCreature(binderTimers, binderState, guid)
     binderState[guid] = freshBinderState()
