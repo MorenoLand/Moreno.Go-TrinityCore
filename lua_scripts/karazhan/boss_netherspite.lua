@@ -32,6 +32,7 @@
 -- phases in C++-exact form).
 
 local ENTRY_NETHERSPITE = 15689
+local GO_MASSIVE_DOOR = 185521 -- karazhan.h:99
 
 local EMOTE_PHASE_PORTAL = 0
 local EMOTE_PHASE_BANISH = 1
@@ -395,8 +396,9 @@ local function netherspiteEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     netherspiteInitState(guid)
-    -- C++ JustEngagedWith: HandleDoors(false) (no instance-script model,
-    -- skipped) then SwitchToPortalPhase.
+    -- C++ JustEngagedWith: HandleDoors(false) then SwitchToPortalPhase.
+    local door = creature:FindNearestGameObject(GO_MASSIVE_DOOR, 100.0)
+    if door then door:SetGoState(1) end -- GO_STATE_READY
     switchToPortal(creature, guid)
     schedule(guid, "voidzone", 15000, function() onVoidZone(creature, guid) end)
     schedule(guid, "berserk", 540000, function() onBerserk(creature, guid) end)
@@ -412,14 +414,19 @@ end
 local function netherspiteDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustDied: HandleDoors(true) then DestroyPortals (order kept).
+    local door = creature:FindNearestGameObject(GO_MASSIVE_DOOR, 100.0)
+    if door then door:SetGoState(0) end -- GO_STATE_ACTIVE
     destroyPortals(creature, guid)
-    -- C++ JustDied: HandleDoors(true) (no instance-script model, skipped).
 end
 
 local function netherspiteReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     netherspiteInitState(guid)
+    -- C++ Reset: HandleDoors(true) then DestroyPortals (order kept).
+    local door = creature:FindNearestGameObject(GO_MASSIVE_DOOR, 100.0)
+    if door then door:SetGoState(0) end -- GO_STATE_ACTIVE
     destroyPortals(creature, guid)
 end
 

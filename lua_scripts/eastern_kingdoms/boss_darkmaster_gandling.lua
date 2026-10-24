@@ -27,8 +27,9 @@
 --
 -- Documented-unmodeled (no bridges):
 -- Reset/JustDied/JustEngagedWith GO_GATE_GANDLING (177374) state legs
--- (SetGoState ACTIVE/ACTIVE/READY via instance GetGuidData) — no
--- GO-state/instance bridges. spell_shadow_portal (17950: picks one of six
+-- (SetGoState ACTIVE/ACTIVE/READY) PORTED below via
+-- creature:FindNearestGameObject — C++ used instance GetGuidData;
+-- the entry is unique in the instance, so the target is identical. spell_shadow_portal (17950: picks one of six
 -- room portals 17863/17939/17943/17944/17946/17948 among rooms whose
 -- gates are still open, up to 6 tries) + spell_shadow_portal_rooms
 -- (17863..: summons 3x NPC_RISEN_GUARDIAN 11598 at the room's SummonPos,
@@ -39,6 +40,7 @@
 -- bookkeeping have no bridges (luaBossAI shim).
 
 local ENTRY_GANDLING = 1853
+local GO_GATE_GANDLING = 177374 -- scholomance.h:49
 
 local SPELL_ARCANE_MISSILES = 15790
 local SPELL_SHADOW_SHIELD = 12040
@@ -138,7 +140,7 @@ local function onShadowPortal(creature, guid)
 end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (shim) + the four events +
--- GO_GATE_GANDLING SetGoState(READY) (bridgeless leg documented-only).
+-- GO_GATE_GANDLING SetGoState(READY) PORTED below (FindNearestGameObject).
 local function gandlingEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -154,6 +156,8 @@ local function gandlingEnterCombat(event, creature, target)
     schedule(guid, "shadowPortal", 15000, function()
         onShadowPortal(creature, guid)
     end)
+    local gate = creature:FindNearestGameObject(GO_GATE_GANDLING, 100.0)
+    if gate then gate:SetGoState(1) end -- GO_STATE_READY
 end
 
 local function gandlingLeaveCombat(event, creature)
@@ -162,12 +166,15 @@ end
 
 local function gandlingDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local gate = creature:FindNearestGameObject(GO_GATE_GANDLING, 100.0)
+    if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
 end
 
--- C++ Reset: _Reset + GO_GATE_GANDLING SetGoState(ACTIVE) (bridgeless leg
--- documented-only).
+-- C++ Reset: _Reset + GO_GATE_GANDLING SetGoState(ACTIVE) PORTED below.
 local function gandlingReset(event, creature)
     cancelTimers(creature:GetGUID())
+    local gate = creature:FindNearestGameObject(GO_GATE_GANDLING, 100.0)
+    if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
 end
 
 RegisterCreatureEvent(ENTRY_GANDLING, 1, gandlingEnterCombat)

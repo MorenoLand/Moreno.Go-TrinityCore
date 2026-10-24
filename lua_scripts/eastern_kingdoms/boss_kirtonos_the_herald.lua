@@ -51,10 +51,10 @@
 --   GetScholomanceAI -> GetInstanceAI legs (instance-script model
 --   blocked, standing).
 -- - Reset -> _Reset() (instance-model leg) and the _JustDied() leg.
--- - JustDied / EnterEvadeMode: the gate/brazier GameObject arms
---   (instance->GetGuidData(GO_GATE_KIRTONOS) /
---   GO_BRAZIER_OF_THE_HERALD through ObjectAccessor + SetGoState /
---   ResetDoorOrButton; instance-script model blocked — the true bar;
+-- - JustDied / EnterEvadeMode: the gate/brazier SetGoState arms
+--   PORTED below via creature:FindNearestGameObject (both entries
+--   unique in the instance; C++ used instance GetGuidData).
+--   ResetDoorOrButton stays out (no bridge); _JustDied() leg stays out;
 --   the old "no despawn bridge" on the 5s DespawnOrUnsummon arm was
 --   stale (creature:Despawn() is bridged, lua_creature_events.go:214).
 -- - IsSummonedBy + MovementInform INTRO_1..6 choreography: MovePath(
@@ -85,6 +85,7 @@ local EQUIP_NO_CHANGE = 0xFFFFFFFF
 local WEAPON_KIRTONOS_STAFF = 11365
 
 local GO_BRAZIER_OF_THE_HERALD = 175564
+local GO_GATE_KIRTONOS = 175570 -- scholomance.h:48
 local POS_SUMMON = {315.028, 70.53845, 102.1496, 0.3859715} -- C++ PosSummon[0]
 local SOUND_SCREECH = 557
 
@@ -208,14 +209,26 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_kirtonos_the_herald.cpp:106-113): gate ACTIVE,
+    -- brazier READY (ResetDoorOrButton leg unbridged, skipped).
+    local gate = creature:FindNearestGameObject(GO_GATE_KIRTONOS, 100.0)
+    if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
+    local brazier = creature:FindNearestGameObject(GO_BRAZIER_OF_THE_HERALD, 100.0)
+    if brazier then brazier:SetGoState(1) end -- GO_STATE_READY
 end
 
 local function onEvade(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ EnterEvadeMode (:115-124): gate ACTIVE, brazier READY, then
+    -- the 5s self-despawn below (ResetDoorOrButton leg unbridged).
+    local gate = creature:FindNearestGameObject(GO_GATE_KIRTONOS, 100.0)
+    if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
+    local brazier = creature:FindNearestGameObject(GO_BRAZIER_OF_THE_HERALD, 100.0)
+    if brazier then brazier:SetGoState(1) end -- GO_STATE_READY
     -- C++ EnterEvadeMode (boss_kirtonos_the_herald.cpp:115-124):
-    -- me->DespawnOrUnsummon(5s) — the gate/brazier GO legs ride the
-    -- unbridged instance-GO machine; the 5s self-despawn is a genuine
+    -- me->DespawnOrUnsummon(5s) — the gate/brazier SetGoState legs are
+    -- PORTED above (FindNearestGameObject); the 5s self-despawn is a genuine
     -- delayed despawn (terestian precedent).
     CreateLuaEvent(function()
         creature:Despawn()

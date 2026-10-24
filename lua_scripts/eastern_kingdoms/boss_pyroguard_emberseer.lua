@@ -61,9 +61,10 @@
 -- draenei_survivor).
 -- Reset's _Reset() and JustDied's _JustDied() are internal
 -- BossAI machinery covered by the cancel/re-arm on combat events
--- (halycon precedent); JustDied's UpdateRunes(GO_STATE_READY) +
--- instance->SetBossState(DONE) arms are instance-side — unmodeled
--- (instance precedent).
+-- (halycon precedent); JustDied's UpdateRunes(GO_STATE_READY) is
+-- PORTED below via creature:FindNearestGameObject (7 distinct rune
+-- entries; C++ used instance GetGuidData). SetBossState(DONE) stays
+-- out (instance precedent).
 
 local SPELL_FIRE_SHIELD = 13376
 local SPELL_FIRENOVA = 23462
@@ -71,6 +72,7 @@ local SPELL_FLAMEBUFFET = 23341
 local SPELL_PYROBLAST = 17274
 
 local ENTRY_PYROGAURD_EMBERSEER = 9816
+local EMBERSEER_RUNES = {175266, 175267, 175268, 175269, 175270, 175271, 175272} -- blackrock_spire.h:115-121
 
 local timers = {}
 
@@ -153,13 +155,20 @@ local function onEnterCombat(_, creature)
     schedule(guid, "pyroblast", 14000, function() onPyroblast(creature, guid) end)
 end
 
-local function onCombatEnd(_, creature)
+local function onCombatEnd(event, creature)
     -- C++ Reset (boss_pyroguard_emberseer.cpp:83-86): NOT_SELECTABLE +
     -- SetImmuneToPC(true) [SetFlag(59, 0x100)] — the flag pair comes
     -- first in arm order, before events.Reset and the aura cleanup.
     creature:SetFlag(59, 0x2000000)
     creature:SetFlag(59, 0x100)
     cancelTimers(creature:GetGUID())
+    if event == 4 then
+        -- C++ JustDied: UpdateRunes(GO_STATE_READY) (illidan event-4 precedent).
+        for _, entry in ipairs(EMBERSEER_RUNES) do
+            local rune = creature:FindNearestGameObject(entry, 100.0)
+            if rune then rune:SetGoState(1) end -- GO_STATE_READY
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 1, onEnterCombat)
