@@ -34,8 +34,9 @@
 -- GetClosePoint + SummonCreature NPC_RAGECLAW 29686, SetFacing
 -- ToObject pair — the LockRageclaw facing pair (C++ :74-75) is
 -- bridgeable via the atan2 twin, devourer_of_souls precedent,
--- retracting "facing" from the blocker list) sits behind the flag /
--- summon bridges;
+-- retracting "facing" from the blocker list) stays documented-only:
+-- the SpellHit quest/credit/deathstate gates are unbridged, and the
+-- Reset arm alone would strand the rageclaw (no release trigger);
 -- the SpellHit(55083 UNLOCK_SHACKLE) machine (player-caster +
 -- quest-12861 INCOMPLETE gates -> DoCast(rageclaw, 55223)
 -- triggered + setDeathState(DEAD) + KilledMonster + RemoveAura
@@ -50,8 +51,8 @@
 -- SetStandState(STAND) + SetFaction(template) + DoCast(me,
 -- 55085) + Talk(0) + MoveRandom(10) + DespawnOrUnsummon(10s))
 -- has the faction / stand-state bridges (SetFaction + SetStandState
--- both live) but not movement / despawn — the release machine's
--- MoveRandom + DespawnOrUnsummon legs block it, so the Reset arm stays
+-- both live) but not MoveRandom, the template-faction restore value,
+-- or the shackles SpellHit trigger — so the Reset arm stays
 -- deferred rather than ported as a stranded half (a permanently-
 -- chained NPC is worse than no registration); MoveInLineOfSight overridden empty —
 -- documented-only. 55085 verifiable.
@@ -83,13 +84,16 @@
 -- documented-only. 12916/29928/55529 verifiable.
 -- npc_alchemist_finklestein — the facing/emote loop (EVENT_TURN_TO
 -- _POT 15-26s SetFacingTo(6.230825) + EMOTE_STATE_USE_STANDING
--- _NO_SHEATHE -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
--- EMOTE_STATE_NONE -> 25-41s->TURN_TO_POT), the MEDIUM_4 / MEDIUM_5 /
+-- _NO_SHEATHE 133 -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
+-- EMOTE_STATE_NONE 30 -> 25-41s->TURN_TO_POT) is PORTED below
+-- (SetFacingTo/EmoteState/CreateLuaEvent {min,max} bridges live —
+-- the old "no facing/emote bridges" stay-out is retracted for this
+-- loop only); the MEDIUM_4 / MEDIUM_5 /
 -- HARD_6 ingredient events (player GUID lookup -> Talk(say, player) +
 -- DoCast(player, 51154/51157) + ++try, dispatched by the cauldron's
 -- SetData(1,1)), and the cauldron GO arm (player->CastSpell(player,
--- SPELL_POT_CHECK 51046)) stay documented-only: no facing/emote/
--- GO/player-self-cast bridges. OnGossipSelect (zone_zuldrak.cpp:
+-- SPELL_POT_CHECK 51046)) stay documented-only: no GO SetData /
+-- player-self-cast bridges. OnGossipSelect (zone_zuldrak.cpp:
 -- 575-583: CloseGossipMenuFor + DoCast(player,
 -- SPELL_ALCHEMIST_APPRENTICE_INVISBUFF 51216) + ScheduleEvent
 -- (EVENT_EASY_123, 100ms) -> Talk(SAY_EASY_123 0, player) +
@@ -213,10 +217,53 @@ local function finklesteinCancel(event, creature)
     finklesteinCancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset() (zone_zuldrak.cpp:482-484) seeds EVENT_TURN_TO_POT at
+-- 15-26s; TURN_TO_POT (:518-521): SetFacingTo(6.230825) +
+-- EmoteState(133 USE_STANDING_NO_SHEATHE) -> TURN_BACK 11s;
+-- TURN_BACK (:523-526): SetFacingTo(4.886922) + EmoteState(30 NONE)
+-- -> TURN_TO_POT 25-41s. Ungated ambient loop; timers ride the
+-- per-GUID table so 2/4 cancel kills the loop, and 23 re-seeds it
+-- with the Reset. Cyclic pair uses forward declarations (tharon_ja
+-- idiom): a later `local function` would shadow the nil slot.
+local FACING_TO_POT = 6.230825
+local FACING_BACK = 4.886922
+local EMOTE_STATE_USE_STANDING_NO_SHEATHE = 133
+local EMOTE_STATE_NONE = 30
+
+local finklesteinTurnToPot, finklesteinTurnBack
+
+finklesteinTurnToPot = function(creature, guid)
+    creature:SetFacingTo(FACING_TO_POT)
+    creature:EmoteState(EMOTE_STATE_USE_STANDING_NO_SHEATHE)
+    finklesteinSchedule(guid, "turnback", 11000, function()
+        finklesteinTurnBack(creature, guid)
+    end)
+end
+
+finklesteinTurnBack = function(creature, guid)
+    creature:SetFacingTo(FACING_BACK)
+    creature:EmoteState(EMOTE_STATE_NONE)
+    finklesteinSchedule(guid, "turnpot", {25000, 41000}, function()
+        finklesteinTurnToPot(creature, guid)
+    end)
+end
+
+-- C++ Reset seed: cancel (Reset clears the event map) then schedule
+-- the first TURN_TO_POT at 15-26s. Spawn (5) and reset (23) both
+-- run Reset in C++; leave-combat (2) / death (4) stay cancel-only.
+local function finklesteinReset(event, creature)
+    local guid = creature:GetGUID()
+    finklesteinCancelTimers(guid)
+    finklesteinSchedule(guid, "turnpot", {15000, 26000}, function()
+        finklesteinTurnToPot(creature, guid)
+    end)
+end
+
 RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 2, finklesteinCancel)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 4, finklesteinCancel)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinCancel)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinReset)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 5, finklesteinReset)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- zone_zuldrak.cpp:510: custom UpdateAI never calls DoMeleeAttackIfReady (RP event machine in C++, never melees)
 end)
