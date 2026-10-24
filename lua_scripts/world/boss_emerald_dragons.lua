@@ -47,27 +47,23 @@
 -- no-op today).
 -- DOCUMENTED-ONLY (in this header; only the four dragon entries
 -- registered):
--- emerald_dragonAI Reset — DoCast(me, SPELL_MARK_OF_NATURE_AURA 25041,
--- triggered) non-targeted self-cast + RemoveFlag NOT_SELECTABLE /
--- NON_ATTACKABLE + SetReactState(REACT_AGGRESSIVE) + the EVENT_TAIL_SWEEP
--- / EVENT_NOXIOUS_BREATH / EVENT_SEEPING_FOG ScheduleEvent legs (the
--- self-cast is bridgeable in isolation (CastSpell(creature, 25041, true))
--- but its whole mechanical payload rides unbridged legs: the aura's 10s
--- tick triggers 25042 whose effect is the SpellScript-only
--- spell_mark_of_nature (no SpellScript bridge), and the 25040 mark it
--- tests for is applied by the unportable victim-self-cast KilledUnit leg
--- below — a ported cast would apply a mechanically inert aura; flags /
--- react-state have no bridges).
--- emerald_dragonAI UpdateAI — the SPELL_SUMMON_PLAYER 24776 max-threat
--- pull + DoMeleeAttackIfReady legs (no bridges); the base event machine
--- (EVENT_SEEPING_FOG 120-150s DoCast pair, EVENT_NOXIOUS_BREATH 7.5-15s,
--- EVENT_TAIL_SWEEP 2s) — re-keyed 2026-10-15 (timer doctrine): the
--- timer and cast legs bridge (CreateLuaEvent / CastSpell are live);
--- the machine stays out because the payloads ride unbridged legs —
--- the SPELL_SUMMON_PLAYER 24776 max-threat pull (no threat /
--- random-target bridge — the_beast / doomwalker precedent) and the
--- RemoveFlag / SetReactState legs. The stale "no-timer / no-cast"
--- claim is corrected.
+-- emerald_dragonAI Reset — PORTED 2026-10-24: RemoveFlag NOT_SELECTABLE /
+-- NON_ATTACKABLE (already ported 2026-10-20) + DoCast(me, SPELL_MARK_OF_
+-- NATURE_AURA 25041, triggered) self-cast in dragonReset; the aura is
+-- mechanically inert in Go (its 10s tick triggers 25042 via the
+-- SpellScript-only spell_mark_of_nature), like the ported KilledUnit
+-- 25040 cast. SetReactState(REACT_AGGRESSIVE) stays out: nothing in the
+-- ported model ever sets the dragons non-aggressive (see dragonReset).
+-- The base EVENT_TAIL_SWEEP / EVENT_NOXIOUS_BREATH / EVENT_SEEPING_FOG
+-- machine is PORTED 2026-10-24 (tailSweepTick / noxiousBreathTick /
+-- seepingFogTick, seeded in all four EnterCombat handlers): the old
+-- claim that the events ride the SPELL_SUMMON_PLAYER 24776 leg was
+-- wrong — 24776 is a separate UpdateAI leg (:158-159), not part of
+-- ExecuteEvent. That leg is PORTED 2026-10-24 too (summonPlayerTick,
+-- 1s combat pump): MaxThreat player beyond 50yd via the threat-ordered
+-- GetAITargets list + the reach-adjusted distance bar (UnitAI.cpp
+-- DefaultTargetSelector: negative dist excludes in-range targets).
+-- The three events are plain self-casts with their own re-arms.
 -- emerald_dragonAI KilledUnit — PORTED (this run): player-gated
 -- who->CastSpell(who, SPELL_MARK_OF_NATURE 25040, triggered), lowered to
 -- creature:CastSpell(victim, 25040, true) (maiden_of_virtue / moroes
@@ -157,6 +153,12 @@ local SPELL_SUMMON_DRUID_SPIRITS = 24795 -- boss_emerald_dragons.cpp:249 (Ysondr
 local SPELL_DRAW_SPIRIT = 24811 -- boss_emerald_dragons.cpp:336 (Lethon DamageTaken)
 local SPELL_CORRUPTION_OF_EARTH = 24910 -- boss_emerald_dragons.cpp:474 (Emeriss DamageTaken)
 local SPELL_MARK_OF_NATURE = 25040 -- boss_emerald_dragons.cpp:53,112 (all-dragon KilledUnit)
+local SPELL_TAIL_SWEEP = 15847 -- boss_emerald_dragons.cpp:46 (base ExecuteEvent)
+local SPELL_NOXIOUS_BREATH = 24818 -- boss_emerald_dragons.cpp:52 (base ExecuteEvent)
+local SPELL_SEEPING_FOG_LEFT = 24813 -- boss_emerald_dragons.cpp:50 (base ExecuteEvent)
+local SPELL_SEEPING_FOG_RIGHT = 24814 -- boss_emerald_dragons.cpp:51 (base ExecuteEvent)
+local SPELL_MARK_OF_NATURE_AURA = 25041 -- boss_emerald_dragons.cpp:54 (base Reset)
+local SPELL_SUMMON_PLAYER = 24776 -- boss_emerald_dragons.cpp:47 (base UpdateAI)
 local SPELL_PUTRID_MUSHROOM = 24904 -- boss_emerald_dragons.cpp:473,505 (Emeriss KilledUnit)
 
 local SAY_SUMMON = 1 -- SAY_YSONDRE_SUMMON_DRUIDS / SAY_LETHON_DRAW_SPIRIT /
@@ -242,6 +244,75 @@ local function bellowingRoarTick(creature, guid)
     end)
 end
 
+-- C++ emerald_dragonAI::ExecuteEvent (:132-135): DoCast(me, SPELL_TAIL_
+-- SWEEP 15847) 2-arg (non-triggered); 4s init, 2s repeat. All four
+-- dragons fall through to the base ExecuteEvent for this event.
+local function tailSweepTick(creature, guid)
+    creature:CastSpell(creature, SPELL_TAIL_SWEEP)
+    schedule(guid, "tail_sweep", 2000, function()
+        tailSweepTick(creature, guid)
+    end)
+end
+
+-- C++ emerald_dragonAI::ExecuteEvent (:127-130): DoCast(me, SPELL_NOXIOUS_
+-- BREATH 24818) 2-arg (non-triggered); randtime(7.5s,15s) init/repeat.
+local function noxiousBreathTick(creature, guid)
+    creature:CastSpell(creature, SPELL_NOXIOUS_BREATH)
+    schedule(guid, "noxious_breath", {7500, 15000}, function()
+        noxiousBreathTick(creature, guid)
+    end)
+end
+
+-- C++ emerald_dragonAI::ExecuteEvent (:120-125): DoCast(me, SPELL_SEEPING_
+-- FOG_LEFT 24813, triggered) + DoCast(me, SPELL_SEEPING_FOG_RIGHT
+-- 24814, triggered); randtime(12.5s,20s) init, randtime(120s,150s)
+-- repeat. The fog-pair casts are self-casts; the summoned dream-fog
+-- creatures' own AI stays unported (motion machine, see below).
+local function seepingFogTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SEEPING_FOG_LEFT, true)
+    creature:CastSpell(creature, SPELL_SEEPING_FOG_RIGHT, true)
+    schedule(guid, "seeping_fog", {120000, 150000}, function()
+        seepingFogTick(creature, guid)
+    end)
+end
+
+-- C++ emerald_dragonAI::UpdateAI (:158-159): SelectTarget(MaxThreat, 0,
+-- -50.0f, playerOnly) -> DoCast(target, SPELL_SUMMON_PLAYER 24776)
+-- 2-arg (non-triggered), every UpdateAI tick while the condition holds.
+-- DefaultTargetSelector (UnitAI.cpp:259-279): a negative dist EXCLUDES
+-- targets within 50yd — only the top-threat player BEYOND 50yd
+-- (plus combat reaches) qualifies, i.e. a player wandering off.
+-- Ported as a 1s combat pump (the per-tick check has no Lua event;
+-- 1s is the file's pump granularity): iterate the threat-ordered
+-- GetAITargets list (lua_creature_events.go:345), skipping
+-- in-range players (C++ filters before picking), and cast when the
+-- raw 3D GetDistance meets the C++
+-- IsWithinCombatRange bar — exactDist >= 50 + dragon reach +
+-- player reach, with the player reach taken as the 1.5 default
+-- (combatReachOrDefault) since the player surface carries no
+-- GetCombatReach read. C++ fires per tick; the 1s pump is coarser
+-- but converges on the same teleport once the player stays out.
+local function summonPlayerTick(creature, guid)
+    local targets = creature:GetAITargets()
+    if targets then
+        -- C++ filters FIRST (DefaultTargetSelector drops in-range
+        -- targets), then picks MaxThreat among survivors: skip
+        -- in-range players, cast on the first player beyond the bar.
+        for _, target in ipairs(targets) do
+            if target:GetObjectType() == "Player" then
+                local bar = 50 + creature:GetCombatReach() + 1.5
+                if creature:GetDistance(target) >= bar then
+                    creature:CastSpell(target, SPELL_SUMMON_PLAYER)
+                    break
+                end
+            end
+        end
+    end
+    schedule(guid, "summon_player", 1000, function()
+        summonPlayerTick(creature, guid)
+    end)
+end
+
 -- C++ boss_ysondre::DamageTaken (:283-293): if (!HealthAbovePct(100 -
 -- 25*_stage)) { Talk(1); 10x DoCast(me, 24795, triggered); ++_stage; }.
 -- Pre-damage health in the event-9 hook (moroes precedent); C++-exact
@@ -323,6 +394,18 @@ local function ysondreEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "summon_player", 1000, function()
+        summonPlayerTick(creature, guid)
+    end)
+    schedule(guid, "tail_sweep", 4000, function()
+        tailSweepTick(creature, guid)
+    end)
+    schedule(guid, "noxious_breath", {7500, 15000}, function()
+        noxiousBreathTick(creature, guid)
+    end)
+    schedule(guid, "seeping_fog", {12500, 20000}, function()
+        seepingFogTick(creature, guid)
+    end)
     schedule(guid, "lightning_wave", 12000, function()
         lightningWaveTick(creature, guid)
     end)
@@ -332,6 +415,18 @@ local function lethonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "summon_player", 1000, function()
+        summonPlayerTick(creature, guid)
+    end)
+    schedule(guid, "tail_sweep", 4000, function()
+        tailSweepTick(creature, guid)
+    end)
+    schedule(guid, "noxious_breath", {7500, 15000}, function()
+        noxiousBreathTick(creature, guid)
+    end)
+    schedule(guid, "seeping_fog", {12500, 20000}, function()
+        seepingFogTick(creature, guid)
+    end)
     schedule(guid, "shadow_bolt_whirl", 10000, function()
         shadowBoltWhirlTick(creature, guid)
     end)
@@ -341,6 +436,18 @@ local function emerissEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "summon_player", 1000, function()
+        summonPlayerTick(creature, guid)
+    end)
+    schedule(guid, "tail_sweep", 4000, function()
+        tailSweepTick(creature, guid)
+    end)
+    schedule(guid, "noxious_breath", {7500, 15000}, function()
+        noxiousBreathTick(creature, guid)
+    end)
+    schedule(guid, "seeping_fog", {12500, 20000}, function()
+        seepingFogTick(creature, guid)
+    end)
     schedule(guid, "volatile_infection", 12000, function()
         volatileInfectionTick(creature, guid)
     end)
@@ -350,6 +457,18 @@ local function taerarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "summon_player", 1000, function()
+        summonPlayerTick(creature, guid)
+    end)
+    schedule(guid, "tail_sweep", 4000, function()
+        tailSweepTick(creature, guid)
+    end)
+    schedule(guid, "noxious_breath", {7500, 15000}, function()
+        noxiousBreathTick(creature, guid)
+    end)
+    schedule(guid, "seeping_fog", {12500, 20000}, function()
+        seepingFogTick(creature, guid)
+    end)
     schedule(guid, "arcane_blast", 12000, function()
         arcaneBlastTick(creature, guid)
     end)
@@ -404,6 +523,11 @@ local function dragonReset(event, creature)
     -- UpdateAI-timeout AGGRESSIVE restore :677 are both unported),
     -- and spawn default is AGGRESSIVE.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
+    -- C++ emerald_dragonAI::Reset (:102): DoCast(me, SPELL_MARK_OF_NATURE_
+    -- AURA 25041, triggered) — ported for C++-exactness; mechanically
+    -- inert in Go (its 10s tick triggers 25042 via the SpellScript-only
+    -- spell_mark_of_nature), like the ported KilledUnit 25040 cast.
+    creature:CastSpell(creature, SPELL_MARK_OF_NATURE_AURA, true)
 end
 
 -- C++ boss_taerarAI::Reset (boss_emerald_dragons.cpp:596-600):
