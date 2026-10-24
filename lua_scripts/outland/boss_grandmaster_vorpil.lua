@@ -97,10 +97,11 @@
 -- bridge), MoveFollow (no motion bridge), DoCast(me,
 -- SPELL_SACRIFICE 33587, false) at 3 yards, then on _sacrificed:
 -- DoCastAOE(SPELL_EMPOWERING_SHADOWS 33783, true) + DoCast(me,
--- SPELL_SHADOW_NOVA 33846, true) + me->KillSelf() (no KillSelf
--- binding). The casts bridge (self-cast convention) but the follow /
--- instance-lookup / kill legs don't — documented-only (NOT
--- registered; shaffar-beacon precedent).
+-- SPELL_SHADOW_NOVA 33846, true) + me->KillSelf() (creature:Kill()
+-- is the self-kill bridge, kj fiend precedent — but the kill leg
+-- stays out with the rest: the casts bridge (self-cast convention)
+-- but the follow / instance-lookup legs don't, and the file is
+-- documented-only (NOT registered; shaffar-beacon precedent).
 -- All Talk() calls in the file accounted for (4 ported above —
 -- aggro/slay/death/intro; SAY_HELP 2 rides the traveler timer
 -- machine — documented-only).

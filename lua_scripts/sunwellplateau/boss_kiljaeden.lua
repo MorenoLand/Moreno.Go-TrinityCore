@@ -192,11 +192,14 @@
 -- (25608) + felfire-portal arms are unregistered entries and the
 -- armageddon arm is dormant (never engages, pure timer visual); the
 -- deceiver/portal AddThreat relays stay out on cross-creature
--- bearer grounds (AddThreat itself is bridged); no kill/
--- despawn/flag/react/gravity bridges — the fiend KillSelf, the
--- armageddon DespawnOrUnsummon, the kalecgos-kj/controller flag/
--- gravity/faction/GO-type arms and the reflection dual-wield
--- arms are unmodeled; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the soul-flay/
+-- bearer grounds (AddThreat itself is bridged); the old "no kill/
+-- despawn/flag/react/gravity bridges" claim is stale — Kill, Despawn,
+-- SetFlag, SetReactState and SetDisableGravity are all bridged, and
+-- the fiend KillSelf and armageddon DespawnOrUnsummon arms ARE ported
+-- below; what stays out is the kalecgos-kj/controller flag/gravity/
+-- faction/GO-type arms (unregistered entries 25319/25608 + GO bearer,
+-- not bridge) and the reflection dual-wield arms (no SetCanDualWield
+-- bridge); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the soul-flay/
 -- lightning/fire-bloom/shadow-spike/darkness IsNonMeleeSpellCast
 -- queue gates are unmodeled (timers fire unconditionally, jeklik
 -- convention); the SPELLVALUE/aura-filter targeting nuances have

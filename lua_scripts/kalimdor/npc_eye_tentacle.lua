@@ -8,9 +8,11 @@
 -- repeat; C++ SelectTarget Random is bridged via the
 -- maiden_of_virtue idiom — GetPlayersInWorld filtered by
 -- map/instance/alive).
--- The 35s KillSelf has no Lua bridge (no KillSelf API); the portal
--- summon/JustDied cross-kill legs stay out (no bridges — documented,
--- not wired). The JustEngagedWith DoZoneInCombat leg PORTED
+-- The 35s KillSelf is PORTED (boss_cthun.cpp:897,939-942 — UpdateAI
+-- KillSelfTimer, victim-gated in C++; the Lua one-shot runs only
+-- while in combat since ev2/ev4 cancel it, kj fiend precedent).
+-- The portal summon/JustDied cross-kill legs stay out (no GUID->
+-- creature bridge — documented, not wired). The JustEngagedWith DoZoneInCombat leg PORTED
 -- 2026-10-23 (creature:DoZoneInCombat bridge live,
 -- engine/world/lua_creature_events.go).
 local ENTRY = 15726
@@ -57,6 +59,9 @@ local function onEnterCombat(event, creature, target)
     timers[guid]["flay"] = CreateLuaEvent(function()
         onMindFlay(creature, guid)
     end, 500)
+    timers[guid]["killself"] = CreateLuaEvent(function()
+        creature:Kill()
+    end, 35000)
 end
 
 local function onLeaveCombat(event, creature)

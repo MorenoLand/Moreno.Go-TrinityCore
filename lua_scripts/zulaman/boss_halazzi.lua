@@ -38,10 +38,11 @@
 -- 43573 SpellHit) has no firing hook — the engine's event 14 fires only
 -- for player casts (the boss's own split self-cast is visual-only on the
 -- bridge), so an event-14 guard for 43573 is kept but the actual human
--- entry runs on a 2s timer approximating the transform; no SetMaxHealth
--- on the bridge, so the per-cycle health reset is mapped as
--- SetMaxHealth(600000) + SetHealth(600000-150000*TransformCount)
--- (boss_halazzi.cpp:164-165, C++-exact); no instance-script
+-- entry runs on a 2s timer approximating the transform; the per-cycle
+-- health reset is ported as SetMaxHealth(600000) +
+-- SetHealth(600000-150000*TransformCount) (boss_halazzi.cpp:164-165,
+-- C++-exact; the old "no SetMaxHealth bridge" claim was stale — the
+-- bridge is live and used at the lynx/human entries below); no instance-script
 -- model — admission only via the luaBossAI shim; the shock target's
 -- IsNonMeleeSpellCast check uses the live player IsCasting bridge
 -- (Go activeCast is the cast-bar phase, like C++'s non-melee check);
