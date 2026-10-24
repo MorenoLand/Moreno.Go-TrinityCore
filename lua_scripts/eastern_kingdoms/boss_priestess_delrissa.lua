@@ -38,24 +38,29 @@
 -- + KilledUnit + JustDied):
 -- Combat entry: Talk(SAY_AGGRO) on OnEnterCombat(1) (maiden-of-virtue
 -- convention).
--- Heal machine: flash-heal self-cast 17843 15000ms -> 15000ms loop.
--- In C++ the heal targets the alive lackey with the least health and
--- falls back to self; the lackey-GUID list (ObjectAccessor) has no
--- bridge, so the port models the self-target leg only (self-cast via
--- creature:CastSpell(creature, spell), selin DoCastAOE convention).
--- Renew machine: renew self-cast 44174 10000ms -> 5000ms loop (the
--- C++ leg that targets a random alive lackey is the same GUID-list
--- bridge; the C++ has NO heroic 46192 leg at all — the enum entry is
--- never referenced in the source (SD "No Heroic support yet"), so the
--- "dropped — no difficulty bridge" claim was stale and is retracted;
--- there is no heroic arm to gate).
--- Shield machine: shield self-cast 44291 2000ms -> 7500ms loop (the
--- C++ random-lackey leg and the HasAura(44291) check share the same
--- missing bridges).
--- Dispel machine: dispel-magic self-cast 27609 7500ms -> 12000ms loop.
--- The C++ target chooser (random player via SelectTarget / self /
--- random lackey via GUID list) has no bridges on either leg; the port
--- models the self-cast leg only.
+-- Heal machine: flash-heal 17843 15000ms -> 15000ms loop, PORTED with
+-- the lackey leg: C++ (boss_priestess_delrissa.cpp:268-281) starts
+-- target = me and replaces it with every alive lackey whose health is
+-- below DELRISSA's health (the threshold is never updated in the
+-- loop, so the LAST qualifying lackey wins — the old "least health"
+-- paraphrase was wrong); the port re-finds each chosen lackey by
+-- entry (FindNearestCreature, live snapshot) and casts on the final
+-- target, falling back to self when no lackey qualifies.
+-- Renew machine: renew 44174 10000ms -> 5000ms loop, PORTED with the
+-- random-lackey leg: C++ gates on urand(0, 1), then a random lackey
+-- slot; an alive lackey takes the cast, else self (the C++ has NO
+-- heroic 46192 leg at all — the enum entry is never referenced in
+-- the source (SD "No Heroic support yet"), so the "dropped — no
+-- difficulty bridge" claim was stale and is retracted; there is no
+-- heroic arm to gate).
+-- Shield machine: shield 44291 2000ms -> 7500ms loop, PORTED with the
+-- random-lackey leg: C++ gates on urand(0, 1), then a random lackey
+-- slot alive and WITHOUT the shield aura (creature:HasAura is a live
+-- aura-map read); else self.
+-- Dispel machine: dispel-magic 27609 7500ms -> 12000ms loop, PORTED
+-- with the full C++ target chooser: urand(0, 1) -> random alive player
+-- within 100yd, else urand(0, 1) -> self, else a random alive lackey;
+-- no cast when the chooser lands on nothing (C++ null-target guard).
 -- KilledUnit: via OnTargetDied(3); the C++ victim->GetTypeId() ==
 -- TYPEID_PLAYER gate is bridged by victim:GetObjectType() == "Player"
 -- (selin precedent): Talk(PlayerDeath[PlayersKilled]) with a per-guid
@@ -79,18 +84,22 @@
 -- convention).
 -- Reset() _Reset() / JustDied() _JustDied() are internal ScriptedAI
 -- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); Reset's InitializeLackeys() summon/resummon machine has
--- no summon bridge (below).
+-- precedent); Reset's InitializeLackeys() summon/resummon machine is
+-- PORTED on event 23 (below).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Reset()'s InitializeLackeys(): the 4-of-8 random lackey selection
---   and SummonCreature calls (TEMPSUMMON_CORPSE_DESPAWN) at the four
---   LackeyLocations plus the resummon-on-missing leg — no summon
---   bridge on the Lua surface (razorgore precedent).
+-- - Reset()'s InitializeLackeys(): PORTED on event 23 — 4-of-8 random
+--   selection + SummonCreature at the slot locations (type 4
+--   CORPSE_DESPAWN) + the resummon-on-missing leg via
+--   FindNearestCreature liveness (garaxxas precedent; dead-but-
+--   undespawned corpses read as missing, the one divergence window).
 -- - JustReachedHome: instance->SetBossState(DATA_PRIESTESS_DELRISSA,
 --   FAIL) — no instance bridge (standing blocker).
--- - JustEngagedWith's lackey AddThreat(who, 0.0f, pAdd) ring via the
---   lackey GUID list (ObjectAccessor) — no bridge; the SetBossState
---   IN_PROGRESS arm — instance bridge.
+-- - JustEngagedWith's lackey AddThreat(who, 0.0f, pAdd) ring: stays
+--   out — the AddThreat bridge is self-threat only (the 3rd-arg
+--   who-redirect is not expressible, lua_creature_events.go:581),
+--   AttackStart is not on the creature surface, and DoZoneInCombat
+--   engages only the caller; no bridge makes ANOTHER creature engage.
+--   The SetBossState IN_PROGRESS arm — instance bridge.
 -- - JustDied's DATA_DELRISSA_DEATH_COUNT check and the lootable-flag
 --   manipulation — instance bridge.
 -- - SW_PAIN machine (PORTED): DoCast(SelectTarget(Random, 0, 100,
@@ -164,9 +173,21 @@ local MAX_PLAYER_DEATH_TALK = 4
 
 local ENTRY_PRIESTESS_DELRISSA = 24560
 
+-- C++ InitializeLackeys (boss_priestess_delrissa.cpp:178-230): 4 of the
+-- 8 m_auiAddEntries summoned at LackeyLocations, fZLocation -19.921,
+-- fOrientation 4.98, TEMPSUMMON_CORPSE_DESPAWN (Go summon type 4).
+local MAX_ACTIVE_LACKEY = 4
+local LACKEY_ENTRIES = { 24557, 24558, 24554, 24561, 24559, 24555, 24553, 24556 }
+local LACKEY_LOCATIONS = { { 123.77, 17.6007 }, { 131.731, 15.0827 }, { 121.563, 15.6213 }, { 129.988, 17.2355 } }
+local LACKEY_Z = -19.921
+local LACKEY_O = 4.98
+local SUMMON_TYPE_CORPSE_DESPAWN = 4
+local LACKEY_FIND_RANGE = 100.0
+
 local timers = {}
 local playersKilled = {}
 local usedPotion = {}
+local lackeyEntries = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -208,23 +229,114 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ InitializeLackeys first branch: copy all 8 entries, erase random
+-- entries until 4 remain (sequential random erasure, C++-exact
+-- distribution), then summon the survivors in list order at the slot
+-- locations. Later Resets run the resummon leg: a slot whose entry has
+-- no live creature in range is re-summoned. The live check is
+-- FindNearestCreature (garaxxas precedent): it skips Health == 0, so a
+-- dead-but-not-yet-despawned lackey corpse reads as missing where C++
+-- GetUnit would still see it — the one known divergence window.
+-- SummonCreature returns the summoned object, but stored objects go
+-- stale (luaMotionCreature snapshots state at build), so every leg
+-- below re-finds its lackey fresh by entry instead of trusting a stored
+-- reference; the per-GUID state kept here is the chosen entry list
+-- only, mirroring C++'s LackeyEntryList (cleared only in the ctor, so
+-- it survives death/evade like the C++ list).
+local function initializeLackeys(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    local entries = lackeyEntries[guid]
+    if not entries then
+        local pool = {}
+        for i, entry in ipairs(LACKEY_ENTRIES) do
+            pool[i] = entry
+        end
+        while #pool > MAX_ACTIVE_LACKEY do
+            table.remove(pool, math.random(#pool))
+        end
+        entries = pool
+        lackeyEntries[guid] = entries
+        for i, entry in ipairs(entries) do
+            local loc = LACKEY_LOCATIONS[i]
+            creature:SummonCreature(entry, loc[1], loc[2], LACKEY_Z, LACKEY_O, SUMMON_TYPE_CORPSE_DESPAWN)
+        end
+    else
+        for i, entry in ipairs(entries) do
+            if not creature:FindNearestCreature(entry, LACKEY_FIND_RANGE) then
+                local loc = LACKEY_LOCATIONS[i]
+                creature:SummonCreature(entry, loc[1], loc[2], LACKEY_Z, LACKEY_O, SUMMON_TYPE_CORPSE_DESPAWN)
+            end
+        end
+    end
+end
+
+local function randomLackey(creature, guid)
+    local entries = lackeyEntries[guid]
+    if not entries then
+        return nil
+    end
+    return creature:FindNearestCreature(entries[math.random(#entries)], LACKEY_FIND_RANGE)
+end
+
 local function onHeal(creature, guid)
-    creature:CastSpell(creature, SPELL_FLASH_HEAL)
+    local target = creature
+    local myHealth = creature:GetHealth()
+    local entries = lackeyEntries[guid]
+    if entries then
+        for _, entry in ipairs(entries) do
+            local lackey = creature:FindNearestCreature(entry, LACKEY_FIND_RANGE)
+            if lackey and not lackey:IsDead() and lackey:GetHealth() < myHealth then
+                target = lackey
+            end
+        end
+    end
+    creature:CastSpell(target, SPELL_FLASH_HEAL)
     schedule(guid, "heal", 15000, function() onHeal(creature, guid) end)
 end
 
 local function onRenew(creature, guid)
-    creature:CastSpell(creature, SPELL_RENEW_NORMAL)
+    local target = creature
+    if math.random(0, 1) == 1 then
+        local lackey = randomLackey(creature, guid)
+        if lackey and not lackey:IsDead() then
+            target = lackey
+        end
+    end
+    creature:CastSpell(target, SPELL_RENEW_NORMAL)
     schedule(guid, "renew", 5000, function() onRenew(creature, guid) end)
 end
 
 local function onShield(creature, guid)
-    creature:CastSpell(creature, SPELL_SHIELD)
+    local target = creature
+    if math.random(0, 1) == 1 then
+        local lackey = randomLackey(creature, guid)
+        if lackey and not lackey:IsDead() and not lackey:HasAura(SPELL_SHIELD) then
+            target = lackey
+        end
+    end
+    creature:CastSpell(target, SPELL_SHIELD)
     schedule(guid, "shield", 7500, function() onShield(creature, guid) end)
 end
 
 local function onDispel(creature, guid)
-    creature:CastSpell(creature, SPELL_DISPEL_MAGIC)
+    local target = nil
+    if math.random(0, 1) == 1 then
+        target = randomPlayerInRange(creature, 100)
+    else
+        if math.random(0, 1) == 1 then
+            target = creature
+        else
+            local lackey = randomLackey(creature, guid)
+            if lackey and not lackey:IsDead() then
+                target = lackey
+            end
+        end
+    end
+    if target then
+        creature:CastSpell(target, SPELL_DISPEL_MAGIC)
+    end
     schedule(guid, "dispel", 12000, function() onDispel(creature, guid) end)
 end
 
@@ -234,6 +346,14 @@ local function onSwPain(creature, guid)
         creature:CastSpell(target, SPELL_SW_PAIN)
     end
     schedule(guid, "swpain", 10000, function() onSwPain(creature, guid) end)
+end
+
+local function onReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    usedPotion[guid] = nil
+    playersKilled[guid] = nil
+    initializeLackeys(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
@@ -307,4 +427,4 @@ RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 4, onDied)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 23, onReset)
