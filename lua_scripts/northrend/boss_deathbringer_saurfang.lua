@@ -87,9 +87,8 @@
 --   self-cast, then Talk(SAY_BLOOD_BEASTS 9) (:498); re-arm 40s
 --   unconditional (:499). The 25-man trio DoCastSelf(
 --   SPELL_SUMMON_BLOOD_BEAST_25_MAN+i25 72356/72357/72358) (:495-497)
---   stays out: the C++ gate is Is25ManRaid() — the 10/25-man
---   raid-size selector has no bridge (IsHeroic covers normal/heroic
---   only; the deviations section names this blocker exactly).
+--   ported via creature:Is25ManRaid() (C++ :495-497 gate, cast
+--   order kept: pair, then trio, then Talk).
 -- EVENT_BLOOD_NOVA (:504-507) — DoCastAOE(SPELL_BLOOD_NOVA_TRIGGER
 --   72378) = non-triggered self-cast; re-arm {20s,25s} randtime.
 -- EVENT_RUNE_OF_BLOOD (:508-511) — DoCastVictim(SPELL_RUNE_OF_BLOOD
@@ -220,9 +219,8 @@
 --   it on heroic via IsHeroic() would fire EMOTE_SCENT_OF_BLOOD and
 --   the AoE unconditionally, wrong on 10-man and wrong whenever the
 --   beast wave is fully dead.
--- EVENT_SUMMON_BLOOD_BEAST 25-man trio (72356/72357/72358) not
---   ported: Is25ManRaid unbridged (the IsHeroic bridge covers
---   normal/heroic, not 10/25-man).
+-- EVENT_SUMMON_BLOOD_BEAST 25-man trio (72356/72357/72358) PORTED
+--   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
 -- The UNIT_STATE_CASTING gate in UpdateAI (:534-535) has no bridge
 --   (the maiden precedent: timers fire unconditionally).
 -- The intro exploit-engage DoCastSelf(SPELL_GRIP_OF_AGONY) leg
@@ -243,6 +241,7 @@ local SAY_DEATH = 13
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_SUMMON_BLOOD_BEAST = 72172
+local SPELL_SUMMON_BLOOD_BEAST_25_MAN = 72356
 local SPELL_FRENZY = 72737
 local SPELL_BLOOD_NOVA_TRIGGER = 72378
 local SPELL_BOILING_BLOOD = 72385
@@ -302,8 +301,7 @@ end
 -- C++ :493-502 EVENT_SUMMON_BLOOD_BEAST: 2x DoCastSelf(
 -- SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) non-triggered, then
 -- Talk(SAY_BLOOD_BEASTS 9); re-arm 40s unconditional. The 25-man
--- trio (72356+i25, :495-497) stays out: Is25ManRaid unbridged
--- (10/25-man is a separate axis from IsHeroic normal/heroic).
+-- trio (72356+i25, :495-497) PORTED via creature:Is25ManRaid().
 -- The heroic-only EVENT_SCENT_OF_BLOOD schedule (:500-501) stays
 -- out on the !summons.empty() gate (no summon-list bridge); the
 -- IsHeroic() schedule gate is bridgeable but the arm body would fire
@@ -311,6 +309,11 @@ end
 local function onSummonBloodBeast(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST + 1)
+    if creature:Is25ManRaid() then
+        creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST_25_MAN)
+        creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST_25_MAN + 1)
+        creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST_25_MAN + 2)
+    end
     creature:Talk(SAY_BLOOD_BEASTS)
     schedule(guid, "beasts", 40000, function() onSummonBloodBeast(creature, guid) end)
 end

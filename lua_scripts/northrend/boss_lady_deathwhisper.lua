@@ -625,21 +625,12 @@ end
 -- JustDied-Talk precedent. cancelTimers stops the 10-min berserk +
 -- deathanddecay + (phase-1) shadowbolt arms from firing on the corpse.
 -- C++ boss_lady_deathwhisper::JustDied darnavan block (:344-383):
--- raid size has no Lua bridge (Is25ManRaid unbridged), so the 10/25
--- pair is picked by group size (>10 members = 25-man; solo = 10-man).
+-- NPC_DARNAVAN_CREDIT is RAID_MODE(39091, 39092) (:169), resolved
+-- via creature:Is25ManRaid() on the boss's map.
 -- C++ IsInMap is twinned as same MapId + same InstanceId.
-local function darnavanIs25Man(player)
-    local group = player:GetGroup()
-    if group == nil then
-        return false
-    end
-    local members = group:GetMembers()
-    return members ~= nil and #members > 10
-end
-
-local function darnavanCredit(killer)
+local function darnavanCredit(creature, killer)
     local credit
-    if darnavanIs25Man(killer) then
+    if creature:Is25ManRaid() then
         credit = NPC_DARNAVAN_CREDIT_25
     else
         credit = NPC_DARNAVAN_CREDIT_10
@@ -673,7 +664,7 @@ local function deathwhisperJustDied(event, creature, killer)
         darnavan:SetReactState(REACT_PASSIVE)
         darnavan:Talk(SAY_DARNAVAN_RESCUED)
         if killer ~= nil and killer:GetObjectType() == "Player" then
-            darnavanCredit(killer)
+            darnavanCredit(creature, killer)
         end
     end
 end
@@ -686,7 +677,7 @@ local function darnavanJustDied(event, creature, killer)
         return
     end
     local quest
-    if darnavanIs25Man(killer) then
+    if creature:Is25ManRaid() then
         quest = QUEST_DEPROGRAMMING_25
     else
         quest = QUEST_DEPROGRAMMING_10

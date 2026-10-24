@@ -29,8 +29,8 @@
 -- second/thirdThreat; AddThreat(victim, 1000) + second/thirdThreat
 -- 1000 each (AddThreat bridge is self-threat-only, which is exactly
 -- C++ AddThreat here); DoCast(pHatefulTarget, HATEFUL_STRIKE
--- 28308, triggered); 1s repeat. 25-man is the victim-group-size
--- proxy (deathwhisper precedent; Is25ManRaid unbridged). Frenzy
+-- 28308, triggered); 1s repeat. 25-man via creature:Is25ManRaid()
+-- (C++ :137,141). Frenzy
 -- latch (UpdateAI HealthBelowPct(5) arm) is folded into the 1s
 -- hateful pump: DoCastSelf(FRENZY 28131, triggered) + Talk(EMOTE_
 -- FRENZY 4) once (C++ checks every UpdateAI tick; 1s granularity
@@ -90,17 +90,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function is25Man(victim)
-    if victim ~= nil and victim.GetGroup ~= nil then
-        local group = victim:GetGroup()
-        if group ~= nil then
-            local members = group:GetMembers()
-            return members ~= nil and #members > 10
-        end
-    end
-    return false
-end
-
 local function hatefulTick(creature, guid)
     local targets = creature:GetAITargets()
     local victim = creature:GetVictim()
@@ -110,7 +99,7 @@ local function hatefulTick(creature, guid)
         if targets[1]:GetGUID() ~= victimGuid then
             second = targets[1]
         end
-        local twentyFive = is25Man(victim)
+        local twentyFive = creature:Is25ManRaid()
         if (second == nil or twentyFive) and targets[2] ~= nil
                 and not targets[2]:IsDead() then
             if targets[2]:GetGUID() ~= victimGuid then
