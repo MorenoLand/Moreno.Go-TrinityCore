@@ -33,8 +33,9 @@
 --   precedent), non-triggered, init 42s -> 42s.
 -- - Air Burst 32014: Talk SAY_AIR_BURST (3) + cast on
 --   SelectTargetMethod::Random, 1 (C++ comment "not on tank" —
---   approximated as a random alive player excluding the current victim,
---   azgalor victim-exclusion convention, no threat-list bridge),
+--   PORTED: random pick from GetAITargets()[2..], i.e. the threat list
+--   minus its first (top-threat) entry, all C++ defaults — no range
+--   cap, playerOnly false, no dead filter, midnight precedent),
 --   non-triggered, init 30s -> {25s,40s}.
 -- - Grip of the Legion 31972: SelectTargetMethod::Random, 0 with no
 --   range cap (unbounded alive player in the instance — nefarian
@@ -293,14 +294,20 @@ local function onFear(creature, guid)
 end
 
 -- C++ EVENT_AIR_BURST: Talk(SAY_AIR_BURST) + DoCast(
--- SelectTarget(Random, 1), 32014) — position 1 ("not on tank") has no
--- threat-list bridge, so a random alive player excluding the current
--- victim (azgalor victim-exclusion convention); non-triggered,
--- init 30s -> {25s,40s}.
+-- SelectTarget(Random, 1), 32014) — position 1 ("not on tank") = skip
+-- the first MaxThreat-order entry, then a random pick from the rest;
+-- all defaults (no range cap, playerOnly false, withTank true), so the
+-- pool is the threat-ordered GetAITargets list, creatures included,
+-- with no dead filter (midnight precedent). Nil when fewer than 2
+-- entries (C++ returns nullptr when the threat list size <= offset).
 local function onAirBurst(creature, guid)
     creature:Talk(SAY_AIR_BURST)
-    local target = randomPlayerInRange(creature, 100, true)
-    if target and not target:IsDead() then
+    local targets = creature:GetAITargets()
+    local target = nil
+    if #targets >= 2 then
+        target = targets[math.random(2, #targets)]
+    end
+    if target then
         creature:CastSpell(target, SPELL_AIR_BURST)
     end
     schedule(guid, "airburst", math.random(25000, 40000), function()

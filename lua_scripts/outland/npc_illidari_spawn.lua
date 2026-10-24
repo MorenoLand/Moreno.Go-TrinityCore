@@ -45,8 +45,11 @@
 -- choreography, LiveCounter/LiveCount bookkeeping, cinematic timers)
 -- behind the no-summon / movement / cross-creature bridges —
 -- documented-only.
--- go_crystal_prison: GameObjectAI — no gameobject bridge —
--- documented-only.
+-- go_crystal_prison: GameObjectAI OnQuestAccept (quest 10781 gates
+-- an EventStarted/PlayerGUID/LiveCount write into the unported illidan
+-- controller) — no GO quest-accept Lua fire site exists (gossip 1/2
+-- only, gossip.go), so the "no gameobject bridge" note is re-keyed to
+-- the precise blocker; documented-only.
 -- npc_enraged_spirit, spell_unlocking_zuluheds_chains (SpellScript —
 -- no SpellScript bridge, standing blocker) and
 -- npc_shadowmoon_tuber_node: remaining zone classes — not in this unit.

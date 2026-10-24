@@ -12,8 +12,8 @@
 -- DoMeleeAttackIfReady. No aggro Talk in the C++ AI.
 -- Fight shape: enter combat arms thrash 3391 5s then {10s,20s} (all
 -- phases) / holy nova 23858 5s then {45s,75s} (phase one: casts only
--- when 3 or more alive players are within melee range, the C++
--- top-10-threat scan approximated without a threat model) / dispel
+-- when 3 or more of the top-10 threat targets are within melee range,
+-- the C++ top-10-threat scan ported via GetAITargets) / dispel
 -- magic 23859 35s then {15s,20s} self-cast (phase one) / holy fire
 -- 23860 10s then {45s,60s} on a random alive player (phase one) /
 -- renew 23895 30s then {25s,30s} self-cast (phase one) / holy wrath
@@ -147,15 +147,18 @@ local function onThrash(creature, guid)
 end
 
 -- C++ EVENT_HOLY_NOVA: phase one; counts the top-10 threat targets
--- within melee range — with no threat model this scans the alive players
--- in the instance within 5 yd instead — and non-triggered DoCastVictim
--- (23858) only when 3 or more qualify; the re-arm sits outside the
--- count gate, so it fires {45s,75s} C++-exact either way. Nil-victim
--- ticks cast nothing but keep the schedule (jeklik convention).
+-- (SelectTarget(MaxThreat, i), i = 0..9) within melee range — ported
+-- via the threat-ordered GetAITargets list, first 10 entries; the 5-yd
+-- check stands in for IsWithinMeleeRange as before, and C++ applies no
+-- dead filter, so none added (midnight precedent) — and non-triggered
+-- DoCastVictim (23858) only when 3 or more qualify; the re-arm sits
+-- outside the count gate, so it fires {45s,75s} C++-exact either way.
+-- Nil-victim ticks cast nothing but keep the schedule (jeklik convention).
 local function onHolyNova(creature, guid)
     local inMelee = 0
-    for _, p in ipairs(alivePlayersInInstance(creature)) do
-        if creature:GetDistance(p) <= 5 then
+    local targets = creature:GetAITargets()
+    for i = 1, math.min(10, #targets) do
+        if creature:GetDistance(targets[i]) <= 5 then
             inMelee = inMelee + 1
         end
     end

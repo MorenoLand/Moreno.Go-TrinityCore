@@ -27,8 +27,8 @@
 -- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
 -- and ported at onReset below; InterruptNonMeleeSpells(false) before
 -- Evocation is bridged (no-op twin, lua_creature_events.go) and ported in onAstralFlare below. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
--- i.e. a non-tank — is approximated with a random alive player in 100 yd,
--- since the engine has no threat model.
+-- i.e. a non-tank — is PORTED via creature:GetAITargets()[2] (threat-ordered,
+-- lua_creature_events.go; the stale "no threat model" note is retracted).
 
 local ENTRY = 15691
 
@@ -76,23 +76,14 @@ local function cancelKey(guid, key)
     end
 end
 
-local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
-end
-
+-- C++ EVENT_HATEFUL_BOLT: SelectTarget(MaxThreat, 1), all defaults (no
+-- range cap, playerOnly false, withTank true) — the second entry of the
+-- threat-ordered GetAITargets list; nil when fewer than 2 entries (C++
+-- returns nullptr when the threat list size <= offset). C++ applies no
+-- dead filter, so none added (midnight precedent).
 local function onHatefulBolt(creature, guid)
-    local target = randomTargetInRange(creature, 100)
+    local targets = creature:GetAITargets()
+    local target = targets[2]
     if target then
         creature:CastSpell(target, SPELL_HATEFUL_BOLT)
     end
