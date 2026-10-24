@@ -27,12 +27,18 @@
 --
 -- - :233 (SpawnEyeTentacle target pick): BLOCKED. The arm is
 --   DoSpawnCreature(NPC_EYE_TENTACLE 15726) followed by
---   Spawned->AI()->AttackStart(random target). The Lua creature
---   method list has NO summon/spawn bridge (no SummonCreature /
---   DoSpawnCreature / SpawnCreature entry) and no way to reach a
---   spawned creature's AI to order AttackStart. The tentacle's own
---   AI is already ported (npc_eye_tentacle.lua, entry 15726);
---   only the eye's spawning of it is the gap. Not ported.
+--   Spawned->AI()->AttackStart(random target). creature:SummonCreature
+--   IS bridged (engine/world/lua_creature_events.go:940;
+--   DoSpawnCreature = SummonCreature at own pos + offsets,
+--   ScriptedCreature.cpp:288; TEMPSUMMON_CORPSE_DESPAWN = Lua type 1,
+--   500ms — noxxion precedent). A spawned tentacle self-aggros via the
+--   engine combat tick (aran.lua precedent) since Lua cannot order a
+--   spawned AI's AttackStart. The tentacle's own AI is already ported
+--   (npc_eye_tentacle.lua, entry 15726). The remaining blocker is the
+--   instance-phase gate: EyeTentacleTimer fires only while
+--   DATA_CTHUN_PHASE is GREEN or RED (cthun.cpp:245), a word the
+--   unported body writes — a Lua-local 45s pump would keep spawning
+--   through TRANSITION/DONE. Not ported.
 --
 -- - :272 (green beam): BLOCKED. Arm: SelectTarget(Random, 0) ->
 --   InterruptNonMeleeSpells(false) -> DoCast(target,
@@ -57,8 +63,9 @@
 --   SelectTarget(Random, 0) ->
 --   SummonCreature(NPC_CLAW_TENTACLE 15725, *target,
 --   TEMPSUMMON_CORPSE_DESPAWN) -> Spawned->AI()->AttackStart.
---   Same blocker as :233 — no summon bridge, no spawned-AI
---   AttackStart bridge. Not ported.
+--   Same as :233 — summon bridge is live (lua_creature_events.go:940);
+--   blocker is the instance-phase gate (ClawTentacleTimer ticks only in
+--   the GREEN switch arm, cthun.cpp:292-301). Not ported.
 --
 -- - :316 (dark-glare start target): BLOCKED. Arm:
 --   SelectTarget(Random, 0) -> DarkGlareAngle =
@@ -77,8 +84,9 @@
 -- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
 -- re-triage) — only the instance->SetData(DATA_CTHUN_PHASE,
 -- PHASE_EYE_GREEN_BEAM) leg stays out (no instance bridge);
--- EyeTentacleTimer 45s 8-spot spawn block (:247-:263, summon
--- bridge blocker); PhaseTimer transitions (:303-:335 green->red,
+-- EyeTentacleTimer 45s 8-spot spawn block (:247-:263,
+-- instance-phase-gate blocker — summon bridge live, :233 verdict
+-- re-triaged 2026-10-23); PhaseTimer transitions (:303-:335 green->red,
 -- :363-:383 red->green — phase SetData legs, no bridge);
 -- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget — bridged 2026-10-20 via
 -- creature:SetTarget; SetHealth/SetVisible — unbridged; cross-AI hand-off

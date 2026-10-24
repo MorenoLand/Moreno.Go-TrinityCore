@@ -33,12 +33,13 @@
 -- = class-1; monk lands on the druid row like C++; druid is guarded —
 -- see deviations). Kills: random Talk(YELL_KILL_ONE=1/YELL_KILL_TWO=2)
 -- (C++ KilledUnit has no player gate); death: Talk(YELL_DEATH=5).
--- Adds: Thurg — bloodlust 43578 15s then 12s (friendly-buff scan has no
--- bearer, cast skipped, 12s cycle kept), cleave 15496 10s then 12s on
--- victim; Alyson Antille — flash heal 43575 skipped (friendly scan has
--- no bearer), and the dispel magic 43577 else-branch fires only on the
--- urand(0,1)==0 leg (~50% of 2.5s ticks) on a random alive player
--- (the friendly leg has no bridge); Gazakroth — firebolt 43584 2s
+-- Adds: Thurg — bloodlust 43578 15s then 12s on the first in-combat
+-- friendly in 50 yd missing the aura (firstMissingBuff), cleave 15496
+-- 10s then 12s on victim; Alyson Antille — flash heal 43575 on the
+-- most-missing friendly in 99 yd (>30000 missing HP) when within 50 yd,
+-- and the dispel magic 43577 else-branch fires on the urand(0,1)==1
+-- most-missing-friendly-in-50-yd leg or the urand==0 random-threat-target
+-- leg; Gazakroth — firebolt 43584 2s
 -- then 700ms on victim; Lord Raadan — thunderclap 43583 13s then 12s / flame breath
 -- 43582 8s then 12s on victim; Darkheart — psychic wail 43590 8s then
 -- 12s on victim; Slither — venom spit 43579 5s then 2.5s on a random
@@ -68,12 +69,13 @@
 -- HasSpell(15473) redirect is ported via the player:HasSpell bridge;
 -- the C++ druid PlayerClass special case (class 11 -> index 11 of
 -- the 10-row table) is genuine out-of-bounds upstream — Lua guards it
--- and steals no abilities from druids; HEAL-target and BUFF-target
--- abilities (DoSelectLowestHpFriendly / DoFindFriendlyMissingBuff) have
--- no bridge, so those casts are skipped while the ability cycle keeps
--- running; ABILITY_TARGET_SPECIAL (ice lance) falls through the C++
--- default to a random enemy, modeled exactly; thurg's bloodlust
--- friendly-buff scan has no bearer; alyson/slither 20-yd AttackStart
+-- and steals no abilities from druids; HEAL-target abilities
+-- (DoSelectLowestHpFriendly) scan the friendly set via lowestHpFriendly
+-- while the ability cycle keeps running; the BUFF leg has no rows in
+-- the upstream PlayerAbility table; ABILITY_TARGET_SPECIAL (ice lance)
+-- falls through the C++ default to a random enemy, modeled exactly;
+-- thurg's bloodlust friendly-buff scan is ported via firstMissingBuff;
+-- alyson/slither 20-yd AttackStart
 -- chase and gazakroth's AttackStartCaster have no movement bridge;
 -- fenstalker's "core bug" victim-self-cast has no caster-override
 -- bridge, so the boss-side creature casts on the victim; no threat model
@@ -213,6 +215,54 @@ local function randomAlivePlayer(creature, maxDist)
     return found[math.random(#found)]
 end
 
+-- The boss's friendly set: itself plus the eight adds (zulaman.h:49,
+-- boss_hexlord.cpp AddEntryList order). Only four of the eight spawn per
+-- fight (the ctor's RandomResize pick); the grid scan simply finds the
+-- ones present. Entry-filtering replaces the C++ !IsHostileTo check
+-- (sulfuron precedent — these entries are the known-friendly set).
+local FRIENDLY_ENTRIES = {
+    ENTRY_HEXLORD, ENTRY_ALYSON, ENTRY_THURG, ENTRY_SLITHER,
+    ENTRY_RAADAN, ENTRY_GAZAKROTH, ENTRY_FENSTALKER,
+    ENTRY_DARKHEART, ENTRY_KORAGG,
+}
+
+-- C++ ScriptedAI::DoSelectLowestHpFriendly(range, minHPDiff)
+-- (GridNotifiers.h:813): alive, in combat, not hostile to the searcher,
+-- within range, missing strictly more than minHPDiff HP; the strictly
+-- most-missing unit wins. Scan order here is entry then GUID (the C++
+-- cell-visit order is unspecified).
+local function lowestHpFriendly(creature, range, minMissing)
+    local best, bestMissing = nil, minMissing
+    for _, entry in ipairs(FRIENDLY_ENTRIES) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, range)) do
+            if not add:IsDead() and add:IsInCombat() then
+                local missing = add:GetMaxHealth() - add:GetHealth()
+                if missing > bestMissing then
+                    best, bestMissing = add, missing
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- C++ ScriptedAI::DoFindFriendlyMissingBuff(range, spell) first-pick
+-- (ScriptedCreature.cpp:444; GridNotifiers.h:897): first alive, in-combat
+-- friendly creature in range missing the aura. Same entry/GUID order
+-- caveat as lowestHpFriendly (the stale "no friendly-scan bridge" claim
+-- is retracted — GetCreaturesInGrid + HasAura are live).
+local function firstMissingBuff(creature, range, spell)
+    for _, entry in ipairs(FRIENDLY_ENTRIES) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, range)) do
+            if not add:IsDead() and add:IsInCombat()
+                    and not add:HasAura(spell) then
+                return add
+            end
+        end
+    end
+    return nil
+end
+
 local onSpiritBolts
 local onDrainPower
 local onSiphonSoul
@@ -279,8 +329,10 @@ end
 
 -- C++ UseAbility: random of the three stolen-class abilities; the
 -- upstream target-alive check is commented out, so the cycle re-arms
--- {8s,10s} unconditionally. HEAL/BUFF targets have no friendly-scan
--- bridge, so those casts are skipped.
+-- {8s,10s} unconditionally. HEAL targets scan the friendly set via
+-- lowestHpFriendly (the stale "no friendly-scan bridge" claim is
+-- retracted); the C++ PlayerAbility table has no ABILITY_TARGET_BUFF
+-- rows, so the BUFF leg never fires upstream.
 onAbility = function(creature, guid)
     local st = bossState(guid)
     local row = st.playerClass and ABILITIES[st.playerClass] or nil
@@ -293,6 +345,13 @@ onAbility = function(creature, guid)
             creature:CastSpell(nil, spell, false)
         elseif tgt == TGT_ENEMY then
             local target = randomAlivePlayer(creature, 100)
+            if target then
+                creature:CastSpell(target, spell, false)
+            end
+        elseif tgt == TGT_HEAL then
+            -- C++ DoSelectLowestHpFriendly(50.f, 0): the most-HP-missing
+            -- friendly in 50 yd; no cast when nobody is hurt.
+            local target = lowestHpFriendly(creature, 50.0, 0)
             if target then
                 creature:CastSpell(target, spell, false)
             end
@@ -411,32 +470,45 @@ RegisterCreatureEvent(ENTRY_HEXLORD, 23, hexlordReset)
 
 local ADD_ARMS = {
     [ENTRY_THURG] = {
-        -- C++ bloodlust: DoFindFriendlyMissingBuff has no bearer — cast
-        -- skipped, 12s cycle kept (C++ re-arms 12000 unconditionally).
+        -- C++ bloodlust (boss_hexlord.cpp:541-549): DoFindFriendlyMissingBuff
+        -- (50, 43578) — the first in-combat friendly in 50 yd missing the
+        -- bloodlust aura — gets DoCast(43578, false); re-arms 12000
+        -- unconditionally.
         { key = "bloodlust", first = 15000, min = 12000, max = 12000,
-          fire = function(creature) end },
+          fire = function(creature)
+              local target = firstMissingBuff(creature, 50.0, SPELL_BLOODLUST)
+              if target then
+                  creature:CastSpell(target, SPELL_BLOODLUST, false)
+              end
+          end },
         { key = "cleave", first = 10000, min = 12000, max = 12000,
           fire = function(creature)
               creature:CastSpell(nil, SPELL_CLEAVE_ADD, false)
           end },
     },
     [ENTRY_ALYSON] = {
-        -- C++ flashheal arm: DoSelectLowestHpFriendly(99, 30000) has no
-        -- bearer (treated as no heal target, so the else branch runs
-        -- friendly leg has no bridge); the C++ else branch casts
-        -- DoCast(SPELL_DISPEL_MAGIC, false) on whichever scan wins the
-        -- urand(0,1) — ~50% of 2.5s ticks dispel a random threat-list
-        -- target (randomThreatTarget — SelectTarget(Random, 0) with
-        -- playerOnly=FALSE, UnitAI.h:170, has no range gate), the
-        -- friendly-leg ticks are skipped. The commented-out
-        -- MoveChase fallback is dead C++ code, not modeled.
+        -- C++ flashheal arm (boss_hexlord.cpp:623-641): every 2.5s the
+        -- most-HP-missing friendly in 99 yd with >30000 missing HP is
+        -- flash-healed when within 50 yd (the farther MoveChase leg is
+        -- commented-out dead C++ — no-op). With no heal target,
+        -- urand(0,1) picks the dispel leg: 1 -> most-missing friendly in
+        -- 50 yd, 0 -> random threat-list target (randomThreatTarget —
+        -- SelectTarget(Random, 0) with playerOnly=FALSE, UnitAI.h:170, no
+        -- range gate).
         { key = "flashheal", first = 2500, min = 2500, max = 2500,
           fire = function(creature)
-              -- C++ urand(0,1): the lowest-hp-friendly leg (50%) has no
-              -- bridge so the cast is skipped; only the random-enemy leg
-              -- dispels.
-              if math.random(0, 1) == 0 then
-                  local target = randomThreatTarget(creature)
+              local target = lowestHpFriendly(creature, 99.0, 30000)
+              if target then
+                  if creature:GetDistance(target) <= 50.0 then
+                      creature:CastSpell(target, SPELL_FLASH_HEAL, false)
+                  end
+              elseif math.random(0, 1) == 1 then
+                  target = lowestHpFriendly(creature, 50.0, 0)
+                  if target then
+                      creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
+                  end
+              else
+                  target = randomThreatTarget(creature)
                   if target then
                       creature:CastSpell(target, SPELL_DISPEL_MAGIC, false)
                   end
