@@ -12104,6 +12104,15 @@ func init() {
 	// documented-only (no bridges). Entry 25301 verifiable from the
 	// C++ LastRites enum (zone_borean_tundra.cpp:413).
 	RegisterLuaBoss("npc_counselor_talbot", 25301)
+	// npc_mageguard_dalaran (Dalaran, trespasser guards) — ported arm
+	// in lua_scripts/northrend/npc_mageguard_dalaran.lua: constructor
+	// SetFlag NON_ATTACKABLE + ApplySpellImmune normal/magic damage
+	// (event 5 spawn). Entries 29254/29255 verifiable from the C++
+	// Dalaran enum (zone_dalaran.cpp:55-56). MoveInLineOfSight
+	// trespasser teleport stays documented-only (ev27 engage-only,
+	// IsInBack unbridged for handler creatures).
+	RegisterLuaBoss("npc_mageguard_dalaran", 29254)
+	RegisterLuaBoss("npc_mageguard_dalaran", 29255)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
