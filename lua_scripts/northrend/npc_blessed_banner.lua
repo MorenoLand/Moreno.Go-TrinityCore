@@ -51,8 +51,9 @@
 -- duel-end machine (killing blow by a player -> damage = 0 +
 -- pDoneBy->CastSpell(pDoneBy, 63049 kill credit, true) +
 -- SetFaction(FACTION_FRIENDLY) + DespawnOrUnsummon(5s) +
--- SetHomePosition + EnterEvadeMode) has no DamageTaken hook /
--- player-self-cast / faction / despawn bridges; the ctor
+-- SetHomePosition + EnterEvadeMode) now has its DamageTaken hook (ev9 rewrite), SetFaction,
+-- Despawn, SetHomePosition bridges; the remaining blockers are
+-- the missing entry, player self-cast 63049, and EnterEvadeMode; the ctor
 -- MovePoint + SetFaction(FACTION_FRIENDLY) arm and the
 -- MovementInform POINT_MOTION_TYPE -> SetFaction(FACTION_
 -- MONSTER) flip sit behind the movement bridge (SetFaction IS

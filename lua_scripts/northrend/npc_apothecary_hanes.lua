@@ -47,8 +47,10 @@
 -- bridgeable in principle but unregistered without an entry.
 -- npc_mindless_abomination — the EVENT_CHECK_CHARMED 1s arm
 -- (IsCharmedOwnedByPlayerOrPlayer gate -> DespawnOrUnsummon)
--- has no charm-check / despawn bridges in the model —
--- documented-only.
+-- now has its bridges (creature:IsCharmed + creature:Despawn)
+-- but no NPC_ entry constant exists in the C++ sources, so it
+-- stays unregistered; the charm-semantics gap also stands
+-- (Go IsCharmed = any charm, C++ requires player-owned charm).
 -- spell_mindless_abomination_explosion_fx_master — SpellScript
 -- (creature-gated 43401 blood-explosion self-cast + 10x 42266
 -- poison circumference casts) has no SpellScript bridge anywhere
@@ -57,9 +59,9 @@
 -- npc_riven_widow_cocoon — the JustDied player-killer machine
 -- (20% roll: player->CastSpell(me, 43289) + KilledMonsterCredit
 -- 24211; else player->CastSpell(me, one of the 11 cocoon summon
--- spells 43275-43285)) has no killer-player / player-cast-on-me
--- / kill-credit path (borean nerubar_victim precedent) —
--- documented-only. No NPC_ entry constant for the cocoon in the
+-- spells 43275-43285)) KilledMonsterCredit is bridged, but the summon casts are
+-- player->CastSpell(me, ...) with no player-cast bridge (moroes
+-- precedent) — documented-only. No NPC_ entry constant for the cocoon in the
 -- C++ sources either.
 
 local SPELL_HEALING_POTION = 17534

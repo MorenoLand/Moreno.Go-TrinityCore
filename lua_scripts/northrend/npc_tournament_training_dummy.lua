@@ -18,7 +18,7 @@
 -- The creature_template ScriptName binding is DB-side (no TDB in
 -- this workspace).
 -- Eluna creature events: 5 OnSpawn, 23 OnReset, 14 OnHitBySpell,
--- 9 OnDamageTaken, 2 OnLeaveCombat, 4 OnDied.
+-- 9 OnDamageTaken, 2 OnLeaveCombat (evade re-arm, see below), 4 OnDied.
 -- Spells (TournamentDummy enum): SPELL_CHARGE_CREDIT 62658,
 -- SPELL_MELEE_CREDIT 62672, SPELL_RANGED_CREDIT 62673,
 -- SPELL_PLAYER_THRUST 62544, SPELL_PLAYER_BREAK_SHIELD 62626,
@@ -30,9 +30,13 @@
 -- reset — C++ schedules, not immediate); entry-switched: 33272 leg
 -- if (!me->HasAura(SPELL_CHARGE_DEFEND)) DoCast(me, 64100, true) —
 -- triggered self-cast, HasAura gate bridged (gunship precedent);
--- the 33243 leg (aura stack < 3 / duration <= 8000 gate) has no
--- aura-detail bridge — stays out; the 33229 entry has no recast
--- leg. All entries: isVulnerable=false (:293) and the 5s re-arm.
+-- the 33243 leg (aura stack < 3 / duration <= 8000 gate) is now
+-- ported via creature:GetStackAmount(spell) (bridged —
+-- lua_creature_events.go:416; an absent aura reads 0, subsuming
+-- the !defend leg); only the duration <= 8000 leg stays out
+-- (no GetDuration bridge), so at 3 stacks the recast may run
+-- up to 8s late — documented approximation. The 33229 entry
+-- has no recast leg. All entries: isVulnerable=false (:293) and the 5s re-arm.
 -- The SetControlled(STUNNED) Reset leg has no control-state
 -- bridge (documented).
 -- Ported arm 2 (C++ SpellHit :237-267, entry-switched):
@@ -58,9 +62,11 @@
 -- RescheduleEvent(EVENT_DUMMY_RESET, 10s) leg rides the unbridged
 -- evade machine (EVENT_DUMMY_RESET :296-302: UpdateVictim-gated
 -- EnterEvadeMode, no evade bridge) — documented deviation; the
--- latch-clear side effect is moot since the 5s recast clears it.
--- Unmodeled: the 62709 counterattack; the 33243 recast stack /
--- duration gate; MoveInLineOfSight overridden empty; the
+-- latch-clear side effect is moot since the 5s recast clears it,
+-- and the evade->Reset defend re-arm IS modeled (ev23 then ev2
+-- both re-arm — see the ev2 registration note below).
+-- Unmodeled: the 62709 counterattack; the 33243 recast
+-- duration <= 8000 leg (no GetDuration bridge); the
 -- SetControlled stunned leg; npc_argent_valiant's charge /
 -- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry
 -- constant anywhere in-tree — entry-blocked, stinky precedent);
@@ -69,10 +75,10 @@
 -- no area/team bridges); npc_frostbrood_skytalon (VehicleAI);
 -- blessed_banner summon/intro/wave machines (Reset arm ported in
 -- npc_blessed_banner.lua).
--- Go: RegisterLuaBoss("npc_tournament_training_dummy", 33272 /
--- 33229 / 33243) — the no-op AI neutralizes default combat
--- behavior for these stunned non-combatants (storm_cloud /
--- blessed_banner zone-script precedent).
+-- No RegisterLuaBoss entry exists for the dummy entries
+-- (boss_ai.go registers blessed_banner 30891 only); the file
+-- is event-driven, and the no-op boss AI is not required for
+-- the ev5/23/14/9/2/4/27 bindings.
 
 local ENTRY_CHARGE_TARGET = 33272
 local ENTRY_MELEE_TARGET = 33229
@@ -115,13 +121,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND: 33272 leg only
--- (!HasAura(64100) -> triggered self-cast 64100); all entries get
+-- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND: 33272 leg
+-- (!HasAura(64100) -> triggered self-cast 64100) + 33243 leg
+-- (!HasAura(62719) or stack < 3 -> triggered self-cast 62719;
+-- the duration <= 8000 leg stays out, no GetDuration bridge;
+-- a presence-only aura reads stack 0, so the recast may repeat
+-- at 5s rather than only below 3 stacks); all entries get
 -- isVulnerable=false + the 5s re-arm.
 local function onRecastDefend(creature, guid)
     if creature:GetEntry() == ENTRY_CHARGE_TARGET
             and not creature:HasAura(SPELL_CHARGE_DEFEND) then
         creature:CastSpell(creature, SPELL_CHARGE_DEFEND, true)
+    end
+    if creature:GetEntry() == ENTRY_RANGED_TARGET
+            and (not creature:HasAura(SPELL_RANGED_DEFEND)
+                or creature:GetStackAmount(SPELL_RANGED_DEFEND) < 3) then
+        creature:CastSpell(creature, SPELL_RANGED_DEFEND, true)
     end
     vulnerable[guid] = false
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
@@ -129,14 +144,23 @@ end
 
 -- C++ Reset() :214-221: Initialize() (isVulnerable=false) +
 -- schedule EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed).
+-- C++ ctor (:203) SetCombatMovement(false) rides here too
+-- (re-applied on reset/evade — value-idempotent).
 local function dummySpawnOrReset(event, creature)
     local guid = creature:GetGUID()
+    creature:SetCombatMovement(false)
     cancelTimers(guid)
     vulnerable[guid] = false
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
 end
 
-local function dummyLeaveCombat(event, creature)
+-- Evade order (engine triggerCreatureEvade, creaturemotion.go):
+-- ev23 fires BEFORE ev2. The old ev2 handler cancelled the
+-- timers, undoing the ev23 Reset re-arm — after the first
+-- evade the defend timer never ran again. ev2 now re-arms via
+-- dummySpawnOrReset (C++ evade -> Reset semantics); ev4 keeps
+-- the cancel (a dead dummy runs no timers; spawn re-arms).
+local function dummyDied(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
@@ -177,22 +201,22 @@ RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 5, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 23, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 9, dummyDamageTaken)
-RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 2, dummyLeaveCombat)
-RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 4, dummyLeaveCombat)
+RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 2, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 4, dummyDied)
 
 RegisterCreatureEvent(ENTRY_MELEE_TARGET, 5, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_MELEE_TARGET, 23, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_MELEE_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_MELEE_TARGET, 9, dummyDamageTaken)
-RegisterCreatureEvent(ENTRY_MELEE_TARGET, 2, dummyLeaveCombat)
-RegisterCreatureEvent(ENTRY_MELEE_TARGET, 4, dummyLeaveCombat)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 2, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_MELEE_TARGET, 4, dummyDied)
 
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 5, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 23, dummySpawnOrReset)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 14, dummySpellHit)
 RegisterCreatureEvent(ENTRY_RANGED_TARGET, 9, dummyDamageTaken)
-RegisterCreatureEvent(ENTRY_RANGED_TARGET, 2, dummyLeaveCombat)
-RegisterCreatureEvent(ENTRY_RANGED_TARGET, 4, dummyLeaveCombat)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 2, dummySpawnOrReset)
+RegisterCreatureEvent(ENTRY_RANGED_TARGET, 4, dummyDied)
 for _, entry in ipairs({ ENTRY_CHARGE_TARGET, ENTRY_MELEE_TARGET, ENTRY_RANGED_TARGET }) do
     RegisterCreatureEvent(entry, 1, function(_, creature)
         creature:SetMeleeAttack(false) -- zone_icecrown.cpp:271: custom UpdateAI never calls DoMeleeAttackIfReady (defend/stun machine in C++, never melees)
