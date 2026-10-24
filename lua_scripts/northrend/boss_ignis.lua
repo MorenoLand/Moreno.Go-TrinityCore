@@ -102,9 +102,10 @@
 -- leg is blocked by the DoAction cross-AI arm (RemoveAuraFromStack also
 -- unbridged) and DespawnOrUnsummon; the NPC never spawns in Lua (DoSummon
 -- blocked) so no registration. UpdateAI HEAT-stack / MOLTEN / BRITTLE /
--- IsInWater machine — aura-stack (GetStackAmount) and water-state
--- (IsInWater) have no bridges (both verified absent this run); no Talk arms
--- anywhere.
+-- IsInWater machine — aura-stack leg: GetStackAmount is bridged
+-- but self-reads only engine-applied auras (a Lua AddAura reads 0)
+-- and the HEAT source machine is unported; water-state (IsInWater)
+-- still has no bridge; no Talk arms anywhere.
 -- npc_scorch_ground (NPC_GROUND_SCORCH 33221 — now spawned by the
 -- ported EVENT_SCORCH arm): MoveInLineOfSight heat tracking + UpdateAI
 -- AddAura(SPELL_HEAT 65667) 1s machine — proximity IS bridged (creature

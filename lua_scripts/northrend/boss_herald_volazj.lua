@@ -89,7 +89,9 @@
 -- + phase + aura-removal bridges absent.
 -- UpdateAI insanity wait-state (UpdateVictim early-return then the
 -- _insanityHandled / summons.empty() gate): whole machine rides
--- the unbridged DamageTaken / SpellHitTarget / summon arms.
+-- the unported insanity payload (summon strand + player-cast clone
+-- + phase mask + stun-control); the DamageTaken crossing arm is
+-- ported above and ev15 is live but unreachable for 57496.
 -- The wait-state cleanup leg's SetControlled(false, UNIT_STATE_STUNNED)
 -- (boss_herald_volazj.cpp:269) stays out too — no stun-control bridge.
 -- npc_twisted_visage: NO AI EXISTS in C++ (file header comment

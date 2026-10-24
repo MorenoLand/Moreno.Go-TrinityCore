@@ -109,9 +109,10 @@
 --   npc_argent_captainAI SpellHit SPELL_UNDEATH 70053->70089 arm
 --   (:895-921: setDeathState(JUST_RESPAWNED) + UpdateEntry remap +
 --   DoCastSelf(SPELL_UNDEATH 70089, true)) is blocked on the
---   setDeathState/UpdateEntry machine legs (no bridges) — event 14
---   OnHitBySpell is bridged (boss_ai.go:2052-2096) but the cast alone,
---   without the entry swap, would be C++-inexact — documented-only.
+--   setDeathState leg (no bridge) + the never-cast trigger — event 14
+--   OnHitBySpell is bridged (boss_ai.go:2052-2096) and UpdateEntry
+--   is bridged since 2026-10-22, but the cast alone, without the
+--   entry swap + death-state legs, would be C++-inexact — documented-only.
 -- EVENT_BRANDON_DIVINE_SHIELD (500ms poll +
 --   HealthBelowPct(20) gate) and the IsUndead random-target legs
 --   (EVENT_BRANDON_HAMMER_OF_BETRAYAL, EVENT_GRONDEL_CONFLAGRATION)

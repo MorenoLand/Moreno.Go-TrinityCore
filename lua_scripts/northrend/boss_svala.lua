@@ -183,7 +183,9 @@
 -- cross-creature arthas->AI()->Talk(SAY_DIALOG_OF_ARTHAS_1 0 /
 -- SAY_DIALOG_OF_ARTHAS_2 1) — the intro machine (MoveInLineOfSight
 -- IDLE -> INTRO, summon NPC_ARTHAS 29280, MotionMaster takeoff/land,
--- UpdateEntry 29281 -> 26668) has no bridges. Stay out.
+-- UpdateEntry 29281 -> 26668 — UpdateEntry itself bridged
+-- 2026-10-22, but the MLOS-IDLE trigger + summon + motion legs
+-- are not) stays out.
 -- npc_spectator (26667) — MovementInform flee machine, no Talk arms,
 -- no MovementInform bridge. Stay out.
 -- spell_paralyze_pinnacle (SpellScript target filter) and

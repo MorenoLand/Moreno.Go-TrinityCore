@@ -48,8 +48,8 @@
 -- Drained=false, ManaBurnTimer 5000+rand32()%3*1000 —
 -- 5-7s (5000 + rand32()%3*1000); the WeakPercent = 25+rand32()%16 init belongs to the
 -- unmodeled quest arm, see deviations; the C++ Reset()
--- entry-restore arm (UpdateEntry(18879) when drained) has no
--- entry-update bridge — unmodeled) + 1s scheduler pump; the
+-- entry-restore arm (UpdateEntry(18879) when drained) PORTED
+-- 2026-10-24 (ev23 branch of onLeaveCombat, ingvar precedent)) + 1s scheduler pump; the
 -- C++ JustEngagedWith override stores the player GUID, which
 -- only feeds the unmodeled quest arms — lands nowhere.
 -- Pump (C++ UpdateAI arm order): materialize arm — one-shot
@@ -74,10 +74,11 @@
 -- — millhouse note — so both hooks land the same reset).
 -- Deliberate deviations (all await engine bridges): no
 -- entry-update bridge — the C++ Reset() drained->full
--- restore arm (me->UpdateEntry(NPC_PHASE_HUNTER_ENTRY)) and
--- the Drained arm's UpdateEntry(NPC_DRAINED_PHASE_HUNTER_
--- ENTRY) + SetHealth pct + LowerPlayerDamageReq +
--- SetInCombatWith unmodeled (nether_drake precedent); no
+-- restore arm is PORTED (ev23 branch above); the Drained
+-- arm's UpdateEntry(NPC_DRAINED_PHASE_HUNTER_ENTRY) +
+-- SetHealth pct + LowerPlayerDamageReq + SetInCombatWith
+-- stays unmodeled behind the quest-status + HasAura(34219)
+-- gates (nether_drake precedent); no
 -- aura-state / unit-state bridge — the phase-slip arm
 -- (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or UNIT_STATE_
 -- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) unmodeled
@@ -115,7 +116,8 @@ end
 
 -- C++ Reset(): the observable remainder — the timer re-latch
 -- — lands on OnEnterCombat (gargolmar precedent); the
--- entry-restore arm (UpdateEntry) has no bridge.
+-- entry-restore arm (zone_netherstorm.cpp:398-399: entry 19595
+-- -> 18879) lands in onLeaveCombat's ev23 branch below.
 local function fullReset(guid)
     cancelPump(guid)
     hunterState[guid] = nil
@@ -201,9 +203,15 @@ local function onEnterCombat(_, creature)
     end, 1000, 0)
 end
 
--- C++ Reset() (called on evade): fullReset — see above.
-local function onLeaveCombat(_, creature)
+-- C++ Reset() (called on evade): fullReset + the drained-entry
+-- restore — ev23 fires first on the Go evade path, then ev2
+-- (creaturemotion.go triggerCreatureEvade; Eluna EnterEvadeMode
+-- calls On_Reset first), so the restore gates on event == 23.
+local function onLeaveCombat(event, creature)
     fullReset(creature:GetGUID())
+    if event == 23 and creature:GetEntry() == 19595 then
+        creature:UpdateEntry(18879)
+    end
 end
 
 -- The C++ CreatureScript binds one AI class to both entries

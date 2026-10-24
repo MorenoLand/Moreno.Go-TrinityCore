@@ -122,8 +122,9 @@
 --   CHAMPION 70053 is never cast in Go (Svalna's EVENT_SVALNA_
 --   RESURRECT DoCast rides the unbridged gauntlet DoAction machine —
 --   boss_sister_svalna.lua DOCUMENTED-ONLY), and the arm's core legs
---   have no bridge: UpdateEntry (zero Lua hits) and setDeathState(
---   JUST_RESPAWNED). Talk(1) + the UNDEATH 70089 self-cast alone would
+--   setDeathState(JUST_RESPAWNED) has no bridge (UpdateEntry is
+--   bridged since 2026-10-22 — ingvar/volkhan precedents — but
+--   cannot rescue the arm alone). Talk(1) + the UNDEATH 70089 self-cast alone would
 --   Talk a living-entry captain the revive never flips — C++-inexact.
 -- npc_argent_captainAI::DoAction (:838-857) —
 --   ACTION_START_GAUNTLET follow / active / far-visible legs and

@@ -107,8 +107,9 @@
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
 -- - npc_pulsing_pumpkin (23694): Reset self-casts + the sprout arm fires
 --   only via DoAction(ACTION_PUMPKIN_SPROUTING_FINISHED) from the
---   unmodeled 42281 SpellScript; UpdateEntry + DoZoneInCombat have no
---   bridges. Documented-only.
+--   unmodeled 42281 SpellScript; its UpdateEntry + DoZoneInCombat
+--   legs are bridged now (2026-10-22 / 2026-10-23) but cannot run
+--   without the DoAction trigger. Documented-only.
 -- - npc_flame_bunny (23686): Reset's cosmetic self-cast growth schedule
 --   (43184 -> 43148 x3) — stranded-half Reset self-casts (rageclaw/
 --   phoenix_tk precedent); no Talk, no combat. Documented-only.

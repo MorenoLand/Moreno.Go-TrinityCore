@@ -18,17 +18,17 @@
 -- (player-side CastSpell bridge — modeled as caster:AddAura,
 -- brutallus precedent) + triggered self-cast 18377 on the kodo.
 -- The C++ also gates on the kodo not having SPELL_KODO_KOMBO_
--- DESPAWN_BUFF 18377, but the motion creature proxy has no
--- HasAura bridge (aura bridges exist on the session player
--- proxy only), so the kodo-side gate is dropped — documented
--- below.
+-- DESPAWN_BUFF 18377 — PORTED 2026-10-24: creature:HasAura is
+-- bridged on the handler surface (lua_creature_events.go:388,
+-- creatureAuras + activeCreatureAuras keyed by motion), so the
+-- kodo-side gate lands in kodoSpellHit below.
 -- Deliberate deviations (documented here): the 18153 arm's
 -- mutation half — UpdateEntry(NPC_TAMED_KODO 11627), CombatStop,
 -- SetFaction(FRIENDLY), SetSpeedRate(run 0.6f), EngagementOver,
 -- MoveFollow, setActive(true), RemoveFlag(UNIT_NPC_FLAG_GOSSIP)
--- — re-triaged 2026-10-24: CombatStop + SetFaction are bridged now,
--- but UpdateEntry + MoveFollow are not, and the stop/faction half
--- alone would leave a friendly wild-entry non-following kodo, a
+-- — re-triaged 2026-10-24: CombatStop + SetFaction + UpdateEntry
+-- are bridged now, but MoveFollow is not, and the bridged legs
+-- alone would leave a tamed-entry kodo that never follows, a
 -- state C++ never produces (half-pair) — still unmodeled;
 -- the 18362 (SPELL_KODO_KOMBO_GOSSIP) SpellHit arm — SetFlag
 -- gossip, SetHomePosition, MotionMaster Clear + MoveIdle,
@@ -68,8 +68,12 @@ local function kodoSpellHit(_, creature, caster, spellId)
     if caster:HasAura(SPELL_KODO_KOMBO_PLAYER_BUFF) then
         return
     end
-    -- The C++ kodo-side gate (!me->HasAura(SPELL_KODO_KOMBO_
-    -- DESPAWN_BUFF)) has no motion-proxy bridge — unmodeled.
+    -- C++ SpellHit gate (zone_desolace.cpp:85): !(caster 18172
+    -- || kodo 18377) — the kodo-side gate lands via
+    -- handler-creature HasAura (bridged 2026-10-24).
+    if creature:HasAura(SPELL_KODO_KOMBO_DESPAWN_BUFF) then
+        return
+    end
     caster:AddAura(SPELL_KODO_KOMBO_PLAYER_BUFF)
     creature:CastSpell(creature, SPELL_KODO_KOMBO_DESPAWN_BUFF, true)
 end

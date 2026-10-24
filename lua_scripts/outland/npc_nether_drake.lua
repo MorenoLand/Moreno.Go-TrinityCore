@@ -56,13 +56,13 @@
 -- gargolmar precedent; Eluna's On_Reset fires ahead of
 -- OnDied and OnSpawn — millhouse note — so both hooks
 -- land the same reset).
--- Deliberate deviations (all await engine bridges): no
--- entry-update bridge — the whole SpellHit phase-modulator
--- arm (the entry rotation, me->UpdateEntry, EnterEvadeMode,
--- the Nihil UNIT_FLAG_NON_ATTACKABLE latch, the
+-- Deliberate deviations (all await engine bridges): the
+-- whole SpellHit phase-modulator arm (the entry rotation,
+-- me->UpdateEntry — bridged 2026-10-22 — EnterEvadeMode
+-- (no bridge), the Nihil UNIT_FLAG_NON_ATTACKABLE latch, the
 -- RemoveFlag interrupt arm, AttackStart on the player
--- caster, Talk(SAY_NIHIL_INTERRUPT)) unmodeled — no event
--- 14 registration; the IsNihil speech machine (SAY_NIHIL_
+-- caster, Talk(SAY_NIHIL_INTERRUPT)) stays unmodeled on the
+-- EnterEvadeMode / AttackStart legs — no event 14 registration; the IsNihil speech machine (SAY_NIHIL_
 -- 1..4), the UNIT_FLAG_NOT_SELECTABLE flag arm, the MoveIn
 -- LineOfSight NON_ATTACKABLE gate and the MovementInform
 -- MovePoint(0)->DespawnOrUnsummon arm all sit behind it or
