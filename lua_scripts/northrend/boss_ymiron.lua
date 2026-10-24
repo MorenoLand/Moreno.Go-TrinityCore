@@ -73,8 +73,8 @@
 -- MovementInform bridge (the health-threshold latch itself is bridgeable
 -- via event 9 + GetHealthPct — boss_nethekurse.lua uses GetHealthPct()
 -- <= 20 at event 9 — but the blocker is the MovePoint(POINT_BOAT) leg,
--- :218, plus no InterruptNonMeleeSpells / react-state
--- bridges (Despawn IS bridged, but the arm is
+-- :218 (InterruptNonMeleeSpells / SetReactState are bridged;
+-- the blocker is the MovePoint leg — Despawn IS bridged, but the arm is
 -- DespawnBoatGhosts — it despawns OTHER creatures, not
 -- the handler; calling creature:Despawn() on Ymiron would
 -- target the wrong creature); the MovementInform(POINT_BOAT) ->

@@ -418,9 +418,10 @@ local function algalonTimersStart(event, creature)
     if algalonFirstPull[guid] == nil then
         algalonFirstPull[guid] = false
         creature:Talk(SAY_ALGALON_START_TIMER)
+        creature:InterruptNonMeleeSpells(false) -- C++ :381, after Talk, before setActive/SetFarVisible.
         -- C++ JustEngagedWith first-pull (boss_algalon_the_observer.cpp:383-384):
-        -- me->SetFarVisible(true), then DoZoneInCombat() (the
-        -- InterruptNonMeleeSpells/setActive legs have no bridge).
+        -- me->SetFarVisible(true), then DoZoneInCombat() (C++ :383-384).
+        -- InterruptNonMeleeSpells(false) ported above; setActive leg has no bridge.
         creature:SetFarVisible(true)
         creature:DoZoneInCombat() -- C++ :384, in arm order after SetFarVisible (bridge live 2026-10-23)
         introDelay = 26500

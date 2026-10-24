@@ -225,14 +225,13 @@ local function onElementalFire(creature, guid)
     end)
 end
 
--- C++ EVENT_MAGMA_BLAST: if the victim is not within melee range,
--- non-triggered DoCastVictim(20565); once-only Talk(SAY_MAGMABURST);
--- re-arm 2500ms. The IsWithinMeleeRange gate has no bridge — the
--- cast fires unconditionally and the Talk fires on the first tick.
+-- C++ EVENT_MAGMA_BLAST (boss_ragnaros.cpp:231-242): if the victim is
+-- not within melee range, non-triggered DoCastVictim(20565) + once-only
+-- Talk(SAY_MAGMABURST) inside the gate; re-arm 2500ms unconditional.
 local function onMagmaBlast(creature, guid)
     local s = getState(guid)
     local victim = creature:GetVictim()
-    if victim then
+    if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_MAGMA_BLAST)
         if not s.hasYelledMagmaBurst then
             creature:Talk(SAY_MAGMABURST)

@@ -121,9 +121,10 @@
 -- Initialize). The UpdateEntry morph re-seats faction/flags/display/
 -- stats from the brittle template (the "Set in DB" stunned/
 -- non-attackable flags ride the template unit_flags).
--- DOCUMENTED DEVIATIONS: InterruptNonMeleeSpells (no bridge; Go
--- creature casts are packet-only, the interrupt is a net no-op) +
--- MotionMaster clear (no motion bridge) stay out.
+-- DOCUMENTED DEVIATIONS: InterruptNonMeleeSpells is bridged (no-op
+-- twin, lua_creature_events.go) — the golem kill-shot leg is PORTED
+-- below; volkhan's own :298 leg rides the unported temper-summon
+-- machine (see header) + MotionMaster clear (no motion bridge) stay out.
 -- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
 -- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
 -- SpellHit (:444-449: SPELL_SHATTER 52429 dummy on a brittle golem
@@ -263,8 +264,8 @@ end
 -- the entry change dispatches subsequent hooks to the brittle entry's
 -- registrations (registered below for both entries — the C++ AI object
 -- keeps receiving hooks after the transform). AttackStop bridged
--- 2026-10-22 (C++ order RemoveAllAuras -> AttackStop). Interrupt /
--- MotionMaster stay out behind true blockers (see header deviations).
+-- 2026-10-22 (C++ order RemoveAllAuras -> AttackStop -> Interrupt).
+-- MotionMaster stays out (no motion bridge; see header deviations).
 local function golemDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if damage >= creature:GetHealth() then
@@ -274,6 +275,7 @@ local function golemDamageTaken(event, creature, attacker, damage)
         -- C++ boss_volkhan.cpp:433: me->AttackStop() (C++ order
         -- RemoveAllAuras -> AttackStop).
         creature:AttackStop()
+        creature:InterruptNonMeleeSpells(false) -- C++ :437, after AttackStop.
         golemFrozen[guid] = true
         golemCancelTimers(guid)
         return false, 0

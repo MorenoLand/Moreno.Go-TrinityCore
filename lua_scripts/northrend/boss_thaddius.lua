@@ -56,7 +56,8 @@
 -- Reset() — empty in C++; EnterEvadeMode — ballLightningEnabled /
 -- PHASE_TRANSITION/PHASE_THADDIUS legs + BeginResetEncounter — no
 -- phase / instance bridges; CanAIAttack — the
--- ballLightningEnabled/IsWithinMeleeRange gate — no bridge;
+-- ballLightningEnabled/IsWithinMeleeRange gate — no CanAIAttack hook
+-- bridge (IsWithinMeleeRange itself bridged 2026-10-24; the hook has no Lua event);
 -- JustAppeared — ResetEncounter (phase reset + REACT_PASSIVE +
 -- respawn of spawn IDs 130958/130959) — instance model — no bridge;
 -- DoAction — the whole cross-AI machine (ACTION_FEUGEN_RESET/
