@@ -105,16 +105,15 @@
 --   here could fire anyway. Corrected 2026-10-17.
 -- - SpellHit(45714)'s SummonCreature(NPC_DEAD = 25268, 5s
 --   out-of-combat despawn) + SetMaxHealth/SetHealth + double
---   self-charm (45717/45726) + Unit::DealDamage leg: me->
---   SummonCreature has no Lua summon bridge (gurtogg class) —
---   STRAND. The "event 15 never fires" label was doubly stale:
---   the C++ hook is void SpellHit = event 14
---   (CreatureEventOnHitBySpell, bridged — boss_ai.go:2052-2096 +
---   spells.go:11709-11730; the 45714 caster is the fog-forced player, so
---   the player-caster path would fire it), but the arm's load-bearing
---   SummonCreature leg keeps it unmodeled. Corrected 2026-10-17.
--- - JustSummoned's NPC_DEAD AttackStart/random + DoZoneInCombat
---   + 45415 self-cast arm: shares the no-summon-bridge block.
+--   self-charm (45717/45726) + Unit::DealDamage leg: re-triaged
+--   2026-10-24 — SummonCreature + SetMaxHealth + DoZoneInCombat are
+--   all bridged now and event 14 fires for the player-caster path
+--   (spells.go:11781), but the arm still stays out: the lethal
+--   DealDamage on the player caster has no bridge (creature:Kill is
+--   self-only) and the summoned DEAD's AttackStart(random) has none,
+--   so the summon+charm legs alone would be a half-pair.
+-- - JustSummoned's NPC_DEAD AttackStart/random + 45415 self-cast
+--   arm: shares the AttackStart block above.
 -- - npc_felmyst_vapor (25265): entry only in the header + this
 --   cpp (no corroborating usage — fails the kalecgos entry-
 --   verifiability check); the AI itself is target acquisition

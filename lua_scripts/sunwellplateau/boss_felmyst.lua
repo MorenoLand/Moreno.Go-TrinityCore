@@ -78,8 +78,13 @@
 -- always GROUND here). The SpellHit FOG_INFORM 45714 arm (summon
 -- NPC_DEAD at the caster, copy health, triggered FOG_CHARM 45717
 -- + FOG_CHARM2 45726 self-casts, lethal DealDamage on the caster)
--- has no SpellHit-hook, SetMaxHealth or DealDamage bridges — unmodeled
--- (the summon bridge alone is insufficient). The
+-- stays out (2026-10-24 re-triage: event 14 DOES fire for the
+-- player-caster path (spells.go:11781), and SummonCreature +
+-- SetMaxHealth + DoZoneInCombat are all bridged now — but the lethal
+-- DealDamage on the player caster has no bridge (creature:Kill is
+-- self-only) and the summoned DEAD's AttackStart(random) has none,
+-- so the summon+charm legs alone would leave a live player beside a
+-- charmed, idle copy — a half-pair C++ never produces). The
 -- DespawnSummons(NPC_VAPOR_TRAIL)->NPC_DEAD summon arm (fires only
 -- when phase == PHASE_FLIGHT) is phase-gated; the SetVisible/
 -- Despawn side ports via GetCreaturesInGrid + SetVisible + Despawn

@@ -614,6 +614,30 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: health})
 		return nil, nil
 	}
+	// SetMaxHealth is Unit::SetMaxHealth (Unit.cpp:9588-9612): a 0 value
+	// becomes 1, UNIT_FIELD_MAXHEALTH is set, and a current health above
+	// the new max is clamped down via SetHealth. The values update
+	// carries both fields when the clamp fires, max only otherwise.
+	methods["SetMaxHealth"] = func(_ context.Context, args []any) ([]any, error) {
+		maxHealth, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		s.motionMu.Lock()
+		motion.MaxHealth = maxHealth
+		updates := map[int]uint32{unitFieldMaxHealth: maxHealth}
+		if motion.Health > maxHealth {
+			motion.Health = maxHealth
+			updates[unitFieldHealth] = maxHealth
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
+		return nil, nil
+	}
 	// SetPower is Unit::SetPower (Unit.cpp): writes UNIT_FIELD_POWER1+type,
 	// clamped to the type's max (C++ clamps via std::min against
 	// GetMaxPower), then broadcasts the update field. powerType is validated

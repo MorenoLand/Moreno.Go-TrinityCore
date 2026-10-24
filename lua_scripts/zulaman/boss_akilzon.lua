@@ -166,11 +166,10 @@ end
 -- Bridges: creature:SummonCreature (engine/world/lua_creature_events.go:940;
 -- summonType 2 = TEMPSUMMON_TIMED_DESPAWN, despawnMs in ms),
 -- SetDisableGravity (:784), StopMoving (:667), SetScale (:1565), SetFaction
--- (:2060), SetHealth (:542), RemoveFlag (:1968).
--- DELTA: no SetMaxHealth bridge — SetHealth clamps to the template max
--- (lua_creature_events.go:548-549), so the C++ 9,999,999-HP pool is not
--- reproduced; the cloud's gameplay role in this tree is nil anyway (the
--- zap sequence that used it as caster is dead code).
+-- (:2060), SetHealth (:602), SetMaxHealth (:621), RemoveFlag (:1968).
+-- The cloud's gameplay role in this tree is nil anyway (the zap
+-- sequence that used it as caster is dead code), but its 9,999,999-HP
+-- pool is now C++-exact (boss_akilzon.cpp:292-293).
 local function onElectricalStorm(creature, guid)
     local target = randomPlayerInRange(creature, 50)
     if target then
@@ -182,6 +181,7 @@ local function onElectricalStorm(creature, guid)
             cloud:StopMoving()
             cloud:SetScale(1.0)
             cloud:SetFaction(FACTION_FRIENDLY)
+            cloud:SetMaxHealth(9999999)
             cloud:SetHealth(9999999)
             cloud:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         end

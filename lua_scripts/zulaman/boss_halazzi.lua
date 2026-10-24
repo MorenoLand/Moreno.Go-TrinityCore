@@ -37,8 +37,8 @@
 -- bridge), so an event-14 guard for 43573 is kept but the actual human
 -- entry runs on a 2s timer approximating the transform; no SetMaxHealth
 -- on the bridge, so the per-cycle health reset is mapped as
--- SetHealth(max - max/4*TransformCount) — the exact C++ fractions
--- (600000-150000*count) on the engine's fixed max; no instance-script
+-- SetMaxHealth(600000) + SetHealth(600000-150000*TransformCount)
+-- (boss_halazzi.cpp:164-165, C++-exact); no instance-script
 -- model — admission only via the luaBossAI shim; the shock target's
 -- IsNonMeleeSpellCast check uses the live player IsCasting bridge
 -- (Go activeCast is the cast-bar phase, like C++'s non-melee check);
@@ -296,9 +296,8 @@ local function onCheck(creature, guid)
 end
 
 -- C++ EnterPhase: arm the timers for the new phase and reset the per-phase
--- health on lynx/enrage entry (C++: max 600000, health 600000-150000*count
--- — mapped onto the engine's fixed max as the exact fractions, since
--- SetMaxHealth has no bridge).
+-- health on lynx/enrage entry (C++: SetMaxHealth(600000) +
+-- SetHealth(600000-150000*count), boss_halazzi.cpp:164-165).
 enterPhase = function(creature, guid, nextPhase)
     local st = halazziState(guid)
     cancelPhaseTimers(guid)
@@ -309,11 +308,8 @@ enterPhase = function(creature, guid, nextPhase)
             -- melee is continuous.
         end
         -- The lynx DisappearAndDie has no bearer (the lynx never spawns).
-        local maxHealth = creature:GetMaxHealth()
-        if maxHealth > 0 then
-            creature:SetHealth(maxHealth - math.floor(maxHealth / 4)
-                * st.transformCount)
-        end
+        creature:SetMaxHealth(600000)
+        creature:SetHealth(600000 - 150000 * st.transformCount)
         st.phase = nextPhase
         schedule(timers, guid, "frenzy", 16000, function()
             onFrenzy(creature, guid)
@@ -332,14 +328,11 @@ enterPhase = function(creature, guid, nextPhase)
     elseif nextPhase == PHASE_HUMAN then
         -- C++ DoSpawnCreature(SPIRIT_LYNX) skipped — no summon model.
         -- C++ EnterPhase(PHASE_HUMAN): SetMaxHealth(400000) +
-        -- SetHealth(400000) — a full heal; SetMaxHealth has no bridge,
-        -- so the heal lands on the engine's fixed max (100%, C++-exact
-        -- fraction).
+        -- SetHealth(400000) — a full heal, ported C++-exact
+        -- (boss_halazzi.cpp:178-179).
         st.phase = PHASE_HUMAN
-        local maxH = creature:GetMaxHealth()
-        if maxH > 0 then
-            creature:SetHealth(maxH)
-        end
+        creature:SetMaxHealth(400000)
+        creature:SetHealth(400000)
         schedule(timers, guid, "shock", 10000, function()
             onShock(creature, guid)
         end)
