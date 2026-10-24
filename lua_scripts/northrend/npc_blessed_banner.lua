@@ -21,7 +21,10 @@
 -- leg (zone_icecrown.cpp:455-459; the Summons.DespawnAll() half stays
 -- out — no summon-list bridge).
 -- Modeled in onSpawnOrReset: SetRegenerateHealth(false) (bridged —
--- lua_creature_events.go, honored by the Go regen tick).
+-- lua_creature_events.go, honored by the Go regen tick). The ctor
+-- SetCombatMovement(false) (zone_icecrown.cpp:421) is ported at
+-- JustEngagedWith — the bridge's ctor-equivalent point (eredar_twins
+-- convention).
 -- Unmodeled: EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900 with
 -- MovePoint machines — summon / movement bridges);
 -- EVENT_INTRO_1..3 Talk/facing chain (cross-creature-Talk /
@@ -152,4 +155,5 @@ end
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 27, onMoveInLOS)
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- zone_icecrown.cpp:461: custom UpdateAI never calls DoMeleeAttackIfReady (summon event machine in C++, never melees)
+    creature:SetCombatMovement(false) -- zone_icecrown.cpp:421: ctor arm, ScriptedAI stands-and-casts (eredar_twins convention)
 end)

@@ -30,6 +30,20 @@
 -- MovementInform spline-chain events (InitializeAI ->
 -- MoveAlongSplineChain — no movement bridge). The AI is not registered
 -- in boss_ai.go; stays out as unregistered AI.
+-- Documented-only (quest-giver axis): npc_chromie_middle
+-- (culling_of_stratholme.cpp:474-545 — no entry constant anywhere in the
+-- C++ tree; culling_of_stratholme.h names only NPC_CHROMIE = 26527, "we
+-- don't need the other two for anything" — DB ScriptName binding only,
+-- unverifiable, wounded-skirmisher precedent). OnGossipHello (:508-514):
+-- the me->IsQuestGiver() / player->PrepareQuestMenu(me->GetGUID()) pair
+-- (:509-510) is inseparable and PrepareQuestMenu has no bridge, so the
+-- query result gates an unbridgeable call; the rest of the menu rides
+-- instance->GetData(DATA_INSTANCE_PROGRESS) == CRATES_DONE (no instance
+-- bridge). OnGossipSelect STEP1/2/3 menu-nav ends in AdvanceDungeon ->
+-- instance->SetGuidData(DATA_UTHER_START, ...) (no instance bridge); the
+-- MoveInLineOfSight whisper machine rides the same instance
+-- GetData/quest-status legs. The AI is not registered in boss_ai.go;
+-- stays out as unregistered AI.
 
 local ENTRY_CHROMIE_START = 26527
 

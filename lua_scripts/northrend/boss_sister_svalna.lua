@@ -204,6 +204,13 @@
 --   MovementInform (:439-450) — SetReactState / SetDisableGravity
 --   / SetHover legs, no Talk of Svalna's own (no MovementInform
 --   bridge).
+-- boss_sister_svalna EnterEvadeMode (:872-885) — the
+--   GetVehicle-gated MoveFollow(NPC_CROK_SCOURGEBANE) leg (:882-885)
+--   rides the unbridged EnterEvadeMode hook (event 25 unused;
+--   boss_ai.go:5753-5754) plus the unported vehicle/motion machines —
+--   stays out. The _vehicleCheckTimer 500ms UpdateAI leg (:1403-1410,
+--   DespawnOrUnsummon(100ms) when !me->GetVehicle()) rides the same
+--   unported vehicle machine — stays out.
 -- npc_crok_scourgebane DoAction (:553-589) — ACTION_START_GAUNTLET
 --   intro Talk(SAY_CROK_INTRO_1 0) + EVENT_ARNATH_INTRO_2 (7s,
 --   cross-AI Talk SAY_ARNATH_INTRO_2 5) + EVENT_CROK_INTRO_3 (14s,

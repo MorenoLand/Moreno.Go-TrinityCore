@@ -72,6 +72,10 @@
 -- ACTION_MOVE_TO_CENTER_POSITION arrival leg (SetReactState(REACT_AGGRESSIVE)
 -- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE | STUNNED)) rides the
 -- unbridged MovementInform hook; the boss stays REACT_DEFENSIVE in Lua.
+-- UpdateAI MoveTimer arm (:871-881) — GetVehicleKit()->HasEmptySeat(-1)
+-- gated FindNearestCreature(NPC_CONTAINER, 50) + MovePoint(1) leg rides
+-- the unported vehicle machine (GetVehicleKit/GetVehicle unbridged) and
+-- the unbridged MovePoint — stays out.
 -- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS) /
 -- SetData(DATA_UNBROKEN) / DoAction tower-destruction loot-mode ladder —
 -- no GetData/SetData/DoAction bridges.

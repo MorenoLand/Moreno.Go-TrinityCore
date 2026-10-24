@@ -114,7 +114,10 @@
 -- tables (separate trash creature entries, not the boss file scope); the
 -- DARK_RUNE_WARBRINGER AURA_OF_CELERITY engage arm is ported (see PORTED
 -- ARMS), the per-entry Reset ability-schedule tables and the arena-phase
--- DoAction legs stay out.
+-- DoAction legs stay out. The pre-phase ShouldSparWith / DamageTaken
+-- pet-damage nullify arms (boss_thorim.cpp:1170-1178, !attacker->GetAffectingPlayer()
+-- -> damage = 0) ride the same unregistered pre-phase trash entries; the
+-- unit-side GetAffectingPlayer pet-owner resolution has no Lua bridge.
 -- The ten spell scripts / condition_thorim_arena_leap / three achievements —
 -- no SpellScript / AuraScript / ConditionScript / achievement bridges.
 

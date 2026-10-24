@@ -112,7 +112,11 @@
 -- the roll_chance_i(50) _invocationOrder build / EVENT_INVOCATION_OF_BLOOD
 -- seed :289) has no instance bridge; UpdateAI EVENT_INVOCATION_OF_BLOOD
 -- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
--- the invocation rotation machine — no bridge; NOT registered (the
+-- the invocation rotation machine — no bridge; boss_blood_council_
+-- controller::JustDied (:322-336, prince kill sweep — the prince->
+-- LowerPlayerDamageReq(:331) + Unit::Kill legs, SetBossState(DONE)
+-- :323) rides the same unregistered controller + no-instance bridge;
+-- NOT registered (the
 -- bronjahm npc_corrupted_soul_fragment precedent).
 -- BloodPrincesBossAI::DoAction (:549-580) — Talk(SelectInvocationSay())
 -- + DoCastSelf(SPELL_INVOCATION_VISUAL_ACTIVE 71596, true) ride
