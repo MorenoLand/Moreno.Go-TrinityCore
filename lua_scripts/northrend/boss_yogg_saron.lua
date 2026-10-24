@@ -71,8 +71,10 @@
 -- grounds: the EVENT_SARAS_FERVOR / BLESSING / ANGER casts are unported
 -- and the phase gate has no bridge, so event 15 never fires for them in
 -- Go (event 15 itself is live — boss_ai.go:1904).
--- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on
--- NPC_DEATH_ORB summon — no JustSummoned bridge.
+-- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on NPC_DEATH_ORB
+-- summon (boss_yogg_saron.cpp:873-876; the orb arrives via a spell
+-- summon leg, unported) — the event-19 bridge is live (broggok
+-- precedent), but the arm stays out with the unported summon leg.
 -- Sara Reset SetReactState(REACT_PASSIVE) (:783-787) stays out: Sara
 -- has no event-23 handler (no reset registration) and the rest of the
 -- Reset machine (RemoveAllAuras / faction-friendly / phase reset)

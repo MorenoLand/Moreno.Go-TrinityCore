@@ -78,10 +78,11 @@
 -- player-gated variant precedent).
 -- JustDied (:234-239) — _JustDied() passthrough + Talk(SAY_DEATH
 -- 3) + DoRemoveAurasDueToSpellOnPlayers(SPELL_AURA_OF_DESPAIR
--- 62692, true, true) leg — only the Talk arm is bridgeable
--- (event 4; the sjonnir JustDied-Talk precedent; the
--- includePets/includeControlled legs have no pet/controlled
--- iteration bridge); also wipes the surge/berserk timers.
+-- 62692, true, true) player leg — PORTED via stripDespairAuras
+-- (GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura —
+-- the moroes precedent; event 4, C++ arm order; the
+-- includePets/includeControlled legs have no pet/controlled iteration
+-- bridge — stay out); also wipes the surge/berserk timers.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33271):
 -- Reset / Initialize — _Reset() + shadowDodger /
@@ -352,15 +353,31 @@ local function vezaxTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied (:234-239): _JustDied() passthrough + Talk
--- (SAY_DEATH) + DoRemoveAurasDueToSpellOnPlayers(SPELL_AURA_OF_
--- DESPAIR 62692, true, true) — only the Talk arm is bridgeable;
--- the includePets/includeControlled legs have no pet/controlled
--- iteration bridge; the surge/berserk timers are wiped
--- with it.
+-- C++ instance->DoRemoveAurasDueToSpellOnPlayers(
+-- SPELL_AURA_OF_DESPAIR 62692, true, true) player leg
+-- (boss_general_vezax.cpp:234-239, JustDied): strip the aura from every
+-- player sharing the creature's map+instance — GetPlayersInWorld +
+-- mapId/instanceId filter + player:RemoveAura (the moroes precedent;
+-- C++-exact, no alive gate). The includePets/includeControlled legs have
+-- no pet/controlled iteration bridge — stay out.
+local function stripDespairAuras(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_AURA_OF_DESPAIR)
+        end
+    end
+end
+
 local function vezaxDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_general_vezax.cpp:234-239 — arm order: _JustDied,
+    -- Talk(SAY_DEATH), DoRemoveAurasDueToSpellOnPlayers): the player leg
+    -- is PORTED via stripDespairAuras above (C++ arm order; the
+    -- includePets/includeControlled legs stay out — no pet/controlled
+    -- iteration bridge).
+    stripDespairAuras(creature)
 end
 
 -- Shared timer wipe for events 2/23.

@@ -108,10 +108,13 @@
 -- damage rewritten to 0 (C++-exact). OnTargetDied(3): player victim
 -- -> Talk(SAY_SATH_SLAY); the killed-kalecgos-human evade relay has
 -- no bridge — skipped. OnDied(4): Talk(SAY_SATH_DEATH); the
--- DoRemoveAurasDueToSpellOnPlayers arm (SPELL_SPECTRAL_REALM_AURA
--- 46021, true, true — the includePets/includeControlled legs have no
--- pet/controlled iteration bridge) and the kalecgos ACTION_
--- START_OUTRO relay have no bridges — skipped. OnSpellHit(14): hit
+-- DoRemoveAurasDueToSpellOnPlayers player leg
+-- (SPELL_SPECTRAL_REALM_AURA 46021) is PORTED via
+-- stripSpectralRealmAuras (GetPlayersInWorld + mapId/instanceId filter +
+-- player:RemoveAura — the moroes precedent; the
+-- includePets/includeControlled legs have no pet/controlled iteration
+-- bridge — stay out) and the kalecgos ACTION_
+-- START_OUTRO relay has no bridge — skipped. OnSpellHit(14): hit
 -- by 46733 (tap check damage) -> triggered self-cast teleport back
 -- 46020; the Unit::Kill(caster) arm has no kill bridge — skipped.
 -- OnLeaveCombat(2)/OnReset(23): the kalecgos EnterEvadeMode relay
@@ -568,13 +571,31 @@ local function sathrovarrResetState(guid)
     sathrovarrState[guid] = nil
 end
 
--- C++ JustDied: Talk(SAY_SATH_DEATH). The
--- DoRemoveAurasDueToSpellOnPlayers arm (SPELL_SPECTRAL_REALM_AURA
--- 46021, true, true — the includePets/includeControlled legs have no
--- pet/controlled iteration bridge) and the kalecgos ACTION_
--- START_OUTRO relay have no bridges — skipped.
+-- C++ instance->DoRemoveAurasDueToSpellOnPlayers(
+-- SPELL_SPECTRAL_REALM_AURA 46021, true, true) player leg
+-- (boss_kalecgos.cpp:511, sathrovarr JustDied): strip the aura from every
+-- player sharing the creature's map+instance — GetPlayersInWorld +
+-- mapId/instanceId filter + player:RemoveAura (the moroes precedent;
+-- C++-exact, no alive gate). The includePets/includeControlled legs have
+-- no pet/controlled iteration bridge — stay out.
+local function stripSpectralRealmAuras(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:RemoveAura(SPELL_SPECTRAL_REALM_AURA)
+        end
+    end
+end
+
 local function sathrovarrDied(event, creature, killer)
     creature:Talk(SAY_SATH_DEATH)
+    -- C++ JustDied (boss_kalecgos.cpp:508-516): _JustDied() is the
+    -- sathrovarrResetState below; Talk(SAY_SATH_DEATH) above;
+    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_SPECTRAL_REALM_AURA 46021,
+    -- true, true) — the player leg is PORTED via stripSpectralRealmAuras
+    -- (C++ arm order; the kalecgos ACTION_START_OUTRO relay has no
+    -- bridge — skipped).
+    stripSpectralRealmAuras(creature)
     sathrovarrResetState(creature:GetGUID())
 end
 

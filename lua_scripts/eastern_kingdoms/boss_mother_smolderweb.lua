@@ -29,9 +29,11 @@
 -- DamageTaken: GetHealth() <= damage (lethal hit) -> self-cast
 -- SUMMON_SPIRE_SPIDERLING 16103 (DoCast(me, 16103, true)). C++-exact
 -- condition; one-shot per-guid flag (the fight cannot outlive the
--- lethal hit, magmus latch convention). The summon effect itself has
--- no SummonCreature bridge on the Lua surface, so the port carries
--- the cast arm only, which is what the C++ arm expresses.
+-- lethal hit, magmus latch convention). The summon effect lives
+-- inside spell 16103's own effect data (creature:SummonCreature is
+-- bridged but cannot see inside a spell cast — steamrigger
+-- precedent), so the port carries the cast arm only, which is what
+-- the C++ arm expresses.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (maiden
 -- precedent). The C++ scheduler is driven from JustEngagedWith and
