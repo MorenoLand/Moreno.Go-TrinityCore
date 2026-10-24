@@ -72,21 +72,19 @@
 -- bridge); JustDied kael->AI()->DoAction(ACTION_ACTIVE_
 -- ADVISOR) is a cross-creature/instance bridge — unmodeled.
 -- Thaladred (20064): OnEnterCombat(1): Talk(SAY_THALADRED_
--- AGGRO) + 1s pump (the C++ JustEngagedWith AddThreat(who,
--- 5000000.0f) has no threat bridge — unmodeled). Pump (C++
--- arm order): silence — 20000 init then 20000:
+-- AGGRO) + JustEngagedWith AddThreat(who, 5000000.0f) PORTED
+-- (anonymous EnterCombat handler below) + 1s pump (C++ arm
+-- order, gaze first): gaze — 100 init then 8500: random alive
+-- player pick (randomPlayer pool, thespia precedent) +
+-- ResetAllThreat (ResetThreatList twin) + AddThreat(5000000) +
+-- Talk(EMOTE_THALADRED_GAZE 2, pick); no pick leaves the timer
+-- at <=1000 for a next-tick retry (C++ leaves Gaze_Timer <= diff
+-- when SelectTarget returns nil). Pump order: silence — 20000
+-- init then 20000:
 -- DoCastVictim(SPELL_SILENCE 30225); rend — 4000 init then
 -- 4000: DoCastVictim(SPELL_REND 36965); psychic blow — 10000
 -- init then 20000+rand()%5000: DoCastVictim(SPELL_PSYCHIC_
--- BLOW 10689). The gaze arm (100 init then 8500: random
--- target + ResetThreatList + AddThreat(5000000) + Talk(EMOTE_
--- THALADRED_GAZE 2, target)) is unmodeled — AddThreat has no
--- bridge (ResetThreatList's ResetAllThreat twin IS bridged,
--- lua_creature_events.go, but the arm stays out on the
--- threat leg; Talk(id, target) is bridged — whisperTarget arm,
--- engine/world/lua_creature_events.go:100, boss_arlokk.lua
--- precedent — but the arm is threat-gated, keleseth
--- precedent).
+-- BLOW 10689).
 -- Sanguinar (20060): OnEnterCombat(1): Talk(SAY_SANGUINAR_
 -- AGGRO) + 1s pump: bellowing roar — 20000 init then
 -- 25000+rand()%10000: DoCastVictim(SPELL_BELLOWING_ROAR
@@ -269,13 +267,27 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
 end)
 
 -- Thaladred the Darkener (20064): C++ UpdateAI in arm order
--- (gaze arm unmodeled — see header; the !UpdateVictim /
--- _inFakeDeath early return collapses into the pump) — 1s
--- granularity exact for all C++ timers.
+-- (gaze first; the !UpdateVictim / _inFakeDeath early return
+-- collapses into the pump) — 1s granularity exact for all
+-- C++ timers.
 local function thaladredTick(creature, guid)
     local st = combatStates[guid]
     if not st then
         return
+    end
+
+    -- 0. Gaze arm: 100 init then 8500 re-arm; random alive player
+    -- pick + ResetAllThreat + AddThreat(5000000) + Talk(2, pick).
+    if st.gaze <= 1000 then
+        local pick = randomPlayer(creature)
+        if pick ~= nil then
+            creature:ResetAllThreat()
+            creature:AddThreat(pick, 5000000)
+            creature:Talk(2, pick)
+            st.gaze = 8500
+        end
+    else
+        st.gaze = st.gaze - 1000
     end
 
     -- 1. Silence arm: DoCastVictim(SPELL_SILENCE), 20000 init
@@ -307,19 +319,23 @@ local function thaladredTick(creature, guid)
 end
 
 -- C++ ctor / Initialize() values (the whole schedule lands
--- on OnEnterCombat): gaze 100 (unmodeled) / silence 20000 /
+-- on OnEnterCombat): gaze 100 PORTED / silence 20000 /
 -- rend 4000 / psychic blow 10000. The C++ JustEngagedWith
--- talks SAY_THALADRED_AGGRO (the AddThreat(who, 5000000.0f)
--- arm has no threat bridge — unmodeled).
-RegisterCreatureEvent(ENTRY_THALADRED, 1, function(_, creature)
+-- talks SAY_THALADRED_AGGRO + AddThreat(who, 5000000.0f) PORTED
+-- (C++ JustEngagedWith order: Talk then AddThreat).
+RegisterCreatureEvent(ENTRY_THALADRED, 1, function(_, creature, target)
     local guid = creature:GetGUID()
     cancelCombatPump(guid)
     combatStates[guid] = {
+        gaze = 100,
         silence = 20000,
         rend = 4000,
         psychicBlow = 10000,
     }
     creature:Talk(0)
+    if target ~= nil then
+        creature:AddThreat(target, 5000000)
+    end
     combatTimers[guid] = CreateLuaEvent(function()
         thaladredTick(creature, guid)
     end, 1000, 0)

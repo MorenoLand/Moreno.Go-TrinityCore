@@ -458,6 +458,9 @@ end
 -- (movement machine) and is dropped; the C++ caster-GUID leg of
 -- HasAura is unrepresentable (bridged HasAura takes only the spell
 -- id) — only the nucleus applies 71822, so the plain check is exact.
+-- C++ npc_dark_nucleus::DamageTaken (:1072-1078) — ResetAllThreat +
+-- AddThreat(attacker, 500000000) PORTED below (nucleusDamageTaken);
+-- the self-hit early-out is the GUID compare.
 -- C++ npc_dark_nucleus::Reset :1043-1048: SetReactState(
 -- REACT_DEFENSIVE) + triggered DoCastSelf(SPELL_SHADOW_RESONANCE_AURA
 -- 72980).
@@ -481,6 +484,19 @@ local function nucleusEnterCombat(event, creature, target)
         creature:CastSpell(target, SPELL_SHADOW_RESONANCE_RESIST)
     end
     schedule(guid, "auracheck", 1000, function() onNucleusAuraCheck(creature, guid) end)
+end
+
+-- C++ npc_dark_nucleus::DamageTaken (boss_blood_prince_council.cpp:1072-1078):
+-- self-hit no-op (GUID compare, kalecgos precedent); otherwise
+-- ResetAllThreat (ThreatManager::ResetAllThreat twin) +
+-- AddThreat(attacker, 500000000). Damage passes through unchanged
+-- (C++ leaves the damage param alone); no return rewrite.
+local function nucleusDamageTaken(event, creature, attacker, damage)
+    if attacker == nil or attacker:GetGUID() == creature:GetGUID() then
+        return
+    end
+    creature:ResetAllThreat()
+    creature:AddThreat(attacker, 500000000)
 end
 
 local function nucleusReset(event, creature)
@@ -562,4 +578,5 @@ RegisterCreatureEvent(ENTRY_KELESETH, 23, princesReset)
 RegisterCreatureEvent(ENTRY_TALDARAM, 23, princesReset)
 RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
+RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)

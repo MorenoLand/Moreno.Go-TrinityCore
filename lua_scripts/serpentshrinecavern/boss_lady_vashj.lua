@@ -100,9 +100,10 @@
 -- registration (display/flag bridges live 2026-10-20)),
 -- and the tainted-elemental
 -- JustDied -> EventTaintedElementalDeath relay PORTED below
--- (FindNearestCreature + timer clamp); no
--- threat bridge — the melee-range check is the 5-yd player
--- stand-in; the JustEngagedWith AddThreat(0.1f) arm is dropped;
+-- (FindNearestCreature + timer clamp); the melee-range check is
+-- the 5-yd player stand-in; the npc_tainted_elemental
+-- JustEngagedWith AddThreat(0.1f) arm (boss_lady_vashj.cpp:689-692,
+-- misattributed to vashj here before) is PORTED below.
 -- no item bridges for item_tainted_core (Tainted Core 31088):
 -- the OnUse arm needs instance->GetData(DATA_SHIELDGENERATOR1.
 -- .4), cross-creature channel kill via the vashj AI's stored
@@ -112,7 +113,8 @@
 -- "no victim + in combat -> EnterEvadeMode" arm has no evade
 -- bridge — unmodeled.
 -- npc_tainted_elemental (22009) port: OnEnterCombat(1) per-GUID
--- reset + 1s pump; Poison bolt 40095 {5s,10s} then {5s,10s} —
+-- reset + 1s pump + JustEngagedWith AddThreat(0.1f) PORTED
+-- (elementalEnterCombat); Poison bolt 40095 {5s,10s} then {5s,10s} —
 -- random alive player pick, cast only when within 30 yd (C++
 -- SelectTarget(Random, 0) + IsWithinDistInMap(me, 30): gate
 -- after pick, so an out-of-range pick wastes the round with no
@@ -525,8 +527,12 @@ local function elementalTick(creature, guid)
     end
 end
 
-local function elementalEnterCombat(event, creature)
+local function elementalEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_lady_vashj.cpp:694: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
+    -- C++ npc_tainted_elemental::JustEngagedWith (boss_lady_vashj.cpp:689-692).
+    if target ~= nil then
+        creature:AddThreat(target, 0.1)
+    end
     local guid = creature:GetGUID()
     resetElemental(guid)
     elementalState[guid] = freshElementalState()
