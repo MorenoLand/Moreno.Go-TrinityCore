@@ -30,9 +30,9 @@
 --   rand32()%15000); nil target leaves the C++ timer expired so the next
 --   tick retries — modeled as cast-if-target-alive, then re-arm.
 -- - Doom 31347 on SelectTargetMethod::Random, 1, 100, true — position 1
---   (the C++ comment says "never on tank"); there is no threat-list
---   bridge, so this is approximated as a random alive player within 100
---   excluding the current victim. Non-triggered, init 50s -> {45s,50s}.
+--   (the C++ comment says "never on tank"); threat-list pick via
+--   GetAITargets (offset 1 pops the victim, players within 100).
+--   Non-triggered, init 50s -> {45s,50s}.
 -- - Howl of Azgalor 31344 self-cast (C++ DoCast(me)), non-triggered,
 --   init 30s -> 30s.
 -- - Cleave 31345 on the victim (C++ DoCastVictim — jeklik GetVictim +
@@ -119,7 +119,7 @@ end
 
 -- C++ SelectTargetMethod::Random, 0, 100, true — janalai convention; the
 -- excludeVictim flag approximates C++ position 1 ("never on tank") for
--- Doom, where no threat-list bridge exists.
+-- Doom (now a threat-list pick, see below).
 local function randomPlayerInRange(creature, maxDist, excludeVictim)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
@@ -135,6 +135,28 @@ local function randomPlayerInRange(creature, maxDist, excludeVictim)
         return nil
     end
     return found[math.random(#found)]
+end
+
+-- C++ SelectTarget(Random, 1, maxDist, true) threat-list pick
+-- (UnitAI.h:163-174): offset 1 pops the first MaxThreat entry
+-- (the current victim, first in the C++-constructed list);
+-- the Go list is threat-descending so the victim entry is
+-- dropped by GUID instead. Dead members are offline in C++
+-- (skipped at list build) so they are filtered here.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGUID = victim and victim:GetGUID() or 0
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() ~= victimGUID and t:GetObjectType() == "Player"
+                and not t:IsDead() and creature:GetDistance(t) <= maxDist then
+            pool[#pool + 1] = t
+        end
+    end
+    if #pool == 0 then
+        return nil
+    end
+    return pool[math.random(#pool)]
 end
 
 -- C++ RainTimer: DoCast(SelectTarget(Random, 0, 30, true), 31340),
@@ -154,9 +176,9 @@ end
 
 -- C++ DoomTimer: DoCast(SelectTarget(Random, 1, 100, true), 31347),
 -- non-triggered, init 50s -> {45s,50s}; position 1 never hits the tank
--- (approximated by excluding the victim, see above).
+-- (threat-list pick, victim entry dropped, see above).
 local function onDoom(creature, guid)
-    local target = randomPlayerInRange(creature, 100, true)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_DOOM)
     end

@@ -50,8 +50,8 @@
 --   even on an empty target (kazrogal precedent), so the Lua re-arm is
 --   too (nil target -> no cast).
 -- - Steal Flesh 52708 on SelectTarget(Random, 1, 50.0f, true) ->
---   random alive player within 50m excluding the victim (azgalor
---   position-1 / excludeVictim convention — no threat-list bridge),
+--   random threat-list player within 50m excluding the victim
+--   (GetAITargets pick, azgalor position-1 convention),
 --   non-triggered (C++ DoCast), Talk SAY_STEAL_FLESH (5) fires
 --   regardless of target (C++ Talks before the SelectTarget), init
 --   {25s,35s} -> repeat {15s,20s} unconditional (nil target -> no
@@ -122,8 +122,7 @@ end
 
 -- nefarian convention: random alive player in the instance within
 -- maxDist; the excludeVictim flag approximates C++ position 1 ("never
--- on tank") for Steal Flesh, where no threat-list bridge exists
--- (azgalor Doom precedent).
+-- on tank") for Steal Flesh (now a threat-list pick, see below).
 local function randomPlayerInRange(creature, maxDist, excludeVictim)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
@@ -139,6 +138,28 @@ local function randomPlayerInRange(creature, maxDist, excludeVictim)
         return nil
     end
     return found[math.random(#found)]
+end
+
+-- C++ SelectTarget(Random, 1, maxDist, true) threat-list pick
+-- (UnitAI.h:163-174): offset 1 pops the first MaxThreat entry
+-- (the current victim, first in the C++-constructed list);
+-- the Go list is threat-descending so the victim entry is
+-- dropped by GUID instead. Dead members are offline in C++
+-- (skipped at list build) so they are filtered here.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGUID = victim and victim:GetGUID() or 0
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() ~= victimGUID and t:GetObjectType() == "Player"
+                and not t:IsDead() and creature:GetDistance(t) <= maxDist then
+            pool[#pool + 1] = t
+        end
+    end
+    if #pool == 0 then
+        return nil
+    end
+    return pool[math.random(#pool)]
 end
 
 -- C++ EVENT_EXPLODE_GHOUL1: Talk SAY_EXPLODE_GHOUL + DoCastAOE
@@ -189,7 +210,7 @@ end
 -- repeat {15s,20s} unconditional (nil target -> no cast).
 local function onStealFlesh(creature, guid)
     creature:Talk(SAY_STEAL_FLESH)
-    local target = randomPlayerInRange(creature, 50, true)
+    local target = randomThreatPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_STEAL_FLESH)
     end

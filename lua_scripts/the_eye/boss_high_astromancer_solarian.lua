@@ -59,11 +59,10 @@
 --    casts SPELL_BLINDING_LIGHT on the victim instead of
 --    missiles.
 -- 2. Wrath arm — 20000+rand()%5000 init then 20000+rand()%
---    5000: InterruptNonMeleeSpells unmodeled (no cast-state
---    bridge, netherspite precedent); target = SelectTarget
---    (Random, 1, 100, true) — random alive player in the
---    instance within 100 yd excluding the current victim
---    (najentus precedent); TRIGGERED DoCast(target, SPELL_
+--    5000: InterruptNonMeleeSpells(false) ported (no-op twin);
+--    target = SelectTarget (Random, 1, 100, true) — random
+--    threat-list player within 100 yd excluding the current
+--    victim (GetAITargets pick); TRIGGERED DoCast(target, SPELL_
 --    WRATH_OF_THE_ASTROMANCER 42783, true) (C++-exact),
 --    re-arm 20000+rand()%5000 regardless of target pick
 --    (C++-exact).
@@ -162,10 +161,11 @@
 -- ported (2026-10-23); the SetDisplayId arms are ported,
 -- SetObjectScale ported via the scale bridge; no arc
 -- bridge — the HasInArc victim fallback unmodeled; no cast-
--- state bridge — the InterruptNonMeleeSpells arms
+-- state bridge — the remaining InterruptNonMeleeSpells arms
 -- unmodeled, casts fire unconditionally (netherspite
--- precedent); no threat-list bridge — the wrath arm's
--- non-player 1s re-arm unreachable; npc_solarium_priest
+-- precedent); the wrath arms now pick from the threat list
+-- (GetAITargets), including the non-player 1s re-arm;
+-- npc_solarium_priest
 -- (18806) documented only, not registered; no AuraScript
 -- bridge — spell_astromancer_wrath_of_the_astromancer
 -- documented only (standing blocker).
@@ -239,20 +239,28 @@ end
 -- 1): any alive player in the instance excluding the current
 -- victim, within `maxDist` yd (nil = no distance limit) —
 -- najentus precedent.
-local function randomNonVictimPlayer(creature, maxDist)
+-- C++ SelectTarget(Random, 1) threat-list pick (UnitAI.h:163-174):
+-- offset 1 pops the first MaxThreat entry, which C++ constructs
+-- as the current victim first; the Go list is threat-descending
+-- so the victim entry is dropped by GUID instead. playerOnly
+-- and maxDist filter like DefaultTargetSelector; dead members
+-- are offline in C++ (skipped at list build) so they are
+-- filtered here. playerOnly=false leaves pets/totems eligible.
+local function randomThreatTarget(creature, playerOnly, maxDist)
     local victim = creature:GetVictim()
     local victimGUID = victim and victim:GetGUID() or 0
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() ~= victimGUID
-                and (not maxDist or creature:GetDistance(p) <= maxDist) then
-            candidates[#candidates + 1] = p
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() ~= victimGUID and not t:IsDead()
+                and (not playerOnly or t:GetObjectType() == "Player")
+                and (not maxDist or creature:GetDistance(t) <= maxDist) then
+            pool[#pool + 1] = t
         end
     end
-    if #candidates == 0 then
+    if #pool == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return pool[math.random(#pool)]
 end
 
 -- C++ UpdateAI in arm order — 1s granularity exact for all
@@ -275,10 +283,13 @@ local function combatTick(creature, guid)
             st.blindingLightTimer = st.blindingLightTimer - 1000
         end
         -- 2. Wrath arm — 20000+rand()%5000: TRIGGERED cast on
-        -- a random non-victim player within 100 yd; re-arm
-        -- regardless of target pick (C++-exact).
+        -- a random threat-list player within 100 yd excluding
+        -- the victim (C++ SelectTarget(Random, 1, 100, true),
+        -- boss_astromancer.cpp:236-241); re-arm regardless of
+        -- target pick (C++-exact).
         if st.wrathTimer <= 1000 then
-            local target = randomNonVictimPlayer(creature, 100)
+            creature:InterruptNonMeleeSpells(false)
+            local target = randomThreatTarget(creature, true, 100)
             if target then
                 creature:CastSpell(target, SPELL_WRATH_OF_THE_ASTROMANCER, true)
             end
@@ -314,21 +325,25 @@ local function combatTick(creature, guid)
             st.arcaneMissilesTimer = st.arcaneMissilesTimer - 1000
         end
         -- 4. Wrath-of-the-astromancer arm — 15000 init:
-        -- non-triggered cast on a random non-victim player,
-        -- re-arm 25000 on a player pick; no pick leaves the
-        -- timer expired for a next-tick retry (C++-exact; the
-        -- non-player 1s re-arm has no threat-list bridge —
-        -- unreachable in this model).
+        -- C++ SelectTarget(Random, 1) from the threat list
+        -- (boss_astromancer.cpp:268-285): offset 1 pops the
+        -- current victim, playerOnly=false so non-players are
+        -- eligible; player pick -> non-triggered cast + 25000,
+        -- non-player pick -> 1000 re-arm, no pick -> timer
+        -- stays expired for a next-tick retry (C++-exact).
         if st.wrathOfAstromancerTimer <= 1000 then
-            local target = randomNonVictimPlayer(creature)
+            creature:InterruptNonMeleeSpells(false)
+            local target = randomThreatTarget(creature, false, nil)
             if target then
-                creature:CastSpell(target, SPELL_WRATH_OF_THE_ASTROMANCER)
-                st.wrathOfAstromancerTimer = 25000
+                if target:GetObjectType() == "Player" then
+                    creature:CastSpell(target, SPELL_WRATH_OF_THE_ASTROMANCER)
+                    st.wrathOfAstromancerTimer = 25000
+                else
+                    st.wrathOfAstromancerTimer = 1000
+                end
             end
             -- No target: the C++ leaves the timer expired so
-            -- the arm retries on the next tick (C++-exact);
-            -- the non-player 1s re-arm has no threat-list
-            -- bridge — unreachable in this model.
+            -- the arm retries on the next tick (C++-exact).
         else
             st.wrathOfAstromancerTimer = st.wrathOfAstromancerTimer - 1000
         end
