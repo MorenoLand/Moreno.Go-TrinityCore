@@ -31,13 +31,12 @@
 -- UpdateAI — 1s granularity is exact for all C++ timers here).
 -- Pump: earthquake 40s init — first fire -> DoCastVictim 37764,
 -- earthquakeArm=true, re-arm 10000; second fire -> Talk(SAY_
--- SUMMON) + Talk(EMOTE_EARTHQUAKE), earthquakeArm=false,
--- re-arm 40000 + rand32()%5000 (C++-exact; the 10x Tidewalker
--- Lurker summons at the MurlocCords coords stay unmodeled —
--- re-keyed 2026-10-24: creature:SummonCreature is live, but each
--- C++ lurker AttackStarts a separately random target and no
--- AttackStart bridge exists, so a summon-only half would leave
--- idle murlocs C++ never produces (solarian precedent); the
+-- SUMMON) + 10x Tidewalker Lurker summons at the MurlocCords
+-- coords (each DoZoneInCombat — the AttackStart substitute, since
+-- lurkers carry no custom AI) + Talk(EMOTE_EARTHQUAKE),
+-- earthquakeArm=false, re-arm 40000 + rand32()%5000 — PORTED
+-- 2026-10-24 (the per-lurker separately-random target assignment
+-- stays out; zone aggro substitutes for it). The
 -- engine LOS-aggro scan does not replicate per-lurker random
 -- targeting). Tidal wave 37730 10s then 20s -> DoCastVictim (C++-
 -- exact). Phase 1 (!phase2): watery grave 30s -> Talk(SAY_
@@ -106,6 +105,21 @@ local EMOTE_WATERY_GLOBULES = 7
 
 local ENTRY_MOROGRIM = 21213
 local ENTRY_WATER_GLOBULE = 21913
+local ENTRY_TIDEWALKER_LURKER = 21920 -- boss_morogrim_tidewalker.cpp:71
+
+-- C++ MurlocCords[10][4] (boss_morogrim_tidewalker.cpp:74-85).
+local MURLOC_CORDS = {
+    {424.36, -715.4, -7.14, 0.124},
+    {425.13, -719.3, -7.14, 0.124},
+    {425.05, -724.23, -7.14, 0.124},
+    {424.91, -728.68, -7.14, 0.124},
+    {424.84, -732.18, -7.14, 0.124},
+    {321.05, -734.2, -13.15, 0.124},
+    {321.05, -729.4, -13.15, 0.124},
+    {321.05, -724.03, -13.15, 0.124},
+    {321.05, -718.73, -13.15, 0.124},
+    {321.05, -714.24, -13.15, 0.124},
+}
 
 local GLOBULE_EXPLOSION_RANGE = 5
 
@@ -166,9 +180,14 @@ local function morogrimTick(creature, guid)
     end
 
     -- Earthquake 40s init: first fire -> DoCastVictim, arm the
-    -- second stage in 10s; second fire -> Talk + Talk(EMOTE),
-    -- re-arm 40-45s (the 10x murloc summon + AttackStart relay
-    -- is summon/cross-creature blocked — header).
+    -- second stage in 10s; second fire -> Talk + 10x murloc
+    -- summon + Talk(EMOTE), re-arm 40-45s (C++ boss_morogrim_
+    -- tidewalker.cpp:195-207: per cord SummonCreature(TIDEWALKER_
+    -- LURKER 21920, type 3, 10000ms) + AttackStart(random target);
+    -- the per-lurker target assignment rides DoZoneInCombat here
+    -- (the AttackStart substitute — lurkers carry no custom AI, so
+    -- engine combat carries them; the C++ per-summon target-exists
+    -- gate is vacuously true in combat).
     if st.earthquake <= 1000 then
         if not st.earthquakeArm then
             creature:CastSpell(nil, SPELL_EARTHQUAKE)
@@ -176,6 +195,13 @@ local function morogrimTick(creature, guid)
             st.earthquake = 10000
         else
             creature:Talk(SAY_SUMMON)
+            for _, cord in ipairs(MURLOC_CORDS) do
+                local lurker = creature:SummonCreature(ENTRY_TIDEWALKER_LURKER,
+                    cord[1], cord[2], cord[3], cord[4], 3, 10000)
+                if lurker then
+                    lurker:DoZoneInCombat()
+                end
+            end
             creature:Talk(EMOTE_EARTHQUAKE)
             st.earthquakeArm = false
             st.earthquake = 40000 + math.random(0, 4999)

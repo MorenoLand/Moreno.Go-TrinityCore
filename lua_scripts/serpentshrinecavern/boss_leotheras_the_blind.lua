@@ -63,11 +63,11 @@
 -- ported at pump granularity — every 1s tick with the victim in
 -- range, independent of the blast timer (2026-10-22).
 -- Inner demons 30s one-
--- shot -> Talk(SAY_INNER_DEMONS), timer pinned to 999999 (C++-
--- exact; the threat-list pick of up to 5 non-victim players, the
--- SummonCreature(INNER_DEMON_ID) arms and the player-side
--- AddAura(INSIDIOUS_WHISPER 37676) have no threat/summon/player-
--- aura bridges — unmodeled, below). Switch-to-human 60s ->
+-- shot -> threat-list pick of up to 5 non-victim players, per-player
+-- SummonCreature(INNER_DEMON 21857) + DoZoneInCombat + player
+-- AddAura(INSIDIOUS_WHISPER 37676), Talk(SAY_INNER_DEMONS), timer
+-- pinned to 999999 — PORTED 2026-10-24 (the SetGUID victim binding
+-- stays out, below). Switch-to-human 60s ->
 -- demonForm=false, needThreatReset=true, switchToHuman=60000
 -- (the CastConsumingMadness arm is demon-cast — no inner demons
 -- exist in this model — and the DespawnDemon/LoadEquipment arms
@@ -205,6 +205,7 @@ local SPELL_DEMONIC_ALIGNMENT = 37713
 local SAY_AGGRO = 0
 local SAY_SWITCH_TO_DEMON = 1
 local SAY_INNER_DEMONS = 2
+local SPELL_INSIDIOUS_WHISPER = 37676 -- boss_leotheras_the_blind.cpp:41
 local SAY_DEMON_SLAY = 3
 local SAY_NIGHTELF_SLAY = 4
 local SAY_FINAL_FORM = 5
@@ -431,9 +432,36 @@ local function leotherasTick(creature, guid)
         end
 
         -- Inner demons: 30s one-shot, then pinned (C++-exact).
-        -- The summon + player whisper-aura arms are summon/player-
-        -- aura blocked — unmodeled, header.
+        -- C++ boss_leotheras_the_blind.cpp:524-562: threat-sorted
+        -- list, players only, exclude the current victim (GetVictim
+        -- stands in for GetLastVictim), cap 5, alive only; per
+        -- player: SummonCreature(INNER_DEMON 21857, px+10, py+10,
+        -- pz, o=0, type 3, 5000ms) + DoZoneInCombat (the AttackStart
+        -- substitute — opera/broggok precedent) + player AddAura
+        -- (INSIDIOUS_WHISPER 37676). The SetGUID(INNER_DEMON_VICTIM)
+        -- binding stays out (no cross-creature GUID bridge), so the
+        -- demon's victim-only damage immunity stays unmodeled.
         if st.innerDemons <= 1000 then
+            local victim = creature:GetVictim()
+            local victimGuid = victim and victim:GetGUID() or nil
+            local picked = 0
+            for _, target in ipairs(creature:GetAITargets()) do
+                if picked >= 5 then
+                    break
+                end
+                if target:GetObjectType() == "Player"
+                        and target:GetGUID() ~= victimGuid
+                        and not target:IsDead() then
+                    local demon = creature:SummonCreature(ENTRY_INNER_DEMON,
+                        target:GetX() + 10, target:GetY() + 10,
+                        target:GetZ(), 0, 3, 5000)
+                    if demon then
+                        demon:DoZoneInCombat()
+                    end
+                    target:AddAura(SPELL_INSIDIOUS_WHISPER)
+                    picked = picked + 1
+                end
+            end
             creature:Talk(SAY_INNER_DEMONS)
             st.innerDemons = 999999
         else

@@ -37,9 +37,11 @@
 -- form: CorruptedForm=false, MarkOfHydross_Count=0, Talk(SAY_SWITCH_
 -- TO_CLEAN); the SetDisplayId(MODEL_CLEAN 20162) arm is PORTED
 -- 2026-10-20 (C++ arm order — first at the switch) and ResetThreatList
--- is PORTED 2026-10-17; the SummonBeams, 4x DoSpawnCreature(ENTRY_
--- PURE_SPAWN 22035) and SetMeleeDamageSchool(frost) arms have no
--- bridges (below); the ApplySpellImmune school arms are ported
+-- is PORTED 2026-10-17; SummonBeams is PORTED 2026-10-24
+-- (summonBeams, C++ order after ResetThreatList); the 4x
+-- DoSpawnCreature(ENTRY_PURE_SPAWN 22035) and SetMeleeDamageSchool
+-- (frost) arms have no bridges (below); the ApplySpellImmune
+-- school arms are ported
 -- (below). Clean form: MarkOfHydross 15s then 15s —
 -- DoCastVictim of 38215/38216/38217/38218/38231/40584 by stack
 -- count, same escalation rule. Water tomb 38235 7s then 7s — the
@@ -50,9 +52,11 @@
 -- corrupted form: CorruptedForm=true, MarkOfCorruption_Count=0,
 -- Talk(SAY_SWITCH_TO_CORRUPT); the SetDisplayId(MODEL_CORRUPT
 -- 20609) arm is PORTED 2026-10-20 (C++ arm order — first at the
--- switch) and ResetThreatList is PORTED 2026-10-17; the
--- DeSummonBeams, 4x DoSpawnCreature(ENTRY_TAINTED_SPAWN 22036)
--- and SetMeleeDamageSchool(nature) arms stay out (no bridges);
+-- switch) and ResetThreatList is PORTED 2026-10-17;
+-- DeSummonBeams is PORTED 2026-10-24 (despawnBeams, C++ order
+-- after ResetThreatList); the 4x DoSpawnCreature(ENTRY_TAINTED_
+-- SPAWN 22036) and SetMeleeDamageSchool(nature) arms stay out
+-- (no bridges);
 -- the ApplySpellImmune school arms are PORTED at the switch
 -- points (below). Enrage (both
 -- forms): 27680 10min then 60s, non-triggered self-cast
@@ -61,19 +65,22 @@
 -- SAY_CLEAN_SLAY) — no TYPEID gate in C++ (C++-exact). OnDied(4):
 -- Talk(corrupted ? SAY_CORRUPT_DEATH : SAY_CLEAN_DEATH) + cleanup
 -- (the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
--- OnReset(23): cancel the pump, drop per-GUID state (the Reset-side
--- DeSummonBeams + Summons.DespawnAll are summon-blocked; the
--- instance SetData(NOT_STARTED) and SetMeleeDamageSchool have no
--- bridges; the ApplySpellImmune Reset/tick arms are PORTED 2026-10-20
--- (creature:ApplySpellImmune bridge, lua_creature_events.go); the
--- SetDisplayId arm is ported).
--- Deliberate deviations (all await engine bridges): no summon
--- bridge — the first-UpdateAI-tick SummonBeams pair (ENTRY_BEAM_
--- DUMMY 21934 + triggered SPELL_BLUE_BEAM 38015), the 4x pure/
--- tainted spawn DoSpawnCreature arms and the DeSummonBeams/
--- Summons.DespawnAll arms unmodeled; the beams are summoned on
--- the very first UpdateAI tick even out of combat in C++, which
--- has no out-of-combat update hook in the Lua model — unmodeled;
+-- OnReset(23): cancel the pump, drop per-GUID state, despawn the
+-- stored beam pair (C++ Reset :137 DeSummonBeams, PORTED
+-- 2026-10-24; Summons.DespawnAll stays summon-blocked — beams are
+-- NOT in Summons, JustSummoned only tracks the elemental spawns);
+-- the instance SetData(NOT_STARTED) and SetMeleeDamageSchool have
+-- no bridges; the ApplySpellImmune Reset/tick arms are PORTED
+-- 2026-10-20 (creature:ApplySpellImmune bridge,
+-- lua_creature_events.go); the SetDisplayId arm is ported).
+-- Deliberate deviations (all await engine bridges): the beam pair
+-- is PORTED 2026-10-24 (summonBeams/despawnBeams: SummonCreature
+-- type 4 + beamer CastSpell + SetDisplayId + SetFlag; clean-switch
+-- re-summon overwrites the stored pair, orphaning the old beams
+-- exactly as C++ does); the pair lands at pull instead of on the
+-- pre-pull first UpdateAI tick (Go has no out-of-combat update
+-- hook); the 4x pure/tainted spawn DoSpawnCreature arms and
+-- Summons.DespawnAll stay unmodeled;
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
 -- arms are summon-blocked; ResetThreatList on both form switches
 -- PORTED 2026-10-17 (creature:ResetAllThreat, bridged
@@ -106,12 +113,60 @@ local SAY_CORRUPT_DEATH = 6
 
 local ENTRY_HYDROSS = 21216
 
+-- UNIT_FIELD_FLAGS (UpdateFields.h:117: OBJECT_END+0x35 = 59);
+-- UNIT_FLAG_NOT_SELECTABLE (SharedDefines.h); SetFlag bridge live.
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local ENTRY_BEAM_DUMMY = 21934 -- boss_hydross_the_unstable.cpp:68
+local SPELL_BLUE_BEAM = 38015 -- boss_hydross_the_unstable.cpp:64
+local BEAM_DISPLAY_ID = 11686 -- boss_hydross_the_unstable.cpp:155 (invisible)
+
 local HYDROSS_X = -239.439
 local HYDROSS_Y = -363.481
 local SWITCH_RADIUS = 18
 
 local pumpTimers = {}
 local hydrossState = {}
+local hydrossBeams = {}
+
+-- C++ SummonBeams (boss_hydross_the_unstable.cpp:149-167): per beam
+-- SummonCreature(BEAM_DUMMY 21934, type 4 CORPSE_DESPAWN) + beamer
+-- CastSpell(hydross, BLUE_BEAM 38015, triggered) + SetDisplayId
+-- (11686, invisible) + SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE).
+-- Stored as objects (leotherasBinders precedent): C++ keeps GUIDs
+-- and resolves them via ObjectAccessor, which has no Lua bridge.
+-- C++ re-summons on every clean switch WITHOUT despawning the old
+-- pair — the stored pair is overwritten, orphaning the old beams,
+-- replicated here.
+local function summonBeams(creature, guid)
+    local beams = {}
+    local cords = {
+        {-258.333, -356.34, 22.0499, 5.90835},
+        {-219.918, -371.308, 22.0042, 2.73072},
+    }
+    for _, cord in ipairs(cords) do
+        local beamer = creature:SummonCreature(ENTRY_BEAM_DUMMY,
+            cord[1], cord[2], cord[3], cord[4], 4, 0)
+        if beamer then
+            beamer:CastSpell(creature, SPELL_BLUE_BEAM, true)
+            beamer:SetDisplayId(BEAM_DISPLAY_ID)
+            beamer:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            beams[#beams + 1] = beamer
+        end
+    end
+    hydrossBeams[guid] = beams
+end
+
+-- C++ DeSummonBeams (:168-175): DespawnOrUnsummon each stored beam.
+local function despawnBeams(guid)
+    local beams = hydrossBeams[guid]
+    if beams then
+        for _, beamer in ipairs(beams) do
+            beamer:Despawn()
+        end
+    end
+    hydrossBeams[guid] = nil
+end
 
 -- Alive players sharing the creature's map+instance (teron
 -- convention).
@@ -229,6 +284,7 @@ local function hydrossTick(creature, guid)
                 st.hydrossCount = 0
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
                 creature:ResetAllThreat()
+                summonBeams(creature, guid)
                 -- C++ :304-305: clean form is frost-school immune,
                 -- nature explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 16, true)
@@ -279,6 +335,7 @@ local function hydrossTick(creature, guid)
                 st.corruptCount = 0
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
                 creature:ResetAllThreat()
+                despawnBeams(guid)
                 -- C++ :388-389: corrupted form is nature-school immune,
                 -- frost explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 8, true)
@@ -301,12 +358,21 @@ local function hydrossEnterCombat(event, creature)
     resetState(guid)
     hydrossState[guid] = freshHydrossState()
     creature:Talk(SAY_AGGRO)
+    -- C++ first-UpdateAI-tick SummonBeams latch (boss_hydross_the_
+    -- unstable.cpp:217-221): the beam flag starts false, so the pair
+    -- exists pre-pull in C++. Go has no pre-combat tick hook, so
+    -- the pair lands at pull instead; the latch check mirrors the
+    -- C++ beam flag (no re-summon if a pair already stands).
+    if not hydrossBeams[guid] or #hydrossBeams[guid] == 0 then
+        summonBeams(creature, guid)
+    end
     pumpTimers[guid] = CreateLuaEvent(function()
         hydrossTick(creature, guid)
     end, 1000, 0)
 end
 
 local function hydrossLeaveCombat(event, creature)
+    despawnBeams(creature:GetGUID())
     resetState(creature:GetGUID())
     -- C++ Reset() :143 runs on evade: restore the clean model.
     creature:SetDisplayId(20162)
@@ -335,6 +401,7 @@ local function hydrossDied(event, creature, killer)
 end
 
 local function hydrossReset(event, creature)
+    despawnBeams(creature:GetGUID())
     resetState(creature:GetGUID())
     -- C++ Reset() :140-141: clean-form school immunities (frost-school
     -- immune, nature explicitly not) — the creature:ApplySpellImmune
