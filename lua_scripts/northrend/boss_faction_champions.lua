@@ -4,9 +4,10 @@
 -- Each champion's CreatureScript struct (npc_toc_druid, npc_toc_paladin,
 -- npc_toc_shadow_priest, npc_toc_mage, npc_toc_hunter, npc_toc_boomkin,
 -- npc_toc_warrior, npc_toc_dk, npc_toc_rogue, npc_toc_retro_paladin) runs
--- an EventMap; ONLY the defensive self-buff case arm is modeled here per
--- champion — the rest of each champion's rotation is unported (single-arm
--- territory). Creature entries from trial_of_the_crusader.h NPC_ALLIANCE_*
+-- an EventMap; the defensive self-buff case arm is modeled here per
+-- champion, plus the victim-gated and EnemiesInRange count-gated
+-- rotation arms for hunter / dk / rogue (see below) — the rest of
+-- each champion's rotation is unported (single-arm territory). Creature entries from trial_of_the_crusader.h NPC_ALLIANCE_*
 -- / NPC_HORDE_* (lines 180-208).
 -- C++ arm shape (e.g. npc_toc_druid EVENT_HEAL_BARKSKIN :817):
 --   case EVENT_HEAL_BARKSKIN:
@@ -24,9 +25,15 @@
 -- after a cast, or the short check delay otherwise.
 -- All casts are DoCast default (triggered=false) self-casts.
 -- Unmodeled (no bridges or out of single-arm scope — documented, not wired):
--- - The full rotation of each champion (DoSelectLowestHpFriendly heals,
---   SelectTarget random-player DPS arms, EnemiesInRange checks) is
---   unported; only the HealthBelowPct defensive arm per site fires.
+-- - The rest of each champion's rotation (DoSelectLowestHpFriendly
+--   heals, SelectTarget random-player DPS arms, the remaining
+--   EnemiesInRange call sites) is unported. npc_toc_warrior
+--   EVENT_SHATTERING_THROW (:1676, init 20-40s) stays out: its gate
+--   is victim HasAuraWithMechanic(MECHANIC_IMMUNE_SHIELD), which has
+--   no Lua surface method. boss_faction_championsAI::UpdateThreat
+--   (:611, per-ref ScaleThreat(0) + AddThreat(calculated)) stays out:
+--   GetAITargets yields victims, not mutable threat refs, so the
+--   per-ref rewrite has no bridge.
 -- - boss_faction_championsAI base: EVENT_THREAT 5s + heroic
 --   EVENT_REMOVE_CC 5s (instance-gated), UpdateThreat/UpdatePower,
 --   RemoveCC, JustEngagedWith: DoCast(me, SPELL_ANTI_AOE 68595, true)
@@ -56,6 +63,12 @@ local SPELL_RETALIATION = 65932
 local SPELL_ICEBOUND_FORTITUDE = 66023
 local SPELL_CLOAK = 65961
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42 (JustEngagedWith :646 DoCast(me, ..., true))
+local SPELL_WING_CLIP = 66207 -- boss_faction_champions.cpp:128 (npc_toc_hunter)
+local SPELL_FROST_TRAP = 65880 -- boss_faction_champions.cpp:125 (npc_toc_hunter)
+local SPELL_DISENGAGE = 65869 -- boss_faction_champions.cpp:123 (npc_toc_hunter)
+local SPELL_DEATH_GRIP = 66017 -- boss_faction_champions.cpp:156 (npc_toc_dk)
+local SPELL_BLADE_FLURRY = 65956 -- boss_faction_champions.cpp:167 (npc_toc_rogue)
+local SPELL_SHADOWSTEP = 66178 -- boss_faction_champions.cpp:168 (npc_toc_rogue)
 
 -- cfg: pct threshold, spell self-cast id, forbearance flag (optional,
 -- blocks the cast and falls back to the short check like C++),
@@ -157,6 +170,110 @@ local function defensiveCheck(creature, guid, championCfg)
     end
 end
 
+-- Victim-gated rotation arms (per-struct Reset initial schedules, C++
+-- case arms): victim arm cfg holds the spell, init range, IsInRange
+-- bounds (minRange nil = plain GetDistance2d < maxRange), and the
+-- cast/miss reschedule ranges.
+local function victimCfg(spell, initMin, initMax, minRange, maxRange, hitMin, hitMax, missMin, missMax)
+    return {
+        spell = spell, initMin = initMin, initMax = initMax,
+        minRange = minRange, maxRange = maxRange,
+        hitMin = hitMin, hitMax = hitMax, missMin = missMin, missMax = missMax,
+    }
+end
+
+-- npc_toc_hunter EVENT_WING_CLIP :1487 (init 10-20s, reschedule
+-- 15-25s either way); npc_toc_dk EVENT_DEATH_GRIP :1755 (init
+-- 15-25s, cast -> 35s, gate fails -> 3s); npc_toc_rogue
+-- EVENT_SHADOWSTEP :1874 (init 20-30s, cast -> 30s, gate fails -> 5s).
+local VICTIM_ARMS = {
+    [34467] = victimCfg(SPELL_WING_CLIP, 10000, 20000, nil, 6.0, 15000, 25000, 15000, 25000),
+    [34448] = victimCfg(SPELL_WING_CLIP, 10000, 20000, nil, 6.0, 15000, 25000, 15000, 25000),
+    [34461] = victimCfg(SPELL_DEATH_GRIP, 15000, 25000, 5.0, 30.0, 35000, 35000, 3000, 3000),
+    [34458] = victimCfg(SPELL_DEATH_GRIP, 15000, 25000, 5.0, 30.0, 35000, 35000, 3000, 3000),
+    [34472] = victimCfg(SPELL_SHADOWSTEP, 20000, 30000, 10.0, 40.0, 30000, 30000, 5000, 5000),
+    [34454] = victimCfg(SPELL_SHADOWSTEP, 20000, 30000, 10.0, 40.0, 30000, 30000, 5000, 5000),
+}
+
+local function victimCheck(creature, guid, arm)
+    local victim = creature:GetVictim()
+    local fire = false
+    if victim ~= nil then
+        local dist = creature:GetDistance2d(victim)
+        if arm.minRange == nil then
+            fire = dist < arm.maxRange
+        else
+            -- WorldObject::IsInRange (Object.cpp:1329, is3D=false): 2D
+            -- distance against min/max plus both combat reaches, dist
+            -- >= min side and dist < max side; ToC victims are players
+            -- (1.5 default reach; player surface has no GetCombatReach,
+            -- kologarn precedent).
+            local sizefactor = creature:GetCombatReach() + 1.5
+            fire = dist >= arm.minRange + sizefactor and dist < arm.maxRange + sizefactor
+        end
+    end
+    if fire then
+        creature:CastSpell(victim, arm.spell)
+        schedule(guid, "victim", math.random(arm.hitMin, arm.hitMax), function()
+            victimCheck(creature, guid, arm)
+        end)
+    else
+        schedule(guid, "victim", math.random(arm.missMin, arm.missMax), function()
+            victimCheck(creature, guid, arm)
+        end)
+    end
+end
+
+-- EnemiesInRange count arms: C++ iterates the threat list counting
+-- victims within 10.0 yd (GetDistance2d, strict <); GetAITargets is
+-- the bridged threat list (sorted, same set C++ iterates unsorted),
+-- so the count matches unless a dead ref lingers on one side only.
+-- npc_toc_hunter EVENT_FROST_TRAP :1479 (init 10-20s, DoCastAOE =
+-- self-cast, 30s either way) and EVENT_DISENGAGE :1470 (init
+-- 10-20s, self-cast, 30s either way); npc_toc_rogue
+-- EVENT_BLADE_FLURRY :1875 (init 10-20s, cast -> 120s, gate fails
+-- -> 5s).
+local function countCfg(spell, initMin, initMax, hitMin, hitMax, missMin, missMax)
+    return {
+        spell = spell, initMin = initMin, initMax = initMax,
+        hitMin = hitMin, hitMax = hitMax, missMin = missMin, missMax = missMax,
+    }
+end
+
+local HUNTER_COUNTS = {
+    countCfg(SPELL_FROST_TRAP, 10000, 20000, 30000, 30000, 30000, 30000),
+    countCfg(SPELL_DISENGAGE, 10000, 20000, 30000, 30000, 30000, 30000),
+}
+local ROGUE_COUNTS = {
+    countCfg(SPELL_BLADE_FLURRY, 10000, 20000, 120000, 120000, 5000, 5000),
+}
+
+local COUNT_ARMS = {
+    [34467] = HUNTER_COUNTS,
+    [34448] = HUNTER_COUNTS,
+    [34472] = ROGUE_COUNTS,
+    [34454] = ROGUE_COUNTS,
+}
+
+local function countCheck(creature, guid, arm)
+    local count = 0
+    for _, target in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance2d(target) < 10.0 then
+            count = count + 1
+        end
+    end
+    if count >= 2 then
+        creature:CastSpell(creature, arm.spell)
+        schedule(guid, "count" .. arm.spell, math.random(arm.hitMin, arm.hitMax), function()
+            countCheck(creature, guid, arm)
+        end)
+    else
+        schedule(guid, "count" .. arm.spell, math.random(arm.missMin, arm.missMax), function()
+            countCheck(creature, guid, arm)
+        end)
+    end
+end
+
 local function championEnterCombat(event, creature, target)
     local championCfg = CHAMPIONS[creature:GetEntry()]
     if championCfg == nil then
@@ -180,6 +297,20 @@ local function championEnterCombat(event, creature, target)
     schedule(guid, "def", math.random(championCfg.initMin, championCfg.initMax), function()
         defensiveCheck(creature, guid, championCfg)
     end)
+    local vArm = VICTIM_ARMS[creature:GetEntry()]
+    if vArm ~= nil then
+        schedule(guid, "victim", math.random(vArm.initMin, vArm.initMax), function()
+            victimCheck(creature, guid, vArm)
+        end)
+    end
+    local cArms = COUNT_ARMS[creature:GetEntry()]
+    if cArms ~= nil then
+        for _, cArm in ipairs(cArms) do
+            schedule(guid, "count" .. cArm.spell, math.random(cArm.initMin, cArm.initMax), function()
+                countCheck(creature, guid, cArm)
+            end)
+        end
+    end
 end
 
 local function championLeaveCombat(event, creature)
