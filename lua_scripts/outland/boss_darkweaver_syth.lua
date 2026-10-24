@@ -44,8 +44,9 @@
 -- Talk(SAY_SLAY 2) (event 3; razuvious player-gated precedent).
 -- boss_darkweaver_sythAI::JustDied — Talk(SAY_DEATH 3) (event 4;
 -- sjonnir self-Talk precedent); the Lakka leg
--- (FindNearestCreature(NPC_LAKKA 18956, 500.0f) → Talk(1)) rides
--- the no-FindNearestCreature bridge — documented-only.
+-- (FindNearestCreature(NPC_LAKKA 18956, 500.0f) → Talk(1)) is PORTED
+-- in sythDied (the old "no FindNearestCreature bridge" claim was
+-- stale — lua_creature_events.go:2332, live-only per Health==0 skip).
 -- All timers cancelled on 2/4/23 (gargolmar precedent); the 90/50/10
 -- latches reset on 23 (C++ Reset → Initialize).
 -- DOCUMENTED-ONLY (in this header; only entry 18968 registered):
@@ -62,6 +63,8 @@ local SAY_SUMMON = 0 -- boss_darkweaver_syth.cpp:38
 local SAY_AGGRO = 1 -- boss_darkweaver_syth.cpp:39
 local SAY_SLAY = 2 -- boss_darkweaver_syth.cpp:40
 local SAY_DEATH = 3 -- boss_darkweaver_syth.cpp:41
+local NPC_LAKKA = 18956 -- boss_darkweaver_syth.cpp:68
+local SAY_LAKKA_FREE = 1 -- boss_darkweaver_syth.cpp:69
 
 local SPELL_FROST_SHOCK = 21401 -- boss_darkweaver_syth.cpp:44
 local SPELL_FLAME_SHOCK = 34354 -- boss_darkweaver_syth.cpp:45
@@ -197,9 +200,13 @@ end
 -- (instance leg — documented-only) + Talk(SAY_DEATH) — the sjonnir
 -- self-Talk precedent (event 4). The Lakka leg
 -- (FindNearestCreature(NPC_LAKKA 18956, 500.0f, true) → Talk(1))
--- rides the no-FindNearestCreature bridge — documented-only.
+-- is PORTED below (bridge live, lua_creature_events.go:2332).
 local function sythDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    local lakka = creature:FindNearestCreature(NPC_LAKKA, 500.0)
+    if lakka then
+        lakka:Talk(SAY_LAKKA_FREE)
+    end
     cancelTimers(creature:GetGUID())
     sythState[creature:GetGUID()] = nil
 end

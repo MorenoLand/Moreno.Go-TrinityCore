@@ -53,6 +53,13 @@
 -- boss_skadi JustDied — Talk(SAY_DEATH 3) unconditional (event 4 — the
 -- sjonnir JustDied-Talk precedent; the _JustDied() passthrough leg has
 -- no bridge).
+-- boss_skadi gauntlet reset-check — DoAction(ACTION_START_ENCOUNTER,
+-- :239-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
+-- 200.0f) -> trigger self-cast SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_
+-- CHECK 49308, triggered, Repeat 6s. PORTED on event 1 (the C++ start
+-- leg is the unbridged DoAction, so the Lua pump starts at first combat
+-- instead of encounter-start: gauntlet-window checks are missed, the
+-- 6s cadence once running is C++-exact); cancelled on 2/4/23.
 -- The ymirjar trash spell-timer kits are all ungated in their
 -- ScheduleTasks (no phase groups, no DoAction-gated arms — the
 -- yogg_saron adds precedent), so they are ported with per-entry event-1
@@ -132,6 +139,8 @@ local ENTRY_YMIRJAR_WARRIOR = 26690
 local ENTRY_YMIRJAR_WITCH_DOCTOR = 26691
 local ENTRY_YMIRJAR_HARPOONER = 26692
 local ENTRY_GRAUF = 26893 -- utgarde_pinnacle.h:70
+local NPC_TRIGGER_RESET = 23472 -- utgarde_pinnacle.h:74
+local SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK = 49308 -- boss_skadi.cpp:54
 
 local SAY_KILL = 1
 local SAY_DEATH = 3
@@ -203,6 +212,24 @@ end
 -- Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk precedent.
 local function skadiJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ DoAction(ACTION_START_ENCOUNTER) reset-check scheduler
+-- (boss_skadi.cpp:239-246): 6s first tick, Repeat 6s; the trigger
+-- self-cast is the mandokir/fathomlord found-creature CastSpell
+-- precedent. Starts at first combat (DoAction unbridged — see header).
+local function skadiEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local function resetCheckTick()
+        local trigger = creature:FindNearestCreature(NPC_TRIGGER_RESET, 200.0)
+        if trigger then
+            trigger:CastSpell(trigger, SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK, true)
+        end
+        schedule(guid, "resetCheck", 6000, resetCheckTick)
+    end
+    schedule(guid, "resetCheck", 6000, resetCheckTick)
 end
 
 -- C++ npc_ymirjar_warriorAI::ScheduleTasks (:545-555): DoCastVictim
@@ -267,8 +294,11 @@ local function harpoonerEnterCombat(event, creature)
     schedule(guid, "throw", 2000, throwTick)
 end
 
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 1, skadiEnterCombat)
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 3, skadiKilledUnit)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 4, skadiJustDied)
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 1, warriorEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 4, cancelCombatTimers)

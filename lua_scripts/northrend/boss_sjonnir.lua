@@ -92,7 +92,12 @@
 -- precedent; no Talk arms anywhere in the script — the merge
 -- machine (FindNearestCreature 27981 3.0f -> DoSpawnCreature
 -- IRON_SLUDGE 28165 + double DisappearAndDie; _mergeTimer 10s /
--- 3s) has no proximity / summon / despawn / timer bridges).
+-- 3s) stays out on BEARER grounds only: the proximity / summon /
+-- despawn / timer bridges are all live now (FindNearestCreature
+-- lua_creature_events.go:2332, SummonCreature :1183, Despawn,
+-- CreateLuaEvent runtime.go:798) — the old "no bridges" claim is
+-- stale — but the ooze AI itself is unregistered, so the arm has
+-- no bearer to run on.
 -- npc_iron_sludge (CreatureScript via
 -- GetHallsOfStoneAI<npc_iron_sludgeAI> (ScriptedAI);
 -- NPC_IRON_SLUDGE = 28165, local enum — entry-verifiable but
