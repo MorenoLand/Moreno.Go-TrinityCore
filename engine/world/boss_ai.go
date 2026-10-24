@@ -9505,6 +9505,74 @@ func init() {
 	RegisterLuaBoss("npc_stalagg", 15929)
 	RegisterLuaBoss("npc_feugen", 15930)
 
+	// Patchwerk (16028, Naxxramas, Construct Quarter) —
+	// lua_scripts/northrend/boss_patchwerk.lua. Entry from the
+	// creature_template table (cross-checked: 15956/15953/15928/
+	// 15952/15932/15936/15989/15990 all match naxxramas.h
+	// NAXCreaturesIds; 25-man difficulty entry 29324 not registered,
+	// base-entry-only convention). Ported arms (C++-exact):
+	// JustEngagedWith Talk(0) + EVENT_HATEFUL 1s + EVENT_BERSERK
+	// 6min; EVENT_HATEFUL threat-list algorithm (first non-victim
+	// entry is secondThreat; next available entry is thirdThreat
+	// when secondThreat is set, else secondThreat; on 25-man a
+	// further available entry becomes thirdThreat with no victim
+	// check; pick is victim/second/higher-HP-of-second-third) +
+	// AddThreat 1000 each + DoCast(HATEFUL_STRIKE 28308,
+	// triggered), 1s repeat; 5% frenzy latch folded into the 1s
+	// pump (DoCastSelf FRENZY 28131, triggered + Talk 4, once);
+	// EVENT_BERSERK DoCastSelf(BERSERK 26662, triggered) + Talk 3,
+	// one-shot, then EVENT_SLIME DoCastAOE-lowered self-cast
+	// (SLIME_BOLT 32309, triggered), 2s repeat; KilledUnit Talk(1)
+	// at 1-in-5; JustDied Talk(2). DOCUMENTED-BLOCKED: instance
+	// bookkeeping + timed achievement 10286 (no achievement/
+	// instance bridges); empty-threat-list EnterEvadeMode leg
+	// (EnterEvadeMode unbridged — pump re-arms instead).
+	RegisterLuaBoss("boss_patchwerk", 16028)
+
+	// Grobbulus (15931, Naxxramas, Construct Quarter) —
+	// lua_scripts/northrend/boss_grobbulus.lua. Entry from the
+	// creature_template table (same cross-check as patchwerk;
+	// 25-man difficulty entry 29373 not registered). Fallout
+	// slime entry 16290 is NPC_FALLOUT_SLIME in the C++ file.
+	// Ported arms (C++-exact): JustEngagedWith + EVENT_CLOUD 15s
+	// (DoCastAOE-lowered self-cast POISON_CLOUD 28240, 15s repeat)
+	// + EVENT_INJECT 20s (SelectTarget Random/1/playerOnly/
+	// -MUTATING_INJECTION: skip threat head, filter players
+	// without the aura, random pick; DoCast MUTATING_INJECTION
+	// 28169; re-arm 8s + round(120 * healthPct) ms) + EVENT_SPRAY
+	// randtime (15s, 30s) (DoCastAOE-lowered self-cast SLIME_SPRAY
+	// 28157) + EVENT_BERSERK 12min one-shot (DoCastAOE-lowered
+	// self-cast BERSERK 26662, triggered); SpellHitTarget 15:
+	// SLIME_SPRAY hits summon FALLOUT_SLIME 16290 at the target
+	// position, type 3 TIMED_DESPAWN_OUT_OF_COMBAT, timer 0.
+	// DOCUMENTED-BLOCKED: instance bookkeeping; poison-cloud AI
+	// (entry not in the C++ file — spell-effect arrival, DB-side);
+	// both SpellScripts (mutating-injection remove, poison-cloud
+	// periodic trigger — no SpellScript bridge); BOMBARD_SLIME
+	// 28280 is enum-only in the file.
+	RegisterLuaBoss("boss_grobbulus", 15931)
+
+	// Loatheb (16011, Naxxramas, Plague Quarter) —
+	// lua_scripts/northrend/boss_loatheb.lua. Entry from the
+	// creature_template table (same cross-check as patchwerk;
+	// 25-man difficulty entry 29718 not registered). Ported arms
+	// (C++-exact): JustEngagedWith + EVENT_NECROTIC_AURA 17s
+	// (DoCastAOE-lowered self-cast NECROTIC_AURA 55593 + Talk 0 +
+	// FADING Talk 2 at 14s + FADED Talk 1 at 17s, 20s repeat) +
+	// EVENT_DEATHBLOOM 5s (DoCastAOE-lowered self-cast DEATHBLOOM
+	// 29865, 30s repeat) + EVENT_SPORE 18s (DoCastSelf SUMMON_SPORE
+	// 29234, 36s/15s 10-/25-man via victim-group-size proxy) +
+	// EVENT_INEVITABLE_DOOM 2min (DoCastAOE-lowered self-cast
+	// INEVITABLE_DOOM 29204; 30s repeat while counter <= 6, then
+	// alternating 14s odd / 17s even on the incremented counter);
+	// SummonedCreatureDies 21: summon casts FUNGAL_CREEP 29232
+	// on itself, triggered; Reset 23: FUNGAL_CREEP removed from
+	// all players on the boss map+instance. DOCUMENTED-BLOCKED:
+	// instance bookkeeping; achievement_spore_loser criteria
+	// script (no achievement bridge); deathbloom AuraScript
+	// AfterRemove final-damage leg (no SpellScript bridge).
+	RegisterLuaBoss("boss_loatheb", 16011)
+
 	// instance_naxxramas.cpp audit (2026-10-18): pure InstanceMapScript
 	// (map 533, "instance_naxxramas") — 16-boss GUID latches, door/
 	// boundary/port GO data, achievement 7600/7601 + Immortal/Undying
