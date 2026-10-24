@@ -120,8 +120,10 @@ local function onConflagration(creature, guid)
 end
 
 -- C++ DoChangePhase: arms the four phase-two timers, sets secondPhase,
--- RemoveAllAuras + SetFullHealth (no bridge). Unreachable today: no
--- DoAction/instance-script bridge can trigger ACTION_PHASE_TWO (1).
+-- RemoveAllAuras + SetFullHealth (both bridged now: RemoveAllAuras
+-- is live, SetFullHealth rides SetHealth(GetMaxHealth())). Unreachable
+-- today: no DoAction/instance-script bridge can trigger
+-- ACTION_PHASE_TWO (1).
 local function doChangePhase(creature, guid)
     secondPhase[guid] = true
     schedule(guid, "cleave", 15000, function()
@@ -136,6 +138,8 @@ local function doChangePhase(creature, guid)
     schedule(guid, "conflag", 12000, function()
         onConflagration(creature, guid)
     end)
+    creature:RemoveAllAuras()
+    creature:SetHealth(creature:GetMaxHealth())
 end
 
 local function razorgoreResetState(guid)

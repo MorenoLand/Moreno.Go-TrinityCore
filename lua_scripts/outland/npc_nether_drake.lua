@@ -19,8 +19,9 @@
 -- documented-only (see deviations).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 23 OnReset (the C++ overrides no KilledUnit/JustDied/
--- DamageTaken; the SpellHit transform has no entry-update
--- bridge — no event 14, see deviations).
+-- DamageTaken; the SpellHit transform (event 14 IS live;
+-- UpdateEntry bridged 2026-10-22) stays unmodeled on its
+-- EnterEvadeMode / AttackStart legs, see deviations).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order, non-Nihil branch only — the IsNihil speech
 -- machine is unreachable behind the unmodeled SpellHit
@@ -62,7 +63,9 @@
 -- (no bridge), the Nihil UNIT_FLAG_NON_ATTACKABLE latch, the
 -- RemoveFlag interrupt arm, AttackStart on the player
 -- caster, Talk(SAY_NIHIL_INTERRUPT)) stays unmodeled on the
--- EnterEvadeMode / AttackStart legs — no event 14 registration; the IsNihil speech machine (SAY_NIHIL_
+-- EnterEvadeMode / AttackStart legs alone — event 14 itself is
+-- live and UpdateEntry / SetFlag / RemoveFlag / Talk are all
+-- bridged, so those two legs are the sole blockers; the IsNihil speech machine (SAY_NIHIL_
 -- 1..4), the UNIT_FLAG_NOT_SELECTABLE flag arm, the MoveIn
 -- LineOfSight NON_ATTACKABLE gate and the MovementInform
 -- MovePoint(0)->DespawnOrUnsummon arm all sit behind it or

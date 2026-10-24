@@ -57,8 +57,9 @@
 -- - EVENT_KALECGOS_LANDING arm: DoCastAOE(SPELL_CAMERA_SHAKE
 --   44762) + SetObjectScale(0.6f) + 1s re-arm of
 --   EVENT_KALECGOS_TRANSFORM — triggered only from MovementInform,
---   so it is stranded with the movement leg; no object-scale
---   bridge either.
+--   so it is stranded with the movement leg; SetScale IS bridged
+--   (creature:SetScale, the SetObjectScale twin), so the movement
+--   leg is the sole blocker.
 -- - EVENT_KALECGOS_TRANSFORM's cast triplet: DoCast(me,
 --   SPELL_ORB_KILL_CREDIT 46307, triggered) / DoCast(me,
 --   SPELL_TRANSFORM_VISUAL 24085) / DoCast(me,
@@ -68,7 +69,8 @@
 --   scheduled from EVENT_KALECGOS_LANDING, which is stranded on
 --   the MovementInform bridge, so the whole transform chain is
 --   documented-only; me->UpdateEntry(NPC_HUMAN_KALECGOS 24848)
---   has no entry-update bridge regardless.
+--   IS bridged (creature:UpdateEntry) — the stranded LANDING
+--   scheduling chain is the sole blocker.
 local ENTRY_KALECGOS = 24844
 
 local GOSSIP_ICON_CHAT = 0
