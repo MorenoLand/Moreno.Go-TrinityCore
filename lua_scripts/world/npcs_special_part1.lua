@@ -50,7 +50,9 @@
 -- (cannot register); the IsWithinLOS bridge went live 2026-10-23
 -- (WorldObject::IsWithinLOSInMap twin) but the emote gate stays
 -- unported with the class on the no-entry-consts ground;
--- no Relocate / SetDisableGravity / heartbeat bridges.
+-- no Relocate / heartbeat bridges (SetDisableGravity is bridged since
+-- 2026-10-23, but the class stays documented-only on the no-entry-consts
+-- ground above).
 -- The me->SetFacingToObject(player) leg (C++ :364) is bridgeable via
 -- the atan2 twin (devourer_of_souls precedent) — the old "no
 -- SetFacingToObject bridge" parenthetical is retracted — but the class

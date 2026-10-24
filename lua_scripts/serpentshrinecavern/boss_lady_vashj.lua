@@ -79,9 +79,10 @@
 -- timers. STAY-OUT: Coilfang-elite (22055), Coilfang-strider (22056)
 -- and sporebat (22140) — all ride spawned-AI()->AttackStart(random
 -- target) and their sole role is combat (dropped leg guts the arm);
--- no movement/teleport bridge — the phase-2 MotionMaster Clear +
--- DoTeleportTo and the enchanted-elemental MovePoint waypoint
--- machine unmodeled (the enchanted elemental is movement-driven
+-- the phase-2 MotionMaster Clear stays out (no bridge) but its
+-- DoTeleportTo is PORTED in the phase-2 arm below (2026-10-24 — the old
+-- "no teleport bridge" claim was stale); the enchanted-elemental MovePoint
+-- waypoint machine stays unmodeled (the enchanted elemental is movement-driven
 -- through and through: nearest-waypoint search, SetWalk, walk
 -- 0.6f speeds, MovePoint phases, IsWithinDist3d checks — no
 -- bridges, so "npc_enchanted_elemental" (21958) is documented
@@ -147,6 +148,12 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 local ENTRY_TAINTED_ELEMENTAL = 22009
 local ENTRY_SHIELD_GENERATOR_CHANNEL = 19870 -- boss_lady_vashj.cpp:60 (C++ spells it SHIED_GENERATOR_CHANNEL)
 local ENTRY_ENCHANTED_ELEMENTAL = 21958
+
+-- boss_lady_vashj.cpp:69-71 (MIDDLE_X/Y/Z): the platform center Vashj
+-- teleports to at the phase-2 transition (:401-402).
+local VASHJ_MIDDLE_X = 30.134
+local VASHJ_MIDDLE_Y = -923.65
+local VASHJ_MIDDLE_Z = 42.9
 
 -- boss_lady_vashj.cpp:133-139 (ShieldGeneratorChannelPos) and
 -- :83-92 (ElementPos), literal tables.
@@ -301,15 +308,18 @@ local function vashjTick(creature, guid)
         end
 
         -- Phase 2 at <70% health, once (C++ HealthBelowPct(70) is
-        -- evaluated every UpdateAI; the teleport has no bridge —
-        -- dropped, documented). PORTED (boss_lady_vashj.cpp:398-408):
-        -- 4x SummonCreature(SHIED_GENERATOR_CHANNEL 19870 at
-        -- ShieldGeneratorChannelPos, TEMPSUMMON_CORPSE_DESPAWN Eluna
-        -- type 4), then Talk(SAY_PHASE2). The ShieldGeneratorChannel
-        -- GUID latch feeds the instance-blocked Reset cleanup only.
+        -- evaluated every UpdateAI). PORTED (boss_lady_vashj.cpp:393-408):
+        -- MotionMaster Clear has no bridge (skipped), then DoTeleportTo
+        -- the platform middle via creature:Teleport (the old "teleport
+        -- has no bridge" claim was stale), 4x SummonCreature(
+        -- SHIED_GENERATOR_CHANNEL 19870 at ShieldGeneratorChannelPos,
+        -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4), then Talk(SAY_PHASE2).
+        -- The ShieldGeneratorChannel GUID latch feeds the
+        -- instance-blocked Reset cleanup only.
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 70 / 100) then
+            creature:Teleport(VASHJ_MIDDLE_X, VASHJ_MIDDLE_Y, VASHJ_MIDDLE_Z)
             for _, pos in ipairs(SHIELD_GENERATOR_CHANNEL_POSITIONS) do
                 creature:SummonCreature(ENTRY_SHIELD_GENERATOR_CHANNEL,
                     pos[1], pos[2], pos[3], pos[4], 4, 0)

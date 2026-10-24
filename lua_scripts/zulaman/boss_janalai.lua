@@ -14,7 +14,35 @@
 -- Fight shape: flame breath 43140 on a random player at 8s, repeat 8s
 -- (C++ motion-master clear + StopMoving have no bridge — the
 -- cast is not interrupted here, and the DamageDealt 30-degree arc gate
--- has no bridge, so the isFlameBreathing arm never runs); enrage arm —
+-- has no bridge, so the isFlameBreathing arm never runs); the bomb phase
+-- IS ported (2026-10-24 — the old "no summon/teleport bridge" claim was
+-- stale: creature:SummonCreature, creature:Teleport, creature:AttackStop,
+-- creature:StopMoving and player:TeleportNear are all bridged): BombTimer
+-- 30s -> Talk(SAY_FIRE_BOMBS=1) + AttackStop + Teleport to the platform
+-- center + StopMoving + non-triggered self-cast FIRE_BOMB_CHANNEL 42621 +
+-- FireWall() (10 wall bombs at FireWallCoords, TEMPSUMMON_TIMED_DESPAWN
+-- type 2 / 15s, each triggered self-cast FIRE_WALL 43113) + SpawnBombs()
+-- (40 bombs at boss-relative irand(-22,22)/irand(-25,25) offsets, same
+-- type/despawn, tracked in st.bombs) + alive players teleported near the
+-- center (C++ DoTeleportPlayer) + the flamebreath/hatcher timers cancelled
+-- (C++ pauses them while isBombing) + 100ms bomb-sequence pump: per bomb
+-- RemoveFlag(NOT_SELECTABLE) + boss DoCast(FIRE_BOMB_THROW 42628,
+-- triggered) + SetFlag(NOT_SELECTABLE) (the registered firebomb SpellHit
+-- arm answers with triggered 42629), re-arm 100ms, 5000ms after the 40th
+-- -> Boom(): every tracked bomb takes triggered FIRE_BOMB_DAMAGE 42630 +
+-- RemoveAllAuras, then BombTimer = urand(20000,40000), RemoveAura(42621),
+-- flamebreath/hatcher re-armed at full delays and enrage re-armed at
+-- 290000 (the C++ 10s EnrageTimer shave rides the full-delay re-arm —
+-- the ~9s bombing pause has no remaining-time bridge, documented
+-- micro-deviation); melee is suppressed while bombing via SetMeleeAttack
+-- (C++ UpdateAI returns before DoMeleeAttackIfReady when isBombing).
+-- HatcherTimer 10s/90s IS ported: HatchAllEggs(0) is a pure egg-existence
+-- probe, modeled with creature:GetCreaturesInGrid(ENTRY_EGG, 100) — eggs
+-- present -> Talk(SAY_SUMMON_HATCHER=2) + two 23818 summons at the
+-- hatcherway spawn points (TEMPSUMMON_CORPSE_TIMED_DESPAWN type 5 / 10s)
+-- + 90s re-arm, none -> noeggs latches the arm off (C++-exact); the
+-- hatchers' own waypoint/egg-hatching AI stays unregistered (movement-
+-- driven body, fiendish-portal precedent), so summoned hatchers idle.
 -- a 5min one-shot (EnrageTimer = 5*60*1000) whose first fire triggered-
 -- casts enrage 44779, sets enraged, and re-arms 300s, and whose later
 -- fires Talk(SAY_BERSERK=4) + triggered berserk 45078 + re-arm 300s
@@ -23,45 +51,36 @@
 -- post-damage health (nefarian rule), canceling the pending timer
 -- and firing the same handler. Kills: Talk SAY_SLAY (C++ KilledUnit has no player gate);
 -- death: Talk SAY_DEATH.
--- Deviations from C++: the entire bomb phase has no bridge — no summon
--- model (the 40 fire bombs + fire wall never exist), no creature teleport
--- (DoTeleportTo), stale 'no player teleport (DoTeleportPlayer)' retracted —
--- player:TeleportNear is bridged (lua_player.go:366); the arm stays out on
--- the summon machine, no AttackStop/
--- motion-master clear, so Talk(SAY_FIRE_BOMBS=1), the fire-wall arms, the
--- 100ms-per-bomb sequence, Boom, and the enrage-timer 10s shave never run;
--- the hatcher arm has no bridge — no egg enumeration (HatchAllEggs), no
--- summon model (the two 23818 hatchers never exist), so Talk(SAY_SUMMON_
--- HATCHER=2) and HatcherTimer never run; the all-eggs 35% arm stays out —
--- its core effect is HatchAllEggs(2) (no egg-enumeration bridge), so
--- porting the Talk(SAY_ALL_EGGS=3)/AttackStop/teleport/StopMoving/
--- SPELL_HATCH_ALL 43144 shell without the hatch would fabricate behavior
--- (the 2026-10-23 "no teleport" parenthetical is retracted — Teleport,
--- AttackStop and StopMoving are bridged; the blocker is the egg
--- enumeration). noeggs stays false; the Reset
--- egg display-id restore (HatchAllEggs(1), display 10056) has no bearer;
+-- Deviations from C++: the bomb-phase MotionMaster Clear is cosmetic and
+-- skipped (the teleport lands anyway); the sub-25% enrage event-9 hook can
+-- fire mid-bombing while C++ defers it until the sequence ends (~9s
+-- ordering delta); the hatcher AI is not registered at all — its whole
+-- body is MovementInform waypoints, MoveInLineOfSight/AttackStart gates,
+-- and instance-state checks (fiendish-portal precedent: no Lua-modelable
+-- hooks fire for it), so the two summoned hatchers idle; the fire bomb
+-- 23920 SpellHit arm (42628 -> triggered self-cast 42629) answers the
+-- sequence throws; the hatchling 23598 flame-buffet AI and the egg 23817
+-- SpellHit arm (42471 -> self-cast 42493) are registered so hatched eggs
+-- spawn hatchlings; the Reset egg display-id restore (HatchAllEggs(1),
+-- display 10056) is ported in janalaiReset via GetCreaturesInGrid;
 -- no instance-script model — admission only via the luaBossAI shim
 -- (GetZulAmanAI/BossAI SetBossState arms skipped, the hatchling's
--- IN_PROGRESS DisappearAndDie arm skipped); the hatcher AI is not
--- registered at all — its whole body is MovementInform waypoints, MoveIn-
--- LineOfSight/AttackStart gates, and instance-state checks (fiendish-
--- portal precedent: no Lua-modelable hooks fire for it); the fire bomb
--- 23920 SpellHit arm (42628 -> triggered self-cast 42629) is registered
--- so any spawned fire bomb reacts correctly, though none ever spawn; the
--- hatchling 23598 flame-buffet AI and the egg 23817 SpellHit arm
--- (42471 -> self-cast 42493) are registered for the same reason; the
--- pre-fight trash gauntlet's SAY_EVENT_STRANGERS/FRIENDS lines belong to
--- zulaman.cpp, not this file's AI; the sub-25% enrage arm is a C++
--- UpdateAI HealthBelowPct, so the event-9 port tests projected
--- post-damage health (postDamage > 0 and postDamage < floor
--- threshold — nefarian rule) rather than pre-damage health.
+-- IN_PROGRESS DisappearAndDie arm skipped); the pre-fight trash
+-- gauntlet's SAY_EVENT_STRANGERS/FRIENDS lines belong to zulaman.cpp,
+-- not this file's AI; the sub-25% enrage arm is a C++ UpdateAI
+-- HealthBelowPct, so the event-9 port tests projected post-damage health
+-- (postDamage > 0 and postDamage < floor threshold — nefarian rule)
+-- rather than pre-damage health.
 
 local ENTRY_JANALAI = 23578
 local ENTRY_FIRE_BOMB = 23920
 local ENTRY_HATCHLING = 23598
 local ENTRY_EGG = 23817
+local ENTRY_HATCHER = 23818
 
 local SAY_AGGRO = 0
+local SAY_FIRE_BOMBS = 1
+local SAY_SUMMON_HATCHER = 2
 local SAY_ALL_EGGS = 3
 local SAY_BERSERK = 4
 local SAY_SLAY = 5
@@ -85,6 +104,32 @@ local SPELL_FLAMEBUFFET = 43299
 
 local SPELL_HATCH_EGG = 42471
 local SPELL_SUMMON_HATCHLING = 42493
+
+local SPELL_FIRE_WALL = 43113
+local SPELL_FIRE_BOMB_CHANNEL = 42621
+local SPELL_FIRE_BOMB_DAMAGE = 42630
+
+-- SetFlag/RemoveFlag field + flag values (opera precedent):
+-- UNIT_FIELD_FLAGS = OBJECT_END(0x6)+0x35 = 59 (UpdateFields.h:117);
+-- UNIT_FLAG_NOT_SELECTABLE = 0x02000000 (UnitDefines.h:149).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+-- C++ FireWallCoords (boss_janalai.cpp:89-95): the four fire-wall lines.
+local FIRE_WALL_COORDS = {
+    {-10.13, 1149.27, 19, 3.1415},
+    {-33.93, 1123.90, 19, 0.5 * 3.1415},
+    {-54.80, 1150.08, 19, 0},
+    {-33.93, 1175.68, 19, 1.5 * 3.1415},
+}
+
+-- C++ hatcherway (boss_janalai.cpp:97-115): the two hatcher spawn points
+-- (hatcherway[0][0] and hatcherway[1][0]); the waypoint legs are movement-
+-- bridged-out, documented below.
+local HATCHER_SPAWNS = {
+    {-87.46, 1170.09, 6},
+    {-86.57, 1132.85, 6},
+}
 
 local timers = {}
 local state = {}
@@ -114,7 +159,8 @@ end
 local function janalaiState(guid)
     local st = state[guid]
     if not st then
-        st = { enraged = false, noeggs = false }
+        st = { enraged = false, noeggs = false, bombing = false,
+               bombCount = 0, bombs = {}, wallBombs = {} }
         state[guid] = st
     end
     return st
@@ -169,20 +215,203 @@ local function onEnrage(creature, guid)
     end)
 end
 
+-- Despawn any tracked bombs (BossAI evade/death despawns summons; the Lua
+-- tracks them per-guid, vancleef blackguard idiom).
+local function despawnTrackedBombs(guid)
+    local st = state[guid]
+    if not st then
+        return
+    end
+    for _, list in ipairs({ st.bombs, st.wallBombs }) do
+        for _, bomb in ipairs(list) do
+            if bomb then
+                bomb:Despawn()
+            end
+        end
+    end
+end
+
+-- Forward declaration: onBombPhase, onBombSequence and onHatcher call
+-- each other across definition order (the tharon_ja/gal_darah idiom — a
+-- plain assignment, never a second `local function`, or the closures bind
+-- a nil slot).
+local onBombPhase, onHatcher
+
+-- C++ HandleBombSequence (boss_janalai.cpp:275-296): FireBombGUIDs holds
+-- the 40 SpawnBombs summons in order; each tick the next bomb loses
+-- NOT_SELECTABLE, takes the boss's triggered FIRE_BOMB_THROW 42628 (the
+-- registered firebomb SpellHit arm answers with triggered 42629), and
+-- regains NOT_SELECTABLE. Re-arm is 100ms, 5000ms after the 40th; then
+-- Boom() (boss_janalai.cpp:258-273): every fire bomb in 100 yd — exactly
+-- the 50 tracked summons — takes triggered FIRE_BOMB_DAMAGE 42630 and
+-- loses all auras. Afterwards BombTimer = urand(20000,40000), the channel
+-- aura is removed, and the paused timers resume (C++-exact re-arms; the
+-- enrage 10s shave rides the full-delay re-arm, documented above).
+local function onBombSequence(creature, guid)
+    local st = janalaiState(guid)
+    if st.bombCount < 40 then
+        local bomb = st.bombs[st.bombCount + 1]
+        if bomb then
+            bomb:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:CastSpell(bomb, SPELL_FIRE_BOMB_THROW, true)
+            bomb:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        end
+        st.bombCount = st.bombCount + 1
+        schedule(timers, guid, "bombseq",
+            st.bombCount == 40 and 5000 or 100, function()
+                onBombSequence(creature, guid)
+            end)
+        return
+    end
+    for _, bomb in ipairs(st.bombs) do
+        bomb:CastSpell(bomb, SPELL_FIRE_BOMB_DAMAGE, true)
+        bomb:RemoveAllAuras()
+    end
+    for _, bomb in ipairs(st.wallBombs) do
+        bomb:CastSpell(bomb, SPELL_FIRE_BOMB_DAMAGE, true)
+        bomb:RemoveAllAuras()
+    end
+    st.bombing = false
+    st.bombCount = 0
+    st.bombs = {}
+    st.wallBombs = {}
+    creature:RemoveAura(SPELL_FIRE_BOMB_CHANNEL)
+    creature:SetMeleeAttack(true)
+    schedule(timers, guid, "bomb", math.random(20000, 40000), function()
+        onBombPhase(creature, guid)
+    end)
+    schedule(timers, guid, "flamebreath", 8000, function()
+        onFlameBreath(creature, guid)
+    end)
+    schedule(timers, guid, "hatcher", 90000, function()
+        onHatcher(creature, guid)
+    end)
+    schedule(timers, guid, "enrage", 290000, function()
+        onEnrage(creature, guid)
+    end)
+end
+
+-- C++ BombTimer arm (boss_janalai.cpp:348-380): Talk(SAY_FIRE_BOMBS),
+-- AttackStop, MotionMaster Clear (cosmetic, no bridge), DoTeleportTo the
+-- platform center, StopMoving, non-triggered self-cast FIRE_BOMB_CHANNEL
+-- 42621, FireWall() (10 bombs on the four wall lines), SpawnBombs() (40
+-- bombs at boss-relative irand(-22,22)/irand(-25,25) offsets — C++
+-- DoSpawnCreature adds offsets to the boss position,
+-- ScriptedCreature.cpp:286-289), every alive player teleported near the
+-- center (C++ DoTeleportPlayer; Zul'Aman is always a dungeon so the
+-- IsDungeon early-out never triggers), then isBombing with the 100ms
+-- sequence pump. Flamebreath/hatcher timers are cancelled here because
+-- C++ pauses them while isBombing (UpdateAI early-return); the enrage
+-- timer is re-armed at bomb end (see onBombSequence).
+onBombPhase = function(creature, guid)
+    local st = janalaiState(guid)
+    creature:Talk(SAY_FIRE_BOMBS)
+    creature:AttackStop()
+    creature:Teleport(JANALAI_CENTER_X, JANALAI_CENTER_Y, JANALAI_CENTER_Z)
+    creature:StopMoving()
+    creature:SetMeleeAttack(false)
+    creature:CastSpell(creature, SPELL_FIRE_BOMB_CHANNEL)
+    st.bombs = {}
+    st.wallBombs = {}
+    for i = 1, 4 do
+        local wc = FIRE_WALL_COORDS[i]
+        local wallNum = (i == 1 or i == 3) and 3 or 2
+        for j = 1, wallNum do
+            local x, y
+            if wallNum == 3 then
+                x, y = wc[1], wc[2] + 5 * (j - 2)
+            else
+                x, y = wc[1] - 2 + 4 * (j - 1), wc[2]
+            end
+            local bomb = creature:SummonCreature(ENTRY_FIRE_BOMB,
+                x, y, wc[3], wc[4], 2, 15000)
+            if bomb then
+                bomb:CastSpell(bomb, SPELL_FIRE_WALL, true)
+                st.wallBombs[#st.wallBombs + 1] = bomb
+            end
+        end
+    end
+    local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
+    for _ = 1, 40 do
+        local bomb = creature:SummonCreature(ENTRY_FIRE_BOMB,
+            bx + math.random(-22, 22), by + math.random(-25, 25), bz,
+            0, 2, 15000)
+        if bomb then
+            st.bombs[#st.bombs + 1] = bomb
+        end
+    end
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            p:TeleportNear(JANALAI_CENTER_X - 5 + math.random(0, 9),
+                JANALAI_CENTER_Y - 5 + math.random(0, 9),
+                JANALAI_CENTER_Z, 0)
+        end
+    end
+    local per = timers[guid]
+    if per then
+        if per["flamebreath"] then
+            RemoveEventById(per["flamebreath"])
+            per["flamebreath"] = nil
+        end
+        if per["hatcher"] then
+            RemoveEventById(per["hatcher"])
+            per["hatcher"] = nil
+        end
+    end
+    st.bombing = true
+    st.bombCount = 0
+    schedule(timers, guid, "bombseq", 100, function()
+        onBombSequence(creature, guid)
+    end)
+end
+
+-- C++ HatcherTimer arm (boss_janalai.cpp:398-408): HatchAllEggs(0) is a
+-- pure existence probe (action 0 touches no egg) over NPC_EGG within
+-- 100 yd, modeled with creature:GetCreaturesInGrid. Eggs present ->
+-- Talk(SAY_SUMMON_HATCHER) + two 23818 summons at the hatcherway spawn
+-- points (TEMPSUMMON_CORPSE_TIMED_DESPAWN, Go type 5, 10s) + 90s re-arm;
+-- none -> noeggs latches the arm off, C++-exact.
+onHatcher = function(creature, guid)
+    local st = janalaiState(guid)
+    if #creature:GetCreaturesInGrid(ENTRY_EGG, 100) > 0 then
+        creature:Talk(SAY_SUMMON_HATCHER)
+        for _, pos in ipairs(HATCHER_SPAWNS) do
+            creature:SummonCreature(ENTRY_HATCHER,
+                pos[1], pos[2], pos[3], 0, 5, 10000)
+        end
+        schedule(timers, guid, "hatcher", 90000, function()
+            onHatcher(creature, guid)
+        end)
+    else
+        st.noeggs = true
+    end
+end
+
 local function janalaiResetState(guid)
+    despawnTrackedBombs(guid)
     cancelTimers(timers, guid)
-    state[guid] = { enraged = false, noeggs = false }
+    state[guid] = { enraged = false, noeggs = false, bombing = false,
+                    bombCount = 0, bombs = {}, wallBombs = {} }
 end
 
 local function janalaiEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     janalaiResetState(guid)
-    -- C++ JustEngagedWith: Talk + the Initialize timer set
-    -- (FireBreathTimer 8s, EnrageTimer 5min); Bomb/Hatcher timers never
-    -- run (no summon/teleport bridge).
+    -- C++ JustEngagedWith (boss_janalai.cpp:181-193): Talk + the Initialize
+    -- timer set — FireBreathTimer 8s, BombTimer 30s, HatcherTimer 10s,
+    -- EnrageTimer 5min (the old "no summon/teleport bridge" claim was
+    -- stale; the bomb and hatcher arms are ported above).
     creature:Talk(SAY_AGGRO)
     schedule(timers, guid, "flamebreath", 8000, function()
         onFlameBreath(creature, guid)
+    end)
+    schedule(timers, guid, "bomb", 30000, function()
+        onBombPhase(creature, guid)
+    end)
+    schedule(timers, guid, "hatcher", 10000, function()
+        onHatcher(creature, guid)
     end)
     schedule(timers, guid, "enrage", 300000, function()
         onEnrage(creature, guid)
