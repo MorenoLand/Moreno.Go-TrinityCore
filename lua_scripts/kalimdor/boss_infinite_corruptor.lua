@@ -33,8 +33,8 @@
 --   too (nil target -> no cast).
 -- - Void Strike 60590 on the victim (C++ DoCastVictim — jeklik GetVictim
 --   + CastSpell convention), non-triggered, init 5s -> repeat 5s.
--- - Death (C++ JustDied): Talk SAY_DEATH (1) + cancel; the _JustDied()
---   instance leg and the guardian/rift cleanup below are blocked.
+-- - Death (C++ JustDied): Talk SAY_DEATH (1) + cancel + guardian/rift
+--   cleanup (below); the _JustDied() instance leg stays blocked.
 -- Unmodeled (documented-only, no bridges):
 -- - Reset's DoCastAOE(SPELL_CORRUPTION_OF_TIME_CHANNEL 60422), the
 --   "implicitly targets the Guardian" channel leg — no cast-target /
@@ -45,11 +45,15 @@
 --   "implicitly targets the Guardian") is unported — no cast-target /
 --   AoE-to-guardian bridge — so event 15 never fires for it in Go
 --   (event 15 itself is live — boss_ai.go:1904).
--- - JustDied's FindNearestCreature legs: NPC_GUARDIAN_OF_TIME 32281
---   within 100.0f -> RemoveAurasDueToSpell(60451) + DespawnOrUnsummon
---   (5s); NPC_TIME_RIFT 28409 within 100.0f -> DespawnOrUnsummon() —
---   no nearby-creature enumeration bridge (the_black_morass
---   MoveInLineOfSight Time Keeper precedent).
+-- - JustDied's FindNearestCreature legs, PORTED in onDied (the
+--   header's "no nearby-creature enumeration bridge" claim was stale:
+--   FindNearestCreature is live, lua_creature_events.go:2332, nearest
+--   live only): NPC_GUARDIAN_OF_TIME 32281 within 100.0f ->
+--   RemoveAura(60451), the single-spell twin of RemoveAurasDueToSpell
+--   (netherspite precedent), + 5s one-shot Despawn (valithria
+--   precedent; C++ DespawnOrUnsummon(5s)); NPC_TIME_RIFT 28409
+--   within 100.0f -> immediate Despawn (C++ DespawnOrUnsummon()).
+--   The DoAction LEAVE leg below stays out (MovePoint unbridged).
 -- - EnterEvadeMode's HasReactState(REACT_PASSIVE) early-return — no
 --   react-state bridge (standing).
 -- - MovementInform(POINT_MOTION_TYPE, MOVEMENT_TIME_RIFT 1) ->
@@ -72,6 +76,11 @@ local SAY_DEATH = 1
 
 local SPELL_CORRUPTING_BLIGHT = 60588
 local SPELL_VOID_STRIKE       = 60590
+
+local SPELL_CORRUPTION_OF_TIME_TARGET = 60451
+
+local NPC_GUARDIAN_OF_TIME = 32281
+local NPC_TIME_RIFT        = 28409
 
 local timers = {}
 
@@ -158,9 +167,26 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (:88-99): Talk SAY_DEATH + _JustDied() (instance,
+-- blocked) + guardian/rift cleanup in C++ order: guardian within
+-- 100.0f loses the corruption aura and despawns after 5s; rift
+-- within 100.0f despawns at once. FindNearestCreature skips dead
+-- creatures, so a dead guardian/rift reads as absent, like C++'s
+-- live-pointer checks.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    local guardian = creature:FindNearestCreature(NPC_GUARDIAN_OF_TIME, 100)
+    if guardian then
+        guardian:RemoveAura(SPELL_CORRUPTION_OF_TIME_TARGET)
+        CreateLuaEvent(function()
+            guardian:Despawn()
+        end, 5000)
+    end
+    local rift = creature:FindNearestCreature(NPC_TIME_RIFT, 100)
+    if rift then
+        rift:Despawn()
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
