@@ -112,7 +112,9 @@
 -- no bridge) + Talk(ANGER_SAY_SPITE=5), the 1s tanker-check loop
 -- (on tank switch: Talk(ANGER_SAY_SEETHE=2) + Talk(ANGER_EMOTE_
 -- SEETHE=3) + triggered seethe 41364 self-cast — the
--- GetThreat/victim-GUID arms have no threat bridge), FREED_2
+-- GetVictim/GetThreat legs are bridged now (lua_creature_events.go
+-- GetThreat), but the essence AIs are unregistered, so the loop
+-- stays out on no-registration alone), FREED_2
 -- Talk(ANGER_SAY_FREED_2=1) on the 1s..3min one-shot; JustDied:
 -- DoPlaySoundToSet(11401) would be creature:PlayDirectSound (the
 -- bridge is live — gurtogg precedent) but the essence AIs are

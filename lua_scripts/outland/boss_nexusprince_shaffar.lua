@@ -105,10 +105,11 @@
 -- npc_yor — zero Talk; NOT registered: the EVENT_DOUBLE_BREATH
 -- 6-9s machine (IsWithinDist(victim, ATTACK_DISTANCE)-gated
 -- non-triggered DoCastVictim(SPELL_DOUBLE_BREATH 38361) +
--- DoMeleeAttackIfReady) — timer + cast legs would bridge, but the
--- melee-range distance gate has no bridge (alar precedent) and no
--- registered Lua file hosts the class. The stale "no-timer /
--- no-cast" claim is corrected.
+-- DoMeleeAttackIfReady) — timer + cast + IsWithinDist gate legs
+-- would all bridge (the gate is IsWithinDist itself, generic
+-- fallback in engine/scripting/object.go — the "no bridge" claim
+-- is stale), but no registered Lua file hosts the class, so the
+-- arm stays out on no-registration alone.
 -- All Talk() calls in the file accounted for (3 ported above +
 -- SAY_INTRO 0 MoveInLineOfSight + SAY_SUMMON 3 EVENT_BEACON machine
 -- documented above).

@@ -94,10 +94,16 @@
 -- summon / react-state / motion-master bridges.
 -- UpdateAI arms that STAY OUT (gothik precedent: porting gated
 -- arms on combat-start timers would fabricate casts):
--- EVENT_MELEE_CHECK (cpp:258-261) —
+-- EVENT_MELEE_CHECK (cpp:258-261) — PORTED as meleeCheckTick:
 -- DoCast(SPELL_PETRIFY_BREATH 62030) gated on
--- !me->IsWithinMeleeRange(me->GetVictim()); no melee-range
--- bridge.
+-- !me->IsWithinMeleeRange(me->GetVictim()); the gate rides the
+-- weegli melee-range twin (IsWithinDist with the C++ GetMeleeRange
+-- formula, engine/world/combat.go: max(reach + victimReach + 4/3,
+-- 5.0); player victims use the 1.5 engine-default reach since the
+-- player surface has no GetCombatReach). DoCast resolves to a
+-- victim cast via AISpellInfo (UnitAI.cpp FillAISpellInfo:
+-- TARGET_UNIT_TARGET_ENEMY -> AITARGET_VICTIM), so the Lua
+-- victim-cast (nil target) matches. 6s init, 1s re-arm.
 -- EVENT_SWEEP (cpp:263-266) — DoCast(sweep stalker,
 -- SPELL_ARM_SWEEP 63766, true) gated on left-arm presence
 -- (the PassengerBoarded `left` flag); no PassengerBoarded
@@ -162,6 +168,7 @@ local SAY_BERSERK = 7
 local SPELL_SUMMON_FOCUSED_EYEBEAM = 63342
 local SPELL_BERSERK = 47008
 local SPELL_KOLOGARN_REDUCE_PARRY = 64651
+local SPELL_PETRIFY_BREATH = 62030
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -228,6 +235,31 @@ local function enrageTick(creature, guid)
     creature:Talk(SAY_BERSERK)
 end
 
+-- C++ EVENT_MELEE_CHECK: 6s init from JustEngagedWith (cpp:124),
+-- 1s re-arm (cpp:261); fires DoCast(SPELL_PETRIFY_BREATH) only
+-- when the victim is outside melee range. The C++ casting-state
+-- early-return has no bridge (maiden deviation, as with the other
+-- timers in this file).
+local function meleeCheckTick(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        local victimReach = 1.5
+        if victim:GetObjectType() ~= "Player" then
+            victimReach = victim:GetCombatReach()
+        end
+        local meleeRange = creature:GetCombatReach() + victimReach + 4.0 / 3.0
+        if meleeRange < 5.0 then
+            meleeRange = 5.0
+        end
+        if not creature:IsWithinDist(victim, meleeRange) then
+            creature:CastSpell(nil, SPELL_PETRIFY_BREATH)
+        end
+    end
+    schedule(guid, "meleecheck", 1000, function()
+        meleeCheckTick(creature, guid)
+    end)
+end
+
 -- Constructor (boss_kologarn.cpp:107-117) — RemoveFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
@@ -259,6 +291,9 @@ local function kologarnEnterCombat(event, creature, target)
     end)
     schedule(guid, "enrage", 600000, function()
         enrageTick(creature, guid)
+    end)
+    schedule(guid, "meleecheck", 6000, function()
+        meleeCheckTick(creature, guid)
     end)
 end
 
