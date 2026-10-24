@@ -27,8 +27,8 @@
 -- canceled at transform and re-armed at transform-back, C++-exact).
 -- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
--- DoCastVictim(24110) envolwing web, threat wipe (no threat model —
--- skipped), phase -> 3; the phase-2 timers are canceled (C++ phase
+-- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
+-- phase -> 3; the phase-2 timers are canceled (C++ phase
 -- mask); arm charge 22911 1.5s then every 8s on a random player (up
 -- to 3 draws breaking on a mana user, not the current victim — C++
 -- "not aggro leader" is approximated as excluding the victim; no
@@ -53,9 +53,8 @@
 -- HATCH_SPIDER_EGG 24082 casts spawn nothing (only their re-arm cycles
 -- are modeled); no gameobject bridge — the Reset egg
 -- Respawn/UpdateObjectVisibility scan and the gob_spider_egg
--- JustSummoned->Mar'li AI forward have no bearer; no threat model —
--- the transform -100% threat wipe and the charge "not aggro leader"
--- exclusion are approximated with the current victim; no
+-- JustSummoned->Mar'li AI forward have no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
+-- the charge "not aggro leader" exclusion is approximated with the current victim; no
 -- stat-modifier bridge — the DamageIncrease/Decrease ApplyStatPctModifier
 -- hack (including the Reset PHASE_THREE rollback) is skipped; no
 -- movement model — the charge AttackStart arm is skipped (cast lands,
@@ -256,8 +255,8 @@ end
 
 -- C++ EVENT_TRANSFORM: Talk(SAY_TRANSFORM), non-triggered self-cast
 -- 24084 (spider form), non-triggered DoCastVictim(24110) envolwing
--- web; the +35% damage stat hack and the -100% threat wipe have no
--- bridge; phase -> 3 with the phase-2 timers dropped (C++ phase mask);
+-- web; the +35% damage stat hack has no bridge and the -100%
+-- threat wipe is PORTED 2026-10-24 (gate + cut, C++ order); phase -> 3 with the phase-2 timers dropped (C++ phase mask);
 -- arm charge 1.5s and transform-back 25s, both phase-THREE.
 onTransform = function(creature, guid)
     local st = marliState(guid)
@@ -269,6 +268,9 @@ onTransform = function(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ENVOLWINGWEB)
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -100)
+        end
     end
     cancelTimer(guid, "aspect")
     cancelTimer(guid, "hatchegg") -- C++ CancelEvent(EVENT_HATCH_SPIDER_EGG)

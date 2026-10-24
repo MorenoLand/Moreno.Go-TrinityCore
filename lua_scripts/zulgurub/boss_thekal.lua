@@ -58,7 +58,7 @@
 -- fake-death machine as thekal, forwarding SetData to thekal.
 -- Zealot Zath (11348): sweeping strikes 18765 13s then {22s,26s} /
 -- sinister strike 15581 8s then {8s,16s} / gouge 12540 25s then
--- {17s,27s} (the -100% threat cut has no bridge) / kick 15614 18s then
+-- {17s,27s} (the -100% threat cut is PORTED 2026-10-24) / kick 15614 18s then
 -- {15s,25s} / blind 21060 5s then {10s,20s}, all on the victim,
 -- non-triggered (C++-exact); same fake-death machine as thekal. Zath's
 -- C++ UpdateAI has no UNIT_STATE_CASTING gate.
@@ -83,7 +83,7 @@
 -- damage hack and the Reset -damage hack are skipped (marli/arlokk
 -- convention); the EVENT_CHANGE_PHASE_3 ResetThreatList arm is PORTED
 -- 2026-10-19 (c:ResetAllThreat, bridged lua_objects.go); the gouge
--- ModifyThreatByPercent arms stay skipped (no bridge); no movement
+-- ModifyThreatByPercent gouge arm is PORTED 2026-10-24; no movement
 -- model — the charge
 -- AttackStart arm skipped (charge is inert anyway, see above); no
 -- SetControlled bridge — the phase-change root/unroot arms are PORTED
@@ -661,7 +661,9 @@ local function onGouge(e, creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_GOUGE)
-        -- the -100% ModifyThreatByPercent arm has no threat-model bridge
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -100)
+        end
     end
     schedule(guid, "gouge", math.random(17000, 27000), function()
         onGouge(e, creature, guid)

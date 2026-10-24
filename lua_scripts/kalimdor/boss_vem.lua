@@ -8,7 +8,7 @@
 -- C++ SelectTarget Random is bridged via the maiden_of_virtue
 -- idiom — GetPlayersInWorld filtered by map/instance/alive;
 -- the AttackStart leg has no bridge); Knockback 26027 on victim
--- (8-20s -> 15-25s; the -80% threat modify has no bridge);
+-- (8-20s -> 15-25s; the -80% threat modify is PORTED 2026-10-24);
 -- Enrage 34624 is NOT ported: boss_bug_trio.cpp:219's enrage arm is
 -- dead code in this tree — the else-branch decrements Charge_Timer
 -- instead of Enrage_Timer, so Enrage_Timer never ticks down and the
@@ -67,6 +67,9 @@ local function onKnockback(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCKBACK)
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -80)
+        end
     end
     schedule(guid, "knockback", math.random(15000, 25000), function()
         onKnockback(creature, guid)

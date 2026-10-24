@@ -32,7 +32,7 @@
 --   tunnel coords (boss_fankriss.cpp:139-206). The summoned hatchlings'
 --   AttackStart(target) has no bridge (documented gap — they idle until
 --   the engine engages them), and ModifyThreatByPercent(target, -100)
---   has no threat bridge (documented gap). Re-arm {45000,60000} is
+--   is PORTED 2026-10-24 (gate + cut after the ROOT cast). Re-arm {45000,60000} is
 --   unconditional on fire (C++ sets it inside the <=diff branch even
 --   with no target); the health gate drops the key when below 3%
 --   (C++ outer HealthAbovePct(3) arm).
@@ -96,7 +96,7 @@ end
 -- HealthAbovePct(3); on fire pick a random alive player (SelectTarget
 -- Random, 0, 0.0f, playerOnly TRUE — no range cap), DoCast(target,
 -- SPELL_ROOT 28858) non-triggered, ModifyThreatByPercent(target, -100)
--- (no threat bridge — documented gap), DoTeleportPlayer(target) to one
+-- (PORTED 2026-10-24), DoTeleportPlayer(target) to one
 -- of three tunnel coords, then 4x SummonCreature(15962) at the target's
 -- LIVE post-teleport position with the C++-verbatim offsets
 -- (-3,-3 / -3,+3 / -5,-5 / -5,+5, z = target z), o = 0 (bridge falls
@@ -132,6 +132,9 @@ local function onSpawnHatchlings(creature, guid)
         local target = randomPlayerAnywhere(creature)
         if target then
             creature:CastSpell(target, SPELL_ROOT)
+            if creature:GetThreat(target) ~= 0 then
+                creature:ModifyThreatByPercent(target, -100)
+            end
             local spot = TUNNEL_SPOTS[math.random(#TUNNEL_SPOTS)]
             target:TeleportNear(spot[1], spot[2], spot[3], spot[4])
             local tx, ty, tz = target:GetX(), target:GetY(), target:GetZ()

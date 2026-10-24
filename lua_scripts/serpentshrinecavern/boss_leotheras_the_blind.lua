@@ -142,11 +142,11 @@
 -- blocked), the damage-immunity arm (damage=0 unless the
 -- attacker is the bound victim or self — CREATURE_EVENT_ON_-
 -- DAMAGE_TAKEN (9) carries a damage rewrite, but the arm's
--- victim-GUID exemption is cross-creature blocked and
--- ModifyThreatByPercent has no bridge, so a port would fabricate
+-- victim-GUID exemption is cross-creature blocked (ModifyThreatByPercent
+-- is bridged 2026-10-24, but the binding is not), so a port would fabricate
 -- blanket immunity — unmodeled) and the threat retarget/owner-
 -- death
--- arms (no threat bridge) are unmodeled; the JustDied whisper-
+-- arms (threat-scale bridged 2026-10-24; AddThreat/owner binding unbridged) are unmodeled; the JustDied whisper-
 -- aura removal is cross-creature blocked. OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no instance-
@@ -166,7 +166,7 @@
 -- demon-copy (21875) spawn stay unmodeled — threat/victim-binding
 -- and cross-creature legs unbridged (firesworn/hydross
 -- convention); no movement/
--- threat bridge beyond ResetAllThreat — the whirlwind target-switch
+-- threat bridge beyond ResetAllThreat/ModifyThreatByPercent — the whirlwind target-switch
 -- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
 -- half is PORTED below via creature:ResetAllThreat), the chaos-
 -- blast StopMoving arm and the leotheras MoveInLineOfSight

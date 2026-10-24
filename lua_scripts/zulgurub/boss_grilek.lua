@@ -19,8 +19,8 @@
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the avatar ModifyThreatByPercent(-50) victim arm and the
--- AttackStart-on-random-player arm have no bridge (no threat model, no
+-- skipped); the avatar ModifyThreatByPercent(-50) victim arm is PORTED 2026-10-24
+-- (gate + cut after the cast, C++ order) and the AttackStart-on-random-player arm has no bridge (no
 -- movement model) — the avatar cast still lands C++-exact, but the
 -- boss keeps attacking its current victim; no Talk lines exist in the
 -- C++ AI.
@@ -55,8 +55,14 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_AVATAR: non-triggered DoCast(me, 24646); re-arm {25s,35s}.
+-- GetThreat gate + -50% victim cut PORTED 2026-10-24 (C++ order:
+-- cast, then threat; AttackStart leg stays out, no movement bridge).
 local function onAvatar(creature, guid)
     creature:CastSpell(creature, SPELL_AVATAR)
+    local victim = creature:GetVictim()
+    if victim and creature:GetThreat(victim) ~= 0 then
+        creature:ModifyThreatByPercent(victim, -50)
+    end
     schedule(guid, "avatar", math.random(25000, 35000), function()
         onAvatar(creature, guid)
     end)

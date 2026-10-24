@@ -52,8 +52,8 @@
 -- 3. Knock away 25778: 30s init then 30s — non-triggered
 --    DoCastVictim (C++-exact), re-arm 30s regardless
 --    (C++-exact). The 25% threat drop (C++ GetThreat /
---    ModifyThreatByPercent) has no bridge — unmodeled
---    (morogrim no-ModifyThreatByPercent precedent).
+--    ModifyThreatByPercent) is PORTED 2026-10-24 (victim gate + cut
+--    after the cast).
 -- 4. Berserk 27680: 600000 one-shot — Enraged latch (C++
 --    ctor/Reset() Initialize() sets false, C++-exact), DoCast
 --    (me) self-cast (C++-exact); one-shot arm, no re-arm.
@@ -161,9 +161,13 @@ local function bossTick(creature, guid)
     -- Knock away 25778: 30s init then 30s — non-triggered
     -- DoCastVictim (C++-exact), re-arm 30s regardless
     -- (C++-exact). The 25% threat drop (GetThreat /
-    -- ModifyThreatByPercent) has no bridge — unmodeled.
+    -- ModifyThreatByPercent) is PORTED 2026-10-24 (victim gate + cut after the cast).
     if st.knockAway <= 1000 then
         creature:CastSpell(nil, SPELL_KNOCK_AWAY)
+        local victim = creature:GetVictim()
+        if victim and creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -25)
+        end
         st.knockAway = 30000
     else
         st.knockAway = st.knockAway - 1000

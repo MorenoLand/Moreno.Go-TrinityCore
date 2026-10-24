@@ -27,9 +27,8 @@
 -- SetFlag/RemoveFlag (all bridged) — the boss actually goes
 -- invisible + unselectable C++-exact; DoTeleportTo ports via the
 -- live creature:Teleport bridge (2026-10-24); the aggro-switch
--- GetThreat/ModifyThreatByPercent(-50) + AttackStart arms have no threat
--- or movement bridge (grilek convention) — only the 7-20s re-arm cycle
--- is kept; no instance-script model — boss admission via the luaBossAI
+-- GetThreat/ModifyThreatByPercent(-50) arm is PORTED 2026-10-24; the AttackStart arm has no movement
+-- bridge (grilek convention) — only the 7-20s re-arm cycle is kept for that leg; no instance-script model — boss admission via the luaBossAI
 -- shim (_Reset/BossAI::JustEngagedWith and the GetZulGurubAI
 -- bookkeeping arms skipped); the C++ frozen-timer behavior (ambush,
 -- aggro, thousand-blades timers hold their remainder while the gate is
@@ -145,10 +144,25 @@ local function onVisible(creature, guid)
 end
 
 -- C++ aggro-switch timer: frozen while invisible; the GetThreat/
--- ModifyThreatByPercent(-50, victim) and AttackStart(target) arms have
--- no threat/movement bridge — only the re-arm cycle is kept
--- (grilek convention). Re-arm {7s,20s}.
+-- ModifyThreatByPercent(-50, victim) arm is PORTED 2026-10-24 (a random
+-- 100-yd player pick gates the cut, C++ order) and the AttackStart(target) arm has no movement bridge.
+-- Re-arm {7s,20s}.
 local function onAggroSwitch(creature, guid)
+    local st = renatakiState[guid]
+    if not (st and st.invisible) then
+        local candidates = {}
+        for _, p in ipairs(alivePlayersInInstance(creature)) do
+            if creature:GetDistance(p) <= 100 then
+                candidates[#candidates + 1] = p
+            end
+        end
+        if #candidates > 0 then
+            local victim = creature:GetVictim()
+            if victim and creature:GetThreat(victim) ~= 0 then
+                creature:ModifyThreatByPercent(victim, -50)
+            end
+        end
+    end
     schedule(guid, "aggro", math.random(7000, 20000), function()
         onAggroSwitch(creature, guid)
     end)

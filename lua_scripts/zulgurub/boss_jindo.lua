@@ -52,11 +52,10 @@
 -- engine DBC SummonProperties gates (unverifiable from the repo: no
 -- Spell.dbc ships in-tree), and when they do, Jin'do's event-19 twin
 -- arms their loops; the ward constructor's REACT_PASSIVE arm and its
--- AttackStart no-op have no bridge; the teleport -100% threat wipe and
--- the troll formation coordinates are not used (no threat bridge, and
--- the trolls' AttackStart leg has no bridge — a summon-only half would
--- leave idle trolls C++ never produces); no threat model — the hex -80% and
--- teleport -100% ModifyThreatByPercent arms are skipped; summoned
+-- AttackStart no-op have no bridge; the teleport -100% threat wipe is PORTED 2026-10-24 and
+-- the troll formation coordinates are not used (the trolls' AttackStart leg has no bridge — a summon-only half would
+-- leave idle trolls C++ never produces); the hex -80% and
+-- teleport -100% ModifyThreatByPercent arms are PORTED 2026-10-24; summoned
 -- creatures get no Reset/Spawn fire, so the ward's always-on UpdateAI
 -- heal loop and the shade's Reset invisibility are armed from Jin'do's
 -- event-19 summon twin instead of the combat-lifecycle events.
@@ -144,13 +143,16 @@ local function onHealingWard(creature, guid)
 end
 
 -- C++ EVENT_HEX: triggered DoCast(victim, 24053) (nil-victim tick casts
--- nothing); the -80% threat arm has no bridge — skipped.
+-- nothing); the -80% threat arm is PORTED 2026-10-24 (gate + cut after the cast).
 -- Re-arm {12s,20s} unconditional (C++ schedules outside the target
 -- gate).
 local function onHex(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_HEX, true)
+        if creature:GetThreat(victim) ~= 0 then
+            creature:ModifyThreatByPercent(victim, -80)
+        end
     end
     schedule(guid, "hex", math.random(12000, 20000), function()
         onHex(creature, guid)
@@ -172,8 +174,9 @@ local function onDelusions(creature, guid)
 end
 
 -- C++ EVENT_TELEPORT: random 100-yd player -> DoTeleportPlayer to
--- TeleportLoc (boss_jindo.cpp), then the -100% threat wipe and the 10
--- sacrificed-troll summons (no threat/summon bridges — skipped).
+-- TeleportLoc (boss_jindo.cpp), then the -100% threat wipe (PORTED 2026-10-24:
+-- victim-gated, target cut, C++ order) and the 10 sacrificed-troll summons
+-- (skipped — AttackStart leg has no bridge).
 -- Re-arm {15s,23s} unconditional; nil-target tick teleports nothing.
 local TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O =
     -11583.7783, -1249.4278, 77.5471, 4.745
@@ -181,6 +184,9 @@ local function onTeleport(creature, guid)
     local target = randomPlayer100(creature)
     if target then
         target:TeleportNear(TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O)
+        if creature:GetThreat(creature:GetVictim()) ~= 0 then
+            creature:ModifyThreatByPercent(target, -100)
+        end
     end
     schedule(guid, "teleport", math.random(15000, 23000), function()
         onTeleport(creature, guid)
