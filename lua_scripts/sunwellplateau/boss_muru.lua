@@ -56,9 +56,9 @@
 -- the EnterEvadeMode
 -- entropius relay are blocked on the instance-script/cross-creature
 -- bridges). The
--- SetCombatMovement(false) constructor arm has no movement
--- bridge — Muru never moves in this model (C++-exact, since it
--- never schedules movement). Entropius (25840). OnReset(23):
+-- SetCombatMovement(false) constructor arm PORTED in muruEnterCombat
+-- (boss_muru.cpp:237; the stale "no movement bridge" claim is
+-- retracted — Muru never moves in this model, C++-exact). Entropius (25840). OnReset(23):
 -- triggered self-cast entropius cosmetic spawn 46223 (C++-exact;
 -- the _Reset instance bookkeeping is blocked). OnEnterCombat(1):
 -- 2s one-shot: DoResetPortals (100yd grid scan of entry 25770 ->

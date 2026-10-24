@@ -46,16 +46,12 @@
 -- (arugal precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_SPAWN is PORTED (spawnTick — the stale "summon STRAND
--- absent" claim is retracted for this one-shot summon leg; the
--- summoned mushroom AIs stay unported).
--- EVENT_RESPAWN — _mushroomsDeque dead-mushroom position re-spawn
--- machine (40-60s repeat): unported (dead-mushroom position
--- bookkeeping has no cross-AI bridge).
+-- absent" claim is retracted for this one-shot summon leg).
+-- EVENT_RESPAWN is PORTED (respawnTick — ev21 deque + 40-60s repeat,
+-- amanitarSummonedDied below).
 -- JustSummoned summons.Summon leg: moot in Lua (no summon-list
 -- container; the spawnTick SummonCreature calls arm the timer via
 -- the Eluna spawn type directly).
--- SummonedCreatureDies mushroom-position bookkeeping (into the
--- deque the EVENT_RESPAWN leg reads) — cross-AI bridge absent.
 -- EnterEvadeMode — summons.DespawnAll (summon-lifecycle STRAND
 -- absent — the old "no despawn bridge (terestian precedent)" was
 -- stale: creature:Despawn() IS bridged (lua_creature_events.go:236),
@@ -72,36 +68,24 @@
 -- leg (SPELL_MINI 57055) is PORTED via stripMiniAuras (the
 -- includePets/includeControlled legs have no pet/controlled iteration
 -- bridge — stay out).
--- npc_amanitar_mushrooms — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
--- (30391 NPC_HEALTHY_MUSHROOM / 30435 NPC_POISONOUS_MUSHROOM —
--- ahnkahet.h kalecgos pass): zero registration. Reset leg —
--- SetReactState(REACT_PASSIVE) (SetReactState IS bridged —
--- frozen_core precedent, lua_creature_events.go:524) +
--- SetDisplayId(Modelid2) (display bridge live 2026-10-20 — the
--- blocker is the unbridged Modelid2 VALUE bearer: no
--- GetCreatureTemplate().Modelid2 in Lua) + DoCastSelf triplet
--- (Putrid Mushroom 31690 / Shrink 31691 triggered / Grow 57059
--- triggered) + the healthy/poisonous visual-aura self-cast
--- (56740 / 56741) + the 800ms re-Grow scheduler (CreateLuaEvent
--- one-shot): the Reset leg stays out — the npc_amanitar_mushrooms
--- Reset arms (SetReactState/SetDisplayId/DoCastSelf triplet) are
--- documented here only because the summoned mushroom AI has no
--- registration yet (no summon-AI bridge, not no summon bridge:
--- the EVENT_SPAWN SummonCreature leg is ported above). The
--- MoveInLineOfSight player-proximity poison leg (2.0f, _active
--- latch): target RemoveAurasDueToSpell(Potent Fungus 56648)
--- (player:RemoveAura IS bridged — engine/world/lua_player.go:219; the
--- old "no aura-removal bridge (aeranas precedent)" claim is stale),
--- DoCastAOE(Poisonous
--- Mushroom Poison Cloud 57061) (stays out: summon STRAND absent),
--- SetObjectScale(0.1f) (stays out: summon STRAND absent — the
--- scale bridge itself exists, creature:SetScale), DespawnOrUnsummon(4s)
--- (stale "no despawn bridge" retracted — creature:Despawn() is
--- bridged, lua_creature_events.go:214; the proximity + summon legs
--- are the true blockers). JustDied healthy
--- leg: DoCastAOE(Potent Fungus 56648, triggered) (stays out:
--- behind the unbridged summon STRAND). Joins the
--- entry-verifiable-but-bridge-blocked queue.
+-- npc_amanitar_mushrooms (30391 NPC_HEALTHY_MUSHROOM / 30435
+-- NPC_POISONOUS_MUSHROOM — ahnkahet.h kalecgos pass) — PORTED
+-- 2026-10-24 via the summoner-ev19 vehicle: Reset leg —
+-- SetReactState(REACT_PASSIVE) + SetDisplayId(Modelid2 via
+-- creature:GetTemplateModelId(2) — the old "unbridged Modelid2 VALUE
+-- bearer" claim was stale) + DoCastSelf triplet (Putrid Mushroom
+-- 31690 / Shrink 31691 triggered / Grow 57059 triggered) +
+-- healthy/poisonous visual-aura self-cast (56740 / 56741) + the
+-- 800ms re-Grow one-shot (amanitarJustSummoned); JustDied healthy
+-- leg — DoCastAOE(Potent Fungus 56648, triggered) — entry-registered
+-- (mushroomDied, event 4). The MoveInLineOfSight player-proximity
+-- poison leg (2.0f, _active latch) stays out: ev27 fires only from
+-- the aggro-engage branch and passive mushrooms never engage;
+-- target RemoveAurasDueToSpell(Potent Fungus 56648) (player:RemoveAura
+-- IS bridged), DoCastAOE(Poisonous Mushroom Poison Cloud 57061),
+-- SetObjectScale(0.1f) (scale bridge exists, creature:SetScale),
+-- DespawnOrUnsummon(4s) (creature:Despawn() bridged) all ride the
+-- unported proximity trigger out.
 -- spell_amanitar_potent_fungus — AuraScript (56648 Potent Fungus:
 -- on-apply, if the target HasAura(Mini 57055) remove it and drop
 -- the aura): no SpellScript/AuraScript binding bridge (razelikh
@@ -117,6 +101,12 @@ local SPELL_MINI = 57055
 local SPELL_ENTANGLING_ROOTS = 57095
 local SPELL_VENOM_BOLT_VOLLEY = 57088
 local SPELL_REMOVE_MUSHROOM_POWER = 57283
+local SPELL_POTENT_FUNGUS = 56648
+local SPELL_POISONOUS_MUSHROOM_VISUAL_AURA = 56741
+local SPELL_POWER_MUSHROOM_VISUAL_AURA = 56740
+local SPELL_PUTRID_MUSHROOM = 31690
+local SPELL_GROW = 57059
+local SPELL_SHRINK = 31691
 
 -- boss_amanitar.cpp :52-82 (ahnkahet.h NPC_HEALTHY_MUSHROOM 30391,
 -- NPC_POISONOUS_MUSHROOM 30435).
@@ -158,6 +148,8 @@ local MUSHROOM_POSITIONS = {
 }
 
 local timers = {}
+
+local mushroomDeque = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -287,15 +279,90 @@ end
 -- fires once, 1s after engage; for each of the 32 MushroomPositions,
 -- SummonCreature(roll_chance_i(40) ? NPC_HEALTHY_MUSHROOM 30391 :
 -- NPC_POISONOUS_MUSHROOM 30435, pos, TEMPSUMMON_CORPSE_TIMED_DESPAWN
--- Eluna type 5, 4s). Delta: summoned mushroom AI is unported — the
--- summons are inert (the npc_amanitar_mushrooms Reset proximity
--- poison machine needs MoveInLineOfSight etc.).
+-- Eluna type 5, 4s). The summoned mushrooms' Reset legs ride the
+-- summoner ev19 below (amanitarJustSummoned); only the proximity
+-- poison machine (MoveInLineOfSight) stays out.
 local function spawnTick(creature, guid)
     for _, pos in ipairs(MUSHROOM_POSITIONS) do
         local entry = (math.random(1, 100) <= 40)
             and NPC_HEALTHY_MUSHROOM or NPC_POISONOUS_MUSHROOM
         creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 4000)
     end
+end
+
+-- C++ npc_amanitar_mushrooms::Reset (boss_amanitar.cpp:203-222) via the
+-- summoner ev19 (svalna/anubarak precedent): a summoned mushroom's own
+-- Reset never fires in Go (summonTempCreature fires no OnReset), so the
+-- Reset legs land here at summon time. The stale "unbridged Modelid2
+-- VALUE bearer" claim is retracted: GetTemplateModelId(2) is the bearer
+-- (anubarak burrow precedent).
+local function amanitarJustSummoned(_, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry ~= NPC_HEALTHY_MUSHROOM and entry ~= NPC_POISONOUS_MUSHROOM then
+        return
+    end
+    summoned:SetReactState(0) -- REACT_PASSIVE
+    summoned:SetDisplayId(summoned:GetTemplateModelId(2))
+    summoned:CastSpell(summoned, SPELL_PUTRID_MUSHROOM)
+    summoned:CastSpell(summoned, SPELL_SHRINK, true)
+    summoned:CastSpell(summoned, SPELL_GROW, true)
+    if entry == NPC_HEALTHY_MUSHROOM then
+        summoned:CastSpell(summoned, SPELL_POWER_MUSHROOM_VISUAL_AURA)
+    else
+        summoned:CastSpell(summoned, SPELL_POISONOUS_MUSHROOM_VISUAL_AURA)
+    end
+    local sguid = summoned:GetGUID()
+    schedule(sguid, "grow", 800, function()
+        if not summoned:IsDead() then
+            summoned:CastSpell(summoned, SPELL_GROW, true)
+        end
+    end)
+end
+
+-- C++ npc_amanitar_mushrooms::JustDied (boss_amanitar.cpp:248-252): a
+-- healthy mushroom casts Potent Fungus on death. Entry-registered: the
+-- kill funnel fires event 4 by entry for summoned creatures too.
+local function mushroomDied(event, creature)
+    if creature:GetEntry() == NPC_HEALTHY_MUSHROOM then
+        creature:CastSpell(creature, SPELL_POTENT_FUNGUS, true)
+    end
+end
+
+-- C++ boss_amanitar::SummonedCreatureDies (boss_amanitar.cpp:125-129) +
+-- EVENT_RESPAWN (boss_amanitar.cpp:172-177): dead summons' positions queue
+-- in _mushroomsDeque; every 40-60s the queue drains via SpawnMushroom
+-- (40% healthy roll, type 5, 4s). ev21 args (event, creature, summon,
+-- killer) per the anomalus precedent. The deque is deliberately NOT
+-- cleared on leave/died/reset: C++ keeps it across evade (summons
+-- despawn without dying), and EVENT_SPAWN re-fills the field on
+-- re-engage.
+local function amanitarSummonedDied(event, creature, summon, killer)
+    local entry = summon:GetEntry()
+    if entry ~= NPC_HEALTHY_MUSHROOM and entry ~= NPC_POISONOUS_MUSHROOM then
+        return
+    end
+    local guid = creature:GetGUID()
+    local deque = mushroomDeque[guid]
+    if not deque then
+        deque = {}
+        mushroomDeque[guid] = deque
+    end
+    deque[#deque + 1] = {summon:GetX(), summon:GetY(), summon:GetZ(), summon:GetO()}
+end
+
+local function respawnTick(creature, guid)
+    local deque = mushroomDeque[guid]
+    if deque then
+        for _, pos in ipairs(deque) do
+            local entry = (math.random(1, 100) <= 40)
+                and NPC_HEALTHY_MUSHROOM or NPC_POISONOUS_MUSHROOM
+            creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 4000)
+        end
+        mushroomDeque[guid] = {}
+    end
+    schedule(guid, "respawn", math.random(40000, 60000), function()
+        respawnTick(creature, guid)
+    end)
 end
 
 local function amanitarEnterCombat(event, creature, target)
@@ -307,6 +374,9 @@ local function amanitarEnterCombat(event, creature, target)
     -- EVENT_RESPAWN 40-60s (summon machine — unbridged).
     schedule(guid, "spawn", 1000, function()
         spawnTick(creature, guid)
+    end)
+    schedule(guid, "respawn", math.random(40000, 60000), function()
+        respawnTick(creature, guid)
     end)
     schedule(guid, "root", math.random(5000, 9000), function()
         rootTick(creature, guid)
@@ -371,3 +441,7 @@ RegisterCreatureEvent(ENTRY_AMANITAR, 1, amanitarEnterCombat)
 RegisterCreatureEvent(ENTRY_AMANITAR, 2, amanitarLeaveCombat)
 RegisterCreatureEvent(ENTRY_AMANITAR, 4, amanitarDied)
 RegisterCreatureEvent(ENTRY_AMANITAR, 23, amanitarReset)
+RegisterCreatureEvent(ENTRY_AMANITAR, 19, amanitarJustSummoned)
+RegisterCreatureEvent(ENTRY_AMANITAR, 21, amanitarSummonedDied)
+RegisterCreatureEvent(NPC_HEALTHY_MUSHROOM, 4, mushroomDied)
+RegisterCreatureEvent(NPC_POISONOUS_MUSHROOM, 4, mushroomDied)

@@ -146,7 +146,8 @@
 -- is bridged 2026-10-24, but the binding is not), so a port would fabricate
 -- blanket immunity — unmodeled) and the threat retarget/owner-
 -- death
--- arms (threat-scale bridged 2026-10-24; AddThreat/owner binding unbridged) are unmodeled; the JustDied whisper-
+-- arms (threat-scale + AddThreat bridged 2026-10-24; the owner binding
+-- (SetGUID victim) unbridged) are unmodeled; the JustDied whisper-
 -- aura removal is cross-creature blocked. OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no instance-

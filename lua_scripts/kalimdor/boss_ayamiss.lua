@@ -130,8 +130,8 @@ local function onPoisonStinger(creature, guid)
 end
 
 -- C++ EVENT_PARALYZE: SelectTarget Random -> DoCast(25725), 15s.
--- SelectTarget has no bridge; random player via GetPlayersInWorld
--- (maiden_of_virtue convention).
+-- Random-player pick via GetPlayersInWorld (maiden_of_virtue
+-- convention); the old "SelectTarget has no bridge" phrasing is stale.
 local function onParalyze(creature, guid)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}

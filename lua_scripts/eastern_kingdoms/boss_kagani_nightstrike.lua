@@ -53,19 +53,18 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - The vanish machine (DoCast(me, SPELL_VANISH 44290) 2000ms init
---   -> 30000ms loop; SelectTarget(Random, 0) -> ResetThreatList() +
---   AddThreat(unit, 1000.0f), InVanish = true, Wait_Timer = 10000)
---   — re-keyed 2026-10-15 (timer doctrine): the timer leg bridges
---   (CreateLuaEvent is live) but the payload gates on SelectTarget
---   + threat-list bridges (the_beast / doomwalker precedent —
---   absent), so the machine stays out; the stale "no timer bridge"
---   claim is corrected.
--- - The InVanish leg (Wait_Timer -> DoCastVictim(SPELL_BACKSTAB
---   15657, true) + DoCastVictim(SPELL_KIDNEY_SHOT 27615, true) +
---   me->SetVisible(true), InVanish = false; melee skipped while
---   InVanish) — rides on the vanish machine's bridges; no
---   creature SetVisible bridge on the Lua surface either.
+-- - The vanish machine is PORTED 2026-10-24 (onVanish): DoCast(me,
+--   SPELL_VANISH 44290) 2000ms init -> 30000ms loop; SelectTarget
+--   (Random, 0) via GetAITargets random pick -> ResetAllThreat() +
+--   AddThreat(unit, 1000.0f); the stale "SelectTarget + threat-list
+--   bridges absent" claim is retracted (both bridged, as is
+--   SetVisible). The vanish cast itself is packet-visual in Go, so
+--   the reveal SetVisible(true) is a restore-only no-op.
+-- - The InVanish leg is PORTED 2026-10-24 (onVanishReveal):
+--   Wait_Timer 10000 -> DoCastVictim(SPELL_BACKSTAB 15657, true) +
+--   DoCastVictim(SPELL_KIDNEY_SHOT 27615, true) + SetVisible(true) +
+--   InVanish = false; melee skipped while InVanish via
+--   SetMeleeAttack(false)/(true) (nethekurse precedent).
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -77,13 +76,16 @@
 --   instance->GetCreature — no instance bridge.
 -- - Common-AI Reset: AcquireGUIDs (instance bridge) and the respawn-
 --   of-Delrissa leg (instance bridge); me->SetVisible(true) on the
---   Reset override shares the missing SetVisible bridge with the
---   vanish leg.
--- - Common-AI ResetThreatTimer (urand(5000, 20000) -> ResetThreatList)
---   — no threat-list bridge.
+--   Reset override is PORTED in onCombatEnd (shared 2/23 handler).
+-- - Common-AI ResetThreatTimer is PORTED 2026-10-24
+--   (onThreatReset): urand(5000, 20000) -> ResetAllThreat() + re-arm;
+--   the stale "no threat-list bridge" claim is retracted.
 local SPELL_GOUGE = 12540
 local SPELL_KICK = 27613
 local SPELL_EVISCERATE = 27611
+local SPELL_VANISH = 44290
+local SPELL_BACKSTAB = 15657
+local SPELL_KIDNEY_SHOT = 27615
 local SPELL_HEALING_POTION = 15503
 
 local ENTRY_KAGANI_NIGHTSTRIKE = 24557
@@ -137,10 +139,58 @@ local function onEviscerate(creature, guid)
     schedule(guid, "eviscerate", 4000, function() onEviscerate(creature, guid) end)
 end
 
+-- C++ InVanish Wait_Timer expiry (:541-550): DoCastVictim(BACKSTAB,
+-- true) + DoCastVictim(KIDNEY_SHOT, true) + SetVisible(true) +
+-- InVanish = false (SetMeleeAttack(true) twin). The casts read the
+-- current victim (DoCastVictim); the visible/melee restores run
+-- unconditionally, as in C++.
+local function onVanishReveal(creature, guid)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, SPELL_BACKSTAB, true)
+        creature:CastSpell(victim, SPELL_KIDNEY_SHOT, true)
+    end
+    creature:SetVisible(true)
+    creature:SetMeleeAttack(true)
+end
+
+-- C++ boss_kagani_nightstrikeAI::UpdateAI Vanish_Timer
+-- (boss_priestess_delrissa.cpp:526-550): 2000ms init, 30000ms loop —
+-- DoCast(me, SPELL_VANISH) + SelectTarget(Random, 0) ->
+-- ResetThreatList() + AddThreat(unit, 1000.0f) if any + InVanish =
+-- true (SetMeleeAttack(false) twin: the engine combat-tick swing
+-- gate honors NoMeleeAttack, creaturemotion.go:3261) + Wait_Timer =
+-- 10000. The threat pick is GetAITargets() random (Random,0 takes
+-- any threat entry, victim included — no playerOnly filter in C++).
+local function onVanish(creature, guid)
+    creature:CastSpell(creature, SPELL_VANISH)
+    local targets = creature:GetAITargets()
+    creature:ResetAllThreat()
+    if #targets > 0 then
+        creature:AddThreat(targets[math.random(#targets)], 1000)
+    end
+    creature:SetMeleeAttack(false)
+    schedule(guid, "vanishReveal", 10000, function() onVanishReveal(creature, guid) end)
+    schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
+end
+
+-- C++ boss_priestess_lackey_commonAI::UpdateAI ResetThreatTimer
+-- (boss_priestess_delrissa.cpp:458-462): urand(5000, 20000) init
+-- (Initialize, :368) -> ResetThreatList() + re-arm urand(5000,
+-- 20000). ResetAllThreat is the exact twin (values zeroed, entries
+-- kept, no evade — lua_creature_events.go:583).
+local function onThreatReset(creature, guid)
+    creature:ResetAllThreat()
+    schedule(guid, "threatReset", math.random(5000, 20000), function() onThreatReset(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     usedPotion[guid] = false
+    creature:SetMeleeAttack(true)
+    schedule(guid, "vanish", 2000, function() onVanish(creature, guid) end)
+    schedule(guid, "threatReset", math.random(5000, 20000), function() onThreatReset(creature, guid) end)
     schedule(guid, "gouge", 5500, function() onGouge(creature, guid) end)
     schedule(guid, "kick", 7000, function() onKick(creature, guid) end)
     schedule(guid, "eviscerate", 6000, function() onEviscerate(creature, guid) end)
@@ -148,6 +198,13 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset override (boss_priestess_delrissa.cpp:511-517):
+    -- Initialize() + SetVisible(true) + commonAI::Reset(); the
+    -- Initialize leg is the cancel/re-arm above, the visible leg is
+    -- here (shared 2/23 handler: leave-combat restores visibility too,
+    -- vacuous in Go since the vanish cast never hides her).
+    creature:SetVisible(true)
+    creature:SetMeleeAttack(true)
 end
 
 local function onDamageTaken(_, creature, _, damage)

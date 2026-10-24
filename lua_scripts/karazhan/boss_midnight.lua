@@ -35,7 +35,8 @@
 -- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
 -- but there is no handle to the attumen creature from the midnight kill arm,
 -- so it broadcasts untargeted. Attumen's JustDied Talk(SAY_DEATH) is kept; midnight->KillSelf
--- has no bridge. The EMOTE_MOUNT_UP mount-emote arm is PORTED in
+-- stays out on the SetGUID midnight-handle binding (creature:Kill() IS bridged,
+-- lua_creature_events.go:1027 — the handle, not the kill, is missing). The EMOTE_MOUNT_UP mount-emote arm is PORTED in
 -- attumenSpellHit below (2026-10-21): the stale "no GUID->creature
 -- bridge" claim is retracted — event 14 passes the midnight creature
 -- as the caster arg. EnterEvadeMode despawns now

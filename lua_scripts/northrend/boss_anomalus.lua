@@ -77,8 +77,9 @@
 -- npc_chaotic_rift — entry-unverifiable (26918, local-enum-only) — no
 -- registration, no lua; its arms are documented here only:
 -- SetCombatMovement(false); Reset — SetDisplayId(Modelid2) +
--- DoCast(me, SPELL_ARCANEFORM 48019) — no model-id / no instance-less
--- self-cast-on-reset surface; UpdateAI uiChaoticEnergyBurstTimer —
+-- DoCast(me, SPELL_ARCANEFORM 48019) — the display leg IS bridgeable
+-- (GetTemplateModelId(2)) but the rift entry is unverifiable, so no
+-- registration; the shield-gated casts ride the instance gate out; UpdateAI uiChaoticEnergyBurstTimer —
 -- SelectTarget(Random, 0) -> DoCast(SPELL_CHAOTIC_ENERGY_BURST 47688 /
 -- charged 47737 when Anomalus via instance->GetGuidData(DATA_ANOMALUS)
 -- HasAura(SPELL_RIFT_SHIELD)), 1s init, 1s repeat — no instance /

@@ -71,9 +71,10 @@
 -- the unported EVENT_SUMMON_NERUBIAN spell-summon, so the arm fires
 -- only if a future path summons via anubarak); JustSummoned
 -- NPC_SPIKE 34660 leg —
--- SelectTarget(Random,0,0.0f,true) -> EngageWithTarget (no
--- random-target SelectTarget bridge — cairne/kazzak precedent) +
--- Talk(EMOTE_SPIKE 0, target) (rides the unbridged leg).
+-- SelectTarget(Random,0,0.0f,true) -> EngageWithTarget (random-target
+-- pick IS bridged — cairne/kazzak precedent; sole blocker is
+-- EngageWithTarget, no bridge) + Talk(EMOTE_SPIKE 0, target) (rides
+-- the unbridged leg).
 -- boss_anubarak_trial JustEngagedWith — RemoveFlag(
 -- NON_ATTACKABLE | NOT_SELECTABLE) PORTED via the RemoveFlag bridge
 -- (engine/world/lua_creature_events.go; the old "no flag bridge —
