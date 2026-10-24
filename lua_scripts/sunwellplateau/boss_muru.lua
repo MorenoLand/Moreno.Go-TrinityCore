@@ -90,7 +90,9 @@
 -- kalecgos teleport-back event-14 precedent). The JustSummoned
 -- arm (triggered 45989 summoner visual + 1.5s-delayed self-cast
 -- 45988 summon-void-sentinel, driving the void-sentinel chain)
--- is summon-blocked — unmodeled. Dark Fiend (25744). OnSpawn(5):
+-- is PORTED in portalJustSummoned below (ev19; the 45978 summon
+-- cast already lives in portalSpellHit, and the spell-summon
+-- EffectSummonType bridge fires ev19 — broggok precedent). Dark Fiend (25744). OnSpawn(5):
 -- triggered self-cast darkfiend skin 45934 (C++-exact — the
 -- constructor/Initialize arm, which has no Reset() override (the
 -- class never re-casts it on evade); the SetDisplayId(Modelid2) arm
@@ -176,6 +178,8 @@ local SPELL_BLACKHOLE = 46282
 local SPELL_OPEN_PORTAL = 45977
 local SPELL_OPEN_PORTAL_2 = 45976
 local SPELL_SUMMON_VOID_SENTINEL_SUMMONER = 45978
+local SPELL_SUMMON_VOID_SENTINEL_SUMMONER_VISUAL = 45989
+local SPELL_SUMMON_VOID_SENTINEL = 45988
 local SPELL_TRANSFORM_VISUAL_MISSILE = 46205
 local SPELL_DARKFIEND_SKIN = 45934
 local SPELL_DARKFIEND_DAMAGE = 45944
@@ -400,6 +404,19 @@ end
 
 RegisterCreatureEvent(ENTRY_PORTAL, 14, portalSpellHit)
 RegisterCreatureEvent(ENTRY_PORTAL, 23, portalReset)
+
+-- C++ npc_muru_portalAI::JustSummoned (boss_muru.cpp:349-354): the portal
+-- casts triggered 45989 on the summon; 1.5s later the summon casts
+-- triggered 45988 on itself (VoidSpawnSummon BasicEvent; C++ casts on
+-- nullptr, self-cast is the Lua lowering). No entry gate in C++.
+local function portalJustSummoned(event, creature, summon)
+    creature:CastSpell(summon, SPELL_SUMMON_VOID_SENTINEL_SUMMONER_VISUAL, true)
+    schedule(summon:GetGUID(), "voidspawnsummon", 1500, function()
+        summon:CastSpell(summon, SPELL_SUMMON_VOID_SENTINEL, true)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_PORTAL, 19, portalJustSummoned)
 
 -- ================= Dark Fiend (25744) =================
 
