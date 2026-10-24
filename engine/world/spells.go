@@ -11774,7 +11774,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// path; the creature-caster twin fires in castCreatureSpellInternal
 		// (boss_ai.go).
 		for _, effectTarget := range hitTargets {
-			if uint16(effectTarget>>48) != 0xF130 {
+			// Pet (0xF140) and vehicle (0xF150) GUIDs ride hitTargets
+			// too: the area-enemy sweep iterates every motion in
+			// motionMap (pet motions are keyed by petGUID), explicit
+			// targets adopt any fitting-mask wire GUID, and
+			// TARGET_UNIT_PET appends the caster's PetGUID — and
+			// findCreatureMotion resolves them by direct map hit, like
+			// the unfiltered creature-caster twin in boss_ai.go. The old
+			// 0xF130-only filter dropped every pet hit.
+			high := uint16(effectTarget >> 48)
+			if high != 0xF130 && high != 0xF140 && high != 0xF150 {
 				continue
 			}
 			if motion := s.findCreatureMotion(effectTarget); motion != nil {
