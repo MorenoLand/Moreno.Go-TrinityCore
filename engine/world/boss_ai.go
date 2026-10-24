@@ -2140,7 +2140,7 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		if hasDest {
 			x, y, z = dx, dy, dz
 		}
-		summoned := s.summonTempCreature(ctx, m, entry, x, y, z, m.Orientation, summonType, despawnMs)
+		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, x, y, z, m.Orientation, summonType, despawnMs)
 		if summoned == nil {
 			continue
 		}

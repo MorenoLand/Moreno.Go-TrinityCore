@@ -20,8 +20,10 @@
 --    unbridged), at_sholazar_waygate (:214-256; SHOLAZAR_TO_UNGORO 52056 /
 --    UNGORO_TO_SHOLAZAR 52057 on AT_SHOLAZAR 5046 / AT_UNGORO 5047, gated on
 --    quest statuses 12613/12559/13956).
--- 2. no player:SummonCreature / FindNearestCreature bridge (method lists
---    above): at_scent_larkorwi (:192-212; quest 4291 + SummonCreature(9683)),
+-- 2. player:SummonCreature IS bridged since 2026-10-24, but the arms
+--    below stay out behind quest-status gates (+ FindNearestCreature on
+--    the player surface still unbridged): at_scent_larkorwi (:192-212;
+--    quest 4291 + SummonCreature(9683)),
 --    at_nats_landing (:261-293; HasAura(42644) bridgeable but quest 11209 +
 --    SummonCreature(23928)+AttackStart not), at_sentry_point (:298-326;
 --    quest 1265 + SummonCreature(4967)+SPELL_TELEPORT_VISUAL 799 cast), and

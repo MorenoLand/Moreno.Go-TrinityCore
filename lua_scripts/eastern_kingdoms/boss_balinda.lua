@@ -35,10 +35,13 @@
 -- Unmodeled: EVENT_SUMMON_WATER_ELEMENTAL (3s init -> 50s; summons the
 -- water elemental when summons.empty()) + JustSummoned
 -- (AttackStart(SelectTarget(Random)) + SetFaction + GUID store) +
--- SummonedCreatureDespawn + JustDied summons.DespawnAll — no summon
--- model on the Lua surface (no SummonCreature/AttackStart/SetFaction
--- bridges — phoenix precedent); the elemental never enters the world,
--- so its timer chain is documented-only rather than a no-op dead loop.
+-- SummonedCreatureDespawn + JustDied summons.DespawnAll — creature
+-- SummonCreature + SetFaction ARE bridged now, but the arm still stays
+-- out: the summon arrives via spell-cast 45067 (no engine spell-summon
+-- data footprint) and JustSummoned's AttackStart leg has no bridge
+-- (boss_ai.go) — a SetFaction-only half would leave an idle elemental
+-- C++ never produces (kodo half-pair precedent); the elemental never
+-- enters the world, so its timer chain stays documented-only.
 -- Unmodeled: EVENT_CHECK_RESET (home-position 2D distance > 50yd ->
 -- EnterEvadeMode + Talk(SAY_EVADE=1), plus the elemental's leash arm) —
 -- the leash needs EnterEvadeMode (no bridge); creature:GetHomePosition()

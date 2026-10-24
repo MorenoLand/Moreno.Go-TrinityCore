@@ -73,8 +73,8 @@
 --   by new go_brazier_of_the_herald): me->UseDoorOrButton() is ported via
 --   go:UseDoorOrButton (bridged, engine/world/lua_objects.go:1113) on the
 --   brazier GO gossip hook (onBrazierGossip); player->SummonCreature(
---   NPC_KIRTONOS, PosSummon[0], TEMPSUMMON_DEAD_DESPAWN, 15min) has no
---   summon bridge — skipped; me->PlayDirectSound(SOUND_SCREECH = 557)
+--   NPC_KIRTONOS, PosSummon[0], TEMPSUMMON_DEAD_DESPAWN, 15min) PORTED
+--   via player:SummonCreature on the same hook; me->PlayDirectSound(SOUND_SCREECH = 557)
 --   is ported via go:PlayDirectSound on the same hook. (The 2026-10-18
 --   "no door bridge" claim was stale; corrected 2026-10-19.)
 
@@ -85,6 +85,7 @@ local EQUIP_NO_CHANGE = 0xFFFFFFFF
 local WEAPON_KIRTONOS_STAFF = 11365
 
 local GO_BRAZIER_OF_THE_HERALD = 175564
+local POS_SUMMON = {315.028, 70.53845, 102.1496, 0.3859715} -- C++ PosSummon[0]
 local SOUND_SCREECH = 557
 
 local SPELL_SWOOP = 18144
@@ -230,16 +231,16 @@ end
 -- (boss_kirtonos_the_herald.cpp:290-294): me->UseDoorOrButton() (bridged,
 -- ported below) + me->PlayDirectSound(SOUND_SCREECH, 0) +
 -- player->SummonCreature(NPC_KIRTONOS, PosSummon[0],
--- TEMPSUMMON_DEAD_DESPAWN, 15min) — skipped: the creature-side
--- summon bridge is live but the C++ summoner is the PLAYER
--- (go_brazier_of_the_heraldAI::OnGossipHello, :293) and there is
--- no player:SummonCreature bridge.
+-- TEMPSUMMON_DEAD_DESPAWN, 15min) — PORTED via player:SummonCreature
+-- (lua_player.go; shares the creature-side summonTempCreature funnel,
+-- no event-19 fire for player summoners).
 -- C++ returns true (handled: native GO use suppressed) == Lua true
 -- (Eluna GOSSIP_EVENT_ON_HELLO: only a Lua false lets native use
 -- proceed; see engine/world/gameobject_hooks.go).
 local function onBrazierGossip(_, player, go)
     go:UseDoorOrButton()
     go:PlayDirectSound(SOUND_SCREECH)
+    player:SummonCreature(ENTRY_KIRTONOS, POS_SUMMON[1], POS_SUMMON[2], POS_SUMMON[3], POS_SUMMON[4], 6, 900000)
     -- C++ go_brazier_of_the_herald::OnGossipHello returns true (handled:
     -- native GO use suppressed). Eluna GOSSIP_EVENT_ON_HELLO polarity
     -- (in-tree GossipHooks.cpp:27-34, GameObject.cpp:1500-1503): a Lua

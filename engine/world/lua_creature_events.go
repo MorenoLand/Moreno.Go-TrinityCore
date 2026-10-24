@@ -64,7 +64,31 @@ func backArcTarget(args []any) (x, y float32, guid uint64, ok bool) {
 // entries return nil (C++ logs and returns null for a missing template).
 // The summon is NOT auto-aggroed: C++ arms call DoZoneInCombat/AttackStart
 // explicitly, so ported arms must do the same.
-func (s *Server) summonTempCreature(ctx context.Context, motion *creatureMotion, entry uint32, x, y, z, o float32, summonType uint8, despawnMs uint32) *creatureMotion {
+// Player summoners (player:SummonCreature) share this funnel with a
+// nil SummonerMotion: no event-19 fire, since players carry no creature AI.
+// tempSummonOrigin is the summoner snapshot summonTempCreature spawns
+// from: creature summoners pass their motion (which also carries the
+// event-19 fire target), player summoners pass session state with a nil
+// SummonerMotion (players carry no creature AI, so no JustSummoned
+// event fires for them — the C++ player-summon arms call no AI hook).
+type tempSummonOrigin struct {
+	Map, InstanceID uint32
+	GUID            uint64
+	X, Y, Z, O      float32
+	Reach           float64
+	SummonerMotion  *creatureMotion
+}
+
+// summonOriginFromMotion snapshots a creature summoner under motionMu.
+// Callers must not hold motionMu: summonTempCreature itself locked it
+// for the same read before this refactor.
+func (s *Server) summonOriginFromMotion(m *creatureMotion) tempSummonOrigin {
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return tempSummonOrigin{Map: m.Map, InstanceID: m.InstanceID, GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, O: m.Orientation, Reach: float64(m.CombatReach), SummonerMotion: m}
+}
+
+func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin, entry uint32, x, y, z, o float32, summonType uint8, despawnMs uint32) *creatureMotion {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return nil
 	}
@@ -73,11 +97,9 @@ func (s *Server) summonTempCreature(ctx context.Context, motion *creatureMotion,
 		"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
 		return nil
 	}
-	s.motionMu.Lock()
-	mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
-	sx, sy, sz, summonerO := motion.X, motion.Y, motion.Z, motion.Orientation
-	reach := float64(motion.CombatReach)
-	s.motionMu.Unlock()
+	mapID, instanceID, ownerGUID := origin.Map, origin.InstanceID, origin.GUID
+	sx, sy, sz, summonerO := origin.X, origin.Y, origin.Z, origin.O
+	reach := origin.Reach
 	// Object.cpp:2059-2062 — the C++ float overload falls back to a
 	// close point (GetClosePoint(combatReach): summoner position
 	// offset by combat reach in facing direction, z = summoner z;
@@ -140,7 +162,9 @@ func (s *Server) summonTempCreature(ctx context.Context, motion *creatureMotion,
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
 	}
-	s.fireCreatureSummoned(ctx, motion, scripting.CreatureEventOnJustSummonedCreature, summoned)
+	if origin.SummonerMotion != nil {
+		s.fireCreatureSummoned(ctx, origin.SummonerMotion, scripting.CreatureEventOnJustSummonedCreature, summoned)
+	}
 	return summoned
 }
 
@@ -1067,7 +1091,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				return nil, err
 			}
 		}
-		summoned := s.summonTempCreature(ctx, motion, entry, x, y, z, o, uint8(summonType), despawnMs)
+		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(motion), entry, x, y, z, o, uint8(summonType), despawnMs)
 		if summoned == nil {
 			return []any{nil}, nil
 		}

@@ -18,13 +18,15 @@
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
 --   * MISSING bridges that block every class here: player:GetQuestStatus,
---     player:GetQuestRewardStatus, player:CastSpell, player:SummonCreature,
+--     player:GetQuestRewardStatus, player:CastSpell,
 --     player:DestroyItemCount, player:HasItemCount (use HasItem/GetItemCount),
 --     player:GetNativeGender, player:IsInSameRaidWith, go:GetGoType,
 --     go:GetOwner, go:CastSpell, go:AddUse, go:SummonCreature,
 --     GetClosestCreatureWithEntry. All verified zero hits in
 --     engine/world/lua_player.go, engine/world/lua_objects.go,
 --     engine/scripting/object.go (2026-10-18).
+--     (2026-10-24: player:SummonCreature landed in lua_player.go; the
+--     classes below stay blocked on their other gates + registration.)
 --   * GO entry IDs come from the C++ tree only; classes whose C++ names no GO
 --     entry const are not registered (DB-side binding, unverifiable).
 --
@@ -52,8 +54,8 @@
 --    player->SummonCreature(17716, 8106.11, -7542.06, 151.775, 3.02598,
 --    TEMPSUMMON_DEAD_DESPAWN, 1min) then AttackStart(player). Returns true
 --    (handled; native use suppressed).
---    Blockers: no player:GetQuestStatus bridge; no player:SummonCreature
---    bridge; no go:GetGoType bridge. DOCUMENTED-ONLY.
+--    Blockers: no player:GetQuestStatus bridge; no go:GetGoType bridge;
+--    no registration. player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -76,7 +78,8 @@
 --     OUT_OF_COMBAT 30s. If summoned creature not hostile: faction -> rep
 --     spell on player: 1011->39456, 935->39457, 942->39460, 933->39474,
 --     989->39475, 970->39476. Returns false (native use continues).
---    Blockers: player:SummonCreature unbridged (go:UseDoorOrButton IS bridged,
+--    Blockers: no registration (no GO entry const); player:SummonCreature
+--    IS bridged since 2026-10-24 (go:UseDoorOrButton IS bridged,
 --    but the summon is the script's observable effect). DOCUMENTED-ONLY.
 -- ============================================================================
 
@@ -86,7 +89,8 @@
 --    Arm: me->UseDoorOrButton(); player->SummonCreature(random of
 --    NpcStasisEntry[] {22825,20888,22827,22826,22828} at GO position,
 --    TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT 30s). Returns false.
---    Blocker: player:SummonCreature unbridged. DOCUMENTED-ONLY.
+--    Blocker: no registration (no GO entry const); player:SummonCreature
+--    IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -105,7 +109,8 @@
 --    Arm: player->SummonCreature(23002, 0,0,0,0, TEMPSUMMON_DEAD_DESPAWN),
 --    then creature->CastSpell(player, 39865, false). Returns false.
 --    (C++ note: implicitTarget=48 spell summon path not implemented, manual
---    summon used.) Blocker: player:SummonCreature unbridged. DOCUMENTED-ONLY.
+--    summon used.) Blocker: no registration (no GO entry const);
+--    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -150,7 +155,8 @@
 --    Arm: if go type == GAMEOBJECT_TYPE_GOOBER,
 --    player->SummonCreature(17830, -369.746, 166.759, -21.50, 5.235,
 --    TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 30s). Returns true (handled).
---    Blockers: player:SummonCreature, go:GetGoType unbridged. DOCUMENTED-ONLY.
+--    Blockers: go:GetGoType unbridged + no registration;
+--    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================

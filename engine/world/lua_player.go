@@ -976,6 +976,58 @@ func (s *session) luaPlayer() *scripting.Object {
 		object := s.nearestGameObject(ctx, state.Map, state.X, state.Y, rangeValue)
 		return []any{object}, nil
 	}
+	// SummonCreature is the player-surface twin of the creature bridge
+	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
+	// the shared summonTempCreature funnel): same (entry, x, y, z, o,
+	// summonType, despawnTimer-ms) signature, same 0-7 type scheme,
+	// unknown entries return nil. No event-19 fire: players carry no
+	// creature AI to receive JustSummoned.
+	methods["SummonCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		summonType := uint32(7)
+		if len(args) > 5 {
+			if summonType, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+			if summonType > 7 {
+				return nil, fmt.Errorf("SummonCreature summonType must be 0-7")
+			}
+		}
+		var despawnMs uint32
+		if len(args) > 6 {
+			if despawnMs, err = luaUint32Arg(args, 6); err != nil {
+				return nil, err
+			}
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		origin := tempSummonOrigin{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID, X: state.X, Y: state.Y, Z: state.Z, O: state.Orientation, Reach: float64(state.CombatReach)}
+		summoned := s.server.summonTempCreature(ctx, origin, entry, x, y, z, o, uint8(summonType), despawnMs)
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaMotionCreature(summoned)}, nil
+	}
 	return &scripting.Object{Type: "Player", Fields: fields, Methods: methods}
 }
 
