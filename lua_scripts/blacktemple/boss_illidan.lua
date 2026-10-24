@@ -273,6 +273,8 @@ local ENTRY_FLAME_OF_AZZINOTH = 22997
 local ENTRY_DB_TARGET = 23070
 local ENTRY_MAIEV = 23197
 local ENTRY_BLADE_OF_AZZINOTH = 22996
+local ENTRY_PARASITIC_SHADOWFIEND = 23498 -- black_temple.h:110
+local SPELL_SUMMON_TEAR_OF_AZZINOTH = 39855 -- boss_illidan.cpp:109
 local ENTRY_DEMON_FIRE = 23069
 local ENTRY_BLAZE = 23259
 local ENTRY_FLAME_CRASH = 23336
@@ -1287,10 +1289,48 @@ local function bladeReset(event, creature)
     -- Reset() never runs on death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_BIRTH, true)
+        -- C++ blade Reset() 3s leg (:1447-1451): DoCastSelf(
+        -- SPELL_SUMMON_TEAR_OF_AZZINOTH) — unconditional, no
+        -- instance gate on the cast itself. The nested 500ms
+        -- AZZINOTH_CHANNEL leg on the flame GUID stays out: the
+        -- flame GUID capture rides the blade's JustSummoned, and
+        -- the spell-effect-summon capture is unverified.
+        local guid = creature:GetGUID()
+        schedule(guid, "bladeTear", 3000, function()
+            creature:CastSpell(creature, SPELL_SUMMON_TEAR_OF_AZZINOTH)
+        end)
     end
 end
 
+local function bladeClear(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 23, bladeReset)
+RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 2, bladeClear)
+RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 4, bladeClear)
+
+-- C++ npc_parasitic_shadowfiend::Reset (:1380-1391): instance
+-- boss-state gate + illidan->AI()->JustSummoned link stay out
+-- (instance bridge), but the 2s leg — REACT_AGGRESSIVE +
+-- DoZoneInCombat — ports: the fiend only exists when summoned
+-- mid-fight, so the leg is dormant until then. The DoAction
+-- ACTION_RESUME_COMBAT re-arm stays out (no DoAction bridge).
+local function parasiticShadowfiendReset(event, creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "shadowfiendAggressive", 2000, function()
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+        creature:DoZoneInCombat()
+    end)
+end
+
+local function parasiticShadowfiendClear(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_PARASITIC_SHADOWFIEND, 23, parasiticShadowfiendReset)
+RegisterCreatureEvent(ENTRY_PARASITIC_SHADOWFIEND, 2, parasiticShadowfiendClear)
+RegisterCreatureEvent(ENTRY_PARASITIC_SHADOWFIEND, 4, parasiticShadowfiendClear)
 
 --
 -- Illidan generic fire (23069 demon fire / 23259 blaze /

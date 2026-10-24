@@ -287,15 +287,13 @@ local function soulDied(event, creature, killer)
     soulClear(creature:GetGUID())
 end
 
--- C++ npc_enslaved_soul::DamageTaken: lethal damage is zeroed
--- (damage = 0, C++-exact), and once per soul the soul-release
--- cast fires. The AttackStop/MotionMaster-clear arms and the
--- 500ms-delayed KillSelf arm stay out on the cross-creature DoAction
--- broadcast (creature:Kill() is bridged now, but the arm rides the
--- reliquary's summons.DoAction order — no bearer); the REACT_PASSIVE arm
--- is the Reset arm — PORTED 2026-10-20, creature:SetReactState;
--- the soul survives at its pre-lethal
--- health after the release cast.
+-- C++ npc_enslaved_soul::DamageTaken (:625-634): lethal damage is zeroed
+-- (damage = 0, C++-exact), and once per soul HandleSoulRelease fires
+-- directly from DamageTaken (not only via the reliquary DoAction path):
+-- REACT_PASSIVE + AttackStop + DoCastSelf(SOUL_RELEASE) + KillSelf at
+-- 500ms — all ported below. The MotionMaster-clear leg stays out
+-- (no bridge); the reliquary DoAction trigger itself stays
+-- instance-blocked, but it is a separate trigger from this one.
 local function soulDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
@@ -311,8 +309,12 @@ local function soulDamageTaken(event, creature, attacker, damage)
             -- 2026-10-19; the Go bridge drops the victim +
             -- SMSG_ATTACK_STOP) -> DoCastSelf(SPELL_SOUL_RELEASE)
             -- defaults non-triggered (UnitAI.h:320, UnitAI.cpp:165).
+            creature:SetReactState(0) -- REACT_PASSIVE (HandleSoulRelease order)
             creature:AttackStop()
             creature:CastSpell(creature, SPELL_SOUL_RELEASE)
+            schedule(guid, "soulKillSelf", 500, function()
+                creature:Kill()
+            end)
         end
         return false, 0
     end

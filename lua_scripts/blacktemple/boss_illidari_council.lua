@@ -543,7 +543,6 @@ local function gathiosEnterCombat(event, creature, target)
     for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
         illidari:DoZoneInCombat()
     end
-    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:312: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_SEAL_OF_BLOOD)
@@ -790,7 +789,6 @@ local function verasEnterCombat(event, creature, target)
     for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
         illidari:DoZoneInCombat()
     end
-    creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:511: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "veras_vanish", 18000, function()

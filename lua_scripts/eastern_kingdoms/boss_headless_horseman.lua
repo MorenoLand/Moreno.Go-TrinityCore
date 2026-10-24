@@ -141,6 +141,10 @@ local SAY_KILL_PLAYER = 5
 local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
 local ENTRY_SIR_THOMAS = 23904 -- NPC_SIR_THOMAS, scarlet_monastery.h:75
+local SPELL_WISP_INVIS = 42823 -- boss_headless_horseman.cpp:106
+local SPELL_WISP_FLIGHT_MISSILE = 42821 -- boss_headless_horseman.cpp:107
+local UNIT_NPC_FLAGS_FIELD = 82 -- aeranas precedent
+local UNIT_NPC_FLAG_QUESTGIVER = 2
 
 local timers = {}
 
@@ -290,3 +294,28 @@ end
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 4, onHeadDied)
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 5, onHeadSpawn)
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 24, onHeadReachHome)
+
+-- C++ npc_sir_thomas::Reset (boss_headless_horseman.cpp:708-720):
+-- RemoveFlag(QUESTGIVER) + SetFlag(NOT_SELECTABLE) + self-cast
+-- WISP_INVIS 42823, then a 9s one-shot self-cast WISP_FLIGHT_MISSILE
+-- 42821. The bearer arrives via the ported boss onDied
+-- SummonCreature(23904) leg, so Reset arms on events 5/23. The
+-- SpellHit(42818) handler stays out (SpellHit handlers not modeled
+-- — draenei_survivor precedent).
+local function sirThomasReset(event, creature)
+    creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:CastSpell(creature, SPELL_WISP_INVIS)
+    local guid = creature:GetGUID()
+    schedule(guid, "wispFlight", 9000, function()
+        creature:CastSpell(creature, SPELL_WISP_FLIGHT_MISSILE)
+    end)
+end
+
+local function sirThomasClear(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_SIR_THOMAS, 23, sirThomasReset)
+RegisterCreatureEvent(ENTRY_SIR_THOMAS, 5, sirThomasReset)
+RegisterCreatureEvent(ENTRY_SIR_THOMAS, 4, sirThomasClear)

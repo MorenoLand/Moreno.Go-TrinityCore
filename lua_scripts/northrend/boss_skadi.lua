@@ -98,7 +98,12 @@
 -- DoCast(target, SPELL_POISONED_SPEAR 50255), DoCast(SPELL_WHIRLWIND
 -- 50228) — fire ONLY inside the ACTION_GAUNTLET_END leg, which rides
 -- the vehicle dismount (PassengerBoarded !apply on npc_grauf) — an
--- unbridged vehicle/DoAction machine (the gothik precedent). Stay out.
+-- unbridged vehicle/DoAction machine (the gothik precedent). PORTED
+-- 2026-10-24 as a proxy from graufJustDied: Grauf death ->
+-- skadi->ExitVehicle() -> PassengerBoarded(!apply) -> GAUNTLET_END
+-- (:350-356, :362), so the timer kit (not the teleport/flag/react
+-- arms) starts there; Skadi rides Grauf, so FindNearestCreature
+-- resolves her.
 -- The SetReactState(REACT_AGGRESSIVE) (:270) rides the same unbridged
 -- ACTION_GAUNTLET_END leg; boss_skadi Reset's SetReactState(REACT_
 -- PASSIVE) (:170) stays out with Skadi's unported Reset (the whole
@@ -147,6 +152,9 @@ local SAY_DEATH = 3
 local SPELL_HAMSTRING = 48639
 local SPELL_STRIKE = 48640
 local SPELL_SHADOW_BOLT = 49084
+local SPELL_CRUSH = 50234
+local SPELL_POISONED_SPEAR = 50255
+local SPELL_WHIRLWIND = 50228
 local SPELL_SHRINK = 49089
 local SPELL_NET = 49092
 local SPELL_THROW = 49091
@@ -197,6 +205,24 @@ local function farthestPlayerTarget(creature, maxDist)
         end
     end
     return best
+end
+
+-- Random alive player in the same map/instance (SelectTarget(Random)
+-- over the hostile set, approximated by the player set — the
+-- farthestPlayerTarget idiom above, without the distance ranking).
+local function randomPlayerTarget(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ KilledUnit: if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL)
@@ -330,6 +356,32 @@ local function graufJustDied(event, creature, killer)
     CreateLuaEvent(function()
         creature:Despawn()
     end, 6000)
+    -- C++ GAUNTLET_END timer kit (:274-290) via the ExitVehicle chain
+    -- (see header): crush 8s victim, poisoned spear 11s random,
+    -- whirlwind 23s self — all Repeat(). Skadi's timers cancel with
+    -- her events 2/4/23.
+    local skadi = creature:FindNearestCreature(ENTRY_SKADI_THE_RUTHLESS, 200.0)
+    if skadi then
+        local skadiGuid = skadi:GetGUID()
+        local function crushTick()
+            skadi:CastSpell(nil, SPELL_CRUSH)
+            schedule(skadiGuid, "crush", 8000, crushTick)
+        end
+        local function spearTick()
+            local target = randomPlayerTarget(skadi)
+            if target then
+                skadi:CastSpell(target, SPELL_POISONED_SPEAR)
+            end
+            schedule(skadiGuid, "poisonedSpear", 11000, spearTick)
+        end
+        local function whirlwindTick()
+            skadi:CastSpell(skadi, SPELL_WHIRLWIND)
+            schedule(skadiGuid, "whirlwind", 23000, whirlwindTick)
+        end
+        schedule(skadiGuid, "crush", 8000, crushTick)
+        schedule(skadiGuid, "poisonedSpear", 11000, spearTick)
+        schedule(skadiGuid, "whirlwind", 23000, whirlwindTick)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GRAUF, 4, graufJustDied)

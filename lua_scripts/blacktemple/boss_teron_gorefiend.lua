@@ -100,6 +100,8 @@ local SPELL_CRUSHING_SHADOWS = 40243
 local SPELL_SHADOW_OF_DEATH = 40251
 local SPELL_BERSERK = 45078
 local SPELL_SUMMON_DOOM_BLOSSOM = 40188
+local SPELL_DOOM_BLOSSOM_SHADOWBOLT = 40185
+local ENTRY_DOOM_BLOSSOM = 23123
 local SPELL_SPIRITUAL_VENGEANCE = 40268
 local SPELL_SHADOW_OF_DEATH_REMOVE = 41999
 
@@ -288,3 +290,33 @@ RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 2, teronLeaveCombat)
 RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 3, teronTargetDied)
 RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 4, teronDied)
 RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 23, teronReset)
+
+-- C++ npc_doom_blossom::Reset (boss_teron_gorefiend.cpp:236-243): 12s
+-- init, SelectTarget(Random) -> DoCast(target, SPELL_SHADOWBOLT
+-- 40185), Repeat(2s). The blossom arrives via the 40188 spell-effect
+-- summon, so its Reset arm rides the boss event-19 relay (supremus
+-- volcano precedent): if the spell-effect summon never spawns, this
+-- never fires and nothing is fabricated. The hover takeoff +8z and
+-- the 40186 cast stay out (no MoveTakeoff bridge); the blossom's
+-- timers die with Teron's timers on leave/died/reset.
+local function blossomShadowboltTick(blossom, bossGuid, blossomGuid)
+    local target = randomAnyTarget(blossom)
+    if target then
+        blossom:CastSpell(target, SPELL_DOOM_BLOSSOM_SHADOWBOLT, false)
+    end
+    schedule(bossGuid, "blossomShadowbolt:" .. blossomGuid, 2000, function()
+        blossomShadowboltTick(blossom, bossGuid, blossomGuid)
+    end)
+end
+
+local function teronJustSummoned(event, creature, summon)
+    if summon:GetEntry() == ENTRY_DOOM_BLOSSOM then
+        local bossGuid = creature:GetGUID()
+        local blossomGuid = summon:GetGUID()
+        schedule(bossGuid, "blossomShadowbolt:" .. blossomGuid, 12000, function()
+            blossomShadowboltTick(summon, bossGuid, blossomGuid)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 19, teronJustSummoned)

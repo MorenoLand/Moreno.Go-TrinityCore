@@ -278,6 +278,7 @@ local SPELL_NECROTIC_STRIKE = 70659
 local SPELL_DEATHCHILL_BOLT = 70594
 local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
+local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
 local SPELL_DEATH_AND_DECAY = 71001 -- :63
 local SPELL_SHADOW_BOLT = 71254 -- :62
 local SPELL_CURSE_OF_TORPOR = 71237 -- :102 (adherent)
@@ -472,6 +473,18 @@ local function touchTick(creature, guid)
     end)
 end
 
+local function summonSpiritsTick(creature, guid)
+    -- C++ :439-443 GROUP_TWO: 12s init, CastSpell(nullptr,
+    -- SPELL_SUMMON_SPIRITS) with SPELLVALUE_MAX_TARGETS (2 if 25-man
+    -- else 1) — the MaxTargets arg has no Lua bridge (documented
+    -- delta; not faked with an IsHeroic gate, since the count keys
+    -- on 25-man, not heroic). Repeat().
+    creature:CastSpell(nil, SPELL_SUMMON_SPIRITS)
+    schedule(guid, "summonspirits", 12000, function()
+        summonSpiritsTick(creature, guid)
+    end)
+end
+
 local function deathwhisperDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if deathwhisperPhase[guid] == 3 then
@@ -517,6 +530,9 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         end)
         schedule(guid, "touch", math.random(6000, 9000), function()
             touchTick(creature, guid)
+        end)
+        schedule(guid, "summonspirits", 12000, function()
+            summonSpiritsTick(creature, guid)
         end)
         -- C++ DamageTaken :449-450: on heroic mode the phase-2
         -- transition makes her immune to taunt effects
@@ -782,8 +798,9 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- DoCastSelf(CLEAR_ALL_DEBUFFS) + DoCastSelf(FULL_HEAL, triggered)
         -- + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE); 6s ->
         -- RemoveAurasDueToSpell(PERMANENT_FEIGN_DEATH) + RemoveFlag +
-        -- SetReactState(AGGRESSIVE) + DoCastSelf(SHROUD_OF_THE_OCCULT)
-        -- + DoZoneInCombat(me). The ladyDeathwhisper->AI()->Talk(
+        -- SetReactState(AGGRESSIVE) + DoZoneInCombat(me). No shroud
+        -- here in C++ (:641-658) — SHROUD_OF_THE_OCCULT is the
+        -- adherent 6s arm only (:732-750). The ladyDeathwhisper->AI()->Talk(
         -- SAY_ANIMATE_DEAD 13) leg has no
         -- instance bridge (documented).
         local guid = creature:GetGUID()
@@ -800,7 +817,6 @@ local function fanaticSpellHit(event, creature, caster, spellId)
             creature:RemoveFlag(UNIT_FIELD_FLAGS,
                 UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
             creature:SetReactState(REACT_AGGRESSIVE)
-            creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
             creature:DoZoneInCombat()
         end)
     end

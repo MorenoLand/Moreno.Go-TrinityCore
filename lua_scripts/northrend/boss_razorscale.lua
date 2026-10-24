@@ -273,3 +273,24 @@ RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
+
+-- C++ go_razorscale_mole_machine::Reset (boss_razorscale.cpp:1559-1566):
+-- SetFlag(GO_FLAG_NOT_SELECTABLE), 1s UseDoorOrButton, 10s Delete.
+-- GO OnAdd is event 12 (gameobjects.go:1659, dynamic spawns only) —
+-- latent until the spawner chain ports (same latent-add precedent as
+-- the XT-002 life spark). Delete ports as Despawn (the GO hide twin).
+local GO_MOLE_MACHINE = 194316 -- ulduar.h:250
+local GO_FLAG_NOT_SELECTABLE = 0x10 -- SharedDefines.h:1641
+local GAMEOBJECT_FLAGS_FIELD = 9 -- gameobjects.go gameObjectFlags
+
+local function moleMachineAdd(event, go)
+    go:SetFlag(GAMEOBJECT_FLAGS_FIELD, GO_FLAG_NOT_SELECTABLE)
+    CreateLuaEvent(function()
+        go:UseDoorOrButton()
+    end, 1000)
+    CreateLuaEvent(function()
+        go:Despawn()
+    end, 10000)
+end
+
+RegisterGameObjectEvent(GO_MOLE_MACHINE, 12, moleMachineAdd)
