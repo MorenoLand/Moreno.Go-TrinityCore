@@ -39,10 +39,8 @@
 --   All three can fire on the same tick — same sequential-check order
 --   as C++.
 -- Unmodeled (documented-only, no bridges):
--- - Reset: me->SetFaction(FACTION_FRIENDLY) — SetFaction is bridged on
---   the event surface, but the only runtime flip is the unbridged
---   at_zumrah areatrigger leg (zulfarrak.cpp), so the restore is a
---   template-idempotent no-op and stays documented-only.
+-- - Reset: only the at_zumrah areatrigger leg stays out (zulfarrak.cpp);
+--   the SetFaction(FACTION_FRIENDLY) restore is PORTED in onReset.
 -- - JustDied: instance->SetData(DATA_ZUM_RAH, DONE) — no
 --   instance-data bridge (standing); BossAI _JustDied ctor leg blocked.
 
@@ -216,6 +214,11 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     hpFlags[guid] = { ward80 = false, ward40 = false, heal30 = false }
+    -- C++ Reset (boss_zum_rah.cpp:72): SetFaction(FACTION_FRIENDLY = 35);
+    -- restores the friendly template faction the at_zumrah areatrigger
+    -- flips to enemy (areatrigger leg itself unported, so this is
+    -- template-idempotent until that leg lands).
+    creature:SetFaction(35)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

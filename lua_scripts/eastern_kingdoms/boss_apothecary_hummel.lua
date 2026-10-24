@@ -65,8 +65,9 @@
 -- also starts the intro via OnEnterCombat when still in PHASE_ALL (coren
 -- precedent: the fight starts when a player pulls).
 -- Unmodeled (documented-only, no bridges):
--- - Reset: SetFaction(FACTION_FRIENDLY) + SummonCreatureGroup(1) (Baxter/
---   Frye spawn from the group; the per-GUID latch is cleared in Lua).
+-- - Reset: SummonCreatureGroup(1) only (Baxter/Frye spawn from the group;
+--   no group-summon bridge; the SetFaction(FACTION_FRIENDLY) leg is PORTED
+--   in onReset, and the per-GUID latch is cleared in Lua).
 -- - EnterEvadeMode: summons.DespawnAll + _DespawnAtEvade(10s) — no
 --   summon/evade bridges; Lua cancels timers on 2.
 -- - DoAction: SetImmuneToPC(true) + SetFaction(FACTION_MONSTER) +
@@ -119,6 +120,7 @@ local ENTRY_HUMMEL = 36296
 -- UnitDefines.h:149/153; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59)
 -- is bridged (engine/world/lua_creature_events.go:968).
 local UNIT_FIELD_FLAGS = 59
+local FACTION_FRIENDLY = 35
 local UNIT_FLAG_UNK_29 = 0x20000000
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
@@ -330,6 +332,9 @@ end
 
 local function onReset(event, creature)
     clearState(creature:GetGUID())
+    -- C++ Reset (boss_apothecary_hummel.cpp:121): SetFaction(FACTION_FRIENDLY);
+    -- the SummonCreatureGroup(1) leg stays out (no group-summon bridge).
+    creature:SetFaction(FACTION_FRIENDLY)
 end
 
 -- C++ DamageTaken: lethal-blow class (damage >= health, pre-damage) ->
