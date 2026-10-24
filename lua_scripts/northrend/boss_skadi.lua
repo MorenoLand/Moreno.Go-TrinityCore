@@ -115,12 +115,11 @@
 -- spline-chain gated (PassengerBoarded / MovementInform SPLINE_CHAIN_
 -- MOTION_TYPE: EMOTE_ON_RANGE / EMOTE_BREATH Talks, FREEZING_CLOUD
 -- periodic casts, ACTION_DRAKE_BREATH handoff) — no MovementInform /
--- spline / vehicle bridges. Stay out; only the JustDied
+-- spline / vehicle bridges. Stay out; the JustDied
 -- DespawnOrUnsummon(Seconds(6)) leg ports (event 4, below — the freya
 -- delayed-despawn idiom), the paired skadi->ExitVehicle() leg having
--- no cross-creature bridge. npc_grauf Reset's SetReactState(REACT_
--- PASSIVE) (:344) stays out with the unported spline-chain movement
--- machine (event 23 not registered for Grauf this run).
+-- no cross-creature bridge, and the Reset trio (REACT_PASSIVE +
+-- no-regen + run speed 2.5) ports on event 23 below.
 -- npc_ymirjar_harpooner JustDied — DoCast(SPELL_SUMMON_HARPOON 56789)
 -- is a pure summon leg (no bridge — the zarithrian precedent). Stay
 -- out.
@@ -311,6 +310,17 @@ RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 1, harpoonerEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 23, cancelCombatTimers)
+
+-- C++ npc_graufAI::Reset (boss_skadi.cpp:343-348): REACT_PASSIVE +
+-- no-regen + run speed 2.5, in C++ order; the spline-chain timer
+-- legs stay out (see header), but Reset itself is not machine-gated.
+local function graufReset(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:SetRegenerateHealth(false)
+    creature:SetSpeedRate(1, 2.5)
+end
+
+RegisterCreatureEvent(ENTRY_GRAUF, 23, graufReset)
 
 -- C++ npc_graufAI::JustDied (boss_skadi.cpp:350-356): the
 -- skadi->ExitVehicle() leg is cross-creature (no bridge, stays out);

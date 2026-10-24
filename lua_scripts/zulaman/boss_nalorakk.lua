@@ -20,8 +20,8 @@
 -- ranges. Berserk 45078 is a one-shot at 600s with Talk YELL_BERSERK,
 -- re-armed for 600s (C++-exact). Kills: random YELL_KILL_ONE/YELL_KILL_TWO.
 -- Deviations from C++: the entire pre-fight trash-wave gauntlet has no
--- bridge — no movement model (MovePoint/MovementInform/SetOrientation/
--- SetSpeedRate), no NOT_SELECTABLE/NON_ATTACKABLE flags on the Lua
+-- bridge — no movement model (MovePoint/MovementInform/SetOrientation),
+-- no NOT_SELECTABLE/NON_ATTACKABLE flags on the Lua
 -- object, no MoveInLineOfSight proximity hook, and no friendly-creature
 -- AttackStart wiring — so the YELL_NALORAKK_WAVE1-4 arms, the waypoint
 -- walks, and the SendAttacker arms never run and combat starts directly
@@ -299,6 +299,12 @@ local function nalorakkDied(event, creature, killer)
 end
 
 local function nalorakkReset(event, creature)
+    -- C++ Reset, MoveEvent branch (boss_nalorakk.cpp:133-140): the
+    -- constructor inits MoveEvent true, so the spawn Reset sets run
+    -- speed 2; the NOT_SELECTABLE/NON_ATTACKABLE flag pair stays out
+    -- (its wave-4 clear never runs in the collapsed model, so the
+    -- flags would strand the boss unattackable).
+    creature:SetSpeedRate(1, 2.0)
     nalorakkResetState(creature:GetGUID())
 end
 
