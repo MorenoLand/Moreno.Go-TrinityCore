@@ -39,8 +39,9 @@
 -- models the freeze as cancel + re-arm with re-arm delays on emerge).
 -- Emerge: re-arm the combat timers (eruption {20s,45s}, wrath 25s,
 -- hand 20s, lava burst 10s, elemental fire {10s,14s}, magma blast
--- 2500ms); the C++ Talk/faction/flag/AttackStart arms have no bridges
--- (emerge emote is ported — see deviations); see deviations. The
+-- 2500ms); the C++ faction/flag arms are PORTED 2026-10-24 (below) and
+-- the AttackStart resume rides the REACT_AGGRESSIVE flip (no AttackStart
+-- bridge — see deviations); see deviations. The
 -- 8-son-of-flame summons are PORTED 2026-10-24 (per-iteration random-
 -- target SummonCreature(12143, target pos, type 1, 15min) — C++-exact;
 -- the AttackStart relay has no bridge, sons engage via engine aggro)
@@ -71,13 +72,14 @@
 -- starts on pull instead of after the 53s intro; the submerge
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ResetAllThreat,
 -- bridged lua_objects.go:389). The submerge faction change and NOT_SELECTABLE flag
--- have no bridges (AttackStop, ResetThreatList and InterruptNonMeleeSpells
--- are ported in onSubmerge below; the emerge AttackStart resume rides
--- the REACT_AGGRESSIVE flip); the SUBMERGED/0
+-- are PORTED 2026-10-24 (SetFaction + SetFlag below, C++ :257-258; the
+-- emerge faction/flag restore is ported in onEmerge, C++ :179-180; the
+-- emerge AttackStart resume rides the REACT_AGGRESSIVE flip — no AttackStart
+-- bridge); the SUBMERGED/0
 -- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
 -- lua_creature_events.go); the emerge react arm is PORTED
--- (creature:SetReactState, 2026-10-20); the faction/flag/AttackStart
--- arms still have no bridges (submerge/emote arms are ported); the
+-- (creature:SetReactState, 2026-10-20); the faction/flag arms are PORTED
+-- 2026-10-24 and only the AttackStart arms stay out (no bridge); the
 -- magma blast IsWithinMeleeRange gate has no
 -- bridge; SPELL_RAGSUBMERGE 21107 / SPELL_RAGEMERGE 20568 /
 -- SPELL_SONS_OF_FLAME_DUMMY 21108 are commented out / server-side in
@@ -100,6 +102,11 @@ local SPELL_MAGMA_BLAST = 20565
 local SPELL_WRATH_OF_RAGNAROS = 20566
 local SPELL_ELEMENTAL_FIRE = 20564
 local SPELL_LAVA_BURST = 21158
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local FACTION_FRIENDLY = 35
+local FACTION_MONSTER = 14
 
 local timers = {}
 local state = {}
@@ -256,10 +263,10 @@ local function cancelCombatTimers(guid)
 end
 
 -- C++ UpdateAI banished arm: _emergeTimer 90s -> flip _isBanished
--- back. The C++ faction/flag/AttackStart arms have no bridges (emerge
--- emote is ported); the sons-of-flame counter never advances (no
--- summon bridge), so
--- the >8-adds early-emerge arm is unmodeled.
+-- back. The C++ faction/flag arms are PORTED 2026-10-24 in onEmerge
+-- below (SetFaction + RemoveFlag, C++ :179-180); only the AttackStart
+-- resume stays out (no bridge — rides the REACT_AGGRESSIVE flip). The
+-- >8-adds early-emerge arm is PORTED via the event-21 handler below.
 -- Forward declaration: onEmerge's timer closures reference onSubmerge
 -- textually before its local definition; without this the name compiles
 -- to a global and the 3-minute submerge stream calls nil (Ragnaros
@@ -272,6 +279,10 @@ local function onEmerge(creature, guid)
     -- C++ boss_ragnaros.cpp:178: me->SetReactState(REACT_AGGRESSIVE)
     -- (emerge arm order: flip first, then faction/flag/emote arms).
     creature:SetReactState(2) -- REACT_AGGRESSIVE
+    -- C++ boss_ragnaros.cpp:179-180: SetFaction(FACTION_MONSTER) then
+    -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE).
+    creature:SetFaction(FACTION_MONSTER)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     -- C++ boss_ragnaros.cpp:181-182: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
     -- then HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
     creature:EmoteState(0)
@@ -308,10 +319,11 @@ end
 -- so the re-arm freezes for the 90s banish and fires 270s after the
 -- previous submerge in real time. The port models the freeze as
 -- cancel + re-arm: submerge arms only the 90s emerge; emerge re-arms
--- the 3min submerge. The summon (8 sons of flame), threat reset,
--- faction/flag/immobilize arms have no bridges (the react arm is
--- PORTED — creature:SetReactState, 2026-10-20; submerge/emote
--- arms are ported).
+-- the 3min submerge. The summon (8 sons of flame), threat reset and
+-- faction/flag arms are all PORTED (summon 2026-10-24, threat 2026-10-19,
+-- faction/flag 2026-10-24 below); the react arm is PORTED
+-- (creature:SetReactState, 2026-10-20) and the submerge/emote arms are
+-- ported. The C++ root leg is a commented-out DoCast(23973), not a live arm.
 -- NOTE: plain assignment, NOT `local function` — the forward-declared
 -- `local onSubmerge` above is a separate slot; re-declaring with
 -- `local function` would shadow it and Ragnaros would never re-submerge.
@@ -334,6 +346,10 @@ onSubmerge = function(creature, guid)
     creature:SetReactState(0) -- REACT_PASSIVE
     -- C++ boss_ragnaros.cpp:254: me->InterruptNonMeleeSpells(false)
     creature:InterruptNonMeleeSpells(false)
+    -- C++ boss_ragnaros.cpp:257-258: SetFaction(FACTION_FRIENDLY) then
+    -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE).
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     if not s.hasSubmergedOnce then
         creature:Talk(SAY_REINFORCEMENTS1)
         s.hasSubmergedOnce = true

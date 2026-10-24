@@ -12,9 +12,10 @@
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
 -- Fight shape: flame breath 43140 on a random player at 8s, repeat 8s
--- (C++ motion-master clear + StopMoving have no bridge — the
--- cast is not interrupted here, and the DamageDealt 30-degree arc gate
--- has no bridge, so the isFlameBreathing arm never runs); the bomb phase
+-- (C++ motion-master Clear still has no bridge and the DamageDealt
+-- 30-degree arc gate has no bridge, so the isFlameBreathing UpdateAI
+-- gate never runs; StopMoving IS bridged and IS ported in onFlameBreath
+-- below — the old "StopMoving has no bridge" claim was stale); the bomb phase
 -- IS ported (2026-10-24 — the old "no summon/teleport bridge" claim was
 -- stale: creature:SummonCreature, creature:Teleport, creature:AttackStop,
 -- creature:StopMoving and player:TeleportNear are all bridged): BombTimer

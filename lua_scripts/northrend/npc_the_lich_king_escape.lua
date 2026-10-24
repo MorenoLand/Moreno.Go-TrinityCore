@@ -31,8 +31,8 @@
 --   source->PlayDirectSound — ScriptedCreature.cpp:188-200, broadcast-to-set
 --   SMSG_PLAY_SOUND, the engine/world/lua_objects.go PlayDirectSound bridge),
 --   and DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) = self-cast (the file's
---   DoCastAOE idiom), in C++ order. The instance SetBossState(FAIL) /
---   StopMoving / DespawnOrUnsummon(12s) legs have no bridge — documented below.
+--   DoCastAOE idiom), in C++ order. StopMoving + the 12s delayed Despawn are
+--   PORTED below; only the instance SetBossState(FAIL) leg has no bridge.
 -- KilledUnit (:1251-1255) — player-gated
 --   (victim:GetObjectType() == "Player", the razuvious precedent)
 --   DoPlaySoundToSet(RAND(SOUND_LK_SLAY_1 17214, SOUND_LK_SLAY_2 17215)) =
@@ -51,8 +51,8 @@
 --   instance-GUID escape leader + gunship movement: no-MovementInform
 --   / no-instance-GetGuidData bridges.
 -- EnterEvadeMode (:1305-1316) — the _despawn latch, Fury-of-Frostmourne
---   sound, and cast are ported above; the instance SetBossState(FAIL) /
---   StopMoving / DespawnOrUnsummon(12s) legs have no bridge.
+--   sound, cast, StopMoving and 12s delayed Despawn are ported above;
+--   only the instance SetBossState(FAIL) leg has no bridge.
 -- JustSummoned / SummonedCreatureDies (:1233-1250) — summon bookkeeping
 --   with no summon-list bridge.
 
@@ -79,21 +79,27 @@ local function lichKingEscapeDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1316):
+-- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1316),
+-- C++ order: instance SetBossState(FAIL) [no bridge] -> StopMoving ->
 -- DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE 17224) — PlayDirectSound
--- (the DoPlaySoundToSet ≡ PlayDirectSound identity above), then
--- DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) non-triggered — self-cast
--- (the file's DoCastAOE idiom), C++ order kept. Both ungated apart from
--- the _despawn once-latch. The instance SetBossState(FAIL) / StopMoving /
--- DespawnOrUnsummon(12s) legs have no bridge — documented above.
+-- (the DoPlaySoundToSet ≡ PlayDirectSound identity above) -> DoCastAOE
+-- (SPELL_FURY_OF_FROSTMOURNE 70063) non-triggered — self-cast (the file's
+-- DoCastAOE idiom) -> DespawnOrUnsummon(12s), modeled as a 12s
+-- CreateLuaEvent one-shot calling creature:Despawn (immediate bridge).
+-- All ungated apart from the _despawn once-latch. Only the instance
+-- SetBossState(FAIL) leg has no bridge.
 local function lichKingEscapeLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     if evadeFired[guid] then
         return
     end
     evadeFired[guid] = true
+    creature:StopMoving()
     creature:PlayDirectSound(SOUND_LK_FURY_OF_FROSTMOURNE)
     creature:CastSpell(creature, SPELL_FURY_OF_FROSTMOURNE)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 12000)
 end
 
 -- C++ npc_the_lich_king_escape_horAI::KilledUnit (:1251-1255):
