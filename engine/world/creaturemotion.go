@@ -278,6 +278,12 @@ type creatureMotion struct {
 	// corpse sweep instead of the C++ corpse-timed despawn. Zero value is
 	// never a live state: the summon bridge always stamps the type.
 	TempSummonType uint8
+	IsTempSummon   bool
+	// IsTempSummon is the Unit::IsSummon twin (Unit.h:837 — the
+	// UNIT_MASK_SUMMON bit, set on TempSummon objects only; pets carry
+	// UNIT_MASK_PET instead, and DB-spawned creatures carry neither).
+	// Stamped only by the summon bridge (summonTempCreature); spell-
+	// effect summons have no Go producer, so no other path sets it.
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on

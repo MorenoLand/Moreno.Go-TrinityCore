@@ -149,8 +149,9 @@
 --   the event queue but UpdateAI stops ticking (no victim
 --   after RemoveAllAttackers/AttackStop) and the creature
 --   despawns 7.5s later; without the cancel the Lua timers
---   would fire forever on the unkillable body since the
---   despawn leg has no bridge.
+--   would fire through the 7.5s despawn window (the despawn
+--   itself IS ported — CreateLuaEvent 7500 in freyaDamageTaken;
+--   the stale "despawn leg has no bridge" wording is retracted).
 --
 -- DOCUMENTED-ONLY (in this header; no registrations beyond
 -- entries 32906 / 32915 / 32914 / 32913):

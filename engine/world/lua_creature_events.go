@@ -109,6 +109,7 @@ func (s *Server) summonTempCreature(ctx context.Context, motion *creatureMotion,
 	}
 	s.motionMu.Lock()
 	summoned.OwnerGUID = ownerGUID
+	summoned.IsTempSummon = true
 	summoned.TempSummonType = summonType
 	// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
 	// the summon type: only the timed family (0/1/2/3) arms the timer
@@ -217,6 +218,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		charmed := motion.Charmed
 		s.motionMu.Unlock()
 		return []any{charmed}, nil
+	}
+	// IsSummon is Unit::IsSummon (Unit.h:837 — UNIT_MASK_SUMMON): true
+	// only for creatures stamped by the summon bridge (creaturemotion
+	// IsTempSummon); DB creatures and pets report false. Lets Lua gate
+	// IsSummon arms such as skeram's image evade/died/split legs.
+	methods["IsSummon"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		isSummon := motion.IsTempSummon
+		s.motionMu.Unlock()
+		return []any{isSummon}, nil
 	}
 	// CastSpell(target, spellId[, triggered]) casts a creature spell through
 	// the server's creature cast path (SMSG_SPELL_GO broadcast, the same path

@@ -113,9 +113,11 @@
 -- motion / react-state bridges. SummonedCreatureDespawn —
 -- NPC_PLANAR_ANOMALY: CastSpell(summon, SPELL_PLANAR_BLAST
 -- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — stays
--- out on the missing SummonedCreatureDespawn hook, not on the cast
--- (CastSpell is bridged; the anomaly summons are never delivered —
--- no SPELL_EFFECT_SUMMON leg — so no hook would ever fire).
+-- out on the missing summon delivery, not on the hook: event 20
+-- (SummonedCreatureDespawn) IS bridged (runtime.go:230, fired on
+-- timed-summon expiry in pet_combat.go), but the anomaly summons
+-- are never delivered — no SPELL_EFFECT_SUMMON leg — so no hook
+-- would ever fire.
 -- spell_eregos_planar_shift — AuraScript AfterEffectRemove
 -- (EFFECT_0 SPELL_AURA_SCHOOL_IMMUNITY): target ToCreature
 -- -> AI()->DoAction(ACTION_SET_NORMAL_EVENTS) (the

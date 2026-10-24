@@ -53,11 +53,13 @@
 --   AttackStart on random target, summons.Summon bookkeeping —
 --   all inside the summon-image AI, unreachable without a
 --   SummonCreature/JustSummoned bridge.
--- - JustDied !IsSummon gate + image DespawnOrUnsummon +
---   BossAI::JustDied leg: IsSummon has no Lua bridge, so the
---   DEATH Talk is ungated here (C++-verbatim would suppress it
---   for images).
--- - EnterEvadeMode: image self-despawn (IsSummon leg) — no bridge.
+-- - JustDied !IsSummon gate + image DespawnOrUnsummon PORTED
+--   below (creature:IsSummon bridge, engine/world/
+--   lua_creature_events.go + lua_objects.go; the BossAI::JustDied
+--   instance leg stays out — no instance bridge).
+-- - EnterEvadeMode image self-despawn PORTED below on the event-2
+--   evade proxy (creature:IsSummon gate; the boss itself never
+--   despawns on evade, C++-exact).
 -- - BossAI ctor leg DATA_SKERAM and _Reset() — instance bridge,
 --   standing.
 -- - SelectTarget/AttackStart/SetVisible/
@@ -196,6 +198,11 @@ end
 -- SetVisible(false) PORTED via the creature:SetVisible bridge;
 -- ported as the Talk + visibility + blink re-arm.
 local function onDamageTaken(event, creature, attacker, damage)
+    -- C++ split check is !IsSummon-gated (boss_skeram.cpp:184);
+    -- images run the same AI but never split.
+    if creature:IsSummon() then
+        return
+    end
     local guid = creature:GetGUID()
     local s = st(guid)
     if s.splitHpct <= 0 then
@@ -247,6 +254,13 @@ end
 
 local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_skeram.cpp:81-85 EnterEvadeMode: ScriptedAI base
+    -- then, only for images, me->DespawnOrUnsummon() — the event-2
+    -- handler is the evade proxy (drakkari precedent); the boss
+    -- (IsSummon false) keeps its existing cancel-only behavior.
+    if creature:IsSummon() then
+        creature:Despawn()
+    end
 end
 
 local function onReset(event, creature)
@@ -262,7 +276,14 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
-    creature:Talk(SAY_DEATH)
+    -- C++ boss_skeram.cpp:129-136 JustDied: images DespawnOrUn-
+    -- summon with no Talk; only the true boss Talks (the BossAI::
+    -- JustDied instance leg stays out — no instance bridge).
+    if creature:IsSummon() then
+        creature:Despawn()
+    else
+        creature:Talk(SAY_DEATH)
+    end
     cancelTimers(creature:GetGUID())
 end
 

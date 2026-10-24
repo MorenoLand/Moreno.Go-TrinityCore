@@ -16,9 +16,10 @@
 -- self-Talk arm (Talk takes a textId only; the line plays nearby).
 -- The C++ JustEngagedWith summoner arm (IsSummon ->
 -- ToTempSummon()->GetSummonerUnit() -> summoner->AI()->
--- AttackStart(who)) has no summon bridge — unmodeled (marzon is
--- summoned by the lescovar waypoint-16 phase arm, behind the
--- no-summon bridge). The C++ EnterEvadeMode DisappearAndDie pair
+-- AttackStart(who)) stays unmodeled: IsSummon IS bridged now
+-- (creature:IsSummon), but GetSummonerUnit and AttackStart have
+-- no bridges (marzon is summoned by the lescovar waypoint-16
+-- phase arm, behind the escort machine). The C++ EnterEvadeMode DisappearAndDie pair
 -- self-DisappearAndDie arm is PORTED below (vazruden/muru
 -- convention: DisappearAndDie -> immediate creature:Despawn());
 -- the summoner-DisappearAndDie leg stays out behind the
@@ -51,7 +52,8 @@ local SAY_MARZON_2 = 1
 
 -- C++ JustEngagedWith: Talk(SAY_MARZON_2). The summoner-AttackStart
 -- gate (IsSummon / GetSummonerUnit / TYPEID_UNIT / IsAlive /
--- !IsInCombat) sits behind the no-summon bridge — no bridgeable
+-- !IsInCombat) sits behind the no-summoner-access / no-AttackStart
+-- bridges (IsSummon itself is bridged) — no bridgeable
 -- arm there, so the yell stands alone (C++-exact for the modeled
 -- arm).
 local function onEnterCombat(_, creature)

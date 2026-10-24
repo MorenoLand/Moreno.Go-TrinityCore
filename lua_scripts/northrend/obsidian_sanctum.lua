@@ -114,8 +114,10 @@
 -- npc_acolyte_of_shadron (NPC_ACOLYTE_OF_SHADRON 31218,
 -- entry-verifiable from the local enum) — Reset self
 -- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED (the aura leg
--- is bridged); DespawnOrUnsummon(28s) is inexpressible (Go
--- Despawn takes no delay arg); the instance-gated AddAura
+-- is bridged); DespawnOrUnsummon(28s) PORTED below as a 28s
+-- one-shot creature:Despawn (the old "inexpressible — Despawn
+-- takes no delay arg" claim was stale: the delayed-Despawn
+-- CreateLuaEvent precedent covers it); the instance-gated AddAura
 -- gift-of-twilight 58766/57835 legs and JustDied's instance
 -- SetBossState + player-loop cast/remove legs have no instance
 -- bridges — documented-only.
