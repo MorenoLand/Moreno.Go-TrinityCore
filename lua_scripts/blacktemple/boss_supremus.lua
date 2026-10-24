@@ -32,13 +32,12 @@
 -- (C++-exact). Nil-victim / nil-target ticks cast nothing but keep
 -- the schedule (jeklik convention). OnDied(4)/OnLeaveCombat(2)/
 -- OnReset(23): cancel timers.
--- The npc_molten_flame and npc_volcano AIs in the same C++ file are
--- not registered — the C++ ScriptNames "npc_molten_flame" /
--- "npc_volcano" bind DB-side in creature_template (no TDB in this
--- workspace), so the entries cannot be verified against the
--- bindings from the C++ sources alone (garr firesworn convention;
--- NPC_SUPREMUS_VOLCANO=23085 exists in the header but the binding
--- is still DB-side).
+-- The npc_molten_flame AI in the same C++ file is not registered — its
+-- C++ ScriptName binds DB-side in creature_template (no TDB in this
+-- workspace), so the entry cannot be verified against the binding from
+-- the C++ sources alone (garr firesworn convention). npc_volcano needs
+-- no standalone registration: its AI is relayed from the boss event-19
+-- handler below (NPC_SUPREMUS_VOLCANO=23085, black_temple.h:89).
 -- Cast gating: boss_supremus has no UpdateAI override, so it runs
 -- under BossAI::UpdateAI (ScriptedCreature.cpp:571-589), which gates
 -- event execution on HasUnitState(UNIT_STATE_CASTING). That gate has
@@ -55,16 +54,16 @@
 -- the charge target the way the C++ 1e6 entry does; the strike target is
 -- approximated by the highest-health alive player in the instance
 -- within 5 yd (melee range) of the boss; no summon model — the
--- volcanic summon 40276 never spawns a volcano add and the molten
--- flame 40980 / volcanic eruption 40117 / volcanic geyser 42055
--- add arms are unregistered with it; the summons.DoAction(ACTION_
--- DISABLE_VULCANO) aura-cleanup arm has no bearer (no volcano
--- summons exist to address); the ApplySpellImmune taunt/attack-me
+-- volcanic summon 40276 spawns volcano adds through the Go spell-effect
+-- summon (creatureEffectSummonType) when the DBC props pass, and the volcano
+-- AI is relayed from the boss event-19 handler below (3s eruption cast); the
+-- molten flame 40980 arm stays out (its summon source is not in this file);
+-- the summons.DoAction(ACTION_DISABLE_VULCANO) aura-cleanup arm is ported
+-- via GetCreaturesInGrid in ChangePhase; the ApplySpellImmune taunt/attack-me
 -- Reset arms stay out — they are no-op removes undoing the
 -- ChangePhase adds, which ride the unported phase machine (the
 -- immunity bridge itself exists: creature:ApplySpellImmune); the
--- EnterEvadeMode summons.DespawnAll arm has no bearer (no volcano
--- summons exist to address) while the
+-- EnterEvadeMode summons.DespawnAll arm is ported via GetCreaturesInGrid below, while the
 -- _DespawnAtEvade() -> DespawnOrUnsummon() leg is PORTED below
 -- (stale "no despawn bridge" claim retracted: creature:Despawn()
 -- is bridged, engine/world/lua_creature_events.go:214).
@@ -84,6 +83,10 @@ local SPELL_VOLCANIC_SUMMON = 40276
 local SPELL_BERSERK = 45078
 local SPELL_SNARE_SELF = 41922
 local SPELL_CHARGE = 41581
+
+local ENTRY_VOLCANO = 23085
+local SPELL_VOLCANIC_ERUPTION = 40117
+local SPELL_VOLCANIC_GEYSER = 42055
 
 local MELEE_RANGE = 5
 
@@ -208,8 +211,8 @@ end
 
 -- C++ EVENT_VOLCANO: triggered DoCastAOE(40276) at the boss's own
 -- location — modeled as a triggered self-cast — + Talk(EMOTE_GROUND_
--- CRACK); repeat 10s unconditional (C++-exact). The volcano add
--- never spawns (no summon model). Chase-phase only.
+-- CRACK); repeat 10s unconditional (C++-exact). The volcano add's AI is relayed via the boss event-19 handler below.
+-- Chase-phase only.
 local function onVolcano(creature, guid)
     creature:CastSpell(creature, SPELL_VOLCANIC_SUMMON, true)
     creature:Talk(EMOTE_GROUND_CRACK)
@@ -238,7 +241,7 @@ end
 
 -- C++ ChangePhase: STRIKE from INITIAL or CHASE (removes the snare
 -- aura, drops the taunt-immune rows, and the volcano summons'
--- DoAction has no bearer); CHASE otherwise (arms volcano/
+-- DoAction is ported via grid below); CHASE otherwise (arms volcano/
 -- switch-target, non-triggered self-cast snare, raises the
 -- taunt-immune rows). The rows are LIVE: creature:ApplySpellImmune
 -- feeds the script-immunity rows the Go hit/aura gates consult
@@ -264,6 +267,13 @@ local function changePhase(creature, guid)
         st.phase = PHASE_STRIKE
         cancelTimer(guid, "volcano")
         cancelTimer(guid, "switchtarget")
+        -- C++ ChangePhase STRIKE: summons.DoAction(ACTION_DISABLE_VULCANO)
+        -- (boss_supremus.cpp) — volcanoes sit at the boss location (DoCastAOE
+        -- spawn, NullCreatureAI, no motion), so the grid sweep addresses them all.
+        for _, volcano in ipairs(creature:GetCreaturesInGrid(ENTRY_VOLCANO, 100)) do
+            volcano:RemoveAura(SPELL_VOLCANIC_ERUPTION)
+            volcano:RemoveAura(SPELL_VOLCANIC_GEYSER)
+        end
         creature:RemoveAura(SPELL_SNARE_SELF)
         schedule(guid, "hateful", 2000, function()
             onHatefulStrike(creature, guid)
@@ -300,6 +310,24 @@ local function changePhase(creature, guid)
     end)
 end
 
+-- C++ npc_volcano::Reset (boss_supremus.cpp): 3s self-cast of
+-- VOLCANIC_ERUPTION 40117; DoAction(DISABLE) removes eruption + geyser
+-- auras (ported in ChangePhase via grid). Temp summons bypass the spawn
+-- Reset funnel, so the Reset arm is driven here from the boss event-19
+-- relay (terestian precedent): the 40276 spell-effect summon fires 19 on
+-- the boss with the volcano as the summon arg. If the spell-effect summon
+-- does not spawn (DBC props), this never fires and nothing is fabricated.
+-- The pending eruption is cancelled with the boss timers on LeaveCombat,
+-- Died, or Reset.
+local function supremusJustSummoned(event, creature, summon)
+    if summon:GetEntry() == ENTRY_VOLCANO then
+        local key = "volcanoEruption:" .. summon:GetGUID()
+        schedule(creature:GetGUID(), key, 3000, function()
+            summon:CastSpell(summon, SPELL_VOLCANIC_ERUPTION)
+        end)
+    end
+end
+
 local function supremusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -320,8 +348,12 @@ end
 
 local function supremusLeaveCombat(event, creature)
     supremusResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode: summons.DespawnAll() before _DespawnAtEvade().
+    for _, volcano in ipairs(creature:GetCreaturesInGrid(ENTRY_VOLCANO, 100)) do
+        volcano:Despawn()
+    end
     -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon()
-    -- (summons.DespawnAll is moot — no volcano summons are modeled).
+    -- (summons.DespawnAll is ported via GetCreaturesInGrid above).
     creature:Despawn()
 end
 
@@ -337,6 +369,7 @@ local function supremusReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_SUPREMUS, 1, supremusEnterCombat)
+RegisterCreatureEvent(ENTRY_SUPREMUS, 19, supremusJustSummoned)
 RegisterCreatureEvent(ENTRY_SUPREMUS, 2, supremusLeaveCombat)
 RegisterCreatureEvent(ENTRY_SUPREMUS, 4, supremusDied)
 RegisterCreatureEvent(ENTRY_SUPREMUS, 23, supremusReset)

@@ -12,21 +12,24 @@
 -- clamps), 14 OnHitBySpell (the SPELL_MOUNT merge arm), 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
--- Deviations from C++: the engine has no summon model, so
--- SPELL_SUMMON_ATTUMEN (29714) and SPELL_SUMMON_ATTUMEN_MOUNTED (29799)
--- are visual-only casts and the Eluna events 19/22 (JustSummoned/
--- IsSummonedBy) never fire — the SetGUID/_midnightGUID/_attumenGUID wiring,
--- the summon health-max merge, the DoZoneInCombat call, the
--- summon->AI()->Talk(SAY_APPEAR) greeting, and the
--- summoner-entry phase assignments have no bridge. Approximation: the
+-- Deviations from C++: event 19 (JustSummoned) DOES fire on the summoner via the shared
+-- summonTempCreature funnel, so the summon->AI()->Talk(SAY_APPEAR) greeting
+-- is relayed in midnightJustSummoned below; event 22 (IsSummonedBy) fires
+-- only from the pet funnel, so the summoner-entry phase assignments stay
+-- approximated in OnEnterCombat keyed on entry. The SetGUID wiring and the
+-- AttackStart(victim) leg have no bridge. The 29714 cast's spell-effect
+-- summon spawns Attumen when the DBC props pass; if it does not, no
+-- Attumen exists to relay. Approximation: the
 -- phase that C++ IsSummonedBy would set before combat (ATTUMEN_ENGAGES for
 -- 15550, MOUNTED for 16152) is set in OnEnterCombat keyed on entry, which
 -- is where C++ ScheduleTasks/JustEngagedWith also runs. The 25% mount arm
 -- (Midnight's DamageTaken casting SPELL_MOUNT triggered) fires from the
 -- Midnight damage hook; Attumen's SpellHit(SPELL_MOUNT) arm cancels its
--- timers and Talk(SAY_MOUNT), but the follow/visibility/summon-mounted
--- steps stay out (no MoveFollow bridge — the creature:SetVisible bridge
--- is live but the arm's follow machine is unported). No
+-- timers and Talk(SAY_MOUNT), but the follow step stays out (no MoveFollow
+-- bridge); the visibility + mounted-summon steps are ported via the
+-- midnight-side 1s proximity poll below (Go self-casts hit only the caster
+-- plus chain jumps, so SpellHit delivery of MOUNT to Attumen is unproven
+-- and the poll is driven from midnight's 25% arm, not SpellHit). No
 -- MECHANIC_DISARM info reaches the Lua spell-hit hook, so the
 -- SAY_DISARMED arm is skipped. Midnight's directed Talk(SAY_MIDNIGHT_KILL,
 -- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
@@ -63,6 +66,7 @@ local SPELL_SPAWN_SMOKE = 10389
 local SPELL_CHARGE = 29847
 local SPELL_KNOCKDOWN = 29711
 local SPELL_SUMMON_ATTUMEN = 29714
+local SPELL_SUMMON_ATTUMEN_MOUNTED = 29799
 local SPELL_MOUNT = 29770
 
 local PHASE_NONE, PHASE_ATTUMEN_ENGAGES, PHASE_MOUNTED = 0, 1, 2
@@ -146,6 +150,47 @@ local function midnightEnterCombat(event, creature, target)
     schedule(guid, "knockdown", {15000, 25000}, function() onMidnightKnockdown(creature, guid) end)
 end
 
+-- C++ boss_attumenAI::SpellHit(SPELL_MOUNT) 1s proximity poll
+-- (boss_midnight.cpp): if within 5yd 2d of midnight, DoCastAOE
+-- (SPELL_SUMMON_ATTUMEN_MOUNTED) + both SetVisible(false); else re-follow
+-- + repeat. Driven here from midnight's 25% arm because Go self-casts hit
+-- only the caster (no AoE fan-out), so SpellHit delivery to Attumen is
+-- unproven. The mounted summon is a direct SummonCreature (no 29799 cast,
+-- so no double spawn); the health merge + DoZoneInCombat twin the attumen
+-- JustSummoned arm (C++: midnight's health when higher, Attumen's otherwise). Attumen's own timers cannot be
+-- cancelled cross-creature (documented deviation: the invisible unmounted
+-- form's casts may still fire). Cancelled with the midnight timers on
+-- LeaveCombat/Reset.
+local function onMountPoll(creature, guid)
+    local attumen = creature:FindNearestCreature(ENTRY_ATTUMEN, 200)
+    if attumen ~= nil and creature:GetDistance2d(attumen) <= 5.0 then
+        local mounted = creature:SummonCreature(ENTRY_ATTUMEN_MOUNTED,
+            attumen:GetX(), attumen:GetY(), attumen:GetZ(), 0)
+        if mounted ~= nil then
+            local mh, ah = creature:GetHealth(), attumen:GetHealth()
+            if mh > ah then
+                mounted:SetHealth(mh)
+            else
+                mounted:SetHealth(ah)
+            end
+            mounted:DoZoneInCombat()
+            attumen:SetVisible(false)
+            creature:SetVisible(false)
+        end
+    else
+        schedule(guid, "mountpoll", 1000, function() onMountPoll(creature, guid) end)
+    end
+end
+
+-- C++ boss_midnightAI::JustSummoned (boss_midnight.cpp): summon entry
+-- 15550 -> store GUID (no bridge), SetGUID (no bridge), AttackStart
+-- (no bridge), Talk(SAY_APPEAR). Only the greeting is portable.
+local function midnightJustSummoned(event, creature, summon)
+    if summon:GetEntry() == ENTRY_ATTUMEN then
+        summon:Talk(SAY_APPEAR)
+    end
+end
+
 local function midnightDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = midnightState[guid]
@@ -172,6 +217,7 @@ local function midnightDamageTaken(event, creature, attacker, damage)
     elseif state.phase == PHASE_ATTUMEN_ENGAGES and postHealth < math.floor(maxHealth * 25 / 100) then
         state.phase = PHASE_MOUNTED
         creature:CastSpell(creature, SPELL_MOUNT, true)
+        schedule(guid, "mountpoll", 1000, function() onMountPoll(creature, guid) end)
     end
     return false, newDamage
 end
@@ -209,6 +255,7 @@ RegisterCreatureEvent(ENTRY_MIDNIGHT, 2, midnightLeaveCombat)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 3, midnightTargetDied)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 9, midnightDamageTaken)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 23, midnightReset)
+RegisterCreatureEvent(ENTRY_MIDNIGHT, 19, midnightJustSummoned)
 
 -- Attumen (15550 unmounted / 16152 mounted) -----------------------------------
 
@@ -305,7 +352,8 @@ local function attumenDamageTaken(event, creature, attacker, damage)
     -- C++ asks the midnight creature to cast SPELL_MOUNT (triggered) here;
     -- the cross-creature GUID wiring (SetGUID/NPC_MIDNIGHT) has no Lua
     -- bridge, so the mount cast is skipped — the mounted form's arms are
-    -- covered by the 16152 entry when it exists in the world.
+    -- covered by the 16152 entry when it exists in the world, and midnight's
+    -- own 25% arm drives the mount poll below.
     if state.phase == PHASE_ATTUMEN_ENGAGES and postHealth < math.floor(maxHealth * 25 / 100) then
         state.phase = PHASE_NONE
     end
