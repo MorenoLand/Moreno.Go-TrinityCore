@@ -56,11 +56,10 @@
 -- instance-script model); difficulty is bridged —
 -- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
 -- drives the heroic-only spore-strider summon fire arm; no ObjectAccessor/cross-creature
--- bridge — the whole LevitatedTarget/LevitatedTarget_Timer/
--- InAir followup machine unmodeled (GetUnit + HasAura +
--- AddAura(SPELL_SUSPENSION 31719) + triggered CastSpell
--- (SPELL_MAGNETIC_PULL 31705) arms all need it; timer
--- bookkeeping for the levitate re-arm itself is exact); no
+-- bridge — the LevitatedTarget followup machine is PORTED
+-- below (GUID->player scan + HasAura gate + SUSPENSION leg;
+-- only the MAGNETIC_PULL 31705 player self-cast leg stays out
+-- — no player self-cast bridge); no
 -- home-position bridge — the check_Timer 60-yd evade arm
 -- unmodeled (timer bookkeeping exact; the re-arm from 5000
 -- to 1000 is C++-exact); no summon/attack-start bridge —
@@ -73,6 +72,7 @@
 -- bridged; no SpellScript/AuraScript scripts in this file.
 
 local SPELL_LEVITATE = 31704
+local SPELL_SUSPENSION = 31719
 local SPELL_CHAIN_LIGHTNING = 31717
 local SPELL_STATIC_CHARGE = 31715
 local SPELL_SUMMON_SPORE_STRIDER = 38755
@@ -152,12 +152,27 @@ local function pickRandomPlayerIn30Yd(creature)
     return found[math.random(#found)]
 end
 
+-- C++ ObjectAccessor::GetUnit(*me, guid) twin for the levitated
+-- player: GUIDs are globally unique, so a GetPlayersInWorld()
+-- scan matching GetGUID() is exact (anastari precedent).
+local function findPlayerByGuid(guid)
+    for _, pl in ipairs(GetPlayersInWorld()) do
+        if pl:GetGUID() == guid then
+            return pl
+        end
+    end
+    return nil
+end
+
 -- C++ Initialize() values: Levitate_Timer=12000,
 -- ChainLightning_Timer=6000, StaticCharge_Timer=10000,
 -- SporeStriders_Timer=10000+rand32()%5000, check_Timer=5000,
 -- InAir=false (the C++ JustEngagedWith is empty).
 local function freshState()
     return {
+        levitatedGuid = nil,
+        levitatedTimer = 0,
+        inAir = false,
         levitate = 12000,
         chainLightning = 6000,
         staticCharge = 10000,
@@ -195,19 +210,53 @@ local function bossTick(creature, guid)
         st.sporeStriders = st.sporeStriders - 1000
     end
 
+    -- LevitatedTarget followup (C++ UpdateAI order: before the
+    -- Levitate_Timer arm): on the 2000ms timer expiry, GetUnit
+    -- the stored GUID (nil -> clear and fall through to the
+    -- levitate arm, C++-exact); player found but without the
+    -- LEVITATE aura -> clear and return (C++ UpdateAI return
+    -- skips chain/static that tick). Not yet in air: the
+    -- MAGNETIC_PULL 31705 self-cast leg stays out (no player
+    -- self-cast bridge) but the InAir latch + 1500ms re-arm
+    -- are kept, so the second expiry still fires SUSPENSION
+    -- via player:AddAura (C++-exact timing modulo the 1s pump
+    -- granularity: the 1500ms re-arm fires on the 2nd tick).
+    -- In air: AddAura(SUSPENSION) + clear.
+    if st.levitatedGuid then
+        if st.levitatedTimer <= 1000 then
+            local target = findPlayerByGuid(st.levitatedGuid)
+            if not target then
+                st.levitatedGuid = nil
+            elseif not target:HasAura(SPELL_LEVITATE) then
+                st.levitatedGuid = nil
+                return
+            elseif st.inAir then
+                target:AddAura(SPELL_SUSPENSION)
+                st.levitatedGuid = nil
+            else
+                st.inAir = true
+                st.levitatedTimer = 1500
+            end
+        else
+            st.levitatedTimer = st.levitatedTimer - 1000
+        end
+    end
+
     -- Levitate 31704: 12s init then 12000+rand32()%3000 —
     -- random alive player excluding the victim (quagmirran
     -- convention), nil pick casts nothing, non-triggered cast
     -- on the target (C++-exact), re-arm regardless (the re-arm
-    -- is outside the if (target) block, C++-exact). The whole
-    -- LevitatedTarget/LevitatedTarget_Timer/InAir followup
-    -- machine (SUSPENSION 31719 / MAGNETIC_PULL 31705 arms)
-    -- needs an ObjectAccessor/cross-creature bridge — timer
-    -- bookkeeping only.
+    -- is outside the if (target) block, C++-exact). A cast
+    -- stores the target GUID + 2000ms followup timer +
+    -- InAir=false (C++ Levitate_Timer arm, overwriting any
+    -- pending followup); a nil pick leaves the latch clear.
     if st.levitate <= 1000 then
         local target = pickRandomPlayerExcludingVictim(creature)
         if target then
             creature:CastSpell(target, SPELL_LEVITATE)
+            st.levitatedGuid = target:GetGUID()
+            st.levitatedTimer = 2000
+            st.inAir = false
         end
         st.levitate = 12000 + math.random(0, 2999)
     else

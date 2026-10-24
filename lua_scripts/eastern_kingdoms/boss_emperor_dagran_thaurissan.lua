@@ -35,18 +35,22 @@
 --   is retracted.
 -- Unmodeled: JustEngagedWith me->CallForHelp(VISIBLE_RANGE) — no
 -- CallForHelp bridge on the luaMotionCreature surface.
--- Unmodeled: JustDied moira arm — ObjectAccessor::GetCreature via
--- _instance->GetGuidData(DATA_MOIRA) + AI()->EnterEvadeMode() +
--- SetFaction(FACTION_FRIENDLY) + Talk(EMOTE_SHAKEN=0) — no
--- instance-script / GetGuidData / SetFaction bridges on the Lua surface
--- (instance_blackrock_depths.cpp stays blocked on the instance-script
--- model).
+-- JustDied moira arm PORTED below (onDied): the instance GUID
+-- lookup is a FindNearestCreature(8929, 100.0) search (moira
+-- stands in the throne room; instance_blackrock_depths.cpp:45
+-- NPC_MOIRA = 8929) + SetFaction(FACTION_FRIENDLY 35) +
+-- Talk(EMOTE_SHAKEN=0), all bridged. Only the EnterEvadeMode
+-- leg stays out (no bridge, 2026-10-21) — moira takes no part
+-- in the fight, so evade is cleanup-only here.
 
 local SPELL_AVATAROFFLAME = 15636
 local SPELL_HANDOFTHAURISSAN = 17492
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
+local EMOTE_SHAKEN = 0
+local FACTION_FRIENDLY = 35
+local ENTRY_MOIRA = 8929
 
 local TYPEID_PLAYER = 4
 
@@ -122,6 +126,19 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_emperor_dagran_thaurissan.cpp:78-85):
+-- moira->AI()->EnterEvadeMode() (no bridge, stays out) +
+-- moira->SetFaction(FACTION_FRIENDLY) + moira->AI()->
+-- Talk(EMOTE_SHAKEN); nil moira skips all three arms.
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    local moira = creature:FindNearestCreature(ENTRY_MOIRA, 100.0)
+    if moira then
+        moira:SetFaction(FACTION_FRIENDLY)
+        moira:Talk(EMOTE_SHAKEN)
+    end
+end
+
 local function onReset(_, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -135,5 +152,5 @@ end
 RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 3, onTargetDied)
-RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_EMPEROR_DAGRAN_THAURISSAN, 23, onReset)

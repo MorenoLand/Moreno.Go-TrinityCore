@@ -25,21 +25,18 @@
 -- collapses into the pump). Pump: hemorrhage 30478: 3s init
 -- then 15s — non-triggered DoCastVictim (felmyst
 -- convention), re-arm 15s regardless (C++-exact).
--- OnDied(4): cleanup (the JustDied cross-creature arm is
--- blocked: instance->GetBossState(DATA_NETHEKURSE) !=
--- IN_PROGRESS early return plus the ObjectAccessor
--- GetCreature SetData(SETDATA_PEON_DEATH) relay have no
--- instance/cross-creature bridges). OnLeaveCombat(2)/
--- OnReset(23): cleanup.
+-- OnDied(4): cleanup + PORTED peon-death relay (below).
+-- OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no
--- instance/cross-creature bridge — the JustEngagedWith arm
--- ObjectAccessor::GetCreature(instance->GetGuidData(NPC_
--- GRAND_WARLOCK_NETHEKURSE))->AI()->SetData(SETDATA_DATA,
--- SETDATA_PEON_AGGRO) unmodeled (kalithresh precedent), so
--- the convert contributes no peon-aggro counts to the boss
--- (the whole peon/intro machine stays on the boss side,
--- blocked); the JustDied arm's GetBossState(IN_PROGRESS)
--- gate and the SetData(SETDATA_PEON_DEATH) relay unmodeled;
+-- instance/cross-creature bridge — the peon SetData relays
+-- are PORTED below via FindNearestCreature + boss Talk (the
+-- count/activation half stays boss-side: no cross-file state
+-- bridge, and the in-port boss is already attackable, so the
+-- 4th-death NON_ATTACKABLE removal is moot in-port); the
+-- JustDied arm's GetBossState(IN_PROGRESS) gate has no
+-- in-port equivalent (converts die while the boss is active
+-- in-port), so the death Talk fires whenever the boss is
+-- found alive nearby;
 -- no assistance bridge — the Reset() SetNoCallAssistance
 -- arm unmodeled; no LoS-aggro bridge — the C++ empty
 -- MoveInLineOfSight override (no line-of-sight response)
@@ -49,6 +46,9 @@
 local SPELL_HEMORRHAGE = 30478
 
 local ENTRY_FEL_ORC_CONVERT = 17083
+local ENTRY_NETHEKURSE = 16807
+local SAY_PEON_ATTACKED = 1
+local SAY_PEON_DIES = 2
 
 local timers = {}
 local states = {}
@@ -67,8 +67,13 @@ local function resetConvert(guid)
 end
 
 -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_HEMORRHAGE,
--- 3s) — the ObjectAccessor/SetData arm in the same hook is
--- cross-creature blocked (documented above).
+-- 3s) + the peon-aggro relay (boss_nethekurse.cpp:333-336):
+-- the 45.0yd IsWithinDist gate is the FindNearestCreature
+-- range; boss:Talk(SAY_PEON_ATTACKED) is the SetData effect
+-- (C++ talks once per relay while the count is below 4 — the
+-- normal flow is 4 converts engaging once each, C++-exact;
+-- re-engages after an evade would re-talk, as no cross-file
+-- counter exists to enforce the cap).
 local function freshState()
     return {
         hemorrhage = 3000,
@@ -99,6 +104,10 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 1, function(_, creature)
     timers[guid] = CreateLuaEvent(function()
         convertTick(creature, guid)
     end, 1000, 0)
+    local kurse = creature:FindNearestCreature(ENTRY_NETHEKURSE, 45.0)
+    if kurse then
+        kurse:Talk(SAY_PEON_ATTACKED)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 2, function(_, creature)
@@ -107,6 +116,14 @@ end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 4, function(_, creature)
     resetConvert(creature:GetGUID())
+    -- C++ JustDied peon-death relay (boss_nethekurse.cpp:340-346):
+    -- no distance gate in C++, so a 100.0 room-scale search;
+    -- boss:Talk(SAY_PEON_DIES) is the SetData effect (same
+    -- count caveat as the aggro relay above).
+    local kurse = creature:FindNearestCreature(ENTRY_NETHEKURSE, 100.0)
+    if kurse then
+        kurse:Talk(SAY_PEON_DIES)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 23, function(_, creature)
