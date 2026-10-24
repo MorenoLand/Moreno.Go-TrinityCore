@@ -188,7 +188,10 @@
 -- InterruptNonMeleeSpells, RemoveAllAttackers — no bridges;
 -- the live-elder shutdown sweep (RemoveAllAuras / AttackStop /
 -- CombatStop / EngagementOver / DoAction(ACTION_ELDER_FREYA_KILLED))
--- — no GetData / DoAction bridges. PORTED 2026-10-21 into
+-- — PORTED 2026-10-24 into freyaDied via the GetCreaturesInGrid elder
+-- scan (no instance GuidData needed); CombatStop has no bridge and the
+-- elder _JustDied instance SetBossState has none — both stay out. Freya's own
+-- legs were PORTED 2026-10-21 into
 -- freyaDamageTaken (the stale "no cast / react-state / faction
 -- bridges" retraction): SetReactState REACT_PASSIVE, AttackStop,
 -- SetFaction FRIENDLY, CastSpell SPELL_KNOCK_ON_WOOD_CREDIT 65074,
@@ -200,10 +203,10 @@
 -- achievement sampling; elemental 12s revive / trio-defeated
 -- GUID logic; DoMeleeAttackIfReady (engine-driven in Go).
 -- Freya GetData(DATA_GETTING_BACK_TO_NATURE /
--- DATA_KNOCK_ON_WOOD) + elder DoAction
--- (ACTION_ELDER_FREYA_KILLED -> DespawnOrUnsummon(10s)) —
--- no GetData / DoAction bridges (consumers: the four
--- achievements below).
+-- DATA_KNOCK_ON_WOOD) — no GetData bridge (consumers: the four
+-- achievements below); the elder DoAction
+-- (ACTION_ELDER_FREYA_KILLED -> DespawnOrUnsummon(10s)) is PORTED
+-- into freyaDied (see above).
 -- Elder DamageTaken — stonebark petrified-bark reflect
 -- (:841-855: who->CastSpell(who, SPELL_PETRIFIED_BARK_DMG
 -- 62379) with AddSpellBP0(damage) + damage = 0): the
@@ -403,8 +406,28 @@ local function freyaLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Freya JustDied elder shutdown sweep (boss_freya.cpp:630-641):
+-- for each live elder (instance GuidData in C++, the GetCreaturesInGrid
+-- scan here — the engage-time precedent above): RemoveAllAuras +
+-- AttackStop + the elder DoAction (DespawnOrUnsummon 10s, fire-and-
+-- forget like the 7.5s self-despawn above, + the elder's events.Reset
+-- as cancelTimers). CombatStop has no bridge; the elder _JustDied
+-- instance SetBossState has none; EngagementOver is freya-side
+-- housekeeping on the dying boss. All three stay out.
 local function freyaDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    for _, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
+        for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+            if elder:IsAlive() then
+                elder:RemoveAllAuras()
+                elder:AttackStop()
+                cancelTimers(elder:GetGUID())
+                CreateLuaEvent(function()
+                    elder:Despawn()
+                end, 10000)
+            end
+        end
+    end
 end
 
 local function freyaReset(event, creature)
@@ -440,8 +463,8 @@ end
 -- cancel it, which C++ never does either). Still out: the chest
 -- summon (summonSpell indexed by GetMap()->GetDifficulty() —
 -- no 10/25 raid-size bridge; creature:IsHeroic is heroic-only),
--- InterruptNonMeleeSpells, RemoveAllAttackers, and the live-elder
--- shutdown sweep (instance GuidData / DoAction — no bridges).
+-- InterruptNonMeleeSpells and RemoveAllAttackers (the live-elder
+-- shutdown sweep is ported into freyaDied 2026-10-24).
 local function freyaDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
