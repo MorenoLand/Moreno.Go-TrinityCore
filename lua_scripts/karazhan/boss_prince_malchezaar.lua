@@ -18,15 +18,19 @@
 -- 60%) — Sunder Armor {10s,18s} and Cleave {6s,12s} on the victim, Shadow
 -- Word: Pain stops; phase 3 (below 30%) — axes fly out, Amplify Damage
 -- {20s,30s} on a random target, Shadow Nova 31s, Infernals every 14.5s.
--- Deviations from C++: no Go summon model, so the infernal summons
--- (18 fixed INFERNAL_Z points on map 532), the two axe summons (17650),
--- the SPELL_INFERNAL_RELAY handshake, and the whole netherspite_infernal
--- AI (Hellfire 4s / Cleanup 170s / DamageTaken non-Malchezaar immunity /
--- Cleanup point recycling) have no bearer — Infernals stay virtual and the
--- InfernalTimer arm keeps the C++ cadence as Talk(SAY_SUMMON) only; the
--- axes are never spawned, so the phase-3 AxesTargetSwitchTimer threat
--- rewiring (no threat model) is skipped entirely and AxesCleanup's
--- cross-creature KillSelf on the axes is moot. No instance-script
+-- Deviations from C++: the infernal summons (18 fixed INFERNAL_Z points
+-- on map 532) and the netherspite_infernal AI ARE ported (onInfernal +
+-- event 14 relay: invisible display, native-display restore via template
+-- modelid1, NOT_SELECTABLE, Hellfire 4s, DamageTaken non-Malchezaar
+-- immunity via the event-9 damage rewrite, Cleanup 170s as a no-op) —
+-- the point pool draws with replacement (Cleanup point-recycle has no
+-- cross-file bearer) and Reset/JustDied/LeaveCombat despawn live
+-- infernals via a grid sweep (InfernalCleanup twin). The two axe
+-- summons (17650) stay unspawned: axes have no C++ AI script and their
+-- attack legs (AttackStart, AddThreat who-redirect — AddThreat is
+-- self-threat only) have no bridge, so the phase-3
+-- AxesTargetSwitchTimer threat rewiring is skipped entirely and
+-- AxesCleanup's cross-creature KillSelf on the axes is moot. No instance-script
 -- model, so the DATA_GO_NETHER_DOOR toggles on Reset/JustEngagedWith/
 -- JustDied are skipped. The phase-2 equipment swap is ported via
 -- creature:SetEquipmentSlots (33542,33542,0xFFFFFFFF at the phase-2
@@ -66,6 +70,23 @@ local SPELL_SUNDER_ARMOR = 30901
 local SPELL_EQUIP_AXES = 30857
 local SPELL_AMPLIFY_DAMAGE = 39095
 local SPELL_CLEAVE = 30131
+local SPELL_HELLFIRE = 30859
+local SPELL_INFERNAL_RELAY = 30834
+
+local ENTRY_INFERNAL = 17646
+local INFERNAL_MODEL_INVISIBLE = 11686
+local INFERNAL_Z = 275.5
+local INFERNAL_POINTS = {
+    {-10922.8, -1985.2}, {-10916.2, -1996.2}, {-10932.2, -2008.1},
+    {-10948.8, -2022.1}, {-10958.7, -1997.7}, {-10971.5, -1997.5},
+    {-10990.8, -1995.1}, {-10989.8, -1976.5}, {-10971.6, -1973.0},
+    {-10955.5, -1974.0}, {-10939.6, -1969.8}, {-10958.0, -1952.2},
+    {-10941.7, -1954.8}, {-10943.1, -1988.5}, {-10948.8, -2005.1},
+    {-10984.0, -2019.3}, {-10932.8, -1979.6}, {-10935.7, -1996.0},
+}
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local PHASE_ONE, PHASE_TWO, PHASE_THREE = 1, 2, 3
 local ENFEEBLE_MAX_TARGETS = 5
@@ -321,15 +342,44 @@ local function onInfernal(creature, guid)
     if st == nil then
         return
     end
-    -- C++ SummonInfernal: no Go summon model, so the virtual infernal is
-    -- just the SAY_SUMMON announcement; hellfire/relay/display arms have
-    -- no bearer. C++ repeats 14.5s in phase 3, 44.5s otherwise.
+    -- C++ SummonInfernal (boss_prince_malchezaar.cpp:360-388): random
+    -- point from the 18 fixed INFERNAL_Z points on map 532 (C++ draws
+    -- without replacement from the live-point pool; the Lua port draws
+    -- with replacement — the infernal Cleanup point-recycle has no
+    -- cross-file bearer, so the pool never drains here), summon
+    -- TEMPSUMMON_TIMED_DESPAWN 180s, SetDisplayId(invisible),
+    -- SetFaction, then the RELAY cast that arms the infernal AI
+    -- (event 14 below, which restores the native display); off-map
+    -- fallback is the boss position (C++ GetRandomNearPosition(60),
+    -- no bridge).
+    -- C++ order: summon, faction, relay, Talk. Repeats 14.5s in
+    -- phase 3, 44.5s otherwise.
+    local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+    if creature:GetMapId() == 532 then
+        local pt = INFERNAL_POINTS[math.random(#INFERNAL_POINTS)]
+        x, y, z = pt[1], pt[2], INFERNAL_Z
+        o = math.random() * 2 * math.pi
+    end
+    local infernal = creature:SummonCreature(ENTRY_INFERNAL, x, y, z, o, 2, 180000)
+    if infernal then
+        infernal:SetDisplayId(INFERNAL_MODEL_INVISIBLE)
+        infernal:SetFaction(creature:GetFaction())
+        creature:CastSpell(infernal, SPELL_INFERNAL_RELAY)
+    end
     creature:Talk(SAY_SUMMON)
     local delay = 44500
     if st.phase == PHASE_THREE then
         delay = 14500
     end
     schedule(guid, "infernal", delay, function() onInfernal(creature, guid) end)
+end
+
+-- C++ InfernalCleanup (Reset/JustDied): live infernals are killed
+-- (SetVisible(false) + JUST_DIED); Despawn is the Lua removal twin.
+local function despawnInfernals(creature)
+    for _, infernal in ipairs(creature:GetCreaturesInGrid(ENTRY_INFERNAL, 100)) do
+        infernal:Despawn()
+    end
 end
 
 local function startPhaseTwo(creature, guid)
@@ -366,9 +416,12 @@ local function startPhaseThree(creature, guid)
     end
     -- C++ UpdateAI phase-2 arm: InfernalTimer = 15000, ClearWeapons /
     -- RemoveAurasDueToSpell(thrash) (both bridged, ported below),
-    -- Talk(SAY_AXE_TOSS2), two axe summons with 10M threat (no summon or
-    -- threat model — the AxesTargetSwitchTimer re-threating is skipped
-    -- entirely).
+    -- Talk(SAY_AXE_TOSS2), two axe summons with 10M threat — the axes
+    -- stay unspawned: they have no C++ AI script, and their attack legs
+    -- (AttackStart on the picked target, AddThreat who-redirect) have
+    -- no bridge (AddThreat is self-threat only), so a summoned axe
+    -- would idle at the boss's feet; the AxesTargetSwitchTimer
+    -- re-threating is skipped entirely.
     st.phase = PHASE_THREE
     -- C++ ClearWeapons: SetEquipmentSlots(false, EQUIP_UNEQUIP,
     -- EQUIP_UNEQUIP, EQUIP_NO_CHANGE) = (0, 0, 0xFFFFFFFF); the
@@ -422,6 +475,7 @@ end
 local function malchezaarLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    despawnInfernals(creature)
     malchezaarInitState(guid)
 end
 
@@ -431,16 +485,18 @@ end
 
 local function malchezaarDied(event, creature, killer)
     -- C++ JustDied: Talk(SAY_DEATH), AxesCleanup / ClearWeapons /
-    -- InfernalCleanup / positions reset (nothing to clean with no summon
-    -- model), door open (no instance model).
+    -- InfernalCleanup / positions reset (axes never spawn, so only the
+    -- infernal sweep ports), door open (no instance model).
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    despawnInfernals(creature)
     malchezaarInitState(creature:GetGUID())
 end
 
 local function malchezaarReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    despawnInfernals(creature)
     malchezaarInitState(guid)
 end
 
@@ -470,6 +526,62 @@ local function malchezaarDamageTaken(event, creature, attacker, damage)
     end
     return false, damage
 end
+
+-- Netherspite Infernal (17646, boss_prince_malchezaar.cpp:105-175):
+-- SpellHit RELAY restores the native display (template modelid1),
+-- sets NOT_SELECTABLE, arms Hellfire 4s and Cleanup 170s; DamageTaken
+-- zeroes everything not dealt by Malchezaar (boss found via the
+-- FindNearestCreature liveness twin — the AI's malchezaar GUID field
+-- has no cross-file bearer); the Cleanup arm only recycles the boss
+-- spawn point, which is a no-op here (onInfernal draws with
+-- replacement), so its timer callback is empty. The infernal never
+-- melees (C++ UpdateAI has no melee arm) and never engages (C++
+-- JustEngagedWith/MoveInLineOfSight are empty), so it needs no
+-- enter-combat registration.
+local infernalTimers = {}
+
+local function infernalSchedule(guid, key, delay, fn)
+    local per = infernalTimers[guid]
+    if not per then
+        per = {}
+        infernalTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function infernalSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_INFERNAL_RELAY then
+        return
+    end
+    local native = creature:GetTemplateModelId(1)
+    if native ~= nil and native ~= 0 then
+        creature:SetDisplayId(native)
+    end
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    local guid = creature:GetGUID()
+    infernalSchedule(guid, "hellfire", 4000, function()
+        creature:CastSpell(creature, SPELL_HELLFIRE)
+    end)
+    infernalSchedule(guid, "cleanup", 170000, function()
+    end)
+end
+
+local function infernalDamageTaken(event, creature, attacker, damage)
+    if attacker == nil then
+        return false, 0
+    end
+    local boss = creature:FindNearestCreature(ENTRY_MALCHEZAAR, 100.0)
+    if boss == nil or attacker:GetGUID() ~= boss:GetGUID() then
+        return false, 0
+    end
+    return false, damage
+end
+
+RegisterCreatureEvent(ENTRY_INFERNAL, 9, infernalDamageTaken)
+RegisterCreatureEvent(ENTRY_INFERNAL, 14, infernalSpellHit)
 
 RegisterCreatureEvent(ENTRY_MALCHEZAAR, 1, malchezaarEnterCombat)
 RegisterCreatureEvent(ENTRY_MALCHEZAAR, 2, malchezaarLeaveCombat)

@@ -49,10 +49,11 @@
 -- Mandokir simply starts combat already at the arena; the Mount
 -- (MODEL_OHGAN_MOUNT = 15271) / Dismount arms port via the
 -- creature:Mount/Dismount bridge (UNIT_FIELD_MOUNTDISPLAYID +
--- UNIT_FLAG_MOUNT, Unit.cpp:8310/8365); the
--- Ohgan and chained-spirit summon arms have no bearer (no summon
--- model) — neither ever spawns; SummonedCreatureDies' Ohgan frenzy
--- 24318 + Talk(SAY_OHGAN_DEAD=4) arm therefore never fires; the
+-- UNIT_FLAG_MOUNT, Unit.cpp:8310/8365); the Ohgan and chained-spirit
+-- summon arms ARE ported at engage (live SummonCreature bridge, see
+-- below), and SummonedCreatureDies' Ohgan frenzy 24318 +
+-- Talk(SAY_OHGAN_DEAD=4) arm ports via the Ohgan Died handler's
+-- FindNearestCreature boss relay; the
 -- KilledUnit jindo Talk(SAY_GRATS_JINDO) arm rides GetCreaturesInGrid
 -- (11380 is unique in Zul'Gurub); the mortal strike HealthBelowPct(50) check
 -- uses post-damage GetHealthPct (no pre-damage health bridge);
@@ -74,11 +75,13 @@ local SPELL_WATCH = 24314
 local SPELL_CHARGE = 24408
 local SPELL_LEVEL_UP = 24312
 local SPELL_SUNDERARMOR = 24317
+local SPELL_FRENZY = 24318
 local SPELL_DEMORALIZING_SHOUT = 13730
 local SPELL_CLEAVE = 15284
 
 local SAY_AGGRO = 0
 local SAY_DING_KILL = 1
+local SAY_OHGAN_DEAD = 4
 local SAY_GRATS_JINDO = 0 -- boss_mandokir.cpp:36
 local SAY_WATCH = 2
 
@@ -344,6 +347,17 @@ RegisterCreatureEvent(ENTRY_OHGAN, 2, function(event, creature)
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 4, function(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ SummonedCreatureDies (boss_mandokir.cpp:184-190): frenzy
+    -- self-cast + Talk on the boss; relayed via FindNearestCreature
+    -- (garaxxas/delrissa liveness twin — the boss object is not
+    -- reachable from the summon's own Died handler otherwise).
+    -- Temp-summon expiry is UnSummon, not death, so this fires only on
+    -- a real kill; a missing boss (already dead/gone) skips silently.
+    local boss = creature:FindNearestCreature(ENTRY_MANDOKIR, 100.0)
+    if boss then
+        boss:CastSpell(boss, SPELL_FRENZY)
+        boss:Talk(SAY_OHGAN_DEAD)
+    end
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 23, function(event, creature)
     local guid = creature:GetGUID()

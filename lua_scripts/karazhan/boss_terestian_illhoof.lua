@@ -17,17 +17,18 @@
 -- debuff from the boss first); when broken pact 30065 hits the boss, the
 -- summon timer is re-armed at 32s.
 -- Deviations from C++: the two portal summons (SPELL_FIENDISH_PORTAL_1 30171,
--- SPELL_FIENDISH_PORTAL_2 30179) and the sacrifice's demon-chains summon
--- (SPELL_SUMMON_DEMONCHAINS 30120) never spawn their creatures: the portals
--- are PassiveAI with no combat events firing (unported unit) and the chains
--- are cast by the sacrificed player (no player:CastSpell bridge) for an
--- unported chains unit — so those casts are skipped while the non-summon
--- arms (RemoveAura, Talk) stay; the boss's Reset/JustDied ACTION_DESPAWN_IMPS
--- arms stay out (DoAction relay has no bridge; the portal unit is
--- unregistered); the portal imps' DoZoneInCombat
--- has a bearer now (event 19 passes the summon object —
--- summon:DoZoneInCombat(), live bridge 2026-10-23) but the portal unit
--- itself is unported, so the arm never fires. The kil'rek summon
+-- SPELL_FIENDISH_PORTAL_2 30179) ARE ported: the spell effects spawn
+-- portal 17265 (same engine gap as kil'rek below), the portal imp pump
+-- (first imp 2.4s, then every 8s, DoCastAOE 30184 triggered) is armed by
+-- the boss event-19 handler (the portal never engages, so no portal
+-- combat event can arm it), the portal imps' DoZoneInCombat ports via
+-- the portal event-19 handler, and Reset/JustDied/LeaveCombat despawn
+-- portals + imps via a grid sweep (the ACTION_DESPAWN_IMPS DoAction
+-- relay has no bridge). The sacrifice's demon-chains summon
+-- (SPELL_SUMMON_DEMONCHAINS 30120) never spawns: the chains are cast by
+-- the sacrificed player (no player:CastSpell bridge) for an unported
+-- chains unit — so that cast is skipped while the non-summon arms
+-- (RemoveAura, Talk) stay. The kil'rek summon
 -- (SPELL_SUMMON_IMP 30066) IS ported: the 2026-10-23 engine gap closure
 -- (4212e3e7) executes SPELL_EFFECT_SUMMON on the creature-cast path, so the
 -- DoCastAOE self-cast spawns 17229 whose npc_kilrek AI is registered below.
@@ -38,9 +39,9 @@
 -- never fire in the engine) and its JustDied arm needs the recorded
 -- sacrifice GUID, which has no bridge — so the sacrifice debuff runs its
 -- full duration instead of ending when the chains die. Fiendish portal
--- (17265, "npc_fiendish_portal") is not registered: PassiveAI with its
--- scheduler on UpdateAI, no combat events fire for it and its imp summons
--- have no bearer. No threat model — shadow bolt uses the victim via the
+-- (17265, "npc_fiendish_portal") is registered for event 19 only
+-- (JustSummoned imp engage); its imp pump lives in the boss file (see
+-- above). No threat model — shadow bolt uses the victim via the
 -- nil-target fallback (C++ MaxThreat) and sacrifice picks any random alive
 -- player. No UNIT_STATE_CASTING model — timers fire unconditionally. The
 -- fiendish imp's fire-school ApplySpellImmune and kil'rek's
@@ -49,6 +50,7 @@
 local ENTRY_TERESTIAN_ILLHOOF = 15688
 local ENTRY_KILREK = 17229
 local ENTRY_FIENDISH_IMP = 17267
+local ENTRY_FIENDISH_PORTAL = 17265
 
 local SAY_SLAY = 0
 local SAY_DEATH = 1
@@ -157,10 +159,13 @@ local function onSacrifice(creature, guid)
     end)
 end
 
--- C++ EVENT_SUMMON_PORTAL_1 / _2: DoCastAOE(FIENDISH_PORTAL_1/_2) — the
--- portal summons have no bearer, skipped; only the emote stays.
+-- C++ EVENT_SUMMON_PORTAL_1: Talk(SAY_SUMMON_PORTAL) then
+-- DoCastAOE(FIENDISH_PORTAL_1, non-triggered) — the spell effect
+-- summons portal 17265 (4212e3e7 engine gap, kil'rek precedent); the
+-- portal's imp pump is armed by the boss event-19 handler below.
 local function onPortal1(creature, guid)
     creature:Talk(SAY_SUMMON_PORTAL)
+    creature:CastSpell(creature, SPELL_FIENDISH_PORTAL_1)
 end
 
 local function onEnrage(creature, guid)
@@ -187,25 +192,67 @@ local function terestianEnterCombat(event, creature, target)
     end)
     schedule(timers, guid, "portal2", 11000, function()
         -- C++ EVENT_SUMMON_PORTAL_2: DoCastAOE(SPELL_FIENDISH_PORTAL_2,
-        -- triggered) only — the portal summon has no bearer, so the event
-        -- is a no-op in this build.
+        -- triggered) — the spell effect summons portal 17265, same
+        -- event-19 pump arming as portal 1.
+        creature:CastSpell(creature, SPELL_FIENDISH_PORTAL_2, true)
     end)
     schedule(timers, guid, "enrage", 600000, function()
         onEnrage(creature, guid)
     end)
 end
 
+-- C++ npc_fiendish_portal Reset: first imp at 2.4s, then every 8s
+-- (DoCastAOE triggered). The portal never engages (PassiveAI), so its
+-- pump is armed by the boss event-19 handler when the portal spawns,
+-- not by any portal combat event; the pump lives in the boss timers
+-- store so LeaveCombat/Died/Reset cancel it with everything else.
+local function portalImpPump(portal, bossGuid, key)
+    portal:CastSpell(portal, SPELL_SUMMON_FIENDISH_IMP, true)
+    schedule(timers, bossGuid, key, 8000, function()
+        portalImpPump(portal, bossGuid, key)
+    end)
+end
+
+local function terestianJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_FIENDISH_PORTAL then
+        return
+    end
+    local bossGuid = creature:GetGUID()
+    local key = "portalImp:" .. summon:GetGUID()
+    schedule(timers, bossGuid, key, 2400, function()
+        portalImpPump(summon, bossGuid, key)
+    end)
+end
+
+-- C++ npc_fiendish_portal JustSummoned: track + DoZoneInCombat.
+local function portalJustSummoned(event, creature, summon)
+    summon:DoZoneInCombat()
+end
+
+-- C++ Reset/JustDied: portals DoAction(ACTION_DESPAWN_IMPS) + BossAI
+-- summon cleanup; the grid sweep is the Lua twin (no DoAction relay).
+local function despawnPortalMachine(creature)
+    for _, imp in ipairs(creature:GetCreaturesInGrid(ENTRY_FIENDISH_IMP, 100)) do
+        imp:Despawn()
+    end
+    for _, portal in ipairs(creature:GetCreaturesInGrid(ENTRY_FIENDISH_PORTAL, 100)) do
+        portal:Despawn()
+    end
+end
+
 local function terestianLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
+    despawnPortalMachine(creature)
 end
 
 local function terestianDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
-    -- C++ JustDied: Talk(SAY_DEATH); the portal-imp despawn arm and
-    -- SetBossState have no model.
+    -- C++ JustDied: Talk(SAY_DEATH), then the portal-imp despawn arm
+    -- (sweep above); SetBossState has no model.
     creature:Talk(SAY_DEATH)
+    despawnPortalMachine(creature)
 end
 
 -- C++ SpellHit: re-arm EVENT_SUMMON_KILREK at 32s when hit by broken pact
@@ -223,7 +270,11 @@ end
 local function terestianReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
+    despawnPortalMachine(creature)
 end
+
+RegisterCreatureEvent(ENTRY_TERESTIAN_ILLHOOF, 19, terestianJustSummoned)
+RegisterCreatureEvent(ENTRY_FIENDISH_PORTAL, 19, portalJustSummoned)
 
 RegisterCreatureEvent(ENTRY_TERESTIAN_ILLHOOF, 1, terestianEnterCombat)
 RegisterCreatureEvent(ENTRY_TERESTIAN_ILLHOOF, 2, terestianLeaveCombat)

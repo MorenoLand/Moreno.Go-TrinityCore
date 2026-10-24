@@ -9,11 +9,12 @@
 -- 4 OnDied, 9 OnDamageTaken (soft-enrage arm, damage untouched), 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
--- Deviations from C++: the engine has no summon model, so
--- SPELL_SUMMON_ASTRAL_FLARE_* (30236/30239/30240/30241) are visual-only
--- casts and the Eluna events 19/22 never fire — the Astral Flare
--- npc_curator_astral_flare react-state/deselect plumbing (entry 17086) has
--- no Lua-modelable content and is not registered. Mana is drained on
+-- Deviations from C++: SPELL_SUMMON_ASTRAL_FLARE_* (30236/30239/30240/30241)
+-- are cast (onAstralFlare below) and the engine summon effect spawns
+-- flare 17086; the flare's react-state/deselect plumbing ports via the
+-- boss event-19 handler (PASSIVE at summon, AGGRESSIVE + RemoveFlag
+-- NOT_SELECTABLE + DoZoneInCombat at 2s, boss_curator.cpp:155-175).
+-- Mana is drained on
 -- the live field: each Astral Flare summon does ModifyPower(POWER_MANA=0,
 -- -floor(GetMaxPower/10)) (C++ boss_curator.cpp:118-120;
 -- creature:ModifyPower bridged at lua_creature_events.go:603, clamping
@@ -31,6 +32,12 @@
 -- lua_creature_events.go; the stale "no threat model" note is retracted).
 
 local ENTRY = 15691
+local ENTRY_ASTRAL_FLARE = 17086
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
 
 local SAY_AGGRO, SAY_SUMMON, SAY_EVOCATE, SAY_ENRAGE = 0, 1, 2, 3
 local SAY_KILL, SAY_DEATH = 4, 5
@@ -129,6 +136,25 @@ local function onArcaneInfusion(creature)
     creature:CastSpell(creature, SPELL_ARCANE_INFUSION, true)
 end
 
+-- C++ npc_curator_astral_flare: ctor SetReactState(PASSIVE), Reset
+-- schedules 2s -> REACT_AGGRESSIVE + RemoveFlag(NOT_SELECTABLE) +
+-- DoZoneInCombat. The flare never engages on its own, so the 2s arm is
+-- driven by the boss event-19 handler (the flare is the boss's only
+-- summon, but the entry is still filtered); the timer lives in the
+-- boss store so LeaveCombat/Died cancel it.
+local function curatorJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_ASTRAL_FLARE then
+        return
+    end
+    summon:SetReactState(REACT_PASSIVE)
+    local bossGuid = creature:GetGUID()
+    schedule(bossGuid, "flareAggro:" .. summon:GetGUID(), 2000, function()
+        summon:SetReactState(REACT_AGGRESSIVE)
+        summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        summon:DoZoneInCombat()
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -184,6 +210,8 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
     return false, damage
 end
+
+RegisterCreatureEvent(ENTRY, 19, curatorJustSummoned)
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
