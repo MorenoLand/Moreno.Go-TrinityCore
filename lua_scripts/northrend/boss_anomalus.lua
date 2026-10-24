@@ -49,9 +49,11 @@
 -- GetData(DATA_CHAOS_THEORY) — chaosTheory cross-AI data leg consumed
 -- only by achievement_chaos_theory's OnCheck — no GetData bridge and
 -- no achievement bridge.
--- SummonedCreatureDies — chaosTheory=false when a dead summon has
--- entry NPC_CHAOTIC_RIFT — no summon / creature-death dispatch
--- bridge.
+-- SummonedCreatureDies — PORTED (event 21): chaosTheory=false when a
+-- dead summon has entry NPC_CHAOTIC_RIFT — new engine fire site in
+-- fireCreatureDied (summoner OwnerGUID link); the chaosTheory latch is
+-- write-only in Lua (its only C++ reader is achievement_chaos_theory's
+-- GetData(DATA_CHAOS_THEORY), no achievement/GetData bridges).
 -- UpdateAI — the home-position distance >60.0f EnterEvadeMode hack —
 -- no position / EnterEvadeMode bridges; the SPELL_RIFT_SHIELD 47748
 -- HasAura + uiChaoticRiftGUID ObjectAccessor::GetCreature + Rift->
@@ -88,6 +90,7 @@
 -- no-achievement-bridge queue.
 
 local ENTRY_ANOMALUS = 26763
+local NPC_CHAOTIC_RIFT = 26918 -- boss_anomalus.cpp:38
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
@@ -100,6 +103,11 @@ local SPELL_SPARK = 47751 -- C++ :182 fires SPELL_SPARK unconditionally
 -- stale).
 
 local timers = {}
+local chaos = {} -- chaosTheory per-GUID latch: C++ Initialize() sets it
+-- true (Reset twin below); SummonedCreatureDies clears it when a dead
+-- summon is NPC_CHAOTIC_RIFT. Write-only in Lua — its only C++ reader
+-- is achievement_chaos_theory's GetData(DATA_CHAOS_THEORY), and the
+-- achievement + GetData legs have no bridges (see header).
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -176,6 +184,7 @@ end
 
 local function anomalusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    chaos[creature:GetGUID()] = nil
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) (the instance->SetBossState(DATA_
@@ -183,13 +192,26 @@ end
 local function anomalusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    chaos[creature:GetGUID()] = nil
 end
 
 local function anomalusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    chaos[creature:GetGUID()] = true -- C++ Initialize(): chaosTheory = true
+end
+
+-- C++ SummonedCreatureDies: chaosTheory = false when the dead summon's
+-- entry is NPC_CHAOTIC_RIFT (boss_anomalus.cpp:130-134). Fired by the
+-- new engine event-21 dispatch (fireCreatureDied -> summoner OwnerGUID
+-- link); args are (event, creature, summon, killer) per Eluna.
+local function anomalusSummonedDied(event, creature, summon, killer)
+    if summon:GetEntry() == NPC_CHAOTIC_RIFT then
+        chaos[creature:GetGUID()] = false
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ANOMALUS, 1, anomalusEnterCombat)
 RegisterCreatureEvent(ENTRY_ANOMALUS, 2, anomalusLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANOMALUS, 4, anomalusDied)
+RegisterCreatureEvent(ENTRY_ANOMALUS, 21, anomalusSummonedDied)
 RegisterCreatureEvent(ENTRY_ANOMALUS, 23, anomalusReset)

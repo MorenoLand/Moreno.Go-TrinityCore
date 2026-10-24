@@ -2694,6 +2694,27 @@ func (s *session) fireCreatureDied(ctx context.Context, motion *creatureMotion) 
 	diedArgs := []any{scripting.CreatureEventOnDied, creature, s.luaPlayer()}
 	_, _ = sv.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
 	_, _ = sv.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
+	// CREATURE_EVENT_ON_SUMMONED_CREATURE_DIED (21) dispatches on the
+	// summoner when a temp summon dies. C++ (Eluna::SummonedCreatureDied,
+	// CreatureHooks.cpp, reached from ElunaCreatureAI::SummonedCreatureDies,
+	// ElunaCreatureAI.h) pushes (event, creature, summon, killer) over the
+	// entry then unique bindings of the summoner. The summoner link is the
+	// summon's OwnerGUID (stamped by summonTempCreature); pets and charmed
+	// creatures point at player GUIDs, which findCreatureMotion never
+	// resolves, so those skip cleanly. The boolean veto gates only
+	// ScriptedAI::SummonedCreatureDies, whose base is empty (CreatureAI.h)
+	// — a provable no-op like the JustDied/JustSummoned rulings — and is
+	// discarded. Must be called with motionMu released: findCreatureMotion
+	// locks it and the Lua handlers lock it on demand.
+	if motion.OwnerGUID != 0 {
+		if summoner := sv.findCreatureMotion(motion.Map, motion.InstanceID, motion.OwnerGUID); summoner != nil {
+			if summonerObj := sv.luaMotionCreature(summoner); summonerObj != nil {
+				summonDiedArgs := []any{scripting.CreatureEventOnSummonedCreatureDied, summonerObj, creature, s.luaPlayer()}
+				_, _ = sv.Features.Scripts.TriggerCreatureEvent(ctx, summoner.Entry, scripting.CreatureEventOnSummonedCreatureDied, summonDiedArgs...)
+				_, _ = sv.Features.Scripts.TriggerUniqueCreatureEvent(ctx, summoner.GUID, summoner.InstanceID, scripting.CreatureEventOnSummonedCreatureDied, summonDiedArgs...)
+			}
+		}
+	}
 }
 
 // fireCreatureTargetDied dispatches Eluna CREATURE_EVENT_ON_TARGET_DIED (3)
