@@ -91,14 +91,40 @@ local function druidReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_faction_championsAI::KilledUnit relay (see
+-- boss_faction_champions.lua): player victim -> faction-leader bare
+-- Talk(SAY_KILLED_PLAYER 6); Alliance-entry druid means Horde players
+-- -> Garrosh (34995), Horde-entry druid means Alliance players ->
+-- Varian (34990). Trigger event 3, lookup FindNearestCreature 150.0,
+-- nil-guarded.
+local ENTRY_VARIAN = 34990
+local ENTRY_GARROSH = 34995
+local SAY_KILLED_PLAYER = 6
+
+local function druidTargetDied(event, creature, victim)
+    if victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local leaderEntry = ENTRY_GARROSH
+    if creature:GetEntry() == ENTRY_DRUID_HORDE then
+        leaderEntry = ENTRY_VARIAN
+    end
+    local leader = creature:FindNearestCreature(leaderEntry, 150.0)
+    if leader ~= nil then
+        leader:Talk(SAY_KILLED_PLAYER)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 1, druidEnterCombat)
 RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 2, druidLeaveCombat)
+RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 3, druidTargetDied)
 RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 4, druidDied)
 RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 5, druidSpawn)
 RegisterCreatureEvent(ENTRY_DRUID_ALLIANCE, 23, druidReset)
 
 RegisterCreatureEvent(ENTRY_DRUID_HORDE, 1, druidEnterCombat)
 RegisterCreatureEvent(ENTRY_DRUID_HORDE, 2, druidLeaveCombat)
+RegisterCreatureEvent(ENTRY_DRUID_HORDE, 3, druidTargetDied)
 RegisterCreatureEvent(ENTRY_DRUID_HORDE, 4, druidDied)
 RegisterCreatureEvent(ENTRY_DRUID_HORDE, 5, druidSpawn)
 RegisterCreatureEvent(ENTRY_DRUID_HORDE, 23, druidReset)

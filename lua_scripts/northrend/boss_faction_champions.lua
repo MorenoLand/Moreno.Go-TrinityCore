@@ -194,6 +194,41 @@ local function championReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_faction_championsAI::KilledUnit (boss_faction_champions.cpp
+-- :655-666): a player victim relays via instance GetCreature(DATA_VARIAN
+-- /DATA_GARROSH) to varian/garrosh DoAction(ACTION_SAY_KILLED_PLAYER),
+-- whose only leg is a bare Talk (trial_of_the_crusader.cpp:764/833,
+-- GARROSH_SAY_KILLED/VARIAN_SAY_KILLED 6). No DoAction/instance bridge
+-- exists, but the trigger (event 3 OnTargetDied, kalecgos precedent)
+-- and the receiver lookup (FindNearestCreature, maulgar precedent) are
+-- both bridged, so the relay ports: instance DATA_TEAM is the first
+-- entering player's team (instance_trial_of_the_crusader.cpp:135-136)
+-- and champions spawn opposite-faction, so an Alliance-entry champion
+-- means Horde players -> Garrosh talks, and a Horde-entry champion
+-- means Alliance players -> Varian talks. Nil leader (out of the
+-- 150.0 grid) means no relay, matching the C++ live-creature gate.
+local ENTRY_VARIAN = 34990 -- trial_of_the_crusader.h:161 NPC_VARIAN
+local ENTRY_GARROSH = 34995 -- trial_of_the_crusader.h:160 NPC_GARROSH
+local SAY_KILLED_PLAYER = 6 -- trial_of_the_crusader.cpp:61/70
+local ALLIANCE_CHAMPIONS = {
+    [34465] = true, [34473] = true, [34468] = true, [34467] = true,
+    [34475] = true, [34461] = true, [34472] = true, [34471] = true,
+}
+
+local function championTargetDied(event, creature, victim)
+    if victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local leaderEntry = ENTRY_VARIAN
+    if ALLIANCE_CHAMPIONS[creature:GetEntry()] then
+        leaderEntry = ENTRY_GARROSH
+    end
+    local leader = creature:FindNearestCreature(leaderEntry, 150.0)
+    if leader ~= nil then
+        leader:Talk(SAY_KILLED_PLAYER)
+    end
+end
+
 local CHAMPION_ENTRIES = {
     34465, 34445, 34473, 34441, 34468, 34449,
     34467, 34448, 34475, 34453, 34461, 34458,
@@ -203,6 +238,7 @@ local CHAMPION_ENTRIES = {
 for _, entry in ipairs(CHAMPION_ENTRIES) do
     RegisterCreatureEvent(entry, 1, championEnterCombat)
     RegisterCreatureEvent(entry, 2, championLeaveCombat)
+    RegisterCreatureEvent(entry, 3, championTargetDied)
     RegisterCreatureEvent(entry, 4, championDied)
     RegisterCreatureEvent(entry, 23, championReset)
 end

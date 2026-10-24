@@ -259,14 +259,40 @@ local function boomkinReset(event, creature)
     scheduleRotation(creature)
 end
 
+-- C++ boss_faction_championsAI::KilledUnit relay (see
+-- boss_faction_champions.lua): player victim -> faction-leader bare
+-- Talk(SAY_KILLED_PLAYER 6); Alliance-entry boomkin means Horde
+-- players -> Garrosh (34995), Horde-entry boomkin means Alliance
+-- players -> Varian (34990). Trigger event 3, lookup
+-- FindNearestCreature 150.0, nil-guarded.
+local ENTRY_VARIAN = 34990
+local ENTRY_GARROSH = 34995
+local SAY_KILLED_PLAYER = 6
+
+local function boomkinTargetDied(event, creature, victim)
+    if victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local leaderEntry = ENTRY_GARROSH
+    if creature:GetEntry() == ENTRY_BOOMKIN_HORDE then
+        leaderEntry = ENTRY_VARIAN
+    end
+    local leader = creature:FindNearestCreature(leaderEntry, 150.0)
+    if leader ~= nil then
+        leader:Talk(SAY_KILLED_PLAYER)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 1, boomkinEnterCombat)
 RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 2, boomkinLeaveCombat)
+RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 3, boomkinTargetDied)
 RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 4, boomkinDied)
 RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 5, boomkinSpawn)
 RegisterCreatureEvent(ENTRY_BOOMKIN_ALLIANCE, 23, boomkinReset)
 
 RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 1, boomkinEnterCombat)
 RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 2, boomkinLeaveCombat)
+RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 3, boomkinTargetDied)
 RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 4, boomkinDied)
 RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 5, boomkinSpawn)
 RegisterCreatureEvent(ENTRY_BOOMKIN_HORDE, 23, boomkinReset)
