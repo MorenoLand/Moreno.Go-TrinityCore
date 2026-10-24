@@ -71,6 +71,11 @@
 -- retracted.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28923):
+-- Instance script (instance_halls_of_lightning.cpp:87-93): SetBossState
+-- DATA_LOKEN DONE -> LokenGlobe (GO_LOKEN_THRONE, bound on
+-- OnGameObjectCreate) SendCustomAnim(0) — stays out: no Lua instance
+-- bridge, and the sender is the instance boss-state transition, not
+-- Loken's own JustDied, so no event-4 twin is valid here.
 -- boss_loken Reset / Initialize (_healthAmountModifier = 1 flag +
 -- instance->DoStopTimedAchievement(ACHIEV_TIMELY_DEATH_START_EVENT
 -- 20384) — no timed-achievement bridge); JustEngagedWith's

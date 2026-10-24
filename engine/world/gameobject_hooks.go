@@ -22,13 +22,13 @@ func (srv *Server) serverLuaGameObject(ctx context.Context, guid uint64) *script
 	var ok bool
 	srv.objectsMu.RLock()
 	if dyn, found := srv.dynamicGameObjects[guid]; found && dyn != nil {
-		state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, GoState: uint32(dyn.State), LootState: 1}
+		state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, GoState: uint32(dyn.State), LootState: 1}
 		ok = true
 	}
 	if !ok {
 		for _, states := range srv.instanceGameObjects {
 			if dyn := states[guid]; dyn != nil {
-				state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, GoState: uint32(dyn.State), LootState: 1}
+				state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, GoState: uint32(dyn.State), LootState: 1}
 				ok = true
 				break
 			}

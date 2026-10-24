@@ -39,18 +39,19 @@ type luaCreatureState struct {
 }
 
 type luaGameObjectState struct {
-	GUID       uint64
-	LowGUID    uint32
-	Entry      uint32
-	DisplayID  uint32
-	Name       string
-	Map        uint32
-	InstanceID uint32
-	X          float32
-	Y          float32
-	Z          float32
-	GoState    uint32
-	LootState  uint32
+	GUID        uint64
+	LowGUID     uint32
+	Entry       uint32
+	DisplayID   uint32
+	Name        string
+	Map         uint32
+	InstanceID  uint32
+	X           float32
+	Y           float32
+	Z           float32
+	Orientation float32
+	GoState     uint32
+	LootState   uint32
 }
 
 // luaSoundTargetSession resolves the optional [Player] argument (args[1]) of
@@ -1087,7 +1088,7 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
 	var state luaGameObjectState
 	var mapID int64
-	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z); err != nil {
+	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation); err != nil {
 		return state, false
 	}
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
@@ -1228,7 +1229,7 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(srv, nil, state.GUID, methods)
-	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
+	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
 }
 
 func (srv *Server) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64) {
@@ -1246,7 +1247,7 @@ func (s *session) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint6
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
 		return nil
 	}
@@ -1255,7 +1256,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 	nearestDistance := float32(math.MaxFloat32)
 	for rows.Next() {
 		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z); err != nil {
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
 			continue
 		}
 		candidate.Map = mapID
@@ -1284,7 +1285,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 // covers DB spawns only (dynamic GOs have no model here). Instance-hidden
 // objects are skipped, matching the unfiltered twin.
 func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instanceID uint32, x, y, z float32, entry uint32, distance float32) *scripting.Object {
-	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
 		return nil
 	}
@@ -1293,7 +1294,7 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 	nearestDistance := float32(math.MaxFloat32)
 	for rows.Next() {
 		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z); err != nil {
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
 			continue
 		}
 		candidate.Map = mapID
