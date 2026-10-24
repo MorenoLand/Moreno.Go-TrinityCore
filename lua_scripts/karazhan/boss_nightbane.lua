@@ -31,10 +31,13 @@
 -- while airborne); the gravity flips port via the bridged
 -- creature:SetDisableGravity (liftoff on, touchdown off), while
 -- AttackStop and the interrupt-casts leg (both ported at
--- startPhaseFly below) split. No gameobject event dispatch
--- exists in the engine, so the go_blackened_urn gossip arm (entry 194092)
--- and the intro (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
--- are not modeled: the port starts directly at the landing combat state.
+-- startPhaseFly below) split. GO gossip dispatch IS bridged
+-- (RegisterGameObjectGossipEvent), but the go_blackened_urn gossip arm
+-- (entry 194092) stays out: its boss-state gate (DATA_NIGHTBANE DONE /
+-- IN_PROGRESS) has no instance bridge, its effect is a cross-creature
+-- DoAction(ACTION_SUMMON) with no bridge, and the intro machine it
+-- triggers (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
+-- is unported — so the port starts directly at the landing combat state.
 -- Rain of Bones (37098) is cast on the random target only — its
 -- AuraScript periodic skeleton-summon arm (SPELL_SUMMON_SKELETON 30170,
 -- every 5th tick) has no bridge; AuraScript check handlers are a standing
@@ -379,7 +382,9 @@ local function nightbaneReset(event, creature)
     nightbaneInitState(guid)
     -- C++ boss_nightbane::Reset (:126-133): _Reset(), _flyCount = 0,
     -- me->SetDisableGravity(true) (:130) — bridged (lua_creature_events.go,
-    -- PORTED 2026-10-22). The terrace-door / urn legs have no bridges.
+    -- PORTED 2026-10-22). The terrace-door leg has no instance bridge; the
+    -- urn leg stays out on the instance boss-state gate + cross-creature
+    -- DoAction (GO gossip itself is bridged — see header).
     creature:SetDisableGravity(true)
 end
 

@@ -165,6 +165,39 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	}
 }
 
+// setGameObjectFlag mirrors GameObject::SetFlag(GAMEOBJECT_FLAGS, flag)
+// (GameObject.cpp ApplyModFlag path): ORs the bits into the live dynamic
+// state and broadcasts the flags field, the same values-update twin
+// useDoorOrButton uses for GO_FLAG_IN_USE. Only the flags field exists
+// on the Go GO model, so the Lua SetFlag bridge gates on it.
+func (s *Server) setGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		s.objectsMu.Unlock()
+		return
+	}
+	st.Flags |= flag
+	flags := st.Flags
+	s.objectsMu.Unlock()
+	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+}
+
+// gameObjectHasFlag mirrors GameObject::HasFlag(GAMEOBJECT_FLAGS, flag):
+// the live dynamic flags field, false when the GO has no live state.
+func (s *Server) gameObjectHasFlag(mapID, instanceID uint32, guid uint64, flag uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	return st != nil && st.Flags&flag != 0
+}
+
 // gameObjectAutoCloseDelay mirrors GameObjectTemplate::GetAutoCloseTime
 // (GameObjectData.h:535) for the door/button arms: data2, consumed as
 // milliseconds. Zero (or an unavailable DB/template) means no auto-close.

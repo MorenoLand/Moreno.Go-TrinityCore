@@ -1160,6 +1160,54 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		srv.useDoorOrButton(state.Map, state.InstanceID, state.GUID, false, delay)
 		return nil, nil
 	}
+	// SetFlag/HasFlag mirror GameObject::SetFlag/HasFlag on GAMEOBJECT_FLAGS
+	// (the Go values-map flags field, gameObjectFlags): C++ ORs on set and
+	// AND-tests on read; other fields are ignored (creature HasFlag
+	// precedent: only flag-backed fields read live). Backs script flag
+	// arms such as the Zul'Gurub gong (NOT_SELECTABLE) and the Karazhan
+	// urn (IN_USE read leg).
+	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if field == gameObjectFlags {
+			srv.setGameObjectFlag(state.Map, state.InstanceID, state.GUID, flag)
+		}
+		return nil, nil
+	}
+	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if field != gameObjectFlags {
+			return []any{false}, nil
+		}
+		return []any{srv.gameObjectHasFlag(state.Map, state.InstanceID, state.GUID, flag)}, nil
+	}
+	// SendCustomAnim mirrors GameObject::SendCustomAnim (GameObject.cpp):
+	// the SMSG_GAMEOBJECT_CUSTOM_ANIM broadcast for this GO's instance.
+	methods["SendCustomAnim"] = func(_ context.Context, args []any) ([]any, error) {
+		var anim uint32
+		if len(args) > 0 {
+			value, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			anim = value
+		}
+		srv.broadcastGameObjectCustomAnimInInstance(state.Map, state.InstanceID, state.GUID, anim)
+		return nil, nil
+	}
 	// IsTransport is LuaGameObject::IsTransport (GameObjectMethods.h):
 	// GameObject::IsTransport (GameObject.cpp) returns true for template
 	// type TRANSPORT (11) or MO_TRANSPORT (15) (SharedDefines.h:1605/1609).

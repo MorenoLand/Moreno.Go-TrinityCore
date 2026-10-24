@@ -44,14 +44,14 @@
 -- arlokk-SetData(_sideData, 0) leg is cross-creature summon
 -- bookkeeping with no bridge (stays out — the 4s despawn leg IS
 -- ported below).
--- Deviations from C++: no summon model — the zulian prowlers, the
--- panther triggers 15091, and the SummonCreature(14515) from the gong
--- never exist, so EVENT_SUMMON_PROWLERS, the trigger scan, the
--- SetData count arms, and the whole go_gong_of_bethekk script (gong
--- flag/SendCustomAnim/summon arms have no bridge) are skipped; no
+-- Deviations from C++: no prowler-summon model — the zulian prowlers
+-- and the panther triggers 15091 never exist, so EVENT_SUMMON_PROWLERS
+-- (list-enumeration + spell-summon legs, see arlokkEnterCombat) and the
+-- SetData count arms are skipped; the go_gong_of_bethekk script IS
+-- ported (gong flag/anim/summon, see onGongGossip); no
 -- instance-script model — boss admission via the luaBossAI shim, and
--- the EnterEvadeMode gong-flag arm is skipped (the 4s despawn has no
--- bridge); no threat model — mark-of-arlokk target is a random alive
+-- the EnterEvadeMode gong-flag arm is skipped (no EnterEvadeMode bridge;
+-- instance GO lookup unbridged); no threat model — mark-of-arlokk target is a random alive
 -- player (victim fallback); the vanish ResetThreatList arm IS
 -- ported (:285 — ResetAllThreat bridged); equipment PORTED
 -- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
@@ -69,6 +69,10 @@
 
 local ENTRY_ARLOKK = 14515
 local ENTRY_PROWLER = 15101
+local GO_GONG_OF_BETHEKK = 180526
+local GAMEOBJECT_FLAGS = 9 -- UpdateFields.h: OBJECT_END 6 + 3 (Go gameObjectFlags twin)
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local POS_SUMMON_ARLOKK = {-11507.22, -1628.062, 41.38264, 3.159046} -- C++ PosSummonArlokk[0]
 
 local SAY_AGGRO = 0
 local SAY_FEAST_PROWLER = 1
@@ -346,8 +350,11 @@ end
 
 -- C++ JustEngagedWith: Talk SAY_AGGRO; arm shadow word pain, gouge,
 -- mark of arlokk, transform. The panther-trigger scan and prowler
--- summon have no bridge (no creature enumeration, no summon model) —
--- the 6s prowler timer is not scheduled.
+-- summon stay out — the arm needs the full trigger LIST (GetCreatureListWithEntryInGrid,
+-- 100.0f, split by Y < -1625 into 5-per-side GUID arrays) and a
+-- trigger CastSpell(SPELL_SUMMON_PROWLER) delivery (no spell-summon
+-- footprint; single FindNearestCreature + direct SummonCreature cannot
+-- express either leg) — the 6s prowler timer is not scheduled.
 local function arlokkEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     arlokkResetState(guid)
@@ -437,8 +444,19 @@ RegisterCreatureEvent(ENTRY_PROWLER, 1, prowlerEnterCombat)
 RegisterCreatureEvent(ENTRY_PROWLER, 4, prowlerDied)
 RegisterCreatureEvent(ENTRY_PROWLER, 23, prowlerReset)
 
--- go_gong_of_bethekk (180526, C++ ScriptName "go_gong_of_bethekk"):
--- NOT registered — its only arms (SetFlag(GAMEOBJECT_FLAGS),
--- SummonCreature-from-GO(14515), SendCustomAnim) have no GO-surface
--- bearer (luaGameObjectObject has no SetFlag/SummonCreature; no global
--- spawn bridge).
+-- go_gong_of_bethekk (180526, C++ ScriptName "go_gong_of_bethekk",
+-- boss_arlokk.cpp:452-458): OnGossipHello PORTED — SetFlag via the new
+-- go:SetFlag bridge (lua_objects.go), SendCustomAnim via go:SendCustomAnim,
+-- summon via player:SummonCreature (the GO-summoner twin: the GO AI has
+-- no JustSummoned arm, so the player summoner's no-event-19 fire matches
+-- C++; type 3 TIMED_DESPAWN_OUT_OF_COMBAT, 10min). C++ returns true
+-- (handled) == Lua true (brazier polarity). The EnterEvadeMode gong-flag
+-- arm stays out (no EnterEvadeMode bridge; instance GO lookup unbridged).
+local function onGongGossip(_, player, go)
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    go:SendCustomAnim(0)
+    player:SummonCreature(ENTRY_ARLOKK, POS_SUMMON_ARLOKK[1], POS_SUMMON_ARLOKK[2], POS_SUMMON_ARLOKK[3], POS_SUMMON_ARLOKK[4], 3, 600000)
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_GONG_OF_BETHEKK, 1, onGongGossip)
