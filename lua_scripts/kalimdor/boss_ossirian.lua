@@ -242,12 +242,16 @@ local function onTargetDied(event, creature, victim)
     creature:Talk(3)
 end
 
--- C++ SpellHit: weakness spell -> strip SUPREME (crystal legs
--- have no bridge).
+-- C++ SpellHit: weakness spell -> strip SUPREME + despawn the
+-- weakness-casting trigger (ToCreature twin; the crystal
+-- Delete/SpawnNextCrystal legs have no bridge).
 local function onSpellHit(event, creature, caster, spellId)
     for _, w in ipairs(WEAKNESSES) do
         if spellId == w then
             creature:RemoveAura(SPELL_SUPREME)
+            if caster and caster:ToCreature() then
+                caster:Despawn()
+            end
             return
         end
     end

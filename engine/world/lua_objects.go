@@ -1115,7 +1115,7 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 			}
 			return nil, err
 		}
-		state.GoState = value
+		srv.setGameObjectStateInInstance(state.Map, state.InstanceID, state.GUID, uint8(value))
 		return nil, nil
 	}
 	methods["SetLootState"] = func(_ context.Context, args []any) ([]any, error) {
