@@ -38,7 +38,9 @@
 -- all scheduled from combat start (the three arms fire identically in
 -- PHASE_UNDEAD and PHASE_SKELETON; the phase machine advances via the
 -- ported DamageTaken/resurrect machine, and the timers keep running
--- through the fake-death window gated by the resurrecting latch).
+-- through the fake-death window gated by the resurrecting latch, but
+-- STOP (no re-arm) once PHASE_GHOST arrives — C++ PHASE_GHOST case
+-- carries only death bite + marked death).
 -- JustDied: DoCastSelf(Kill Credit 68663) on event
 -- 4 (its instance SetBossState(BOSS_BLACK_KNIGHT, DONE) leg has no
 -- bridge — instance model absent, standing). OnLeaveCombat(2) /
@@ -79,12 +81,18 @@
 -- window). DoCastSelf(Army of the Dead 67761) stays out (DB-side summon
 -- effect, ghoul entry unverifiable, no Go spell-effect producer);
 -- uiDesecration stays out (random-target bridge absent); uiGhoulExplode
--- stays out (phase-gated self-cast, follow-up strip).
+-- PORTED 2026-10-24 — DoCastSelf (67751), 8000 repeat, scheduled at
+-- skeleton entry (its C++ timer is frozen at 8000 until PHASE_SKELETON),
+-- gated on the resurrecting / armyWindow latches while re-arming,
+-- stops at PHASE_GHOST.
 -- boss_black_knight PHASE_GHOST legs — phase now arrives via the
--- ported resurrect machine; the legs stay out:
--- uiDeathBiteTimer — DoCastAOE(Death's Bite 67808),
--- urand(2000,4000) — stays out: PHASE_GHOST-gated (gothik precedent);
--- uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
+-- ported resurrect machine: uiDeathBiteTimer PORTED 2026-10-24 —
+-- DoCastAOE(Death's Bite 67808) lowered to self-cast (selin/mr_smite
+-- precedent), urand(2000,4000) init/repeat, scheduled at ghost entry
+-- (its C++ timer is frozen until PHASE_GHOST); the UNDEAD/SKELETON
+-- rotation timers STOP at PHASE_GHOST (C++ PHASE_GHOST case carries
+-- only death bite + marked death — no re-arm, phase never leaves
+-- ghost). uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
 -- -> DoCast(Marked for Death 67882), urand(5000,7000) — random-target
 -- bridge absent.
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)
@@ -118,12 +126,15 @@ local SPELL_ICY_TOUCH = 67718
 local SPELL_OBLITERATE = 67725
 local SPELL_KILL_CREDIT = 68663
 local SPELL_BLACK_KNIGHT_RES = 67693 -- boss_black_knight.cpp:56
+local SPELL_GHOUL_EXPLODE = 67751 -- boss_black_knight.cpp:51
+local SPELL_DEATH_BITE = 67808 -- boss_black_knight.cpp:55
 
 local MODEL_SKELETON = 29846 -- boss_black_knight.cpp:66
 local MODEL_GHOST = 21300 -- boss_black_knight.cpp:67
 
 local PHASE_UNDEAD = 1 -- boss_black_knight.cpp:72
 local PHASE_SKELETON = 2 -- boss_black_knight.cpp:73
+local PHASE_GHOST = 3 -- boss_black_knight.cpp:74
 
 local timers = {}
 
@@ -170,6 +181,9 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function icyTouchTick(creature, guid)
+    if getBlackKnightState(guid).phase == PHASE_GHOST then
+        return
+    end
     if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_ICY_TOUCH)
     end
@@ -189,6 +203,9 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function plagueStrikeTick(creature, guid)
+    if getBlackKnightState(guid).phase == PHASE_GHOST then
+        return
+    end
     if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_ICY_TOUCH)
     end
@@ -206,12 +223,48 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function obliterateTick(creature, guid)
+    if getBlackKnightState(guid).phase == PHASE_GHOST then
+        return
+    end
     if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_OBLITERATE)
     end
     local next = math.random(17000, 19000)
     schedule(guid, "obliterate", next, function()
         obliterateTick(creature, guid)
+    end)
+end
+
+-- C++ uiGhoulExplodeTimer: DoCastSelf(Ghoul Explode), 8000 repeat,
+-- PHASE_SKELETON case only. The timer is frozen at 8000 until the
+-- phase arrives (Initialize value, never decremented in PHASE_UNDEAD),
+-- so skeleton-entry + 8000ms is C++-exact; casts fail on STUNNED in
+-- C++ during the fake-death / army windows, so the latches gate the
+-- cast while the re-arm continues; no re-arm once PHASE_GHOST arrives.
+local function ghoulExplodeTick(creature, guid)
+    local st = getBlackKnightState(guid)
+    if st.phase ~= PHASE_SKELETON then
+        return
+    end
+    if not st.resurrecting and not st.armyWindow then
+        creature:CastSpell(creature, SPELL_GHOUL_EXPLODE)
+    end
+    schedule(guid, "ghoul_explode", 8000, function()
+        ghoulExplodeTick(creature, guid)
+    end)
+end
+
+-- C++ uiDeathBiteTimer: DoCastAOE(Death's Bite), urand(2000,4000)
+-- init/repeat, PHASE_GHOST case only — lowered to self-cast per the
+-- established DoCastAOE convention. Frozen until ghost entry, so
+-- ghost-entry + urand(2000,4000) is C++-exact.
+local function deathBiteTick(creature, guid)
+    if getBlackKnightState(guid).phase ~= PHASE_GHOST then
+        return
+    end
+    creature:CastSpell(creature, SPELL_DEATH_BITE)
+    schedule(guid, "death_bite", math.random(2000, 4000), function()
+        deathBiteTick(creature, guid)
     end)
 end
 
@@ -268,6 +321,15 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                         creature:SetRooted(false)
                         creature:SetMeleeAttack(true)
                         st.armyWindow = false
+                    end)
+                end
+                if st.phase == PHASE_SKELETON then
+                    schedule(guid, "ghoul_explode", 8000, function()
+                        ghoulExplodeTick(creature, guid)
+                    end)
+                elseif st.phase == PHASE_GHOST then
+                    schedule(guid, "death_bite", math.random(2000, 4000), function()
+                        deathBiteTick(creature, guid)
                     end)
                 end
             end)
