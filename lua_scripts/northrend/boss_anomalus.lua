@@ -64,8 +64,11 @@
 -- SHIELD 3) + DoCast(me, SPELL_RIFT_SHIELD) + SummonCreature(NPC_
 -- CHAOTIC_RIFT 26918, RiftLocation[urand(0,5)], TEMPSUMMON_TIMED_
 -- DESPAWN_OUT_OF_COMBAT 1s) + Rift AttackStart(SelectTarget(Random,0))
--- + Talk(SAY_RIFT 2) machine — no health-pct / summon / random-target
--- SelectTarget / cross-AI AttackStart bridges.
+-- + Talk(SAY_RIFT 2) machine stays out: the summon bridge is live but
+-- 26918 is entry-unverifiable local-enum-only (gothik-minions
+-- precedent — no template row, the summon would return nil), the
+-- rift's AttackStart has no bridge, and the rift AI (burst + wraith
+-- summons) has no bearer (herod precedent).
 -- Ported: uiSparkTimer — SelectTarget(Random, 0) -> DoCast(SPELL_SPARK
 -- 47751), 5s init, 5s repeat, non-triggered — via randomPlayer +
 -- CreateLuaEvent (keleseth / thorim / archavon GetPlayersInWorld

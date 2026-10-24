@@ -22,12 +22,13 @@
 --   35000ms either way.
 -- - EVENT_CRYPTSCARABS: DoCastVictim(SPELL_CRYPT_SCARABS 31602);
 --   20000ms re-arm.
--- - EVENT_RAISEUNDEADSCARAB: the timer shape is preserved (3000ms then
---   16000ms re-arm); the legs are documented-only — C++
---   RaiseUndeadScarab(me->GetVictim()) does DoSpawnCreature(10876,
---   irand(-9,9), irand(-9,9), 0, 0, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN,
---   180s) + pUndeadScarab->AI()->AttackStart(victim) with no summon
---   bridge (herod precedent).
+-- - EVENT_RAISEUNDEADSCARAB: PORTED — C++ RaiseUndeadScarab(me->
+--   GetVictim()) does DoSpawnCreature(10876, irand(-9,9), irand(-9,9),
+--   0, 0, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 180s) via creature:
+--   SummonCreature (type 1, 180000ms; the stale "no summon bridge,
+--   herod precedent" is retracted); the pUndeadScarab->AI()->
+--   AttackStart(victim) leg has no bridge — the scarab idles until the
+--   engine aggros it (noxxion adds precedent); 16000ms re-arm.
 -- - OnDied: timer clear modeled; the C++ JustDied leg
 --   `instance->SetData(TYPE_NERUB 3, IN_PROGRESS)` is documented-only
 --   (no instance-script bridge — shadowfang keep precedent). The C++
@@ -109,9 +110,15 @@ local function onCryptScarabs(creature, guid)
 end
 
 -- C++ RaiseUndeadScarab timer (3000ms then 16000ms): DoSpawnCreature
--- 10876 + AttackStart legs have no summon bridge — timer shape
--- preserved, legs documented-only (jandice set_visibility precedent).
+-- 10876 + AttackStart(victim) — the summon is PORTED via creature:
+-- SummonCreature (type 1 = TIMED_OR_CORPSE_DESPAWN, 180000ms); the
+-- AttackStart leg has no bridge — the scarab idles until the engine
+-- aggros it (noxxion adds precedent).
+local NPC_UNDEAD_SCARAB = 10876
 local function onRaiseUndeadScarab(creature, guid)
+    local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+    creature:SummonCreature(NPC_UNDEAD_SCARAB,
+        x + math.random(-9, 9), y + math.random(-9, 9), z, o, 1, 180000)
     schedule(guid, "raise_undead_scarab", 16000, function() onRaiseUndeadScarab(creature, guid) end)
 end
 

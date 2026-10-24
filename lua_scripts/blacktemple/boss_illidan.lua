@@ -536,8 +536,10 @@ onParasitic = function(creature, guid)
     end)
 end
 
--- C++ EVENT_MINIONS_WEAVE: _dead guard, SummonMinions (no summon
--- bridge — fires empty, hexlord convention), repeat 30s.
+-- C++ EVENT_MINIONS_WEAVE: _dead guard, SummonMinions — fires empty:
+-- the illidari-elite summon stays out (summon-side AttackStart/AddThreat
+-- on Akama via instance GUID, no bridges; 23226 unregistered, no
+-- bearer), repeat 30s.
 local function onMinionsWeave(creature, guid)
     local state = getIllidanState(guid)
     if state.dead then

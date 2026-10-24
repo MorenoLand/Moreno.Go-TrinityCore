@@ -42,9 +42,10 @@
 --   GetGuidData) + DespawnOrUnsummon — no instance SetData/GetData /
 --   MovementInform-instance bridges.
 -- - DestroyDoor (door-bomb run driven by Bly's DoAction(0) via gossip):
---   SetFaction(FACTION_FRIENDLY) + MovePoint(0, 1858.57, 1146.35, 14.745)
---   + Talk(SAY_WEEGLI_OK_I_GO=1) — no SetFaction / point-move bridges;
---   the gossip driver is instance-model-blocked anyway (see below).
+--   SetFaction(FACTION_FRIENDLY) (bridged, but the arm is instance-
+--   gated) + MovePoint(0, 1858.57, 1146.35, 14.745) (no point-movement
+--   bridge) + Talk(SAY_WEEGLI_OK_I_GO=1); the gossip driver is
+--   instance-model-blocked anyway (see below).
 -- - OnGossipHello/OnGossipSelect: instance->GetData(EVENT_PYRAMID)
 --   pyramid-phase gating — instance-model gossip blocked (standing).
 -- - LandMine_Timer (30s init, never fires in the C++ UpdateAI — dead

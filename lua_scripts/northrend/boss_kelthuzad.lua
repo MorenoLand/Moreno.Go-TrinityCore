@@ -53,8 +53,11 @@
 -- no timers), so event 14 can never fire with this ID (the old
 -- "SpellHit never fires in the Lua surface" ruling was stale —
 -- event 14 fires from the Go spell path). EVENT_SKELETON /
--- EVENT_BANSHEE / EVENT_ABOMINATION — SummonCreature (summon STRAND
--- absent); EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
+-- EVENT_BANSHEE / EVENT_ABOMINATION — stay out behind the unported
+-- phase-one machine (scheduled from the instance DoAction
+-- BEGIN_ENCOUNTER leg, PHASE_ONE-gated; summon bridge is live and the
+-- spawn coords are C++-literal, but the phase machine rules — gothik
+-- precedent); EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
 -- (*it)->SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat on the
 -- pre-existing room skeleton — cross-creature, rides the unported
 -- phase-one DoAction machine (same EVENT_SKELETON gate) — documented-only;

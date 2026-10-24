@@ -28,10 +28,9 @@
 -- dead code (the luaBossAI shim admits only registered
 -- entries).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 9 OnDamageTaken (the enrage gate), 23 OnReset. No event
--- 3 — the C++ overrides no KilledUnit; no event 4 — the
--- JustDied arm is unbridgeable (see deviations); no event
--- 14 — no SpellHit override.
+-- 4 OnDied (soul spawn), 9 OnDamageTaken (the enrage gate),
+-- 23 OnReset. No event 3 — the C++ overrides no KilledUnit;
+-- no event 14 — no SpellHit override.
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order — 1s granularity exact for all C++ timers;
 -- the !UpdateVictim early return collapses into the pump).
@@ -77,25 +76,29 @@
 -- engine cast path cannot apply (gurtogg precedent), so a
 -- dispel re-arms the cast exactly like C++: non-triggered
 -- DoCastSelf(SPELL_ENRAGE 8599) (C++-exact).
+-- OnDied(4): the JustDied soul spawn — PORTED 2026-10-24
+-- (creature:SummonCreature bridge live): the spawn fires ALWAYS
+-- (C++-exact), entry per spirit (fire 21097 / earth 21073 / air
+-- 21116 / water 21109), at the spirit's position +1z, o=0,
+-- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (0), 5s; when a totem of
+-- spirits (21071) is within 15yd the soul's faction flips to
+-- FRIENDLY (C++-exact legs — see onDied).
 -- Melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady.
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (Eluna's On_Reset fires ahead of OnDied and
 -- OnSpawn — millhouse note — so both hooks land the same
 -- reset).
--- Deliberate deviations (all await engine bridges): no
--- summon bridge —
--- the JustDied DoSpawnCreature soul arms (NPC_EARTHEN_SOUL
--- 21073 / NPC_FIERY_SOUL 21097 / NPC_ENRAGED_AIRY_SOUL
--- 21116 / NPC_ENRAGED_WATERY_SOUL 21109) and the earth
--- spirit's DoCastSelf(SPELL_SUMMON_ENRAGED_EARTH_SHARD
--- 38365) unmodeled (steamrigger precedent); no world-search
--- / faction / movement / quest-credit bridges — the JustDied
--- FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS 21071, 15yd)
--- arm (SetFaction(FRIENDLY), MovePoint to the totem,
--- KilledMonsterCredit(NPC_CREDIT_*) via the totem's player
--- owner, DoCast(totem, SPELL_SOUL_CAPTURED 36115))
--- unmodeled — so no event 4 is registered.
+-- Deliberate deviations (all await engine bridges): the
+-- earth spirit's JustDied DoCastSelf(SPELL_SUMMON_ENRAGED_EARTH_SHARD
+-- 38365) summons via spell data (entry unverifiable) — unmodeled
+-- (sarannis "can't see inside a spell script" precedent); no
+-- movement / quest-credit / dead-caster-cast bridges — the JustDied
+-- totem legs past the faction flip (MovePoint to the totem,
+-- KilledMonsterCredit(NPC_CREDIT_*) via the totem's player owner,
+-- DoCast(totem, SPELL_SOUL_CAPTURED 36115)) unmodeled — the soul
+-- spawns and stands for its 5s lifetime instead of walking to the
+-- totem.
 -- Zone set status: zone_shadowmoon_valley.cpp — the Torloth
 -- / Illidan cinematic event machine, the infernal summon
 -- pair, the mature/enslaved drake quest arms and the wilda
@@ -119,6 +122,18 @@ local ENTRY_ENRAGED_EARTH_SPIRIT = 21050
 local ENTRY_ENRAGED_FIRE_SPIRIT = 21061
 local ENTRY_ENRAGED_AIR_SPIRIT = 21060
 local ENTRY_ENRAGED_WATER_SPIRIT = 21059
+
+local ENTRY_TOTEM_OF_SPIRITS = 21071
+
+-- C++ JustDied soul entries (zone_shadowmoon_valley.cpp:1317-1320).
+local SOUL_ENTRY = {
+    [ENTRY_ENRAGED_FIRE_SPIRIT] = 21097,   -- NPC_FIERY_SOUL
+    [ENTRY_ENRAGED_EARTH_SPIRIT] = 21073,  -- NPC_EARTHEN_SOUL
+    [ENTRY_ENRAGED_AIR_SPIRIT] = 21116,    -- NPC_ENRAGED_AIRY_SOUL
+    [ENTRY_ENRAGED_WATER_SPIRIT] = 21109,  -- NPC_ENRAGED_WATERY_SOUL
+}
+
+local FACTION_FRIENDLY = 35 -- SharedDefines.h
 
 local spiritState = {}
 local spiritPump = {}
@@ -233,6 +248,31 @@ local function onLeaveCombat(_, creature)
     fullReset(creature:GetGUID())
 end
 
+-- C++ JustDied (zone_shadowmoon_valley.cpp:1434-1491): the soul spawn
+-- fires ALWAYS — DoSpawnCreature(entry, 0,0,1,0,
+-- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 5s) resolves to SummonCreature at
+-- the spirit's position +1z, o=0 (ScriptedCreature.cpp:286-289), entry
+-- per spirit (C++ switch order). The earth spirit's
+-- DoCastSelf(SPELL_SUMMON_ENRAGED_EARTH_SHARD 38365) summons via spell
+-- data (entry unverifiable) — unmodeled (see deviations). The totem
+-- legs: FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS, 15) is bridged and
+-- the SetFaction(FRIENDLY) leg is ported on the spawned soul; the
+-- MovePoint-to-totem, KilledMonsterCredit and DoCast(totem,
+-- SPELL_SOUL_CAPTURED) legs have no movement / quest-credit /
+-- dead-caster-cast bridges — unmodeled (see deviations).
+local function onDied(_, creature)
+    fullReset(creature:GetGUID())
+    local soulEntry = SOUL_ENTRY[creature:GetEntry()]
+    if not soulEntry then
+        return
+    end
+    local soul = creature:SummonCreature(soulEntry,
+        creature:GetX(), creature:GetY(), creature:GetZ() + 1, 0, 0, 5000)
+    if soul and creature:FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS, 15) then
+        soul:SetFaction(FACTION_FRIENDLY)
+    end
+end
+
 -- The C++ UpdateAI per-tick enrage latch (fire + air only)
 -- lands on OnDamageTaken (nagrand_banner precedent): C++-exact
 -- HealthBelowPct(35) = post-damage health < floor(max*35/100)
@@ -276,6 +316,7 @@ for _, entry in ipairs({
 }) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
+    RegisterCreatureEvent(entry, 4, onDied)
     -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
     -- this lands the same reset as the evade hook.
     RegisterCreatureEvent(entry, 23, onLeaveCombat)

@@ -19,8 +19,8 @@
 -- Talk: SAY_AGGRO = 0 (engage — OnEnterCombat, C++-exact),
 -- SAY_DOMINATION = 1 (BEFORE the domination cast —
 -- C++-exact order), SAY_SUMMON = 2 (summon timer —
--- C++-exact: fires even though the summon legs are
--- unmodeled), SAY_ENRAGE = 3 (frenzy latch — C++-exact),
+-- C++-exact: fires after the summon loop), SAY_ENRAGE = 3
+-- (frenzy latch — C++-exact),
 -- SAY_SLAY = 4 (kill — OnTargetDied, C++-exact, no roll),
 -- SAY_DEATH = 5 (death — OnDied, C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
@@ -34,12 +34,16 @@
 -- DoCast(target).
 -- Fight shape (C++-exact for all modeled arms):
 -- 1. Summon 30s init, randtime 30-45s re-arm: the 3x
---    SelectTarget(Random)/SummonCreature(21062)/
---    AttackStart legs have no summon bridge (steamrigger
---    precedent) — unmodeled; Talk(SAY_SUMMON) fires
---    unconditionally on the timer (C++-exact). The summon
---    spell IDs 35285-35288 are "Not scripted" in the C++
---    (no SpellScript) and are never cast by the AI anyway.
+--    SelectTarget(Random,0)-gated SummonCreature(NPC_NETHER_WRAITH
+--    21062, boss pos, o=0, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3,
+--    25s) legs are PORTED 2026-10-24 (creature:SummonCreature bridge
+--    live — entry/coords/type/duration all C++-verifiable); the
+--    Wraith->AI()->AttackStart(target) relay has no bridge
+--    (keleseth precedent) — the wraiths engage via the engine's own
+--    aggro (moroes precedent). Talk(SAY_SUMMON) fires unconditionally
+--    after the loop (C++-exact). The summon spell IDs 35285-35288
+--    are "Not scripted" in the C++ (no SpellScript) and are never
+--    cast by the AI anyway.
 -- 2. Mana Tap 36021: randtime 12-20s init, randtime 14-22s
 --    re-arm — TRIGGERED DoCastVictim (C++-exact).
 -- 3. Arcane Torrent 36022: randtime 16-25s init, randtime
@@ -163,11 +167,21 @@ local function bossTick(creature, guid)
         return
     end
 
-    -- Summon timer: the SummonCreature/AttackStart legs have
-    -- no summon bridge (steamrigger precedent) — unmodeled;
-    -- Talk(SAY_SUMMON) fires unconditionally on the timer
-    -- (C++-exact); re-arm randtime 30-45s.
+    -- Summon timer: 3x SelectTarget(Random,0)-gated SummonCreature(
+    -- NPC_NETHER_WRAITH 21062, boss pos, o=0,
+    -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3, 25s) — C++ arm order
+    -- (boss_pathaleon_the_calculator.cpp:124-133: loop, then Talk);
+    -- the Wraith->AI()->AttackStart(target) relay has no bridge
+    -- (keleseth precedent) — the wraiths engage via the engine's own
+    -- aggro (moroes precedent); Talk(SAY_SUMMON) fires unconditionally
+    -- after the loop (C++-exact); re-arm randtime 30-45s.
     if st.summon <= 1000 then
+        for _ = 1, 3 do
+            if pickRandomPlayer(creature) then
+                creature:SummonCreature(ENTRY_NETHER_WRAITH,
+                    creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 25000)
+            end
+        end
         creature:Talk(SAY_SUMMON)
         st.summon = math.random(30000, 45000)
     else

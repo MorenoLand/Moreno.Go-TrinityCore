@@ -4039,9 +4039,11 @@ func init() {
 	// encounter-state bookkeeping (DATA_RAGNAROS_ADDS) and the
 	// intro/majordomo-kill arms are blocked on the instance-script model;
 	// the intro, submerge and emerge react/emote/flag/faction/attack arms
-	// have no bridges; no summon model — the 8 sons of flame never spawn,
-	// so the >8-adds early-emerge arm is unmodeled (emerge on the 90s
-	// timer only); the magma blast IsWithinMeleeRange gate has no bridge;
+	// have no bridges; the 8 sons of flame summon loop is PORTED
+	// 2026-10-24 (SummonCreature(12143, target pos, type 1, 15min);
+	// AttackStart relay unbridged, engine aggro instead) with the
+	// Lua-side adds-death counter (event 21) driving the >8-adds
+	// early-emerge arm; the magma blast IsWithinMeleeRange gate has no bridge;
 	// the npc_son_of_flame add AI is not registered (no entry constant in
 	// the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_ragnaros", 11502)
@@ -4202,7 +4204,10 @@ func init() {
 	// Illidan (22917) runs the phase-1 schedule, the 25min berserk
 	// and the taunt cycle on pull (the intro arms have no
 	// gossip/instance bridges); the health-based transitions arm
-	// the minions weave (90%, fires empty — no summon bridge), the
+	// the minions weave (90% Talk + 30s weave timer ported; the weave
+	// fires empty — the illidari-elite summon stays out: summon-side
+	// AttackStart/AddThreat on Akama via instance GUID + 23226
+	// unregistered, no bearer), the
 	// air-phase timer chain (65%, positions unmodeled — no movement
 	// bridge; the both-flames-dead finalize arm has no bearer, so
 	// the pillar loop repeats), the demon-form cycle (60s one-shot
@@ -4586,7 +4591,8 @@ func init() {
 	RegisterLuaBoss("npc_frozen_core", 25865)
 	// Hungarfen (The Underbog): foul-spores once-guard at <=20%
 	// health, the acid-geyser target casts, and the mushroom-
-	// summon timer kept as bookkeeping only (no summon bridge).
+	// summon arm PORTED 2026-10-22 (SummonCreature(17990, target
+	// pos + offsets, type 2, 22s)).
 	// Underbog mushroom (17990): the Reset triggered self casts
 	// via the engine-fired OnSpawn event, and the grow/shrink
 	// timer machine (the RemoveAurasDueToSpell shrink arm has no
@@ -4780,12 +4786,13 @@ func init() {
 	// boss_harbinger_skyriss (20912): intro machine / image
 	// splits / mind rend / fear / domination boss; the
 	// wardens-shield / mellichar-kill intro arms, the DoSplit
-	// illusion summons, the heroic mana-burn arm and the
-	// cast-state gates have no instance / cross-creature /
-	// summon / difficulty / cast-state bridges — see
-	// lua_scripts/arcatraz/boss_harbinger_skyriss.lua. The
-	// illusion AI (entries 21466/21467) is documented there
-	// but not registered: its C++ AI is a no-op. Arcatraz
+	// illusion summons (spell-cast summons — type/duration live
+	// in spell data, unverifiable — plus the JustSummoned
+	// AttackStart relay has no bridge and the illusion AI
+	// (21466/21467) is unregistered), the heroic mana-burn arm
+	// is PORTED (IsHeroic bridged) and the cast-state gates have
+	// no instance / cross-creature / cast-state bridges — see
+	// lua_scripts/arcatraz/boss_harbinger_skyriss.lua. Arcatraz
 	// boss roster 4/4 COMPLETE.
 	RegisterLuaBoss("boss_harbinger_skyriss", 20912)
 
@@ -4800,9 +4807,11 @@ func init() {
 
 	// The Botanica (Tempest Keep) boss roster 2/5:
 	// boss_laj (17980): teleport / allergic-reaction boss; the
-	// TRIGGERED summon lasher/flayer casts have no summon bridge
-	// and the DoTransform display/immune arms have no display /
-	// immune bridges — see lua_scripts/botanica/boss_laj.lua.
+	// TRIGGERED summon lasher/flayer casts ride spell data (the
+	// summoned entry IDs live in the spell effects, unverifiable)
+	// and the JustSummoned AttackStart relay has no bridge —
+	// unmodeled; the DoTransform display/immune arms are PORTED
+	// (2026-10-20) — see lua_scripts/botanica/boss_laj.lua.
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
 	RegisterLuaBoss("boss_laj", 17980)
@@ -4974,8 +4983,10 @@ func init() {
 	// binding, no NPC_ constant — entry per standard TBC
 	// creature data; DATA_PATHALEON_THE_CALCULATOR = 4 is
 	// instance-side): summon timer 30s/randtime(30s,45s) with
-	// Talk(SAY_SUMMON) (the SummonCreature/AttackStart legs
-	// have no summon bridge — unmodeled), mana tap 36021
+	// Talk(SAY_SUMMON) after the loop — the 3x SelectTarget-gated
+	// SummonCreature(21062, boss pos, type 3, 25s) legs PORTED
+	// 2026-10-24 (the AttackStart relay has no bridge; wraiths
+	// engage via engine aggro), mana tap 36021
 	// TRIGGERED DoCastVictim randtime(12s,20s)/
 	// randtime(14s,22s), arcane torrent 36022 TRIGGERED
 	// DoCastVictim randtime(16s,25s)/randtime(12s,18s),
@@ -5033,14 +5044,19 @@ func init() {
 	// zone_blades_edge_mountains residuals (npc_nether_drake
 	// already ported at lua_scripts/outland/npc_nether_drake.lua
 	// per the earlier Outland zone-set work): go_legion_
-	// obelisk's quest-10821 spawn arm needs SummonCreature
-	// (no summon bridge), npc_simon_bunny's Simon game needs
-	// SetGUID/SetData/Action dispatch and GameObject flag,
-	// teleport, sound, summon bridges (none exist),
-	// go_simon_cluster / go_apexis_relic's gossip summon
-	// arms need the same, npc_oscillating_frequency_scanner_
-	// master_bunny's Reset summon machine + IsSummonedBy
-	// player-capture arm have no bridges, and
+	// obelisk's quest-10821 spawn arm is quest-gated (no
+	// player:GetQuestStatus bridge); npc_simon_bunny's Simon game
+	// is unreachable — the GO-gossip -> bunny SetGUID/SetData
+	// dispatch and player:SummonCreature have no bridges (the
+	// summon / teleport / sound / world-search bridges it also
+	// needs all exist now — the missing legs are the GO-gossip
+	// entry-point dispatch, player:SummonCreature and
+	// SetObjectScale); go_simon_
+	// cluster / go_apexis_relic's gossip summon arms need the
+	// same; npc_oscillating_frequency_scanner_master_bunny's
+	// Reset summon machine is bridgeable but the unit is
+	// unregistered and its IsSummonedBy player-capture /
+	// GetClosestCreatureWithEntry arms have no bridges; and
 	// spell_oscillating_field is a SpellScript — all
 	// documented only; see hidden_files/CHECKPOINT.md.
 	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
@@ -5132,9 +5148,12 @@ func init() {
 	// 21059 water (stormbolt); all entries verifiable from the
 	// C++ sources (the Enraged_Dpirits enum) — see
 	// lua_scripts/outland/npc_enraged_spirit.lua. The JustDied
-	// soul-spawn arm has no summon bridge and the totem
-	// credit arm sits behind no world-search / faction /
-	// movement / quest-credit bridges — documented only;
+	// soul-spawn arm is PORTED 2026-10-24 (always-spawn, entry
+	// per spirit, +1z, type 0, 5s) with the totem FindNearestCreature
+	// + SetFaction(FRIENDLY) legs; the totem MovePoint /
+	// KilledMonsterCredit / DoCast(SOUL_CAPTURED) legs have no
+	// movement / quest-credit / dead-caster-cast bridges —
+	// documented only;
 	// spell_unlocking_zuluheds_chains (SpellScript) and
 	// npc_shadowmoon_tuber_node (unverifiable entry, SetData /
 	// SpellHit arms) are documented-only.
@@ -5997,7 +6016,10 @@ func init() {
 	// (DoCastVictim, GetVictim nil-guarded) + sub-25%-HP healing-potion
 	// 15503 self-cast latch (OnDamageTaken(9), per-guid one-shot, reset
 	// per engagement). The imp summon 44163 (JustEngagedWith self-cast
-	// — no summon bridge) and the seed-of-corruption 44141 / curse-of-
+	// — PORTED 2026-10-24: the boss self-casts the spell and the engine
+	// summons the imp; the imp's own AI legs stay out — imp entry is
+	// spell-data-side, no C++ AI class) and the seed-of-corruption 44141
+	// / curse-of-
 	// agony 14875 / fear 38595 machines (SelectTarget-gated — no
 	// bridge) unmodeled; common-AI threat ring / death-count /
 	// KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
@@ -6046,7 +6068,10 @@ func init() {
 	// per engagement). The wing-clip 44286 machine (ATTACK_DISTANCE
 	// gate), the freezing-trap 44136 machine (ATTACK_DISTANCE gate +
 	// gameobject lookup — no bridges), the sliver-pet NPC 24552 summon
-	// (no summon bridge), and the common-AI threat ring / death-count /
+	// (stays out: the Reset-time pet-existence check via ObjectAccessor::
+	// GetUnit has no GUID-liveness bridge — an unconditional summon would
+	// duplicate slivers every reset; the summon bridge itself is live),
+	// and the common-AI threat ring / death-count /
 	// KilledUnit forward / AcquireGUIDs / Delrissa-respawn /
 	// ResetThreatList arms unmodeled (no GUID-list / instance / threat
 	// bridges). Entry 24555 verifiable from the C++ sources: boss_
@@ -6828,9 +6853,11 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_nerubenkan.lua: ENCASINGWEBS 7s->30s
 	// DoCastVictim 4962 / PIERCEARMOR 19s->35s DoCastVictim 6016
 	// (urand(0,3)<2 50% cast gate, re-arm unconditional) / CRYPTSCARABS
-	// 3s->20s DoCastVictim 31602 / RAISEUNDEADSCARAB 3s->16s timer shape
-	// preserved with documented-only legs (DoSpawnCreature 10876 +
-	// AttackStart — no summon bridge, herod precedent) (GetVictim +
+	// 3s->20s DoCastVictim 31602 / RAISEUNDEADSCARAB 3s->16s PORTED:
+	// SummonCreature(10876, irand(-9,9) offsets, type 1, 180s) (the
+	// stale "no summon bridge, herod precedent" is retracted; the
+	// scarab's AttackStart(victim) has no bridge — it idles until the
+	// engine aggros it, noxxion precedent) (GetVictim +
 	// CastSpell, nil-victim keeps schedule; JustEngagedWith empty in C++).
 	// Documented-only (no bridges): JustDied instance->SetData(TYPE_NERUB
 	// 3, IN_PROGRESS) (no instance-script bridge), UpdateVictim gate,
@@ -6844,13 +6871,14 @@ func init() {
 	// PUMMEL 7s->12s DoCastVictim 15615 (90% cast gate, re-arm
 	// unconditional) / KNOCKAWAY 11s->14s DoCastVictim 10101 (80% gate,
 	// re-arm unconditional) / SHOOT 1s->1s DoCastVictim 16496 /
-	// SUMMONRIFLEMAN 15s->30s timer shape preserved with rand32()%9 case
-	// selection as the random leg and SummonCreature(11054) legs
-	// documented-only (no summon bridge, herod precedent; 9 ADD positions
-	// C++-exact in the lua header) (GetVictim + CastSpell, nil-victim
-	// keeps schedule; JustEngagedWith empty in C++). Documented-only (no
-	// bridges): JustDied 7x SummonCreature(11054) at ADD 1,2,3,4,5,7,9
-	// (C++ skips 6/8), UpdateVictim gate, melee engine-driven.
+	// SUMMONRIFLEMAN 15s->30s PORTED: rand32()%9 case selection as the
+	// random leg + 3x SummonCreature(11054) at the C++-exact triples
+	// (type 2, 4min; the stale "no summon bridge, herod precedent" is
+	// retracted; 9 ADD positions C++-exact in the lua header) (GetVictim
+	// + CastSpell, nil-victim keeps schedule; JustEngagedWith empty in
+	// C++). Ported: JustDied 7x SummonCreature(11054) at ADD 1,2,3,4,5,7,9
+	// (C++ skips 6/8). Documented-only (no bridges): UpdateVictim gate,
+	// melee engine-driven.
 	RegisterLuaBoss("boss_cannon_master_willey", 10997)
 	// boss_baroness_anastari.cpp audit (Stratholme block, EK loader decl
 	// :130 / call :308 follows willey): 1 script, BossAI timer AI
@@ -8106,21 +8134,25 @@ func init() {
 	RegisterLuaBoss("boss_landslide", 12203)
 	// boss_noxxion: Maraudon, entry 13282 (wowhead-cited; no NPC_
 	// constant in the C++ tree) — toxic volley 21687 DoCastVictim 7s/9s
-	// + uppercut 22916 DoCastVictim 16s/12s (both non-triggered). The
-	// 19s/40s invisible-adds machine (5x DoSpawnCreature 13456,
-	// SetFaction(FRIENDLY), NOT_SELECTABLE, SetDisplayId(11686)/11172 —
-	// which also freezes both timers for 15s) has no summon / faction /
-	// flag / display bridges, so the lua timers keep their cadence
-	// through the invisible windows — documented in
-	// lua_scripts/kalimdor/boss_noxxion.lua, not wired.
+	// + uppercut 22916 DoCastVictim 16s/12s (both non-triggered), both
+	// ported. The 19s/40s invisible-adds machine is PORTED in
+	// lua_scripts/kalimdor/boss_noxxion.lua: SetFaction(FRIENDLY),
+	// SetFlag(59, NOT_SELECTABLE), SetDisplayId(11686), 5x
+	// SummonCreature(13456, irand offsets, type 1, 90s), and the 15s
+	// reappear (SetFaction(MONSTER), RemoveFlag, SetDisplayId(11172));
+	// the C++ 15s timer freeze is modeled by canceling/re-arming the
+	// spell timers (documented skew vs frozen remainders). Unmodeled:
+	// InterruptNonMeleeSpells(false) and the adds' AttackStart(victim)
+	// (no bridges — the adds idle until the engine aggros them).
 	RegisterLuaBoss("boss_noxxion", 13282)
 	// boss_princess_theradras: Maraudon, entry 12201 (wowhead-cited; no
 	// NPC_ constant in the C++ tree) — dust field 21909 self-cast
 	// 8s/14s, boulder 21832 random-player 2s/10s, thrash 3391 self-cast
 	// 5s/18s, repulsive gaze 21869 DoCastVictim 23s/20s (all
-	// non-triggered); the JustDied summon of 12238 has no summon bridge
-	// — documented in
-	// lua_scripts/kalimdor/boss_princess_theradras.lua, not wired.
+	// non-triggered); the JustDied summon of 12238 is ported
+	// (creature:SummonCreature bridge, 2026-10-23 — 'has no summon
+	// bridge' retracted) — see
+	// lua_scripts/kalimdor/boss_princess_theradras.lua.
 	RegisterLuaBoss("boss_princess_theradras", 12201)
 	// instance_maraudon.cpp audit (loader decl :64 / call :177): pure
 	// placeholder InstanceMapScript (map 349, "instance_maraudon") —
@@ -8212,10 +8244,11 @@ func init() {
 	// JustEngagedWith arms Wrath 13009 (8s->12s) + Frostbolt 15530
 	// (1s->8s, both victim-cast) + Frost Nova 15531 (self-cast,
 	// {10s,15s}->15s) + Talk 0; 1s health pump: <=60% Talk 1 +
-	// spectre summon documented-only, <=50% Talk 3, <=30% Talk 2 +
-	// spectre summon documented-only (no summon bridge, jeklik
-	// precedent); KilledUnit Talk 4 player-gated; latches cleared
-	// on Reset. RAZORFEN DOWNS GROUP CLOSED.
+	// DoCastVictim frost-spectres 12642 (ported — the C++ has no direct
+	// summon call, the spectres are spell 12642's effect), <=50% Talk 3,
+	// <=30% Talk 2 + DoCastVictim 12642 (ported; the stale "no summon
+	// bridge, jeklik precedent" is retracted); KilledUnit Talk 4
+	// player-gated; latches cleared on Reset. RAZORFEN DOWNS GROUP CLOSED.
 	RegisterLuaBoss("boss_amnennar_the_coldbringer", 7358)
 
 	// npc_belnistrasz: Razorfen Downs zone script, entry 8516
@@ -8296,10 +8329,12 @@ func init() {
 	// RANGED/MELEE on the swing cadence (creature:SetSheath bridge,
 	// 2026-10-20; melee-range gate via IsWithinDist 5.0, swing gate
 	// paced at 2s). AttackStartCaster, the MovementInform pyramid legs
-	// (no instance SetData/GetData bridges), DestroyDoor's SetFaction +
-	// MovePoint legs, and the pyramid-gated gossip arms have no bridges;
-	// LandMine_Timer and SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL
-	// are dead C++ legs — documented in the lua file, not wired.
+	// (no instance SetData/GetData bridges), DestroyDoor's MovePoint
+	// leg (no point-movement bridge; SetFaction IS bridged but the arm
+	// is instance-gated), and the pyramid-gated gossip arms have no
+	// bridges; LandMine_Timer and SPELL_GOBLIN_LAND_MINE /
+	// SPELL_WEEGLIS_BARREL are dead C++ legs — documented in the lua
+	// file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
 
 	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +
@@ -9182,23 +9217,27 @@ func init() {
 	// lua_scripts/northrend/boss_anubrekhan.lua. PORTED: boss_anubrekhan
 	// (15956) JustEngagedWith Talk(SAY_AGGRO 0) (BossAI bookkeeping,
 	// summons.DoZoneInCombat, SetPhase have no bridge — tharon_ja
-	// precedent); KilledUnit Talk(SAY_SLAY 2) C++-unconditional (the
-	// player-gated corpse-scarab cast has no summon bridge); EVENT_LOCUST
+	// precedent); KilledUnit Talk(SAY_SLAY 2) C++-unconditional; the
+	// player-gated corpse-scarab cast (29105) is PORTED (boss casts on the
+	// victim — victim self-cast has no player:CastSpell bridge); EVENT_LOCUST
 	// Talk(EMOTE_LOCUST 3) + DoCastSelf(Locust Swarm 28785), init
 	// randtime(1m40s,2m), repeat 1m30s (phase_hunter self-cast precedent;
 	// the PHASE_SWARM/NORMAL gating only affects the unmodeled
 	// impale/scarabs arms — documented-only); EVENT_BERSERK DoCastSelf
 	// (Berserk 27680, triggered), 10min init, reschedules 10min.
 	// DOCUMENTED-BLOCKED: intro/summon machine (InitializeAI, Reset
-	// guardCorpses.clear, JustReachedHome SummonGuards — summon STRAND
-	// absent; Is25ManRaid legs — no difficulty bridge, kelidan
-	// precedent; EVENT_SPAWN_GUARD SummonCreatureGroup), JustSummoned
+	// guardCorpses.clear, JustReachedHome SummonGuards — SummonCreatureGroup
+	// is DB-coord group spawn (no summon-group bridge; creature:
+	// SummonCreature is live but takes explicit coords); Is25ManRaid legs
+	// — NOT a blocker (IsHeroic bridged); EVENT_SPAWN_GUARD
+	// SummonCreatureGroup), JustSummoned
 	// EMOTE_SPAWN Talk + SummonedCreatureDies/Despawn guardCorpses
 	// bookkeeping (summon/cross-AI bridges absent; NPC_CRYPT_GUARD 16573
 	// joins the entry-verifiable-but-bridge-blocked queue),
 	// EVENT_IMPALE (random-target SelectTarget — cairne/kazzak precedent;
-	// anti-chain leg noted), EVENT_SCARABS (corpse summon — summon
-	// bridges absent), JustDied DoStartTimedAchievement(9891) (no
+	// anti-chain leg noted), EVENT_SCARABS (corpse cast — stay out: cross-AI
+	// corpse cast/Talk/despawn + guardCorpses GUID bookkeeping + phase
+	// gate, no bridges), JustDied DoStartTimedAchievement(9891) (no
 	// achievement bridge), at_anubrekhan_entrance (no area-trigger
 	// bridge).
 	RegisterLuaBoss("boss_anubrekhan", 15956)
@@ -9223,13 +9262,18 @@ func init() {
 	// Ported arms (C++-exact): KilledUnit Talk(SAY_SLAY 8) gated on player
 	// (nalorakk precedent); JustDied Talk(SAY_DEATH 9) (tharon_ja
 	// precedent). Unmodeled: SpellHit CHAINS_DUMMY Talk (SpellHit never
-	// fires in Lua), EVENT_SKELETON/BANSHEE/ABOMINATION summons (no
-	// summon bridge), EVENT_DESPAWN_MINIONS despawn + SAY_AGGRO (Talk not
+	// fires in Lua), EVENT_SKELETON/BANSHEE/ABOMINATION summons (stay out:
+	// unported phase-one machine + cross-AI DoZoneInCombat + the
+	// _skeletonCount==1 grid-search leg — summon bridge is live, coords
+	// C++-literal), EVENT_DESPAWN_MINIONS despawn + SAY_AGGRO (Talk not
 	// ported orphaned — vortex precedent), EVENT_PHASE_TWO (no phase
 	// bridge), EVENT_FROSTBOLT_VOLLEY / EVENT_CHAINS DoCastAOE (no
 	// DoCastAOE bridge), EVENT_SHADOW_FISSURE / EVENT_DETONATE_MANA /
 	// EVENT_FROST_BLAST SelectTarget(Random) (cairne/kazzak precedent),
-	// transition reply/summon legs (instance model / no summon bridge),
+	// transition reply (lich-king cross-AI Talk via instance GetGuidData
+	// + portal GO states — no instance/GO-state bridges) / transition
+	// summon (SummonCreatureGroup — DB coords — + cross-AI DoAction, no
+	// summon-group/cross-AI bridges),
 	// phase-three 45%-health leg (no health-pct bridge), frostbolt
 	// filler (phase-gated), DamageTaken zeroing (no phase bridge), Reset /
 	// EnterEvadeMode / ACTION_BEGIN_ENCOUNTER (instance model),
@@ -9334,7 +9378,9 @@ func init() {
 	// EVENT_POISON DoCastVictim(NECROTIC_POISON 28776) randtime(10s,
 	// 15s)/randtime(10s,20s) (CastSpell(nil) victim-cast);
 	// EVENT_SUMMON Talk(EMOTE_SPIDERS 0) + C++-exact 30s/40s schedule
-	// (spiderling summons unmodeled — no summon bridge); 30%-health
+	// (EVENT_SUMMON spiderlings PORTED: Talk + urand(8,10)x SummonCreature
+	// type 5, 30s/40s schedule; spiderling AI legs unported — no C++ AI
+	// class); 30%-health
 	// frenzy latch via 1s pump (both RAID_MODE aura IDs 54123/54124
 	// checked, no difficulty bridge — faerlina precedent) -> DoCastSelf
 	// FRENZY 54123. Unmodeled: EVENT_WRAP DoSummon(NPC_WEB_WRAP
@@ -9389,7 +9435,10 @@ func init() {
 	// have no bridge). SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) +
 	// EMOTE_GATE_OPENED (8) ride unported legs (vortex — not ported
 	// orphaned). Unmodeled: EVENT_SUMMON waves10/waves25 + CGUID_TRIGGER
-	// 127618 spawn layout (no summon bridge + difficulty gate), the
+	// 127618 spawn layout (spawns resolve via DB spawn-GUID trigger
+	// lookups — no spawn-ID bridge, coords not in C++ — + unported
+	// wave/phase machine; difficulty gate is NOT a blocker — IsHeroic
+	// is bridged), the
 	// gate machine (DoAction OPEN_GATE — no instance/summon/cross-AI
 	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST
 	// (DoCastAOE 28026/28025/28679 — no DoCastAOE bridge), EVENT_BOLT
@@ -9479,17 +9528,22 @@ func init() {
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// (instance->SetBossState(DATA_ANOMALUS, IN_PROGRESS) leg has no
 	// instance bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH
-	// 1) (SetBossState(DONE) leg has no instance bridge).
+	// 1) (SetBossState(DONE) leg has no instance bridge);
+	// SummonedCreatureDies chaosTheory=false leg PORTED (event 21 —
+	// the stale "no summon bridge" is retracted; the latch is
+	// write-only, its only reader is the unbridged achievement).
 	// Documented-only: Reset Initialize + SetBossState(NOT_STARTED)
 	// (no instance bridge), GetData(DATA_CHAOS_THEORY) cross-AI leg
-	// (no GetData bridge), SummonedCreatureDies chaosTheory=false leg
-	// (no summon bridge), the UpdateAI home-position >60 evade hack
+	// (no GetData bridge), the UpdateAI home-position >60 evade hack
 	// (no position bridge), the RIFT_SHIELD HasAura + GUID-lookup +
 	// RemoveAurasDueToSpell machine (no aura/GUID bridges), the Phase
 	// 0 + HealthBelowPct(50) shield+Talk(SAY_SHIELD 3)+SummonCreature(
 	// CHAOTIC_RIFT 26918 entry-unverifiable local-enum-only)+AttackStart
-	// +Talk(SAY_RIFT 2) machine (no health-pct/summon/random-target/
-	// cross-AI bridges), uiSparkTimer SelectTarget(Random,0)->DoCast(
+	// +Talk(SAY_RIFT 2) machine stays out: the summon bridge is live
+	// but 26918 has no template row (gothik-minions precedent), the
+	// rift's AttackStart has no bridge, and the rift AI (burst +
+	// wraith summons) has no bearer (herod precedent),
+	// uiSparkTimer SelectTarget(Random,0)->DoCast(
 	// SPARK 47751/57062) 5s/5s (no random-target SelectTarget bridge).
 	// npc_chaotic_rift (26918 local-enum-only, gothik-minions
 	// precedent — entry-unverifiable) gets no registration: its burst

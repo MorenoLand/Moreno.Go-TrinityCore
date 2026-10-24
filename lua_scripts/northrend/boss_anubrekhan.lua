@@ -43,16 +43,17 @@
 -- on 2/4/23 (gargolmar precedent). No JustDied Talk in C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_anubrekhan intro/summon machine — InitializeAI / Reset
--- (guardCorpses.clear) / JustReachedHome (SummonGuards) — summon
--- STRAND absent (no Lua-surface consumer without summoning);
+-- (guardCorpses.clear) / JustReachedHome (SummonGuards) — group spawn
+-- with DB-side coords (no summon-group bridge; creature:SummonCreature
+-- is live but takes explicit coords);
 -- SummonGuards: Is25ManRaid() -> SummonCreatureGroup(GROUP_INITIAL_25M
--- 1) — no summon bridge (standing; the old "no difficulty bridge"
--- parenthetical was stale — IsHeroic() is bridged,
--- lua_creature_events.go:260); JustEngagedWith 10-man
+-- 1) — same bar (IsHeroic() is bridged, lua_creature_events.go:260,
+-- so difficulty is NOT the blocker); JustEngagedWith 10-man
 -- EVENT_SPAWN_GUARD leg (randtime 15s-20s) — same bar; EVENT_SPAWN_GUARD
--- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2) — summon STRAND absent;
+-- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2) — same bar (DB-side
+-- group coords);
 -- JustSummoned: NPC_CRYPT_GUARD summon->AI()->Talk(EMOTE_SPAWN 1) —
--- summon / cross-AI bridges absent; SummonedCreatureDies/Despawn:
+-- cross-AI Talk has no bridge; SummonedCreatureDies/Despawn:
 -- guardCorpses GUID-set bookkeeping — no consumer bridge;
 -- EVENT_IMPALE — SelectTarget(Random,0) -> DoCast(Impale 28783
 -- / 25-man 56090), init randtime(10s,20s), repeat randtime(10s,20s),
@@ -64,7 +65,9 @@
 -- EVENT_SCARABS — random guardCorpses corpse ->
 -- creatureTarget->CastSpell(SUMMON_CORPSE_SCARABS_MOB 28864) +
 -- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
--- repeat randtime(40s,60s) — summon / corpse bridges absent;
+-- repeat randtime(40s,60s) — cross-AI corpse cast/Talk/despawn +
+-- guardCorpses GUID bookkeeping, no bridges (creature:SummonCreature /
+-- creature:Despawn are live on the boss surface, not cross-AI);
 -- EVENT_LOCUST / EVENT_LOCUST_ENDS phase legs — events.SetPhase(
 -- PHASE_SWARM/PHASE_NORMAL) and the PHASE_NORMAL gating of IMPALE /
 -- SCARABS — no phase bridge; only the unmodeled arms are phase-gated

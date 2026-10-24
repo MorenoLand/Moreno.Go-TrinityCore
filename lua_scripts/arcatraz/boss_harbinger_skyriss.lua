@@ -72,9 +72,10 @@
 -- DoSplit(33): Talk(SAY_IMAGE) and set the 33 latch (the C++
 -- checks both arms in order on the same tick — a single hit
 -- into <=33% fires both yells, C++-exact; the SPELL_66_
--- ILLUSION 36931 / SPELL_33_ILLUSION 36932 casts themselves
--- have no summon bridge — steamrigger precedent — so only
--- the talk is modeled); mind rend 36924 — 3s init then 8s,
+-- ILLUSION 36931 / SPELL_33_ILLUSION 36932 casts summon via spell
+-- data (summon type/duration unverifiable — sarannis "can't see
+-- inside a spell script" precedent), and the JustSummoned
+-- AttackStart relay has no bridge, so only the talk is modeled); mind rend 36924 — 3s init then 8s,
 -- target = random alive player in the instance excluding the
 -- current victim (C++ SelectTarget(Random, 1), thespia
 -- precedent), nil pick falls back to DoCastVictim (C++-
@@ -113,10 +114,11 @@
 -- via the bridged unit-flags surface (see resetImmuneFlags); no
 -- LoS-aggro bridge — the
 -- MoveInLineOfSight Intro gate unmodeled (gargolmar
--- precedent); no summon bridge — the DoSplit illusion summons
--- and the JustSummoned health-set (66%/33%)/AttackStart-
--- random-target/Summon/immunity arms unmodeled (steamrigger
--- precedent); the illusion SpellIds H_SPELL_MIND_REND_IMAGE
+-- precedent); the DoSplit illusion summons ride spell casts (type/
+-- duration are spell data, unverifiable) and the JustSummoned
+-- health-set (66%/33%)/AttackStart-random-target/Summon/immunity
+-- arms stay out (no AttackStart bridge; the illusion AI 21466/21467
+-- is unregistered) — unmodeled; the illusion SpellIds H_SPELL_MIND_REND_IMAGE
 -- 39021 never fire in the C++ AI — not bridged; the heroic-only
 -- H_SPELL_MANA_BURN 39020 {16s,32s} arm is PORTED (the old "no
 -- difficulty bridge" claim was stale — creature:IsHeroic() is
@@ -275,9 +277,9 @@ end
 
 -- C++ DoSplit: InterruptNonMeleeSpells (no cast-state
 -- bridge — netherspite precedent), Talk(SAY_IMAGE), then
--- DoCast(me, SPELL_66/33_ILLUSION) — the casts have no
--- summon bridge, so only the talk is modeled (steamrigger
--- precedent).
+-- DoCast(me, SPELL_66/33_ILLUSION) — the casts summon via spell
+-- data (unverifiable) and the JustSummoned AttackStart relay has no
+-- bridge, so only the talk is modeled.
 local function doSplit(creature)
     creature:Talk(SAY_IMAGE)
 end

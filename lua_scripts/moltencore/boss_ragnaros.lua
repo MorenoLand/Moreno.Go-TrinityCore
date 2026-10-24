@@ -40,11 +40,13 @@
 -- Emerge: re-arm the combat timers (eruption {20s,45s}, wrath 25s,
 -- hand 20s, lava burst 10s, elemental fire {10s,14s}, magma blast
 -- 2500ms); the C++ Talk/faction/flag/AttackStart arms have no bridges
--- (emerge emote is ported — see deviations); see deviations. The 8-son-of-flame summons and the
--- DATA_RAGNAROS_ADDS
--- counter arms have no bridges — they are never spawned, so the
--- C++ early-emerge condition (adds > 8) can never fire and emerge
--- happens on the 90s timer only.
+-- (emerge emote is ported — see deviations); see deviations. The
+-- 8-son-of-flame summons are PORTED 2026-10-24 (per-iteration random-
+-- target SummonCreature(12143, target pos, type 1, 15min) — C++-exact;
+-- the AttackStart relay has no bridge, sons engage via engine aggro)
+-- and the DATA_RAGNAROS_ADDS counter rides a Lua-side addsDeaths latch
+-- fed by event 21 (summon-died) — the >8-adds early-emerge arm is
+-- ported, C++-exact (reachable across submerges).
 -- The npc_son_of_flame AI in the same C++ file (ScriptName
 -- "npc_SonOfFlame", entry 12143) is not registered: no
 -- NPC_SON_OF_FLAME constant exists in the C++ tree (the summon uses
@@ -75,16 +77,15 @@
 -- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
 -- lua_creature_events.go); the emerge react arm is PORTED
 -- (creature:SetReactState, 2026-10-20); the faction/flag/AttackStart
--- arms still have no bridges (submerge/emote arms are ported); no
--- summon model —
--- the 8 sons of
--- flame never spawn; the magma blast IsWithinMeleeRange gate has no
+-- arms still have no bridges (submerge/emote arms are ported); the
+-- magma blast IsWithinMeleeRange gate has no
 -- bridge; SPELL_RAGSUBMERGE 21107 / SPELL_RAGEMERGE 20568 /
 -- SPELL_SONS_OF_FLAME_DUMMY 21108 are commented out / server-side in
 -- C++ and unused; SPELL_MELT_WEAPON 21388 is declared but never
 -- scheduled by the AI.
 
 local ENTRY_RAGNAROS = 11502
+local ENTRY_SON_OF_FLAME = 12143 -- hardcoded summon literal, boss_ragnaros.cpp:270
 
 local SAY_REINFORCEMENTS1 = 5
 local SAY_REINFORCEMENTS2 = 6
@@ -132,6 +133,24 @@ local function getState(guid)
         state[guid] = s
     end
     return s
+end
+
+-- Alive players sharing the creature's map+instance (teron
+-- convention, gruul precedent) — the C++ SelectTarget(Random, 0)
+-- equivalent for the son-of-flame summon positions.
+local function pickRandomPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local found = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
 end
 
 -- C++ EVENT_ERUPTION: non-triggered DoCastVictim(17731); re-arm
@@ -248,7 +267,8 @@ end
 local onSubmerge
 
 local function onEmerge(creature, guid)
-    getState(guid)
+    local s = getState(guid)
+    s.banished = false -- C++ boss_ragnaros.cpp:188: _isBanished = false
     -- C++ boss_ragnaros.cpp:178: me->SetReactState(REACT_AGGRESSIVE)
     -- (emerge arm order: flip first, then faction/flag/emote arms).
     creature:SetReactState(2) -- REACT_AGGRESSIVE
@@ -318,6 +338,24 @@ onSubmerge = function(creature, guid)
     else
         creature:Talk(SAY_REINFORCEMENTS2)
     end
+    -- C++ boss_ragnaros.cpp:261-290: instance->SetData(DATA_RAGNAROS_ADDS,
+    -- 0) resets the Lua-side adds-death counter here (C++-exact); then
+    -- summon 8 sons of flame — per-iteration SelectTarget(Random,0) gate,
+    -- me->SummonCreature(12143, target pos, o=0,
+    -- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN=1, 15min). The
+    -- summoned->AI()->AttackStart(target) relay has no bridge (keleseth
+    -- precedent) — the sons engage via the engine's own aggro (moroes
+    -- precedent). PORTED 2026-10-24 (creature:SummonCreature bridge live —
+    -- entry/coords/type/duration all C++-verifiable).
+    s.addsDeaths = 0
+    s.banished = true
+    for _ = 1, 8 do
+        local target = pickRandomPlayer(creature)
+        if target then
+            creature:SummonCreature(ENTRY_SON_OF_FLAME,
+                target:GetX(), target:GetY(), target:GetZ(), 0, 1, 900000)
+        end
+    end
     cancelCombatTimers(guid)
     schedule(guid, "emerge", 90000, function()
         onEmerge(creature, guid)
@@ -383,3 +421,25 @@ RegisterCreatureEvent(ENTRY_RAGNAROS, 2, ragnarosLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGNAROS, 3, ragnarosTargetDied)
 RegisterCreatureEvent(ENTRY_RAGNAROS, 4, ragnarosDied)
 RegisterCreatureEvent(ENTRY_RAGNAROS, 23, ragnarosReset)
+
+-- C++ npc_son_of_flame::JustDied: instance->SetData(DATA_RAGNAROS_ADDS, 1)
+-- (the instance increments _ragnarosAddDeaths; the son AI's only other leg
+-- is engine-driven melee) — the Lua-side counter advances here via
+-- CREATURE_EVENT_ON_SUMMONED_CREATURE_DIED (21), which the SummonCreature
+-- bridge dispatches on the summoner (lua_creature_events.go:2697).
+-- C++ UpdateAI reads it while banished: emerge early when deaths > 8
+-- (boss_ragnaros.cpp:175) — reachable across submerges since slain sons
+-- from an earlier banish keep counting until the next submerge resets.
+RegisterCreatureEvent(ENTRY_RAGNAROS, 21, function(_, creature)
+    local guid = creature:GetGUID()
+    local s = getState(guid)
+    s.addsDeaths = (s.addsDeaths or 0) + 1
+    if s.banished and s.addsDeaths > 8 then
+        local per = timers[guid]
+        if per and per["emerge"] then
+            RemoveEventById(per["emerge"])
+            per["emerge"] = nil
+        end
+        onEmerge(creature, guid)
+    end
+end)

@@ -67,16 +67,20 @@
 -- LineOfSight NON_ATTACKABLE gate and the MovementInform
 -- MovePoint(0)->DespawnOrUnsummon arm all sit behind it or
 -- behind flag/movement bridges — unmodeled (netherspite /
--- omor precedents); no summon bridge — the oscillating-
--- frequency scanner master bunny's SummonCreature /
--- SummonGameObject arms unmodeled (steamrigger precedent);
+-- omor precedents); the oscillating-frequency scanner master
+-- bunny's SummonCreature / SummonGameObject arms stay out — the
+-- unit is unregistered and its IsSummonedBy player-capture /
+-- GetClosestCreatureWithEntry arms have no bridges (the summon
+-- bridges themselves exist now);
 -- stale 'no gossip bridge' retracted (RegisterGameObjectGossipEvent
 -- bridged, engine/world/gameobject_hooks.go); go_legion_obelisk,
 -- go_simon_cluster
--- and go_apexis_relic gossip arms unmodeled; no
--- gameobject-flag/world-search bridges — the simon-game
+-- and go_apexis_relic gossip arms unmodeled; the simon-game
 -- node setup/reset arms (SetCanFly, cluster searches,
--- NearTeleportTo) unmodeled; no SpellScript bridge —
+-- NearTeleportTo) stay out — the whole game is unreachable
+-- behind the missing GO-gossip -> bunny SetGUID/SetData dispatch
+-- (SetCanFly / FindNearestGameObject / Teleport / PlayDistanceSound
+-- bridges exist now; NearTeleportTo does not, Teleport is its twin); no SpellScript bridge —
 -- spell_oscillating_field documented only (standing
 -- blocker).
 

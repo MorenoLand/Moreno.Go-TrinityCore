@@ -37,12 +37,13 @@
 --    (C++-exact). The eight TRIGGERED summon casts (SPELL_
 --    SUMMON_LASHER_1..4 34681/34684/34686/34688 / SPELL_
 --    SUMMON_FLAYER_1..4 34682/34685/34690/34687 — the four
---    rand32() % 4 lasher/flayer pairs) have no summon bridge
---    (steamrigger precedent), so the casts are skipped and
---    only the talk and the latch bookkeeping are modeled.
---    The JustSummoned summon->AI()->AttackStart(SelectTarget
---    (Random, 0)) arm is unreachable (no summons exist) —
---    unmodeled.
+--    rand32() % 4 lasher/flayer pairs) summon via spell data (the
+--    summoned entry IDs are not in the C++ sources, unverifiable —
+--    sarannis "can't see inside a spell script" precedent), so the
+--    casts are skipped and only the talk and the latch bookkeeping
+--    are modeled. The JustSummoned summon->AI()->AttackStart(
+--    SelectTarget(Random, 0)) arm is unreachable (no summons exist)
+--    and has no AttackStart bridge — unmodeled.
 -- 2. Allergic arm: 5s init then 25000 + rand32() % 15000 —
 --    DoCastVictim(SPELL_ALLERGIC_REACTION 34697) non-
 --    triggered (C++-exact), re-arm 25000 + rand32() % 15000
@@ -74,11 +75,12 @@
 -- instance-script model; the BossAI ctor DATA_LAJ = 3
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
 -- no summon bridge — the DoSummons TRIGGERED lasher/flayer
--- summon casts and the JustSummoned AttackStart relay
--- unmodeled (steamrigger precedent); no display / immune
--- bridge — the Reset() SetDisplayId(MODEL_DEFAULT) +
--- ApplySpellImmune school arms and the whole DoTransform()
--- (five-model / five-immunity-school rotation) unmodeled;
+-- summon casts ride spell data (summoned entries unverifiable)
+-- and the JustSummoned AttackStart relay has no bridge —
+-- unmodeled (see above); the display / immune arms WERE ported
+-- 2026-10-20 (SetDisplayId + ApplySpellImmune school matrix in
+-- the event-23 hook and the DoTransform() rotation in the pump)
+-- — the old "no display / immune bridge" claim is stale;
 -- the ScriptData "SD%Complete: 90 / Immunities are wrong,
 -- must be adjusted to use resistance from creature_templates.
 -- Most spells require database support." caveat is upstream,
@@ -134,8 +136,8 @@ local function combatTick(creature, guid)
 
     -- 1. Summon arm (only while canSummon, C++ gate order —
     -- always first): Talk(EMOTE_SUMMON) + CanSummon = false,
-    -- the eight TRIGGERED summon casts skipped (no summon
-    -- bridge — steamrigger precedent), re-arm 2500
+    -- the eight TRIGGERED summon casts skipped (spell-data summons,
+    -- entries unverifiable — see header), re-arm 2500
     -- (C++-exact).
     if st.canSummon then
         if st.summon <= 1000 then

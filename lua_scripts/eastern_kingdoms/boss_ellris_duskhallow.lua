@@ -70,8 +70,12 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - JustEngagedWith's DoCast(me, SPELL_SUMMON_IMP 44163) — summon
---   bridge absent (razorgore precedent), so no imp was ported.
+-- - JustEngagedWith's DoCast(me, SPELL_SUMMON_IMP 44163) — the summon
+--   rides the spell effect (SPELL_EFFECT_SUMMON, effect 28); the Go
+--   spell dispatcher has no dispatch case for effect 28 (spells.go
+--   only gate-checks it for players), so the imp leg is unmodeled —
+--   spell-effect summon dispatch is the standing blocker (stalesummon
+--   precedent).
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
