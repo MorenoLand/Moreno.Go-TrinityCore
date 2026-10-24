@@ -32,19 +32,20 @@
 -- once-guard; C++ re-casts every UpdateAI tick below 50%). OnDied/
 -- OnLeaveCombat/OnReset: cancel timers. OnGossipSelect (DB menu 4108
 -- option 0 — the defeated-majordomo "summon Ragnaros" menu): close
--- the menu, Talk(SAY_SUMMON_MAJ), arm the 24s outro
--- Talk(SAY_ARRIVAL2_MAJ).
--- The defeat/outro arms have no bridges and are not modeled: the
--- no-flamewaker defeat trigger (no nearest-creature lookup — healer
--- 11663 / elite 11664), the SetFaction(FACTION_FRIENDLY) arm, the
--- EnterEvadeMode + _JustDied defeat sequence, EVENT_OUTRO_1's
--- NearTeleportTo(RagnarosTelePos) + gossip-flag arm (no teleport
--- bridge; the flag leg IS bridged — SetNPCFlags — but the arm rides
--- the unported teleport, so it stays out), EVENT_OUTRO_2's SummonCreature(NPC_RAGNAROS 11502)
--- arm (instance->instance->SummonCreature: no instance-spawn bridge; also gated on the
--- unported DoAction defeat trigger), and the DoAction(ACTION_START_RAGNAROS /
--- ACTION_START_RAGNAROS_ALT) arms (no DoAction bearer — the instance
--- script is blocked on the instance-script model); SPELL_SUMMON_
+-- the menu, Talk(SAY_SUMMON_MAJ), arm the 8s Ragnaros summon + 24s
+-- outro Talk(SAY_ARRIVAL2_MAJ).
+-- The defeat sequence stays out: the flamewakers are instance-summoned
+-- (instance_molten_core.cpp SummonMajordomoExecutus — no instance-spawn
+-- model, so the no-flamewaker presence check is unevaluatable in Go),
+-- EnterEvadeMode has no bridge, and the instance DONE / _JustDied legs
+-- have no bridge. EVENT_OUTRO_1's NearTeleportTo(RagnarosTelePos) +
+-- gossip-flag arm rides that defeat sequence, so it stays out (its
+-- teleport leg IS bridged — creature:Teleport — and its flag leg IS
+-- bridged — RemoveFlag field 82 — but neither fires without the
+-- defeat trigger). EVENT_OUTRO_2 + the DoAction(ACTION_START_RAGNAROS)
+-- arms are PORTED in the gossip handler below (RemoveFlag, Talk,
+-- 8s Ragnaros summon, 24s Talk). DoAction(ACTION_START_RAGNAROS_ALT)
+-- stays out (instance-summon entry point, no bearer); SPELL_SUMMON_
 -- RAGNAROS 19774 is declared but unused by the AI.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
@@ -53,6 +54,7 @@
 -- and the BOSS_MAJORDOMO_EXECUTUS bookkeeping arms skipped).
 
 local ENTRY_MAJORDOMO_EXECUTUS = 12018
+local NPC_RAGNAROS = 11502
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
@@ -218,10 +220,13 @@ local function majordomoReset(event, creature)
 end
 
 -- C++ OnGossipSelect: menu 4108 option 0 -> CloseGossipMenuFor,
--- DoAction(ACTION_START_RAGNAROS): Talk(SAY_SUMMON_MAJ), arm
--- EVENT_OUTRO_2 8s (instance-spawn, no bridge) and EVENT_OUTRO_3 24s
--- (Talk(SAY_ARRIVAL2_MAJ)). The gossip-flag RemoveFlag arm has no
--- bridge. The hello menu itself is DB-side (menu 4108); only the
+-- DoAction(ACTION_START_RAGNAROS): RemoveFlag(UNIT_NPC_FLAGS,
+-- UNIT_NPC_FLAG_GOSSIP) -> Talk(SAY_SUMMON_MAJ) -> EVENT_OUTRO_2 8s
+-- (instance map-summon at RagnarosSummonPos, duration 0 -> DEAD_DESPAWN,
+-- Go summonType 6) -> EVENT_OUTRO_3 24s (Talk(SAY_ARRIVAL2_MAJ)).
+-- C++ summoner is the map (no summoner); the Go bridge stamps majordomo
+-- as owner — Ragnaros's Lua never reads its summoner, so no observable
+-- difference. The hello menu itself is DB-side (menu 4108); only the
 -- select arm is modeled.
 local function majordomoGossipSelect(event, player, creature, sender, action)
     -- C++ OnGossipSelect gates on menuId == 4108 (the DB gossip menu)
@@ -240,7 +245,11 @@ local function majordomoGossipSelect(event, player, creature, sender, action)
     player:GossipClearMenu()
     player:GossipComplete()
     local guid = creature:GetGUID()
+    creature:RemoveFlag(82, 1)
     creature:Talk(SAY_SUMMON_MAJ)
+    schedule(guid, "outro2", 8000, function()
+        creature:SummonCreature(NPC_RAGNAROS, 838.510, -829.840, -232.0, 2.0, 6, 0)
+    end)
     schedule(guid, "outro3", 24000, function()
         creature:Talk(SAY_ARRIVAL2_MAJ)
     end)

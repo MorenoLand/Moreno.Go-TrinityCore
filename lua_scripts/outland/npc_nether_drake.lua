@@ -69,9 +69,14 @@
 -- behind flag/movement bridges — unmodeled (netherspite /
 -- omor precedents); the oscillating-frequency scanner master
 -- bunny's SummonCreature / SummonGameObject arms stay out — the
--- unit is unregistered and its IsSummonedBy player-capture /
--- GetClosestCreatureWithEntry arms have no bridges (the summon
--- bridges themselves exist now);
+-- unit is unregistered (no entry constant in the C++ sources) and its
+-- IsSummonedBy player-capture has no bridge (event 19 fires on the
+-- summoner, and the summoner here is a player — no player-side summon
+-- hook); the GetClosestCreatureWithEntry leg IS bridged now
+-- (creature:FindNearestCreature, lua_creature_events.go:2114), and the
+-- summon bridges themselves exist — so only the entry + capture legs
+-- block a future bunny port, and the quest-completion SpellScript
+-- (no quest-status/complete bridge) blocks the quest itself;
 -- stale 'no gossip bridge' retracted (RegisterGameObjectGossipEvent
 -- bridged, engine/world/gameobject_hooks.go); go_legion_obelisk,
 -- go_simon_cluster

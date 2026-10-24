@@ -34,8 +34,8 @@
 -- "no SelectTarget bridge" claim retracted) / SPELL_EMOTE_TALK_EXCLAMATION =
 -- 48348 / SPELL_EMOTE_POINT = 48349 / SPELL_EMOTE_ROAR = 48350 /
 -- SPELL_QUITE_SUICIDE = 3617 (serverside) / SAY_GRAVITY_LAPSE_1 = 2 /
--- SAY_GRAVITY_LAPSE_2 = 3 (repeat lapses never recur — no phase-two
--- machinery) / SAY_POWER_FEEDBACK = 4 (phase-two — no bridge) /
+-- SAY_GRAVITY_LAPSE_2 = 3 (repeat lapses — ported below) /
+-- SAY_POWER_FEEDBACK = 4 (ported below) /
 -- SAY_SUMMON_PHOENIX = 5 / SAY_ANNOUNCE_PYROBLAST = 6
 -- (heroic-only arm — ported) / SAY_FLAME_STRIKE = 7 (ported) /
 -- SAY_DEATH = 8 /
@@ -77,10 +77,13 @@
 -- 50%-HP phase-two latch via OnDamageTaken(9) with a per-guid
 -- one-shot flag reset on OnEnterCombat(1) (gyth convention —
 -- C++-exact HealthBelowPctDamaged(50): GetHealth() - damage <
--- floor(0.5*GetMaxHealth()), integer strict-<): Talk(SAY_GRAVITY_LAPSE_1)
--- + cancel of the phase-one timers (C++-exact observable: phase-one
+-- floor(0.5*GetMaxHealth()), integer strict-<): PREPARE arm (Talk
+-- SAY_GRAVITY_LAPSE_1 + REACT_PASSIVE + AttackStop + StopMoving) +
+-- cancel of the phase-one timers (C++-exact observable: phase-one
 -- events stay scheduled but no longer execute once the phase flips to
--- PHASE_TWO; cancelling them is the faithful net effect).
+-- PHASE_TWO; cancelling them is the faithful net effect) + the 1s
+-- CENTER_TELEPORT chain below (gravity lapse -> spheres/beam/power
+-- feedback -> repeat PREPARE with SAY_GRAVITY_LAPSE_2).
 -- Lethal-damage outro chain via OnDamageTaken(9) with a per-guid
 -- one-shot flag (C++-exact: damage >= GetHealth() is checked before
 -- the 50% latch, and the 50% latch is skipped once the outro phase
@@ -121,14 +124,20 @@
 --   precedent, already in this file). The shock-barrier arm is the
 --   heroic-gated leg of JustEngagedWith; pyroblast fires only from
 --   its fire arm, one-shot.
--- - Phase-two machinery: EVENT_PREPARE_GRAVITY_LAPSE /
---   EVENT_GRAVITY_LAPSE_CENTER_TELEPORT (self-cast 44218) /
---   EVENT_GRAVITY_LAPSE (DoCastAOE 44224) / beam visual 44251 /
---   arcane-sphere summons 44265 / EVENT_POWER_FEEDBACK (Talk +
---   DoCastAOE 44232 + self-cast 44233 + summons.DespawnEntry) — the
---   teleport targeting, SpellHitTarget counter logic, AOE auras and
---   summon entries have no bridges (no teleport / SpellHit /
---   DoCastAOE-target / summon bridges).
+-- - Phase-two chain now PORTED (above): PREPARE (Talk + REACT_PASSIVE +
+--   AttackStop + StopMoving) -> CENTER_TELEPORT 1s (self-cast 44218) ->
+--   GRAVITY_LAPSE 1s (DoCastAOE 44224 as self-cast) -> spheres 4s
+--   (3x triggered self-cast 44265) + beam 5s (DoCastAOE 44251 as
+--   self-cast) + POWER_FEEDBACK 35s (Talk + DoCastAOE 44232 as self-cast
+--   + self-cast 44233) -> PREPARE again 11s (Talk SAY_GRAVITY_LAPSE_2).
+--   Still out, with exact blockers: the SpellHitTarget arm (44224 hits ->
+--   counter-indexed directional teleports 44219-44223 + 400ms delayed
+--   damage/fly self-casts on player targets) — no SpellHitTarget bridge
+--   and Go dispatches no spell-effect teleports; the arcane-sphere
+--   MoveFollow arms — spheres never spawn (no SPELL_EFFECT_SUMMON
+--   dispatch), so summons.DespawnEntry(24708) is vacuous; the
+--   RemoveAurasDueToSpell legs — the CLEAR_FLIGHT cast is ported but
+--   aura removal on players is engine-side and absent.
 -- - npc_felblood_kaelthas_phoenix (second CreatureScript class in
 --   the file): IsSummonedBy's DoZoneInCombat + self-casts 44197/
 --   44196, the lethal DamageTaken egg sequence (DoSummon(NPC_
@@ -154,8 +163,15 @@ local SPELL_FLAME_STRIKE = 46162
 local SPELL_SHOCK_BARRIER = 46165
 local SPELL_PYROBLAST = 36819
 local SPELL_CLEAR_FLIGHT = 44232
+local SPELL_GRAVITY_LAPSE_CENTER_TELEPORT = 44218
+local SPELL_GRAVITY_LAPSE_INITIAL = 44224
+local SPELL_GRAVITY_LAPSE_BEAM_VISUAL = 44251
+local SPELL_SUMMON_ARCANE_SPHERE = 44265
+local SPELL_POWER_FEEDBACK = 44233
 
 local SAY_GRAVITY_LAPSE_1 = 2
+local SAY_GRAVITY_LAPSE_2 = 3
+local SAY_POWER_FEEDBACK = 4
 local SAY_FLAME_STRIKE = 7
 local SAY_SUMMON_PHOENIX = 5
 local SAY_ANNOUNCE_PYROBLAST = 6
@@ -202,6 +218,73 @@ local function randomTargetInRange(creature, range)
         return nil
     end
     return candidates[math.random(#candidates)]
+end
+
+-- Gravity-lapse chain (boss_felblood_kaelthas.cpp:327-357). Cyclic
+-- (PREPARE -> CENTER -> LAPSE -> POWER_FEEDBACK -> PREPARE), so the
+-- handlers are forward-declared and plain-assigned (tharon_ja /
+-- gal_darah idiom — never re-local-function, malown time-bomb).
+local onCenterTeleport, onGravityLapse, onSummonArcaneSphere, onBeamVisual, onPowerFeedback, onPrepareGravityLapse
+
+-- C++ EVENT_PREPARE_GRAVITY_LAPSE (:327-333): Talk + REACT_PASSIVE +
+-- AttackStop + MotionMaster Clear + CENTER_TELEPORT 1s. MotionMaster
+-- Clear has no exact bridge; StopMoving (Unit::StopMoving twin) halts
+-- any current movement — the observable remainder for a stationary
+-- caster. Shared by the 50% latch (SAY_GRAVITY_LAPSE_1) and the repeat
+-- arm (SAY_GRAVITY_LAPSE_2).
+local function prepareArms(creature, guid, say)
+    creature:Talk(say)
+    creature:SetReactState(0)
+    creature:AttackStop()
+    creature:StopMoving()
+    schedule(guid, "gravity_center", 1000, function() onCenterTeleport(creature, guid) end)
+end
+
+-- C++ EVENT_GRAVITY_LAPSE_CENTER_TELEPORT (:335-337): self-cast 44218,
+-- GRAVITY_LAPSE 1s.
+onCenterTeleport = function(creature, guid)
+    creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_CENTER_TELEPORT)
+    schedule(guid, "gravity_lapse", 1000, function() onGravityLapse(creature, guid) end)
+end
+
+-- C++ EVENT_GRAVITY_LAPSE (:339-345): DoCastAOE 44224 as self-cast
+-- (DoCastAOE convention) + spheres 4s + beam 5s + power feedback 35s.
+-- The _gravityLapseTargetCount counter is write-only here — its only
+-- consumer is the unported SpellHitTarget arm (see header).
+onGravityLapse = function(creature, guid)
+    creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_INITIAL)
+    schedule(guid, "gravity_spheres", 4000, function() onSummonArcaneSphere(creature, guid) end)
+    schedule(guid, "gravity_beam", 5000, function() onBeamVisual(creature, guid) end)
+    schedule(guid, "gravity_feedback", 35000, function() onPowerFeedback(creature, guid) end)
+end
+
+-- C++ EVENT_SUMMON_ARCANE_SPHERE (:349-351): 3x triggered self-cast
+-- 44265. The spheres never spawn in Go (no SPELL_EFFECT_SUMMON
+-- dispatch) — the casts are the packet-visual remainder.
+onSummonArcaneSphere = function(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
+    creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
+    creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
+end
+
+-- C++ EVENT_GRAVITY_LAPSE_BEAM_VISUAL_PERIODIC (:346-348): DoCastAOE
+-- 44251 as self-cast, single-shot (C++ never re-arms it).
+onBeamVisual = function(creature, guid)
+    creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_BEAM_VISUAL)
+end
+
+-- C++ EVENT_POWER_FEEDBACK (:353-357): Talk + DoCastAOE 44232 as
+-- self-cast + self-cast 44233 + PREPARE again 11s. The
+-- summons.DespawnEntry(24708) leg is vacuous (spheres never spawn).
+onPowerFeedback = function(creature, guid)
+    creature:Talk(SAY_POWER_FEEDBACK)
+    creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
+    creature:CastSpell(creature, SPELL_POWER_FEEDBACK)
+    schedule(guid, "gravity_prepare", 11000, function() onPrepareGravityLapse(creature, guid) end)
+end
+
+onPrepareGravityLapse = function(creature, guid)
+    prepareArms(creature, guid, SAY_GRAVITY_LAPSE_2)
 end
 
 local function onFireball(creature, guid)
@@ -321,7 +404,7 @@ local function onDamageTaken(_, creature, attacker, damage)
         and health - damage < math.floor(creature:GetMaxHealth() * 50 / 100) then
         phaseTwo[guid] = true
         cancelTimers(guid)
-        creature:Talk(SAY_GRAVITY_LAPSE_1)
+        prepareArms(creature, guid, SAY_GRAVITY_LAPSE_1)
     end
     -- C++ DamageTaken tail: non-self lethal damage is clamped to
     -- health-1 so he survives for the 11s outro chain (self-damage may

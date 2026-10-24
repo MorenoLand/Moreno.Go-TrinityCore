@@ -5053,10 +5053,12 @@ func init() {
 	// entry-point dispatch, player:SummonCreature and
 	// SetObjectScale); go_simon_
 	// cluster / go_apexis_relic's gossip summon arms need the
-	// same; npc_oscillating_frequency_scanner_master_bunny's
-	// Reset summon machine is bridgeable but the unit is
-	// unregistered and its IsSummonedBy player-capture /
-	// GetClosestCreatureWithEntry arms have no bridges; and
+	// npc_oscillating_frequency_scanner_master_bunny's
+	// Reset summon machine is bridgeable and its
+	// GetClosestCreatureWithEntry leg is bridged now
+	// (creature:FindNearestCreature) but the unit is unregistered
+	// (no entry constant in the C++ sources) and its IsSummonedBy
+	// player-capture has no bridge (event 19 fires on the summoner); and
 	// spell_oscillating_field is a SpellScript — all
 	// documented only; see hidden_files/CHECKPOINT.md.
 	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
