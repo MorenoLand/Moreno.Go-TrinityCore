@@ -84,10 +84,13 @@
 --   instance SetGuidData(DATA_FLOOR_ERUPTION_GUID) into the
 --   instance-script BFS eruption machine) — no GO-enumeration /
 --   instance-data bridges.
--- - SpellHit (breath-direction redirect) and SpellHitTarget
---   (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL) on player
---   eruption-spell hits) — SpellHit-15-never-fires standing queue /
---   no instance bridge.
+-- - SpellHit (breath-direction redirect, ev14 live) stays out on the
+--   flight machine (MovePoint-8 redirect, no motion bridge).
+--   SpellHitTarget (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)
+--   on player eruption-spell hits) is dead in C++: eruption spells
+--   are cast by floor-eruption gameobjects (instance_onyxias_lair.cpp
+--   FloorEruption), never by onyxia, so onyxia's caster-side ev15
+--   arm never fires — not an instance-bridge gap.
 -- - Initialize / Reset legs (SetCombatMovement, _Reset, instance
 --   SetData(DATA_ONYXIA_PHASE), DoStartTimedAchievement /
 --   DoStopTimedAchievement ACHIEV_TIMED_START_EVENT 6601) — no

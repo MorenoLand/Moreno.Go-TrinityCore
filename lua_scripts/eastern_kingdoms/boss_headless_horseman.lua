@@ -246,6 +246,13 @@ local function onReachHome(_, creature)
     creature:SetReactState(2)
 end
 
+-- C++ boss_headless_horseman::JustSummoned (boss_headless_horseman.cpp:391-395):
+-- _summons.Summon is bookkeeping only; DoZoneInCombat(summon) engages
+-- the summon in zone combat (drakkari precedent).
+local function onJustSummoned(_, creature, summoned)
+    summoned:DoZoneInCombat()
+end
+
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 3, onTargetDied)
@@ -253,6 +260,7 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 24, onReachHome)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 19, onJustSummoned)
 
 -- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
 -- JustDied schedules EVENT_RAIN_OF_TREATS at 11s, C++

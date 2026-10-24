@@ -77,9 +77,12 @@
 -- the event-9 numeric-return bridge EXISTS (fireCreatureDamageTaken;
 -- halazzi precedent) — the arm stays out because the leg is
 -- PHASE_FLIGHT-gated (no phase model), not for lack of a bridge.
--- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — no
--- SpellHitTarget hook bridge (terestian precedent) + no resistance
--- bridge.
+-- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — ev15 IS
+-- bridged (caster-side, boss_ai.go:1817/1833; sapphiron self-casts
+-- 60539) but the arm stays out on the resistance read alone:
+-- no creature:GetResistance bridge (GetArmor exists, resistance
+-- does not); the _canTheHundredClub latch feeds an achievement
+-- check with no bridge either.
 -- MovementInform (MovePoint 1 -> liftoff) — no motion bridge.
 -- DoAction(ACTION_BIRTH) — cross-AI from go_sapphiron_birth — no
 -- instance/cross-AI bridge.

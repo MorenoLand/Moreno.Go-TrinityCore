@@ -274,6 +274,7 @@ local ENTRY_CROK_SCOURGEBANE = 37129
 
 local ENTRY_YMIRJAR_BATTLE_MAIDEN = 37132
 local ENTRY_YMIRJAR_DEATHBRINGER = 38125
+local ENTRY_YMIRJAR_WARHAWK = 38154
 local ENTRY_YMIRJAR_FROSTBINDER = 37127
 local ENTRY_YMIRJAR_HUNTRESS = 37134
 local ENTRY_YMIRJAR_WARLORD = 37133
@@ -485,12 +486,25 @@ local function svalnaReachHome(event, creature)
     creature:SetHover(false)
 end
 
+-- C++ boss_sister_svalna::JustSummoned (boss_sister_svalna.cpp:1221-1230):
+-- warhawk summons go REACT_DEFENSIVE (1); _summons.Summon is
+-- bookkeeping only; engaged summons get DoZoneInCombat.
+local function svalnaJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_YMIRJAR_WARHAWK then
+        summoned:SetReactState(1) -- REACT_DEFENSIVE
+    end
+    if creature:IsInCombat() then
+        summoned:DoZoneInCombat()
+    end
+end
+
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 1, svalnaEnterCombat)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 2, svalnaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 3, svalnaKilledUnit)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 4, svalnaJustDied)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 23, svalnaReset)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 24, svalnaReachHome)
+RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 19, svalnaJustSummoned)
 
 -- C++ boss_sister_svalna::SpellHit :430-437 — ungated arm:
 -- if (spellInfo->Id == SPELL_HURL_SPEAR (71466) &&

@@ -101,8 +101,12 @@
 -- a cross-creature relay (instance->GetCreature(DATA_SIF) -> sif
 -- Talk(SAY_SIF_DESPAWN)/DespawnOrUnsummon) with no instance/cross-AI
 -- bridge. SpellHitTarget (SPELL_LIGHTNING_RELEASE 62466 -> player target
--- -> _dontStandInTheLightning = false) stays out: achievement/GetData
--- machine unbridged, and SpellHitTarget is not the bridged ev14.
+-- -> _dontStandInTheLightning = false) stays out: ev15 IS bridged
+-- (caster-side; thorim casts 62466 on the pillar and the spell's
+-- player hits fire thorim's ev15) but the latch's only consumer is
+-- the Don't-Stand-in-the-Lightning achievement check (no achievement
+-- bridge) and the triggering Lightning Release cast itself rides the
+-- unported pillar machine.
 -- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) —
 -- DoAction(ACTION_ACTIVATE_RUNIC_SMASH)-gated; no DoAction bridge.
 -- npc_runic_colossusAI / npc_ancient_rune_giantAI JustDied — GO door legs

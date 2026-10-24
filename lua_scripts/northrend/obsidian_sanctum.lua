@@ -520,6 +520,15 @@ for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
     end)
 end
 
+-- C++ npc_twilight_eggs::JustSummoned (obsidian_sanctum.cpp:822-825):
+-- DoZoneInCombat(who) engages the spawned whelp in zone combat.
+local function twilightEggJustSummoned(_, creature, summoned)
+    summoned:DoZoneInCombat()
+end
+for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
+    RegisterCreatureEvent(entry, 19, twilightEggJustSummoned)
+end
+
 -- C++ npc_flame_tsunami (obsidian_sanctum.cpp:866-916): Reset —
 -- SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,
 -- NON_ATTACKABLE | NOT_SELECTABLE) ported (both bridged);
