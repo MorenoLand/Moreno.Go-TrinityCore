@@ -33,7 +33,7 @@
 -- - Whirlwind random-target switch (WhirlWindRandom 3-7s:
 --   SelectTarget Random 100y + AddThreat + AttackStart) and the
 --   AggroReset arms (45-55s -> 2-5s re-arm, AggroResetEnd 5s ->
---   35-45s): no AttackStart / AddThreat / ResetThreatList bridges
+--   35-45s): no AttackStart bridge (AddThreat/ResetAllThreat bridged)
 --   (the "no SelectTarget" parenthetical is retracted as moot — the
 --   random-player pool is bridged — but the arms stay out behind
 --   AttackStart + threat-modeling; buru precedent — target switching

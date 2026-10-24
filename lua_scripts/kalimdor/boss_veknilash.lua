@@ -38,9 +38,11 @@
 --   position swap + stun/interrupt/ResetThreatList + twin visual
 --   cast 26638 + post-teleport threat arm — no position/SelectTarget/
 --   InterruptNonMeleeSpells/ResetThreatList/AttackStart bridges.
--- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): creature
---   grid enumeration + SetFaction + threat-victim AttackStart +
---   AddAura — no bridges.
+-- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): grid
+--   enumeration + SetFaction + AddAura are bridged (the veklor twin
+--   ports the abuse leg), but this twin's AttackStart(victim) leg
+--   has no bridge and the dead-bug Respawn leg has none either,
+--   so the leg stays out.
 -- - KilledUnit/JustEngagedWith/JustDied DoPlaySoundToSet
 --   (SOUND_VN_AGGRO 8661 / KILL 8662 / DEATH 8660): ported via
 --   creature:PlayDirectSound (the sound bridge is live —

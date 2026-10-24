@@ -49,8 +49,10 @@
 -- in-tree), the minion AttackStart leg, and the single-firework
 -- position-target cast leg.
 -- npc_spring_rabbit (:2002-2100) — UpdateAI (:2057) timer pump is
--- CreateLuaEvent-shaped, but FindNearestCreature, GetOwner, and the
--- rabbitGUID ObjectAccessor::GetUnit resolution are unbridged; entry
+-- CreateLuaEvent-shaped, but the MoveFollow/DoAction cross-AI legs
+-- and the rabbitGUID ObjectAccessor::GetUnit resolution are unbridged
+-- (FindNearestCreature is bridged on the creature surface; GetOwner
+-- is player-owner-only); entry
 -- 32791 IS in the C++ file (:2007) but every arm needs those legs.
 -- npc_imp_in_a_ball (:2102-2160) — IsSummonedBy (:2119) needs
 -- summonerGUID + ObjectAccessor::GetPlayer lookup (no bridge); the

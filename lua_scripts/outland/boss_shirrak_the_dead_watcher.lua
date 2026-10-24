@@ -190,7 +190,8 @@ end
 
 -- C++ JustSummoned (boss_shirrak_the_dead_watcher.cpp:94-107), entry-gated:
 -- the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered self-cast + SetFaction
--- (summoner faction, via the pending slot — no creature:GetOwner bridge)
+-- (summoner faction, via the pending slot — creature:GetOwner is
+-- player-owner-only, so it cannot yield the summoner creature)
 -- legs are bridged; the UNIT_STATE_ROOT leg ports via creature:SetRooted
 -- (2026-10-24); SetLevel / AttackStart have no bridges, stay out.
 local function focusFireSummoned(event, creature)

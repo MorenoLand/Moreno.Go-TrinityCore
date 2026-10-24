@@ -51,8 +51,9 @@
 --   krosh distance-poller idiom). The unbridged TeleportToMyBrother
 --   gate (TryActivateAfterTTelep / AfterTeleport 5s re-arm) stays
 --   out, as does the sibling teleport arm.
--- - HandleBugs / CastSpellOnBug (SPELL_EXPLODEBUG 804): creature
---   grid enumeration + SetFaction + AddAura — no bridges.
+-- - HandleBugs / CastSpellOnBug (SPELL_EXPLODEBUG 804): PORTED
+--   (onBugsTick — 2s scan + abuse timer); the dead-bug Respawn leg
+--   stays out (no creature:Respawn bridge).
 -- - Shadow Bolt MoveChase leg (VEKLOR_DIST 20, "VL will not come
 --   to melee when attacking"): motion bridge absent.
 -- - Custom AttackStart (melee-less aggro): motion bridge absent.
@@ -86,12 +87,19 @@ local SPELL_BERSERK = 26662
 
 local SPELL_ARCANEBURST = 568
 
+local SPELL_EXPLODEBUG = 804
+local FACTION_MONSTER = 14
+local ENTRY_BUG_1 = 15316
+local ENTRY_BUG_2 = 15317
+local ABUSE_BUG_RANGE = 20
+
 local SOUND_VL_AGGRO = 8657
 local SOUND_VL_KILL = 8658
 local SOUND_VL_DEATH = 8659
 
 local timers = {}
 local flags = {}
+local bugState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -102,6 +110,7 @@ local function cancelTimers(guid)
         timers[guid] = nil
     end
     flags[guid] = nil
+    bugState[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -114,6 +123,48 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ HandleBugs (boss_twinemperors.cpp:348-371) + RespawnNearbyBugsAndGetOne
+-- (:315-346) + veklor CastSpellOnBug (:523-527): every 2000ms (BugsTimer)
+-- scan entries 15316/15317 within 150y; the dead-bug Respawn +
+-- FACTION_CREATURE + RemoveAllAuras legs stay out (no creature:Respawn
+-- bridge), so only live bugs are picked; a live bug within 20y
+-- (ABUSE_BUG_RANGE) is picked with the C++ rand32()%4 == 0 replacement
+-- rule, then SetFaction(FACTION_MONSTER) + AddAura(SPELL_EXPLODEBUG) +
+-- SetFullHealth (SetHealth(GetMaxHealth())); abuse timer
+-- urand(10000,17000), 1000ms retry on no pick. Veknilash's twin leg
+-- stays out: its CastSpellOnBug adds AttackStart(victim) (no bridge).
+local function onBugsTick(creature, guid)
+    local st = bugState[guid]
+    if st == nil then
+        return
+    end
+    if st.abuse > 2000 then
+        st.abuse = st.abuse - 2000
+    else
+        local pick = nil
+        for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
+            for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+                if not bug:IsDead() and creature:IsWithinDistInMap(bug, ABUSE_BUG_RANGE) then
+                    if pick == nil or math.random(0, 3) == 0 then
+                        pick = bug
+                    end
+                end
+            end
+        end
+        if pick ~= nil then
+            pick:SetFaction(FACTION_MONSTER)
+            pick:AddAura(SPELL_EXPLODEBUG)
+            pick:SetHealth(pick:GetMaxHealth())
+            st.abuse = math.random(10000, 17000)
+        else
+            st.abuse = 1000
+        end
+    end
+    schedule(guid, "bugs", 2000, function()
+        onBugsTick(creature, guid)
+    end)
 end
 
 -- C++ ShadowBolt arm (boss_twinemperors.cpp:544-552): cast only
@@ -195,6 +246,10 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     flags[guid] = {}
+    bugState[guid] = {abuse = math.random(10000, 17000)}
+    schedule(guid, "bugs", 2000, function()
+        onBugsTick(creature, guid)
+    end)
     -- C++ JustEngagedWith: DoPlaySoundToSet(me, SOUND_VL_AGGRO 8657)
     -- behind the !pOtherBoss->IsInCombat() gate (cross-AI — no
     -- bridge); per-creature port.

@@ -71,7 +71,7 @@
 --   mrfloppy/emily precedent — the "no bridge" note below is stale).
 -- boss_sister_svalna::JustReachedHome (:389-395) — _JustReachedHome()
 --   then SetReactState(REACT_PASSIVE 0); the SetDisableGravity /
---   SetHover legs have no bridge and stay out. Ported as event-24
+--   SetHover legs port with it (bridges live). Ported as event-24
 --   reach-home; pairs with the 9s one-shot DEFENSIVE restore
 --   (evade -> PASSIVE, re-engage -> DEFENSIVE, C++-exact).
 -- boss_sister_svalna::KilledUnit (:364-388) — victim->GetTypeId()
