@@ -38,7 +38,7 @@
 --   (creature:SetCanFly, lua_creature_events.go); the SetCombatMovement(false) Reset arm PORTED
 --   2026-10-22 (creature:SetCombatMovement, lua_creature_events.go —
 --   C++ boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
---   (creature:ClearThreatList, bridged lua_objects.go:389).
+--   (creature:ResetAllThreat, bridged lua_objects.go).
 -- - EVENT_LASH: DoCastVictim 25852, reschedule 8-15s.
 -- - EVENT_TRASH: DoCastVictim 3391 (kurinnaxx convention),
 --   reschedule 5-7s.
@@ -173,7 +173,7 @@ end
 -- damage (event 9); event 9 fires pre-damage so the subtraction
 -- mirrors the post-damage C++ read (buru transform convention).
 -- Motion has no bridge; ResetThreatList PORTED 2026-10-19
--- (creature:ClearThreatList, bridged lua_objects.go:389).
+-- (creature:ResetAllThreat, bridged lua_objects.go).
 local function checkGroundPhase(creature, guid, damage)
     local state = ayamissState[guid]
     if state == nil or state.phase ~= PHASE_AIR then
@@ -198,7 +198,7 @@ local function checkGroundPhase(creature, guid, damage)
         -- C++ ground-phase leg: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no bridge" header claims were
         -- stale); the motion leg has no bridge.
-        creature:ClearThreatList()
+        creature:ResetAllThreat()
         cancelTimer(guid, "poison")
         schedule(guid, "lash", math.random(5000, 8000), function()
             onLash(creature, guid)

@@ -67,7 +67,7 @@
 -- creature-lookup bridges all exist (lua_creature_events.go) but the
 -- intro machine itself is unported, so the arms stay out — the fight
 -- starts on pull instead of after the 53s intro; the submerge
--- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
+-- ResetThreatList arm is PORTED 2026-10-19 (creature:ResetAllThreat,
 -- bridged lua_objects.go:389). The submerge AttackStop,
 -- InterruptNonMeleeSpells, faction change and NOT_SELECTABLE flag
 -- have no bridges (AttackStop additionally stays out because the
@@ -308,7 +308,7 @@ onSubmerge = function(creature, guid)
     -- with TargetGUID intact, so the one-shot stop here is faithful.
     -- C++ boss_ragnaros.cpp:251: me->AttackStop()
     creature:AttackStop()
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     -- C++ boss_ragnaros.cpp:252: me->SetReactState(REACT_PASSIVE)
     -- (submerge arm order: ResetThreatList -> flip -> InterruptNonMeleeSpells).
     creature:SetReactState(0) -- REACT_PASSIVE

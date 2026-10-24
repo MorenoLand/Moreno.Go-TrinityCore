@@ -32,7 +32,7 @@
 --   documented-only.
 -- - Blink (30-45s init -> 10-30s): self-cast one of {4801, 8195,
 --   20449} (C++ BlinkSpells). ResetThreatList PORTED 2026-10-19
---   (creature:ClearThreatList, bridged lua_objects.go:389); SetVisible(true)
+--   (creature:ResetAllThreat, bridged lua_objects.go); SetVisible(true)
 --   PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
 -- - Earth Shock 26194 (DoCastVictim, 2s repeat): victim cast
 --   (fankriss GetVictim convention).
@@ -152,12 +152,12 @@ end
 
 -- C++ EVENT_BLINK: DoCast(me, BlinkSpells[urand(0,2)]), init
 -- urand(30000,45000) -> urand(10000,30000). ResetThreatList PORTED
--- 2026-10-19 (creature:ClearThreatList); SetVisible: no bridge.
+-- 2026-10-19 (creature:ResetAllThreat); SetVisible: no bridge.
 local function onBlink(creature, guid)
     creature:CastSpell(creature, BLINK_SPELLS[math.random(#BLINK_SPELLS)])
     -- C++ EVENT_BLINK: ResetThreatList() after the blink cast (bridged
     -- lua_objects.go:389; the old "no bridge" header claims were stale).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     -- C++ EVENT_BLINK: me->SetVisible(true) (boss_skeram.cpp:174,
     -- creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656),
     -- in C++ order (after ResetThreatList, before the re-arm).

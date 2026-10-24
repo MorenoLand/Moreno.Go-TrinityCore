@@ -438,7 +438,7 @@ local function enterPhase(creature, guid, next)
         -- CENTER_Z, 100) first (boss_zuljin.cpp:303).
         creature:Teleport(120.148811, 703.713684, 45.111477, 100)
         -- C++ EnterPhase cases 1-4: ResetThreatList().
-        creature:ClearThreatList()
+        creature:ResetAllThreat()
         -- C++ EnterPhase cases 1-4: SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 0)
         -- (boss_zuljin.cpp:303); the EQUIP_NO_CHANGE slots skip as 0xFFFFFFFF.
         creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)

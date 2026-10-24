@@ -82,7 +82,7 @@
 -- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); no stat-modifier bridge — the +40% tiger
 -- damage hack and the Reset -damage hack are skipped (marli/arlokk
 -- convention); the EVENT_CHANGE_PHASE_3 ResetThreatList arm is PORTED
--- 2026-10-19 (c:ClearThreatList, bridged lua_objects.go:389); the gouge
+-- 2026-10-19 (c:ResetAllThreat, bridged lua_objects.go); the gouge
 -- ModifyThreatByPercent arms stay skipped (no bridge); no movement
 -- model — the charge
 -- AttackStart arm skipped (charge is inert anyway, see above); no
@@ -310,7 +310,7 @@ local function onChangePhase3(e, thekalGuid)
         -- (boss_thekal.cpp:312) releases the phase-1 root via
         -- creature:SetRooted (lua_creature_events.go).
         c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
-        c:ClearThreatList()
+        c:ResetAllThreat()
         c:SetRooted(false)
     end
     schedule(thekalGuid, "forcepunch", 4000, function()

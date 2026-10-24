@@ -42,7 +42,7 @@
 -- innerDemons=30000, else whirlwind=15000, needThreatReset=false
 -- (the MotionMaster Clear/MoveChase half has no movement bridge —
 -- unmodeled; the ResetThreatList half is PORTED below via
--- creature:ClearThreatList). Berserk
+-- creature:ResetAllThreat). Berserk
 -- 26662 600s one-shot (EnrageUsed-guarded): non-triggered self-
 -- cast (C++-exact; the InterruptNonMeleeSpells arm has no
 -- interrupt bridge — krosh convention). Nightelf form: whirlwind
@@ -165,9 +165,9 @@
 -- demon-copy (21875) spawn stay unmodeled — threat/victim-binding
 -- and cross-creature legs unbridged (firesworn/hydross
 -- convention); no movement/
--- threat bridge beyond ClearThreatList — the whirlwind target-switch
+-- threat bridge beyond ResetAllThreat — the whirlwind target-switch
 -- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
--- half is PORTED below via creature:ClearThreatList), the chaos-
+-- half is PORTED below via creature:ResetAllThreat), the chaos-
 -- blast StopMoving arm and the leotheras MoveInLineOfSight
 -- intro/aggro machine unmodeled; the switch-to-demon + Reset
 -- MODEL_DEMON(20125)/MODEL_NIGHTELF(20514) SetDisplayId swaps and
@@ -342,7 +342,7 @@ local function leotherasTick(creature, guid)
 
     -- NeedThreatReset arm: fires once the whirlwind aura lapses or
     -- a form switches (the ResetThreatList half is PORTED below via
-    -- creature:ClearThreatList; the MotionMaster Clear/MoveChase half
+    -- creature:ResetAllThreat; the MotionMaster Clear/MoveChase half
     -- has no movement bridge — timer bookkeeping otherwise).
     if st.needThreatReset and not creature:HasAura(SPELL_WHIRLWIND) then
         if st.demonForm then
@@ -353,7 +353,7 @@ local function leotherasTick(creature, guid)
         st.needThreatReset = false
         -- C++ NeedThreatReset arm (leotheras :461): ResetThreatList();
         -- the MoveChase half has no movement bridge.
-        creature:ClearThreatList()
+        creature:ResetAllThreat()
     end
 
     -- Berserk: 10min one-shot, EnrageUsed-guarded (C++-exact),

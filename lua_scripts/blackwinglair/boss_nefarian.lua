@@ -96,7 +96,7 @@
 -- from the unported pre-fight event machine (no SetData bearer, no
 -- MovePath bridge), the same unreachable verdict as the FindNearestCreature
 -- arms above; the EVENT_SHADOW_BOLT ResetThreatList arm IS
--- ported (:223 — ClearThreatList bridged, lua_objects.go:389); the
+-- ported (:223 — ResetAllThreat bridged, lua_objects.go); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
 -- + bone-construct grid despawn) is blocked on the instance-script
 -- model; the mind-control event (30-35s) is commented out upstream
@@ -237,7 +237,7 @@ local function onNefariusShadowBolt(creature, guid)
     end
     -- C++ EVENT_SHADOW_BOLT: ResetThreatList after the cast (threat wipe
     -- is the arm's core mechanic; bridged lua_objects.go:389).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     schedule(guid, "shadowbolt", math.random(3000, 10000), function()
         onNefariusShadowBolt(creature, guid)
     end)

@@ -53,7 +53,7 @@
 -- the EnterEvadeMode gong-flag arm is skipped (the 4s despawn has no
 -- bridge); no threat model — mark-of-arlokk target is a random alive
 -- player (victim fallback); the vanish ResetThreatList arm IS
--- ported (:285 — ClearThreatList bridged); equipment PORTED
+-- ported (:285 — ResetAllThreat bridged); equipment PORTED
 -- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
 -- the Reset dagger restore + EVENT_TRANSFORM unequip +
 -- EVENT_TRANSFORM_BACK re-equip arms; no
@@ -211,7 +211,7 @@ local onTransformBack
 
 -- C++ panther transform: self-cast 24190 (non-triggered), vanish
 -- visual 24222, vanish 24223; ResetThreatList PORTED 2026-10-19 via
--- creature:ClearThreatList (bridged lua_creature_events.go); AttackStop /
+-- creature:ResetAllThreat (bridged lua_creature_events.go); AttackStop /
 -- SetFlag / REACT_PASSIVE arms PORTED 2026-10-22 (equipment PORTED via
 -- creature:SetEquipmentSlots); the movement legs still have no bridge. The C++
 -- EVENT_TRANSFORM was scheduled with
@@ -283,7 +283,7 @@ local function onTransform(creature, guid)
     -- still have no bridge (the REACT_PASSIVE arm is PORTED 2026-10-20 —
     -- creature:SetReactState; equipment PORTED above; AttackStop/flag
     -- PORTED 2026-10-22 — bridged lua_creature_events.go:180/:968).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     creature:SetReactState(0) -- REACT_PASSIVE
     creature:SetFlag(59, 0x02000002) -- UNIT_FLAG_NON_ATTACKABLE|UNIT_FLAG_NOT_SELECTABLE
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)

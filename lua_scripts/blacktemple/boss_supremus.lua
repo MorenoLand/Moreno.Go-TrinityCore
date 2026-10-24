@@ -49,11 +49,10 @@
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
 -- skipped); no threat model — the ResetThreatList/AddThreat
 -- (1,000,000 on the charge target) arms and the threat-list pick
--- for hateful strike: ClearThreatList IS bridged (lua_objects.go:401)
+-- for hateful strike: ResetAllThreat IS bridged (lua_objects.go)
 -- but the arm is intentionally skipped — the C++ pairs it with the
--- unbridged AddThreat(1e6) top-up, and clearing alone would leave the
--- Go threat table empty/victimless, a state the C++ never produces;
--- the strike target is
+-- unbridged AddThreat(1e6) top-up, and zeroing alone would not fixate
+-- the charge target the way the C++ 1e6 entry does; the strike target is
 -- approximated by the highest-health alive player in the instance
 -- within 5 yd (melee range) of the boss; no summon model — the
 -- volcanic summon 40276 never spawns a volcano add and the molten
@@ -222,10 +221,9 @@ end
 -- C++ EVENT_SWITCH_TARGET: non-triggered charge 41581 on the charge
 -- target + Talk(EMOTE_NEW_TARGET); repeat 10s unconditional
 -- (C++-exact). The ResetThreatList/AddThreat arms are skipped:
--- ClearThreatList is bridged (lua_objects.go:401) but the C++ arm
--- pairs it with the unbridged AddThreat(target, 1e6) top-up — clearing
--- alone would leave the threat table empty/victimless (Go
--- ClearThreat also zeroes currentVictim), a state the C++ never
+-- ResetAllThreat is bridged (lua_objects.go) but the C++ arm
+-- pairs it with the unbridged AddThreat(target, 1e6) top-up — zeroing
+-- alone would not fixate the charge target, a state the C++ never
 -- produces; only the cast and the Talk are kept. Chase-phase only.
 local function onSwitchTarget(creature, guid)
     local target = chargeTarget(creature)
@@ -295,7 +293,7 @@ local function changePhase(creature, guid)
     -- DoZoneInCombat() (me, PORTED 2026-10-23 — bridge live; the
     -- ChangePhase machine is ported in this file, so the me->DoZoneInCombat()
     -- tail is bridgeable) -> 60s EVENT_SWITCH_PHASE re-arm (C++ order).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     creature:DoZoneInCombat()
     schedule(guid, "switchphase", 60000, function()
         changePhase(creature, guid)

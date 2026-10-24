@@ -7,7 +7,7 @@
 -- only NPC_VEM = 15544 and NPC_KRI = 15511; binding is DB-side via
 -- RegisterTempleOfAhnQirajCreatureAI).
 -- Ported: Fear 19408 on victim (12-24s -> 20s) + the ResetThreatList leg
--- (2026-10-21, creature:ClearThreatList — fires ungated C++-exact).
+-- (2026-10-21, creature:ResetAllThreat — fires ungated C++-exact).
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
@@ -48,7 +48,7 @@ local function onFear(creature, guid)
     end
     -- C++ boss_bug_trio.cpp:290 — ResetThreatList() fires with the fear
     -- cast, ungated on victim (bridged lua_creature_events.go).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     schedule(guid, "fear", 20000, function()
         onFear(creature, guid)
     end)

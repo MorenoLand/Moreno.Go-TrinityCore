@@ -43,7 +43,7 @@
 -- (:67) / {15s,20s} re-arm (:113-115) — zero gating legs —
 -- creature:CastSpell(nil, 50752, true).
 -- UpdateAI EVENT_SHOCK_OF_SORROW — PORTED:
--- ResetThreatList (PORTED 2026-10-17: creature:ClearThreatList,
+-- ResetThreatList (PORTED 2026-10-17: creature:ResetAllThreat,
 -- bridged lua_objects.go:389) + Talk(SAY_STUN 3) +
 -- DoCastAOE(SPELL_SHOCK_OF_SORROW 50760)
 -- non-triggered, {20s,25s} init (:68) / {20s,30s} re-arm (:117-121)
@@ -124,11 +124,11 @@ local function stormTick(creature, guid)
 end
 
 -- C++ UpdateAI EVENT_SHOCK_OF_SORROW (:117-121): ResetThreatList
--- (PORTED: creature:ClearThreatList, bridged lua_objects.go:389) +
+-- (PORTED: creature:ResetAllThreat, bridged lua_objects.go) +
 -- Talk(SAY_STUN 3) + DoCastAOE(SPELL_SHOCK_OF_SORROW 50760)
 -- non-triggered, {20s,25s} init (:68) / {20s,30s} re-arm.
 local function shockTick(creature, guid)
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     creature:Talk(SAY_STUN)
     creature:CastSpell(creature, SPELL_SHOCK_OF_SORROW)
     schedule(guid, "shock", {20000, 30000}, function()

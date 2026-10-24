@@ -39,7 +39,7 @@
 -- AuraScript periodic skeleton-summon arm (SPELL_SUMMON_SKELETON 30170,
 -- every 5th tick) has no bridge; AuraScript check handlers are a standing
 -- unmodeled area. The EVENT_RAIN_OF_BONES ResetThreatList arm IS
--- ported (:205 — ClearThreatList bridged). Tail
+-- ported (:205 — ResetAllThreat bridged). Tail
 -- Sweep's HasInArc(PI) behind-target gate is PORTED via the inArc twin
 -- (GetX/GetY/GetO are bridged). No UNIT_STATE_CASTING model, so timers
 -- fire unconditionally.
@@ -208,7 +208,7 @@ local function onRainOfBones(creature, guid)
     -- cast (bridged lua_creature_events.go); SetFacingToObject has no
     -- direct bridge — facing computed with math.atan2 (the Unit::
     -- GetAbsoluteAngle twin, zuljin precedent) then SetFacingTo.
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     local target = randomAlivePlayer(creature)
     if target ~= nil then
         local dx = target:GetX() - creature:GetX()

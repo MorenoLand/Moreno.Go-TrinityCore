@@ -397,10 +397,22 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}
 	// ClearThreatList is UnitMethods::ClearThreatList
 	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat via
-	// Unit::GetThreatManager — Go's ClearThreat twin.
+	// Unit::GetThreatManager — Go's ClearThreat twin. WARNING: this WIPES
+	// the threat table (evade semantics); it is NOT ScriptedAI::
+	// ResetThreatList — use ResetAllThreat for that.
 	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) {
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
 			motion.ThreatMgr.ClearThreat()
+		}
+		return nil, nil
+	}
+	// ResetAllThreat is the session-surface twin of the handler-surface
+	// bridge (lua_creature_events.go): ThreatManager::ResetAllThreat —
+	// zero threat values, keep entries, no evade. ScriptedAI::
+	// ResetThreatList lowers to this, not to ClearAllThreat.
+	methods["ResetAllThreat"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
+			motion.ThreatMgr.ResetThreat()
 		}
 		return nil, nil
 	}

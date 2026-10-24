@@ -808,6 +808,21 @@ func (tm *ThreatManager) HasVictim(victim uint64) bool {
 	return ok
 }
 
+// ResetThreat zeroes every threat value while keeping the entries, so the
+// owner keeps its victim list and does not evade. It mirrors TC's
+// ThreatReference::ScaleThreat(0.0f), which scales only _baseAmount — the Go
+// entries map holds _baseAmount (tempMods mirrors _tempModifier), so temp
+// modifiers, the current victim and taunt state are left untouched.
+// Reference: TrinityCore ThreatManager::ResetAllThreat via
+// ScriptedAI::ResetThreatList.
+func (tm *ThreatManager) ResetThreat() {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	for guid := range tm.entries {
+		tm.entries[guid] = 0
+	}
+}
+
 // ClearThreat wipes the threat table on evade or death.
 // Reference: TrinityCore ThreatManager::ClearAllThreat.
 func (tm *ThreatManager) ClearThreat() {

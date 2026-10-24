@@ -76,7 +76,7 @@
 -- has no out-of-combat update hook in the Lua model — unmodeled;
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
 -- arms are summon-blocked; ResetThreatList on both form switches
--- PORTED 2026-10-17 (creature:ClearThreatList, bridged
+-- PORTED 2026-10-17 (creature:ResetAllThreat, bridged
 -- lua_objects.go:389, C++ arm order after Talk); the
 -- MODEL_CORRUPT/MODEL_CLEAN SetDisplayId swaps are PORTED
 -- 2026-10-20 (handler-surface creature:SetDisplayId bridge,
@@ -216,7 +216,7 @@ local function hydrossTick(creature, guid)
         -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
-        -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
+        -- (creature:ResetAllThreat, bridged lua_objects.go:389, C++
         -- arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
@@ -228,7 +228,7 @@ local function hydrossTick(creature, guid)
                 st.corrupted = false
                 st.hydrossCount = 0
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
-                creature:ClearThreatList()
+                creature:ResetAllThreat()
                 -- C++ :304-305: clean form is frost-school immune,
                 -- nature explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 16, true)
@@ -266,7 +266,7 @@ local function hydrossTick(creature, guid)
         -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
-        -- (creature:ClearThreatList, bridged lua_objects.go:389, C++
+        -- (creature:ResetAllThreat, bridged lua_objects.go:389, C++
         -- arm order after Talk).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
@@ -278,7 +278,7 @@ local function hydrossTick(creature, guid)
                 st.corrupted = true
                 st.corruptCount = 0
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
-                creature:ClearThreatList()
+                creature:ResetAllThreat()
                 -- C++ :388-389: corrupted form is nature-school immune,
                 -- frost explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 8, true)

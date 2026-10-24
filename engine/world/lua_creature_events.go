@@ -468,7 +468,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// ClearThreatList is UnitMethods::ClearThreatList
 	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat via
-	// Unit::GetThreatManager — Go's ClearThreat twin. Handler-surface twin
+	// Unit::GetThreatManager — Go's ClearThreat twin. WARNING: this WIPES
+	// the threat table (evade semantics); it is NOT ScriptedAI::
+	// ResetThreatList — use ResetAllThreat for that. Handler-surface twin
 	// of the session-bound bridge (lua_objects.go:401): nightbane's
 	// rain-of-bones, zuljin's EnterPhase and jeklik's DamageTaken phase-2
 	// ports call it from RegisterCreatureEvent handlers, where the
@@ -476,6 +478,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["ClearThreatList"] = func(_ context.Context, _ []any) ([]any, error) {
 		if motion.ThreatMgr != nil {
 			motion.ThreatMgr.ClearThreat()
+		}
+		return nil, nil
+	}
+	// ResetAllThreat is ThreatManager::ResetAllThreat
+	// (ThreatManager.h:150-152): ScaleThreat(0.0f) on every entry — the
+	// threat VALUES go to zero but the ENTRIES stay, so the owner does
+	// not evade and UpdateVictim keeps a victim list. This is what
+	// ScriptedAI::ResetThreatList (ScriptedCreature.cpp:229-234) lowers
+	// to — "does not delete entries, just sets their threat to zero".
+	// It is NOT ClearThreatList (ClearAllThreat: wipe + evade); ports
+	// that used ClearThreatList for ResetThreatList arms deviated.
+	methods["ResetAllThreat"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ResetThreat()
 		}
 		return nil, nil
 	}

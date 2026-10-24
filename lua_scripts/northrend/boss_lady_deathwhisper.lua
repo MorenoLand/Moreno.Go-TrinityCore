@@ -464,9 +464,9 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
         creature:SetPower(POWER_MANA, 0)
         creature:RemoveAura(SPELL_MANA_BARRIER)
         -- C++ DamageTaken phase-2: ResetThreatList() (bridged
-        -- lua_objects.go:389; the old "no threat bridge" header claim was
+        -- lua_objects.go; the old "no threat bridge" header claim was
         -- stale).
-        creature:ClearThreatList()
+        creature:ResetAllThreat()
         -- C++ CancelGroup(GROUP_ONE) (:419): the shadowbolt arm dies at
         -- the phase transition; deathanddecay is phase-independent and
         -- rides the normal cancelTimers on 2/4/23.

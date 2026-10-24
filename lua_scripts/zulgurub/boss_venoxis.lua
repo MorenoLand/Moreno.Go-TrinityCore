@@ -39,7 +39,7 @@
 -- REACT_PASSIVE/REACT_AGGRESSIVE arms are PORTED (creature:SetReactState,
 -- bridged lua_creature_events.go:524 — the stale "no bridge" note is
 -- retracted); the EVENT_TRANSFORM
--- ResetThreatList arm is PORTED 2026-10-19 (creature:ClearThreatList,
+-- ResetThreatList arm is PORTED 2026-10-19 (creature:ResetAllThreat,
 -- bridged lua_objects.go:389)
 -- (no threat model); the holy-nova SelectTarget(MaxThreat) scan has no
 -- bearer — alive players in the instance are scanned instead with the
@@ -256,7 +256,7 @@ end
 
 -- C++ EVENT_TRANSFORM: non-triggered self-cast 23849 +
 -- Talk(SAY_VENOXIS_TRANSFORM=1); ResetThreatList PORTED 2026-10-19
--- (creature:ClearThreatList, bridged lua_objects.go:389); the
+-- (creature:ResetAllThreat, bridged lua_objects.go); the
 -- phase-one timers are canceled (C++
 -- SetPhase(PHASE_TWO) drops the phase-1 EventMap entries C++-exact);
 -- arms the phase-two timers.
@@ -266,7 +266,7 @@ local function onTransform(creature, guid)
     creature:Talk(TALK_VENOXIS_TRANSFORM)
     -- C++ EVENT_TRANSFORM: ResetThreatList() after the Talk (bridged
     -- lua_objects.go:389; the old "no bridge" header claims were stale).
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     cancelTimerKeys(guid, PHASE_ONE_TIMER_KEYS)
     if st then
         st.phase = PHASE_TWO

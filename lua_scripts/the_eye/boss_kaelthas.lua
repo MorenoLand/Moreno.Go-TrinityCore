@@ -72,8 +72,8 @@
 -- BLOW 10689). The gaze arm (100 init then 8500: random
 -- target + ResetThreatList + AddThreat(5000000) + Talk(EMOTE_
 -- THALADRED_GAZE 2, target)) is unmodeled — AddThreat has no
--- bridge (ResetThreatList's ClearThreatList twin IS bridged,
--- lua_creature_events.go:202, but the arm stays out on the
+-- bridge (ResetThreatList's ResetAllThreat twin IS bridged,
+-- lua_creature_events.go, but the arm stays out on the
 -- threat leg; Talk(id, target) is bridged — whisperTarget arm,
 -- engine/world/lua_creature_events.go:100, boss_arlokk.lua
 -- precedent — but the arm is threat-gated, keleseth

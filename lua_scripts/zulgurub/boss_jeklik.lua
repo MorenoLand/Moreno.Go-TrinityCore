@@ -54,7 +54,7 @@
 -- the GetZulGurubAI bookkeeping arms skipped); no threat model — the
 -- charge and shadow-word-pain targets are random alive players with no
 -- victim fallback; ResetThreatList PORTED 2026-10-19
--- (creature:ClearThreatList, bridged lua_creature_events.go); no movement
+-- (creature:ResetAllThreat, bridged lua_creature_events.go); no movement
 -- model — the
 -- charge AttackStart arm skipped; SetCanFly IS bridged
 -- (lua_creature_events.go, PORTED 2026-10-22) — the phase-1
@@ -329,7 +329,7 @@ local function jeklikDamageTaken(event, creature, attacker, damage)
     -- me->SetCanFly(false), then ResetThreatList (bridged
     -- lua_creature_events.go) — C++ arm order kept.
     creature:SetCanFly(false)
-    creature:ClearThreatList()
+    creature:ResetAllThreat()
     for _, key in ipairs(PHASE_ONE_TIMER_KEYS) do
         local per = timers[guid]
         if per and per[key] then

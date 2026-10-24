@@ -50,7 +50,7 @@
 -- (C++-exact); reset threat 30s init then {25s,40s} —
 -- bookkeeping only (the C++ arm's DoYellForThreat head-talk
 -- sequence and AddThreat have no bridges — ResetThreatList's
--- ClearThreatList twin IS bridged (lua_creature_events.go:202)
+-- ResetAllThreat twin IS bridged (lua_creature_events.go)
 -- but the arm stays out on the unbridged legs — so the
 -- pick-and-reset is unmodeled), re-arm
 -- regardless (C++-exact); fear 30584: 8s init then {15s,35s}
@@ -95,7 +95,7 @@
 -- (ahune bunny / nethekurse fissure precedent); the
 -- ResetThreatList/AddThreat arms unmodeled (timer bookkeeping
 -- exact) — AddThreat has no bridge; ResetThreatList's
--- ClearThreatList twin is bridged (lua_creature_events.go:202)
+-- ResetAllThreat twin is bridged (lua_creature_events.go)
 -- but the arm stays out on the unbridged legs; H_SPELL_BURNING_MAUL 36056 is an
 -- unused C++ enum member (the cast is unconditional, C++-
 -- exact); the ScriptData "Heroic enabled. Spell timing

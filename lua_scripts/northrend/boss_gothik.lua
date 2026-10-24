@@ -71,7 +71,7 @@
 -- SAY_PHASE_TWO 4) + Talk(EMOTE_PHASE_TWO 7) + the EVENT_TELEPORT/
 -- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — stays OUT: no phase
 -- bridge (react-state / threat-list ARE bridged — SetReactState,
--- creature:ClearThreatList — but every arm rides the unported wave/
+-- creature:ResetAllThreat — but every arm rides the unported wave/
 -- phase machine; the Oct-12 "no DoCastAOE bridge"
 -- claim is superseded by the phase-machine verdict);
 -- EVENT_TELEPORT — HealthBelowPct(30) gate + SetReactState +
