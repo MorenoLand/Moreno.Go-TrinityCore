@@ -71,7 +71,10 @@
 -- self-cast soul release 41542 (the AttackStop/MotionMaster-clear
 -- arms have no bridge — the REACT_PASSIVE arm is the Reset arm,
 -- PORTED 2026-10-20, creature:SetReactState — and the 500ms-delayed
--- KillSelf arm has no despawn/kill bridge — the soul survives at
+-- KillSelf arm stays out on the cross-creature DoAction broadcast
+-- (creature:Kill() is bridged now, but the arm is ordered by the
+-- reliquary's EVENT_SUBMERGE summons.DoAction, which has no
+-- bearer) — the soul survives at
 -- its pre-lethal health after the release cast). The reliquary-
 -- driven DoAction(ACTION_KILL_SELF) soul-release path has no
 -- bearer (no cross-creature DoAction bridge).
@@ -282,9 +285,11 @@ end
 -- C++ npc_enslaved_soul::DamageTaken: lethal damage is zeroed
 -- (damage = 0, C++-exact), and once per soul the soul-release
 -- cast fires. The AttackStop/MotionMaster-clear arms and the
--- 500ms-delayed KillSelf arm have no bridges (the REACT_PASSIVE arm
+-- 500ms-delayed KillSelf arm stay out on the cross-creature DoAction
+-- broadcast (creature:Kill() is bridged now, but the arm rides the
+-- reliquary's summons.DoAction order — no bearer); the REACT_PASSIVE arm
 -- is the Reset arm — PORTED 2026-10-20, creature:SetReactState;
--- no despawn/kill bridge) — the soul survives at its pre-lethal
+-- the soul survives at its pre-lethal
 -- health after the release cast.
 local function soulDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()

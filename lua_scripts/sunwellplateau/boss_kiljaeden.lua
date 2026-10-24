@@ -135,9 +135,8 @@
 -- damage itself is NOT rewritten — the C++ lets the death
 -- proceed). OnEnterCombat(1): 2s prime, then a 500ms proximity
 -- check: armed and within 3 yd of the victim -> non-triggered
--- DoCastVictim(45779); the C++ KillSelf has no kill bridge — the
--- fiend is modeled as consumed by its explosion (check stops
--- after firing). The AddThreat lock-on arm has no threat bridge.
+-- DoCastVictim(45779) + KillSelf (ported via creature:Kill()).
+-- The AddThreat lock-on arm has no threat bridge.
 -- OnReset(23)/OnLeaveCombat(2)/OnDied(4): timer/state cleanup.
 -- Armageddon Target (25735). OnReset(23): triggered self-cast
 -- armageddon visual 45911, ~1 tick later triggered 45914 (C++ case
@@ -729,8 +728,8 @@ local function fiendDamageTaken(event, creature, attacker, damage)
 end
 
 -- C++ proximity detonation: 2s prime, then explode within 3 yd of
--- the victim. The C++ KillSelf has no kill bridge — the fiend is
--- modeled as consumed by its explosion.
+-- the victim; the C++ KillSelf follows the fission cast (ported
+-- via creature:Kill(), which fires the event-4 cleanup below).
 local function fiendProximity(creature, guid)
     local st = fiendState[guid]
     if not st then
@@ -741,6 +740,7 @@ local function fiendProximity(creature, guid)
         if victim and creature:IsWithinDist(victim, 3) then
             creature:CastSpell(nil, SPELL_FELFIRE_FISSION)
             st.armed = false
+            creature:Kill()
             return
         end
     end

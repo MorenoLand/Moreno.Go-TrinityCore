@@ -843,6 +843,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Kill is Unit::Kill (Unit.cpp:11188-11387) with the caller as both
+	// killer and victim — the Creature::KillSelf twin. The death runs
+	// through the spell insta-kill victim path (boss_ai.go
+	// creatureInstaKillVictim): DamageTaken/Dealt hooks, tap, lootable
+	// corpse flag, threat teardown, KILL/KILLED/DEATH proc auras,
+	// death-aura strip, the KilledUnit branch arm and BossAI OnDied.
+	// The Lua event chain (23 Reset then 4 Died, the session kill
+	// funnel's order) fires here only when no player owns the victim:
+	// a player-owned victim's owner path already funnels through
+	// onCreatureKilled, which fires both events, so firing again
+	// would double-dispatch. Already-dead callers are a no-op (the
+	// victim path's Health == 0 early-out).
+	methods["Kill"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion == nil {
+			return nil, nil
+		}
+		ownerPlayer := false
+		if motion.OwnerGUID != 0 {
+			if owner := s.findSessionByGUID(motion.OwnerGUID); owner != nil && owner.player != nil {
+				ownerPlayer = true
+			}
+		}
+		s.creatureInstaKillVictim(ctx, motion, motion.GUID)
+		if ownerPlayer || s.Features == nil || s.Features.Scripts == nil {
+			return nil, nil
+		}
+		creature := s.luaMotionCreature(motion)
+		if creature == nil {
+			return nil, nil
+		}
+		resetArgs := []any{scripting.CreatureEventOnReset, creature}
+		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
+		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
+		diedArgs := []any{scripting.CreatureEventOnDied, creature, creature}
+		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
+		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
+		return nil, nil
+	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
 	// SendTeleportPacket (MSG_MOVE_TELEPORT carrying the creature GUID to

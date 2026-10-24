@@ -89,8 +89,10 @@
 -- SetControlled bridge — the phase-change root/unroot arms are PORTED
 -- via SetRooted (lua_creature_events.go) and only the _isChangingPhase
 -- melee skip has no bearer (melee is engine-driven); no summon model — the SPELL_SUMMONTIGERS tigers never
--- spawn; thekal's JustDied KillSelf of the two adds has no kill bridge —
--- their timers are canceled instead; Lor'Khan's greater-heal 100-yd
+-- spawn; thekal's JustDied KillSelf of the two adds stays out on
+-- the instance lookup (instance->GetCreature(DATA_LORKHAN/ZATH) has
+-- no bridge — creature:Kill() itself is bridged now); their timers
+-- are canceled instead; Lor'Khan's greater-heal 100-yd
 -- range check is skipped.
 
 local ENTRY_THEKAL = 14509
@@ -508,7 +510,8 @@ end
 local function thekalDied(event, creature, killer)
     local e = encounterState(creature)
     creature:Talk(TALK_DEATH)
-    -- C++ KillSelf's the two adds here; no kill bridge — their timers
+    -- C++ KillSelf's the two adds here; the instance lookup
+    -- (instance->GetCreature) has no bridge, so their timers
     -- are canceled instead and the encounter state is cleared.
     thekalResetEncounter(e, creature)
 end

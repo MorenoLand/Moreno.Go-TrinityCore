@@ -400,7 +400,8 @@ local function hexlordDied(event, creature)
     state[guid] = nil
     creature:Talk(YELL_DEATH)
     -- C++ JustDied's add KillSelf arm (boss_hexlord.cpp:326-331) has no
-    -- bearer (no Kill bridge — the KillSelf axis).
+    -- bearer (the adds are reached via the stored AddGUID[] array —
+    -- no GUID->creature bridge; creature:Kill() itself is bridged now).
 end
 
 -- C++ boss_hexlord.cpp:134-141: Pos_X[4], POS_Y 921.2795, POS_Z 33.8883,

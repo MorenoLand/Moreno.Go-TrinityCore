@@ -116,7 +116,9 @@
 -- bridge — stay out) and the kalecgos ACTION_
 -- START_OUTRO relay has no bridge — skipped. OnSpellHit(14): hit
 -- by 46733 (tap check damage) -> triggered self-cast teleport back
--- 46020; the Unit::Kill(caster) arm has no kill bridge — skipped.
+-- 46020; the Unit::Kill(unitCaster, me) arm stays out — creature:Kill()
+-- is self-killer only, and this arm credits the kill to the caster
+-- (player kill chain), which no bridge expresses — skipped.
 -- OnLeaveCombat(2)/OnReset(23): the kalecgos EnterEvadeMode relay
 -- has no bridge — modeled as timer/state cleanup only.
 -- Not registered: go_kalecgos_spectral_rift (GO 187055 — no

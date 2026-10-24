@@ -518,7 +518,9 @@ local function shadowImageVisualCheck(creature, guid)
 end
 
 -- C++ JustEngagedWith (empty in C++) + Initialize: arm the
--- combat timers. The 15s KillSelf arm has no kill bridge.
+-- combat timers, including the 15s KillSelf arm (ported via
+-- creature:Kill(); Reset re-arms it, and the evade cycle re-arms
+-- via LeaveCombat cancel + EnterCombat).
 local function shadowImageEnterCombat(event, creature)
     local guid = creature:GetGUID()
     -- C++ 5000 + rand32()%15000 is exclusive-top [5000,19999].
@@ -530,6 +532,9 @@ local function shadowImageEnterCombat(event, creature)
     end)
     schedule(guid, "visualcheck", 10000, function()
         shadowImageVisualCheck(creature, guid)
+    end)
+    schedule(guid, "kill", 15000, function()
+        creature:Kill()
     end)
 end
 
