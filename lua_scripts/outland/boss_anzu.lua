@@ -36,7 +36,8 @@
 -- carry a nonce instead of replacing like the syth helper.
 -- EVENT_SUMMON — 7x me->SummonCreature(NPC_BROOD_OF_ANZU 23132,
 -- PosSummonBrood[i], TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 46s)
--- rides the no-SummonCreature bridge — documented-only; the
+-- ported via creature:SummonCreature (stale "no summon bridge"
+-- retracted 2026-10-23); the
 -- DoCast(me, SPELL_BANISH_SELF 42354) 2-arg (non-triggered) self-cast
 -- and the 12s one-shot EVENT_SPELL_BOMB schedule are ported.
 -- EVENT_SPELL_BOMB — one-shot: SelectTarget(Random, 0) →
@@ -64,6 +65,18 @@
 -- DoMeleeAttackIfReady — documented-only.
 
 local ENTRY_ANZU = 23035 -- NPC_ANZU (sethekk_halls.h:58)
+local NPC_BROOD_OF_ANZU = 23132
+
+-- PosSummonBrood[7] (boss_anzu.cpp:52-60) — exact C++ coordinates.
+local BROOD_SUMMON_POSITIONS = {
+    { -118.1717, 284.5299, 121.2287, 2.775074 },
+    { -98.15528, 293.4469, 109.2385, 0.174533 },
+    { -99.70160, 270.1699, 98.27389, 6.178465 },
+    { -69.25543, 303.0768, 97.84479, 5.532694 },
+    { -87.59662, 263.5181, 92.70478, 1.658063 },
+    { -73.54323, 276.6267, 94.25807, 2.802979 },
+    { -81.70527, 280.8776, 44.58830, 0.526849 },
+}
 
 local SAY_SUMMON_BROOD = 0 -- boss_anzu.cpp:31
 local SAY_SPELL_BOMB   = 1 -- boss_anzu.cpp:32
@@ -169,11 +182,18 @@ local function spellBombTick(creature, guid)
     end
 end
 
--- C++ EVENT_SUMMON (boss_anzu.cpp:137-144): the 7x SummonCreature leg
--- rides the no-SummonCreature bridge (documented-only); the
--- DoCast(me, SPELL_BANISH_SELF) self-cast and the 12s one-shot
--- EVENT_SPELL_BOMB schedule are ported.
+-- C++ EVENT_SUMMON (boss_anzu.cpp:137-144): 7x me->SummonCreature
+-- (NPC_BROOD_OF_ANZU 23132, PosSummonBrood[i],
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3, 46s) — ported C++-exactly
+-- (summons before the self-cast) via the live creature:SummonCreature
+-- bridge (stale "no summon bridge" retracted; the TODO pathing arm is
+-- upstream, documented, not bridged); the DoCast(me, SPELL_BANISH_SELF)
+-- self-cast and the 12s one-shot EVENT_SPELL_BOMB schedule follow
+-- C++ arm order.
 local function summonTick(creature, guid)
+    for _, p in ipairs(BROOD_SUMMON_POSITIONS) do
+        creature:SummonCreature(NPC_BROOD_OF_ANZU, p[1], p[2], p[3], p[4], 3, 46000)
+    end
     creature:CastSpell(creature, SPELL_BANISH_SELF)
     scheduleOnce(guid, "spell_bomb", 12000, function()
         spellBombTick(creature, guid)

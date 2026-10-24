@@ -65,8 +65,9 @@
 -- MONSTER), C++-verbatim order, IsDead-gated off the death path —
 -- SetFlag(59)/SetFaction bridges live, ouro precedent); the
 -- MoveInLineOfSight aggro machine is unmodeled (CREATURE_EVENT_ON_MOVE_IN_LOS (27) exists, but the C++ arm's AttackStart relay has no creature-side bridge);
--- the C++ do-NOT-melee arm has no no-melee bridge — engine
--- melee applies (leotheras demon-form precedent). OnDied(4)/
+-- the C++ do-NOT-melee arm ports via creature:SetMeleeAttack(false)
+-- on event 1 (2026-10-23 — the stale "no no-melee bridge / leotheras
+-- precedent" claim is retracted). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
@@ -80,7 +81,7 @@
 -- 38025/37850) and the globule-summon player-side triggered
 -- casts (37854/37858/37860/37861) unmodeled (the C++ target-
 -- pick loops with dedup collapse with the unbridgeable casts);
--- no no-melee bridge for the globule (above; LOS event 27 exists but the AttackStart relay is unbridged);
+-- the globule no-melee arm IS ported (creature:SetMeleeAttack bridge is live, 2026-10-23 — the stale "no no-melee bridge" claim is retracted); LOS event 27 exists but the AttackStart relay is still unbridged;
 -- the globule Check_Timer runs at 1s pump granularity instead
 -- of the C++ 500ms re-arm; no SpellScript/AuraScript scripts
 -- in this file.

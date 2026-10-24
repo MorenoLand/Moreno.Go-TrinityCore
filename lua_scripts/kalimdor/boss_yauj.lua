@@ -11,8 +11,10 @@
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
--- DATA_VEMISDEAD — no bridge); JustDied 10x summon (SummonCreature
--- — zero Lua usage) + instance DATA_BUG_TRIO_DEATH.
+-- DATA_VEMISDEAD — no bridge); JustDied 10x summon (boss_bug_trio.cpp:
+-- 270-279 — the creature:SummonCreature bridge is live, stale "no
+-- bridge" retracted, but the paired Summoned->AI()->AttackStart relay
+-- has no bridge) + instance DATA_BUG_TRIO_DEATH.
 local ENTRY = 15543
 
 local SPELL_FEAR = 19408

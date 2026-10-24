@@ -31,9 +31,12 @@
 -- 3. no creature-motion bridges (SetWalk/MovePath/AddUnitState):
 --    at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
 --    + MovePath(NPC*100)); quest-status gate also unbridged.
--- 4. no entry-filtered gameobject bridge (player:GetNearestGameObject(range)
---    at lua_player.go:813 takes no entry; no loot-state gate, no
---    UseDoorOrButton): at_coilfang_waterfall (:72-94; GO_COILFANG_WATERFALL
+-- 4. no entry-filtered gameobject bridge on the player surface
+--    (player:GetNearestGameObject(range) at lua_player.go:968 takes no
+--    entry; creature:FindNearestGameObject can't reach the AT hook's
+--    player-only context; go:GetLootState + go:UseDoorOrButton ARE bridged
+--    — lua_objects.go:1093 — but the arm stays out behind the search
+--    gate): at_coilfang_waterfall (:72-94; GO_COILFANG_WATERFALL
 --    184212 within 35.0f, GO_READY check, UseDoorOrButton).
 -- 5. at_brewfest (:331-376): FindNearestCreature(24711/24710) unbridged, so the
 --    creature:Talk(SAY_WELCOME 4) arm (bridge exists at

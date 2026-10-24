@@ -515,7 +515,13 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
     if not st.dead and health - newDamage < FIGHT_WON_VALUE then
         st.dead = true
         cancelTimers(guid)
-        creature:SetFlag(59, 0x100) -- C++ :368 (fight-won SetImmuneToPC(true) = set UNIT_FLAG_IMMUNE_TO_PC; the _EnterEvadeMode / NOT_SELECTABLE / RemoveAurasOnEvade / cross-AI DoAction legs have no bridge)
+        -- C++ :368-369 arm order: SetFlag(UNIT_FLAG_NOT_SELECTABLE) then
+        -- SetImmuneToPC(true) (= set UNIT_FLAG_IMMUNE_TO_PC); the NOT_SELECTABLE
+        -- leg ports 2026-10-23 on the live creature:SetFlag bridge (the stale
+        -- "no bridge" claim is retracted); the _EnterEvadeMode /
+        -- RemoveAurasOnEvade / cross-AI DoAction legs have no bridge.
+        creature:SetFlag(59, 0x2000000)
+        creature:SetFlag(59, 0x100)
         creature:CastSpell(creature, SPELL_REMOVE_MARKS_OF_THE_FALLEN_CHAMPION)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT, true)
         creature:Talk(SAY_DEATH)

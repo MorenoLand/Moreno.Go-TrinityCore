@@ -138,9 +138,10 @@
 --   maiden_of_virtue precedent documents the same gap.
 -- - EVENT_SOLAR_FLARE: C++ passes SPELLVALUE_MAX_TARGETS =
 --   the FLUX_AURA stack count (1-8) via CastSpellExtraArgs;
---   no spell-mod / GetAura / SetStackAmount bridge exists
---   (the Go aura model is presence-only), so the cast fires
---   with the spell's default targeting.
+--   creature:GetStackAmount is live now (2026-10-23) but the chain
+--   is broken — Lua AddAura is presence-only (stacks unreadable)
+--   and creature:CastSpell has no SpellMod/extra-args path — so
+--   the cast fires with the spell's default targeting.
 -- - EVENT_FLUX: C++ sets the re-applied aura to
 --   urand(1, 8) stacks via Flux->SetStackAmount; dropped —
 --   the aura is re-applied presence-only.
@@ -493,8 +494,9 @@ end
 
 -- C++ EVENT_FLUX (:767-772): init 5s, repeat 7500ms;
 -- RemoveAurasDueToSpell + AddAura(SPELL_FLUX_AURA) —
--- SetStackAmount(urand(1, 8)) has no bridge (Go aura model
--- is presence-only), so the aura is re-applied as-is.
+-- SetStackAmount(urand(1, 8)) has no bridge (only the read side,
+-- creature:GetStackAmount, was built 2026-10-23; the Go aura
+-- model is presence-only), so the aura is re-applied as-is.
 local function onFlux(creature, guid)
     if elderTimersActive(creature) then
         creature:RemoveAura(SPELL_FLUX_AURA)

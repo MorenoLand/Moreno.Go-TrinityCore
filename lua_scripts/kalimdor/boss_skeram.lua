@@ -152,7 +152,9 @@ end
 
 -- C++ EVENT_BLINK: DoCast(me, BlinkSpells[urand(0,2)]), init
 -- urand(30000,45000) -> urand(10000,30000). ResetThreatList PORTED
--- 2026-10-19 (creature:ResetAllThreat); SetVisible: no bridge.
+-- 2026-10-19 (creature:ResetAllThreat); SetVisible(true) PORTED
+-- 2026-10-23 on the live creature:SetVisible bridge (below, in
+-- C++ order — the stale "SetVisible: no bridge" claim is retracted).
 local function onBlink(creature, guid)
     creature:CastSpell(creature, BLINK_SPELLS[math.random(#BLINK_SPELLS)])
     -- C++ EVENT_BLINK: ResetThreatList() after the blink cast (bridged

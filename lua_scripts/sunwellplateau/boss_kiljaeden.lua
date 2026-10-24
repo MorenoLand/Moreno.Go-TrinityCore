@@ -184,8 +184,11 @@
 -- no GameObjectAI bridge
 -- — go_orb_of_the_blue_flight (gossip summon + vengeance cast)
 -- is not registered; no movement/teleport bridge — the shield-
--- orb circle-movement/MovementInform/DoTeleportTo arms and the
--- SetCombatMovement arms are unmodeled; no threat bridge — the
+-- orb circle-movement/MovementInform/DoTeleportTo arms are unmodeled;
+-- SetCombatMovement bridge live (lua_creature_events.go:1301) — KJ's own
+-- ctor arm PORTED in kjEnterCombat (boss_kiljaeden.cpp:525); the controller
+-- (25608) + felfire-portal arms are unregistered entries and the
+-- armageddon arm is dormant (never engages, pure timer visual); no threat bridge — the
 -- deceiver/portal AddThreat relays are unmodeled; no kill/
 -- despawn/flag/react/gravity bridges — the fiend KillSelf, the
 -- armageddon DespawnOrUnsummon, the kalecgos-kj/controller flag/

@@ -51,7 +51,11 @@
 -- Reset INTRO_DONE leg — cross-AI GetData/SetData bridge absent
 -- (the Reset RemoveAura(SPELL_FREEZE_ANIM) rides the INTRO_DONE
 -- gate, so it stays out with it).
--- JustSummoned DoZoneInCombat(summon) — no summon bridge.
+-- JustSummoned DoZoneInCombat(summon) — the summon-bearer pattern (event
+-- 19) exists and the bridge is live (2026-10-23), but the arm rides the
+-- unbridged DoAction summon machine (ACTION_SUMMON_ELEMENTAL's Emerge
+-- cast has no fire site) and the elemental's entry is unverifiable, so
+-- it never spawns — stays out.
 -- boss_drakkari_elemental — ENTRY UNVERIFIABLE (gundrak.h
 -- GDCreatureIds has no NPC_DRAKKARI_ELEMENTAL; the .cpp enum names
 -- only spells/texts; belnistrasz/willix precedent — no invented
@@ -87,7 +91,9 @@
 -- (SetReactState IS bridged — stays out on the entry-blocked /
 -- no-registration ground like the rest), MovementInform id-1 ->
 -- cross-AI DoAction(UNFREEZE) + SetData(DATA_INTRO_DONE) +
--- DoZoneInCombat + DespawnOrUnsummon (bridges absent).
+-- DoZoneInCombat + DespawnOrUnsummon (the DoZoneInCombat bridge is live
+-- 2026-10-23 and creature:Despawn IS bridged, but the whole chain rides
+-- the unbridged DoAction/instance/MovementInform machine — stays out).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
 -- (gargolmar precedent); BossAI _Reset/_JustDied instance
 -- bookkeeping has no bridge.

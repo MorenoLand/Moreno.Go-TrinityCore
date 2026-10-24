@@ -80,7 +80,8 @@
 -- Surrounding machinery, also unbridged (for the record, not
 -- wired): Reset (:210-:220, RemoveAurasDueToSpell + SetVisible +
 -- FindNearestCreature(NPC_CTHUN_PORTAL) passive — FindNearestCreature
--- and SetVisible have no bridge); JustEngagedWith (:224-:228): the
+-- has no bridge (SetVisible IS bridged — creature:SetVisible — but the
+-- arm rides the instance SetData leg); JustEngagedWith (:224-:228): the
 -- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
 -- re-triage) — only the instance->SetData(DATA_CTHUN_PHASE,
 -- PHASE_EYE_GREEN_BEAM) leg stays out (no instance bridge);
@@ -89,8 +90,9 @@
 -- re-triaged 2026-10-23); PhaseTimer transitions (:303-:335 green->red,
 -- :363-:383 red->green — phase SetData legs, no bridge);
 -- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget — bridged 2026-10-20 via
--- creature:SetTarget; SetHealth/SetVisible — unbridged; cross-AI hand-off
--- to the cthun body, DoAction has no bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
+-- creature:SetTarget; SetVisible IS bridged (creature:SetVisible) but the
+-- arm rides the cross-AI hand-off to the cthun body (DoAction has no
+-- bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
 -- DespawnOrUnsummon — no bridge).
 --
 -- The 4 tentacle NPCs' own AIs are ported separately

@@ -23,7 +23,11 @@
 -- are cast by the sacrificed player (no player:CastSpell bridge) for an
 -- unported chains unit — so those casts are skipped while the non-summon
 -- arms (RemoveAura, Talk) stay; the boss's Reset/JustDied ACTION_DESPAWN_IMPS
--- arms and the portal imps' DoZoneInCombat have no bearer. The kil'rek summon
+-- arms stay out (DoAction relay has no bridge; the portal unit is
+-- unregistered); the portal imps' DoZoneInCombat
+-- has a bearer now (event 19 passes the summon object —
+-- summon:DoZoneInCombat(), live bridge 2026-10-23) but the portal unit
+-- itself is unported, so the arm never fires. The kil'rek summon
 -- (SPELL_SUMMON_IMP 30066) IS ported: the 2026-10-23 engine gap closure
 -- (4212e3e7) executes SPELL_EFFECT_SUMMON on the creature-cast path, so the
 -- DoCastAOE self-cast spawns 17229 whose npc_kilrek AI is registered below.

@@ -71,10 +71,11 @@
 -- Tyrannus JustDied (:193) — Talk(SAY_DEATH 10); timers cancelled (the
 --   sjonnir JustDied-Talk precedent).
 -- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — the EVENT_ICY_BLAST
---   seed (15s, :335) lands on Rimefang's own Eluna event 1, which fires
---   when DoZoneInCombat() (:333) puts Rimefang in combat — the faithful
---   anchor (the phase flip + DoZoneInCombat legs have no bridge, but the
---   anchor is the same combat-start moment).
+--   seed (15s, :335) lands on Rimefang's own Eluna event 1 (engine aggro —
+--   the faithful anchor for the unported DoAction relay): the :332 phase
+--   flip and :333 DoZoneInCombat stay out behind the unbridged DoAction
+--   relay + intro machine (DoZoneInCombat bridge live 2026-10-23, but the
+--   relay has no bearer — rimefang->AI()->DoAction has no bridge).
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0)
 -- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
 -- (GetAITargets pick, no Player filter); DoCast(target, 69232);

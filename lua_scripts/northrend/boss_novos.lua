@@ -44,8 +44,9 @@
 -- SetBubbled(false) legs — instance GetGuidData + ObjectAccessor
 -- cross-AI bridges absent; instance model absent (standing).
 -- SetBubbled(true)'s DoCast(SPELL_ARCANE_FIELD 47346) + UNIT_FLAG_
--- NON_ATTACKABLE flag set — flag bridge absent (drakkari_colossus
--- precedent); the _bubbled latch gates UpdateAI entirely while set
+-- NON_ATTACKABLE flag set — field-59 HasFlag/SetFlag/RemoveFlag ARE
+-- bridged (obsidian :358 precedent; drakkari_colossus claim retracted);
+-- the _bubbled latch gates UpdateAI entirely while set
 -- and clears only via the unbridged DoAction machine, so no latch
 -- is emulated (jedoga precedent — an ungated bubbled model would
 -- diverge from C++ combat behavior).

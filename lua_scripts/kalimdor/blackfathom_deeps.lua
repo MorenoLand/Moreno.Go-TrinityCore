@@ -42,7 +42,10 @@
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - JustDied's me->IsSummon() -> _instance->SetData(DATA_EVENT, +1) leg:
 --   instance-script model blocked (standing).
--- - IsSummonedBy -> DoZoneInCombat(): no zone-in-combat bridge.
+-- - IsSummonedBy -> DoZoneInCombat(): the DoZoneInCombat bridge is live
+--   (2026-10-23), but the IsSummonedBy hook (event 22) never fires for
+--   spell-summoned creatures — it fires only from the pet funnel
+--   (pet_cooldowns.go:73) — so the arm has no fire site.
 -- - DamageTaken's 15%-hp flee arm (entries 4977 Murkshallow Softshell /
 --   4823 Barbed Crustacean, not registered): DoFleeToGetAssistance has no
 --   movement bridge (av_marshal precedent); their only other C++ arm is

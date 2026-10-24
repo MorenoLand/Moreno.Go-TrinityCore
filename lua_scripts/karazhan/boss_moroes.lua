@@ -243,11 +243,12 @@ local function moroesEnterCombat(event, creature, target)
     schedule(guid, "gouge", 23000, function() onGouge(creature, guid) end)
     -- C++ JustEngagedWith's AddsAttack (boss_moroes.cpp:224-238) —
     -- temp->AI()->AttackStart(me->GetVictim()) + DoZoneInCombat(temp)
-    -- for each live add, EnterEvadeMode() if any add is missing — has
-    -- no bearer: no AttackStart / DoZoneInCombat / EnterEvadeMode
-    -- bridges (the keleseth guard-AttackStart precedent). The four
-    -- summoned guests run their registered class AIs and engage via
-    -- the engine's own aggro.
+    -- for each live add, EnterEvadeMode() if any add is missing — stays
+    -- out: AttackStart/EnterEvadeMode have no bridge (keleseth
+    -- precedent) and the per-add DoZoneInCombat(temp) legs have no
+    -- bearer from Moroes's handler (the bridge is live 2026-10-23 but
+    -- receiver-bound). The four summoned guests run their registered
+    -- class AIs and engage via the engine's own aggro.
 end
 
 -- Enrage: C++ UpdateAI checks HealthBelowPct(30) on the post-damage health

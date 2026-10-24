@@ -322,8 +322,9 @@ end
 -- summon gating (the maiden CreateLuaEvent precedent); the
 -- UpdateVictim/UNIT_STATE_CASTING gates have no bridge (timers fire
 -- unconditionally, the maiden precedent). The intro
--- ACTION_START_FROSTWYRM flight machine stays out (no-DoAction /
--- no-motion bridges).
+-- ACTION_START_FROSTWYRM flight machine stays out (no-DoAction bridge;
+-- MovePoint/MovementInform unbridged — SetDefaultMovementType IS
+-- bridged (lua_objects.go:633, pure field write) but carries no motion).
 local function onSpinestalkerRoar(creature, guid)
     creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "roar", {25000, 30000}, function() onSpinestalkerRoar(creature, guid) end)

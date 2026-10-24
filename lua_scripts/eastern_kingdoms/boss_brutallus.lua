@@ -67,9 +67,11 @@
 --   model blocked, standing).
 -- - JustDied's me->SummonCreature(NPC_FELMYST = 25038, x, y,
 --   z + 30, orientation, TEMPSUMMON_MANUAL_DESPAWN) leg: entry
---   25038 IS header-verifiable (NPC_FELMYST = 25038) but me->
---   SummonCreature has no Lua summon bridge (gurtogg class) —
---   STRAND.
+--   25038 IS header-verifiable (NPC_FELMYST = 25038) — PORTED in the
+--   canonical lua_scripts/sunwellplateau/boss_brutallus.lua
+--   (brutallusDied, type 7, C++-exact; stale "no summon bridge"
+--   retracted). This file's registrations were removed 2026-10-12 —
+--   dead copy, no edits.
 -- - KilledUnit's Talk(YELL_KILL = 6) leg: the "no KilledUnit bridge"
 --   claim is STALE — CREATURE_EVENT_ON_TARGET_DIED (event 3) is bridged
 --   (lua_creature_events.go:438); the canonical port

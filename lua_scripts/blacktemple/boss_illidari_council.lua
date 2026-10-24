@@ -370,7 +370,8 @@ local function councilLeaveCombat(event, creature)
 end
 
 -- C++ Reset: _Reset + _inCombat=false + SummonCreatureGroup
--- (no summon bridge).
+-- (creature:SummonCreature IS bridged; SummonCreatureGroup group-ID
+-- spawn has no bridge — stays out).
 local function councilReset(event, creature)
     councilResetState(creature:GetGUID())
 end

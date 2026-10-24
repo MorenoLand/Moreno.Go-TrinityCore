@@ -428,8 +428,12 @@ end
 -- (PHANTOM_BLAST 5000 / MIRRORED_SOUL 8000 / WELL_OF_SOULS 30000 /
 -- UNLEASHED_SOULS 20000 / WAILING_SOULS {60000,70000}ms). The
 -- BossAI::JustEngagedWith passthrough leg and the NPC_CRUCIBLE_OF_SOULS
--- double-spawn-guard SummonCreature leg (:163-164, no Go summon bridge)
--- do not port.
+-- double-spawn-guard summon leg (:163-164) — C++ uses
+-- instance->instance->SummonCreature (map spawn); the Lua port uses
+-- creature:SummonCreature (bridge live 2026-10-22, type 6 DEAD_DESPAWN
+-- = the 2-arg C++ default) — same map/instance in practice, and no
+-- event-19 handler on the devourer consumes the JustSummoned ping.
+-- Coordinates/entry verified against CrucibleSummonPos (:121).
 local function devourerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)

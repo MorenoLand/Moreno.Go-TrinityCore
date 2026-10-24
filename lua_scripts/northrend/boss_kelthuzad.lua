@@ -91,7 +91,9 @@
 -- EVENT_TRANSITION_REPLY — lich-king cross-AI Talk(SAY_ANSWER_REQUEST
 -- 3) via DATA_LICH_KING + the four KT portal GO states — instance
 -- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —
--- SummonCreatureGroup(_guardianGroups) — no summon bridge;
+-- SummonCreatureGroup(_guardianGroups) — group-ID spawn, no bridge
+-- (the creature:SummonCreature bridge is live but C++ spawns by
+-- summon-group, which has no bridge);
 -- phase-three UpdateAI leg — HealthBelowPct(45) Talk(SAY_REQUEST_AID
 -- 12) + transition scheduling — the health-pct read IS bridgeable
 -- (creature:GetHealthPct(), object.go:107) but the transition arm rides

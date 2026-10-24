@@ -76,7 +76,9 @@
 --   -> {25s,30s}.
 -- - CheckTimer 5s: DespawnOrUnsummon when the instance DATA_AZGALOR GUID
 --   is missing/dead (instance GUID bridge blocked); MoveInLineOfSight
---   AttackStart within 50 while not in combat (no LoS-aggro bridge).
+--   AttackStart within 50 while not in combat — event 27, IsWithinDist
+--   and IsInCombat are all bridged, but the AttackStart relay has no
+--   bridge, so the arm stays out (2026-10-23 re-triage).
 
 local ENTRY = 17842
 

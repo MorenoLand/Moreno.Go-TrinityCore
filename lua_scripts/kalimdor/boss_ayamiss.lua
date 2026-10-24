@@ -18,8 +18,9 @@
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule STINGER_SPRAY (20-30s), POISON_STINGER (5s),
 --   PARALYZE (15s). (C++ also schedules SUMMON_SWARMER /
---   SWARMER_ATTACK, but SummonCreature has no Lua bridge — zero
---   usage in lua_scripts — so those timers are not armed.)
+--   SWARMER_ATTACK — the bridge is live but the swarmer legs ride
+--   the unbridged cross-AI AttackStart relay (EVENT_SWARMER_ATTACK,
+--   boss_ayamiss.cpp:212-219), so those timers are not armed.)
 -- - EVENT_STINGER_SPRAY: self-cast 25749, reschedule 15-20s.
 -- - EVENT_POISON_STINGER: DoCastVictim 25748 (jeklik GetVictim +
 --   CastSpell convention), reschedule 2-3s; cancelled at ground
@@ -53,7 +54,10 @@
 --   SetDisableGravity(true) ports via the creature:SetDisableGravity
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
--- - SummonCreature (NPC_SWARMER 15546, NPC_LARVA 15555): no bridge.
+-- - SummonCreature (NPC_SWARMER 15546, NPC_LARVA 15555): the bridge
+--   is live, but the larva's paired JustSummoned leg is a MovePoint to
+--   AltarPos (no motion bridge) and the swarmer leg is the cross-AI
+--   AttackStart relay — both stay out (stale "no bridge" retracted).
 -- - EVENT_SWARMER_ATTACK's cross-AI AttackStart on swarmers: no
 --   bridge (zero SelectTarget/AttackStart usage in lua_scripts).
 -- - npc_hive_zara_larva: MovementInform/AttackStart/MoveInLineOfSight

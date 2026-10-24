@@ -17,11 +17,11 @@
 -- SPELL_GUARDS_MARK 38067 on the target :149); MoveInLineOfSight :153-181
 -- (TYPEID_PLAYER gate, range check :165 RANGE_ALARMBOT 100 / RANGE_TRIPWIRE
 -- 15, IsHostileTo :168, IsValidAttackTarget :171, TRIPWIRE skips flying :174).
--- Missing bridges: SummonCreature (no bridge anywhere in engine/),
--- EngageWithTarget / IsEngagedBy, IsHostileTo, IsValidAttackTarget, unit-flag
--- manipulation. Bridged fragments (OnMoveInLOS 27, player:CanFly,
--- IsWithinDistInMap) cannot gate hostility/validity and cannot summon or
--- engage the guard — the machine's core legs have no bridge.
+-- Missing bridges: EngageWithTarget / IsEngagedBy, IsHostileTo,
+-- IsValidAttackTarget, unit-flag manipulation (the creature:
+-- SummonCreature bridge is live — stale "no bridge anywhere in
+-- engine/" retracted — but the machine's core legs are the
+-- engage/hostility gates, not the summon).
 
 -- npc_chicken_cluck (C++ :194-292) — DOCUMENTED-ONLY.
 -- Arms: Reset :216-221 (faction FACTION_PREY, remove QUESTGIVER flag);
@@ -85,9 +85,15 @@
 -- PatientSaved :710-746 (AreaExploredOrEventHappens at 15 saved — no
 -- bridge); UpdateAI :893-946 (10s summon timer, picks random Coordinates
 -- point, summons 12938/12936/12937 or 12923/12924/12925 via
--- me->SummonCreature :922 — NO SummonCreature bridge, the machine's heart).
--- UNIT_FLAG_NOT_SELECTABLE / UNIT_FLAG_PLAYER_CONTROLLED manipulation has no
--- SetFlag bridge either.
+-- me->SummonCreature :922 (bridge live — stale "NO SummonCreature
+-- bridge" retracted) — but the machine's heart is the cross-AI write
+-- (Patient->AI()->DoctorGUID + Coord, no bridge), the PatientDied /
+-- PatientSaved DoAction relay (no bridge), FailQuest and
+-- AreaExploredOrEventHappens (no bridges) — summon alone spawns
+-- patients the machine can never track.
+-- UNIT_FLAG_NOT_SELECTABLE / UNIT_FLAG_PLAYER_CONTROLLED manipulation
+-- is bridgeable (creature:SetFlag, lua_creature_events.go:1919) — the
+-- blockers are the cross-AI legs above, not the flag.
 
 -- npc_injured_patient (C++ :778-890; entries 12923/12924/12925,
 -- 12936/12937/12938 in-file) — Reset arm PORTED below; rest DOCUMENTED-ONLY.

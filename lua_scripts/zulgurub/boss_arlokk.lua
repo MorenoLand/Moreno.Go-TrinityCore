@@ -438,5 +438,7 @@ RegisterCreatureEvent(ENTRY_PROWLER, 4, prowlerDied)
 RegisterCreatureEvent(ENTRY_PROWLER, 23, prowlerReset)
 
 -- go_gong_of_bethekk (180526, C++ ScriptName "go_gong_of_bethekk"):
--- NOT registered — its only arms (SetFlag NOT_SELECTABLE,
--- SendCustomAnim, SummonCreature(14515)) have no Lua bridge.
+-- NOT registered — its only arms (SetFlag(GAMEOBJECT_FLAGS),
+-- SummonCreature-from-GO(14515), SendCustomAnim) have no GO-surface
+-- bearer (luaGameObjectObject has no SetFlag/SummonCreature; no global
+-- spawn bridge).

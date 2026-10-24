@@ -60,9 +60,12 @@
 -- JustSummoned — NPC_IRON_CONSTRUCT faction/react-state/flag/
 -- immune/root legs + AttackStart/DoZoneInCombat + summons.Summon
 -- — the faction / react-state legs have bridges now (SetFaction +
--- SetReactState live, 2026-10-21) but the summoned constructs never
--- materialize (no SPELL_EFFECT_SUMMON bridge) and AttackStart /
--- DoZoneInCombat have no creature-side bridges — stays out.
+-- SetReactState live, 2026-10-21) and DoZoneInCombat is bridged
+-- (lua_creature_events.go:426 — the 2026-10-22 "no creature-side
+-- bridges" note is half-retracted), but the summoned constructs never
+-- materialize (no SPELL_EFFECT_SUMMON bridge; the DoSummon machine's
+-- heart is the unbridged DoAction(20) cross-AI relay + aura-stack legs)
+-- and AttackStart still has no bridge — stays out.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
 -- npc_iron_construct DamageTaken) — no DoAction / aura-stack

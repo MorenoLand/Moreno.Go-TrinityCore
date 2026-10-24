@@ -52,8 +52,10 @@
 -- lost by the absence of a spawn bridge. JustDied's
 -- FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS)->AI()->SetData(1, 2)
 -- (creature-list precedent). IsSummonedBy's SetImmuneToPC(false) +
--- DoZoneInCombat() has no spawn bridge (emberseer JustAppeared
--- precedent). MovementInform's despawn path gates on MotionMaster /
+-- DoZoneInCombat() bridge live (2026-10-23) — but the summon (IsSummonedBy)
+-- is unmodeled (the Nefarius summon chain is documented-only); porting to
+-- OnSpawn(5) would fire it on natural respawns, which C++ never does.
+-- MovementInform's despawn path gates on MotionMaster /
 -- DespawnOrUnsummon (unmodeled).
 
 local SPELL_WHIRLWIND = 13736

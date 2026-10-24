@@ -50,7 +50,10 @@
 -- (AchievementCriteriaScript, CAST_AI cross-AI OnCheck) has no
 -- achievement-criteria bridge on the Lua surface — documented-only.
 -- Constrictor: the stack-count leg (GetAura(55093) stack check == 5 —
--- GetStackAmount has no bridge, blessed_banner precedent),
+-- creature:GetStackAmount is live but is a SELF-read (the constrictor's
+-- own auras) while C++ reads the TARGET player's aura stacks — no
+-- player-surface stack bridge, so the old "no bridge" wording's
+-- blessed_banner precedent still holds),
 -- RemoveAurasDueToSpell, the victim self-cast of SNAKE_WRAP 55126
 -- (a player-side self-cast with no player-cast path from creature AI,
 -- corastrasza precedent — the old "no victim CastSpell bridge"

@@ -90,17 +90,21 @@
 --    the NPC_ASTROMANCER_SOLARIAN_SPOTLIGHT 18928 /
 --    NPC_SOLARIUM_AGENT 18925 / NPC_SOLARIUM_PRIEST 18806
 --    summons, the SetVisible/SetFlag(NOT_SELECTABLE) arms and
---    the AppearDelay/StopMoving/AttackStop machine — has no
---    summon / movement / visibility / flag bridges
---    (steamrigger / omor precedents), unmodeled; Phase stays
---    1 until the 20% latch. SAY_SUMMON1/SAY_SUMMON2 never
+--    the AppearDelay/StopMoving/AttackStop machine — unmodeled
+--    (steamrigger / omor precedents); the summon/StopMoving/AttackStop/
+--    visibility/flag bridges are all live now (2026-10-23), but the
+--    machine still needs the motion-master Clear, cross-creature
+--    AttackStart for the 12 agents + 2 priests (no bridge — they'd
+--    spawn inert), and the npc_solarium_priest/agent minion AIs; Phase
+--    stays 1 until the 20% latch. SAY_SUMMON1/SAY_SUMMON2 never
 --    fire in this model.
 -- Phase 4 latch (C++ arm order — after the phase branches,
 -- every tick): if Phase ~= 4 and HealthBelowPct(20): Phase =
 -- 4 + Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
--- RemoveFlag(NOT_SELECTABLE) is flag-bridgeable (creature:RemoveFlag 59)
--- but stays out paired with the unbridged SetVisible(true) leg (a reveal
--- without visibility would fabricate a state C++ never exhibits); the
+-- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
+-- ported (2026-10-23 — the stale "paired with the reveal" rationale is
+-- retracted: the Lua model never goes invisible, so the reveal is
+-- vacuous, exactly like the display/scale arms); the
 -- SetArmor(31000) arm has no armor bridge — unmodeled
 -- (netherspite precedent); the
 -- SetDisplayId(MODEL_VOIDWALKER 18988) arm IS ported (the stale
@@ -117,15 +121,19 @@
 -- OnTargetDied(3): Talk(SAY_KILL) unconditionally (no player
 -- gate, C++-exact). OnDied(4): Talk(SAY_DEATH) + cleanup
 -- (the _JustDied arm is instance-blocked); the SetObjectScale
--- restore arm is ported as a scale clear (the SetDisplayId arm
--- stays out with the unbridged reveal legs).
+-- restore arm is ported as a scale clear, and the
+-- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms are
+-- ported too (2026-10-23 — visibility bridge is live; the stale
+-- "no visibility bridge" claim is retracted).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
--- gargolmar precedent; the SetArmor/SetVisible arms have no bridges and
--- RemoveFlag(NOT_SELECTABLE) stays out paired with the unbridged reveal
--- legs; the SetDisplayId arm stays out paired with them — land nowhere
--- (the SetObjectScale restore arm is ported as a scale clear);
+-- gargolmar precedent; the SetArmor arm has no bridge (stays out);
+-- the RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms and
+-- the SetDisplayId restore ARE ported (2026-10-23 — visibility bridge
+-- is live; the stale "no visibility bridge / paired with the reveal"
+-- claims are retracted), plus the SetObjectScale restore as a scale
+-- clear;
 -- the _Reset arm is instance-
 -- blocked; Eluna's On_Reset fires ahead of OnDied and
 -- OnSpawn — millhouse note — so both hooks land the same
@@ -141,15 +149,17 @@
 -- unbridged cross-creature relay; their role is combat);
 -- spotlight (18928) stays out on the paired summon-side
 -- self-cast SPELL_SPOTLIGHT 25824 (:322); no
--- movement bridge — the UpdatePosition teleports, the
--- StopMoving/AttackStop and the AppearDelay machine
--- unmodeled (omor precedent); no visibility/armor bridge — the phase
--- arms touching SetVisible/SetArmor unmodeled (netherspite precedent);
--- the UNIT_FLAG_NOT_SELECTABLE RemoveFlag arm is flag-bridgeable but
--- stays out paired with the unbridged reveal legs; the SetDisplayId arm is
--- display-bridgeable but stays out paired with the unbridged
--- reveal legs, SetObjectScale ported via the
--- scale bridge; no arc
+-- movement bridge — the UpdatePosition teleports are teleport-
+-- bridgeable and StopMoving/AttackStop bridges are live, but the
+-- AppearDelay machine stays unmodeled (omor precedent) with the
+-- unbridged motion-master Clear and the unported phase 2/3 machine;
+-- no armor bridge — the SetArmor arms stay out (netherspite
+-- precedent); the phase 2/3 SetVisible/SetFlag(NOT_SELECTABLE)
+-- machine legs stay out with the machine (their bridges are live —
+-- see the phase-2/3 note above); the phase-4/reset
+-- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
+-- ported (2026-10-23); the SetDisplayId arms are ported,
+-- SetObjectScale ported via the scale bridge; no arc
 -- bridge — the HasInArc victim fallback unmodeled; no cast-
 -- state bridge — the InterruptNonMeleeSpells arms
 -- unmodeled, casts fire unconditionally (netherspite
@@ -169,6 +179,8 @@ local ENTRY_SOLARIAN = 18805
 
 local MODEL_HUMAN = 18239 -- boss_astromancer.cpp:72
 local MODEL_VOIDWALKER = 18988 -- boss_astromancer.cpp:73
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END+0x35)
+local UNIT_FLAG_NOT_SELECTABLE = 33554432 -- 0x02000000, UnitDefines.h:149
 
 local SAY_AGGRO = 0
 local SAY_KILL = 3
@@ -349,19 +361,28 @@ local function combatTick(creature, guid)
 
     -- Phase 4 latch (C++ arm order — after the phase
     -- branches): HealthBelowPct(20) while not already phase
-    -- 4 — Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
-    -- visibility/armor arms have no bridges and the RemoveFlag
-    -- (NOT_SELECTABLE) leg stays out paired with the unbridged
-    -- SetVisible(true) (visibility has no bridge at all); the
-    -- display arm (MODEL_VOIDWALKER) is ported below — the stale
-    -- "paired with the reveal" rationale retracted (Lua model never
-    -- goes invisible); the scale arm is ported below via
+    -- 4 — the RemoveFlag(NOT_SELECTABLE) + SetVisible(true)
+    -- guarantee arms port below (2026-10-23 — the stale "no
+    -- visibility bridge / paired with the reveal" claims are
+    -- retracted), then Talk(SAY_VOIDA) + Talk(SAY_VOIDB)
+    -- (C++-exact); the SetArmor arm has no bridge — unmodeled
+    -- (netherspite precedent); the display arm (MODEL_VOIDWALKER)
+    -- is ported below; the scale arm is ported below via
     -- creature:SetScale.
     if st.phase ~= 4 then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
             st.phase = 4
+            -- C++ arm order (boss_astromancer.cpp:400-401): the
+            -- "make sure she wont be invisible or not selectable"
+            -- guarantee — RemoveFlag(NOT_SELECTABLE) + SetVisible(true)
+            -- before the talks; vacuous in this model (phases 2/3 never
+            -- conceal her) but C++-exact; the stale "paired with the
+            -- reveal" rationale is retracted 2026-10-23, same as the
+            -- display/scale arms.
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetVisible(true)
             creature:Talk(SAY_VOIDA)
             creature:Talk(SAY_VOIDB)
             -- C++ arm order: SetDisplayId(MODEL_VOIDWALKER) before
@@ -430,11 +451,18 @@ end)
 -- this lands the same Reset() reset as the evade hook; the C++
 -- Reset SetObjectScale(defaultsize) restore arm ports as a scale
 -- clear and the SetDisplayId(MODEL_HUMAN) restore as
--- SetDisplayId(MODEL_HUMAN) (SetArmor/SetVisible arms stay
--- unbridged; the RemoveFlag(NOT_SELECTABLE) leg stays out paired
--- with the unbridged reveal — visibility, unlike display, has no
--- bridge at all).
+-- SetDisplayId(MODEL_HUMAN); the RemoveFlag(NOT_SELECTABLE) +
+-- SetVisible(true) guarantee arms are ported too (2026-10-23 —
+-- the stale "no visibility bridge" claim is retracted); only
+-- the SetArmor arm stays out (no armor bridge).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
+    -- C++ Reset() arm order (boss_astromancer.cpp:151-155): SetArmor
+    -- has no bridge; RemoveFlag(NOT_SELECTABLE) + SetVisible(true) are
+    -- vacuous here (flag never set, never hidden) but C++-exact — the
+    -- stale "no visibility bridge / paired with the reveal" rationale
+    -- retracted 2026-10-23; then the scale clear and SetDisplayId restore.
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetVisible(true)
     creature:SetScale(0)
     creature:SetDisplayId(MODEL_HUMAN)
     fullReset(creature:GetGUID())

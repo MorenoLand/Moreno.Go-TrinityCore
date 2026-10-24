@@ -69,16 +69,21 @@
 -- cross-creature casts, the fog-breath 45495 self-cast + FOG_
 -- TRIGGER 45582 / FOG_FORCE 45782 fog summon + breath-move loop x3,
 -- the max-threat chase and the landing + EnterPhase(GROUND) re-
--- entry) has no movement/contact-point/facing/cross-creature/
--- summon bridges — the fight stays in ground-phase timers
+-- entry) has no movement/contact-point/facing/cross-creature
+-- bridges — the summon bridge is live, but the whole flight phase is
+-- phase-gated on the unported PHASE_FLIGHT/MovementInform machine;
+-- the fight stays in ground-phase timers
 -- (ragnaros-intro convention); the DamageTaken lethal-damage
 -- rewrite arm has no bearer without the flight phase (phase is
 -- always GROUND here). The SpellHit FOG_INFORM 45714 arm (summon
 -- NPC_DEAD at the caster, copy health, triggered FOG_CHARM 45717
 -- + FOG_CHARM2 45726 self-casts, lethal DealDamage on the caster)
--- has no summon or kill bridges — unmodeled. The
--- DespawnSummons(NPC_VAPOR_TRAIL)->NPC_DEAD summon arm has no
--- creature-enumeration/summon bridges — unmodeled. The
+-- has no SpellHit-hook, SetMaxHealth or DealDamage bridges — unmodeled
+-- (the summon bridge alone is insufficient). The
+-- DespawnSummons(NPC_VAPOR_TRAIL)->NPC_DEAD summon arm (fires only
+-- when phase == PHASE_FLIGHT) is phase-gated; the SetVisible/
+-- Despawn side ports via GetCreaturesInGrid + SetVisible + Despawn
+-- (bridged) in the Reset leg below. The
 -- JustAppeared Talk(YELL_BIRTH) arm ports on event 5 in the sibling
 -- eastern_kingdoms/boss_felmyst.lua (ev5 fires on initial spawn and
 -- respawn via fireCreatureSpawned — the old "no spawn-fire bridge"

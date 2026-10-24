@@ -185,9 +185,10 @@ local function bossTick(creature, guid)
     end
 
     -- Reset threat: 30s init then {25s,40s} — bookkeeping
-    -- only (the DoYellForThreat head-talk sequence and the
-    -- ResetThreatList/AddThreat arms have no bridges), re-arm
-    -- regardless (C++-exact).
+    -- only (the DoYellForThreat head-talk sequence and AddThreat
+    -- have no bridges; ResetThreatList's ResetAllThreat twin IS
+    -- bridged (lua_creature_events.go) but the arm stays out on the
+    -- unbridged legs), re-arm regardless (C++-exact).
     if st.resetThreat <= 1000 then
         st.resetThreat = math.random(25000, 39999)
     else

@@ -38,10 +38,13 @@
 --   bridge — plus SummonCreature for the globe ring, which has
 --   zero Lua usage.)
 -- - The glob explosion / rejoin machinery: NPC_GLOB_OF_VISCIDUS
---   15667 spawns (SummonCreature — no bridge) on a 40yd ring
---   around ViscidusCoord (-7992.36, 908.19, -52.62), MovePoint
---   to ROOM_CENTER then MovementInform -> REJOIN_VISCIDUS 25896
---   + UnSummon (no-motion bridge); the glob JustDied leg shrinks
+--   15667 spawns on a 40yd ring around ViscidusCoord
+--   (-7992.36, 908.19, -52.62) — the creature:SummonCreature bridge
+--   is live (stale "no bridge" retracted), but the EXPLODE arm sits
+--   behind the unported PHASE_MELEE machine (frost spell-school
+--   SpellHit gate has no bridge), so the spawn never fires here;
+--   MovePoint to ROOM_CENTER, MovementInform -> REJOIN_VISCIDUS
+--   25896 + UnSummon (no-motion bridge); the glob JustDied leg shrinks
 --   Viscidus (SetHealth - maxhealth/20 + SHRINKS 25893) or kills
 --   him under 5% hp — all cross-AI/instance legs, no bridge. Per
 --   the no-placeholder-Lua rule, no npc_glob_of_viscidus.lua file

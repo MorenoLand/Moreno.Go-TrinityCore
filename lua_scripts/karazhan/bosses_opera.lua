@@ -942,9 +942,9 @@ RegisterCreatureGossipEvent(ENTRY_GRANDMOTHER, 2, grandmotherGossipSelect)
 -- Talk(SAY_JULIANNE_DEATH01 = 2), and 2.5s later she fakes death and flips
 -- to phase ROMULO; 10s after that Romulo is summoned (summon bridge,
 -- 2026-10-22 — his DoZoneInCombat aggro leg (bosses_opera.cpp:1411,
--- on the summon, not self) stays out: re-evaluated 2026-10-23
--- against the live bridge — summon-leg call on a different
--- creature; he stands until the engine aggros him, documented gap).
+-- on the summon, not self) IS PORTED: re-evaluated 2026-10-23 —
+-- summon:DoZoneInCombat() with the summon object in hand (the
+-- "documented gap" note is stale).
 -- Phase ROMULO: Romulo fights — backward lunge 30815 on a random alive
 -- player within 100 yd every 15-30s (C++ picks the second-threat target
 -- behind him; no threat/facing model), daring 30841 on self every 20-40s,

@@ -54,7 +54,8 @@
 -- 10-20s repeat.
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 18708 registered):
--- SetCombatMovement(false) — no movement bridge.
+-- SetCombatMovement(false) — PORTED in murmurEnterCombat (boss_murmur.cpp:64
+-- ctor arm; bridge live, lua_creature_events.go:1301).
 -- The UpdateAI casting gate (HasUnitState(UNIT_STATE_CASTING)
 -- early-out, and the per-event post-cast return) — creature
 -- IsCasting is a stub returning false (lua_objects.go:330) — no

@@ -129,7 +129,8 @@ local function uromDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ Reset (boss_urom.cpp:132-140): SetDisableGravity has no bridge
+-- C++ Reset (boss_urom.cpp:132-140): the SetDisableGravity(false) leg is
+-- PORTED in uromReset below (bridge live, lua_creature_events.go:800),
 -- and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua never sets
 -- REACT_PASSIVE), but the DoCastSelf(SPELL_EVOCATE) leg is ungated and
 -- port-pattern-ready — self-cast on the reset path (halion

@@ -98,7 +98,8 @@
 -- phase-three disk/scion machine) — no timer-event / cast /
 -- phase bridges. SpellHit — SPELL_POWER_SPARK_MALYGOS 56152
 -- (Talk SAY_BUFF_SPARK 14 + despawn the spark) stays out: the
--- trigger is Malygos's MoveInLineOfSight arm (no LOS bridge —
+-- trigger is Malygos's MoveInLineOfSight arm (event 27 exists,
+-- but the arm is PHASE_ONE-gated with no phase model in Lua —
 -- next bullet), so event 14 can never fire with this ID;
 -- SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER
 -- 19) stays out: the trigger is the self-cast SPELL_BERSERK 60670
@@ -109,7 +110,10 @@
 -- this ID (re-audit 2026-10-15: the 22:34 "trigger live in Go"
 -- claim was wrong).
 -- MoveInLineOfSight (power-spark proximity -> cast
--- SPELL_POWER_SPARK_MALYGOS) — no LOS bridge.
+-- SPELL_POWER_SPARK_MALYGOS) — event 27 exists, but the arm is
+-- gated on _phase == PHASE_ONE (no phase model in Lua) and the
+-- spark's approach movement is unported — stays out (2026-10-23
+-- re-triage; the stale "no LOS bridge" wording is retracted).
 -- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
 -- SPELL_PORTAL_OPENED -> phase-one-gated DoCast
 -- SPELL_SUMMON_POWER_PARK; UpdateAI per-tick aura maintenance —
@@ -174,6 +178,7 @@
 -- unmodeled-achievement queue.
 
 local ENTRY_MALYGOS = 28859
+local NPC_ALEXSTRASZA = 32295 -- eye_of_eternity.h:57
 
 local SAY_START_P_ONE = 1
 local SAY_DEATH = 17
@@ -199,16 +204,21 @@ end
 -- Talk(SAY_DEATH) + gift-box-bunny GUID ->
 -- SummonGameObject(HEART_OF_MAGIC) + SummonCreature
 -- NPC_ALEXSTRASZA + DespawnOrUnsummon(5s). The Talk arm is
--- ported; the summon legs are instance-resolution blocked —
--- the GetGuidData leg has no bridge (creature:SummonGameObject /
--- creature:SummonCreature are bridged, but the summoner is
--- unresolvable without the instance bridge). The 5s
--- despawn is a fire-and-forget one-shot CreateLuaEvent — the
--- creature is dead, so no timer bookkeeping is needed (C++
--- DespawnOrUnsummon rides the creature's own despawn timer,
--- not the EventMap).
+-- ported; the gift-box-bunny SummonGameObject leg stays out —
+-- the summoner resolves via instance GetGuidData (no bridge).
+-- The SummonCreature(NPC_ALEXSTRASZA 32295) leg IS ported
+-- 2026-10-23 (summoner is me — no instance leg; AlexstraszaSpawnPos
+-- boss_malygos.cpp:290; TEMPSUMMON_MANUAL_DESPAWN = 7, the bridge
+-- default); Alexstrasza has no C++ AI script, so no behavior is
+-- lost. The 5s despawn is a fire-and-forget one-shot
+-- CreateLuaEvent — the creature is dead, so no timer bookkeeping
+-- is needed (C++ DespawnOrUnsummon rides the creature's own
+-- despawn timer, not the EventMap).
 local function malygosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ arm order: the gift-box-bunny SummonGameObject leg is
+    -- instance-blocked (above); the Alexstrasza summon lands here.
+    creature:SummonCreature(NPC_ALEXSTRASZA, 854.551, 1225.31, 300.901, 0.0, 7, 0)
     CreateLuaEvent(function()
         creature:Despawn()
     end, 5000)

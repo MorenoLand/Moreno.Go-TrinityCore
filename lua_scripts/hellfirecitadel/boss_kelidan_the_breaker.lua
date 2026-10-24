@@ -60,14 +60,16 @@
 -- is paired with the unbridgeable ChannelerDied clear, so
 -- porting the apply alone would leave the boss permanently
 -- immune and unpullable — and the
--- SummonChannelers() arm has no summon bridge, steamrigger
+-- SummonChannelers() arm — creature:SummonCreature IS bridged but the
+-- ObjectAccessor GUID latch + channeler AIs are unported (steamrigger
 -- precedent).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_blood_furnace.cpp stays blocked on the instance-script
 -- model; the BossAI ctor DATA_KELIDAN_THE_BREAKER = 2 bookkeeping
--- in Reset/JustEngagedWith/JustDied skipped); no summon bridge —
--- the whole SummonChannelers machine (5 channelers at the
+-- in Reset/JustEngagedWith/JustDied skipped); the SummonChannelers
+-- machine stays out — creature:SummonCreature IS bridged, but the
+-- whole machine (5 channelers at the
 -- ShadowmoonChannelers spawn points, TEMPSUMMON_CORPSE_TIMED_
 -- DESPAWN) unmodeled; no ObjectAccessor/cross-creature bridge —
 -- ChannelerEngaged (the addYell-gated SAY_ADD_AGGRO talk and the

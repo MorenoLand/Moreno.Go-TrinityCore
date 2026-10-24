@@ -202,9 +202,11 @@ end)
 -- (majordomo / shahraz precedent): phase = false + Talk(
 -- EMOTE_SUMMON) + Talk(SAY_SUMMON) (C++-exact). The DoCast
 -- (me, SPELL_SUMMON_REINFORCEMENTS) arm is unmodeled — the
--- dummy spell's only effect is the unmodeled SpellScript's
--- SummonCreature calls (no summon bridge, steamrigger
--- precedent).
+-- dummy spell's only effect is the SpellScript's
+-- GetCaster()->SummonCreature calls (boss_commander_sarannis.cpp:
+-- 164-179; no SpellScript bridge, steamrigger precedent — the
+-- stale "no summon bridge" phrasing is retracted, creature:
+-- SummonCreature is live but can't see inside a spell script).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = combatStates[guid]

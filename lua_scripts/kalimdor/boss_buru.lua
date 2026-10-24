@@ -39,9 +39,11 @@
 --   documented below.
 -- Unmodeled (documented-only, no bridges):
 -- - ChaseNewVictim's target switch (SelectTarget Random +
---   ResetThreatList + AttackStart + Talk): no Lua bridge for the
---   SelectTarget/AttackStart/Talk legs (ResetThreatList's ResetAllThreat
---   twin is bridged, but the switch stays out on the other legs).
+--   ResetThreatList + AttackStart + Talk): ResetThreatList's
+--   ResetAllThreat twin IS bridged and whisper-target Talk(id, target)
+--   is bridged (tyrannus precedent) — the switch stays out on
+--   AttackStart alone (no bridge, keleseth precedent); a threat
+--   reset without the attack-start would not switch victims.
 -- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
 --   buru retargeting via instance GetGuidData(DATA_BURU);
 --   JustDied's ManageRespawn via dynamic_cast to boss_buruAI):

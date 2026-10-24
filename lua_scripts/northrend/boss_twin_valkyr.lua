@@ -50,9 +50,10 @@
 -- 65766 Light / 65768 Dark) (event arms; the me->DoZoneInCombat() first
 -- arm is PORTED 2026-10-23 — DoZoneInCombat bridge live
 -- (engine/world/lua_creature_events.go); the BossAI::JustEngagedWith
--- instance-bookkeeping leg, cross-AI sister AddAura/Empathy and
--- DoZoneInCombat(pSister), and setActive have no bridges
--- — tharon_ja precedent; the SetCombatPulseDelay(5) arm is PORTED
+-- instance-bookkeeping leg and setActive have no bridges; the
+-- cross-AI sister AddAura/Empathy + DoZoneInCombat(pSister) legs are
+-- PORTED 2026-10-23 (sister via GetCreaturesInGrid, the JustDied
+-- idiom — tharon_ja precedent superseded by the live bridge); the SetCombatPulseDelay(5) arm is PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
 -- C++ arm order)); KilledUnit Talk(SAY_KILL_PLAYER 6)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
@@ -205,6 +206,11 @@ local SPELL_SPIKE_EYDIS = 66069
 local SPELL_BERSERK = 64238
 local SPELL_LIGHT_TOUCH = 67297 -- C++ :74 (fjola's TouchSpellId)
 local SPELL_DARK_TOUCH = 67282 -- C++ :86 (eydis's TouchSpellId)
+-- C++ :77/:89 (MyEmphatySpellId): fjola applies TWIN_EMPATHY_DARK to
+-- eydis, eydis applies TWIN_EMPATHY_LIGHT to fjola (JustEngagedWith
+-- :271 — me->AddAura(spell, pSister), aura lands on the sister).
+local SPELL_TWIN_EMPATHY_LIGHT = 66133
+local SPELL_TWIN_EMPATHY_DARK = 66132
 -- C++ RAID_MODE essence variants (:120-121): only one variant can be
 -- present per instance (applied difficulty-gated), so the pool checks
 -- all four — C++-exact within a running instance.
@@ -324,7 +330,7 @@ local UNIT_DYNFLAG_LOOTABLE = 0x0001
 -- counter cannot live in reset().
 local sisterDeaths = 0
 
-local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
+local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras, empathySpell)
     return function(event, creature, target)
         sisterDeaths = 0
         -- C++ boss_fjolaAI::JustEngagedWith (boss_twin_valkyr.cpp:442-448):
@@ -335,15 +341,25 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras)
         if creature:GetEntry() == ENTRY_FJOLA then
             creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
         end
-        -- C++ boss_twin_baseAI::JustEngagedWith first arm (:267, PORTED
+        -- C++ boss_twin_baseAI::JustEngagedWith first arm (:268, PORTED
         -- 2026-10-23 — DoZoneInCombat bridge live,
-        -- engine/world/lua_creature_events.go); the cross-AI sister
-        -- DoZoneInCombat(pSister) leg (:270) stays out — no cross-AI
-        -- bridge.
+        -- engine/world/lua_creature_events.go); the sister block
+        -- (:269-272 — AddAura(MyEmphatySpellId, pSister) +
+        -- DoZoneInCombat(pSister)) is PORTED 2026-10-23: the sister is
+        -- gathered via GetCreaturesInGrid (the JustDied sister idiom
+        -- below; the C++ instance->GetCreature nil-guard is the empty
+        -- grid), the aura lands on the sister object (sister:AddAura —
+        -- receiver-side twin of me->AddAura(spell, pSister)), C++ arm
+        -- order kept (aura before zone-in).
         creature:DoZoneInCombat()
+        local sisterEntry = creature:GetEntry() == ENTRY_FJOLA and ENTRY_EYDIS or ENTRY_FJOLA
+        for _, sister in ipairs(creature:GetCreaturesInGrid(sisterEntry, 150)) do
+            sister:AddAura(empathySpell)
+            sister:DoZoneInCombat()
+        end
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
-        creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; AddAura/sister Empathy/setActive legs have no bridge)
+        creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; the setActive leg has no bridge)
         local guid = creature:GetGUID()
         cancelTimers(guid)
         schedule(guid, "twinspike", 20000, function()
@@ -418,13 +434,13 @@ local function reset(event, creature)
     end
 end
 
-RegisterCreatureEvent(ENTRY_FJOLA, 1, makeEnterCombat(SPELL_SURGE_FJOLA, SPELL_SPIKE_FJOLA, SPELL_LIGHT_TOUCH, DARK_ESSENCE_AURAS))
+RegisterCreatureEvent(ENTRY_FJOLA, 1, makeEnterCombat(SPELL_SURGE_FJOLA, SPELL_SPIKE_FJOLA, SPELL_LIGHT_TOUCH, DARK_ESSENCE_AURAS, SPELL_TWIN_EMPATHY_DARK))
 RegisterCreatureEvent(ENTRY_FJOLA, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_FJOLA, 3, targetDied)
 RegisterCreatureEvent(ENTRY_FJOLA, 4, died)
 RegisterCreatureEvent(ENTRY_FJOLA, 23, reset)
 
-RegisterCreatureEvent(ENTRY_EYDIS, 1, makeEnterCombat(SPELL_SURGE_EYDIS, SPELL_SPIKE_EYDIS, SPELL_DARK_TOUCH, LIGHT_ESSENCE_AURAS))
+RegisterCreatureEvent(ENTRY_EYDIS, 1, makeEnterCombat(SPELL_SURGE_EYDIS, SPELL_SPIKE_EYDIS, SPELL_DARK_TOUCH, LIGHT_ESSENCE_AURAS, SPELL_TWIN_EMPATHY_LIGHT))
 RegisterCreatureEvent(ENTRY_EYDIS, 2, makeLeaveCombat())
 RegisterCreatureEvent(ENTRY_EYDIS, 3, targetDied)
 RegisterCreatureEvent(ENTRY_EYDIS, 4, died)

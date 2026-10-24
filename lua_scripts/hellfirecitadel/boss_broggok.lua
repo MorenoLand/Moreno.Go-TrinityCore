@@ -55,9 +55,10 @@
 -- unbridgeable ACTIVATE DoAction — so the activate schedule
 -- is applied at the only engagement hook this model has,
 -- OnEnterCombat(1) (Talk(SAY_AGGRO) stays on engage,
--- C++-exact); no react bridge (SetReactState unbridged) —
--- the ACTIVATE arm's SetReactState(REACT_AGGRESSIVE) and the
--- RESET arm's mirror flip unmodeled; the NON_ATTACKABLE flag
+-- C++-exact); SetReactState IS bridged (lua_creature_events.go:1197 —
+-- stale "no react bridge" retracted); the ACTIVATE arm's
+-- SetReactState(REACT_AGGRESSIVE) and the RESET arm's mirror flip stay
+-- out with the unbridged DoAction machine; the NON_ATTACKABLE flag
 -- flips and the SetImmuneToAll(false/true) flag legs stay out
 -- on the unbridgeable DoAction gate (the SetFlag/RemoveFlag(59)
 -- surface itself IS bridged, lua_creature_events.go — the stale
@@ -67,8 +68,10 @@
 -- 17662 (react passive + CastSpell SPELL_POISON_CLOUD_PASSIVE 30914)
 -- and NPC_INCOMBAT_TRIGGER 16006 (react passive) are PORTED in
 -- onJustSummoned via the spell-summon EffectSummonType bridge
--- (event 19) — the C++ summons.Summon list and the trigger's
--- DoZoneInCombat arm stay unbridged (steamrigger precedent);
+-- (event 19) — the C++ summons.Summon list has no bridge
+-- (steamrigger precedent); the trigger's DoZoneInCombat arm IS PORTED
+-- 2026-10-23 (summon:DoZoneInCombat() — the event-19 summon object is
+-- the bearer);
 -- ACTION_PREPARE_BROGGOK's DoCastSelf(SPELL_SUMMON_INCOMBAT_
 -- TRIGGER 26837) fires only cross-creature from the lever
 -- gossip — unreachable in this model, documented only; the
@@ -179,7 +182,8 @@ end
 -- (entry 16006, from SPELL_SUMMON_INCOMBAT_TRIGGER 26837 — fires only
 -- via the instance-gated ACTION_PREPARE_BROGGOK cast, documented
 -- above): SetReactState(REACT_PASSIVE) ported; the C++ DoZoneInCombat
--- arm has no bridge and the summons.Summon list has no bridge.
+-- arm is PORTED below (bridge live 2026-10-23 — the stale "no bridge"
+-- claim is retracted) and the summons.Summon list has no bridge.
 local function onJustSummoned(_, creature, summon)
     local entry = summon:GetEntry()
     if entry == NPC_POISON_CLOUD then
@@ -187,6 +191,7 @@ local function onJustSummoned(_, creature, summon)
         summon:CastSpell(summon, SPELL_POISON_CLOUD_PASSIVE, true)
     elseif entry == NPC_INCOMBAT_TRIGGER then
         summon:SetReactState(REACT_PASSIVE)
+        summon:DoZoneInCombat() -- boss_broggok.cpp:87 (JustSummoned arm 2, C++ order after SetReactState; the summons.Summon list has no bridge)
     end
 end
 
