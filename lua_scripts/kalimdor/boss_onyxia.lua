@@ -88,11 +88,11 @@
 --   (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL) on player
 --   eruption-spell hits) — SpellHit-15-never-fires standing queue /
 --   no instance bridge.
--- - Initialize / Reset legs (SetCombatMovement, SetReactState,
---   _Reset, instance SetData(DATA_ONYXIA_PHASE),
---   DoStartTimedAchievement / DoStopTimedAchievement
---   ACHIEV_TIMED_START_EVENT 6601) — no instance / achievement /
---   BossAI-Reset bridges.
+-- - Initialize / Reset legs (SetCombatMovement, _Reset, instance
+--   SetData(DATA_ONYXIA_PHASE), DoStartTimedAchievement /
+--   DoStopTimedAchievement ACHIEV_TIMED_START_EVENT 6601) — no
+--   instance / achievement / BossAI-Reset bridges; the unconditional
+--   SetReactState(REACT_AGGRESSIVE) leg (:158) IS ported in onReset.
 -- - The C++ HasUnitState(UNIT_STATE_CASTING) early-return gates in
 --   UpdateAI — no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (mal_ganis precedent).
 -- - The instance script itself (AddSC_instance_onyxias_lair: boss
@@ -205,6 +205,13 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_onyxiaAI::Reset (boss_onyxia.cpp:150-160): Initialize() +
+    -- SetCombatMovement(true) + _Reset() + SetReactState(REACT_AGGRESSIVE)
+    -- (:158) + instance DATA_ONYXIA_PHASE / achievement legs (no
+    -- instance / achievement bridges). The react leg is a C++-exact
+    -- restore: the Lua model never sets PASSIVE (the 65% breath-phase
+    -- machine is unported), so it is vacuous until that machine ports.
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 
 local function onDied(event, creature, killer)

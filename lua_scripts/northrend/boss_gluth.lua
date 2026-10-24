@@ -203,6 +203,13 @@ end
 
 local function gluthReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_gluthAI::Reset (boss_gluth.cpp:107-114): _Reset() +
+    -- zombie GUID clear + state NORMAL + SetReactState(REACT_AGGRESSIVE)
+    -- (:112) + SetSpeed 12.0f below. The react leg is a C++-exact
+    -- restore: the Lua model never sets PASSIVE (the decimate
+    -- zombie-eat machine is unported), so it is vacuous until that
+    -- machine ports.
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     -- C++ Reset() :113: SetSpeed(MOVE_RUN, 12.0f) — absolute form; the
     -- rate is 12.0 / baseMoveSpeed[MOVE_RUN] (7.0 yd/s, Unit.cpp:8816-8819).
     -- The decimate 36.0f leg stays out: it fires only inside the eating

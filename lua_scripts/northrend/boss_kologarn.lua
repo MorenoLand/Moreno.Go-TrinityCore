@@ -85,13 +85,11 @@
 -- CRITERIA_DISARMED timed-achievement start, and the attach
 -- branch (EVENT_STONE_SHOUT cancel + DoZoneInCombat) — no
 -- PassengerBoarded bridge.
--- JustSummoned — focused-eyebeam visual casts
--- (SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT 63676 /
--- SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT 63702 +
--- SPELL_FOCUSED_EYEBEAM_PERIODIC 63347 /
--- SPELL_FOCUSED_EYEBEAM_VISUAL 63369), NPC_RUBBLE summon
--- bookkeeping, REACT_PASSIVE + MoveChase(eyebeamTarget) — no
--- summon / react-state / motion-master bridges.
+-- JustSummoned — PORTED as kologarnJustSummoned (event 19):
+-- directional visuals 63676/63702 + PERIODIC 63347 + VISUAL 63369
+-- (all triggered) + REACT_PASSIVE for eyebeam 33632/33802 and
+-- rubble 33768; NPC_RUBBLE summon bookkeeping has no Lua summon
+-- list; MoveChase(eyebeamTarget) has no motion bridge and stays out.
 -- UpdateAI arms that STAY OUT (gothik precedent: porting gated
 -- arms on combat-start timers would fabricate casts):
 -- EVENT_MELEE_CHECK (cpp:258-261) — PORTED as meleeCheckTick:
@@ -169,6 +167,15 @@ local SPELL_SUMMON_FOCUSED_EYEBEAM = 63342
 local SPELL_BERSERK = 47008
 local SPELL_KOLOGARN_REDUCE_PARRY = 64651
 local SPELL_PETRIFY_BREATH = 62030
+
+local ENTRY_FOCUSED_EYEBEAM = 33632
+local ENTRY_FOCUSED_EYEBEAM_RIGHT = 33802
+local ENTRY_RUBBLE = 33768
+local SPELL_FOCUSED_EYEBEAM_PERIODIC = 63347
+local SPELL_FOCUSED_EYEBEAM_VISUAL = 63369
+local SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT = 63676
+local SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT = 63702
+local REACT_PASSIVE = 0
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -336,3 +343,27 @@ RegisterCreatureEvent(ENTRY_KOLOGARN, 3, kologarnTargetDied)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 4, kologarnDied)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 5, kologarnSpawn)
 RegisterCreatureEvent(ENTRY_KOLOGARN, 23, kologarnReset)
+
+-- C++ boss_kologarnAI::JustSummoned (boss_kologarn.cpp:214-235):
+-- eyebeam 33632/33802 cast their directional visual on the boss
+-- (triggered); rubble 33768 joins the summon list (no Lua summon
+-- list); all three then cast PERIODIC 63347 + VISUAL 63369 on
+-- themselves (triggered) and go REACT_PASSIVE, in C++ order. The
+-- eyebeamTarget Attack/MoveChase legs (:237-242) have no motion
+-- bridge and stay out. Event 19 fires on the summoner for the
+-- ported SUMMON_FOCUSED_EYEBEAM spell-effect summon through the
+-- shared summonTempCreature funnel (boss_ai.go:1734).
+local function kologarnJustSummoned(event, creature, summon)
+    local entry = summon:GetEntry()
+    if entry == ENTRY_FOCUSED_EYEBEAM then
+        summon:CastSpell(creature, SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT, true)
+    elseif entry == ENTRY_FOCUSED_EYEBEAM_RIGHT then
+        summon:CastSpell(creature, SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT, true)
+    elseif entry ~= ENTRY_RUBBLE then
+        return
+    end
+    summon:CastSpell(summon, SPELL_FOCUSED_EYEBEAM_PERIODIC, true)
+    summon:CastSpell(summon, SPELL_FOCUSED_EYEBEAM_VISUAL, true)
+    summon:SetReactState(REACT_PASSIVE)
+end
+RegisterCreatureEvent(ENTRY_KOLOGARN, 19, kologarnJustSummoned)

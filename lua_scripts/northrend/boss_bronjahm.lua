@@ -69,11 +69,11 @@
 --   OnReachHome fires at the same point as C++ HomeMovementGenerator::
 --   DoFinalize). The removal on engage is ported, so the channel visual
 --   clears exactly like C++.
--- The JustSummoned soul-fragment machine (:128-136 — summons.Summon, the
---   REACT_PASSIVE leg :133, MoveFollow :134, PURPLE_BANISH_VISUAL self-cast
---   :135) rides the no-summon-list / no-movement bridges, so ported
---   CORRUPT_SOUL casts summon fragments that will not follow the boss —
---   a fidelity gap, not a fabricated cast.
+-- The JustSummoned soul-fragment machine (:128-136) is PORTED as
+--   bronjahmJustSummoned (event 19): REACT_PASSIVE :133 +
+--   PURPLE_BANISH_VISUAL self-cast :135 (triggered); MoveFollow :134
+--   has no motion bridge and stays out, so fragments still will not
+--   follow the boss; summons.Summon has no Lua summon list.
 -- GetData(DATA_SOUL_POWER) (:139-154) joins the no-GetData-bridge queue
 --   (the boss_zuramat precedent); achievement_bronjahm_soul_power rides it
 --   into the unmodeled-achievement queue.
@@ -119,6 +119,10 @@ local SPELL_FEAR = 68950
 local SPELL_SOULSTORM = 68872
 local SPELL_SOULSTORM_CHANNEL = 69008
 local SPELL_SOULSTORM_VISUAL = 68870
+
+local ENTRY_CORRUPTED_SOUL_FRAGMENT = 36535
+local SPELL_PURPLE_BANISH_VISUAL = 68862
+local REACT_PASSIVE = 0
 
 local timers = {}
 local phase2 = {}
@@ -318,6 +322,23 @@ RegisterCreatureEvent(ENTRY_BRONJAHM, 3, bronjahmKilledUnit)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 4, bronjahmJustDied)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 9, bronjahmDamageTaken)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 23, bronjahmReset)
+
+-- C++ boss_bronjahmAI::JustSummoned (boss_bronjahm.cpp:128-136):
+-- entry NPC_CORRUPTED_SOUL_FRAGMENT 36535 -> summons.Summon (no Lua
+-- summon list) + SetReactState(REACT_PASSIVE) + triggered self-cast
+-- PURPLE_BANISH_VISUAL 68862. MoveFollow (:134) has no motion bridge
+-- and stays out; the fragment IsSummonedBy instance-GetGuidData leg
+-- stays out. Event 19 fires on the summoner for spell-effect summons
+-- through the shared summonTempCreature funnel (boss_ai.go:1734),
+-- so the ported CORRUPT_SOUL cast delivers this arm.
+local function bronjahmJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
+        return
+    end
+    summon:SetReactState(REACT_PASSIVE)
+    summon:CastSpell(summon, SPELL_PURPLE_BANISH_VISUAL, true)
+end
+RegisterCreatureEvent(ENTRY_BRONJAHM, 19, bronjahmJustSummoned)
 
 -- C++ boss_bronjahmAI::JustReachedHome (:94-96): _JustReachedHome() is
 -- instance bookkeeping (no bridge); DoCast(me, SPELL_SOULSTORM_CHANNEL,
