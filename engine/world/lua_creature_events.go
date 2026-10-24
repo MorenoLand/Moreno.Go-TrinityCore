@@ -505,6 +505,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["IsCasting"] = func(_ context.Context, _ []any) ([]any, error) {
 		return []any{false}, nil
 	}
+	// InterruptNonMeleeSpells is Unit::InterruptNonMeleeSpells
+	// (Unit.cpp: interrupt all non-melee casts, withDelayed included). Go
+	// creature casts are fire-and-forget with no in-flight cast state (the
+	// 2026-10-20 caststate axiom, same as IsCasting above), so the
+	// handler-surface twin is a no-op: without it, svala's ritual-strike
+	// arm nil-called here and aborted the handler before its CastSpell.
+	methods["InterruptNonMeleeSpells"] = func(_ context.Context, _ []any) ([]any, error) {
+		return nil, nil
+	}
 	// AddLootMode is CreatureMethods::AddLootMode (CreatureMethods.h:1321):
 	// Creature::AddLootMode (Creature.h:227) sets the mode bits on
 	// Creature::m_LootMode. Handler-surface twin of the session binding

@@ -343,6 +343,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
 	// Unit::CastStop. No-op for creatures — no cast state to interrupt.
 	methods["StopSpellCast"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// InterruptNonMeleeSpells is Unit::InterruptNonMeleeSpells: same no-cast-
+	// state rationale as StopSpellCast — handler-surface twin lives in
+	// lua_creature_events.go (svala ritual-strike arm).
+	methods["InterruptNonMeleeSpells"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	// GetHomePosition is CreatureMethods::GetHomePosition
 	// (CreatureMethods.h:630-644): x, y, z, o from the creature's HOME
 	// position (Creature::GetHomePosition, Creature.h:296-297); the 4th
