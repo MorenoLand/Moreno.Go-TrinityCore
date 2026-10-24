@@ -81,7 +81,8 @@
 -- Lua type 7 default); fires once in C++ (no re-arm) -> one-shot
 -- schedule in kelesethEnterCombat (Reset-inits-on-combat xt002
 -- precedent).
--- DOCUMENTED-ONLY (in this header; no registration beyond entry 23953):
+-- DOCUMENTED-ONLY (in this header; registrations are entry 23953 +
+-- skeleton entry 23970 below):
 -- npc_frost_tomb (NPC_FROSTTOMB 23965, :79-115) — NOT registered (no
 -- genuinely bridgeable arms, the yogg_saron adds precedent):
 -- IsSummonedBy DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97)
@@ -91,23 +92,21 @@
 -- (DATA_PRINCE_KELESETH) (:101-105) — instance-GUID leg, no bridge.
 -- (The spell-summoned tomb from the FROST_TOMB arm therefore spawns
 -- with no Lua AI — visual only.)
--- npc_vrykul_skeleton (NPC_SKELETON 23970, :247-320) — NOT registered:
--- the add only enters combat through the blocked boss summon leg, and
--- its whole state machine (DamageTaken lethal rewrite damage = 0 +
--- UNIT_FLAG_NOT_SELECTABLE + stand-state dead + events Reset +
--- EVENT_RESURRECT 18-22s + MotionMaster Clear/MoveIdle, :261-285)
--- rides flag / stand-state / MotionMaster legs with no bridges — a lone
--- damage-rewrite port without the machine would leave an unkillable
--- add; EVENT_DECREPIFY (:299-302: random-target DoCast(target,
--- SPELL_DECREPIFY 42702), 2-arg non-triggered, init 4-6s :259, re-arm
--- 1-5s) is individually bridgeable on the baltharus pattern but moot
--- without the summon machine; EVENT_RESURRECT (:304-306) /
--- EVENT_FULL_HEAL (:308-309: DoCast(me, SPELL_FULL_HEAL 17683, true))
--- / EVENT_SHADOW_FISSURE (:311-317: DoCast(me, SPELL_SHADOW_FISSURE
--- 50657, true) + DoCastAOE(SPELL_BONE_ARMOR 59386, true) -> self-cast
--- + flag clear + stand + MoveChase + re-arm DECREPIFY 4-6s) are all
--- rooted in the unbridgeable fake-death machine — the gothik
--- machine-gating precedent.
+-- npc_vrykul_skeleton (NPC_SKELETON 23970, :247-320) — PORTED this
+-- run (skeletonReset / skeletonDamageTaken / skeletonDecrepifyTick /
+-- skeletonResurrectTick / skeletonShadowFissureTick; the old "no
+-- flag / stand-state bridges" block is stale — SetFlag, SetStandState,
+-- HasFlag, event-9 damage rewrite and CreateLuaEvent are all live):
+-- Reset decrepify init {4s,6s}, decrepify random-target cast + {1s,5s}
+-- re-arm, lethal-damage zero + fake-death (NOT_SELECTABLE + STAND_DEAD
+-- + RESURRECT {18s,22s}), resurrect chain (FULL_HEAL + SHADOW_FISSURE
+-- + BONE_ARMOR self-cast + flag clear + STAND + decrepify re-arm).
+-- Deviations: MotionMaster Clear/MoveIdle (fake-death) and MoveChase
+-- (resurrect) stay out — no motion bridge; the add keeps its motion
+-- state through the fake-death window. The decrepify init is armed
+-- from skeletonTick's returned summon object (temp summons bypass
+-- the motion funnel, so event 23 may never fire for them); event 23
+-- covers any respawn-path Reset.
 -- spell_frost_tomb (AuraScript OnRemove: despawn-or-unsummon the tomb
 -- caster when the stun aura is removed by non-death, :341-370) — no
 -- AuraScript / SpellScript bridge; joins the no-SpellScript-bridge
@@ -129,6 +128,14 @@ local SPELL_SHADOWBOLT = 43667
 local SPELL_FROST_TOMB = 48400
 local SPELL_FROST_TOMB_STUN = 42672
 local SPELL_FROST_TOMB_SUMMON = 42714
+
+local SPELL_DECREPIFY = 42702
+local SPELL_FULL_HEAL = 17683
+local SPELL_SHADOW_FISSURE = 50657
+local SPELL_BONE_ARMOR = 59386
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 
@@ -214,12 +221,110 @@ end
 -- Talk(SAY_SUMMON_SKELETONS 2) + SummonSkeletons() — 4x
 -- me->SummonCreature(NPC_SKELETON, {156.2559, 259.2093}, 42.8668, o=0)
 -- (:230-234); one-shot in C++ (no re-arm) -> one-shot schedule here.
--- The adds get default melee AI (npc_vrykul_skeleton unregistered,
--- header).
+-- Forward declaration (tharon_ja / gal_darah idiom): skeletonTick below
+-- references skeletonDecrepifyTick, defined after it — a later
+-- `local function` re-declare would shadow this slot and nil-call, so
+-- the definition below is a plain assignment, never re-local.
+local skeletonDecrepifyTick
+
+-- The adds run npc_vrykul_skeleton (handlers below, entry 23970).
 local function skeletonTick(creature, guid)
     creature:Talk(SAY_SUMMON_SKELETONS)
     for _ = 1, 4 do
-        creature:SummonCreature(ENTRY_SKELETON, 156.2559, 259.2093, 42.8668, 0)
+        local skeleton = creature:SummonCreature(ENTRY_SKELETON, 156.2559, 259.2093, 42.8668, 0)
+        -- C++ Reset init (:259) rides the summon here: temp summons
+        -- bypass the motion funnel, so event 23 may never fire for
+        -- them (the curator-flare event-19 arming precedent) — arm
+        -- the decrepify init off the returned object instead; the
+        -- event-23 handler below covers any respawn-path Reset, and
+        -- schedule() replaces the same key, so a double-arm is a
+        -- harmless re-init, not a double timer.
+        if skeleton then
+            local skelGuid = skeleton:GetGUID()
+            schedule(skelGuid, "decrepify", {4000, 6000}, function()
+                skeletonDecrepifyTick(skeleton, skelGuid)
+            end)
+        end
+    end
+end
+
+-- C++ EVENT_DECREPIFY (skeleton arm :299-302): SelectTarget(Random, 0,
+-- 0.0f, playerOnly, withTank, -SPELL_DECREPIFY) -> DoCast(target,
+-- SPELL_DECREPIFY), 2-arg = non-triggered; re-arm {1s,5s} sits outside
+-- the target check — C++-exact.
+skeletonDecrepifyTick = function(creature, guid)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and not unit:HasAura(SPELL_DECREPIFY) then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_DECREPIFY)
+    end
+    schedule(guid, "decrepify", {1000, 5000}, function()
+        skeletonDecrepifyTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SHADOW_FISSURE (skeleton arm :311-317): DoCast(me,
+-- SPELL_SHADOW_FISSURE, true) + DoCastAOE(SPELL_BONE_ARMOR, true) ->
+-- self-cast + RemoveFlag(NOT_SELECTABLE) + SetStandState(STAND) +
+-- re-arm DECREPIFY {4s,6s}, in C++ order. MoveChase(victim) stays out
+-- (no motion bridge); MoveIdle at fake-death likewise — the add keeps
+-- its motion state through the fake-death window.
+local function skeletonShadowFissureTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SHADOW_FISSURE, true)
+    creature:CastSpell(creature, SPELL_BONE_ARMOR, true)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
+    schedule(guid, "decrepify", {4000, 6000}, function()
+        skeletonDecrepifyTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RESURRECT (skeleton arm :304-306): EVENT_FULL_HEAL +
+-- EVENT_SHADOW_FISSURE, both 1s (full heal scheduled first, C++ event
+-- order).
+local function skeletonResurrectTick(creature, guid)
+    schedule(guid, "fullheal", 1000, function()
+        creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+    end)
+    schedule(guid, "shadowfissure", 1000, function()
+        skeletonShadowFissureTick(creature, guid)
+    end)
+end
+
+-- C++ npc_vrykul_skeleton::Reset (:256-260): events.Reset() +
+-- EVENT_DECREPIFY init {4s,6s}.
+local function skeletonReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "decrepify", {4000, 6000}, function()
+        skeletonDecrepifyTick(creature, guid)
+    end)
+end
+
+-- C++ npc_vrykul_skeleton::DamageTaken (:261-285): lethal damage is
+-- zeroed unconditionally; the fake-death machine (NOT_SELECTABLE +
+-- STAND_DEAD + events.Reset + RESURRECT {18s,22s}) fires only once
+-- per fake-death — the HasFlag gate (cleared at SHADOW_FISSURE)
+-- is C++-exact. The add is unkillable by damage by C++ design: it
+-- fake-dies and resurrects at full health instead.
+local function skeletonDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health > 0 and damage >= health then
+        if not creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) then
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetStandState(7) -- UNIT_STAND_STATE_DEAD
+            local guid = creature:GetGUID()
+            cancelTimers(guid)
+            schedule(guid, "resurrect", {18000, 22000}, function()
+                skeletonResurrectTick(creature, guid)
+            end)
+        end
+        return false, 0
     end
 end
 
@@ -254,3 +359,5 @@ RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_KELESETH, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KELESETH, 4, kelesethDied)
 RegisterCreatureEvent(ENTRY_KELESETH, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SKELETON, 9, skeletonDamageTaken)
+RegisterCreatureEvent(ENTRY_SKELETON, 23, skeletonReset)

@@ -157,6 +157,7 @@ local function savianaReset(event, creature)
     -- C++ boss_saviana_ragefire::Reset (boss_saviana_ragefire.cpp:80-86):
     -- _Reset() -> SetReactState(REACT_AGGRESSIVE) -> me->SetCanFly(false)
     -- (:85) -> me->SetDisableGravity(false) (:86).
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:SetCanFly(false)
     creature:SetDisableGravity(false)
 end

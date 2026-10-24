@@ -95,9 +95,9 @@
 -- boss_ionar.cpp — the acolyte_of_shadron / stormforged_lieutenant
 -- local-enum precedent) — entry-verifiable but bridge-blocked, no
 -- registration (the stormforged_lieutenant no-bridgeable-arms
--- precedent): Reset (REACT_PASSIVE — SetReactState IS bridged,
--- frozen_core precedent; the arm stays out behind the unbridged
--- summon / movement machines);
+-- precedent): Reset (REACT_PASSIVE) — PORTED on event 23 (sparkReset;
+-- the summon / movement machines stay out, same inert-until-summon
+-- standing as the registered DamageTaken arm below);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
 -- DespawnOrUnsummon — no motion bridge; DamageTaken uiDamage = 0 —
 -- REGISTERED 2026-10-19 (event 9, return false, 0 — halazzi
@@ -240,3 +240,13 @@ RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 9, sparkDamageTaken)
 RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_ionar.cpp:344: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "No melee attack at all!")
 end)
+
+-- C++ npc_spark_of_ionar::Reset (boss_ionar.cpp:322-326): Initialize() +
+-- me->SetReactState(REACT_PASSIVE) — the spark never engages on its own
+-- (its UpdateAI never attacks); the MovementInform callback leg stays
+-- out (no motion bridge).
+local function sparkReset(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+end
+
+RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 23, sparkReset)
