@@ -5390,8 +5390,9 @@ func init() {
 	// SAY_QUEST_ACCEPT 11 awaits the quest-accept bridge. Entry
 	// 26588 verifiable from the C++ Floppy enum — see
 	// lua_scripts/northrend/npc_emily.lua. npc_mrfloppy
-	// (JustEngagedWith cross-creature Emily Talk only — no
-	// cross-creature Talk bridge), npc_outhouse_bunny
+	// (JustEngagedWith cross-creature Emily Talk only — bridged:
+	// FindNearestCreature returns the luaMotionCreature object and
+	// Talk is called on it, ported in npc_emily.lua), npc_outhouse_bunny
 	// (SpellHit 48382 emote/cast arms — no SpellHit bridge),
 	// npc_amberpine_woodsman (Talk-free emote-state machine —
 	// unregistered AI, no C++ entry constant), npc_wounded_skirmisher (SpellHit

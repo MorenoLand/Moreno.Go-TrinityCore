@@ -31,8 +31,9 @@
 --   bridge), cross-creature Yell / DoCast(conflagration blast 30977)
 --   / CastSpell(fire ball 30967) / KillSelf / MovePoint (no
 --   cross-creature bridge), fire-timer cross-fire for steps 7..12,
---   SetDisableGravity / setActive / SetFarVisible / SetSpeedRate /
---   InterruptNonMeleeSpells arms (no bridges), and the step-14 quest
+--   SetDisableGravity / setActive / SetFarVisible / SetSpeedRate arms
+--   (no bridges; InterruptNonMeleeSpells is bridged but rides the same
+--   blocked machine), and the step-14 quest
 --   9645 completion pass over instance players. No movement, summon,
 --   cross-creature or instance-script bridge — the dialogue machine
 --   cannot be started — not registered (firesworn convention).

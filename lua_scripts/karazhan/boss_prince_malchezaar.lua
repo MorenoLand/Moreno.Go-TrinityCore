@@ -34,9 +34,10 @@
 -- visual SPELL_EQUIP_AXES (30857); only SetCanDualWield and the OFF_ATTACK
 -- 1.5x attack-time change have no bridge. The phase-2 thrash aura (12787)
 -- is removed at the phase-3 transition via creature:RemoveAura (bridged).
--- The UpdateAI stun-gate (UNIT_STATE_STUNNED during the phase-2 shift) and
--- InterruptNonMeleeSpells have no UNIT_STATE model — timers fire
--- unconditionally, the standing convention for these ports. The
+-- The UpdateAI stun-gate (UNIT_STATE_STUNNED during the phase-2 shift)
+-- has no UNIT_STATE model — timers fire unconditionally, the standing
+-- convention for these ports. The phase-1 InterruptNonMeleeSpells(false)
+-- leg is ported in startPhaseTwo (no-op twin). The
 -- InfernalCleanupTimer (47s) is initialized in C++ Initialize but has no
 -- arm in UpdateAI — no Lua timer, C++-exact. Enfeeble's tank exclusion
 -- uses GetVictim (no threat list); Enfeeble itself is threat-list-based
@@ -336,14 +337,16 @@ local function startPhaseTwo(creature, guid)
     if st == nil or st.phase ~= PHASE_ONE then
         return
     end
-    -- C++ UpdateAI phase-1 arm: InterruptNonMeleeSpells (no bridge),
+    -- C++ UpdateAI phase-1 arm: InterruptNonMeleeSpells(false),
     -- DoCast SPELL_EQUIP_AXES, Talk(SAY_AXE_TOSS1), thrash aura triggered,
     -- SetEquipmentSlots(false, EQUIP_ID_AXE, EQUIP_ID_AXE, EQUIP_NO_CHANGE)
-    -- (bridged, ported below); SetCanDualWield and the OFF_ATTACK 1.5x
+    -- (all ported below); SetCanDualWield and the OFF_ATTACK 1.5x
     -- attack-time change have no bridge.
+    -- C++ arm order: InterruptNonMeleeSpells(false) -> DoCast(EQUIP_AXES)
+    -- -> Talk(SAY_AXE_TOSS1) -> DoCast(THRASH_AURA, triggered)
+    -- (mandokir cast-then-yell precedent).
+    creature:InterruptNonMeleeSpells(false)
     st.phase = PHASE_TWO
-    -- C++ arm order: DoCast(EQUIP_AXES) -> Talk(SAY_AXE_TOSS1) ->
-    -- DoCast(THRASH_AURA, triggered) (mandokir cast-then-yell precedent).
     creature:CastSpell(creature, SPELL_EQUIP_AXES)
     creature:Talk(SAY_AXE_TOSS1)
     creature:CastSpell(creature, SPELL_THRASH_AURA, true)

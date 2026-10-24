@@ -127,8 +127,9 @@
 -- bridges — unmodeled. OnDied(4): timer cleanup (the controller
 -- deceiverDeathCount++ relay is cross-creature blocked; the
 -- SetBossState arms are instance-blocked). OnLeaveCombat(2):
--- cancel the volley schedule (the InterruptNonMeleeSpells and
--- threat-relay arms have no bridges).
+-- cancel the volley schedule (the JustEngagedWith
+-- InterruptNonMeleeSpells(true) leg is ported in deceiverEnterCombat;
+-- the controller threat-relay arm has no bridge).
 -- Volatile Felfire Fiend (25598). OnDamageTaken(9): lethal damage
 -- -> triggered self-cast felfire fission 45779 (C++-exact; the
 -- damage itself is NOT rewritten — the C++ lets the death
@@ -689,6 +690,10 @@ end
 
 local function deceiverEnterCombat(event, creature)
     local guid = creature:GetGUID()
+    -- C++ JustEngagedWith (boss_kiljaeden.cpp:964): instance
+    -- SetBossState + AddThreat to the controller stay blocked, but the
+    -- InterruptNonMeleeSpells(true) leg is ported (no-op twin).
+    creature:InterruptNonMeleeSpells(true)
     schedule(guid, "volley", math.random(8000, 14000), function()
         deceiverVolley(creature, guid)
     end)

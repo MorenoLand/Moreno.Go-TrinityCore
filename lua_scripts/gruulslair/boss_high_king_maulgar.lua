@@ -72,7 +72,7 @@
 -- convention), non-triggered on the pick, the pick passes
 -- through on empty (C++ DoCast on nullptr casts — the burn
 -- nil-skip was wrong, removed this run); the
--- InterruptNonMeleeSpells arm is blocked.
+-- InterruptNonMeleeSpells(false) arm is ported in kroshBlastWave.
 -- All five: OnEnterCombat(1) resets per-GUID state, ports
 -- DoZoneInCombat (creature:DoZoneInCombat, live bridge
 -- engine/world/lua_creature_events.go, 2026-10-23; C++ arm order:
