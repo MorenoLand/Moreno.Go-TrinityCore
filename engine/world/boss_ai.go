@@ -12117,8 +12117,9 @@ func init() {
 	// in lua_scripts/northrend/npc_wg_queue.lua: ungated Frost
 	// Armor self-cast (0s, 180s re-arm). Entries 32169/32170
 	// (Dalaran pair) + 35600/35601/35602 (Ironforge/Exodar/
-	// Orgrimmar) wowhead-only (no C++ NPC_ constant for these
-	// NPCs).
+	// Orgrimmar) wowhead-only + 35596/35597 (Shattrath pair)
+	// + 35611 (Undercity) changelog-sourced (no C++ NPC_
+	// constant for these NPCs).
 	// Battlefield gossip arms stay documented-only (no
 	// battlefield bridge).
 	RegisterLuaBoss("npc_wg_queue", 32169)
@@ -12126,6 +12127,13 @@ func init() {
 	RegisterLuaBoss("npc_wg_queue", 35600)
 	RegisterLuaBoss("npc_wg_queue", 35601)
 	RegisterLuaBoss("npc_wg_queue", 35602)
+	RegisterLuaBoss("npc_wg_queue", 35596)
+	RegisterLuaBoss("npc_wg_queue", 35597)
+	RegisterLuaBoss("npc_wg_queue", 35611)
+	RegisterLuaBoss("npc_wg_queue", 35598)
+	RegisterLuaBoss("npc_wg_queue", 35599)
+	RegisterLuaBoss("npc_wg_queue", 35603)
+	RegisterLuaBoss("npc_wg_queue", 35612)
 	// npc_mimiron_assault_bot (Ulduar, Mimiron ACU phase) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_assault_bot.lua: engage-seeded
 	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668).

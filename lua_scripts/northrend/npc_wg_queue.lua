@@ -12,17 +12,31 @@
 -- "Arcanist Laniria" (Ironforge, wowhead <Wintergrasp
 -- Battle-Mage>), 35601 "Arcanist Nazalia" (Exodar, wowhead
 -- <Wintergrasp Battle-Mage>) and 35602 "Magister Savarin"
--- (Orgrimmar, WotLK DB <Wintergrasp Battle-Mage>). The
--- remaining capital WG battle-magi (Stormwind Paharin,
--- Darnassus Dulial, Shattrath Iramhir/Aldessia, Thunder Bluff
--- Dalhyr, Undercity Erembria, Silvermoon Caradess) are NOT
--- registered here: individually unverified, and the sequential
--- 35600-35602 block is a hint only, never an entry source.
+-- (Orgrimmar, WotLK DB <Wintergrasp Battle-Mage>); plus
+-- the Shattrath pair 35596 "Arcanist Iramhir" (wowpedia
+-- <Wintergrasp Battle-Mage>, Lower City, Frost Armor ability)
+-- and 35597 "Magistrix Aldessia" (Shattrath Horde
+-- battlemaster group, sequential pair with Iramhir; both
+-- entries from the 2010 entry-ID changelog) and 35611
+-- "Magistrix Erembria" (Undercity battlemaster group, same
+-- changelog); plus 35598 "Arcanist Paharin" (Stormwind),
+-- 35599 "Arcanist Dulial" (Darnassus), 35603 "Magister
+-- Dalhyr" (Thunder Bluff) and 35612 "Magistrix Caradess"
+-- (Silvermoon) — all wowhead <Wintergrasp Battle-Mage>
+-- pages, ids taken from the page URLs. The full set is
+-- now registered: 32169/32170 + 35596-35603 + 35611/35612.
 local NPC_WG_QUEUE_ALLIANCE = 32169
 local NPC_WG_QUEUE_HORDE = 32170
 local NPC_WG_QUEUE_IRONFORGE = 35600
 local NPC_WG_QUEUE_EXODAR = 35601
 local NPC_WG_QUEUE_ORGRIMMAR = 35602
+local NPC_WG_QUEUE_SHATTRATH_A = 35596
+local NPC_WG_QUEUE_SHATTRATH_H = 35597
+local NPC_WG_QUEUE_UNDERCITY = 35611
+local NPC_WG_QUEUE_STORMWIND = 35598
+local NPC_WG_QUEUE_DARNASSUS = 35599
+local NPC_WG_QUEUE_THUNDERBLUFF = 35603
+local NPC_WG_QUEUE_SILVERMOON = 35612
 
 local SPELL_FROST_ARMOR = 12544
 
@@ -76,7 +90,7 @@ local function wgQueueCancel(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
-for _, entry in ipairs({NPC_WG_QUEUE_ALLIANCE, NPC_WG_QUEUE_HORDE, NPC_WG_QUEUE_IRONFORGE, NPC_WG_QUEUE_EXODAR, NPC_WG_QUEUE_ORGRIMMAR}) do
+for _, entry in ipairs({NPC_WG_QUEUE_ALLIANCE, NPC_WG_QUEUE_HORDE, NPC_WG_QUEUE_IRONFORGE, NPC_WG_QUEUE_EXODAR, NPC_WG_QUEUE_ORGRIMMAR, NPC_WG_QUEUE_SHATTRATH_A, NPC_WG_QUEUE_SHATTRATH_H, NPC_WG_QUEUE_UNDERCITY, NPC_WG_QUEUE_STORMWIND, NPC_WG_QUEUE_DARNASSUS, NPC_WG_QUEUE_THUNDERBLUFF, NPC_WG_QUEUE_SILVERMOON}) do
     RegisterCreatureEvent(entry, 5, wgQueueSeed)
     RegisterCreatureEvent(entry, 23, wgQueueSeed)
     RegisterCreatureEvent(entry, 4, wgQueueCancel)
