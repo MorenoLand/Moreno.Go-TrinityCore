@@ -648,7 +648,16 @@ local function kjTargetDied(event, creature, victim)
     creature:Talk(SAY_KJ_SLAY)
 end
 
+-- C++ boss_kiljaedenAI::JustSummoned (boss_kiljaeden.cpp:618-627):
+-- every summon takes the boss's faction (armageddon targets additionally
+-- take NOT_SELECTABLE/NON_ATTACKABLE flags, already ported on the target's
+-- own spawn); the SetLevel leg for non-armageddon summons stays out.
+local function kjJustSummoned(event, creature, summon)
+    summon:SetFaction(creature:GetFaction())
+end
+
 RegisterCreatureEvent(ENTRY_KILJAEDEN, 1, kjEnterCombat)
+RegisterCreatureEvent(ENTRY_KILJAEDEN, 19, kjJustSummoned)
 RegisterCreatureEvent(ENTRY_KILJAEDEN, 2, kjCleanup)
 RegisterCreatureEvent(ENTRY_KILJAEDEN, 3, kjTargetDied)
 RegisterCreatureEvent(ENTRY_KILJAEDEN, 4, kjDied)
@@ -819,8 +828,9 @@ RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 23, armageddonReset)
 -- C++ boss_kiljaedenAI::JustSummoned (boss_kiljaeden.cpp:617-626):
 -- the summoned NPC_ARMAGEDDON_TARGET gets NOT_SELECTABLE |
 -- NON_ATTACKABLE (the SetVisibility(VISIBILITY_OFF) leg is commented
--- out in C++); SetFaction(me->GetFaction()) and summons.Summon are the
--- engine-side summon defaults. Ported on the target's own spawn (ev5).
+-- out in C++), ported on the target's own spawn (ev5); the
+-- SetFaction(me->GetFaction()) leg is PORTED via kjJustSummoned (ev19),
+-- since the engine otherwise keeps the summon's template faction.
 local function armageddonSpawn(event, creature)
     creature:SetFlag(59, 0x2000000)
     creature:SetFlag(59, 0x2)
