@@ -12142,6 +12142,24 @@ func init() {
 	// (no instance boss-state bridge).
 	RegisterLuaBoss("npc_mimiron_flames", 34363)
 	RegisterLuaBoss("npc_mimiron_flames", 34121)
+	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
+	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
+	// questgiver/Talk + 8s monster-faction timer, combat shock/
+	// winds pumps, 30% free arm. Entry 17085 wowhead-only.
+	RegisterLuaBoss("npc_aeranas", 17085)
+	// npc_magister_aledis (Hellfire Peninsula, Arelion's Secret duel)
+	// — ported arms in lua_scripts/outland/npc_magister_aledis.lua:
+	// Reset faction/gossip/immune, gossip-select duel chain,
+	// fireball/frostnova pumps, 20% defeat arm. Entry 20159
+	// wowhead-only. EngageWithTarget + 60s evade stay out (no
+	// bridges); DoZoneInCombat is dungeon-gated.
+	RegisterLuaBoss("npc_magister_aledis", 20159)
+	// npc_taskmaster_fizzule (Northern Barrens, Deep Cover) —
+	// ported arms in lua_scripts/kalimdor/npc_taskmaster_fizzule.lua:
+	// flare/folly SpellHit latch, salute ReceiveEmote friend arm.
+	// Entry 7233 wowhead-only. 120s MoveIdle/EnterEvadeMode revert
+	// stays out (no bridges).
+	RegisterLuaBoss("npc_taskmaster_fizzule", 7233)
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
