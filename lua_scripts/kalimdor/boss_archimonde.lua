@@ -61,7 +61,7 @@
 --   re-arm when the aura is absent). The victim->CastSpell(me, triggered)
 --   delivery and aura-stack visuals have no bridge, so the stacks are
 --   tracked as Lua counters (aura-stack fidelity is abstracted; the
---   InterruptNonMeleeSpells arm has no bridge — maiden precedent). The
+--   InterruptNonMeleeSpells(false) arm ported in onUnleashSoulCharge (C++ :327). The
 --   engage-scheduled {2s,30s} unleash is a no-op in C++ until a kill
 --   lands (no re-arm on the absent-aura path), so unleash scheduling comes
 --   only from kills — C++-equivalent.
@@ -365,6 +365,8 @@ local unleashByColor = {
 
 local function onUnleashSoulCharge(creature, guid)
     local st = bossState(guid)
+    -- C++ :327: interrupt before the urand pick (no-op twin).
+    creature:InterruptNonMeleeSpells(false)
     local pick = math.random(0, 2)
     local color = pick == 0 and "red" or (pick == 1 and "yellow" or "green")
     if st.charges[color] > 0 then

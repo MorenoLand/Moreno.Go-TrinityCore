@@ -60,7 +60,7 @@
 --    so the only reachable exit is the forced arm — when
 --    TreeForm - 30000 <= 1000, exit tree form (MoveFree =
 --    true; the summons.DespawnAll() is a no-op, the
---    InterruptNonMeleeSpells arm has no bridge, the
+--    InterruptNonMeleeSpells arm is bridged (no-op twin; MoveChase still blocks), the
 --    RemoveAllAuras arm is bridged this run, the
 --    MoveChase(victim) arm has no movement
 --    bridge), C++-exact for the reachable model. At 1s

@@ -44,7 +44,7 @@
 -- victim:GetObjectType() == "Player" convention); an empty pool
 -- also re-arms 1000ms (the C++ leaves the timer expired so it
 -- retries on the next UpdateAI tick). On a player pick: the
--- interrupt legs have no bridge; Talk(SAY_ROAR 3);
+-- interrupt legs ported (InterruptNonMeleeSpells(true), C++ :279; avatar arm :263 also ported); Talk(SAY_ROAR 3);
 -- DoCast(target, SPELL_STOLEN_SOUL 32346) 2-arg (non-triggered) —
 -- CastSpell(target, spell); re-arm 20000+rand(10000).
 -- Ribbon_of_Souls (:264-270) — SelectTarget(Random, 0) with NO
@@ -169,7 +169,9 @@ end
 local function stolenSoulTick(creature, guid)
     local target = randomThreatTarget(creature)
     if target and target:GetObjectType() == "Player" then
-        -- The interrupt legs have no bridge (header).
+        -- C++ :279: InterruptNonMeleeSpells(true) before Talk; the
+        -- IsNonMeleeSpellCast gate has no bridge but is moot for the no-op twin.
+        creature:InterruptNonMeleeSpells(true)
         creature:Talk(SAY_ROAR)
         -- soulmodel/soulholder/soulclass exist only for the
         -- no-bridge summon leg (documented in the header).
@@ -212,7 +214,9 @@ local function avatarCheck(creature, guid)
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
-            -- The interrupt legs have no bridge (header).
+            -- C++ :263: InterruptNonMeleeSpells(true) before Talk; the
+            -- IsNonMeleeSpellCast gate has no bridge but is moot for the no-op twin.
+            creature:InterruptNonMeleeSpells(true)
             creature:Talk(SAY_SUMMON)
             creature:CastSpell(creature, SPELL_SUMMON_AVATAR)
             avatarLatched[guid] = true

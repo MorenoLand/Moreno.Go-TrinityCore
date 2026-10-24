@@ -40,7 +40,7 @@
 -- Pump: summon 30707 — 10s init then {15s,30s}, gated on
 -- summonedCount < 2 — non-triggered DoCastSelf (C++-exact),
 -- re-arm {15s,30s} regardless (C++-exact 15000+rand32()%15000);
--- the InterruptNonMeleeSpells arm has no bridge; the
+-- the InterruptNonMeleeSpells arm is ported in the pump (C++ :129); the
 -- JustSummoned arm (Talk(SAY_SUMMON), the AttackStart relay,
 -- ++SummonedCount) is unreachable — the hound never
 -- materializes (steamrigger precedent), so summonedCount stays
@@ -200,13 +200,14 @@ local function bossTick(creature, guid)
     -- Summon 30707: 10s init then {15s,30s}, gated on
     -- summonedCount < 2 — non-triggered DoCastSelf (C++-exact),
     -- re-arm {15s,30s} regardless (C++-exact). The
-    -- InterruptNonMeleeSpells arm has no bridge. The
+    -- InterruptNonMeleeSpells(false) ported (C++ :129). The
     -- JustSummoned arm (Talk(SAY_SUMMON), AttackStart relay,
     -- ++SummonedCount) is unreachable — the hound never
     -- materializes (steamrigger precedent), so summonedCount
     -- stays 0 and the gate stays open.
     if st.summonedCount < 2 then
         if st.summon <= 1000 then
+            creature:InterruptNonMeleeSpells(false)
             creature:CastSpell(creature, SPELL_SUMMON_FIENDISH_HOUND)
             st.summon = 15000 + math.random(0, 14999)
         else

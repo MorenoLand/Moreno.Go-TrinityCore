@@ -15,7 +15,7 @@
 -- npc_summoned_skeleton (SpellHit -> SPELL_DEATH_PACT_2 (17471) ->
 -- DoCastSelf(SPELL_DEATH_PACT_3 = 17472, TRIGGERED)) is registered
 -- by the same AddSC but has no C++-verifiable NPC entry and its
--- SpellHit hook has no Lua bridge — entry-unverifiable, queued.
+-- SpellHit hook fires via event 15, but the skeleton entry is unverifiable — queued.
 -- The Stratholme block is OPEN.
 -- Entry (verifiable from the C++ sources): STRCreatureIds names
 -- NPC_BARON = 10440 in stratholme.h, and instance_stratholme.
@@ -74,7 +74,8 @@
 -- - npc_summoned_skeleton's SpellHit(17471) -> DoCastSelf(17472,
 --   TRIGGERED) leg (no skeleton NPC entry is C++-verifiable from
 --   code — the 17475-17480 raise spells are summoners, not entry
---   evidence — and the SpellHit hook has no Lua bridge:
+--   evidence — and the skeleton entry is unverifiable (the SpellHit
+--   hook itself fires via event 15):
 --   AuraScript/SpellScript-check-handler-blocked class).
 
 local NPC_BARON = 10440
