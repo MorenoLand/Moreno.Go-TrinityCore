@@ -100,11 +100,15 @@
 -- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) — event 9
 -- IS bridged, and SetFlag/RemoveFlag (2026-10-23) + SetReactState
 -- (lana_thel precedent) + AttackStop (2026-10-22) are now bridged too,
--- so the arm stays out only on the no-SummonedCreatureDies bridge
--- (boss_ai.go:7020 comment; mandokir/nefarian precedent — the
--- _shades-- leg gates the banish exit) and the no-InterruptNonMeleeSpells
--- bridge (verified STAND 2026-10-23); the flag/react/AttackStop legs ride
--- the machine. The stale "no-DamageTaken bridge" claim is retracted.
+-- so the arm stays out only on the banish machine's unported shade
+-- summons (24841/24842/24843 — no bearer, mandokir/nefarian precedent;
+-- the _shades-- leg gates the banish exit) and the
+-- no-InterruptNonMeleeSpells bridge (verified STAND 2026-10-23); the
+-- flag/react/AttackStop legs ride the machine. The stale
+-- "no-DamageTaken bridge" claim is retracted, and the stale
+-- "no-SummonedCreatureDies bridge" claim is retracted too (event-21
+-- dispatch bridged 2026-10-24) — the blocker is the missing summons,
+-- not the dispatch.
 -- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
 -- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).

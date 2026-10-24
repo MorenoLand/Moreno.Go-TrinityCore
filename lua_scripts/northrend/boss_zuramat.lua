@@ -65,10 +65,14 @@
 -- VOID_SENTRY 54369), 4s init / 7-10s Repeat) stays out: it is a
 -- summon leg, and the summoned npc_void_sentry AI is unbridged — its
 -- IsSummonedBy triggered self-cast SPELL_SUMMON_VOID_SENTRY_BALL
--- (58650), REACT_PASSIVE stance, SummonedCreatureDies _voidDance =
--- false flip, and SummonedCreatureDespawn DoAction(ACTION_DESPAWN_
--- VOID_SENTRY_BALL) leg have no bridges; casting it would spawn inert
--- sentries. Joins the no-DoAction / no-SummonList bridge queues.
+-- (58650), REACT_PASSIVE stance, and SummonedCreatureDespawn
+-- DoAction(ACTION_DESPAWN_VOID_SENTRY_BALL) leg have no bridges;
+-- casting it would spawn inert sentries. Joins the no-DoAction /
+-- no-SummonList bridge queues. The boss-side SummonedCreatureDies
+-- _voidDance = false flip (boss_zuramat.cpp) is dispatch-bridgeable via
+-- event-21 (2026-10-24), but _voidDance's only C++ consumer is
+-- GetData(DATA_VOID_DANCE) for achievement_void_dance (unbridged) — the
+-- latch would be write-only, so it stays documented-only.
 -- achievement_void_dance (OnCheck AI()->GetData(DATA_VOID_DANCE))
 -- joins the unmodeled-achievement / no-GetData-bridge queue (the
 -- cyanigosa / ichoron precedent).

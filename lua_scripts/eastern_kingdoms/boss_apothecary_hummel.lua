@@ -77,11 +77,13 @@
 --   UNIT_FLAG_NOT_SELECTABLE) leg — PORTED (2026-10-20); the
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
 --   creature:RemoveAura (stale "no aura-remove bridge" claim retracted).
--- - SummonedCreatureDies: no event-21 fire site in the engine, so
---   _deadCount never increments in the port — the lethal clamp persists
---   and the DoCastSelf(SPELL_QUIET_SUICIDE 3617) arm that ends the
---   feign-death in C++ cannot fire; the boss stays at 1 HP once both adds
---   are dead instead of dying (precise, unbridgeable).
+-- - SummonedCreatureDies: the event-21 dispatch IS bridged now
+--   (2026-10-24, retiring the old "no fire site" claim), but the
+--   baxter/frye summon group (Reset SummonCreatureGroup(1)) is unported,
+--   so the arm has no bearer — _deadCount never increments in the port,
+--   the lethal clamp persists, and the DoCastSelf(SPELL_QUIET_SUICIDE
+--   3617) arm that ends the feign-death in C++ cannot fire (the
+--   mandokir/nefarian no-bearer precedent).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
 -- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as

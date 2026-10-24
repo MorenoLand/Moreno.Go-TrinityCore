@@ -47,9 +47,12 @@
 -- victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
 -- Talk(SAY_DEATH 2) (event 4).
 -- Unmodeled (no bridges — documented, not wired):
--- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch
--- and GetData(DATA_RESPECT_YOUR_ELDERS) behind the absent cross-AI
--- DoAction/GetData bridge (zero hits) — documented-only.
+-- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch:
+-- the event-21 dispatch IS bridged now (2026-10-24), but GuardianDied's
+-- only C++ consumer is GetData(DATA_RESPECT_YOUR_ELDERS) for the
+-- achievement (boss_elder_nadox.cpp:105) behind the absent
+-- achievement-criteria/cross-AI-GetData bridges — the latch would be
+-- write-only, so the arm stays documented-only.
 -- npc_ahnkahar_nerubian — ENTRY UNVERIFIABLE (no NPC_AHNKAHAR_
 -- NERUBIAN constant in ahnkahet.h or anywhere in the C++ sources;
 -- the file enums name only the guardian 30176 / swarmer 30178 —

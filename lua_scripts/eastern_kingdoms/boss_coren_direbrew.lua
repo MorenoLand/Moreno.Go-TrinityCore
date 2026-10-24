@@ -35,8 +35,10 @@
 -- (retiring the old "no summon bridge" claim). The phase machine
 -- collapses to per-guid one-shot flags (phases advance only through
 -- these arms) with the C++ else-if ordering.
--- SummonedCreatureDies 1s sister-respawn re-arms are likewise
--- summon-machine arms (no bridge), documented-only.
+-- SummonedCreatureDies 1s sister-respawn re-arms are PORTED below
+-- (event-21 dispatch bridged 2026-10-24, retiring the old "no bridge"
+-- claim); the dead sister's entry re-arms a 1s timer that re-runs the
+-- SummonSister twin.
 -- Gossip (vael precedent — RegisterCreatureGossipEvent exists and
 -- fires inline in gossip.go): OnGossipHello offers the fight and
 -- apologize options; OnGossipSelect FIGHT closes the menu — the C++
@@ -197,8 +199,8 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- IsInPhase (PHASE_ONE / PHASE_TWO); the phases advance only through
     -- these two arms, so per-guid one-shot flags are C++-exact, and the
     -- elseif preserves the C++ else-if ordering (one blow fires at most
-    -- one latch). The SummonedCreatureDies 1s sister-respawn re-arms stay
-    -- documented-only (no DoAction/event-16 bridge).
+    -- one latch). The SummonedCreatureDies 1s sister-respawn re-arms are
+    -- ported in onSummonedCreatureDies below (event-21 bridge).
     -- Damage is never modified (thekal convention returns nothing when
     -- the hook does not alter it).
     local guid = creature:GetGUID()
@@ -261,6 +263,28 @@ local function onGossipSelect(event, player, creature, sender, action)
     return false
 end
 
+-- C++ SummonedCreatureDies (boss_coren_direbrew.cpp:196-202) + the
+-- EVENT_RESPAWN_ILSA / EVENT_RESPAWN_URSULA arms (:255-260): the dead
+-- summon's entry re-arms a 1s timer that re-summons that sister via the
+-- SummonSister twin. Fired by the engine event-21 dispatch
+-- (fireCreatureDied -> summoner OwnerGUID link); C++ ScheduleEvent
+-- re-arms an already-scheduled event, matching schedule()'s
+-- replace-pending-key twin.
+local function onSummonedCreatureDies(event, creature, summon, killer)
+    local guid = creature:GetGUID()
+    local entry = summon:GetEntry()
+    if entry == NPC_ILSA_DIREBREW then
+        schedule(guid, "respawnIlsa", 1000, function()
+            summonSister(creature, NPC_ILSA_DIREBREW)
+        end)
+    elseif entry == NPC_URSULA_DIREBREW then
+        schedule(guid, "respawnUrsula", 1000, function()
+            summonSister(creature, NPC_URSULA_DIREBREW)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_COREN, 21, onSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_COREN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_COREN, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_COREN, 4, onDied)

@@ -178,6 +178,11 @@
 -- npc_cult_adherent summon-death scheduler legs (still out — the
 -- instance-legged boss Talk has no bridge; the UpdateEntry/SetFlag legs
 -- are PORTED 2026-10-22).
+-- SummonedCreatureDies _cultistQueue.remove (boss_lady_deathwhisper.cpp)
+-- — the event-21 dispatch IS bridged (2026-10-24), but the C++
+-- _cultistQueue itself is not modeled (the port's DoImproveCultist twin
+-- pools live adds via GetCreaturesInGrid + the improvedCultists latch,
+-- which already filters IsDead) — documented-only.
 -- npc_vengeful_shade (38222) — zero own Talk lines; the
 -- VengefulBlast passive / KillSelf / SpellHitTarget legs have no
 -- bridge — NOT registered (the bronjahm npc_corrupted_soul_fragment
