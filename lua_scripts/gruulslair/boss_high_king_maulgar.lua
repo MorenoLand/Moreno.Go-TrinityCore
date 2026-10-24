@@ -9,8 +9,9 @@
 -- sources per AddSC_boss_high_king_maulgar; the creature_template
 -- ScriptName bindings are DB-side (no TDB in this workspace).
 -- Talk lines used: Maulgar SAY_AGGRO=0 (pull), SAY_ENRAGE=1
--- (phase 2), SAY_OGRE_DEATH=2 (ogre death — cross-creature arm,
--- documented only), SAY_SLAY=3 (kill), SAY_DEATH=4 (death). The
+-- (phase 2), SAY_OGRE_DEATH=2 (ogre death — ported: each ogre
+-- JustDied relays via relayOgreDeath below), SAY_SLAY=3 (kill),
+-- SAY_DEATH=4 (death). The
 -- four ogre councillors have no Talk calls in C++.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
@@ -36,9 +37,11 @@
 -- no bridge, so the victim arm stays engine-side. Phase 2 roar:
 -- non-triggered self-cast 16508, repeat {40s,50s} (initial 0s).
 -- The DoAction(ACTION_ADD_DEATH) -> Talk(SAY_OGRE_DEATH) relay
--- has no cross-creature bridge — the four ogre JustDied DoAction
--- arms are unmodeled and SAY_OGRE_DEATH fires only if the engine
--- delivers a DoAction call (blocked).
+-- ports via relayOgreDeath below: no DoAction bridge exists, but
+-- the receiver lookup is the bridged FindNearestCreature (svalna
+-- precedent) and the receiver leg is a bare Talk, so the relay is
+-- C++-exact for a live maulgar; only the instance SetBossState
+-- (DONE) leg stays blocked.
 -- Olm the Summoner (18834): OnReset(23) arms dark decay 33129 10s
 -- then 20s (non-triggered DoCastVictim) / summon WFH 33131 15s
 -- then 30s (non-triggered self-cast — the spell's summon is
@@ -79,9 +82,10 @@
 -- DoZoneInCombat first) and re-arms the combat timers (the
 -- SetBossState(IN_PROGRESS) arms are blocked on the
 -- instance-script model). OnDied(4): Maulgar Talk(SAY_DEATH);
--- the ogre JustDied cross-creature DoAction relays and the
--- SetBossState(DONE) arms are blocked — timers are cancelled
--- and per-GUID state dropped. OnTargetDied(3): Maulgar Talk(
+-- the ogre JustDied relays port via relayOgreDeath (live-maulgar
+-- Talk only); the SetBossState(DONE) arms are blocked — timers
+-- are cancelled and per-GUID state dropped. OnTargetDied(3):
+-- Maulgar Talk(
 -- SAY_SLAY), no TYPEID gate (C++-exact). OnLeaveCombat(2)/
 -- OnReset(23): cancel timers, drop per-GUID state (evade-side
 -- cleanup is engine-side). Melee is engine-driven for all five.
@@ -118,6 +122,7 @@ local SPELL_BLAST_WAVE = 33061
 
 local SAY_AGGRO = 0
 local SAY_ENRAGE = 1
+local SAY_OGRE_DEATH = 2
 local SAY_SLAY = 3
 local SAY_DEATH = 4
 
@@ -198,6 +203,20 @@ local function randomPlayerInRange2d(creature, range)
         return nil
     end
     return candidates[math.random(1, #candidates)]
+end
+
+-- C++ ogre JustDied (boss_high_king_maulgar.cpp:263/350/442/524):
+-- instance->GetGuidData(DATA_MAULGAR) -> maulgar->AI()->DoAction(
+-- ACTION_ADD_DEATH) -> Talk(SAY_OGRE_DEATH 2). No DoAction bridge
+-- exists, but the receiver lookup is bridged: FindNearestCreature
+-- (svalna precedent) returns the live maulgar in the same
+-- map+instance, nil when maulgar is dead or absent (the bridge
+-- skips Health==0 entries).
+local function relayOgreDeath(creature)
+    local maulgar = creature:FindNearestCreature(NPC_MAULGAR, 40.0)
+    if maulgar ~= nil then
+        maulgar:Talk(SAY_OGRE_DEATH)
+    end
 end
 
 -- Maulgar arms: arcing smash / whirlwind / mighty blow are
@@ -417,10 +436,11 @@ local function olmLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: the maulgar DoAction(ACTION_ADD_DEATH) relay
--- and the SetBossState(DONE) arm are blocked on the
--- cross-creature and instance-script models — timer cleanup
--- only.
+-- ports via relayOgreDeath above; the SetBossState(DONE) arm is
+-- blocked on the instance-script model — timer cleanup only
+-- besides the relay.
 local function olmDied(event, creature, killer)
+    relayOgreDeath(creature)
     olmResetState(creature:GetGUID())
 end
 
@@ -500,9 +520,11 @@ local function kigglerLeaveCombat(event, creature)
     kigglerResetState(creature:GetGUID())
 end
 
--- C++ JustDied: the maulgar DoAction relay and
--- SetBossState(DONE) are blocked — timer cleanup only.
+-- C++ JustDied: the maulgar DoAction relay ports via
+-- relayOgreDeath above; SetBossState(DONE) is blocked — timer
+-- cleanup only besides the relay.
 local function kigglerDied(event, creature, killer)
+    relayOgreDeath(creature)
     kigglerResetState(creature:GetGUID())
 end
 
@@ -561,9 +583,11 @@ local function blindeyeLeaveCombat(event, creature)
     blindeyeResetState(creature:GetGUID())
 end
 
--- C++ JustDied: the maulgar DoAction relay and
--- SetBossState(DONE) are blocked — timer cleanup only.
+-- C++ JustDied: the maulgar DoAction relay ports via
+-- relayOgreDeath above; SetBossState(DONE) is blocked — timer
+-- cleanup only besides the relay.
 local function blindeyeDied(event, creature, killer)
+    relayOgreDeath(creature)
     blindeyeResetState(creature:GetGUID())
 end
 
@@ -668,9 +692,11 @@ local function kroshLeaveCombat(event, creature)
     kroshResetState(creature:GetGUID())
 end
 
--- C++ JustDied: the maulgar DoAction relay and
--- SetBossState(DONE) are blocked — timer cleanup only.
+-- C++ JustDied: the maulgar DoAction relay ports via
+-- relayOgreDeath above; SetBossState(DONE) is blocked — timer
+-- cleanup only besides the relay.
 local function kroshDied(event, creature, killer)
+    relayOgreDeath(creature)
     kroshResetState(creature:GetGUID())
 end
 
