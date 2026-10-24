@@ -74,7 +74,7 @@
 -- (C++-exact true), spawned=false + the submerged IMMUNE_TO_PC
 -- flag arms PORTED (2026-10-20; the 9x summon arm — 6x
 -- NPC_COILFANG_AMBUSHER + 3x NPC_COILFANG_GUARDIAN at the
--- AddPos coords — has no summon bridge, unmodeled),
+-- AddPos coords — PORTED 2026-10-24, first-submerged-tick block),
 -- spout=3000 (C++ "directly cast Spout after
 -- emerging!"), phase=120000, return (C++-exact). The
 -- IsThreatened/EnterEvadeMode/DoZoneInCombat arms have no
@@ -114,8 +114,8 @@
 -- skipped); stale 'no GO bridge' retracted (RegisterGameObjectGossipEvent
 -- bridged, engine/world/gameobject_hooks.go) — go_strange_pool's
 -- OnGossipHello (the 25% fishing roll, the 54587 cast, the DATA_STRANGE_POOL
--- transitions) unmodeled; no summon bridge — the 9x submerged
--- ambusher/guardian summons unmodeled; no movement bridge —
+-- transitions) unmodeled; the 9x submerged ambusher/guardian
+-- summons PORTED 2026-10-24 (first-submerged-tick block); no movement bridge —
 -- the spout MoveRotate 20s machine, the rot-arc spout picks
 -- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water-on-
 -- creature/react/flag/display/evade bridges — the
@@ -148,6 +148,20 @@ local ENTRY_LURKER = 21217
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local ENTRY_AMBUSHER = 21865
+local ENTRY_GUARDIAN = 21873
+-- C++ AddPos[9][3] (boss_lurker_below.cpp:70-80); first 6 are
+-- ambushers, last 3 guardians (C++ :376 i < 6 test).
+local ADD_POS = {
+    {2.8553810, -459.823914, -19.182686},
+    {12.400000, -466.042267, -19.182686},
+    {51.366653, -460.836060, -19.182686},
+    {62.597980, -457.433044, -19.182686},
+    {77.607452, -384.302765, -19.182686},
+    {63.897900, -378.984924, -19.182686},
+    {34.447250, -387.333618, -19.182686},
+    {14.388216, -423.468018, -19.625271},
+    {42.471519, -445.115295, -19.769423},
+}
 
 local MELEE_RANGE_STANDIN = 5
 
@@ -381,10 +395,22 @@ local function lurkerTick(creature, guid)
             -- holds no other AI-set bits at this point (the
             -- NOT_SELECTABLE Reset arm was cleared at fishing-emerge),
             -- so SetFlag is the exact ported effect. The 9x summon arm
-            -- at the same site stays out (no summon bridge).
+            -- at the same site is PORTED below (2026-10-24).
             if not st.spawned then
                 st.spawned = true
                 creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+                -- C++ :376-379: 9x summon at AddPos, i < 6
+                -- ambusher else guardian, TEMPSUMMON_CORPSE_DESPAWN
+                -- (bridge type 4); Summons.Summon tracking has no
+                -- bridge (DespawnAll stays out, header).
+                for i = 1, 9 do
+                    local pos = ADD_POS[i]
+                    local entry = ENTRY_AMBUSHER
+                    if i > 6 then
+                        entry = ENTRY_GUARDIAN
+                    end
+                    creature:SummonCreature(entry, pos[1], pos[2], pos[3], 0, 4)
+                end
             end
         end
     end
