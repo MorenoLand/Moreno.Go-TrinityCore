@@ -12113,6 +12113,19 @@ func init() {
 	// IsInBack unbridged for handler creatures).
 	RegisterLuaBoss("npc_mageguard_dalaran", 29254)
 	RegisterLuaBoss("npc_mageguard_dalaran", 29255)
+	// npc_wg_queue (Wintergrasp battle-magi) — ported arm
+	// in lua_scripts/northrend/npc_wg_queue.lua: ungated Frost
+	// Armor self-cast (0s, 180s re-arm). Entries 32169/32170
+	// (Dalaran pair) + 35600/35601/35602 (Ironforge/Exodar/
+	// Orgrimmar) wowhead-only (no C++ NPC_ constant for these
+	// NPCs).
+	// Battlefield gossip arms stay documented-only (no
+	// battlefield bridge).
+	RegisterLuaBoss("npc_wg_queue", 32169)
+	RegisterLuaBoss("npc_wg_queue", 32170)
+	RegisterLuaBoss("npc_wg_queue", 35600)
+	RegisterLuaBoss("npc_wg_queue", 35601)
+	RegisterLuaBoss("npc_wg_queue", 35602)
 	// npc_mimiron_assault_bot (Ulduar, Mimiron ACU phase) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_assault_bot.lua: engage-seeded
 	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668).
