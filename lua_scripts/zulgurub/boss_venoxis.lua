@@ -41,9 +41,10 @@
 -- retracted); the EVENT_TRANSFORM
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ResetAllThreat,
 -- bridged lua_objects.go:389)
--- (no threat model); the holy-nova SelectTarget(MaxThreat) scan has no
--- bearer — alive players in the instance are scanned instead with the
--- 5-yd melee check standing in for IsWithinMeleeRange; SelectTarget
+-- the holy-nova SelectTarget(MaxThreat) scan is PORTED via the
+-- threat-ordered GetAITargets list (see onHolyNova below) — the old
+-- "(no threat model)" note is retracted — with the 5-yd check
+-- standing in for IsWithinMeleeRange; SelectTarget
 -- (Random) targets are random alive players in the instance; the
 -- parasitic-serpent summons 14884 never spawn (no summon model) — only
 -- the 15s re-arm cycle is modeled (jeklik six-bat convention).

@@ -84,9 +84,10 @@
 -- (creature:IsHeroic() is bridged, lua_creature_events.go:260),
 -- but the arm still has no landing point: Charge_timer is only
 -- ever armed by the blade-dance-end leg (no movement bridge —
--- MovePoint/MovementInform) and the fire arm needs
--- SelectTarget(Random, 0) non-playerOnly, which has no bridge
--- (kagani-vanish precedent); porting the gate alone would
+-- MovePoint/MovementInform); the fire arm's random threat-list pick
+-- rides the GetAITargets convention (gruul second-threat
+-- precedent), so the arm's sole blocker is that MovementInform
+-- trigger, not SelectTarget; porting the gate alone would
 -- fabricate a fire arm with no trigger (thespia precedent); no cross-creature/
 -- ObjectAccessor bridge — the JustSummoned AttackStart relay
 -- for guard adds stays unmodeled; the removeAdds sweep is

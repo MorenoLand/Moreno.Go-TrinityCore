@@ -9809,11 +9809,14 @@ func init() {
 	// 2s, EVENT_MAGIC_PULL DoCast(SPELL_MAGIC_PULL 51336) 15s,
 	// EVENT_STOMP Talk(SAY_STOMP 4)+DoCast(SPELL_THUNDERING_STOMP
 	// 50774) 15s (no timer-event/cast/summon bridges);
-	// npc_unstable_sphere entry-unverifiable (28166, local-enum-
-	// only) — no registration (Reset self-auras + MoveRandom +
-	// DespawnOrUnsummon(19s), UpdateAI pulse timer 3s DoCast(
-	// SPELL_UNSTABLE_SPHERE_PULSE 50757) — no bridges).
+	// npc_unstable_sphere (28166, NPC_UNSTABLE_SPHERE in the file's
+	// local enum, boss_drakos.cpp:31; CreatureScript
+	// "npc_unstable_sphere", boss_drakos.cpp:159) — PORTED in
+	// lua_scripts/northrend/npc_unstable_sphere.lua (Reset self-auras
+	// + 3s pulse + 19s despawn; MoveRandom stays out, no motion
+	// bridge). The boss port already summons this entry live.
 	RegisterLuaBoss("boss_drakos", 27654)
+	RegisterLuaBoss("npc_unstable_sphere", 28166)
 
 	// Mage-Lord Urom (27655), The Oculus —
 	// lua_scripts/northrend/boss_urom.lua.

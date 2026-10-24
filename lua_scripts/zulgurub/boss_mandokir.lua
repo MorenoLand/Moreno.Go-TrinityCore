@@ -43,7 +43,10 @@
 -- SetImmuneToAll(true) + EVENT_CHECK_START 1s poll of
 -- DATA_MANDOKIR == SPECIAL from the speaker's death, MovePoint to
 -- PosMandokir[1], EVENT_STARTED -> SetImmuneToAll(false) +
--- MovePath(PATH_MANDOKIR), MovementInform's SetHomePosition +
+-- MovePath(PATH_MANDOKIR), the waypoint-arrival MovementInform
+-- (ev6 IS the waypoint-arrival bridge — creaturemotion.go
+-- waypointNodeArrival — but the intro path never launches in Lua,
+-- no MovePath bridge) carrying SetHomePosition +
 -- MoveTargetedHome + SetBossState(NOT_STARTED) at POINT_MANDOKIR_END,
 -- the JustReachedHome SetImmuneToAll(false) arm) has no bearer —
 -- Mandokir simply starts combat already at the arena; the Mount

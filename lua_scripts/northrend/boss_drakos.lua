@@ -14,9 +14,12 @@
 -- (line 59) — entry-verifiable, registration proceeds (the
 -- nexus_commanders kalecgos precedent); the CreatureScript
 -- ScriptName binding is DB-side as usual.
--- NPC_UNSTABLE_SPHERE (28166) exists only in the .cpp's local Spells
--- enum — local-enum-only like gothik's minions — entry-unverifiable,
--- no registration, no lua for npc_unstable_sphere.
+-- NPC_UNSTABLE_SPHERE (28166) is in the .cpp's local Spells enum
+-- and the boss port already summons this entry live (bombTick
+-- below), so the entry is the summon's template by construction —
+-- npc_unstable_sphere is PORTED in
+-- lua_scripts/northrend/npc_unstable_sphere.lua (registered in
+-- boss_ai.go); the old "entry-unverifiable" note is retracted.
 -- Sole-source verified: whole-server-tree grep for "boss_drakos"
 -- hits boss_drakos.cpp + the loader decl/call lines only; grep for
 -- "npc_unstable_sphere" hits boss_drakos.cpp only (registered from
@@ -63,22 +66,12 @@
 -- UpdateAI — EVENT_BOMB_SUMMON is PORTED (bombTick, below); the
 -- stale "no summon bridge" claim is retracted (gurtogg convention
 -- superseded).
--- npc_unstable_sphere — entry-unverifiable (28166, local-enum-only)
--- — no registration, no lua; its arms are documented here only:
--- Reset — SetReactState(REACT_PASSIVE) + MoveRandom(40.0f) + AddAura(
--- SPELL_UNSTABLE_SPHERE_PASSIVE 50756, SPELL_UNSTABLE_SPHERE_TIMER
--- 50758, self) + DespawnOrUnsummon(19s) — motion-blocked (no motion
--- bridge; react-state / aura / despawn legs are bridged in isolation —
--- SetReactState, AddAura on the event-handler surface
--- (lua_creature_events.go:170), Despawn in lua_objects.go — but the
--- sphere still has no lua because its entry is unverifiable and there
--- is no registration); UpdateAI pulseTimer
--- 3000ms ->
--- DoCast(SPELL_UNSTABLE_SPHERE_PULSE 50757) + 3s repeat — the
--- cast/timer/aura/despawn legs ARE bridged (CastSpell +
--- CreateLuaEvent + AddAura on the event-handler surface, Despawn in
--- lua_objects.go); the sphere has no lua solely because its entry is
--- unverifiable and there is no registration.
+-- npc_unstable_sphere — PORTED 2026-10-24 in
+-- lua_scripts/northrend/npc_unstable_sphere.lua (Reset self-auras
+-- 50756/50758 + 3s pulse 50757 + 19s despawn; MoveRandom stays out,
+-- no motion bridge). The old "entry-unverifiable" note is retracted:
+-- 28166 is NPC_UNSTABLE_SPHERE in this file's enum and the boss
+-- port summons it live, so the entry is the summon's template.
 -- UpdateAI UNIT_STATE_CASTING suppression gate (boss_drakos.cpp:96,
 -- 127): C++ defers ALL event execution while the boss is casting;
 -- creature:IsCasting() is hard-coded FALSE (lua_objects.go:326-330),
