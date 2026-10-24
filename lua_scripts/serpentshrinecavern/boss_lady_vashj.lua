@@ -51,7 +51,8 @@
 -- summon bridges — unmodeled, below). CheckTimer 15s init then
 -- 5s: if no alive player in the instance is within 5 yd (the
 -- venoxis/gruul 5-yd GetDistance stand-in for the C++ threat-
--- list IsWithinMeleeRange scan — no threat bridge) -> CastShoot
+-- list IsWithinMeleeRange scan — GetAITargets is the bridged
+-- threat list, code already uses it) -> CastShoot
 -- OrMultishot. CastShootOrMultishot: urand(0,1) -> Shoot 40873
 -- or Multishot 38310 DoCastVictim (C++-exact); Talk(SAY_BOWSHOT)
 -- only when math.random(0,2) != 0 (the C++ rand32()%3 gate).

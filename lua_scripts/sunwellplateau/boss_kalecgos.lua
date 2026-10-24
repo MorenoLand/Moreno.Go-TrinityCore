@@ -90,13 +90,14 @@
 -- Sathrovarr (24892). OnEnterCombat: per-GUID reset, Talk(SAY_SATH_
 -- AGGRO); shadowbolt 45031 {7s,10s} then {7s,10s}: 20% Talk(SAY_
 -- SATH_SPELL1) + DoCastAOE, repeat {7s,10s}. Agony curse 45032 20s:
--- triggered single-target cast on a random alive player in the
--- instance carrying the spectral-realm aura 46021 and not carrying
--- 45032/45034 (C++ CurseAgonySelector, aura-filter arms C++-exact;
--- the NonTankTargetSelector exclusion has no threat bridge —
--- documented); fallback DoCastVictim (nil falls back to the victim
--- on the bridge); the SPELLVALUE_MAX_TARGETS=1 clamp has no bridge
--- but the pick is already single-target. Repeat 20s. Corruption
+-- triggered single-target cast on the current victim: the C++
+-- CurseAgonySelector negates NonTankTargetSelector, so only the
+-- current victim passes the filter (player + spectral-realm aura
+-- 46021 + not carrying 45032/45034); the fallback DoCastVictim
+-- targets the same victim, so the arm collapses to a victim cast
+-- (the old random-player pick misread the selector negation);
+-- the SPELLVALUE_MAX_TARGETS=1 clamp has no bridge but the pick
+-- is already single-target. Repeat 20s. Corruption
 -- strike 45029 13s: 20% Talk(SAY_SATH_SPELL2) + non-triggered
 -- DoCastVictim, repeat 13s. Check timer 1s: health strictly below
 -- 10% and !_isEnraged -> _isEnraged=true (the kalecgos ACTION_
@@ -144,9 +145,11 @@
 -- me->SetFaction(FACTION_FRIENDLY) :319, is now bridgeable via
 -- creature:SetFaction (engine/world/lua_creature_events.go:2076),
 -- but the chain's bearer is sathrovarr's cross-creature DoAction
--- relay — no bridge — so the chain stays out); no threat bridge — the
--- NonTankTargetSelector exclusion in both target filters is
--- unmodeled; the SPELLVALUE_MAX_TARGETS clamp and all SpellScript/
+-- relay — no bridge — so the chain stays out); the agony
+-- NonTankTargetSelector filter collapses to the victim (ported
+-- above); the spectral-blast selector lives in the unmodeled
+-- SpellScript (remove_if polarity, not a SelectTarget pick); the
+-- SPELLVALUE_MAX_TARGETS clamp and all SpellScript/
 -- AuraScript targeting arms are unmodeled (standing gaps).
 
 local ENTRY_KALECGOS = 24850
@@ -212,20 +215,6 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
-end
-
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
 end
 
 local function belowPct(creature, pct)
@@ -481,25 +470,14 @@ local function sathrovarrShadowbolt(creature, guid)
     end)
 end
 
--- C++ EVENT_AGONY_CURSE: triggered DoCast(45032) on a random alive
--- player in the instance carrying the spectral-realm aura and not
--- carrying 45032/45034, else DoCastVictim; repeat 20s. The
--- NonTankTargetSelector exclusion has no threat bridge — unmodeled.
+-- C++ EVENT_AGONY_CURSE: triggered DoCast(45032) on the current
+-- victim — CurseAgonySelector negates NonTankTargetSelector, so
+-- only the victim passes (player + spectral-realm aura 46021 +
+-- not carrying 45032/45034); the else-branch DoCastVictim targets
+-- the same victim, so the arm is a victim cast either way;
+-- repeat 20s.
 local function sathrovarrAgonyCurse(creature, guid)
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:HasAura(SPELL_SPECTRAL_REALM_AURA)
-                and not p:HasAura(SPELL_AGONY_CURSE)
-                and not p:HasAura(SPELL_AGONY_CURSE_ALLY) then
-            candidates[#candidates + 1] = p
-        end
-    end
-    local target = nil
-    if #candidates > 0 then
-        target = candidates[math.random(#candidates)]
-    else
-        target = creature:GetVictim()
-    end
+    local target = creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_AGONY_CURSE, true)
     end

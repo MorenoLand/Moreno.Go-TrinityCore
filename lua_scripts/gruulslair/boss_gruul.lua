@@ -36,9 +36,9 @@
 -- "little time to undo the shatter damage" arm), non-triggered
 -- self-cast shatter 33654, performing=false (see deviations — C++
 -- clears this flag in the SpellHitTarget arm). Else: hurtful
--- strike — pick = random alive player in the instance (C++
+-- strike — pick = GetAITargets()[2] (C++
 -- SelectTarget(MaxThreat, 1), second-highest threat — curator
--- convention, no threat model); if pick exists AND gruul is within
+-- convention, threat-sorted list); if pick exists AND gruul is within
 -- melee range of his victim (5-yd GetDistance stand-in for
 -- IsWithinMeleeRange, venoxis convention) -> DoCast(pick, 33813)
 -- else DoCastVictim(33813); re-arm 8s. Reverberation — triggered
@@ -74,8 +74,8 @@
 -- gap, above); the performing-flag clear now rides event 15
 -- (gruulSpellHitTarget), C++-exact; no movement bridge — the ground-slam
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
--- arms unmodeled; no threat bridge — the hurtful-strike MaxThreat
--- pick is a random alive player (curator convention) and the
+-- arms unmodeled; the hurtful-strike MaxThreat
+-- pick is GetAITargets()[2] (curator convention) and the
 -- IsWithinMeleeRange gate is a 5-yd GetDistance stand-in
 -- (venoxis convention); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- IsNonMeleeSpellCast queue gate unmodeled, timers fire
@@ -177,13 +177,15 @@ local function gruulTick(creature, guid)
             -- leg has no movement bridge and stays out.
         end
     else
-        -- Hurtful Strike: SelectTarget(MaxThreat, 1) approximated
-        -- by a random alive player (curator convention); the
-        -- IsWithinMeleeRange(victim) gate approximated by a 5-yd
-        -- GetDistance stand-in (venoxis convention).
+        -- Hurtful Strike: SelectTarget(MaxThreat, 1) = the second
+        -- entry of the threat-sorted GetAITargets list (curator
+        -- convention); the IsWithinMeleeRange(victim) gate is
+        -- approximated by a 5-yd GetDistance stand-in (venoxis
+        -- convention).
         st.hurtful = st.hurtful - 1000
         if st.hurtful <= 0 then
-            local pick = pickRandomPlayer(creature)
+            local targets = creature:GetAITargets()
+            local pick = targets and targets[2] or nil
             local victim = creature:GetVictim()
             if pick and victim and creature:GetDistance(victim) <= 5 then
                 creature:CastSpell(pick, SPELL_HURTFUL_STRIKE)

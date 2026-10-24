@@ -123,20 +123,21 @@
 -- 45772 aura -> triggered self-cast shadow infusion 45772 (C++-
 -- exact). OnEnterCombat(1): arm shadow bolt volley {8s,14s} then
 -- 12s, non-triggered DoCastVictim(45770). The felfire-portal arm
--- (NPC_FELFIRE_PORTAL summon + threat relay) has no summon/threat
--- bridges — unmodeled. OnDied(4): timer cleanup (the controller
+-- (NPC_FELFIRE_PORTAL summon + cross-creature threat relay) has
+-- no summon/cross-creature bridges — unmodeled. OnDied(4): timer cleanup (the controller
 -- deceiverDeathCount++ relay is cross-creature blocked; the
 -- SetBossState arms are instance-blocked). OnLeaveCombat(2):
 -- cancel the volley schedule (the JustEngagedWith
 -- InterruptNonMeleeSpells(true) leg is ported in deceiverEnterCombat;
--- the controller threat-relay arm has no bridge).
+-- the controller threat-relay arm is cross-creature-blocked).
 -- Volatile Felfire Fiend (25598). OnDamageTaken(9): lethal damage
 -- -> triggered self-cast felfire fission 45779 (C++-exact; the
 -- damage itself is NOT rewritten — the C++ lets the death
 -- proceed). OnEnterCombat(1): 2s prime, then a 500ms proximity
 -- check: armed and within 3 yd of the victim -> non-triggered
 -- DoCastVictim(45779) + KillSelf (ported via creature:Kill()).
--- The AddThreat lock-on arm has no threat bridge.
+-- The AddThreat lock-on arm is PORTED below (first UpdateAI tick
+-- with a victim -> AddThreat(victim, 1e7), boss_kiljaeden.cpp:1110-1113).
 -- OnReset(23)/OnLeaveCombat(2)/OnDied(4): timer/state cleanup.
 -- Armageddon Target (25735). OnReset(23): triggered self-cast
 -- armageddon visual 45911, ~1 tick later triggered 45914 (C++ case
@@ -189,8 +190,9 @@
 -- SetCombatMovement bridge live (lua_creature_events.go:1301) — KJ's own
 -- ctor arm PORTED in kjEnterCombat (boss_kiljaeden.cpp:525); the controller
 -- (25608) + felfire-portal arms are unregistered entries and the
--- armageddon arm is dormant (never engages, pure timer visual); no threat bridge — the
--- deceiver/portal AddThreat relays are unmodeled; no kill/
+-- armageddon arm is dormant (never engages, pure timer visual); the
+-- deceiver/portal AddThreat relays stay out on cross-creature
+-- bearer grounds (AddThreat itself is bridged); no kill/
 -- despawn/flag/react/gravity bridges — the fiend KillSelf, the
 -- armageddon DespawnOrUnsummon, the kalecgos-kj/controller flag/
 -- gravity/faction/GO-type arms and the reflection dual-wield
@@ -764,6 +766,14 @@ local function fiendEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     fiendState[guid] = { armed = false }
+    -- C++ npc_volatile_felfire_fiendAI::UpdateAI first tick with a
+    -- victim: AddThreat(victim, 1e7) + bLockedTarget latch
+    -- (boss_kiljaeden.cpp:1110-1113); engage-time placement, the
+    -- victim is nil-guarded (C++ would lock on the next tick).
+    local victim = creature:GetVictim()
+    if victim then
+        creature:AddThreat(victim, 10000000)
+    end
     schedule(guid, "prime", 2000, function()
         local st = fiendState[guid]
         if st then

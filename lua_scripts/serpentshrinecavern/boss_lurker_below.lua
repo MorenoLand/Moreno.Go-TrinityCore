@@ -56,9 +56,10 @@
 -- and the spout delivers no damage in this model, header).
 -- Whirl 18s (20s right after a spout) -> DoCast self 37660,
 -- re-arm 18000 (C++-exact). CheckTimer 15s then 2s -> inRange =
--- any alive player in the instance within 5 yd (the C++ threat-
--- list IsWithinMeleeRange scan — 5-yd player stand-in, gruul
--- convention; no threat bridge), re-arm 2000 (C++-exact).
+-- any alive player in the instance within 5 yd (the C++ map
+-- player-list IsWithinMeleeRange scan — 5-yd player stand-in,
+-- gruul convention; the old threat-list attribution was wrong),
+-- re-arm 2000 (C++-exact).
 -- Geyser: timer fires -> target = random alive player
 -- excluding the victim (C++ SelectTarget(Random, 1),
 -- curator/teron convention; nil -> victim fallback, C++-exact
