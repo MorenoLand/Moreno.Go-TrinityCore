@@ -40,9 +40,12 @@
 -- _JustDied arm are instance/cross-creature blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the _Reset arm is instance-blocked). Melee
--- is engine-driven. The ctor's SetControlled(true,
--- UNIT_STATE_ROOT) has no unit-state bridge at all (only UNIT_STATE_CASTING has the constant-false IsCasting twin) (mennu/thespia
--- precedent). EnterEvadeMode is instance/cross-creature/
+-- is engine-driven. The ctor's SetControlled(true, UNIT_STATE_ROOT)
+-- is PORTED 2026-10-24 via creature:SetRooted on OnEnterCombat(1):
+-- the root is never cleared in C++, and Go event 5 fires only on the
+-- respawn path (not first summon), so combat entry is where the root
+-- first has observable effect (mennu/thespia precedent retired).
+-- EnterEvadeMode is instance/cross-creature/
 -- summon gated (ahuneBunny DoAction STOP_EVENT,
 -- summons.DespawnAll, DespawnOrUnsummon) — unmodeled.
 -- Deliberate deviations (all await engine bridges): no
@@ -137,6 +140,10 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
+    -- C++ ctor (boss_ahune.cpp:175) SetControlled(true, ROOT), never
+    -- cleared in C++; rides combat entry (Go event 5 fires only on the
+    -- respawn path, not first summon) via creature:SetRooted.
+    creature:SetRooted(true)
     local guid = creature:GetGUID()
     resetBoss(guid)
     -- EVENT_INITIAL_EMERGE (C++-scheduled at 4ms — fires

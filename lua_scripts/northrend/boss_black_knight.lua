@@ -35,12 +35,11 @@
 -- DoCastVictim(Icy Touch 67718) (see note above), urand(10000,13000)
 -- init, urand(12000,15000) repeat; uiObliterateTimer —
 -- DoCastVictim(Obliterate 67725), urand(17000,19000) init, repeat —
--- all scheduled from combat start and independent of the unbridged
--- DamageTaken resurrect machine (the three arms fire identically in
--- PHASE_UNDEAD and PHASE_SKELETON; the phase machine never advances
--- here, so the fight plays its phase-1 rotation until death —
--- boss_eadric precedent for timer arms independent of an unbridged
--- DamageTaken leg). JustDied: DoCastSelf(Kill Credit 68663) on event
+-- all scheduled from combat start (the three arms fire identically in
+-- PHASE_UNDEAD and PHASE_SKELETON; the phase machine advances via the
+-- ported DamageTaken/resurrect machine, and the timers keep running
+-- through the fake-death window gated by the resurrecting latch).
+-- JustDied: DoCastSelf(Kill Credit 68663) on event
 -- 4 (its instance SetBossState(BOSS_BLACK_KNIGHT, DONE) leg has no
 -- bridge — instance model absent, standing). OnLeaveCombat(2) /
 -- OnDied(4) / OnReset(23) cancel the scheduler (gargolmar precedent).
@@ -71,16 +70,16 @@
 -- SelectTarget(Random, 0, 100, true) -> DoCast(Death's Respite 67745),
 -- urand(15000,16000) — random-target SelectTarget bridge absent
 -- (cairne/kazzak precedent).
--- boss_black_knight PHASE_SKELETON legs — phase now arrives via the
--- ported DamageTaken/resurrect machine; the legs stay out: bSummonArmy
--- one-shot
--- AddUnitState(ROOT | STUNNED) + DoCastSelf(Army of the Dead 67761)
--- (no unit-state bridge — only UNIT_STATE_CASTING has the constant-false IsCasting twin; ROOT|STUNNED have none) + uiDeathArmyCheckTimer's ClearUnitState;
--- uiDesecration — SelectTarget(Random, 0, 100, true) ->
--- DoCast(Desecration 67778), urand(15000,16000) (random-target bridge
--- absent); uiGhoulExplodeTimer — DoCastSelf(Ghoul Explode 67751),
--- 8000 repeat (self-cast bridged in isolation, but phase-gated —
--- jedoga bar).
+-- boss_black_knight PHASE_SKELETON legs: phase arrives via the ported
+-- DamageTaken/resurrect machine; the bSummonArmy one-shot ROOT leg, the
+-- uiDeathArmyCheckTimer clear, and the melee-gate leg are PORTED
+-- 2026-10-24 (SetRooted(true) + SetMeleeAttack(false) at skeleton entry,
+-- 7s one-shot clear; the STUNNED half has no bridge, so rotation casts
+-- gate on the armyWindow latch while re-arming, as in the fake-death
+-- window). DoCastSelf(Army of the Dead 67761) stays out (DB-side summon
+-- effect, ghoul entry unverifiable, no Go spell-effect producer);
+-- uiDesecration stays out (random-target bridge absent); uiGhoulExplode
+-- stays out (phase-gated self-cast, follow-up strip).
 -- boss_black_knight PHASE_GHOST legs — phase now arrives via the
 -- ported resurrect machine; the legs stay out:
 -- uiDeathBiteTimer — DoCastAOE(Death's Bite 67808),
@@ -93,8 +92,10 @@
 -- ghoul entry is unverifiable (DB-side SPELL_ARMY_DEAD summon) so no
 -- grid twin exists; display/root legs are bridged (see DamageTaken). JustSummoned — summons.Summon + cross-AI AttackStart(me->
 -- GetVictim()) (summon STRAND absent, standing). Melee gated on
--- !HasUnitState(ROOT) && !HealthBelowPct(1) — the ROOT leg has no unit-state bridge (GetHealthPct() IS bridged, object.go:107 — but the arm is conjunctive on unbridged !HasUnitState(ROOT)); melee plays
--- engine-driven unconditionally in this port.
+-- !HasUnitState(ROOT) && !HealthBelowPct(1): the READ has no unit-state
+-- bridge, but both legs are modeled Lua-side (health via GetHealthPct,
+-- root via the DamageTaken fake-death arm and the skeleton army-window
+-- arm, which drive SetMeleeAttack(false/true)); no unmodeled melee gap.
 -- npc_risen_ghoul — zero registration: ENTRY UNVERIFIABLE (no NPC
 -- constant for the ghoul in trial_of_the_champion.h or anywhere in the
 -- C++ sources; the ghouls materialize via the DB-side SPELL_ARMY_DEAD
@@ -154,7 +155,7 @@ local nativeDisplay = {}
 local function getBlackKnightState(guid)
     local st = bkState[guid]
     if not st then
-        st = { phase = PHASE_UNDEAD, resurrecting = false }
+        st = { phase = PHASE_UNDEAD, resurrecting = false, armyWindow = false }
         bkState[guid] = st
     end
     return st
@@ -169,7 +170,7 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function icyTouchTick(creature, guid)
-    if not getBlackKnightState(guid).resurrecting then
+    if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_ICY_TOUCH)
     end
     local next = math.random(5000, 7000)
@@ -188,7 +189,7 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function plagueStrikeTick(creature, guid)
-    if not getBlackKnightState(guid).resurrecting then
+    if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_ICY_TOUCH)
     end
     local next = math.random(12000, 15000)
@@ -205,7 +206,7 @@ end
 -- has no bridge, so the resurrecting latch gates the cast while the re-arm
 -- continues.
 local function obliterateTick(creature, guid)
-    if not getBlackKnightState(guid).resurrecting then
+    if not getBlackKnightState(guid).resurrecting and not getBlackKnightState(guid).armyWindow then
         creature:CastSpell(nil, SPELL_OBLITERATE)
     end
     local next = math.random(17000, 19000)
@@ -259,6 +260,16 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                 st.resurrecting = false
                 creature:SetRooted(false)
                 creature:SetMeleeAttack(true)
+                if st.phase == PHASE_SKELETON and not st.armyWindow then
+                    st.armyWindow = true
+                    creature:SetRooted(true)
+                    creature:SetMeleeAttack(false)
+                    schedule(guid, "army_window", 7000, function()
+                        creature:SetRooted(false)
+                        creature:SetMeleeAttack(true)
+                        st.armyWindow = false
+                    end)
+                end
             end)
         end
         return false, 0
@@ -270,6 +281,7 @@ local function blackKnightLeaveCombat(event, creature)
     cancelTimers(guid)
     bkState[guid] = nil
     creature:SetMeleeAttack(true)
+    creature:SetRooted(false)
 end
 
 -- C++ JustDied: DoCastSelf(Kill Credit 68663) (the
@@ -287,6 +299,7 @@ local function blackKnightReset(event, creature)
     cancelTimers(guid)
     bkState[guid] = nil
     creature:SetMeleeAttack(true)
+    creature:SetRooted(false)
     -- C++ Reset: SetDisplayId(GetNativeDisplayId()) — no native-display
     -- bridge, so the tharon_ja idiom: the display captured at first
     -- combat is restored (an evade mid-fake-death would otherwise leave

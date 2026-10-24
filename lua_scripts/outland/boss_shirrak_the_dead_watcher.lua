@@ -65,8 +65,9 @@
 -- npc_focus_fire (18374) — registered for JustSummoned (event 19, the
 -- yor precedent): the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered
 -- self-cast + SetFaction(summoner faction, pending-slot idiom) legs are
--- PORTED 2026-10-23; SetLevel / UNIT_STATE_ROOT / AttackStart have no
--- bridges — stay out.
+-- PORTED 2026-10-23; the UNIT_STATE_ROOT leg ports 2026-10-24 via
+-- creature:SetRooted (lua_creature_events.go); SetLevel / AttackStart
+-- have no bridges, stay out.
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
 -- DOCUMENTED-ONLY (in this header; entries 18371 + 18374 registered):
 -- via FocusedTargetGUID) — no cast/root/cross-creature bridges
@@ -190,14 +191,15 @@ end
 -- C++ JustSummoned (boss_shirrak_the_dead_watcher.cpp:94-107), entry-gated:
 -- the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered self-cast + SetFaction
 -- (summoner faction, via the pending slot — no creature:GetOwner bridge)
--- legs are bridged; SetLevel / UNIT_STATE_ROOT / AttackStart have no
--- bridges (the root/attack legs stay out).
+-- legs are bridged; the UNIT_STATE_ROOT leg ports via creature:SetRooted
+-- (2026-10-24); SetLevel / AttackStart have no bridges, stay out.
 local function focusFireSummoned(event, creature)
     if creature:GetEntry() == NPC_FOCUS_FIRE then
         creature:CastSpell(creature, SPELL_FOCUS_FIRE_VISUAL)
         if pendingFocusFireFaction then
             creature:SetFaction(pendingFocusFireFaction)
         end
+        creature:SetRooted(true)
     end
 end
 
