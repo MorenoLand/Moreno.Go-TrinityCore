@@ -38,8 +38,8 @@
 --     event, not ported.
 -- - KilledUnit (event 3): player victim -> Mark of Frost 23182
 --   triggered. C++ is who->CastSpell(who, ...) (player self-cast);
---   player:CastSpell has no bridge (anetheron sleep precedent), so the
---   boss casts it on the victim instead (caster deviates from C++).
+--   ported as the victim self-cast via player:CastSpell
+--   (bridged 2026-10-24, lua_player.go).
 -- - Enrage: HealthBelowPct(26) one-shot latch -> self-cast Enrage
 --   23537; checked by a 1s per-GUID pump (sironas convention; C++
 --   checks every UpdateAI tick, i.e. combat only).
@@ -204,11 +204,11 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
 -- C++ KilledUnit: player victim -> Mark of Frost 23182 triggered; the
--- C++ caster is the victim itself (who->CastSpell(who, ...)) but
--- player:CastSpell has no bridge, so the boss casts it (anetheron
--- sleep precedent).
+-- C++ caster is the victim itself (who->CastSpell(who, ...)),
+-- ported as the victim self-cast via player:CastSpell
+-- (bridged 2026-10-24, lua_player.go).
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     if victim:GetObjectType() == "Player" then
-        creature:CastSpell(victim, SPELL_MARK_OF_FROST, true)
+        victim:CastSpell(victim, SPELL_MARK_OF_FROST, true)
     end
 end)

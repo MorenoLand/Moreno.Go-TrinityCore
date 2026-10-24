@@ -48,10 +48,10 @@
 -- have no instance-creature, cross-creature, flag or movement
 -- bridges (blocked); the AttackStart Intro/IsIntro gate has no
 -- bridge — the fight starts on pull (ragnaros-intro convention).
--- The burn arm deviates once: the target-self-cast has no
--- player-side CastSpell bridge — modeled as target:AddAura(46394),
--- the spell's entire effect is the aura (gurtogg fel-rage
--- convention).
+-- The burn arm deviates once: the target-self-cast is modeled as
+-- target:AddAura(46394) (player:CastSpell bridged 2026-10-24;
+-- AddAura stands — the spell's entire effect is the aura, gurtogg
+-- fel-rage convention).
 
 local NPC_BRUTALLUS = 24882
 

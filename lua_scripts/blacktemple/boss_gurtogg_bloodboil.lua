@@ -53,7 +53,8 @@
 -- found: drop back to phase 1, re-arm the phase-1 schedule and the
 -- change-phase arm at 60s (C++-exact). The two player self-casts
 -- (target->CastSpell(target, 40617/40603, true), pure aura
--- application) have no player-side CastSpell bridge — modeled as
+-- application) are modeled as (player:CastSpell bridged 2026-10-24;
+-- AddAura stands — pure-aura effect)
 -- AddAura(40617)/AddAura(40603), which reproduces the resulting
 -- aura state (deliberate deviation, documented). Back in phase 1
 -- (on the 30s change-phase arm): cancel phase-2 timers, re-arm
@@ -117,8 +118,8 @@ local SPELL_EJECT_2 = 40597
 local SPELL_FEL_ACID_BREATH_2 = 40595
 local SPELL_ARCING_SMASH_2 = 40599
 local SPELL_BERSERK = 45078
--- Player-side self-casts (no player CastSpell bridge — applied via
--- AddAura; their entire C++ effect is the aura).
+-- Player-side self-casts (applied via AddAura — player:CastSpell
+-- bridged 2026-10-24, AddAura stands; their entire C++ effect is the aura).
 local SPELL_TAUNT_GURTOGG = 40603
 local SPELL_FEL_RAGE_P = 40617
 

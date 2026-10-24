@@ -72,12 +72,13 @@
 --   reset on 23.
 -- go_kalecgos_spectral_rift (GO 187055), GossipHello(1):
 -- - if !player:HasAura(44867) then player->CastSpell(player, 44811,
---   true) (C++ boss_kalecgos.cpp:590-595). NOT registered: the cast is
---   unbridgeable — player:CastSpell has no bridge (CastSpell is
---   registered for creature objects only,
---   engine/world/lua_creature_events.go:60) and no creature is in scope
---   in a GO gossip handler to substitute as caster (the canonical
---   sunwellplateau/boss_kalecgos.lua likewise leaves it unregistered).
+--   true) (C++ boss_kalecgos.cpp:590-595). NOT registered: player:CastSpell
+--   is bridged (2026-10-24, lua_player.go) and GO gossip registration
+--   works (manticron precedent), but 44811's effect lives in the
+--   SpellScript spell_kalecgos_spectral_realm_trigger (standing gap) —
+--   the cast without its script leg transfers nothing, so the arm
+--   stays documented-only (the canonical sunwellplateau/boss_kalecgos.lua
+--   likewise leaves it unregistered).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - instance_sunwell_plateau.cpp (AddSC_instance_sunwell_plateau)
 --   — instance-script model blocked (standing): DATA_KALECGOS_*
@@ -406,5 +407,5 @@ end
 -- (verified closed); two registrations double-fired every combat event.
 
 -- go_kalecgos_spectral_rift (GO 187055) — unregistered (see header):
--- the OnGossipHello cast player->CastSpell(player, 44811, true) has no
--- bridge (no player:CastSpell; no creature in GO-gossip scope).
+-- the OnGossipHello cast player->CastSpell(player, 44811, true) is
+-- bridged but its effect lives in the SpellScript gap (see header).

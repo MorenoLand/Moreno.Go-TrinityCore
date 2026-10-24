@@ -149,11 +149,9 @@ local function onSpell(creature, guid, idx)
             local target = randomPlayerInRange(creature, spec.randomDist)
             if target and not target:IsDead() then
                 -- C++ boss_anetheron.cpp:160: target->CastSpell(target,
-                -- SPELL_SLEEP, true) — but player:CastSpell has no bridge
-                -- (CastSpell is creature-only,
-                -- engine/world/lua_creature_events.go:60); creature casts
-                -- on the target instead (caster deviates from C++).
-                creature:CastSpell(target, spec.spell, true)
+                -- SPELL_SLEEP, true) — ported as the target self-cast
+                -- via player:CastSpell (bridged 2026-10-24, lua_player.go).
+                target:CastSpell(target, spec.spell, true)
             end
         end
     else

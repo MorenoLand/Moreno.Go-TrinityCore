@@ -147,8 +147,8 @@
 -- "player->FindNearestCreature has no bridge" claim; the full
 -- OnGossipHello arm ports (boss_magtheridon.cpp:469-491) — the
 -- player's triggered self-cast of 30410 lands as player:AddAura
--- (player:CastSpell still has no bridge; the 30410-remove
--- SpellScript legs stay unmodeled, standing gap). The GO AI itself
+-- (player:CastSpell bridged 2026-10-24, AddAura stands — pure-aura
+-- effect; the 30410-remove SpellScript legs stay unmodeled, standing gap). The GO AI itself
 -- has no registered handler, but the arm is a gossip arm, not an
 -- AI-update arm, so no stub is registered.
 
@@ -577,7 +577,8 @@ end)
 -- then the nearest live 17376 within 10yd self-casts visual 30166
 -- (C++ trigger->CastSpell(nullptr, 30166) = self-cast, DoCastAOE
 -- convention), then the player's triggered self-cast of 30410 lands
--- as player:AddAura (player:CastSpell has no bridge). C++ returns
+-- as player:AddAura (player:CastSpell bridged 2026-10-24;
+-- AddAura stands — pure-aura effect). C++ returns
 -- true (handled) == Lua true (arlock gong / belnistrasz polarity).
 local function onManticronCubeGossip(_, player, go)
     if player:HasAura(SPELL_MIND_EXHAUSTION) or player:HasAura(SPELL_SHADOW_GRASP) then

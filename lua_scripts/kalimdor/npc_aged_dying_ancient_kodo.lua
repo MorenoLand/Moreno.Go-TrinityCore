@@ -15,8 +15,9 @@
 -- by SPELL_KODO_KOMBO_ITEM 18153 -> if the entry is one of the
 -- three kodo entries and the caster lacks SPELL_KODO_KOMBO_
 -- PLAYER_BUFF 18172: triggered self-cast 18172 on the caster
--- (player-side CastSpell bridge — modeled as caster:AddAura,
--- brutallus precedent) + triggered self-cast 18377 on the kodo.
+-- (modeled as caster:AddAura — player:CastSpell bridged
+-- 2026-10-24, AddAura stands, brutallus precedent) + triggered
+-- self-cast 18377 on the kodo.
 -- The C++ also gates on the kodo not having SPELL_KODO_KOMBO_
 -- DESPAWN_BUFF 18377 — PORTED 2026-10-24: creature:HasAura is
 -- bridged on the handler surface (lua_creature_events.go:388,

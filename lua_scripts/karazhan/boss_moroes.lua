@@ -183,12 +183,9 @@ local function onGarrote(creature, guid)
     local target = randomTargetInRange(creature, 100)
     if target then
         -- C++ boss_moroes.cpp:315: target->CastSpell(target, SPELL_GARROTE,
-        -- true) — but player:CastSpell has no bridge (CastSpell is
-        -- registered for creature objects only,
-        -- engine/world/lua_creature_events.go:60); the target-self-cast
-        -- would nil-call and kill this timer chain, so the creature
-        -- casts on the target instead (caster deviates from C++).
-        creature:CastSpell(target, SPELL_GARROTE, true)
+        -- true) — ported as the target self-cast via player:CastSpell
+        -- (bridged 2026-10-24, lua_player.go).
+        target:CastSpell(target, SPELL_GARROTE, true)
     end
     state.invanish = false
 end

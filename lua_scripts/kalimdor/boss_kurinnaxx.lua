@@ -108,11 +108,12 @@ end
 
 -- C++ EVENT_SANDTRAP (boss_kurinnaxx.cpp:109-115): random alive player
 -- within 100 self-casts SPELL_SANDTRAP (triggered); nil target -> victim
--- self-casts. Init {5s,15s} -> {5s,15s}. But player:CastSpell has no
--- bridge (CastSpell is registered for creature objects only,
--- engine/world/lua_creature_events.go:60) — the self-casts would
--- nil-call and kill this timer chain, so the creature casts on the
--- target/victim instead (caster deviates from C++).
+-- self-casts. Init {5s,15s} -> {5s,15s}. Deliberately NOT switched to
+-- player:CastSpell: 25648 spawns the trap under the raid (summon-family
+-- effect), and the session cast path executes no SPELL_EFFECT_SUMMON
+-- (lua_player.go) while the creature cast path does (boss_ai.go
+-- creatureEffectSummonType) — the switch would lose the spawn, so the
+-- creature casts on the target/victim instead (caster deviates from C++).
 local function onSandTrap(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then

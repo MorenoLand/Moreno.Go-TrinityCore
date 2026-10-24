@@ -14,14 +14,15 @@
 -- C++ DoMeleeAttackIfReady.
 -- Deviations from C++ (documented-only legs):
 -- * KilledUnit's victim->CastSpell(victim, SPELL_MARK_DEATH
---   37128, true) (cpp:80): ported for creature victims; the
---   player-victim leg stays out — no player-side CastSpell bridge
---   (boss_ai.go:4247/4389/5330/5395 precedent). The 20% SAY_SLAY
+--   37128, true) (cpp:80): ported for creature AND player victims
+--   via victim:CastSpell (player:CastSpell bridged 2026-10-24,
+--   lua_player.go; the C++ arm is ungated). The 20% SAY_SLAY
 --   talk IS ported (event 3).
 -- * MoveInLineOfSight's mark->aura conversion (cpp:100-106:
 --   who->CastSpell(who, SPELL_AURA_DEATH 37131, triggered)) —
---   same missing player-cast bridge; Go's event 27 is also
---   an aggro-veto hook fired only in the engage branch
+--   stays out on the ev27 restriction alone (player:CastSpell
+--   bridged 2026-10-24): Go's event 27 is an aggro-veto hook
+--   fired only in the engage branch
 --   (lua_creature_events.go:527-540), not a general
 --   MoveInLineOfSight notifier — documented only.
 -- * The UNIT_STATE_CASTING gate (cpp:115-116) —
@@ -166,8 +167,9 @@ end
 
 local function onTargetDied(event, creature, victim)
     -- C++: ungated victim self-cast SPELL_MARK_DEATH first (cpp:80);
-    -- only creature victims can cast (no player-side CastSpell bridge).
-    if victim:GetObjectType() == "Creature" then
+    -- ported for creature and player victims via victim:CastSpell
+    -- (player:CastSpell bridged 2026-10-24, lua_player.go).
+    if victim:GetObjectType() == "Creature" or victim:GetObjectType() == "Player" then
         victim:CastSpell(victim, SPELL_MARK_DEATH, true)
     end
     -- C++: urand(0,4) nonzero -> skip; talk only on roll 0
