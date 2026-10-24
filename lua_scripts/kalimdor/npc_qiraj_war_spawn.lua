@@ -24,7 +24,9 @@
 -- DoMeleeAttackIfReady. The file has no UNIT_STATE_CASTING gates.
 -- Ported arms (from npc_qiraj_war_spawnAI::UpdateAI, entry-gated
 -- exactly as in C++ — qiraji-side entries 15414/15422/15424 get the
--- spell timers; all four entries get the stoned channel):
+-- spell timers; all four entries get the stoned channel,
+-- including its RemoveAllAttackers + AttackStop preamble
+-- (both bridged — old no-bridge deviation retracted):
 -- - Poison cloud (C++ SpellTimer1): DoCast(self, SPELL_POISON_CLOUD
 --   28528) + DoCast(self, SPELL_SUMMON_POISON_CLOUD 24319), init
 --   38500ms, repeat 300000ms, unconditional.
@@ -37,9 +39,9 @@
 -- - Stoned channel (C++ SpellTimer4): DoCast(self,
 --   SPELL_STONED_CHANNEL_CAST_VISUAL 15533), init 100000ms, repeat
 --   2000ms, unconditional. Deviation documented below: the C++
---   preamble me->RemoveAllAttackers() + me->AttackStop() has no
---   bridge (no such methods on the creature Lua surface), so the
---   port models the cast itself, not the combat drop.
+--   preamble me->RemoveAllAttackers() + me->AttackStop() is
+--   ported in onStonedChannel below (C++ order,
+--   zone_silithus.cpp SpellTimer4 arm), both methods bridged.
 -- Died/Reset cancel + re-arm per the C++ Reset latch (see below);
 -- the old leave-combat cancel was wrong (the C++ timers tick outside
 -- combat). Unmodeled (documented-only, no bridges):
@@ -123,9 +125,11 @@ local function onFireExplosion(creature, guid)
 end
 
 -- C++ SpellTimer4: stoned channel visual, repeat 2000ms
--- unconditional (RemoveAllAttackers/AttackStop preamble has no
--- bridge — documented deviation, see header).
+-- unconditional; preamble in C++ order (RemoveAllAttackers,
+-- AttackStop, then the cast).
 local function onStonedChannel(creature, guid)
+    creature:RemoveAllAttackers()
+    creature:AttackStop()
     creature:CastSpell(creature, SPELL_STONED_CHANNEL_VISUAL)
     schedule(guid, "stoned", 2000, function()
         onStonedChannel(creature, guid)

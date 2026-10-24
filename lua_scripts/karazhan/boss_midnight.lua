@@ -55,6 +55,7 @@ local ENTRY_ATTUMEN_MOUNTED = 16152
 
 -- UnitDefines.h react states (engine/world/lua_creature_events.go SetReactState bridge).
 local REACT_DEFENSIVE = 1
+local REACT_PASSIVE = 0
 
 local SAY_KILL, SAY_RANDOM, SAY_DISARMED = 0, 1, 2
 local SAY_MIDNIGHT_KILL, SAY_DEATH, SAY_APPEAR, SAY_MOUNT = 3, 3, 4, 5
@@ -361,10 +362,12 @@ local function attumenDamageTaken(event, creature, attacker, damage)
 end
 
 local function attumenSpellHit(event, creature, caster, spellId)
-    -- C++ SpellHit(SPELL_MOUNT): cancel the scheduler, both creatures walk
-    -- toward each other, then DoCastAOE(SPELL_SUMMON_ATTUMEN_MOUNTED).
-    -- Movement/visibility/summon have no Lua bridge; keep the timer cancel
-    -- and the mount talk. The midnight->AI()->Talk(EMOTE_MOUNT_UP=1) arm
+    -- C++ SpellHit(SPELL_MOUNT): cancel the scheduler, both creatures
+    -- stop + go PASSIVE, walk toward each other (MoveFollow, no bridge),
+    -- then the 1s proximity summon (ported via midnight's mountpoll).
+    -- The stop/passive legs are ported below (AttackStop /
+    -- RemoveAllAttackers / SetReactState all bridged); MoveFollow stays
+    -- out. The midnight->AI()->Talk(EMOTE_MOUNT_UP=1) arm
     -- (boss_midnight.cpp:241) rides the event-14 caster arg — the stale
     -- "no GUID->creature bridge" claim is retracted: the caster IS the
     -- midnight creature that cast SPELL_MOUNT.
@@ -374,10 +377,16 @@ local function attumenSpellHit(event, creature, caster, spellId)
             state.phase = PHASE_NONE
         end
         cancelTimers(creature:GetGUID())
-        creature:Talk(SAY_MOUNT)
         if caster ~= nil then
+            caster:AttackStop()
+            caster:RemoveAllAttackers()
+            caster:SetReactState(REACT_PASSIVE)
             caster:Talk(EMOTE_MOUNT_UP)
         end
+        creature:AttackStop()
+        creature:RemoveAllAttackers()
+        creature:SetReactState(REACT_PASSIVE)
+        creature:Talk(SAY_MOUNT)
     end
 end
 

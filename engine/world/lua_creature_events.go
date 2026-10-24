@@ -427,6 +427,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{aura.StackAmount}, nil
 	}
+	// GetDuration is Aura::GetDuration (SpellAuras.h) for handler
+	// creatures: the live remaining duration in ms of the named aura,
+	// or 0 when the aura is absent (the C++ call sites null-check the
+	// Aura* first — returning 0 subsumes the missing-aura leg, the
+	// GetStackAmount convention). RemainingMs is the duration at last
+	// refresh and DurationUpdatedAt the refresh instant (creature aura
+	// application sets both), so the live remaining is RemainingMs
+	// minus elapsed since that instant, the spells.go:7233 /
+	// boss_ai.go:2937 pattern. Only engine-applied auras
+	// (activeCreatureAuras) carry durations; the Lua AddAura presence
+	// set (creatureAuras) is boolean-only, so a Lua-added aura reads 0.
+	methods["GetDuration"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		aura := s.activeCreatureAuras[key][spell]
+		s.auraMu.Unlock()
+		if aura == nil {
+			return []any{uint32(0)}, nil
+		}
+		remaining := int64(aura.RemainingMs)
+		if !aura.DurationUpdatedAt.IsZero() {
+			if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return []any{uint32(remaining)}, nil
+	}
 	// RemoveAllAuras is Unit::RemoveAllAuras for handler creatures: the
 	// full strip via clearCreatureAuras (the evade-leg twin — timers
 	// stopped, both aura maps cleared). Freywinn's tranquility arm.

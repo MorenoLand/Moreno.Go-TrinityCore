@@ -11,7 +11,8 @@
 -- documents as unmodelable were stale — C++ has an ungated
 -- thrust-credit cast (33229) and a vulnerable-gated break-shield
 -- credit cast (33243); only the 62709 vehicle-base counterattack
--- leg and the aura-stack recast leg stay out.
+-- leg stays out (the aura-stack recast leg is now ported,
+-- see arm 1 below).
 -- Entries (TournamentDummy enum, zone_icecrown.cpp:169-191,
 -- C++-verifiable): NPC_CHARGE_TARGET = 33272,
 -- NPC_MELEE_TARGET = 33229, NPC_RANGED_TARGET = 33243.
@@ -30,12 +31,11 @@
 -- reset — C++ schedules, not immediate); entry-switched: 33272 leg
 -- if (!me->HasAura(SPELL_CHARGE_DEFEND)) DoCast(me, 64100, true) —
 -- triggered self-cast, HasAura gate bridged (gunship precedent);
--- the 33243 leg (aura stack < 3 / duration <= 8000 gate) is now
--- ported via creature:GetStackAmount(spell) (bridged —
+-- the 33243 leg (aura stack < 3 / duration <= 8000 gate) is
+-- ported via creature:GetStackAmount(spell) and
+-- creature:GetDuration(spell) (both bridged —
 -- lua_creature_events.go:416; an absent aura reads 0, subsuming
--- the !defend leg); only the duration <= 8000 leg stays out
--- (no GetDuration bridge), so at 3 stacks the recast may run
--- up to 8s late — documented approximation. The 33229 entry
+-- the !defend leg), C++-exact. The 33229 entry
 -- has no recast leg. All entries: isVulnerable=false (:293) and the 5s re-arm.
 -- The SetControlled(STUNNED) Reset leg has no control-state
 -- bridge (documented).
@@ -65,8 +65,7 @@
 -- latch-clear side effect is moot since the 5s recast clears it,
 -- and the evade->Reset defend re-arm IS modeled (ev23 then ev2
 -- both re-arm — see the ev2 registration note below).
--- Unmodeled: the 62709 counterattack; the 33243 recast
--- duration <= 8000 leg (no GetDuration bridge); the
+-- Unmodeled: the 62709 counterattack; the
 -- SetControlled stunned leg; npc_argent_valiant's charge /
 -- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry
 -- constant anywhere in-tree — entry-blocked, stinky precedent);
@@ -123,10 +122,11 @@ end
 
 -- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND: 33272 leg
 -- (!HasAura(64100) -> triggered self-cast 64100) + 33243 leg
--- (!HasAura(62719) or stack < 3 -> triggered self-cast 62719;
--- the duration <= 8000 leg stays out, no GetDuration bridge;
--- a presence-only aura reads stack 0, so the recast may repeat
--- at 5s rather than only below 3 stacks); all entries get
+-- (!HasAura(62719) or stack < 3 or duration <= 8000 ->
+-- triggered self-cast 62719, C++-exact via GetStackAmount /
+-- GetDuration; a presence-only aura reads stack 0, so the
+-- recast may repeat at 5s rather than only below 3 stacks);
+-- all entries get
 -- isVulnerable=false + the 5s re-arm.
 local function onRecastDefend(creature, guid)
     if creature:GetEntry() == ENTRY_CHARGE_TARGET
@@ -135,7 +135,8 @@ local function onRecastDefend(creature, guid)
     end
     if creature:GetEntry() == ENTRY_RANGED_TARGET
             and (not creature:HasAura(SPELL_RANGED_DEFEND)
-                or creature:GetStackAmount(SPELL_RANGED_DEFEND) < 3) then
+                or creature:GetStackAmount(SPELL_RANGED_DEFEND) < 3
+                or creature:GetDuration(SPELL_RANGED_DEFEND) <= 8000) then
         creature:CastSpell(creature, SPELL_RANGED_DEFEND, true)
     end
     vulnerable[guid] = false
