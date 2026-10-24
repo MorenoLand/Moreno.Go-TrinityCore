@@ -70,10 +70,10 @@
 -- intro machine itself is unported, so the arms stay out — the fight
 -- starts on pull instead of after the 53s intro; the submerge
 -- ResetThreatList arm is PORTED 2026-10-19 (creature:ResetAllThreat,
--- bridged lua_objects.go:389). The submerge AttackStop,
--- InterruptNonMeleeSpells, faction change and NOT_SELECTABLE flag
--- have no bridges (AttackStop additionally stays out because the
--- emerge AttackStart resume leg is unbridged); the SUBMERGED/0
+-- bridged lua_objects.go:389). The submerge faction change and NOT_SELECTABLE flag
+-- have no bridges (AttackStop, ResetThreatList and InterruptNonMeleeSpells
+-- are ported in onSubmerge below; the emerge AttackStart resume rides
+-- the REACT_AGGRESSIVE flip); the SUBMERGED/0
 -- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
 -- lua_creature_events.go); the emerge react arm is PORTED
 -- (creature:SetReactState, 2026-10-20); the faction/flag/AttackStart
@@ -332,6 +332,8 @@ onSubmerge = function(creature, guid)
     -- C++ boss_ragnaros.cpp:252: me->SetReactState(REACT_PASSIVE)
     -- (submerge arm order: ResetThreatList -> flip -> InterruptNonMeleeSpells).
     creature:SetReactState(0) -- REACT_PASSIVE
+    -- C++ boss_ragnaros.cpp:254: me->InterruptNonMeleeSpells(false)
+    creature:InterruptNonMeleeSpells(false)
     if not s.hasSubmergedOnce then
         creature:Talk(SAY_REINFORCEMENTS1)
         s.hasSubmergedOnce = true

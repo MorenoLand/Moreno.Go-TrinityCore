@@ -223,7 +223,7 @@ local function onMindFlay(creature, guid)
     end)
 end
 
--- C++ EVENT_CHAIN_MIND_FLAY: InterruptNonMeleeSpells (no bridge) +
+-- C++ EVENT_CHAIN_MIND_FLAY: InterruptNonMeleeSpells(false) +
 -- DoCastVictim(26044); re-arm {15s,30s}.
 local function onChainMindFlay(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
@@ -231,6 +231,7 @@ local function onChainMindFlay(creature, guid)
     end
     local victim = creature:GetVictim()
     if victim then
+        creature:InterruptNonMeleeSpells(false)
         creature:CastSpell(victim, SPELL_CHAIN_MIND_FLAY)
     end
     schedule(guid, "chainflay", math.random(15000, 30000), function()
@@ -238,12 +239,13 @@ local function onChainMindFlay(creature, guid)
     end)
 end
 
--- C++ EVENT_GREATER_HEAL: InterruptNonMeleeSpells (no bridge) +
+-- C++ EVENT_GREATER_HEAL: InterruptNonMeleeSpells(false) +
 -- DoCast(me, 23954); re-arm {25s,35s}.
 local function onGreaterHeal(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
         return
     end
+    creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(creature, SPELL_GREATER_HEAL)
     schedule(guid, "heal", math.random(25000, 35000), function()
         onGreaterHeal(creature, guid)

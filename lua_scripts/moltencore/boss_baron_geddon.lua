@@ -34,7 +34,7 @@
 -- unconditionally (jeklik convention); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the BOSS_BARON_GEDDON bookkeeping arms skipped); the armageddon
--- InterruptNonMeleeSpells arm has no bridge; the armageddon arm does
+-- InterruptNonMeleeSpells arm is bridged (no-op twin) and ported in onArmageddonPump below; the armageddon arm does
 -- not suppress pending timers in the port (there is no tick-driven
 -- UpdateAI return to carry it — jeklik convention); the
 -- spell_baron_geddon_inferno AuraScript (escalating 19698 tick damage
@@ -162,8 +162,8 @@ local function baronGeddonEnterCombat(event, creature, target)
     end)
 end
 
--- C++ UpdateAI: !HealthAbovePct(2) -> InterruptNonMeleeSpells (no
--- bridge), non-triggered DoCast(me, 20478), Talk(EMOTE_SERVICE),
+-- C++ UpdateAI: !HealthAbovePct(2) -> InterruptNonMeleeSpells(true),
+-- non-triggered DoCast(me, 20478), Talk(EMOTE_SERVICE),
 -- return — checked every tick (no once-guard, no DamageTaken hook in
 -- C++). Modeled as a 1s gated pump (phalanx convention): !HealthAbovePct(2)
 -- is health <= floor(2M/100), so it fires AT exactly 2%.
@@ -175,6 +175,7 @@ onArmageddonPump = function(creature, guid)
     if maxHealth ~= 0
             and creature:GetHealth() <= math.floor(maxHealth * 2 / 100) then
         armageddonSuppress[guid] = true
+        creature:InterruptNonMeleeSpells(true)
         creature:CastSpell(creature, SPELL_ARMAGEDDON)
         creature:Talk(EMOTE_SERVICE)
     else

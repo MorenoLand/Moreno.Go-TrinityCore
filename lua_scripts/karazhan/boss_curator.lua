@@ -26,7 +26,7 @@
 -- deterministic drain clock (10 summons, ~100s) — no Lua-side model. ApplySpellImmune(arcane damage)
 -- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
 -- and ported at onReset below; InterruptNonMeleeSpells(false) before
--- Evocation has no bridge (documented-only). Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
+-- Evocation is bridged (no-op twin, lua_creature_events.go) and ported in onAstralFlare below. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
 -- i.e. a non-tank — is approximated with a random alive player in 100 yd,
 -- since the engine has no threat model.
 
@@ -125,6 +125,7 @@ local function onAstralFlare(creature, guid)
         local newMana = creature:ModifyPower(0, -drain)
         if math.floor(newMana * 100 / maxMana) < 10 then
             creature:Talk(SAY_EVOCATE)
+            creature:InterruptNonMeleeSpells(false)
             creature:CastSpell(creature, SPELL_EVOCATION)
             schedule(guid, "evocateend", SPELL_EVOCATION_CHANNEL_MS,
                 function() onEvocateEnd(creature, guid) end)

@@ -64,7 +64,7 @@
 -- 538-543; both arms re-arm 2000 — the old "no distance bridge"
 -- claim was stale, IsWithinDist is bridged, retracted this run);
 -- spell shield 33054 5s then 30s (C++-exact DoCastVictim; the
--- InterruptNonMeleeSpells arm has no interrupt bridge, blocked);
+-- InterruptNonMeleeSpells(false) arm ported below;
 -- blast wave 33061 20s then 60s — the C++ threat-list-within-15-
 -- yd (2D) pick: the threat-list half has no bridge, the 15-yd
 -- 2D half is bridged via IsWithinDist2d, so a random alive
@@ -608,9 +608,9 @@ kroshFireballPoll = function(creature, guid)
     end
 end
 
--- C++-exact: DoCastVictim(33054) (the InterruptNonMeleeSpells
--- arm has no interrupt bridge, blocked).
+-- C++-exact: InterruptNonMeleeSpells(false) + DoCastVictim(33054).
 local function kroshSpellShield(creature, guid)
+    creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(nil, SPELL_SPELLSHIELD)
     schedule(guid, "spellshield", 30000, function()
         kroshSpellShield(creature, guid)
@@ -624,10 +624,11 @@ end
 -- in the instance within 15 yd (2D) is used (teron convention).
 -- C++ casts on the pick even when the list is empty (DoCast on
 -- nullptr is not a UnitAI early-out), so the pick passes through
--- rather than being nil-skipped. The InterruptNonMeleeSpells
--- arm has no interrupt bridge.
+-- rather than being nil-skipped. The InterruptNonMeleeSpells(false)
+-- arm is ported below.
 local function kroshBlastWave(creature, guid)
     local target = randomPlayerInRange2d(creature, 15)
+    creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(target, SPELL_BLAST_WAVE)
     schedule(guid, "blastwave", 60000, function()
         kroshBlastWave(creature, guid)
