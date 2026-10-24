@@ -244,6 +244,9 @@ end
 local function thorimDamageTaken(event, creature, attacker, damage)
     local postDamage = creature:GetHealth() - damage
     if postDamage < creature:GetMaxHealth() / 100 then
+        -- C++ boss_thorim.cpp FinishEncounter order: AttackStop
+        -- precedes the RENAME flag set.
+        creature:AttackStop()
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
         return false, 0
     end
