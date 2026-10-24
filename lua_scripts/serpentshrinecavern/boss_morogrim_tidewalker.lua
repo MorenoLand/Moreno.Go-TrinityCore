@@ -76,9 +76,10 @@
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the DATA_MOROGRIMTIDEWALKEREVENT NOT_STARTED/IN_PROGRESS/
 -- DONE bookkeeping and the JustEngagedWith Playercount arm
--- skipped); no summon bridge — the 10x Tidewalker Lurker
--- (21920) summons at the MurlocCords coords unmodeled (SummonCreature
--- live; blocker is the per-lurker AttackStart(random) relay, no bridge);
+-- skipped); the 10x Tidewalker Lurker (21920) summons at the
+-- MurlocCords coords are PORTED 2026-10-24 (SummonCreature + DoZoneInCombat;
+-- stale "no summon bridge" claim retracted — the per-lurker
+-- separately-random target assignment stays out, zone aggro substitutes);
 -- cross-creature bridge — the murloc AttackStart relay
 -- unmodeled; no player bridges — the watery-grave waterfall
 -- teleport + the player-side triggered casts (38023/38024/

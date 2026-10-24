@@ -79,7 +79,8 @@
 -- -> isFinalForm=true, demonForm=false, Talk(SAY_FINAL_FORM)
 -- (the SetDisplayId MODEL_NIGHTELF arm is PORTED 2026-10-20, C++
 -- arm order after Talk; the DoSpawnCreature(DEMON_FORM 21875)
--- copy arm has no summon bridge — unmodeled, below).
+-- copy arm is PORTED 2026-10-24 — SummonCreature + DoZoneInCombat,
+-- C++ spawn-before-Talk order; stale "no summon bridge" claim retracted).
 -- OnTargetDied(3): victim:GetObjectType() == "Player"
 -- -> Talk(demonForm and SAY_DEMON_SLAY or SAY_NIGHTELF_SLAY)
 -- (C++-exact per-form slay). OnDied(4): Talk(SAY_DEATH) +
@@ -163,10 +164,10 @@
 -- CheckChannelers summons are PORTED 2026-10-22
 -- (creature:SummonCreature bridge — see checkChannelers; the
 -- spellbinder-Reset re-summon relay stays cross-creature blocked);
--- the inner-demon (21857) summon arms and the final-form
--- demon-copy (21875) spawn stay unmodeled — threat/victim-binding
--- and cross-creature legs unbridged (firesworn/hydross
--- convention); no movement/
+-- the inner-demon (21857) summon arms are PORTED 2026-10-24 and the
+-- final-form demon-copy (21875) spawn is PORTED 2026-10-24
+-- (SummonCreature + DoZoneInCombat; the SetGUID victim-binding and
+-- demon-copy despawn legs stay out); no movement/
 -- threat bridge beyond ResetAllThreat/ModifyThreatByPercent — the whirlwind target-switch
 -- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
 -- half is PORTED below via creature:ResetAllThreat), the chaos-
@@ -485,15 +486,25 @@ local function leotherasTick(creature, guid)
     end
 
     -- Final form: once-guarded <15% health (C++ HealthBelowPct(15)).
-    -- The demon-copy summon is summon-blocked — header.
+    -- C++ boss_leotheras_the_blind.cpp:580-599 order: CastConsumingMadness
+    -- (demon-cast, no demons in this model — out) + DespawnDemon (out) +
+    -- DoSpawnCreature(DEMON_FORM 21875, at the boss position, type 3,
+    -- 6000ms) + AttackStart(victim) -> SummonCreature + DoZoneInCombat
+    -- (the AttackStart substitute — inner-demon precedent), then the
+    -- final-form flag, Talk, SetDisplayId.
     if not st.isFinalForm and healthBelowPct(creature, 15) then
+        local copy = creature:SummonCreature(ENTRY_DEMON_FORM,
+            creature:GetX(), creature:GetY(), creature:GetZ(),
+            creature:GetO(), 3, 6000)
+        if copy then
+            copy:DoZoneInCombat()
+        end
         st.isFinalForm = true
         st.demonForm = false
         creature:Talk(SAY_FINAL_FORM)
         -- C++ :597: SetDisplayId(MODEL_NIGHTELF) after Talk (the paired
-        -- LoadEquipment weapon-restore leg has no item bridge); the
-        -- demon-copy spawn + DespawnDemon arms are summon blocked —
-        -- header.
+        -- LoadEquipment weapon-restore leg has no item bridge; the
+        -- DespawnDemon arm stays out — no demon GUID is ever stored).
         creature:SetDisplayId(MODEL_NIGHTELF)
     end
 end

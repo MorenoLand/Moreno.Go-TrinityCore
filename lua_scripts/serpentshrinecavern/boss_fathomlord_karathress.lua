@@ -61,10 +61,12 @@
 -- leeching throw 29436 20s then 20s, DoCastVictim (C++-exact);
 -- multishot 38366 15s then 20s, DoCastVictim (C++-exact); the
 -- beast within 38373 30s then 30s, non-triggered self-cast
--- (the pet-enrage arm is summon-blocked — the pet object has no
--- bridge); the 10s one-shot pet arm (DoSpawnCreature lurker
--- 22119 / sporebat 22120, pet_id by urand(0,1)) has no summon
--- bridge — unmodeled (firesworn convention). OnDied(4):
+-- (the pet-enrage arm stays out — the SummonedPet GUID binding has
+-- no bridge); the 10s one-shot pet arm (DoSpawnCreature lurker
+-- 22119 / sporebat 22120, pet_id by urand(0,1)) is PORTED 2026-10-24
+-- (SummonCreature + DoZoneInCombat; stale "no summon bridge" claim
+-- retracted for the spawn leg) — see sharkkisTick; the Reset
+-- KillSelf leg stays out (no stored pet object). OnDied(4):
 -- cleanup + PORTED JustDied EventSharkkisDeath relay into
 -- Karathress (FindNearestCreature + Talk + self-cast). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the evade-
@@ -117,9 +119,9 @@
 -- skipped); advisor-death relays PORTED below (FindNearestCreature
 -- + Talk(SAY_GAIN_ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455
 -- / TIDALVESS 38452 / CARIBDIS 38451); no summon bridge — the
--- sharkkis pet spawns stay unmodeled (the Seer Olum quest-10944
--- summon is PORTED in karathressDied; the boss's own cyclone 30-40s
--- arm is PORTED in karathressTick); no movement/
+-- sharkkis pet spawns are PORTED in sharkkisTick (the Seer Olum
+-- quest-10944 summon is PORTED in karathressDied; the boss's own
+-- cyclone 30-40s arm is PORTED in karathressTick); no movement/
 -- threat/cross-creature bridges — the spitfire-totem target
 -- relay, the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
@@ -169,6 +171,8 @@ local UNIT_FIELD_FLAGS = 59 -- SharedDefines.h
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- SharedDefines.h
 local ENTRY_KARATHRESS = 21214
 local ENTRY_SHARKKIS = 21966
+local ENTRY_FATHOM_LURKER = 22119
+local ENTRY_FATHOM_SPOREBAT = 22120
 local ENTRY_TIDALVESS = 21965
 local ENTRY_CARIBDIS = 21964
 
@@ -331,12 +335,14 @@ local function karathressReset(event, creature)
 end
 
 -- C++ Initialize(): leeching throw 20000, beast within 30000,
--- multishot 15000, pet 10000 (pet arm summon-blocked).
+-- multishot 15000, pet 10000.
 local function freshSharkkisState()
     return {
         leechingThrow = 20000,
         beastWithin = 30000,
         multishot = 15000,
+        pet = 10000,
+        petDone = false,
     }
 end
 
@@ -362,6 +368,31 @@ local function sharkkisTick(creature, guid)
     if st.beastWithin <= 0 then
         creature:CastSpell(creature, SPELL_THE_BEAST_WITHIN)
         st.beastWithin = 30000
+    end
+
+    -- Pet: one-shot 10s (C++ boss_fathomlord_karathress.cpp:412-435,
+    -- Pet_Timer 10000 + pet latch; urand(0,1) picks lurker 22119 /
+    -- sporebat 22120, spawned at sharkkis's position, type 3,
+    -- 15000ms) + DoZoneInCombat (the AttackStart(random target)
+    -- substitute — leotheras inner-demon precedent; the random-target
+    -- pick itself stays out). The SummonedPet GUID binding stays out,
+    -- so the beast-within pet-enrage (19574) and Reset KillSelf legs
+    -- stay out. 1s pump granularity, as elsewhere in this file.
+    if not st.petDone then
+        st.pet = st.pet - 1000
+        if st.pet <= 0 then
+            st.petDone = true
+            local petId = ENTRY_FATHOM_LURKER
+            if math.random(2) == 2 then
+                petId = ENTRY_FATHOM_SPOREBAT
+            end
+            local pet = creature:SummonCreature(petId,
+                creature:GetX(), creature:GetY(), creature:GetZ(),
+                creature:GetO(), 3, 15000)
+            if pet then
+                pet:DoZoneInCombat()
+            end
+        end
     end
 end
 
