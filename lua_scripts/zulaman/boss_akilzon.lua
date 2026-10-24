@@ -28,9 +28,12 @@
 -- matches the tree — the storm is the 43648 cast + 60s re-arm only. If
 -- the schedule is restored in the C++, the zap sequence (8s first tick,
 -- 1s ticks, zaps at counts 2..9, re-looping tail) needs re-adding here.
--- No summon model — the storm cloud SummonTrigger, the zap visual
--- triggers, and the eight soaring-eagle spawns never exist, so their
--- casts/spawns are skipped.
+-- No summon model — the zap visual triggers and the eight
+-- soaring-eagle spawns never exist (both ride the dead
+-- HandleStormSequence/SUMMON_EAGLES code), so their casts/spawns are
+-- skipped. The storm cloud SummonTrigger IS ported (see the
+-- onElectricalStorm note below) now that creature:SummonCreature is
+-- bridged.
 -- No weather bridge — SetWeather(WEATHER_STATE_HEAVY_RAIN/FINE) and the
 -- whole EVENT_RAIN arm have no bearer and are skipped. No movement/gravity
 -- model — MovementInform never fires, so the eagle's MovePoint swoop run
@@ -58,6 +61,12 @@ local SPELL_ELECTRICAL_STORM = 43648
 local SPELL_BERSERK = 45078
 local SPELL_CLOUD_VISUAL = 44007
 local SPELL_EAGLE_SWOOP = 44732
+
+-- C++ SummonTrigger summons entry WORLD_TRIGGER = 12999 (Unit.h:33).
+local ENTRY_WORLD_TRIGGER = 12999
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local FACTION_FRIENDLY = 35
 
 local timers = {}
 local eagleTimers = {}
@@ -139,19 +148,43 @@ local function onCallLightning(creature, guid)
     end)
 end
 
--- C++ EVENT_ELECTRICAL_STORM: random alive player within 50 yd; nil
--- target returns out of the case BEFORE the 60s re-arm (EnterEvadeMode
--- in C++ — no evade bridge, so the storm simply stops). Target casts
--- 44007 on self (no player CastSpell bridge — skipped), boss
--- DoCast(target, 43648) non-triggered; cloud SummonTrigger skipped (no
--- summon model). The EVENT_STORM_SEQUENCE arm is never scheduled in this
--- C++ tree (see the local-tree defect note above), so no sequence runs.
--- Repeats 60s and re-arms EVENT_RAIN (weather has no bridge — skipped)
--- on the found-target leg only.
+-- C++ EVENT_ELECTRICAL_STORM (boss_akilzon.cpp:264-302): random alive
+-- player within 50 yd; nil target returns out of the case BEFORE the 60s
+-- re-arm (EnterEvadeMode in C++ — no evade bridge, so the storm simply
+-- stops). Target casts 44007 on self (no player CastSpell bridge —
+-- skipped), boss DoCast(target, 43648) non-triggered; then the cloud leg
+-- (boss_akilzon.cpp:283-294): me->SummonTrigger(x, y,
+-- me->GetPositionZ()+16, 0, 15s) — WORLD_TRIGGER 12999,
+-- TEMPSUMMON_TIMED_DESPAWN — then SetDisableGravity(true), StopMoving(),
+-- SetObjectScale(1.0), SetFaction(FACTION_FRIENDLY 35),
+-- SetMaxHealth/SetHealth(9999999), RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE). The EVENT_STORM_SEQUENCE arm is never
+-- scheduled in this C++ tree (see the local-tree defect note above), so
+-- no sequence runs; the cloud is a visual prop (its zap/KillSelf legs are
+-- dead code). Repeats 60s and re-arms EVENT_RAIN (weather has no bridge
+-- — skipped) on the found-target leg only.
+-- Bridges: creature:SummonCreature (engine/world/lua_creature_events.go:940;
+-- summonType 2 = TEMPSUMMON_TIMED_DESPAWN, despawnMs in ms),
+-- SetDisableGravity (:784), StopMoving (:667), SetScale (:1565), SetFaction
+-- (:2060), SetHealth (:542), RemoveFlag (:1968).
+-- DELTA: no SetMaxHealth bridge — SetHealth clamps to the template max
+-- (lua_creature_events.go:548-549), so the C++ 9,999,999-HP pool is not
+-- reproduced; the cloud's gameplay role in this tree is nil anyway (the
+-- zap sequence that used it as caster is dead code).
 local function onElectricalStorm(creature, guid)
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_ELECTRICAL_STORM)
+        local cloud = creature:SummonCreature(ENTRY_WORLD_TRIGGER,
+            target:GetX(), target:GetY(), creature:GetZ() + 16, 0, 2, 15000)
+        if cloud then
+            cloud:SetDisableGravity(true)
+            cloud:StopMoving()
+            cloud:SetScale(1.0)
+            cloud:SetFaction(FACTION_FRIENDLY)
+            cloud:SetHealth(9999999)
+            cloud:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        end
         schedule(timers, guid, "storm", 60000, function()
             onElectricalStorm(creature, guid)
         end)

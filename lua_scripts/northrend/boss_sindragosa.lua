@@ -295,6 +295,9 @@ end
 
 -- C++ boss_sindragosa::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
+-- (the me->RemoveAllGameObjects() leg has no bridge — the garfrost
+-- JustDied precedent; the _trappedPlayerGUID asphyxiation/ice-tomb
+-- aura cleanup is cross-player GUID blocked — no bridge).
 local function sindragosaJustDied(event, creature, killer)
     -- C++ _JustDied() resets the EventMap (boss_sindragosa.cpp:260):
     -- cancel the CreateLuaEvent timers — they have no death
