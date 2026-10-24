@@ -41,7 +41,8 @@
 -- NearTeleportTo(RagnarosTelePos) + gossip-flag arm (no teleport
 -- bridge; the flag leg IS bridged — SetNPCFlags — but the arm rides
 -- the unported teleport, so it stays out), EVENT_OUTRO_2's SummonCreature(NPC_RAGNAROS 11502)
--- arm (no summon bridge), and the DoAction(ACTION_START_RAGNAROS /
+-- arm (instance->instance->SummonCreature: no instance-spawn bridge; also gated on the
+-- unported DoAction defeat trigger), and the DoAction(ACTION_START_RAGNAROS /
 -- ACTION_START_RAGNAROS_ALT) arms (no DoAction bearer — the instance
 -- script is blocked on the instance-script model); SPELL_SUMMON_
 -- RAGNAROS 19774 is declared but unused by the AI.
@@ -218,7 +219,7 @@ end
 
 -- C++ OnGossipSelect: menu 4108 option 0 -> CloseGossipMenuFor,
 -- DoAction(ACTION_START_RAGNAROS): Talk(SAY_SUMMON_MAJ), arm
--- EVENT_OUTRO_2 8s (summon — no bridge) and EVENT_OUTRO_3 24s
+-- EVENT_OUTRO_2 8s (instance-spawn, no bridge) and EVENT_OUTRO_3 24s
 -- (Talk(SAY_ARRIVAL2_MAJ)). The gossip-flag RemoveFlag arm has no
 -- bridge. The hello menu itself is DB-side (menu 4108); only the
 -- select arm is modeled.

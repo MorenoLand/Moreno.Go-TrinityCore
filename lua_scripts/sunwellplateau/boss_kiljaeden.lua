@@ -467,7 +467,21 @@ local function fireTimer(creature, st, name)
         st.t.soulflay = 2000
     elseif name == "shadowspike" then
         creature:Talk(SAY_KJ_REFLECTION)
-        -- The 4 sinister-reflection summons have no summon bridge.
+        -- C++ CastSinisterReflection (boss_kiljaeden.cpp:674-687): 4x
+        -- SelectTarget(Random, 0, 100, playerOnly, -vengeance) =
+        -- pickRandomPlayer (vengeance-negative, C++-exact) ->
+        -- me->SummonCreature(NPC_SINISTER_REFLECTION 25708, target pos,
+        -- 0, TEMPSUMMON_CORPSE_DESPAWN=4). AttackStart(target) has no
+        -- bridge (shade_of_aran precedent — the reflection idles until
+        -- engine aggro); SetDisplayId(target display) stays out — no
+        -- player GetDisplayId read bridge.
+        for _ = 1, 4 do
+            local target = pickRandomPlayer(creature)
+            if target then
+                creature:SummonCreature(ENTRY_SINISTER_REFLECTION,
+                    target:GetX(), target:GetY(), target:GetZ(), 0, 4, 0)
+            end
+        end
         creature:CastSpell(creature, SPELL_SHADOW_SPIKE)
         changeTimers(st, true, 30000)
         st.t.shadowspike = 0
