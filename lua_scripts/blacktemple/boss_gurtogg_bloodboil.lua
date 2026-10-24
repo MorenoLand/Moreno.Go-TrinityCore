@@ -28,8 +28,8 @@
 -- DoCastVictim (nil falls back to the victim on the bridge; nil
 -- ticks cast nothing but keep the schedule, jeklik convention) /
 -- fel acid breath 40508 25s then {25s,30s}, non-triggered on a
--- random threat-listed unit within combat reach (no
--- combat-reach bridge — approximated as 10 yd, documented) /
+-- random threat-listed unit within combat reach
+-- (creature:GetCombatReach(), bridged) /
 -- eject 40486 35s one-shot, Talk(SAY_SPECIAL) + non-triggered
 -- DoCastVictim / bewildering strike 40491 47s one-shot,
 -- non-triggered DoCastVictim. Phase 2 (fel rage, on the 60s change-
@@ -178,12 +178,13 @@ end
 
 -- C++ SelectTarget(Random, 0, me->GetCombatReach()): any threat-listed
 -- unit (playerOnly=false default, UnitAI.h:170) within combat reach,
--- victim included. No combat-reach bridge — approximated as 10 yd
--- (documented).
+-- victim included. creature:GetCombatReach() is bridged
+-- (lua_creature_events.go, template reach, 1.5 default).
 local function randomTargetWithinReach(creature)
+    local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance(t) <= 10 then
+        if creature:GetDistance(t) <= reach then
             candidates[#candidates + 1] = t
         end
     end
