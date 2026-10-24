@@ -92,10 +92,11 @@
 -- / gettingColdInHere / cheeseTheFreeze /
 -- iHaveTheCoolestFriends / iCouldSayThatThisCacheWasRare,
 -- lines 373-377) — DoAction/SetData-gated, no bridges.
--- DamageTaken lethal companion legs — RemoveAllAttackers /
--- InterruptNonMeleeSpells / StopMoving / MoveIdle / SetControlled
--- stun / CombatStop / instance->SetData(DATA_HODIR_RARE_CACHE)
--- (line 400) — no bridges; documented-only. The rest of the
+-- DamageTaken lethal companion legs still documented-only:
+-- MoveIdle / SetControlled stun / MotionMaster Clear /
+-- instance->SetData(DATA_HODIR_RARE_CACHE) (line 400) — no
+-- bridges. RemoveAllAttackers / InterruptNonMeleeSpells /
+-- StopMoving / CombatStop are PORTED in hodirDamageTaken. The rest of the
 -- machine is ported in hodirDamageTaken (2026-10-21): the stale
 -- "SetFaction unbridged" claim that used to gate it is retracted
 -- (creature:SetFaction is bridged, lua_creature_events.go:1091),
@@ -379,10 +380,12 @@ end
 -- C++ DamageTaken (lines 393-421): damage >= me->GetHealth()
 -- -> damage = 0 + Talk(SAY_DEATH) + the full cheat-death machine,
 -- ported in C++ order with the live bridges: RemoveAllAuras,
--- AttackStop, SetReactState(REACT_PASSIVE),
+-- RemoveAllAttackers, AttackStop, SetReactState(REACT_PASSIVE),
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE),
 -- SetRooted(true) for the UNIT_STATE_ROOT leg (the black-knight
--- root-half approximation), DoCastAOE SPELL_KILL_CREDIT 64899 as
+-- root-half approximation), InterruptNonMeleeSpells (no-op twin),
+-- StopMoving + CombatStop(true) (C++ :413, ahead of the credit
+-- cast), DoCastAOE SPELL_KILL_CREDIT 64899 as
 -- creature:CastSpell(creature, spell, true) BEFORE the faction
 -- change (the C++ comment: the credit targets enemies only),
 -- SetFaction(FACTION_FRIENDLY), DespawnOrUnsummon(10s) as a
@@ -391,18 +394,20 @@ end
 -- leaves nothing able to land another hit), and _JustDied() as
 -- cancelTimers. The numeric second return performs the C++-exact
 -- damage=0 rewrite (the moroes damage-rewrite precedent). No
--- bridges: RemoveAllAttackers, InterruptNonMeleeSpells,
--- StopMoving/MoveIdle, the SetControlled stun leg, CombatStop,
--- instance SetData(DATA_HODIR_RARE_CACHE) — documented-only.
+-- bridges: MoveIdle, the SetControlled stun leg, MotionMaster
+-- Clear, instance SetData(DATA_HODIR_RARE_CACHE) — documented-only.
 local function hodirDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
         creature:Talk(SAY_DEATH)
         creature:RemoveAllAuras()
+        creature:RemoveAllAttackers()
         creature:AttackStop()
         creature:SetReactState(REACT_PASSIVE)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         creature:SetRooted(true)
+        creature:InterruptNonMeleeSpells()
         creature:StopMoving() -- boss_hodir.cpp:409 (MoveIdle sibling still unbridged)
+        creature:CombatStop(true) -- boss_hodir.cpp:413, ahead of the credit cast
         creature:CastSpell(creature, SPELL_KILL_CREDIT, true)
         creature:SetFaction(FACTION_FRIENDLY)
         CreateLuaEvent(function()

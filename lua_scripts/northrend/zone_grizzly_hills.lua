@@ -41,8 +41,8 @@
 -- caster available for the _playerGUID credit leg; SetFlag
 -- NON_ATTACKABLE + SetFlag(59, 0x100) + SetReactState(REACT_PASSIVE) +
 -- Talk(SAY_SEO) + the EVENT_STRAGGLER_1..4 CreateLuaEvent chain) — but
--- CombatStop + the three MovePoint legs + DisappearAndDie have no
--- bridges, and without an entry the separable CHOP/Reset arms can't be
+-- CombatStop is bridged (2026-10-24) but the three MovePoint legs +
+-- DisappearAndDie have no bridges, and without an entry the separable CHOP/Reset arms can't be
 -- registered either. Revisit only if an entry becomes C++-verifiable.
 -- Documented-only (nearest-creature axis): npc_amberpine_woodsman
 -- (zone_grizzly_hills.cpp:409-457): Reset's

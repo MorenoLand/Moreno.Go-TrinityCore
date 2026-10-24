@@ -26,8 +26,10 @@
 -- mutation half — UpdateEntry(NPC_TAMED_KODO 11627), CombatStop,
 -- SetFaction(FRIENDLY), SetSpeedRate(run 0.6f), EngagementOver,
 -- MoveFollow, setActive(true), RemoveFlag(UNIT_NPC_FLAG_GOSSIP)
--- — has no entry-update / faction / movement / react / flag
--- bridges (phase_hunter / midnight precedents) — unmodeled;
+-- — re-triaged 2026-10-24: CombatStop + SetFaction are bridged now,
+-- but UpdateEntry + MoveFollow are not, and the stop/faction half
+-- alone would leave a friendly wild-entry non-following kodo, a
+-- state C++ never produces (half-pair) — still unmodeled;
 -- the 18362 (SPELL_KODO_KOMBO_GOSSIP) SpellHit arm — SetFlag
 -- gossip, SetHomePosition, MotionMaster Clear + MoveIdle,
 -- setActive(false), DespawnOrUnsummon(60s) — has no flag /

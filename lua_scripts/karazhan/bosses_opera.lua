@@ -69,8 +69,8 @@
 -- a zero remainder fires next tick) or the combat-initial delay when
 -- nothing was banked — matching C++ UpdateAI resuming the untouched timers
 -- on IsFakingDeath exit. The partner's
--- real-death cross-kill: the setDeathState(JUST_DIED) / MotionMaster /
--- CombatStop legs have no bridge — the survivor's OnDied runs while
+-- real-death cross-kill: the setDeathState(JUST_DIED) / MotionMaster legs have no bridge;
+-- CombatStop(true) is PORTED at the C++ position (before the LOOTABLE flag) — the survivor's OnDied runs while
 -- the faking partner stays down — but the flag legs ARE ported: the
 -- partner's faking body gets UNIT_DYNFLAG_LOOTABLE via the
 -- creature:SetFlag(79) dynamic-flag bridge (lua_creature_events.go) at
@@ -1224,13 +1224,16 @@ local function julianneDamageTaken(event, creature, attacker, damage)
             -- C++ boss_julianneAI::DamageTaken (bosses_opera.cpp:1521-1533)
             -- really kills Romulo here: RemoveFlag(59, NOT_SELECTABLE)
             -- (vacuous — the Lua fake model never sets it),
-            -- MotionMaster Clear + setDeathState(JUST_DIED) + CombatStop
+            -- MotionMaster Clear + setDeathState(JUST_DIED)
             -- (no bridges — he stays faking, documented),
+            -- CombatStop(true) (PORTED — clears his combat state at
+            -- the C++ position, ahead of the LOOTABLE flag),
             -- SetUInt32Value(79, LOOTABLE) (PORTED — his faking body
             -- becomes lootable like the C++ corpse). His pending
             -- resjulianne timer dies with him in C++; cancel it so he
             -- cannot resurrect the really-dead Julianne. Julianne dies.
             if raj.romulo ~= nil then
+                raj.romulo:CombatStop(true)
                 raj.romulo:SetFlag(79, 0x0001) -- UNIT_DYNFLAG_LOOTABLE
             end
             if raj.romuloGuid ~= nil then
@@ -1499,8 +1502,10 @@ local function romuloDamageTaken(event, creature, attacker, damage)
             -- C++ boss_romuloAI::DamageTaken (bosses_opera.cpp:1252-1262)
             -- really kills Julianne here: RemoveFlag(59, NOT_SELECTABLE)
             -- (vacuous — the Lua fake model never sets it),
-            -- MotionMaster Clear + setDeathState(JUST_DIED) + CombatStop
+            -- MotionMaster Clear + setDeathState(JUST_DIED)
             -- (no bridges — she stays faking, documented),
+            -- CombatStop(true) (PORTED — clears her combat state at
+            -- the C++ position, ahead of the LOOTABLE flag),
             -- SetUInt32Value(79, LOOTABLE) (PORTED — her faking body
             -- becomes lootable like the C++ corpse, via the
             -- creature:SetFlag(79) dynamic-flag bridge). Her pending
@@ -1508,6 +1513,7 @@ local function romuloDamageTaken(event, creature, attacker, damage)
             -- nothing); cancel it so she cannot resurrect the
             -- really-dead Romulo. Romulo dies.
             if raj.julianne ~= nil then
+                raj.julianne:CombatStop(true)
                 raj.julianne:SetFlag(79, 0x0001) -- UNIT_DYNFLAG_LOOTABLE
             end
             if raj.julianneGuid ~= nil then
