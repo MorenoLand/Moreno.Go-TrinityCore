@@ -1352,6 +1352,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{difficulty >= 1}, nil
 	}
+	// Is25ManRaid is Map::Is25ManRaid (Map.cpp:4254-4258) and ScriptedAI::Is25ManRaid
+	// (ScriptedCreature.h:247): raids only, and since 25-man difficulties are 1 and 3
+	// (DBCEnums.h:287-292) the test is difficulty & RAID_DIFFICULTY_MASK_25MAN (1).
+	// Same instance-row read as IsHeroic above: non-instance maps default false.
+	methods["Is25ManRaid"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion.InstanceID == 0 {
+			return []any{false}, nil
+		}
+		var difficulty int64
+		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+			_ = s.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT difficulty FROM instance WHERE id = ?", motion.InstanceID).Scan(&difficulty)
+		}
+		isRaid := false
+		if s.Data != nil {
+			if entry, found, err := s.Data.Map(motion.Map); err == nil && found {
+				isRaid = entry.IsRaid()
+			}
+		}
+		return []any{isRaid && difficulty&1 == 1}, nil
+	}
 	// SetEquipmentSlots is CreatureMethods::SetEquipmentSlots
 	// (CreatureMethods.h:982-994, Trinity): SetUInt32Value
 	// (UNIT_VIRTUAL_ITEM_SLOT_ID + i, slot) for the three virtual item

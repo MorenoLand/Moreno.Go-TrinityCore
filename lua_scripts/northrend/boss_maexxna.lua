@@ -27,8 +27,9 @@
 -- frenzy latch — C++ UpdateAI checks every tick: HealthBelowPct(30)
 -- && !me->HasAura(SPELL_FRENZY_HELPER); checked by a 1s per-GUID
 -- pump (azuregos enrage-pump convention). SPELL_FRENZY_HELPER is
--- RAID_MODE(54123, 54124) — no difficulty bridge, so both aura IDs
--- are checked (faerlina RAID_MODE precedent); the cast is DoCast(54123)
+-- RAID_MODE(54123, 54124) — picked via creature:Is25ManRaid()
+-- (lua_creature_events.go; IsHeroic is heroic-mode, not raid size, and
+-- is NOT a substitute for this gate); the cast is DoCast(54123)
 -- i.e. self-cast (ScriptedAI::DoCast without a target casts on self).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers. The C++
 -- Reset() also runs instance->DoRemoveAurasDueToSpellOnPlayers(
@@ -132,10 +133,13 @@ end
 
 local function frenzyPump(creature, guid)
     local maxHealth = creature:GetMaxHealth()
+    local helper = SPELL_FRENZY
+    if creature:Is25ManRaid() then
+        helper = SPELL_FRENZY_HELPER_25
+    end
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 30 / 100)
-            and not creature:HasAura(SPELL_FRENZY)
-            and not creature:HasAura(SPELL_FRENZY_HELPER_25) then
+            and not creature:HasAura(helper) then
         creature:CastSpell(creature, SPELL_FRENZY)
     end
     schedule(guid, "frenzy", 1000, function()

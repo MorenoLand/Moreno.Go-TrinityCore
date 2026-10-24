@@ -9261,7 +9261,9 @@ func init() {
 	// guardCorpses.clear, JustReachedHome SummonGuards — SummonCreatureGroup
 	// is DB-coord group spawn (no summon-group bridge; creature:
 	// SummonCreature is live but takes explicit coords); Is25ManRaid legs
-	// — NOT a blocker (IsHeroic bridged); EVENT_SPAWN_GUARD
+	// stay out on group spawn (Is25ManRaid itself now bridged,
+	// lua_creature_events.go — IsHeroic was never a substitute for it);
+	// EVENT_SPAWN_GUARD
 	// SummonCreatureGroup), JustSummoned
 	// EMOTE_SPAWN Talk + SummonedCreatureDies/Despawn guardCorpses
 	// bookkeeping (summon/cross-AI bridges absent; NPC_CRYPT_GUARD 16573
@@ -11462,7 +11464,8 @@ func init() {
 	// valanar 72039) ride the unbridged invocation machine; valanar
 	// EVENT_KINETIC_BOMB and the base EVENT_SHOCK_VORTEX leg are
 	// random-target SelectTarget casts (out); the heroic-gated
-	// shadow-prison engage casts have no IsHeroic bridge.
+	// shadow-prison engage casts are PORTED in boss_blood_prince_council.lua
+	// (creature:IsHeroic() bridged; the old "no IsHeroic bridge" claim retracted).
 	// boss_blood_council_controller
 	// has zero own Talk lines — not registered (the bronjahm
 	// npc_corrupted_soul_fragment precedent); npc_blood_queen_lana_thel

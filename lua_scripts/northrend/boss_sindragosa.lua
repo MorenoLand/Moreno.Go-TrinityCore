@@ -53,8 +53,9 @@
 -- player-gated variant precedent).
 -- boss_sindragosa JustDied — Talk(SAY_DEATH 10) (event 4 — the
 -- sjonnir JustDied-Talk precedent; the DoCastAOE
--- FROST_INFUSION_CREDIT heroic leg is gated on Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE) (:262-264); no 25-man difficulty bridge
--- (creature:HasAura IS bridged — the Is25ManRaid gate alone blocks the arm).
+-- FROST_INFUSION_CREDIT leg PORTED (Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)
+-- (:262-264); creature:Is25ManRaid() bridged lua_creature_events.go,
+-- the old "no 25-man difficulty bridge" claim retracted).
 -- DOCUMENTED-ONLY (in this header; only entry 36853 registered):
 -- PORTED (2026-10-13): JustEngagedWith — DoCastSelf(
 -- SPELL_FROST_AURA 70084) + DoCastSelf(SPELL_PERMAEATING_CHILL 70109)
@@ -136,6 +137,8 @@ local sindragosaThirdPhase = {}
 
 local SPELL_FROST_AURA = 70084
 local SPELL_PERMAEATING_CHILL = 70109
+local SPELL_SHADOWS_FATE = 71169
+local SPELL_FROST_INFUSION_CREDIT = 72289
 local SPELL_BERSERK = 26662
 local SPELL_BELLOWING_ROAR = 36922 -- :80
 local SPELL_CLEAVE_SPINESTALKER = 40505 -- :81
@@ -309,6 +312,12 @@ local function sindragosaJustDied(event, creature, killer)
     cancelTimers(guid)
     sindragosaThirdPhase[guid] = nil
     creature:Talk(SAY_DEATH)
+    -- C++ :262-264 — Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
+    -- DoCastAOE(SPELL_FROST_INFUSION_CREDIT, true) via self-cast
+    -- (DoCastAOE = self-cast convention; C++ order kept).
+    if creature:Is25ManRaid() and creature:HasAura(SPELL_SHADOWS_FATE) then
+        creature:CastSpell(creature, SPELL_FROST_INFUSION_CREDIT, true)
+    end
 end
 
 -- PORTED (2026-10-14): npc_spinestalker (37534) — Reset timer seeds

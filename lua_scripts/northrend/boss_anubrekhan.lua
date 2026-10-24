@@ -46,7 +46,7 @@
 -- (guardCorpses.clear) / JustReachedHome (SummonGuards) — group spawn
 -- with DB-side coords (no summon-group bridge; creature:SummonCreature
 -- is live but takes explicit coords);
--- SummonGuards: Is25ManRaid() -> SummonCreatureGroup(GROUP_INITIAL_25M
+-- SummonGuards: Is25ManRaid() (now bridged, lua_creature_events.go) -> SummonCreatureGroup(GROUP_INITIAL_25M
 -- 1) — same bar (IsHeroic() is bridged, lua_creature_events.go:260,
 -- so difficulty is NOT the blocker); JustEngagedWith 10-man
 -- EVENT_SPAWN_GUARD leg (randtime 15s-20s) — same bar; EVENT_SPAWN_GUARD

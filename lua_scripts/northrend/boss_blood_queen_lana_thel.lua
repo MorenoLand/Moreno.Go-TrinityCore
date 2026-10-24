@@ -46,9 +46,9 @@
 -- PORTED (2026-10-13): the three triggered
 -- self-cast auras (:188-190) — curator engage-cast precedent.
 -- boss_blood_queen_lana_thel JustDied — DoCastAOE(
--- SPELL_BLOOD_INFUSION_CREDIT) leg: cast bridge exists
--- (creature:CastSpell self-cast triggered) but the arm is gated on
--- Is25ManRaid() — no 25-man bridge, stays out;
+-- SPELL_BLOOD_INFUSION_CREDIT, true) leg PORTED (Is25ManRaid() +
+-- HasAura(SPELL_SHADOWS_FATE) gate, creature:Is25ManRaid() bridged
+-- lua_creature_events.go; the old "no 25-man bridge" claim retracted);
 -- instance->SetData(DATA_BLOOD_QUICKENING_STATE, DONE) /
 -- RewardPlayerAndGroupAtEvent / FindNearestCreature minchar legs
 -- have no instance bridge. PORTED (2026-10-23): CleanAuras()
@@ -139,6 +139,8 @@ local SAY_SWARMING_SHADOWS = 4
 
 local SPELL_BERSERK = 26662
 local SPELL_SWARMING_SHADOWS = 71264
+local SPELL_SHADOWS_FATE = 71169
+local SPELL_BLOOD_INFUSION_CREDIT = 72934
 
 local timers = {}
 
@@ -313,11 +315,15 @@ local function lanaThelJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (:195-218): _JustDied() is the cancelTimers(guid)
-    -- above; the Is25ManRaid()-gated DoCastAOE(SPELL_BLOOD_INFUSION_
-    -- CREDIT) leg has no 25-man bridge; CleanAuras() (:221-233)
-    -- ports via cleanAuras above (C++ order kept); the
+    -- above; the Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
+    -- DoCastAOE(SPELL_BLOOD_INFUSION_CREDIT, true) leg (:199-200) ports
+    -- via self-cast (DoCastAOE = self-cast convention); CleanAuras()
+    -- (:221-233) ports via cleanAuras above (C++ order kept); the
     -- blood-quickening SetData/RewardPlayerAndGroupAtEvent/
     -- FindNearestCreature minchar legs have no instance bridge.
+    if creature:Is25ManRaid() and creature:HasAura(SPELL_SHADOWS_FATE) then
+        creature:CastSpell(creature, SPELL_BLOOD_INFUSION_CREDIT, true)
+    end
     cleanAuras(creature)
 end
 

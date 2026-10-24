@@ -98,9 +98,9 @@
 -- IN_PROGRESS) — no instance bridge (the DoZoneInCombat(me) :275 leg is
 -- PORTED in the event-1 handler — live bridge
 -- engine/world/lua_creature_events.go, 2026-10-23); JustDied DoCastAOE(
--- SPELL_UNHOLY_INFUSION_CREDIT) leg: cast bridge exists
--- (creature:CastSpell self-cast triggered) but the arm is gated on
--- Is25ManRaid() — no 25-man bridge, stays out;
+-- SPELL_UNHOLY_INFUSION_CREDIT, true) leg PORTED (Is25ManRaid() +
+-- HasAura(SPELL_SHADOWS_FATE) gate, creature:Is25ManRaid() bridged;
+-- the old "no 25-man bridge" claim retracted);
 -- JustReachedHome instance->SetBossState(FAIL) — no instance
 -- bridge.
 -- npc_volatile_ooze / npc_gas_cloud (npc_putricide_oozeAI, lines
@@ -136,6 +136,8 @@ local SAY_BERSERK = 12
 
 local SPELL_OOZE_TANK_PROTECTION = 71770
 local SPELL_MUTATED_PLAGUE_CLEAR = 72618
+local SPELL_SHADOWS_FATE = 71169
+local SPELL_UNHOLY_INFUSION_CREDIT = 71518
 local SPELL_BERSERK2 = 47008
 local SPELL_SLIME_PUDDLE_TRIGGER = 70341
 local SPELL_MALLEABLE_GOO_H = 72296
@@ -274,6 +276,12 @@ local function putricideJustDied(event, creature, killer)
     -- precedent).
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ :299-300 — Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
+    -- DoCastAOE(SPELL_UNHOLY_INFUSION_CREDIT, true) via self-cast
+    -- (DoCastAOE = self-cast convention; C++ order kept).
+    if creature:Is25ManRaid() and creature:HasAura(SPELL_SHADOWS_FATE) then
+        creature:CastSpell(creature, SPELL_UNHOLY_INFUSION_CREDIT, true)
+    end
     -- C++ :302 — DoCast(SPELL_MUTATED_PLAGUE_CLEAR), single-arg DoCast
     -- resolves via AISpellInfo, which defaults to AITARGET_SELF
     -- (CreatureAIImpl.h AISpellInfoType ctor), so self-cast.

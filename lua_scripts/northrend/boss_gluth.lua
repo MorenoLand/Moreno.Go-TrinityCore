@@ -61,8 +61,9 @@
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) per zombie) — no summon/zombie-list
 -- bridge; the STATE_GLUTH_EATING 4s deferral — no state bridge;
 -- EVENT_SUMMON — SummonCreatureGroup(SUMMON_GROUP_CHOW_10MAN/
--- SUMMON_GROUP_CHOW_25MAN) — no summon bridge + no raid-size
--- (10/25-man) selector (the old "Is25ManRaid difficulty gate" wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
+-- SUMMON_GROUP_CHOW_25MAN) — no summon-group bridge (raid-size
+-- selector now bridged, lua_creature_events.go, but stranded on group
+-- spawn) (the old "Is25ManRaid difficulty gate" wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
 -- list iteration + cross-AI SetData(TOBE_EATEN) + REACT_PASSIVE +
 -- AttackStop + MoveCloserAndStop — no summon / cross-AI / react-state
 -- / motion bridges; EVENT_KILL_ZOMBIE_SINGLE — DoCast(ZOMBIE_CHOW_

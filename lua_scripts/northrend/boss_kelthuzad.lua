@@ -89,8 +89,9 @@
 -- DoCastAOE(SPELL_CHAINS_DUMMY 28408) single-arg (triggered=false is the default),
 -- randtime(60s,80s) init, 1min+randtime(0s,20s) repeat — stays OUT:
 -- scheduled only in PHASE_TWO via EVENT_PHASE_TWO + gated on
--- Is25ManRaid (:447/:475-480); the phase machine and the difficulty
--- gate have no bridge (kelidan precedent);
+-- Is25ManRaid (:447/:475-480); the phase machine has no bridge
+-- (difficulty gate now bridged, lua_creature_events.go, but stranded
+-- on the phase machine);
 -- EVENT_TRANSITION_REPLY — lich-king cross-AI Talk(SAY_ANSWER_REQUEST
 -- 3) via DATA_LICH_KING + the four KT portal GO states — instance
 -- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —

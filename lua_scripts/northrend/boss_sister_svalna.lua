@@ -245,7 +245,7 @@
 --   (69929, {10000,20000}ms, re-arm {40000,60000}ms) fires while
 --   !UpdateVictim() — no OOC-tick bridge; the huntress
 --   Is25ManRaid() DoCast(SPELL_SUMMON_WARHAWK 71705) leg is a
---   summon machine + difficulty gate.
+--   summon machine (difficulty gate now bridged, lua_creature_events.go).
 -- npc_impaling_spear (:1385-1413) — the whole AI is a 500ms
 --   vehicle-check despawn timer (no bridgeable arm; NOT
 --   registered).

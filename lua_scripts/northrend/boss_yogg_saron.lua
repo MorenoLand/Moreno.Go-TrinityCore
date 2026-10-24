@@ -106,7 +106,8 @@
 -- Talk 4/Emote 5, {20s,25s} repeat) — scheduled from cross-creature
 -- DoAction(ACTION_PHASE_THREE) (:1024/:1027, PHASE_THREE), deafening
 -- roar additionally gated on Is25ManRaid + instance DATA_KEEPERS_COUNT
--- (:1026) — no DoAction / instance-data bridges.
+-- (:1026) — no DoAction / instance-data bridges (difficulty leg now
+-- bridged, lua_creature_events.go, stranded on DoAction + instance).
 -- Yogg-Saron DoAction(ACTION_PHASE_THREE) —
 -- Talk(SAY_YOGG_SARON_PHASE_3) — no DoAction bridge; joins
 -- the no-DoAction-bridge queue.
