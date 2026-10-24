@@ -12,22 +12,27 @@
 -- DB-side (no TDB in this workspace).
 -- npc_commander_dawnforge and at_commander_dawnforge are
 -- documented-only: the whole event machine sits behind the
--- no-bridge arms — cross-creature GUID coordination with
+-- blocked arms — cross-creature GUID coordination with
 -- Ardonis (19830) via FindNearestCreature, Pathaleon's image
--- (21504) via SummonCreature + the JustSummoned GUID latch,
+-- (21504) via SummonCreature (bridged, returns the summoned object —
+-- midnight precedent — so the JustSummoned GUID latch is
+-- replaceable, not a blocker),
 -- SetFacingToObject / SetStandState kneel choreography (the facing
 -- legs — me->SetFacingToObject(pathaleon) C++ :131, me->
 -- SetFacingToObject(ardonis) C++ :147 — are bridgeable via the atan2
 -- twin, devourer_of_souls precedent, but the choreography rides the
--- cross-creature GUID machine: FindNearestCreature +
--- SummonCreature + the JustSummoned GUID latch — no summon /
--- world-search / cross-creature bridges), the
+-- cross-creature GUID machine — re-keyed 2026-10-24:
+-- FindNearestCreature (lua_creature_events.go:2350), SummonCreature,
+-- SetStandState (:1486) and cross-creature Talk (opera/mandokir
+-- precedents) are all bridged; the chain stays out behind the
+-- AreaTrigger start + quest-status + quest-credit gates below), the
 -- AreaTrigger start condition (player HasAura(SPELL_SUNFURY_
 -- DISGUISE 34603) + quest 10198 incomplete within 30 yd) and
--- the quest credit via AreaExploredOrEventHappens (no cross-
--- creature / summon / movement / stand-state / AreaTrigger /
--- quest-credit bridges; omor / steamrigger / hellfire
--- precedents). Entries 19830 / 19831 / 21504 come from the
+-- the quest credit via AreaExploredOrEventHappens (no AreaTrigger
+-- script hook — areatrigger.go serves native/BG/teleport arms only —
+-- no quest-INCOMPLETE status bridge (HasQuest is presence-only),
+-- no AreaExploredOrEventHappens bridge; omor / steamrigger /
+-- hellfire precedents). Entries 19830 / 19831 / 21504 come from the
 -- C++ CreatureEntry array but nothing is registered for
 -- them — an unregistered file would be dead code (the
 -- luaBossAI shim admits only registered entries).

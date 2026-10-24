@@ -52,8 +52,12 @@
 -- EVENT_SPAWN_GUARD leg (randtime 15s-20s) — same bar; EVENT_SPAWN_GUARD
 -- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2) — same bar (DB-side
 -- group coords);
--- JustSummoned: NPC_CRYPT_GUARD summon->AI()->Talk(EMOTE_SPAWN 1) —
--- cross-AI Talk has no bridge; SummonedCreatureDies/Despawn:
+-- JustSummoned PORTED 2026-10-24 (anubrekhanJustSummoned, ev19):
+-- boss_anubrekhan.cpp:118-126 IsInCombat-gated crypt-guard
+-- Talk(EMOTE_SPAWN 1) via the summoner-side ev19 hook (midnight /
+-- jindo precedents; summoned object carries Talk); latent until
+-- SummonCreatureGroup ports, entry-gated so inert otherwise.
+-- SummonedCreatureDies/Despawn:
 -- guardCorpses GUID-set bookkeeping — no consumer bridge;
 -- EVENT_IMPALE — SelectTarget(Random,0) -> DoCast(Impale 28783
 -- / 25-man 56090), init randtime(10s,20s), repeat randtime(10s,20s),
@@ -80,8 +84,8 @@
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_TIMED_START_EVENT 9891, kill
 -- Maexxna within 20 min) — no achievement bridge (instance model
 -- absent). NPC_CRYPT_GUARD 16573 (naxxramas.h — kalecgos pass; no
--- registered script in this file, Talk rides the summon hook) joins
--- the entry-verifiable-but-bridge-blocked queue.
+-- registered script of its own — its Talk now rides the boss ev19
+-- summon hook, PORTED 2026-10-24; the group spawn itself stays out).
 -- at_anubrekhan_entrance (OnlyOnceAreaTriggerScript — Talk(SAY_GREET 1)
 -- via instance GetGuidData(DATA_ANUBREKHAN), NOT_STARTED-gated) — no
 -- area-trigger bridge — documented-only.
@@ -91,6 +95,8 @@ local ENTRY_ANUBREKHAN = 15956
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
 local EMOTE_LOCUST = 3
+local EMOTE_SPAWN = 1 -- boss_anubrekhan.cpp:37
+local NPC_CRYPT_GUARD = 16573 -- naxxramas.h:104
 
 local SPELL_LOCUST_SWARM = 28785
 local SPELL_BERSERK = 27680
@@ -183,6 +189,17 @@ local function anubrekhanDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustSummoned (boss_anubrekhan.cpp:118-126): BossAI latch +
+-- IsInCombat gate + crypt-guard entry gate -> summon Talk(EMOTE_SPAWN
+-- 1). The Talk's second arg (me, the whisper target) has no Lua twin
+-- — single-arg Talk per the midnight precedent. Latent until
+-- SummonCreatureGroup ports: no Lua path summons guards yet.
+local function anubrekhanJustSummoned(_, creature, summoned)
+    if creature:IsInCombat() and summoned:GetEntry() == NPC_CRYPT_GUARD then
+        summoned:Talk(EMOTE_SPAWN)
+    end
+end
+
 local function anubrekhanReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -191,4 +208,5 @@ RegisterCreatureEvent(ENTRY_ANUBREKHAN, 1, anubrekhanEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 2, anubrekhanLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 3, anubrekhanTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 4, anubrekhanDied)
+RegisterCreatureEvent(ENTRY_ANUBREKHAN, 19, anubrekhanJustSummoned)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 23, anubrekhanReset)

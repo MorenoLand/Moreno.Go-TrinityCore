@@ -79,7 +79,11 @@
 -- DoCast(SPELL_DEVOURING_FLAME 63236), re-arm {6s,12s} /
 -- {10s,12s} — random-target selection leg; no bridge.
 -- EVENT_SUMMON_MINIONS / EVENT_SUMMON_MINIONS_2 (:589-603) —
--- SummonCreature(NPC_RAZORSCALE_SPAWNER) spawner leg — no bridge.
+-- SummonMinions() (:540-546) SummonCreature(NPC_RAZORSCALE_SPAWNER,
+-- frand x/y, 391.517z, TIMED_DESPAWN 15s) re-keyed 2026-10-24:
+-- SummonCreature IS bridged; the arm stays out behind the PHASE_AIR
+-- gate (phase machine unported) + the spawner AI (spell-data mole-
+-- machine/minion casts, freywinn precedent), not the summon bridge.
 -- EVENT_FLAME_BREATH (:604-609) — Talk(EMOTE_BREATH 1, me) +
 -- DoCastVictim(FLAME_BREATH 63317/64021) + EVENT_WING_BUFFET in
 -- 2s, PHASE_GROUND-gated 30s one-shot — phase machine.
