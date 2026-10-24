@@ -29,11 +29,12 @@
 -- DATA_BROODLORD_LASHLAYER bookkeeping arms skipped); the
 -- knockback-arm ModifyThreatByPercent(victim, -50) PORTED 2026-10-24
 -- (threat bridge live) — the cast still lands and the 15-30s re-arm is kept;
--- the EVENT_CHECK home-distance > 150 yd leash check and the
--- Talk(SAY_LEASH=1) + EnterEvadeMode(EVADE_REASON_BOUNDARY) arms have
--- no bridges (no home-position/distance bridge, no evade bridge) —
--- only the 1s re-arm cycle is kept, inert (renataki visible-timer
--- convention); the JustDied GetGameObjectListWithEntryInGrid
+-- the EVENT_CHECK home-distance > 150 yd leash check: gate +
+-- Talk(SAY_LEASH=1) PORTED 2026-10-24 (GetHomePosition + GetX/Y/Z math
+-- minus GetCombatReach twins GetDistance(Position); Talk once-latched
+-- per engagement) — the EnterEvadeMode(EVADE_REASON_BOUNDARY) leg stays
+-- out (no evade bridge), so the 1s re-arm cycle keeps running after
+-- the yell; the JustDied GetGameObjectListWithEntryInGrid
 -- suppression-device scan and the DoAction(ACTION_DEACTIVATE) arms
 -- stay out on the unbridged grid enumeration + unmodeled GameObjectAI
 -- UpdateAI/OnLootState legs (the blanket "no gameobject bridge" claim
@@ -46,7 +47,7 @@
 local ENTRY_BROODLORD = 12017
 
 local SAY_AGGRO = 0
--- SAY_LEASH = 1: unmodeled — no evade bridge (see header).
+local SAY_LEASH = 1 -- Talk ported once-latched in onCheck; EnterEvadeMode leg stays out.
 
 local SPELL_CLEAVE = 26350
 local SPELL_BLASTWAVE = 23331
@@ -56,6 +57,7 @@ local SPELL_KNOCKBACK = 25778
 -- has no gameobject bridge.
 
 local timers = {}
+local leashTalked = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -129,10 +131,26 @@ local function onKnockback(creature, guid)
     end)
 end
 
--- C++ EVENT_CHECK: leash check — distance(home) > 150 yd ->
--- Talk(SAY_LEASH) + EnterEvadeMode. Both the distance query and the
--- evade have no bridge: the 1s cycle is kept, inert.
+-- C++ EVENT_CHECK (boss_broodlord_lashlayer.cpp:117-123): GetDistance(home)
+-- > 150 yd -> Talk(SAY_LEASH) + EnterEvadeMode; 1s re-arm unconditional.
+-- Distance twin: GetHomePosition + GetX/Y/Z math, minus GetCombatReach
+-- (WorldObject::GetDistance(Position), Object.cpp:1175-1179), clamped
+-- >= 0. Talk is once-latched per engagement (C++ evades at once, so the
+-- yell fires once; without an evade bridge the latch stops re-yells);
+-- the EnterEvadeMode leg stays out (no bridge).
 local function onCheck(creature, guid)
+    if not leashTalked[guid] then
+        local hx, hy, hz = creature:GetHomePosition()
+        local dx = creature:GetX() - hx
+        local dy = creature:GetY() - hy
+        local dz = creature:GetZ() - hz
+        local dist = math.sqrt(dx * dx + dy * dy + dz * dz) - creature:GetCombatReach()
+        if dist < 0 then dist = 0 end
+        if dist > 150.0 then
+            creature:Talk(SAY_LEASH)
+            leashTalked[guid] = true
+        end
+    end
     schedule(guid, "check", 1000, function()
         onCheck(creature, guid)
     end)
@@ -161,6 +179,7 @@ end
 
 local function broodlordResetState(guid)
     cancelTimers(guid)
+    leashTalked[guid] = nil
 end
 
 local function broodlordLeaveCombat(event, creature)

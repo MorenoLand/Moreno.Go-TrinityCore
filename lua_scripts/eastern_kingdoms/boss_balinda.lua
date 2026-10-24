@@ -42,12 +42,12 @@
 -- (boss_ai.go) — a SetFaction-only half would leave an idle elemental
 -- C++ never produces (kodo half-pair precedent); the elemental never
 -- enters the world, so its timer chain stays documented-only.
--- Unmodeled: EVENT_CHECK_RESET (home-position 2D distance > 50yd ->
--- EnterEvadeMode + Talk(SAY_EVADE=1), plus the elemental's leash arm) —
--- the leash needs EnterEvadeMode (no bridge); creature:GetHomePosition()
--- IS bridged (dfdd8cc0), so the verdict rests on the evade leg alone;
--- evade still re-arms through OnReset(23) when the engine leashes the
--- creature. Unmodeled: DoAction(ACTION_BUFF_YELL=-30001) -> Talk(0) —
+-- EVENT_CHECK_RESET gate + Talk(SAY_EVADE=1) PORTED 2026-10-24
+-- (GetHomePosition + GetX/Y math minus GetCombatReach twins
+-- GetDistance2d; Talk once-latched per engagement); the self +
+-- elemental EnterEvadeMode legs stay out (no bridge), and the elemental
+-- never spawns in Go, so its leash arm is moot.
+-- Unmodeled: DoAction(ACTION_BUFF_YELL=-30001) -> Talk(0) —
 -- driven by the BattlegroundAV script (BattlegroundAV.cpp), and there is
 -- no Battleground-to-Lua DoAction dispatch bridge. SAY_SALVATION=2 is
 -- declared in the C++ Texts enum but never used by this AI.
@@ -59,6 +59,7 @@ local SPELL_FROSTBOLT = 46987
 local SPELL_ICEBLOCK = 46604
 
 local SAY_AGGRO = 0
+local SAY_EVADE = 1
 
 local ENTRY_BALINDA = 11949
 
@@ -88,7 +89,7 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function initState(guid)
-    balindaState[guid] = { iceblock = false }
+    balindaState[guid] = { iceblock = false, evadeTalked = false }
 end
 
 local function onArcaneExplosion(creature, guid)
@@ -123,6 +124,29 @@ local function onFrostbolt(creature, guid)
     schedule(guid, "frostbolt", {4000, 12000}, function() onFrostbolt(creature, guid) end)
 end
 
+-- C++ EVENT_CHECK_RESET (boss_balinda.cpp:159-168): 2D distance from
+-- home > 50 yd -> EnterEvadeMode + Talk(SAY_EVADE); the elemental's own
+-- 2D-from-Balinda-home check -> elemental evade; 5s re-arm unconditional.
+-- Distance twin: GetHomePosition + GetX/Y math, minus GetCombatReach
+-- (WorldObject::GetDistance2d(x, y), Object.cpp:1193-1197), clamped >= 0.
+-- Talk is once-latched per engagement (C++ evades at once, so the yell
+-- fires once); both EnterEvadeMode legs stay out (no bridge).
+local function onCheckReset(creature, guid)
+    local state = balindaState[guid]
+    if state ~= nil and not state.evadeTalked then
+        local hx, hy = creature:GetHomePosition()
+        local dx = creature:GetX() - hx
+        local dy = creature:GetY() - hy
+        local dist = math.sqrt(dx * dx + dy * dy) - creature:GetCombatReach()
+        if dist < 0 then dist = 0 end
+        if dist > 50.0 then
+            creature:Talk(SAY_EVADE)
+            state.evadeTalked = true
+        end
+    end
+    schedule(guid, "check_reset", 5000, function() onCheckReset(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -132,6 +156,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "cone_of_cold", 8000, function() onConeOfCold(creature, guid) end)
     schedule(guid, "fireball", 1000, function() onFireball(creature, guid) end)
     schedule(guid, "frostbolt", 4000, function() onFrostbolt(creature, guid) end)
+    schedule(guid, "check_reset", 5000, function() onCheckReset(creature, guid) end)
 end
 
 local function onDamageTaken(_, creature, _, damage)

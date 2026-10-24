@@ -60,10 +60,10 @@
 -- bridge engine/world/lua_creature_events.go, 2026-10-23): triggered
 -- self-cast
 -- seal of blood 41459 (C++ ScheduleEvents one-time arm) / bless
--- {41450, 41451} 20s then {30s,45s} — the random-friendly-in-
--- 100-yd scan has no friendly enumeration bridge, so the cast is
--- skipped and only the cycle kept (hexlord friendly-scan
--- convention) / consecration 41541 10s then {30s,35s},
+-- {41450, 41451} 20s then {30s,45s} — PORTED in gathiosBless below
+-- (GetCreaturesInGrid pool over the 4 council entries; the old
+-- "no friendly enumeration bridge" claim was stale — sulfuron/
+-- hexlord friendly-scan precedent) / consecration 41541 10s then {30s,35s},
 -- non-triggered self-cast (C++ DoCast default is triggered=false
 -- — vaelastrasz convention) / hammer of justice 41468 10s then
 -- 20s, non-triggered on a random alive player 10-40 yd excluding
