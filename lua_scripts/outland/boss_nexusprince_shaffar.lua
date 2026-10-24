@@ -66,11 +66,11 @@
 -- path (creaturemotion.go), and the gargolmar taunt arm is the one
 -- genuinely unfirable here (its else-branch fires only when the
 -- player is NOT engaged).
--- boss_nexusprince_shaffarAI::JustSummoned — beacon
--- CastSpell(SPELL_ETHEREAL_BEACON_VISUAL 32368) + Random-SelectTarget
--- AttackStart legs — no-cast / no-random-target / no-cross-creature
--- bridges (the JustSummoned summon-coordination leg is the maladaar
--- precedent) — documented-only.
+-- boss_nexusprince_shaffarAI::JustSummoned — beacon visual leg PORTED
+-- below (shaffarJustSummoned: non-triggered ETHEREAL_BEACON_VISUAL
+-- self-cast; ev19 fires for the Lua Reset summons). The
+-- Random-SelectTarget AttackStart leg stays out (no AttackStart bridge),
+-- as does the beacon AI's own JustSummoned (:223, pure AttackStart).
 -- boss_nexusprince_shaffarAI::ExecuteEvent:
 -- EVENT_BEACON — urand(0,3)==0-gated Talk(SAY_SUMMON 3) + DoCast(me,
 -- SPELL_ETHEREAL_BEACON 32371, triggered), 10s repeat — stays OUT:
@@ -124,6 +124,7 @@ local SAY_DEAD  = 4
 
 local SPELL_FROSTBOLT = 32364 -- boss_nexusprince_shaffar.cpp:42
 local SPELL_FROSTNOVA = 32365 -- boss_nexusprince_shaffar.cpp:44
+local SPELL_ETHEREAL_BEACON_VISUAL = 32368 -- boss_nexusprince_shaffar.cpp:47
 
 local timers = {}
 local taunted = {} -- per-GUID _hasTaunted latch (C++ _hasTaunted, :184)
@@ -262,6 +263,17 @@ local function shaffarMoveInLOS(event, creature, player)
     return true
 end
 
+-- C++ boss_nexusprince_shaffarAI::JustSummoned (boss_nexusprince_shaffar.cpp:119-127),
+-- beacon case: the visual self-cast is unconditional in C++ (it precedes
+-- the target select), so it ports alone; the AttackStart leg stays out.
+local function shaffarJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_BEACON then
+        return
+    end
+    summoned:CastSpell(summoned, SPELL_ETHEREAL_BEACON_VISUAL)
+end
+
+RegisterCreatureEvent(ENTRY_SHAFFAR, 19, shaffarJustSummoned)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 1, shaffarEnterCombat)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 2, shaffarLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 3, shaffarTargetDied)

@@ -307,6 +307,7 @@ local SPELL_PHASE_PUNCH = 64412
 local SPELL_ASCEND_TO_THE_HEAVENS = 64487
 local SPELL_COSMIC_SMASH = 62301
 local SPELL_ARCANE_BARRAGE = 64599
+local SPELL_COLLAPSE = 62018 -- boss_algalon_the_observer.cpp:94
 
 local ENTRY_LIVING_CONSTELLATION = 33052
 
@@ -373,8 +374,26 @@ end
 -- NPC_COLLAPSING_STAR 32955, CollapsingStarPos literals,
 -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4), 18s+introDelay init,
 -- Repeat(1min) (:394, :594-600 verified). The stale "no summon
--- bridge" claim is retracted for this leg. Delta: summoned star AIs
--- are unported — the stars are inert.
+-- bridge" claim is retracted for this leg. Delta: the star AI's own arms
+-- are unported, but the boss JustSummoned star case is ported below
+-- (algalonJustSummoned: PASSIVE + triggered COLLAPSE; MoveRandom out).
+-- C++ boss_algalon_the_observerAI::JustSummoned (boss_algalon_the_observer.cpp:417-425),
+-- collapsing-star case only: SetReactState PASSIVE + triggered COLLAPSE
+-- self-cast, in C++ order. MoveRandom(20.0) stays out (no Move* bridge,
+-- moverandom census). The other switch cases stay out: void-zone /
+-- asteroid / worm-hole stalkers and dark matter are never summoned by
+-- the Lua (only COLLAPSING_STAR 32955 is), so their arms would be dead
+-- code; summons.Summon bookkeeping has no Go twin.
+local function algalonJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= NPC_COLLAPSING_STAR then
+        return
+    end
+    summon:SetReactState(0) -- REACT_PASSIVE
+    summon:CastSpell(summon, SPELL_COLLAPSE, true)
+end
+
+RegisterCreatureEvent(ENTRY_ALGALON, 19, algalonJustSummoned)
+
 local function collapsingStarTick(creature, guid)
     creature:Talk(SAY_ALGALON_COLLAPSING_STAR)
     creature:Talk(EMOTE_ALGALON_COLLAPSING_STAR)
