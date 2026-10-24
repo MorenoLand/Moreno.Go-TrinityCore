@@ -227,12 +227,24 @@ local function onSpawn(_, creature)
     creature:CastSpell(creature, SPELL_ONKILL_PROC, true)
 end
 
+-- C++ boss_headless_horseman::JustReachedHome
+-- (boss_headless_horseman.cpp:373-378): HandleInitialSetup re-cast +
+-- SetReactState(REACT_AGGRESSIVE 2); ScriptedAI::JustReachedHome is the
+-- base no-op. Fires after onCombatEnd (ev2/ev23) cancelled timers, so the
+-- re-cast lands on the clean post-evade state exactly like C++.
+local function onReachHome(_, creature)
+    creature:CastSpell(creature, SPELL_HEAD_VISUAL, true)
+    creature:CastSpell(creature, SPELL_ONKILL_PROC, true)
+    creature:SetReactState(2)
+end
+
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 24, onReachHome)
 
 -- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
 -- JustDied schedules EVENT_RAIN_OF_TREATS at 11s, C++
@@ -261,5 +273,20 @@ local function onHeadSpawn(_, creature)
     creature:CastSpell(creature, SPELL_HEAD_STUN)
 end
 
+-- C++ npc_headless_horseman_head::JustReachedHome
+-- (boss_headless_horseman.cpp:206-214): _events.Reset + MotionMaster
+-- Clear have no Lua counterpart with live effect (the head carries no Lua
+-- timers or motion; its only schedule is the post-death raintreats, which
+-- cannot be pending on a live home-arrival) + HandleInitialSetup re-cast
+-- (non-triggered HEAD_STUN 42408, same as onHeadSpawn) + SetFlag
+-- NOT_SELECTABLE; PassiveAI::JustReachedHome is the base no-op. The flag
+-- clear rides the unported head-phase machine (HandleStartPhase), the same
+-- standing limitation as the raintreats set above.
+local function onHeadReachHome(_, creature)
+    creature:CastSpell(creature, SPELL_HEAD_STUN)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 4, onHeadDied)
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 5, onHeadSpawn)
+RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 24, onHeadReachHome)
