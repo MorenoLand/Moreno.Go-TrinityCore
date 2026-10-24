@@ -106,6 +106,11 @@ local SPELL_SPIRIT_BOLTS = 43383
 local SPELL_DRAIN_POWER = 44131
 local SPELL_SIPHON_SOUL = 43501
 
+local ENTRY_TEMP_TRIGGER = 23920
+local MODEL_INVISIBLE = 11686
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
 local SPELL_CLEAVE_ADD = 15496
 local SPELL_BLOODLUST = 43578
 local SPELL_FLASH_HEAL = 43575
@@ -304,14 +309,26 @@ onSpiritBolts = function(creature, guid)
 end
 
 -- C++ siphon soul: random alive player within 70 yd (SelectTarget Random,
--- no threat model), boss casts the spell triggered on the target
--- directly (the 23920 trigger vehicle has no summon-model bearer), record
--- class and GUID, arm the ability cycle {8s,10s}; the siphon timer then
--- stays disarmed (99999) until the next spirit bolts.
+-- no threat model), DoSpawnCreature(NPC_TEMP_TRIGGER 23920, 0,0,0,0,
+-- TEMPSUMMON_TIMED_DESPAWN 30s) + SetDisplayId(11686 invisible) +
+-- SetFlag(NOT_SELECTABLE) + trigger casts the spell triggered on the
+-- target (MoveChase stays out: no motion bridge, so the trigger stands
+-- at the boss close point instead of chasing the boss), record class
+-- and GUID, arm the ability cycle {8s,10s}; the siphon timer then
+-- stays disarmed (99999) until the next spirit bolts. Nil-summon
+-- fallback keeps the old boss-direct cast (C++ would EnterEvadeMode
+-- on a failed spawn; no evade bridge).
 onSiphonSoul = function(creature, guid)
     local target = randomAlivePlayer(creature, 70)
     if target then
-        creature:CastSpell(target, SPELL_SIPHON_SOUL, true)
+        local trigger = creature:SummonCreature(ENTRY_TEMP_TRIGGER, 0, 0, 0, 0, 2, 30000)
+        if trigger then
+            trigger:SetDisplayId(MODEL_INVISIBLE)
+            trigger:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            trigger:CastSpell(target, SPELL_SIPHON_SOUL, true)
+        else
+            creature:CastSpell(target, SPELL_SIPHON_SOUL, true)
+        end
         local pc = target:GetClass() - 1
         if pc == 10 then
             pc = 11 -- C++ druid special case; out of bounds upstream — guarded below.
