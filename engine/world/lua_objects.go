@@ -1218,6 +1218,52 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{out}, nil
 	}
+	// GetPlayerListInGrid(dist) is
+	// WorldObject::GetPlayerListInGrid (Object.cpp:3236): every alive
+	// player within dist yards (3D, player combat reach 1.5 added —
+	// GridNotifiers.h AnyPlayerInObjectRangeCheck + Object.cpp
+	// _IsWithinDist; gameobjects carry no combat reach, so the source
+	// reach is 0) in the same map+instance, as a Lua array of player
+	// objects (GUID-sorted for determinism). Alive = not dead-or-ghost
+	// (death.go isDeadOrGhost twin; ghosts carry Health=1 in Go, so a
+	// Health>0 check alone would wrongly include them). Backs the
+	// brewfest SHATTRATH + midsummer per-player dispatch
+	// (go_scripts.cpp:999, 1099).
+	methods["GetPlayerListInGrid"] = func(_ context.Context, args []any) ([]any, error) {
+		dist32, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist := float64(dist32)
+		srv.sessionsMu.RLock()
+		var matches []*session
+		for sess := range srv.sessions {
+			if !sess.worldReady.Load() || sess.player == nil {
+				continue
+			}
+			if sess.player.Map != state.Map || sess.player.InstanceID != state.InstanceID {
+				continue
+			}
+			if sess.isDeadOrGhost() {
+				continue
+			}
+			dx := float64(sess.player.X - state.X)
+			dy := float64(sess.player.Y - state.Y)
+			dz := float64(sess.player.Z - state.Z)
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+1.5 {
+				matches = append(matches, sess)
+			}
+		}
+		srv.sessionsMu.RUnlock()
+		sort.Slice(matches, func(i, j int) bool { return matches[i].playerGUID < matches[j].playerGUID })
+		out := make([]any, 0, len(matches))
+		for _, sess := range matches {
+			if player := sess.luaPlayer(); player != nil {
+				out = append(out, player)
+			}
+		}
+		return []any{out}, nil
+	}
 	// FindNearestCreature(entry, dist) is the gameobject-surface twin of
 	// the player/creature bridges (WorldObject::FindNearestCreature):
 	// the nearest live creature of entry within dist yards (3D gate with
