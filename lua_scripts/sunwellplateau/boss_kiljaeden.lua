@@ -666,8 +666,12 @@ end
 -- C++ boss_kiljaedenAI::JustSummoned (boss_kiljaeden.cpp:618-627):
 -- every summon takes the boss's faction (armageddon targets additionally
 -- take NOT_SELECTABLE/NON_ATTACKABLE flags, already ported on the target's
--- own spawn); the SetLevel leg for non-armageddon summons stays out.
+-- own spawn); the SetLevel leg for non-armageddon summons is PORTED via the new SetLevel bridge
+-- (armageddon-gated, C++ order level-then-faction).
 local function kjJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_ARMAGEDDON_TARGET then
+        summon:SetLevel(creature:GetLevel())
+    end
     summon:SetFaction(creature:GetFaction())
 end
 

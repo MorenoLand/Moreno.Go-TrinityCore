@@ -111,8 +111,8 @@
 --    40000+rand()%5000 (C++-exact); flame patch — 30s: PORTED
 --    2026-10-23 (CREATURE_FLAME_PATCH_ALAR 20602 summon + NOT_SELECTABLE
 --    flag + SetDisplayId(11686) + SetFaction + non-triggered self-cast
---    SPELL_FLAME_PATCH 35380; the SetObjectScale(x2.5)/SetLevel legs have
---    no bridges) — the stale "no summon-object drive" claim retracted;
+--    SPELL_FLAME_PATCH 35380; the SetObjectScale(x2.5) leg is PORTED (SetScale twin)
+--    and the SetLevel leg is PORTED via the new SetLevel bridge) — the stale "no summon-object drive" claim retracted;
 --    the DoMeleeAttackIfReady flame-
 --    buffet arm (SPELL_FLAME_BUFFET 34121 — no victim in melee
 --    range) has no attack-timer/melee-range bridge — melee is
@@ -464,7 +464,7 @@ local function combatTick(creature, guid)
         -- 20602) at the random target's position, TEMPSUMMON_TIMED_DESPAWN
         -- 2min (C++ boss_alar.cpp:432-447, C++ arm order). The summon-side
         -- SetObjectScale leg PORTED 2026-10-24 (SetScale twin, relative
-        -- x2.5 via GetScale; C++ order kept) and SetLevel leg has no bridge; the
+        -- x2.5 via GetScale; C++ order kept) and the SetLevel leg is PORTED via the new SetLevel bridge; the
         -- SetFlag(NOT_SELECTABLE) / SetDisplayId(11686) / SetFaction /
         -- non-triggered self-cast SPELL_FLAME_PATCH 35380 legs are bridged.
         if st.flamePatch <= 1000 then
@@ -477,6 +477,7 @@ local function combatTick(creature, guid)
                     flame:SetScale(flame:GetScale() * 2.5)
                     flame:SetDisplayId(11686)
                     flame:SetFaction(creature:GetFaction())
+                    flame:SetLevel(creature:GetLevel())
                     flame:CastSpell(flame, SPELL_FLAME_PATCH)
                 end
             end

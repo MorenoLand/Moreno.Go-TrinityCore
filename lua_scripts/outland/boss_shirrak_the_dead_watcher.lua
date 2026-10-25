@@ -69,16 +69,14 @@
 -- creature:SetRooted (lua_creature_events.go); the AttackStart
 -- (FocusedTargetGUID) leg PORTED this run via EngageWithTarget
 -- (triggerCreatureAggro fires event 1, so the fiery machine below
--- runs); SetLevel has no bridge, stays out.
+-- runs); the SetLevel leg is PORTED via the new SetLevel bridge (C++ order: visual/faction/level/root).
 -- npc_focus_fire UpdateAI fiery machine — PORTED this run as a
 -- 18374 event-1 pump: FieryBlast_Timer 3000+rand(1000) init,
 -- DoCast(me, SPELL_FIERY_BLAST 32302) self, then 1000ms; the
 -- fiery1/fiery2 bools cap it at exactly 2 casts (first cast clears
 -- fiery1, second clears fiery2 which gates the machine).
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
--- DOCUMENTED-ONLY (in this header; entries 18371 + 18374 registered):
--- SetLevel leg of JustSummoned (no SetLevel bridge in
--- lua_creature_events.go / object.go / lua_player.go).
+-- PORTED (this run): SetLevel leg of JustSummoned via the new SetLevel bridge.
 
 local ENTRY_SHIRRAK = 18371 -- DB-side; wowhead-TBC-verified this run
 
@@ -198,6 +196,7 @@ local function focusFireSummoned(event, creature, summon)
     if summon and summon:GetEntry() == NPC_FOCUS_FIRE then
         summon:CastSpell(summon, SPELL_FOCUS_FIRE_VISUAL)
         summon:SetFaction(creature:GetFaction())
+        summon:SetLevel(creature:GetLevel())
         summon:SetRooted(true)
         local tguid = focusedTarget[creature:GetGUID()]
         if tguid ~= nil then

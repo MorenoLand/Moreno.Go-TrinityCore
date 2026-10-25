@@ -2763,6 +2763,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			map[int]uint32{unitFieldFaction: faction})
 		return nil, nil
 	}
+	// SetLevel is Unit::SetLevel (Unit.cpp:9539): writes UNIT_FIELD_LEVEL;
+	// the player group-update leg has no creature analogue, and no stat
+	// recompute runs (creature stats come from the template, not the
+	// level field). Lets Lua port the JustSummoned level legs (kiljaeden,
+	// shirrak, nazan, alar) so summons fight at the summoner's level,
+	// which the combat rolls (combat.go) read from motion.Level; the
+	// spawn record carries motion.Level (creatures.go), like Faction.
+	methods["SetLevel"] = func(_ context.Context, args []any) ([]any, error) {
+		level, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if level > 255 {
+			return nil, fmt.Errorf("SetLevel requires a level 0-255, got %d", level)
+		}
+		s.motionMu.Lock()
+		motion.Level = level
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldLevel: level})
+		return nil, nil
+	}
 	// GetFaction is UnitMethods::GetFaction (CreatureMethods.h): reads the
 	// creature's live faction-template id (the motion slot above, initialized
 	// from the template faction at spawn).

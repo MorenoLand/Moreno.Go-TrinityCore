@@ -78,8 +78,8 @@
 -- liquidFireSummoned below; the event-19 binding was FIXED 2026-10-24
 -- (was registered on the summoned entry, never fired); the stale "no summon bridge" claim was
 -- retracted — creature:SummonCreature is bridged,
--- lua_creature_events.go:728); the JustSummoned SetLevel leg has no
--- bridge — stays out; no SpellScript/AuraScript scripts in this file.
+-- lua_creature_events.go:728); the JustSummoned SetLevel leg is PORTED
+-- via the new SetLevel bridge; no SpellScript/AuraScript scripts in this file.
 
 local SPELL_FIREBALL = 34653
 local SPELL_CONE_OF_FIRE = 30926
@@ -276,9 +276,10 @@ end
 -- 2026-10-24 to the summoner entry + 3-arg handler. Arms (C++ order):
 -- SetFaction(summoner faction) + the DUNGEON_MODE(23971, 30928)
 -- triggered self-cast + FIRE_NOVA_VISUAL 19823 triggered self-cast;
--- SetLevel has no bridge — stays out.
+-- SetLevel leg PORTED via the new SetLevel bridge (C++ order: level/faction/casts).
 local function liquidFireSummoned(event, creature, summon)
     if summon and summon:GetEntry() == NPC_LIQUID_FIRE then
+        summon:SetLevel(creature:GetLevel())
         summon:SetFaction(creature:GetFaction())
         if summon:IsHeroic() then
             summon:CastSpell(summon, SPELL_SUMMON_LIQUID_FIRE_H, true)
