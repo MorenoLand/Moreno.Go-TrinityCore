@@ -19,10 +19,10 @@
 -- (boss_faction_champions.cpp:771/816-824).
 -- Reset — SetEquipmentSlots(51799, NO_CHANGE, NO_CHANGE)
 -- (boss_faction_champions.cpp:774).
--- EVENT_THREAT UpdateThreat — per player-victim ScaleThreat(0) +
+-- EVENT_THREAT UpdatePower + UpdateThreat — per player-victim ScaleThreat(0) +
 -- AddThreat(1000000 * 30000 / (health + 1)) (AI_HEALER, no armor
 -- read); 5s init, 4s repeats (boss_faction_champions.cpp:591,
--- :611-619, :721-724).
+-- :611-624, :721-724).
 
 local ENTRY_DRUID_ALLIANCE = 34469 -- trial_of_the_crusader.h:183
 local ENTRY_DRUID_HORDE = 34459 -- trial_of_the_crusader.h:197
@@ -85,6 +85,12 @@ end
 -- in C++ per-victim order; creature entries are left untouched, as in
 -- C++ (no IsDead filter in C++ either).
 local function threatCheck(creature, guid)
+    -- C++ UpdatePower (:621-624), first in the EVENT_THREAT case
+    -- (:721-724): mana only, ModifyPower(MANA, GetMaxPower(MANA) / 3)
+    -- (C++ integer division; boss_faction_champions.lua main-file idiom).
+    if creature:GetPowerType() == 0 then
+        creature:ModifyPower(0, math.floor(creature:GetMaxPower(0) / 3))
+    end
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
             creature:ModifyThreatByPercent(victim, -100)

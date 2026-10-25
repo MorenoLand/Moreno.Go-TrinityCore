@@ -26,17 +26,17 @@
 -- sentinel, mr_smite precedent). The base Reset legs ride unbridged:
 -- _teamInstance = instance->GetData(DATA_TEAM) (no instance bridge),
 -- SetBossBoundary (no boundary bridge), EVENT_THREAT 5s
--- (UpdateThreat leg PORTED below; heroic EVENT_REMOVE_CC still out).
+-- (UpdatePower + UpdateThreat legs PORTED below; heroic EVENT_REMOVE_CC still out).
 -- base JustEngagedWith (event 1): DoCast(me, SPELL_ANTI_AOE 68595,
 -- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
 -- the DoZoneInCombat leg is PORTED 2026-10-23 (bridge live,
 -- engine/world/lua_creature_events.go); the setActive / controller
 -- SetData(2, IN_PROGRESS) legs have no bridges (tharon_ja precedent).
--- EVENT_THREAT UpdateThreat — per player-victim ScaleThreat(0) +
+-- EVENT_THREAT UpdatePower + UpdateThreat — per player-victim ScaleThreat(0) +
 -- AddThreat(1000000 * 30000 / (health + 1)) (AI_RANGED, no armor
 -- read); 5s init, 4s repeats (boss_faction_champions.cpp:591,
--- :611-619, :721-724).
+-- :611-624, :721-724).
 -- EVENT_CYCLONE — SelectTarget(Random, 0, NonTankTargetSelector) ->
 -- DoCast(Cyclone 65859), 10-20s init, 10-20s re-arm: randomNonTankPlayer
 -- (netherspite / blood_prince_council precedent — alive same-map
@@ -61,9 +61,9 @@
 -- ironaya convention) -> DoCastSelf(Barkskin 65860) + 60s re-arm,
 -- else 5s re-arm; 20-30s init.
 -- Unmodeled (no bridges — documented, not wired):
--- boss_faction_championsAI UpdateAI: UpdatePower() (mana pump),
--- EVENT_REMOVE_CC RemoveAurasByType legs — no power/aura-type
--- bridges; UpdateThreat() PORTED above (AI_RANGED, no armor read).
+-- boss_faction_championsAI UpdateAI: UpdatePower() + UpdateThreat()
+-- PORTED above (AI_RANGED, no armor read); EVENT_REMOVE_CC
+-- RemoveAurasByType legs — no aura-type bridge.
 -- npc_toc_boomkin UpdateAI DoSpellAttackIfReady(SPELL_WRATH 65862) —
 -- ranged auto-attack leg; Go melee is engine-driven (deviation: the
 -- champion melees instead of wrath-spamming between casts).
@@ -250,6 +250,12 @@ end
 -- in C++ per-victim order; creature entries are left untouched, as in
 -- C++ (no IsDead filter in C++ either).
 local function threatCheck(creature, guid)
+    -- C++ UpdatePower (:621-624), first in the EVENT_THREAT case
+    -- (:721-724): mana only, ModifyPower(MANA, GetMaxPower(MANA) / 3)
+    -- (C++ integer division; boss_faction_champions.lua main-file idiom).
+    if creature:GetPowerType() == 0 then
+        creature:ModifyPower(0, math.floor(creature:GetMaxPower(0) / 3))
+    end
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
             creature:ModifyThreatByPercent(victim, -100)
