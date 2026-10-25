@@ -38,11 +38,11 @@
 --   position swap + stun/interrupt/ResetThreatList + twin visual
 --   cast 26638 + post-teleport threat arm — no position/SelectTarget/
 --   InterruptNonMeleeSpells/ResetThreatList/AttackStart bridges.
--- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): grid
---   enumeration + SetFaction + AddAura are bridged (the veklor twin
---   ports the abuse leg), but this twin's AttackStart(victim) leg
---   has no bridge and the dead-bug Respawn leg has none either,
---   so the leg stays out.
+-- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): the
+--   dead-bug Respawn half is PORTED 2026-10-24 (onBugsRespawnTick:
+--   Respawn + FACTION_CREATURE + RemoveAllAuras, creature:Respawn
+--   bridge); this twin's abuse half stays out — CastSpellOnBug
+--   adds AttackStart(victim), no bridge.
 -- - KilledUnit/JustEngagedWith/JustDied DoPlaySoundToSet
 --   (SOUND_VN_AGGRO 8661 / KILL 8662 / DEATH 8660): ported via
 --   creature:PlayDirectSound (the sound bridge is live —
@@ -59,6 +59,9 @@
 --   the old "no cross-AI bridge" claim for this leg is retracted.
 local ENTRY = 15275
 local ENTRY_VEKLOR = 15276 -- temple_of_ahnqiraj.h:74
+local ENTRY_BUG_1 = 15316
+local ENTRY_BUG_2 = 15317
+local FACTION_CREATURE = 7 -- SharedDefines.h:224
 
 -- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79);
 -- UNIT_DYNFLAG_LOOTABLE (SharedDefines.h:3128); the field-79 flag bridge
@@ -151,6 +154,26 @@ local function onBerserk(creature, guid)
     end)
 end
 
+-- C++ boss_twinemperorsAI::HandleBugs respawn half (:315-346, shared
+-- by both twins' UpdateAI): every 2s, dead bugs of either entry
+-- within 150y respawn at full health at home, faction restored to
+-- FACTION_CREATURE and auras cleared. The abuse half stays out:
+-- this twin's CastSpellOnBug adds AttackStart(victim), no bridge.
+local function onBugsRespawnTick(creature, guid)
+    for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
+        for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+            if bug:IsDead() then
+                bug:Respawn()
+                bug:SetFaction(FACTION_CREATURE)
+                bug:RemoveAllAuras()
+            end
+        end
+    end
+    schedule(guid, "bugsrespawn", 2000, function()
+        onBugsRespawnTick(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -167,6 +190,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "berserk", 900000, function()
         onBerserk(creature, guid)
+    end)
+    schedule(guid, "bugsrespawn", 2000, function()
+        onBugsRespawnTick(creature, guid)
     end)
     -- C++ boss_twinemperors.cpp:165: JustEngagedWith pulls the other
     -- twin into the fight when it is not yet in combat

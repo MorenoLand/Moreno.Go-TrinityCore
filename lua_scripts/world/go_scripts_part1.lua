@@ -21,8 +21,11 @@
 --     NOT quest status), player:HasItem (lua_player.go:188), player:GetItemCount,
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
---   * MISSING bridges that block classes here: player:HasItemCount
---     (use HasItem/GetItemCount), go:CastSpell.
+--   * MISSING bridges that block classes here: go:CastSpell only
+--     (player:HasItemCount rides HasItem/GetItemCount, both bridged;
+--     2026-10-24 re-key: outhouse select sole block go:CastSpell stands,
+--     seaforium/gilded/etc. registration-only stands — their C++ enums
+--     carry no GO entry const, unlike matrix/soulwell GO_ enums).
 --     (2026-10-24: player:IsInSameRaidWith bridged in lua_player.go,
 --     go:GetOwner + go:AddUse/GetUseCount bridged in lua_objects.go;
 --     go:SummonCreature bridged 2026-10-24, lua_objects.go.)

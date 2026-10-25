@@ -84,8 +84,11 @@
 -- (Soccothrates' JustDied calls dalliah->AI()->SetData(1, 1)
 -- when Dalliah is alive and out of combat; 6s later Dalliah
 -- says SAY_SOCCOTHRATES_DEATH = 7 via the !UpdateVictim arm)
--- unmodeled — no SetData bridge exists on the shim (see
--- engine/world/lua_creature_events.go); the heroic-only
+-- re-keyed 2026-10-24: creature:SetData IS bridged
+-- (lua_creature_events.go, ScriptData store) — the relay leg is now
+-- portable via the FindNearestCreature twin idiom, but the 6s
+-- !UpdateVictim Talk leg stays out (no out-of-combat pump and no
+-- instance GUID lookup for the twin); the heroic-only
 -- EVENT_SHADOW_WAVE 39016 arm (TRIGGERED DoCastVictim
 -- {11s,16s}) is modeled via creature:IsHeroic(); no
 -- cast-state bridge — the UNIT_STATE_CASTING early-return

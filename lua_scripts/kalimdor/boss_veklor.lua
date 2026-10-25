@@ -52,8 +52,9 @@
 --   gate (TryActivateAfterTTelep / AfterTeleport 5s re-arm) stays
 --   out, as does the sibling teleport arm.
 -- - HandleBugs / CastSpellOnBug (SPELL_EXPLODEBUG 804): PORTED
---   (onBugsTick — 2s scan + abuse timer); the dead-bug Respawn leg
---   stays out (no creature:Respawn bridge).
+--   (onBugsTick — 2s scan + abuse timer + dead-bug Respawn scan
+--   PORTED 2026-10-24: Respawn + FACTION_CREATURE + RemoveAllAuras
+--   via the creature:Respawn bridge, lua_creature_events.go).
 -- - Shadow Bolt MoveChase leg (VEKLOR_DIST 20, "VL will not come
 --   to melee when attacking"): motion bridge absent.
 -- - Custom AttackStart (melee-less aggro): motion bridge absent.
@@ -89,6 +90,7 @@ local SPELL_ARCANEBURST = 568
 
 local SPELL_EXPLODEBUG = 804
 local FACTION_MONSTER = 14
+local FACTION_CREATURE = 7 -- SharedDefines.h:224
 local ENTRY_BUG_1 = 15316
 local ENTRY_BUG_2 = 15317
 local ABUSE_BUG_RANGE = 20
@@ -127,9 +129,9 @@ end
 
 -- C++ HandleBugs (boss_twinemperors.cpp:348-371) + RespawnNearbyBugsAndGetOne
 -- (:315-346) + veklor CastSpellOnBug (:523-527): every 2000ms (BugsTimer)
--- scan entries 15316/15317 within 150y; the dead-bug Respawn +
--- FACTION_CREATURE + RemoveAllAuras legs stay out (no creature:Respawn
--- bridge), so only live bugs are picked; a live bug within 20y
+-- scan entries 15316/15317 within 150y; dead bugs respawn first
+-- (Respawn + FACTION_CREATURE + RemoveAllAuras, PORTED 2026-10-24),
+-- then a live bug within 20y
 -- (ABUSE_BUG_RANGE) is picked with the C++ rand32()%4 == 0 replacement
 -- rule, then SetFaction(FACTION_MONSTER) + AddAura(SPELL_EXPLODEBUG) +
 -- SetFullHealth (SetHealth(GetMaxHealth())); abuse timer
@@ -139,6 +141,19 @@ local function onBugsTick(creature, guid)
     local st = bugState[guid]
     if st == nil then
         return
+    end
+    -- C++ RespawnNearbyBugsAndGetOne (:315-346): every bugs tick, dead
+    -- bugs of either entry within 150y respawn at full health at home,
+    -- faction restored to FACTION_CREATURE and auras cleared, before
+    -- the abuse pick below (C++ order: respawn scan, then pick).
+    for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
+        for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+            if bug:IsDead() then
+                bug:Respawn()
+                bug:SetFaction(FACTION_CREATURE)
+                bug:RemoveAllAuras()
+            end
+        end
     end
     if st.abuse > 2000 then
         st.abuse = st.abuse - 2000
