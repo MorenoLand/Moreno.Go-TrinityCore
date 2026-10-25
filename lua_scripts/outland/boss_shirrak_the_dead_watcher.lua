@@ -161,24 +161,21 @@ end
 -- 15000 + rand32() % 5000. The pick is stored in focusedTarget so
 -- JustSummoned can AttackStart it (C++ FocusedTargetGUID).
 local function focusfireTick(creature, guid)
-    -- C++ pool: threat list minus offline refs (ThreatManager.cpp
-    -- ShouldBeOffline), minus the top-threat entry (offset 1) — the
-    -- pick is then gated on player-type + alive, and a failed gate
-    -- means NO summon that cycle (C++ re-arms only). Go's
-    -- SortedEntries returns dead entries too, so the alive filter
-    -- below stands in for the offline skip; it runs BEFORE the
-    -- offset pop, as in C++ list construction.
-    local alive = {}
-    for _, t in ipairs(creature:GetAITargets()) do
-        if t and t:IsAlive() then
-            alive[#alive + 1] = t
-        end
-    end
+    -- C++ pool (UnitAI.h:205-206, 270-277): [current victim] +
+    -- threat-sorted rest, offline refs skipped, the first entry
+    -- popped BEFORE any filter — then the pick is gated on
+    -- player-type + alive, and a failed gate means NO summon that
+    -- cycle (C++ re-arms only). Black-stalker skip-first idiom:
+    -- pick from GetAITargets()[2..] unfiltered, so a dead or
+    -- non-player pick fails the gate exactly like C++ (the old
+    -- alive-prefilter over-summoned whenever a dead entry
+    -- preceded the pick).
+    local targets = creature:GetAITargets()
     local pick = nil
-    if #alive > 1 then
-        pick = alive[math.random(2, #alive)]
+    if #targets > 1 then
+        pick = targets[math.random(2, #targets)]
     end
-    if pick and pick:GetObjectType() == "Player" then
+    if pick and pick:GetObjectType() == "Player" and pick:IsAlive() then
         local target = pick
         focusedTarget[guid] = target:GetGUID()
         creature:SummonCreature(NPC_FOCUS_FIRE, target:GetX(), target:GetY(),

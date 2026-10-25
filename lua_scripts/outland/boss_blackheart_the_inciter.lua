@@ -57,8 +57,8 @@
 -- (shazzrah precedent);
 -- EVENT_CHARGE_ATTACK — PORTED above: SelectTarget(Random, 0)
 -- → DoCast(target, SPELL_CHARGE 33709) (2-arg, non-triggered,
--- offset 0 — tank INCLUDED, the_beast/opera-Julianne random-pool
--- convention with the threat-list-vs-player-pool caveat), 5s init,
+-- offset 0 — tank INCLUDED, threat-list pool via GetAITargets
+-- (black-stalker idiom), 5s init,
 -- ONE-SHOT. C++ BUG (verified): the arm re-arms EVENT_CHARGE (line
 -- 147), but the enum defines only EVENT_CHARGE_ATTACK —
 -- EVENT_CHARGE resolves to SharedDefines.h:3342 (id 1003,
@@ -122,23 +122,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, ...) — the map-wide random-player pool
--- (the_beast / opera-Julianne convention): C++ picks from the threat
--- list, the Lua pool is all alive players on the same map+instance —
--- threat-list-vs-player-pool caveat applies (netherspite precedent).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0): random alive
+-- unit from the boss's threat list, tank included, no distance
+-- gate (black-stalker idiom; the old map-player pool could pick
+-- never-engaged instance players and missed non-player threat
+-- units).
+local function pickThreatTarget(creature)
+    local found = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    if #candidates == 0 then
+    if #found == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return found[math.random(#found)]
 end
 
 -- C++ EVENT_WAR_STOMP (:149-151): DoCast(me, SPELL_WAR_STOMP 33707)
@@ -157,9 +157,9 @@ end
 -- SPELL_CHARGE 33709) (2-arg, non-triggered), 5s init, ONE-SHOT —
 -- the arm's re-arm schedules EVENT_CHARGE (SharedDefines.h:3342,
 -- id 1003) which the UpdateAI switch never handles (verified
--- no-op). Threat-list-vs-player-pool caveat applies.
+-- no-op). Threat-list pool via GetAITargets (see above).
 local function blackheartChargeTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = pickThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
     end
