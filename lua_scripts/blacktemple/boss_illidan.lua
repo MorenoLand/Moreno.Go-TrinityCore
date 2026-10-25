@@ -60,8 +60,8 @@
 -- non-triggered self-cast (C++ DoCastAOE resolves to the caster's
 -- own position — vaelastrasz convention) / shear 41032 10s then
 -- 12s, non-triggered DoCastVictim / parasitic shadowfiend 41917
--- 26s then 30s, non-triggered on a random alive player in the
--- instance (C++ SelectTarget(Random, 0) — teron convention) /
+-- 26s then 30s, non-triggered on a random threat-list player
+-- alive (C++ SelectTarget(Random, 0, 0.0f, true)) /
 -- taunt Talk(SAY_ILLIDAN_TAUNT) 30s then {30s,60s}. The 10s evade
 -- check has no boundary bridge — skipped; the music controller
 -- arms ride instance->GetGameObject(DATA_ILLIDAN_MUSIC_CONTROLLER)
@@ -100,7 +100,7 @@
 -- 39849 2s, non-triggered self-cast -> throw warglaive 2 39635 1s,
 -- non-triggered self-cast -> pillar 2s then 30s: cancel the phase-2
 -- timers, random pillar index, arm fireball 40598 {1s,8s} then
--- {2s,4s} non-triggered on a random alive player in the instance
+-- {2s,4s} non-triggered on a random threat-list player alive
 -- within 150 yd (C++ SelectTarget(Random, 0, 150.0f, true)) / eye
 -- blast {1s,30s} one-shot: Talk(SAY_ILLIDAN_EYE_BLAST) — the db-
 -- target summon (SummonCreature now bridged, boss_illidan.cpp:906)
@@ -110,7 +110,7 @@
 -- without the sweep the arm is gutted (kiljaeden shield-orb
 -- precedent), so the 39908 beam cast on it is skipped with it /
 -- dark barrage 40585 50% {1s,20s} one-shot, non-
--- triggered on a random alive player within 150 yd, then re-arm
+-- triggered on a random threat-list player alive within 150 yd, then re-arm
 -- eye blast 5s and re-arm the pillar timer 30s (C++ adds 30s to
 -- the pending pillar time — approximated, documented); the liftoff
 -- emote/sound/react/attack-stop/gravity arms are PORTED at the
@@ -185,7 +185,7 @@
 -- engage 3s (the REACT_AGGRESSIVE arm is PORTED 2026-10-20 —
 -- creature:SetReactState; the zone-combat arm has no bridge),
 -- then charge 42003 5s on a random
--- alive player in the instance more than 25 yd (2D) from both
+-- alive threat-list player more than 25 yd (2D) from both
 -- blade positions (676.226,325.231) and (678.060,285.220)
 -- (C++ ChargeTargetSelector, C++-exact), repeat 5s with a target
 -- else 1s (C++-exact) / flame blast 40631 11s then 12s,
@@ -400,34 +400,28 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, 0.0f, true): threat-list players
+-- alive, no range cap, victim included.
+local function randomAnyTarget(creature)
+    local candidates = {}
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead() then
+            candidates[#candidates + 1] = p
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): any alive player in the instance,
--- no range cap, victim included.
-local function randomAnyTarget(creature)
-    local candidates = playersInInstance(creature)
     if #candidates == 0 then
         return nil
     end
     return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(Random, 0, 150.0f, true): any alive player in
--- the instance within 150 yd.
+-- C++ SelectTarget(Random, 0, 150.0f, true): threat-list players
+-- alive within 150 yd.
 local function randomTargetIn150(creature)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 150 then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= 150 then
             candidates[#candidates + 1] = p
         end
     end
@@ -705,8 +699,8 @@ onDemon = function(creature, guid)
     end)
 end
 
--- C++ EVENT_FIREBALL: non-triggered 40598 on a random alive player
--- within 150 yd; repeat {2s,4s}.
+-- C++ EVENT_FIREBALL: non-triggered 40598 on a random threat-list
+-- player alive within 150 yd; repeat {2s,4s}.
 local function onFireball(creature, guid)
     local target = randomTargetIn150(creature)
     if target then
@@ -1109,16 +1103,18 @@ RegisterCreatureEvent(ENTRY_AKAMA, 23, akamaCleanup)
 -- Flame of Azzinoth (22997)
 --
 
--- C++ ChargeTargetSelector: player, 2D distance > 25 yd from both
--- blade positions.
+-- C++ ChargeTargetSelector over the threat list: player, 2D
+-- distance > 25 yd from both blade positions.
 local function chargeTarget(creature)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        local dx1, dy1 = p:GetX() - BLADE_X1, p:GetY() - BLADE_Y1
-        local dx2, dy2 = p:GetX() - BLADE_X2, p:GetY() - BLADE_Y2
-        if (dx1 * dx1 + dy1 * dy1) > 25 * 25
-                and (dx2 * dx2 + dy2 * dy2) > 25 * 25 then
-            candidates[#candidates + 1] = p
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead() then
+            local dx1, dy1 = p:GetX() - BLADE_X1, p:GetY() - BLADE_Y1
+            local dx2, dy2 = p:GetX() - BLADE_X2, p:GetY() - BLADE_Y2
+            if (dx1 * dx1 + dy1 * dy1) > 25 * 25
+                    and (dx2 * dx2 + dy2 * dy2) > 25 * 25 then
+                candidates[#candidates + 1] = p
+            end
         end
     end
     if #candidates == 0 then

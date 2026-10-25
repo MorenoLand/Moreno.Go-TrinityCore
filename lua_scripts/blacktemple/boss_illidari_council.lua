@@ -66,8 +66,9 @@
 -- hexlord friendly-scan precedent) / consecration 41541 10s then {30s,35s},
 -- non-triggered self-cast (C++ DoCast default is triggered=false
 -- — vaelastrasz convention) / hammer of justice 41468 10s then
--- 20s, non-triggered on a random alive player 10-40 yd excluding
--- the current victim (C++ HammerTargetSelector + position 1;
+-- 20s, non-triggered on a random threat-list unit alive 10-40 yd
+-- (C++ HammerTargetSelector + position 1, first MaxThreat entry
+-- skipped before filters;
 -- nil pick casts nothing but keeps the schedule, jeklik
 -- convention) / judgement 41467 15s then 15s, non-triggered
 -- DoCastVictim (nil falls back to the victim on the bridge; nil
@@ -88,15 +89,14 @@
 -- one-time arm — the recurring EVENT_DAMPEN_MAGIC only ever
 -- arms from DoAction(ACTION_REFRESH_DAMPEN), which has no bearer:
 -- the dampen-magic AuraScript that calls it has no bridge) /
--- flamestrike 41481 8s then 40s, non-triggered on a random alive
--- player in the instance (C++ SelectTarget(Random, 0) is
--- player-only — teron convention) + Talk(SAY_COUNCIL_SPECIAL) /
+-- flamestrike 41481 8s then 40s, non-triggered on a random
+-- threat-list unit alive (C++ SelectTarget(Random, 0),
+-- playerOnly defaults false) + Talk(SAY_COUNCIL_SPECIAL) /
 -- blizzard 41482 25s then {15s,40s}, same targeting, non-
 -- triggered / arcane explosion 41524 5s then 1s gated check: if
--- _canUseArcaneExplosion and a random alive player is within 10
+-- _canUseArcaneExplosion and a threat-list unit alive is within 10
 -- yd -> non-triggered self-cast 41524, clear the gate, arm the
--- 5s re-arm (EVENT_ARCANE_EXPLOSION_CHECK); the gate arm has no
--- bridge target scan — playersInInstance supplies it; the 1s
+-- 5s re-arm (EVENT_ARCANE_EXPLOSION_CHECK); the 1s
 -- cycle re-arms unconditionally (C++-exact). Nil-target ticks
 -- cast nothing but keep the schedule (jeklik convention). The
 -- DoSpellAttackIfReady(41483 arcane bolt) filler has no spell-
@@ -234,40 +234,35 @@ local function bossState(guid)
     return st
 end
 
--- supremus convention: alive players in the boss's instance.
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): threat-list any-unit alive, no
+-- range cap, no player gate (playerOnly defaults false) — pets
+-- and totems are eligible, victim included.
+local function randomThreatTarget(creature)
+    local candidates = {}
+    for _, u in ipairs(creature:GetAITargets()) do
+        if not u:IsDead() then
+            candidates[#candidates + 1] = u
         end
     end
-    return found
-end
-
--- teron convention: C++ SelectTarget(Random, 0) is a random alive
--- player in the instance, player-only.
-local function randomInstancePlayer(creature)
-    local candidates = playersInInstance(creature)
     if #candidates == 0 then
         return nil
     end
     return candidates[math.random(1, #candidates)]
 end
 
--- C++ HammerTargetSelector: unit within 10-40 yd of the boss;
--- position 1 excludes the current victim (terestian/gurtogg
--- exclusion convention).
+-- C++ HammerTargetSelector + SelectTarget(Random, 1, predicate):
+-- threat-list any-unit alive 10-40 yd from the boss, with the
+-- first MaxThreat entry skipped BEFORE the filters (UnitAI.h
+-- offset-before-filter) — not a victim-GUID exclusion; differs
+-- when victim != threat head.
 local function hammerJusticeTarget(creature)
-    local victim = creature:GetVictim()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        local d = creature:GetDistance(p)
-        if d >= 10 and d <= 40
-                and (not victim or p:GetGUID() ~= victim:GetGUID()) then
-            candidates[#candidates + 1] = p
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local u = targets[i]
+        local d = creature:GetDistance(u)
+        if not u:IsDead() and d >= 10 and d <= 40 then
+            candidates[#candidates + 1] = u
         end
     end
     if #candidates == 0 then
@@ -581,7 +576,7 @@ RegisterCreatureEvent(ENTRY_GATHIOS, 23, memberReset)
 -- C++ EVENT_FLAMESTRIKE: SelectTarget(Random, 0) -> non-triggered
 -- DoCast(41481); Talk(SAY_COUNCIL_SPECIAL); re-arm 40s.
 local function zerevorFlamestrike(creature, guid)
-    local target = randomInstancePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FLAMESTRIKE)
     end
@@ -594,7 +589,7 @@ end
 -- C++ EVENT_BLIZZARD: SelectTarget(Random, 0) -> non-triggered
 -- DoCast(41482); re-arm {15s,40s}.
 local function zerevorBlizzard(creature, guid)
-    local target = randomInstancePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_BLIZZARD)
     end
@@ -604,7 +599,7 @@ local function zerevorBlizzard(creature, guid)
 end
 
 -- C++ EVENT_ARCANE_EXPLOSION: if _canUseArcaneExplosion and a
--- random alive player is within 10 yd -> non-triggered
+-- threat-list unit alive is within 10 yd -> non-triggered
 -- DoCastSelf(41524), clear the gate, arm the 5s re-arm (EVENT_
 -- ARCANE_EXPLOSION_CHECK); the 1s cycle re-arms unconditionally.
 -- C++ SelectTarget(Random, 0, 10.0f) filters the 10-yd pool BEFORE
@@ -615,9 +610,9 @@ local function zerevorArcaneExplosion(creature, guid)
     local st = bossState(guid)
     if st.canUseArcaneExplosion then
         local near = {}
-        for _, p in ipairs(playersInInstance(creature)) do
-            if creature:GetDistance(p) <= 10 then
-                near[#near + 1] = p
+        for _, u in ipairs(creature:GetAITargets()) do
+            if not u:IsDead() and creature:GetDistance(u) <= 10 then
+                near[#near + 1] = u
             end
         end
         if #near > 0 then
