@@ -66,11 +66,11 @@
 -- EVENT_QUIVERING_STRIKE (:125-127) — DoCastVictim(SPELL_QUIVERING_STRIKE
 --   72422) = victim-cast; re-arm 10000ms unconditional.
 -- EVENT_IMPENDING_DESPAIR (:129-135) — SelectTarget(Random, 0, 45.0f,
---   playerOnly): random alive player within 45.0f (the 45.0f distance
---   filter is modeled via IsWithinDist); target found -> Talk(
---   SAY_IMPENDING_DESPAIR 3) (:132) + non-triggered cast 72426 on the
---   target (:133); re-arm 13000ms unconditional (:135, outside the
---   target-if).
+--   playerOnly): random alive threat-list player within 45.0f (the
+--   45.0f distance filter is modeled via IsWithinDist); target found
+--   -> Talk(SAY_IMPENDING_DESPAIR 3) (:132) + non-triggered cast 72426
+--   on the target (:133); re-arm 13000ms unconditional (:135, outside
+--   the target-if).
 -- EVENT_DEFILING_HORROR (:137-139) — DoCastAOE(SPELL_DEFILING_HORROR
 --   72435) = self-cast; re-arm {21000,39000}ms randtime unconditional.
 --
@@ -106,9 +106,9 @@
 -- plain HopelessnessHelper id — so the aura on the creature is the
 -- plain-id aura (72395/72396/72397); RemoveAura(plain id) clears the
 -- aura the cast actually applied.
--- SelectTarget(Random, 0, 45.0f, true): approximated with a random alive
--- player on the same map/instance within 45.0f (the keleseth / thorim
--- GetPlayersInWorld precedent with the 45.0f distance filter applied).
+-- SelectTarget(Random, 0, 45.0f, true): random alive threat-list
+-- player within 45.0f (GetAITargets is the threat-list bridge; the old
+-- GetPlayersInWorld pool could pick instance players outside combat).
 -- DamageTaken hook is pre-application: post-damage health decides,
 -- strictly at/below 66 / 33 / 10 like C++ HealthBelowPctDamaged (the
 -- moroes convention).
@@ -172,16 +172,16 @@ local function clearState(guid)
 end
 
 -- C++ :129 SelectTarget(SelectTargetMethod::Random, 0, 45.0f, true) —
--- random alive player on the same map/instance within 45.0f (the
--- keleseth / thorim GetPlayersInWorld precedent, plus the 45.0f
--- distance filter).
+-- threat-list players alive within 45.0f (SelectTarget draws the
+-- threat list, UnitAI.h; dead targets are offline refs, Go
+-- SortedEntries returns them too — same stale-pool class as the
+-- Halls of Stone / Forge of Souls strips).
 local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, 45) then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:IsWithinDist(t, 45) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

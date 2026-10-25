@@ -45,19 +45,19 @@
 --   non-triggered; CastSpell(nil, ...) is the victim-cast convention;
 --   re-arm {8000,13000}ms (:104).
 -- EVENT_WELL_OF_CORRUPTION (:106-110) — SelectTarget(Random, 0, 100.0f,
---   true): random alive player WITHIN 100 yd (creature:IsWithinDist is
---   the bridged distance check — the maiden / kiljaeden precedent);
---   if found, DoCast(target, SPELL_WELL_OF_CORRUPTION 72362)
---   non-triggered; re-arm 13000ms unconditional (:109, outside the
---   target-if).
+--   true): random alive threat-list player WITHIN 100 yd
+--   (creature:IsWithinDist is the bridged distance check — the maiden /
+--   kiljaeden precedent); if found, DoCast(target,
+--   SPELL_WELL_OF_CORRUPTION 72362) non-triggered; re-arm 13000ms
+--   unconditional (:109, outside the target-if).
 -- EVENT_CORRUPTED_FLESH (:111-115) — Talk(SAY_CORRUPTED_FLESH 3) (:112)
 --   fires UNCONDITIONALLY in C++; DoCastAOE(SPELL_CORRUPTED_FLESH
 --   72363) is self-cast non-triggered (:113); re-arm 20000ms (:114).
 -- EVENT_SHARED_SUFFERING (:116-120) — SelectTarget(Random, 0, 0.0f,
---   true): random alive player, 0.0f = no distance filter (the
---   keleseth / thorim / garfrost GetPlayersInWorld precedent); if
---   found, DoCast(target, SPELL_SHARED_SUFFERING 72368) non-triggered;
---   re-arm {14000,15000}ms unconditional (:119, outside the target-if).
+--   true): random alive threat-list player, 0.0f = no distance filter;
+--   if found, DoCast(target, SPELL_SHARED_SUFFERING 72368)
+--   non-triggered; re-arm {14000,15000}ms unconditional (:119, outside
+--   the target-if).
 -- KilledUnit (:84-88) — Talk(SAY_SLAY 1) player-gated (:87), the
 --   razuvious player-gated variant precedent.
 -- JustDied (:77-82) — Talk(SAY_DEATH 2) (:79) unconditional, the
@@ -93,10 +93,9 @@
 --   the standing queue.
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
--- Random-target helper: GetPlayersInWorld alive-player scan on the same
---   map/instance (the keleseth / thorim precedent); C++ applies no
---   threat-order weighting and playerOnly = true, so the pool is every
---   alive player — no approximation beyond the C++ select rules.
+-- Random-target helper: threat-list players via GetAITargets
+--   (SelectTarget draws the threat list, UnitAI.h); the old
+--   GetPlayersInWorld pool could pick instance players outside combat.
 -- No-qualifier corner: with zero qualifying players the C++ target-if
 --   skips Talk + cast but still re-arms (:109/:119 outside the if) —
 --   replicated: re-arm runs even when no target qualifies.
@@ -147,15 +146,13 @@ local function initState(guid)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 0.0f, true) — random
--- alive player on the same map/instance; no distance filter (0.0f) —
--- the keleseth / thorim / garfrost GetPlayersInWorld precedent.
+-- alive threat-list player; no distance filter (0.0f) — SelectTarget
+-- draws the threat list (UnitAI.h), not the instance player list.
 local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -164,16 +161,15 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- Same pool with a distance filter (creature:IsWithinDist is the
--- bridged distance check — the maiden / kiljaeden precedent); used for
--- the 100.0f WELL_OF_CORRUPTION target.
+-- Same threat-list pool with a distance filter (creature:IsWithinDist
+-- is the bridged distance check — the maiden / kiljaeden precedent);
+-- used for the 100.0f WELL_OF_CORRUPTION target.
 local function randomPlayerInRange(creature, dist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, dist) then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:IsWithinDist(t, dist) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
