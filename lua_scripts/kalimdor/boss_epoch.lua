@@ -96,20 +96,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
+-- takes any entry; dead members are offline refs in C++ (skipped at
+-- list build) so they are filtered here. The old instance-player pool
+-- is retired (threat-list precedent, Oct-25 strips).
+local function randomThreatPlayerInRange(creature, maxDist)
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            pool[#pool + 1] = t
         end
     end
-    if #found == 0 then
+    if #pool == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return pool[math.random(#pool)]
 end
 
 -- C++ EVENT_WOUNDING_STRIKE: DoCastVictim(52771), non-triggered, init
@@ -127,7 +129,7 @@ end
 -- C++ EVENT_CURSE_OF_EXERTION: DoCast(SelectTarget(Random, 0, 100.0f,
 -- true), 52772), non-triggered, init {10s,17s} -> repeat 9.3s.
 local function onCurseOfExertion(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_EXERTION)
     end

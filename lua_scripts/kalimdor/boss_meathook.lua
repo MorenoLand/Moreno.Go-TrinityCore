@@ -24,13 +24,14 @@
 --   at its C++ ScheduleEvent cooldown ({7s,11s} / 2s / {13s,17s});
 --   the BossAI::JustEngagedWith instance leg is blocked (standing).
 -- - Constricting Chains (EVENT_CHAIN): SelectTarget(Random, 0, -20.0f,
---   true) -> random alive player at least 20yd away (C++'s negative
---   dist is a minimum-distance filter — UnitAI.h/UnitAI.cpp document
---   "dist: if 0: ignored, if > 0: maximum distance, if < 0: minimum
---   distance"; IsWithinCombatRange approximated by GetDistance here)
---   else SelectTarget(Random, 1, 100.0f, true) -> random alive player
---   within 100m excluding the victim (azgalor position-1 convention —
---   no threat-list bridge) else DoCastVictim; DoCast non-triggered
+--   true) -> random alive threat-list player at least 20yd away (C++'s
+--   negative dist is a minimum-distance filter — UnitAI.h/UnitAI.cpp
+--   document "dist: if 0: ignored, if > 0: maximum distance, if < 0:
+--   minimum distance"; IsWithinCombatRange approximated by GetDistance
+--   here) else SelectTarget(Random, 1, 100.0f, true) -> random alive
+--   threat-list player within 100m with the MaxThreat head skipped
+--   BEFORE the player/dist filters (offset-before-filter, UnitAI.h)
+--   else DoCastVictim; DoCast non-triggered
 --   (52720-era salramm DoCast convention); init {7s,11s} ->
 --   repeat {10s,15s} unconditional (C++ Repeat sits outside the
 --   if/else, nil target -> victim cast).
@@ -89,23 +90,28 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: random alive player in the instance within
--- maxDist; minDist models C++'s negative SelectTarget dist ("at least
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
+-- takes any entry, position 1 skips the MaxThreat head BEFORE the
+-- player/dist filters (offset-before-filter, svalna idiom); dead entries
+-- are offline refs in C++ (skipped at list build) so they are filtered
+-- here. minDist models C++'s negative SelectTarget dist ("at least
 -- -dist yards away" per UnitAI.h — IsWithinCombatRange approximated by
--- GetDistance here); excludeVictim approximates C++ position 1
--- ("never on tank") where no threat-list bridge exists (azgalor Doom
--- precedent).
-local function randomPlayer(creature, minDist, maxDist, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
+-- GetDistance here). The old instance-player pool + victim-GUID
+-- exclusion are retired (threat-list precedent, Oct-25 strips).
+local function randomThreatPlayer(creature, minDist, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        start = 2
+    end
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        local d = creature:GetDistance(p)
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and d >= minDist
-                and (not maxDist or d <= maxDist)
-                and not (excludeVictim and victim and p == victim) then
-            found[#found + 1] = p
+    for i = start, #targets do
+        local t = targets[i]
+        local d = creature:GetDistance(t)
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and d >= minDist
+                and (not maxDist or d <= maxDist) then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -116,13 +122,14 @@ end
 
 -- C++ EVENT_CHAIN: DoCast(SelectTarget(Random, 0, -20.0f, true),
 -- 52696) else DoCast(SelectTarget(Random, 1, 100.0f, true), 52696)
--- else DoCastVictim(52696), non-triggered; init {7s,11s} ->
--- repeat {10s,15s} unconditional (C++ Repeat sits outside the
--- if/else; nil target -> victim cast).
+-- else DoCastVictim(52696), non-triggered; both picks draw the threat
+-- list (UnitAI.h), the position-1 pick skipping the MaxThreat head
+-- before the filters; init {7s,11s} -> repeat {10s,15s} unconditional
+-- (C++ Repeat sits outside the if/else; nil target -> victim cast).
 local function onChain(creature, guid)
-    local target = randomPlayer(creature, 20, nil, false)
+    local target = randomThreatPlayer(creature, 20, nil, false)
     if not target then
-        target = randomPlayer(creature, 0, 100, true)
+        target = randomThreatPlayer(creature, 0, 100, true)
     end
     if target then
         creature:CastSpell(target, SPELL_CONSTRICTING_CHAINS)

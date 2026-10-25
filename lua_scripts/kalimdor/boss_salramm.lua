@@ -45,14 +45,14 @@
 --   triggered self-cast SPELL_EXPLODE_GHOUL — scheduled {25s,29s} after
 --   each summon wave.
 -- - Shadow Bolt 57725 on SelectTarget(Random, 0, 40.0f, true) ->
---   random alive player within 40m (nefarian convention), non-triggered
+--   random alive threat-list player within 40m, non-triggered
 --   (C++ DoCast), init 2s -> repeat 3s; C++ Repeat is unconditional
 --   even on an empty target (kazrogal precedent), so the Lua re-arm is
 --   too (nil target -> no cast).
 -- - Steal Flesh 52708 on SelectTarget(Random, 1, 50.0f, true) ->
---   random threat-list player within 50m excluding the victim
---   (GetAITargets pick, azgalor position-1 convention),
---   non-triggered (C++ DoCast), Talk SAY_STEAL_FLESH (5) fires
+--   random threat-list player within 50m with the MaxThreat head
+--   skipped BEFORE the player/dist filters (offset-before-filter,
+--   UnitAI.h), non-triggered (C++ DoCast), Talk SAY_STEAL_FLESH (5) fires
 --   regardless of target (C++ Talks before the SelectTarget), init
 --   {25s,35s} -> repeat {15s,20s} unconditional (nil target -> no
 --   cast).
@@ -120,39 +120,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: random alive player in the instance within
--- maxDist; the excludeVictim flag approximates C++ position 1 ("never
--- on tank") for Steal Flesh (now a threat-list pick, see below).
-local function randomPlayerInRange(creature, maxDist, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and not (excludeVictim and victim and p == victim) then
-            found[#found + 1] = p
-        end
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
+-- takes any entry, position 1 skips the MaxThreat head BEFORE the
+-- player/dist filters (offset-before-filter, svalna idiom). Dead
+-- members are offline refs in C++ (skipped at list build) so they are
+-- filtered here. The old instance-player pool and victim-GUID
+-- exclusion are retired (threat-list precedent, Oct-25 strips).
+local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        start = 2
     end
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
--- C++ SelectTarget(Random, 1, maxDist, true) threat-list pick
--- (UnitAI.h:163-174): offset 1 pops the first MaxThreat entry
--- (the current victim, first in the C++-constructed list);
--- the Go list is threat-descending so the victim entry is
--- dropped by GUID instead. Dead members are offline in C++
--- (skipped at list build) so they are filtered here.
-local function randomThreatPlayerInRange(creature, maxDist)
-    local victim = creature:GetVictim()
-    local victimGUID = victim and victim:GetGUID() or 0
     local pool = {}
-    for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetGUID() ~= victimGUID and t:GetObjectType() == "Player"
-                and not t:IsDead() and creature:GetDistance(t) <= maxDist then
+    for i = start, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
             pool[#pool + 1] = t
         end
     end
@@ -195,7 +179,7 @@ end
 -- 57725), non-triggered, init 2s -> repeat 3s (re-arm unconditional in
 -- C++, even on empty target — kazrogal precedent).
 local function onShadowBolt(creature, guid)
-    local target = randomPlayerInRange(creature, 40, false)
+    local target = randomThreatPlayerInRange(creature, 40, false)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
     end
@@ -210,7 +194,7 @@ end
 -- repeat {15s,20s} unconditional (nil target -> no cast).
 local function onStealFlesh(creature, guid)
     creature:Talk(SAY_STEAL_FLESH)
-    local target = randomThreatPlayerInRange(creature, 50)
+    local target = randomThreatPlayerInRange(creature, 50, true)
     if target then
         creature:CastSpell(target, SPELL_STEAL_FLESH)
     end
