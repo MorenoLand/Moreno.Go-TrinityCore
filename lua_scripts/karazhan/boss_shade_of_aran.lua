@@ -24,19 +24,19 @@
 -- up to 3 random players; a 500ms watcher punishes movement beyond 3 yd
 -- from the cast point), or circular blizzard. Below 40% health once, four
 -- water elementals; at 12 minutes and every 60s after, 5 shadow-of-Aran
--- summons (Talk + summon, Attack leg unbridged). The drink/potion/pyroblast mana sequence needs
+-- summons (Talk + summon + Attack via EngageWithTarget). The drink/potion/pyroblast mana sequence needs
 -- mana to drain; the repo carries no Spell.dbc, so creature spell costs
 -- resolve to 0 and the mana pool never moves — see deviations.
 -- Deviations from C++: the 4 water elementals (17167) ARE summoned now
 -- (2026-10-22 summon bridge — creature:SummonCreature on the handler
--- surface; type 2 TIMED_DESPAWN, 90s); unit->Attack(victim, true) has no
--- bridge, so the elementals idle until the engine aggros them (their
--- waterbolt AI is registered below for when they engage). The 5
--- shadow-of-Aran summons (18254) and the blizzard creature (17161) ARE
--- summoned now (2026-10-24 summon bridge — shadows type 3, 5s OOC
--- grace; blizzard type 2, 25s, self-casts 29951 at summon); their
--- Attack(victim) legs have no bridge, so both idle until the engine
--- aggros them (no C++ script exists for either entry). The water elemental AI itself ("npc_aran_elemental") is
+-- surface; type 2 TIMED_DESPAWN, 90s) and their Attack(victim, true)
+-- legs ARE ported via elemental:EngageWithTarget(victim) (2026-10-20
+-- EngageWithTarget bridge; C++ order Attack-then-SetFaction kept; the
+-- funnel is player-target-only, so a non-player victim no-ops). The 5
+-- shadow-of-Aran summons (18254) ARE summoned now (2026-10-24 summon
+-- bridge — type 3, 5s OOC grace) with the same Attack port; the blizzard
+-- creature (17161) has no Attack leg in C++ (summon + SetFaction +
+-- self-cast 29951 only). No C++ script exists for 18254/17161. The water elemental AI itself ("npc_aran_elemental") is
 -- registered for entry 17167 below so the summoned elementals cast
 -- waterbolt 31012 every 2-5s once engaged. No
 -- instance-script model — the library-door open/close arms and the
@@ -294,13 +294,16 @@ onNormalCast = function(creature, guid)
             -- TEMPSUMMON_TIMED_DESPAWN (2), 90s = 90000ms). The all-zero
             -- coords ride the bridge's Object.cpp:2059-2060 close-point
             -- fallback (C++-exact). unit->Attack(me->GetVictim(), true)
-            -- has no bridge (the elementals idle until the engine aggros
-            -- them — documented gap); unit->SetFaction(me->GetFaction())
-            -- is bridged and ported C++-exact.
+            -- ports via elemental:EngageWithTarget(victim) in C++ order
+            -- (Attack, then SetFaction); the funnel is player-target-only.
+            local victim = creature:GetVictim()
             for _ = 1, 4 do
                 local elemental = creature:SummonCreature(ENTRY_WATER_ELEMENTAL,
                     0, 0, 0, 0, 2, 90000)
                 if elemental ~= nil then
+                    if victim ~= nil then
+                        elemental:EngageWithTarget(victim)
+                    end
                     elemental:SetFaction(creature:GetFaction())
                 end
             end
@@ -371,12 +374,17 @@ onBerserk = function(creature, guid)
     -- all-zero coords ride the bridge's close-point fallback and the
     -- type-3 timer freezes in combat (pet_combat.go expiry twin),
     -- so the 5s runs only out of combat, C++-exact. No C++ script
-    -- exists for 18254 — unit->Attack(victim) has no bridge, so the
-    -- shadows idle until the engine aggros them (elemental precedent).
+    -- exists for 18254 — unit->Attack(victim) ports via
+    -- shadow:EngageWithTarget(victim) in C++ order (Attack, then
+    -- SetFaction); the funnel is player-target-only.
+    local victim = creature:GetVictim()
     for _ = 1, 5 do
         local shadow = creature:SummonCreature(ENTRY_SHADOW_OF_ARAN,
             0, 0, 0, 0, 3, 5000)
         if shadow ~= nil then
+            if victim ~= nil then
+                shadow:EngageWithTarget(victim)
+            end
             shadow:SetFaction(creature:GetFaction())
         end
     end

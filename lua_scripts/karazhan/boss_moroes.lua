@@ -29,10 +29,10 @@
 -- order after Talk(SAY_DEATH), boss_moroes.cpp:181) via GetPlayersInWorld
 -- + mapId/instanceId filter and player:RemoveAura (bridged).
 -- JustEngagedWith's AddsAttack and UpdateAI's 5s CheckAdds re-aggro arm
--- (AttackStart on the boss's victim for adds without one) have no
--- AttackStart/DoZoneInCombat/EnterEvadeMode bridges (the keleseth
--- guard-AttackStart precedent) — the adds engage via the engine's own
--- aggro.
+-- ARE ported via guest:EngageWithTarget(victim) + guest:DoZoneInCombat()
+-- (2026-10-20 EngageWithTarget bridge; guests found by entry with
+-- FindNearestCreature, alive-only, 60 yd — the despawn-sweep range).
+-- The missing-add EnterEvadeMode arm stays out (no bridge).
 
 local ENTRY_MOROES = 15687
 local ENTRY_DOROTHEA, ENTRY_RAFE, ENTRY_CATRIONA = 17007, 19872, 19873
@@ -225,14 +225,59 @@ local function onGouge(creature, guid)
     schedule(guid, "gouge", 40000, function() onGouge(creature, guid) end)
 end
 
+-- C++ boss_moroes.cpp:224-238 AddsAttack + :268-279 CheckAdds: guests are
+-- found by their picked entry (FindNearestCreature is alive-only, so a
+-- dead/missing guest reads nil — the C++ EnterEvadeMode arm for that case
+-- stays out, no bridge).
+local function liveGuest(creature, entry)
+    return creature:FindNearestCreature(entry, 60)
+end
+
+local function addsAttack(creature)
+    local state = moroesState[creature:GetGUID()]
+    if state == nil or state.addIds == nil then
+        return
+    end
+    local victim = creature:GetVictim()
+    if victim == nil then
+        return
+    end
+    for _, entry in ipairs(state.addIds) do
+        local guest = liveGuest(creature, entry)
+        if guest ~= nil then
+            guest:EngageWithTarget(victim)
+            guest:DoZoneInCombat()
+        end
+    end
+end
+
+local function onCheckAdds(creature, guid)
+    local state = moroesState[guid]
+    if state == nil then
+        return
+    end
+    if state.addIds ~= nil then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            for _, entry in ipairs(state.addIds) do
+                local guest = liveGuest(creature, entry)
+                if guest ~= nil and guest:GetVictim() == nil then
+                    guest:EngageWithTarget(victim)
+                end
+            end
+        end
+    end
+    schedule(guid, "checkadds", 5000, function() onCheckAdds(creature, guid) end)
+end
+
 local function moroesEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     moroesInitState(guid)
     -- C++ boss_moroes.cpp:155+164: JustEngagedWith calls StartEvent()
     -- (SetBossState IN_PROGRESS + DoZoneInCombat()) then Talk(SAY_AGGRO),
-    -- AddsAttack(), DoZoneInCombat() — one ported call in arm order (the
-    -- AddsAttack cross-creature leg stays out, documented below).
+    -- AddsAttack(), DoZoneInCombat() — the boss DoZoneInCombat and Talk
+    -- are ported in arm order, AddsAttack follows below.
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
@@ -240,12 +285,11 @@ local function moroesEnterCombat(event, creature, target)
     schedule(guid, "gouge", 23000, function() onGouge(creature, guid) end)
     -- C++ JustEngagedWith's AddsAttack (boss_moroes.cpp:224-238) —
     -- temp->AI()->AttackStart(me->GetVictim()) + DoZoneInCombat(temp)
-    -- for each live add, EnterEvadeMode() if any add is missing — stays
-    -- out: AttackStart/EnterEvadeMode have no bridge (keleseth
-    -- precedent) and the per-add DoZoneInCombat(temp) legs have no
-    -- bearer from Moroes's handler (the bridge is live 2026-10-23 but
-    -- receiver-bound). The four summoned guests run their registered
-    -- class AIs and engage via the engine's own aggro.
+    -- for each live add; the missing-add EnterEvadeMode arm stays out
+    -- (no bridge). The 5s CheckAdds poll (boss_moroes.cpp:268-279)
+    -- re-engages guests that lost their victim.
+    addsAttack(creature)
+    schedule(guid, "checkadds", 5000, function() onCheckAdds(creature, guid) end)
 end
 
 -- Enrage: C++ UpdateAI checks HealthBelowPct(30) on the post-damage health

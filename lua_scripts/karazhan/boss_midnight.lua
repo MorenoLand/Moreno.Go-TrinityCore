@@ -16,8 +16,9 @@
 -- summonTempCreature funnel, so the summon->AI()->Talk(SAY_APPEAR) greeting
 -- is relayed in midnightJustSummoned below; event 22 (IsSummonedBy) fires
 -- only from the pet funnel, so the summoner-entry phase assignments stay
--- approximated in OnEnterCombat keyed on entry. The SetGUID wiring and the
--- AttackStart(victim) leg have no bridge. The 29714 cast's spell-effect
+-- approximated in OnEnterCombat keyed on entry. The SetGUID wiring stays
+-- out (no bridge); the AttackStart(victim) leg IS ported in
+-- midnightJustSummoned via summon:EngageWithTarget(victim). The 29714 cast's spell-effect
 -- summon spawns Attumen when the DBC props pass; if it does not, no
 -- Attumen exists to relay. Approximation: the
 -- phase that C++ IsSummonedBy would set before combat (ATTUMEN_ENGAGES for
@@ -184,11 +185,19 @@ local function onMountPoll(creature, guid)
     end
 end
 
--- C++ boss_midnightAI::JustSummoned (boss_midnight.cpp): summon entry
--- 15550 -> store GUID (no bridge), SetGUID (no bridge), AttackStart
--- (no bridge), Talk(SAY_APPEAR). Only the greeting is portable.
+-- C++ boss_midnightAI::JustSummoned (boss_midnight.cpp:327-338): summon
+-- entry 15550 -> store GUID, SetGUID(me->GetGUID(), NPC_MIDNIGHT),
+-- AttackStart(me->GetVictim()), Talk(SAY_APPEAR). The AttackStart leg IS
+-- ported via summon:EngageWithTarget(victim) (2026-10-20 bridge; the
+-- funnel is player-target-only, so a non-player victim no-ops). The
+-- GUID store stays dead — KilledUnit's Talk target needs a GUID->unit
+-- handle, which has no bridge — and SetGUID stays out (no bridge).
 local function midnightJustSummoned(event, creature, summon)
     if summon:GetEntry() == ENTRY_ATTUMEN then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            summon:EngageWithTarget(victim)
+        end
         summon:Talk(SAY_APPEAR)
     end
 end
