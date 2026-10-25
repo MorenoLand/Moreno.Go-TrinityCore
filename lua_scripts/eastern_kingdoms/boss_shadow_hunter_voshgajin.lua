@@ -28,12 +28,10 @@
 -- EVENT_CLEAVE: victim-cast CLEAVE 20691, 14s init -> 7s loop (maiden
 -- convention).
 -- EVENT_HEX: random-player HEX 16708 — SelectTarget(Random, 0, 100,
--- true) is playerOnly, ported via the keleseth GetPlayersInWorld
--- precedent (same map/instance, alive, within 100yd); 8s init -> 15s
+-- true) is playerOnly, ported via the threat-list pool (GetAITargets,
+-- alive, within 100yd); 8s init -> 15s
 -- loop, re-arm unconditional (C++ ScheduleEvent sits outside the target
--- check), non-triggered DoCast(target). Caveat shared with the
--- keleseth/thorim ports: C++ draws from the threat list (engaged
--- units); the bridge can include nearby unengaged players.
+-- check), non-triggered DoCast(target).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++
@@ -87,14 +85,13 @@ local function onCleave(creature, guid)
     schedule(guid, "cleave", 7000, function() onCleave(creature, guid) end)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 100, true) (boss_shadow_hunter_voshgajin.cpp:88):
+-- threat-list players alive within range (UnitAI.h:162-176).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, range) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -108,7 +105,7 @@ end
 -- DoCast(target, 16708) non-triggered, 8s init, ScheduleEvent(15s)
 -- outside the target check (re-arm unconditional).
 local function onHex(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_HEX)
     end

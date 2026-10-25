@@ -46,11 +46,8 @@
 -- tick, modeled as a 1s re-poll (moroes dorotheaSwPain precedent).
 -- Blizzard machine: DoCast(SelectTarget(Random, 0), SPELL_BLIZZARD
 -- 44178) 8000ms init -> 8000ms loop, unconditional re-arm
--- (:827-833). Both target via the map-wide random-player pool
--- (GetPlayersInWorld filtered by map/instance, opera-Julianne
--- precedent); caveat: C++ picks from the threat list (pets/totems
--- eligible, non-threat players excluded) — the accepted
--- the_beast/nethekurse/opera/teron approximation.
+-- (:827-833). Both target via the threat-list pool (GetAITargets, alive,
+-- any-unit: pets/totems eligible per Random, 0 defaults).
 -- Ice-block latch (UpdateAI arm: HealthBelowPct(35) && !HasIceBlocked
 -- -> DoCast(me, SPELL_ICE_BLOCK 27619), HasIceBlocked = true): via
 -- OnDamageTaken(9), per-guid one-shot, post-damage health check (gyth
@@ -127,22 +124,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) default selector: any player on the map
--- (opera-Julianne playersOnMap precedent; DefaultTargetSelector has
--- no alive or distance filter).
-local function playersOnMap(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) defaults (boss_priestess_delrissa.cpp:815/:830): threat-list any-unit, no
+-- dist cap (UnitAI.h:170); alive filter per strip convention (dead picks
+-- are no-op casts in both engines). The old map-player pool could pick
+-- players who never engaged, plus dead players.
+local function threatTargets(creature)
     local found = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
-            found[#found + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            found[#found + 1] = unit
         end
     end
     return found
 end
 
 local function onPolymorph(creature, guid)
-    local candidates = playersOnMap(creature)
+    local candidates = threatTargets(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_POLYMORPH)
         schedule(guid, "polymorph", 20000, function() onPolymorph(creature, guid) end)
@@ -152,7 +149,7 @@ local function onPolymorph(creature, guid)
 end
 
 local function onBlizzard(creature, guid)
-    local candidates = playersOnMap(creature)
+    local candidates = threatTargets(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_BLIZZARD)
     end

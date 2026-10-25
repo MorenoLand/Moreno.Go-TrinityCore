@@ -48,12 +48,11 @@
 -- Sub-10%-mana latch (maiden convention — checked from the PHASE_NORMAL
 -- fel-explosion loop, GetPowerPct < 10, per-guid _scheduledEvents flag):
 -- EVENT_DRAIN_LIFE randtime(3s,7s) -> 10s loop: random-player within
--- 20.0f (GetPlayersInWorld + map/instance/alive/IsWithinDist filter,
--- maiden precedent) cast 44294 non-triggered; EVENT_DRAIN_CRYSTAL's
+-- 20.0f (GetAITargets + alive/IsWithinDist filter) cast 44294 non-triggered; EVENT_DRAIN_CRYSTAL's
 -- non-heroic 20s/25s (heroic 10s/15s) timing is modeled as the flag
 -- re-arm (crystal selection itself stays out, above); heroic-only
--- EVENT_DRAIN_MANA: same drawn timer + 5s -> 10s loop: random-player
--- within 45.0f cast 46153 non-triggered (stale "no difficulty /
+-- EVENT_DRAIN_MANA: same drawn timer + 5s -> 10s loop: random threat-list
+-- player within 45.0f cast 46153 non-triggered (stale "no difficulty /
 -- SelectTarget bridge" claims retracted — IsHeroic bridged,
 -- engine/world/lua_creature_events.go:260).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
@@ -143,12 +142,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 20/45, true) (boss_selin_fireheart.cpp:199/:194):
+-- threat-list players alive within range (UnitAI.h:162-176).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:IsWithinDist(p, range) then
             candidates[#candidates + 1] = p
         end
     end
@@ -159,17 +159,17 @@ local function randomTargetInRange(creature, range)
 end
 
 local function onDrainLife(creature, guid)
-    local target = randomTargetInRange(creature, 20)
+    local target = randomThreatPlayerInRange(creature, 20)
     if target then
         creature:CastSpell(target, SPELL_DRAIN_LIFE)
     end
     schedule(guid, "drain_life", 10000, function() onDrainLife(creature, guid) end)
 end
 
--- C++ EVENT_DRAIN_MANA (heroic-only): SelectTarget(Random, 0, 45.0f)
+-- C++ EVENT_DRAIN_MANA (heroic-only): SelectTarget(Random, 0, 45.0f, true)
 -- -> DoCast(46153), non-triggered; re-arm ScheduleEvent(10s).
 local function onDrainMana(creature, guid)
-    local target = randomTargetInRange(creature, 45)
+    local target = randomThreatPlayerInRange(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_DRAIN_MANA)
     end

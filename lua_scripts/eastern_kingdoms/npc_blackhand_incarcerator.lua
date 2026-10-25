@@ -30,8 +30,8 @@
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention).
 -- EVENT_ENCAGE: random-player ENCAGE 16045 — SelectTarget(Random, 0,
--- 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
--- precedent (same map/instance, alive, within 100yd); urand(10s, 20s)
+-- 100, true) is playerOnly, ported via the threat-list pool
+-- (GetAITargets, alive, within 100yd); urand(10s, 20s)
 -- init -> urand(6s, 12s) loop, re-arm unconditional, TRIGGERED
 -- DoCast(target, 16045, true). Nil-guard around the cast: C++ calls
 -- DoCast directly on the SelectTarget result (fizzles on null); the
@@ -84,14 +84,14 @@ local function onStrike(creature, guid)
     schedule(guid, "strike", {14000,23000}, function() onStrike(creature, guid) end)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 100, true) (boss_pyroguard_emberseer.cpp:356,
+-- npc_blackhand_incarcerator UpdateAI): threat-list players alive within
+-- range (UnitAI.h:162-176).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, range) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -105,7 +105,7 @@ end
 -- DoCast(target, 16045, true) TRIGGERED, ScheduleEvent(10s, 20s) init,
 -- Repeat(6s, 12s) outside any guard (re-arm unconditional).
 local function onEncage(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_ENCAGE, true)
     end

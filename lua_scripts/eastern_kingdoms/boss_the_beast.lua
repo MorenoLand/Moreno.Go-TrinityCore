@@ -30,12 +30,12 @@
 -- EVENT_FIREBLAST: victim-cast FIREBLAST 16144, urand(5s, 8s) init ->
 -- 5s..8s loop (C++ ScheduleEvent(5s, 8s) / Repeat(5s, 8s), C++-exact).
 -- EVENT_IMMOLATE: random-player IMMOLATE 15570 — SelectTarget(Random,
--- 0, 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
--- precedent (same map/instance, alive, within 100yd); 3s init -> 8s
+-- 0, 100, true) is playerOnly, ported via the threat-list pool
+-- (GetAITargets, alive, within 100yd); 3s init -> 8s
 -- loop, re-arm unconditional (C++ Repeat sits outside the target
 -- check), non-triggered DoCast(target).
 -- EVENT_BERSERKER_CHARGE: random-player BERSERKER_CHARGE 16636 —
--- SelectTarget(Random, 0, 38, true) is playerOnly (keleseth precedent,
+-- SelectTarget(Random, 0, 38, true) is playerOnly (threat-list pool,
 -- within 38yd); 2s init -> urand(15s, 23s) loop, re-arm unconditional,
 -- non-triggered DoCast(target).
 -- SetData(DATA_BEAST_ROOM / DATA_BEAST_REACHED) — gates on
@@ -124,16 +124,13 @@ local function onFireblast(creature, guid)
     schedule(guid, "fireblast", 5000 + math.random(0, 3000), function() onFireblast(creature, guid) end)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent. Caveat shared with the
--- keleseth/thorim ports: C++ draws from the threat list (engaged
--- units); the bridge can include nearby unengaged players.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 100/38, true) (boss_the_beast.cpp:178/:187):
+-- threat-list players alive within range (UnitAI.h:162-176).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, range) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -147,7 +144,7 @@ end
 -- DoCast(target, 15570) non-triggered, 3s init, Repeat(8s) outside the
 -- target check (re-arm unconditional).
 local function onImmolate(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_IMMOLATE)
     end
@@ -158,7 +155,7 @@ end
 -- playerOnly, DoCast(target, 16636) non-triggered, 2s init,
 -- Repeat(15s, 23s) outside the target check (re-arm unconditional).
 local function onBerserkerCharge(creature, guid)
-    local target = randomPlayerInRange(creature, 38)
+    local target = randomThreatPlayerInRange(creature, 38)
     if target then
         creature:CastSpell(target, SPELL_BERSERKER_CHARGE)
     end

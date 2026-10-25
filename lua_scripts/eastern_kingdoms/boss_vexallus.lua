@@ -36,13 +36,11 @@
 -- EVENT_OVERLOAD arm of UpdateAI):
 -- Combat entry: Talk(SAY_AGGRO) (maiden-of-virtue convention). The C++
 -- JustEngagedWith schedules EVENT_CHAIN_LIGHTNING (8s, recast 8s) and
--- EVENT_ARCANE_SHOCK (5s, recast 8s); both ported as random-player casts
--- (GetPlayersInWorld + map/instance/alive/IsWithinDist filter,
--- maiden_of_virtue precedent) — the old "no SelectTarget bridge" claim
--- is retracted. C++ SelectTarget(Random, 0, 0.0f, true) for chain
--- lightning is any-range (dist 0 = no distance restriction), modeled
--- with range 100 (curator precedent); arcane shock's 20.0f is used
--- literally. Timers cancelled on OnLeaveCombat(2)/OnDied(4)/
+-- EVENT_ARCANE_SHOCK (5s, recast 8s); both ported as random threat-list
+-- player casts (GetAITargets + alive filter) — the old "no SelectTarget
+-- bridge" claim is retracted. C++ SelectTarget(Random, 0, 0.0f, true)
+-- for chain lightning is any-range (dist 0 = no distance restriction),
+-- ported with no cap; arcane shock's 20.0f is used literally. Timers cancelled on OnLeaveCombat(2)/OnDied(4)/
 -- OnReset(23), and on enrage via cancelTimers (C++ events.Reset()).
 -- KilledUnit: Talk(SAY_KILL) via OnTargetDied(3) — the C++ arm has no
 -- victim-type gate, so neither does the port.
@@ -135,12 +133,26 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 0.0f, true) chain lightning (:150) = no dist
+-- cap; arcane shock (:155) is Random, 0, 20.0f, true (UnitAI.h:162-176).
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead() then
+            candidates[#candidates + 1] = p
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function randomThreatPlayerInRange(creature, range)
+    local candidates = {}
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:IsWithinDist(p, range) then
             candidates[#candidates + 1] = p
         end
     end
@@ -151,7 +163,7 @@ local function randomTargetInRange(creature, range)
 end
 
 local function onChainLightning(creature, guid)
-    local target = randomTargetInRange(creature, 100)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
     end
@@ -159,7 +171,7 @@ local function onChainLightning(creature, guid)
 end
 
 local function onArcaneShock(creature, guid)
-    local target = randomTargetInRange(creature, 20)
+    local target = randomThreatPlayerInRange(creature, 20)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_SHOCK)
     end

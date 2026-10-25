@@ -44,11 +44,8 @@
 -- re-arm (:655-660).
 -- Fear machine: DoCast(SelectTarget(Random, 0), SPELL_FEAR 38595)
 -- 10000ms init -> 10000ms loop, unconditional re-arm (:662-667). All
--- three target via the map-wide random-player pool (GetPlayersInWorld
--- filtered by map/instance, opera-Julianne precedent); caveat: C++
--- picks from the threat list (pets/totems eligible, non-threat
--- players excluded) — the accepted the_beast/nethekurse/opera/teron
--- approximation.
+-- three target via the threat-list pool (GetAITargets, alive,
+-- any-unit: pets/totems eligible per Random, 0 defaults).
 -- Healing-potion latch (common-AI UpdateAI arm: !UsedPotion &&
 -- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
 -- UsedPotion = true): via OnDamageTaken(9), per-guid one-shot,
@@ -123,22 +120,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) default selector: any player on the map
--- (opera-Julianne playersOnMap precedent; DefaultTargetSelector has
--- no alive or distance filter).
-local function playersOnMap(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) defaults (boss_priestess_delrissa.cpp:654/:662/:670): threat-list any-unit, no
+-- dist cap (UnitAI.h:170); alive filter per strip convention (dead picks
+-- are no-op casts in both engines). The old map-player pool could pick
+-- players who never engaged, plus dead players.
+local function threatTargets(creature)
     local found = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
-            found[#found + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            found[#found + 1] = unit
         end
     end
     return found
 end
 
 local function onSeedOfCorruption(creature, guid)
-    local candidates = playersOnMap(creature)
+    local candidates = threatTargets(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_SEED_OF_CORRUPTION)
     end
@@ -146,7 +143,7 @@ local function onSeedOfCorruption(creature, guid)
 end
 
 local function onCurseOfAgony(creature, guid)
-    local candidates = playersOnMap(creature)
+    local candidates = threatTargets(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_CURSE_OF_AGONY)
     end
@@ -154,7 +151,7 @@ local function onCurseOfAgony(creature, guid)
 end
 
 local function onFear(creature, guid)
-    local candidates = playersOnMap(creature)
+    local candidates = threatTargets(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(#candidates)], SPELL_FEAR)
     end
