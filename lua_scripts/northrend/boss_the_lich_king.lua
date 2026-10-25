@@ -149,7 +149,9 @@
 -- OnGossipSelect intro kick, MovementInform, and SpellHit legs have no
 -- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
 -- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
--- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — NOT registered:
+-- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — DamageTaken PORTED
+-- (terenasDamageTaken, ev9, this tick); Talks/DoAction legs below
+-- remain NOT registered as stated:
 -- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
 -- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
@@ -241,7 +243,7 @@
 -- REACT_AGGRESSIVE (:472-484) + JustSummoned legs :750/:761/:777/1059
 -- (ice-sphere :750 PORTED in lichKingJustSummoned — SelectTarget
 -- approximated by the alive same-map/instance random-player pool,
--- MoveFollow stays out; defile :761 acts on an unregistered add;
+-- MoveFollow stays out; defile :761 PORTED (lichKingJustSummoned);
 -- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
@@ -254,6 +256,11 @@ local ENTRY_SHAMBLING_HORROR = 37698
 local ENTRY_RAGING_SPIRIT = 36701
 local ENTRY_SPIRIT_WARDEN = 36824
 local ENTRY_ICE_SPHERE = 36633 -- icecrown_citadel.h:321 (NPC_ICE_SPHERE)
+local ENTRY_DRUDGE_GHOUL = 37695 -- icecrown_citadel.h:320
+local ENTRY_SHADOW_TRAP = 39137 -- icecrown_citadel.h:332
+local ENTRY_DEFILE = 38757 -- icecrown_citadel.h:323
+local ENTRY_TERENAS = 36823 -- icecrown_citadel.h:316 (NPC_TERENAS_MENETHIL_FROSTMOURNE)
+local ENTRY_TERENAS_HEROIC = 39217 -- icecrown_citadel.h:318
 
 local SAY_LK_KILL = 10
 local SAY_LK_BERSERK = 11
@@ -273,6 +280,14 @@ local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
 local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
 local SPELL_PLAY_MOVIE = 73159
+local SPELL_RISEN_WITCH_DOCTOR_SPAWN = 69639 -- boss_the_lich_king.cpp:87
+local SPELL_SHADOW_TRAP_VISUAL = 73530 -- boss_the_lich_king.cpp:96
+local SPELL_DEFILE_AURA = 72743 -- boss_the_lich_king.cpp:115
+local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
+local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local EMOTE_ONESHOT_EMERGE = 449 -- SharedDefines.h:2086
 
 -- creature:SetReactState is bridged (REACT_PASSIVE=0, REACT_AGGRESSIVE=2).
 local REACT_PASSIVE = 0
@@ -392,7 +407,22 @@ local function randomPlayerAnywhere(creature)
 end
 
 local function lichKingJustSummoned(_, creature, summoned)
-    if summoned:GetEntry() == ENTRY_ICE_SPHERE then
+    -- C++ boss_the_lich_king::JustSummoned (:737-741): horror/ghoul
+    -- spawn visual (triggered) + REACT_PASSIVE + emerge emote, in C++
+    -- order. The 5s LichKingStartMovementEvent leg stays out (timed
+    -- BasicEvent + AttackStart/SelectTarget have no bridge).
+    if summoned:GetEntry() == ENTRY_SHAMBLING_HORROR or summoned:GetEntry() == ENTRY_DRUDGE_GHOUL then
+        summoned:CastSpell(summoned, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
+        summoned:SetReactState(0)
+        summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+    -- C++ :743-745: shadow trap spawn visual (triggered).
+    elseif summoned:GetEntry() == ENTRY_SHADOW_TRAP then
+        summoned:CastSpell(summoned, SPELL_SHADOW_TRAP_VISUAL, true)
+    -- C++ :761-763: defile REACT_PASSIVE + defile aura (non-triggered).
+    elseif summoned:GetEntry() == ENTRY_DEFILE then
+        summoned:SetReactState(0)
+        summoned:CastSpell(summoned, SPELL_DEFILE_AURA)
+    elseif summoned:GetEntry() == ENTRY_ICE_SPHERE then
         local target = randomPlayerAnywhere(creature)
         if target then
             summoned:SetReactState(0) -- REACT_PASSIVE
@@ -520,3 +550,36 @@ RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 23, ragingSpiritLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 1, spiritWardenJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 2, spiritWardenLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)
+
+-- C++ npc_terenas_menethil::DamageTaken (:1733-1752): lethal damage
+-- is clamped to health-1 (sara second-return precedent); then, only
+-- when not heroic and without SPELL_TERENAS_LOSES_INSIDE, SetFlag
+-- NOT_SELECTABLE + DoCast(TERENAS_LOSES_INSIDE, self-cast per the
+-- warden 1-arg precedent) + nearest spirit warden (20yd) casts
+-- DESTROY_SOUL (non-triggered) + 2s despawn + terenas 2s despawn.
+-- The 1s EVENT_TELEPORT_BACK leg stays out (boss DoAction cross-AI,
+-- no bridge); the EVENT_DESTROY_SOUL 1min leg rides the unported
+-- DoAction/summon machine. Terenas Talks stay DoAction/scheduler
+-- gated as documented in the header.
+local function terenasDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    local newDamage = damage
+    if health > 0 and damage >= health then
+        newDamage = health - 1
+        if not creature:HasAura(SPELL_TERENAS_LOSES_INSIDE) and not creature:IsHeroic() then
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:CastSpell(creature, SPELL_TERENAS_LOSES_INSIDE)
+            local guid = creature:GetGUID()
+            local warden = creature:FindNearestCreature(ENTRY_SPIRIT_WARDEN, 20.0)
+            if warden then
+                warden:CastSpell(nil, SPELL_DESTROY_SOUL)
+                schedule(guid, "warden_despawn", 2000, function() warden:Despawn() end)
+            end
+            schedule(guid, "terenas_despawn", 2000, function() creature:Despawn() end)
+        end
+    end
+    return false, newDamage
+end
+
+RegisterCreatureEvent(ENTRY_TERENAS, 9, terenasDamageTaken)
+RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 9, terenasDamageTaken)
