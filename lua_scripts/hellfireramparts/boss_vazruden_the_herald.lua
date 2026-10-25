@@ -57,9 +57,11 @@
 -- AttackStartNoMove(victim) leg stays out (no bridge);
 -- the UnsummonAdds sweep is PORTED below (Reset() leg:
 -- FindNearestCreature(5000) fallback + Despawn + SetRooted(false)
--- + SetVisible(true), summoned-latched); the adds-alive/
--- adds-victim watch arm and the both-dead DisappearAndDie arm
--- stay out with EnterEvadeMode (no bridge); no cross-creature
+-- + SetVisible(true), summoned-latched); the both-dead
+-- DisappearAndDie arm is PORTED (phase-2 pump, live-only
+-- FindNearestCreature nil legs); the adds-alive/no-victim
+-- UnsummonAdds + EnterEvadeMode leg stays out (no bridge);
+-- no cross-creature
 -- bridge — the
 -- sentry JustDied -> herald SentryDownBy(killer) relay and
 -- the sentryDown AttackStartNoMove arm unmodeled (see
@@ -183,8 +185,13 @@ end
 -- C++ phase-1 UpdateAI check (boss_vazruden_the_herald.cpp:401-417,
 -- 1s cadence): not within 5yd (3D) of VazrudenMiddle -> MovePoint
 -- (stays out, no movement bridge); within 5yd -> SummonAdds +
--- phase 2. Phase 2's watch arm stays out (EnterEvadeMode, no
--- bridge), so the pump idles there.
+-- phase 2. Phase 2's watch arm (boss_vazruden_the_herald.cpp:
+-- 418-437, 2s cadence): both adds not-alive -> DisappearAndDie
+-- PORTED below (FindNearestCreature returns live creatures
+-- only, so nil covers the dead/absent legs); the adds-alive/
+-- no-victim UnsummonAdds + EnterEvadeMode leg stays out
+-- (EnterEvadeMode, no bridge) and the adds-alive/with-victim
+-- leg is a no-op return.
 local function heraldTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -197,6 +204,11 @@ local function heraldTick(creature, guid)
         if dx * dx + dy * dy + dz * dz <= 25 then
             summonAdds(creature, guid)
             st.phase = 2
+        end
+    elseif st.phase == 2 then
+        if not creature:FindNearestCreature(ENTRY_NAZAN, 5000)
+            and not creature:FindNearestCreature(ENTRY_VAZRUDEN, 5000) then
+            creature:Despawn()
         end
     end
 end

@@ -38,8 +38,10 @@
 -- `DoCast(victim, SPELL_FIREBALL, true)`, C++-exact),
 -- re-arm {4s,7s} regardless (C++-exact) — fires in both
 -- flight and land phases (C++-exact). Flight phase: fly
--- timer 45000 decrements; on expiry — Talk(EMOTE), land
--- (flight = false, C++-exact latch) + ConeOfFire 12000
+-- timer 45000 decrements; on expiry OR Vazruden
+-- missing/dead/<=20% — land (flight = false, C++-exact
+-- latch) + SetDisableGravity(false) + AttackStart(nearest
+-- threat unit) + Talk(EMOTE) + ConeOfFire 12000
 -- (C++-exact). The VazrudenRing waypoint hops (Turn_Timer
 -- 10s, MovePoint to (-1430.0, 1705.0, 112.0) /
 -- (-1377.0, 1760.0, 112.0)) are movement-blocked, so no
@@ -61,14 +63,14 @@
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
 -- no movement bridge — the whole flight waypoint machine
 -- unmodeled (Turn_Timer MovePoint hops, the flight-phase
--- DoStartMovement/AttackStart re-acquire arms, the land
--- transition's SetDisableGravity(false)/SetWalk(true)/
--- MotionMaster Clear/AttackStart(nearest)/DoStartMovement
--- arms); no cross-creature bridge — the early-land
--- condition (VazrudenGUID via IsSummonedBy NPC_VAZRUDEN_
--- HERALD, Vazruden alive and above 20% health) unmodeled,
--- so only the 45s Fly_Timer timeout lands in this model
--- (the GUID latch from IsSummonedBy has no bridge either);
+-- DoStartMovement/AttackStart re-acquire arms; the land
+-- transition's SetDisableGravity(false) + AttackStart(nearest)
+-- legs are PORTED, SetWalk(true)/MotionMaster Clear/
+-- DoStartMovement stay out (no bridges)); the early-land condition is PORTED (FindNearestCreature
+-- 17537 + GetHealthPct > 20 in place of the IsSummonedBy
+-- VazrudenGUID latch, which has no bridge — the nearest
+-- search is the C++ condition's observable twin since only
+-- one Vazruden exists in the instance);
 -- no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the C++ flight phase never calls
 -- DoMeleeAttackIfReady but engine melee is always on in
 -- this model (kargath in-blade precedent); the heroic-only
@@ -90,6 +92,8 @@ local SPELL_SUMMON_LIQUID_FIRE_H = 30928
 local SPELL_FIRE_NOVA_VISUAL = 19823
 
 local NPC_LIQUID_FIRE = 22515
+
+local ENTRY_VAZRUDEN = 17537
 
 local EMOTE = 0
 
@@ -162,6 +166,41 @@ local function pickThreatTarget(creature)
     return found[math.random(#found)]
 end
 
+-- C++ land condition (boss_vazruden_the_herald.cpp:140-141):
+-- Vazruden alive AND HealthAbovePct(20) keeps Nazan flying;
+-- a missing, dead, or <=20% Vazruden lands her. FindNearestCreature
+-- returns live creatures only (lua_creature_events.go:2916), so a
+-- nil result already covers the missing/dead legs; HealthAbovePct
+-- is strict (Unit.h:874: GetHealth() > CountPctFromMaxHealth),
+-- so the stay-flying gate is GetHealthPct() > 20 (halazzi
+-- precedent: GetHealthPct on a FindNearestCreature result).
+local function vazrudenAliveAbove20(creature)
+    local vazruden = creature:FindNearestCreature(ENTRY_VAZRUDEN, 5000)
+    if not vazruden then
+        return false
+    end
+    return vazruden:GetHealthPct() > 20
+end
+
+-- C++ land arm (boss_vazruden_the_herald.cpp:147-148):
+-- SelectTarget(MinDistance, 0) — nearest threat-list unit, no
+-- player gate, dead filtered by the selector. EngageWithTarget
+-- is the AttackStart twin; it no-ops on non-player targets
+-- (lua_creature_events.go:498), so a nearest non-player keeps
+-- the current victim (documented deviation).
+local function nearestThreatTarget(creature)
+    local best, bestDist = nil, nil
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            local d = creature:GetDistance(t)
+            if best == nil or d < bestDist then
+                best, bestDist = t, d
+            end
+        end
+    end
+    return best
+end
+
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -187,17 +226,28 @@ local function bossTick(creature, guid)
 
     if st.flight then
         -- Flight phase: the Turn_Timer waypoint hops have
-        -- no movement bridge (documented above); the only
-        -- bridgeable arm is the Fly_Timer 45s timeout —
-        -- Talk(EMOTE), land, ConeOfFire 12000 (C++-exact;
-        -- the expiry test is strict `<`, leotheras
-        -- precedent).
-        -- The Vazruden-alive/<20% early-land condition has
-        -- no cross-creature bridge.
-        if st.fly < 1000 then
+        -- no movement bridge (documented above). Land when
+        -- the Fly_Timer 45s timeout expires (strict `<`,
+        -- leotheras precedent) OR the Vazruden-alive/>20%
+        -- condition fails (boss_vazruden_the_herald.cpp:
+        -- 140-141, PORTED above via FindNearestCreature +
+        -- GetHealthPct). Land arm (C++ order): flight =
+        -- false, BellowingRoar 6000, ConeOfFire 12000,
+        -- SetDisableGravity(false), AttackStart(nearest
+        -- threat unit), Talk(EMOTE); SetWalk(true) /
+        -- MotionMaster Clear / DoStartMovement stay out
+        -- (no bridges).
+        if st.fly < 1000 or not vazrudenAliveAbove20(creature) then
             st.flight = false
             st.bellowingRoar = 6000
             st.coneOfFire = 12000
+            creature:SetDisableGravity(false)
+            local nearest = nearestThreatTarget(creature)
+            local victim = creature:GetVictim()
+            if nearest and (not victim
+                or nearest:GetGUID() ~= victim:GetGUID()) then
+                creature:EngageWithTarget(nearest)
+            end
             creature:Talk(EMOTE)
         else
             st.fly = st.fly - 1000
