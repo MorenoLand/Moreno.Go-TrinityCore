@@ -124,6 +124,21 @@ func (tm *ThreatManager) SetTempModifier(victim uint64, mod int32) {
 	tm.tempMods[victim] = mod
 }
 
+// HasThreatEntry reports whether victim has a threat reference on this list,
+// the ThreatManager::IsThreatenedBy twin (ThreatManager.h): the reference
+// set, not the value, is the engaged test — a Unit::EngageWithTarget seed
+// (0.0f) creates the entry, so GetThreat alone cannot tell a seeded entry
+// from an absent victim (both read 0).
+func (tm *ThreatManager) HasThreatEntry(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	_, ok := tm.entries[victim]
+	return ok
+}
+
 // OwnerCanHaveThreatList reports the cached ThreatManager::CanHaveThreatList
 // answer for the owner. Damage funnels consult it before consuming redirect
 // registries or switching victims: C++ runs those arms inside AddThreat,

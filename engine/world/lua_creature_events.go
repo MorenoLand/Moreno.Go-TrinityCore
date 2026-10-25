@@ -414,6 +414,84 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// IsHostileTo(target) is WorldObject::IsHostileTo (Object.cpp:2842-2845):
+	// GetReactionTo(target) <= REP_HOSTILE. The target may be a player
+	// object, a creature object, or a raw GUID. A wild creature vs a player
+	// runs GetFactionReactionTo (Object.cpp:2795-2840) via
+	// creatureHostileToPlayer; vs a creature the template term alone
+	// decides via creatureHostileToCreature. Unresolvable targets read not
+	// hostile.
+	methods["IsHostileTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == motion.GUID {
+			return []any{false}, nil
+		}
+		if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			return []any{s.creatureHostileToPlayer(motion, ts)}, nil
+		}
+		if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
+			return []any{s.creatureHostileToCreature(motion, tm)}, nil
+		}
+		return []any{false}, nil
+	}
+	// IsValidAttackTarget(target) is WorldObject::IsValidAttackTarget
+	// (Object.cpp:2930) restricted to its hostility verdict via
+	// creatureExplicitAttackPasses: the dead, GM, untargetable, visibility
+	// and immunity arms have no twin here (the spell-path twin documents
+	// them as outcome-equivalent for casts, which does not hold for
+	// sighting/engage gates) — ports must compose those arms themselves
+	// from the grid's alive-only filter, IsGM and IsTargetableForAttack.
+	// Unresolvable creature targets fail open, like the spell-path twin.
+	methods["IsValidAttackTarget"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.creatureExplicitAttackPasses(motion, nil, targetGUID)}, nil
+	}
+	// IsEngagedBy(target) is Unit::IsEngagedBy (Unit.h:1032): CanHaveThreatList
+	// ? IsThreatenedBy(target) : IsInCombatWith(target). Wild creatures
+	// carry threat lists, so the entry-presence twin decides; the
+	// IsInCombatWith fallback for list-less owners is not modeled (a
+	// creature's ThreatMgr is created on its first engage, so a nil manager
+	// is never engaged).
+	methods["IsEngagedBy"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || motion.ThreatMgr == nil {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{motion.ThreatMgr.HasThreatEntry(targetGUID)}, nil
+	}
+	// EngageWithTarget(target) is Unit::EngageWithTarget (Unit.cpp:8429-8438)
+	// via the engine aggro funnel: a 0.0f threat seed, victim set, combat
+	// entered and ATTACK_START broadcast (triggerCreatureAggro also fires
+	// the engager's event-1 hook, which is a no-op for handlers the
+	// engager does not register). Go's funnel resolves the victim as a
+	// player session only, so non-player targets no-op. An evading or
+	// passive engager is skipped by the funnel; C++ has no such gate.
+	methods["EngageWithTarget"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		if s.findSessionByGUID(targetGUID) == nil {
+			return nil, nil
+		}
+		s.triggerCreatureAggro(ctx, motion.GUID, targetGUID)
+		return nil, nil
+	}
 	auraKey := func() creatureAuraKey {
 		return creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
 	}

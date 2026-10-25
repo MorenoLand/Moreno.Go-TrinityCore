@@ -208,6 +208,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// IsHostileTo(target) is WorldObject::IsHostileTo (Object.cpp:2842-2845)
+	// from the player side, via playerHostileToUnit: the target's faction
+	// template id resolves from a creature object (its motion's faction) or
+	// a player object (its effective faction template); a raw GUID resolves
+	// the same way. A creature the player owns (pet/minion) reads not
+	// hostile, matching the same-charmer-or-owner friendly arm.
+	methods["IsHostileTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || s.server == nil {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			return []any{false}, nil
+		}
+		if tm := s.server.findCreatureMotion(state.Map, state.InstanceID, targetGUID); tm != nil {
+			if tm.OwnerGUID != 0 && tm.OwnerGUID == s.playerGUID {
+				return []any{false}, nil
+			}
+			return []any{s.server.playerHostileToUnit(s, tm.Faction)}, nil
+		}
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			return []any{s.server.playerHostileToUnit(s, ts.effectiveFactionTemplate(ts.player.Race))}, nil
+		}
+		return []any{false}, nil
+	}
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })

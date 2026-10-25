@@ -457,3 +457,100 @@ func (s *Server) creatureTargetOnCasterVehicle(m *creatureMotion, targetGUID uin
 	seatID, _, _ := kit.GetSeatForPassenger(targetGUID)
 	return seatID >= 0
 }
+
+// creatureHostileToPlayer mirrors WorldObject::IsHostileTo
+// (Object.cpp:2842-2845: GetReactionTo <= REP_HOSTILE) for a wild creature
+// vs a player, via GetFactionReactionTo (Object.cpp:2795-2840): the
+// contested-guard term, then the reputation-rank term when the creature's
+// faction has a reputation row (rank <= REP_HOSTILE; the at-war neutral cap
+// can only lower a friendly rank, never raise a hostile one), else the
+// faction template term (hostile, or HOSTILE_BY_DEFAULT). The forced-rank
+// and IGNORE_REPUTATION arms have no Go model and are skipped. A missing
+// faction template reads not hostile.
+func (s *Server) creatureHostileToPlayer(m *creatureMotion, ts *session) bool {
+	if m == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if creatureSameOwner(m, ts.playerGUID, nil, ts) {
+		return false
+	}
+	if s.creatureContestedHostile(m.Faction, ts) {
+		return true
+	}
+	if s.Data == nil {
+		return false
+	}
+	tpl, found, err := s.Data.FactionTemplate(m.Faction)
+	if err != nil || !found {
+		return false
+	}
+	if rep, repFound, repErr := s.Data.Reputation(tpl.Faction, ts.player.Race, ts.player.Class); repErr == nil && repFound && rep.ReputationList >= 0 {
+		standing := int64(rep.BaseStanding)
+		if saved, ok := playerReputationMap(ts.player.Reputations)[tpl.Faction]; ok {
+			standing = int64(totalReputationStanding(saved))
+		}
+		return reputationRank(standing) <= 1
+	}
+	if s.factionTemplatesHostile(m.Faction, ts.effectiveFactionTemplate(ts.player.Race)) {
+		return true
+	}
+	return tpl.Flags&0x00002000 != 0
+}
+
+// creatureHostileToCreature mirrors WorldObject::IsHostileTo for a creature
+// vs a creature: the faction template term alone decides (hostile, or
+// HOSTILE_BY_DEFAULT on the subject's template). The friendly-either-way
+// verdict does not affect the hostile boolean.
+func (s *Server) creatureHostileToCreature(m, tm *creatureMotion) bool {
+	if m == nil || tm == nil {
+		return false
+	}
+	if creatureSameOwner(m, tm.GUID, tm, nil) {
+		return false
+	}
+	if s.factionTemplatesHostile(m.Faction, tm.Faction) {
+		return true
+	}
+	if s.Data == nil {
+		return false
+	}
+	tpl, found, err := s.Data.FactionTemplate(m.Faction)
+	if err != nil || !found {
+		return false
+	}
+	return tpl.Flags&0x00002000 != 0
+}
+
+// playerHostileToUnit mirrors WorldObject::IsHostileTo from the player side
+// (Object.cpp:2708-2792) for a unit target identified by its faction
+// template id: with a reputation row on the target's faction the verdict is
+// the contested term or the at-war term (anything else reads friendly, so
+// the template term never runs); without one the faction template term
+// decides (hostile, or HOSTILE_BY_DEFAULT on the player's template). The
+// forced-rank arm has no Go model and is skipped.
+func (s *Server) playerHostileToUnit(ts *session, targetFactionTemplate uint32) bool {
+	if ts == nil || ts.player == nil || targetFactionTemplate == 0 {
+		return false
+	}
+	if s.Data == nil {
+		return false
+	}
+	tpl, found, err := s.Data.FactionTemplate(targetFactionTemplate)
+	if err != nil || !found {
+		return false
+	}
+	if s.factionCanHaveReputation(tpl.Faction) {
+		if s.creatureContestedHostile(targetFactionTemplate, ts) {
+			return true
+		}
+		return s.playerAtWarWith(ts, targetFactionTemplate)
+	}
+	playerTpl, playerFound, playerErr := s.Data.FactionTemplate(ts.effectiveFactionTemplate(ts.player.Race))
+	if playerErr != nil || !playerFound {
+		return false
+	}
+	if s.factionTemplatesHostile(ts.effectiveFactionTemplate(ts.player.Race), targetFactionTemplate) {
+		return true
+	}
+	return playerTpl.Flags&0x00002000 != 0
+}

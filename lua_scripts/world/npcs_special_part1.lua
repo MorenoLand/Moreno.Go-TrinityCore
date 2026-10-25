@@ -1,15 +1,17 @@
 -- npcs_special PART 1 (C++ lines 93-1153) — triage result 2026-10-18.
 -- Source: src/server/scripts/World/npcs_special.cpp.
--- VERDICT: 7 of 9 classes are DOCUMENTED-ONLY (gap classes); npc_injured_patient's
--- Reset arm is PORTED below (all legs bridged) and npc_midsummer_bunny_pole is
--- PORTED below (SetData relay + ring chain). Every other class is blocked
+-- VERDICT: 6 of 9 classes are DOCUMENTED-ONLY (gap classes); npc_injured_patient's
+-- Reset arm is PORTED below (all legs bridged), npc_midsummer_bunny_pole is
+-- PORTED below (SetData relay + ring chain) and npc_air_force_bots ALARMBOT
+-- is PORTED in lua_scripts/world/npc_air_force_bots.lua. Every other class is blocked
 -- either by missing entry constants (rule: entries only from C++ NPC_ consts,
 -- never invented) or by missing method bridges, verified against the CURRENT
 -- runtime this run (lua_creature_events.go,
 -- lua_objects.go, lua_player.go, scripting/object.go).
 -- Sibling file handles C++ lines 1154+.
 
--- npc_air_force_bots (C++ :43-188) — DOCUMENTED-ONLY.
+-- npc_air_force_bots (C++ :43-188) — ALARMBOT PORTED in
+-- lua_scripts/world/npc_air_force_bots.lua; TRIPWIRE DOCUMENTED-ONLY.
 -- Entries ARE in-file (airforceSpawns table :72-98: 2614,2615,21974,21993,
 -- 21996,21997,21999,22001,22002,22003,22063,22065,22066,22068,22069,22070,
 -- 22071,22078,22079,22080,22086,22087,22088,22090,22124,22125,22126).
@@ -18,11 +20,12 @@
 -- SPELL_GUARDS_MARK 38067 on the target :149); MoveInLineOfSight :153-181
 -- (TYPEID_PLAYER gate, range check :165 RANGE_ALARMBOT 100 / RANGE_TRIPWIRE
 -- 15, IsHostileTo :168, IsValidAttackTarget :171, TRIPWIRE skips flying :174).
--- Missing bridges: EngageWithTarget / IsEngagedBy, IsHostileTo,
--- IsValidAttackTarget, unit-flag manipulation (the creature:
--- SummonCreature bridge is live — stale "no bridge anywhere in
--- engine/" retracted — but the machine's core legs are the
--- engage/hostility gates, not the summon).
+-- Bridges live since 2026-10-24: creature:IsHostileTo,
+-- player:IsHostileTo, creature:IsValidAttackTarget, creature:IsEngagedBy,
+-- creature:EngageWithTarget (the creature:SummonCreature bridge was already
+-- live). TRIPWIRE stays out: the :174 flying skip has no player:IsFlying
+-- bridge. The old "unit-flag manipulation" block is retracted: neither arm
+-- touches unit flags.
 
 -- npc_chicken_cluck (C++ :194-292) — DOCUMENTED-ONLY.
 -- Arms: Reset :216-221 (faction FACTION_PREY, remove QUESTGIVER flag);
