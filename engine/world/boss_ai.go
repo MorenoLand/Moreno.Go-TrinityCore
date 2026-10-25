@@ -11649,7 +11649,7 @@ func init() {
 	// instance-shimmed / DB-side). Shared npc_argent_captainAI
 	// (ScriptedAI) base; one lua file for the 4 entries, per the
 	// boss_blood_prince_council 3-entries-1-file precedent. Ported
-	// arm in lua_scripts/northrend/npc_argent_captains.lua:
+	// arm in lua_scripts/northrend/boss_sister_svalna.lua:
 	// KilledUnit Talk(SAY_CAPTAIN_KILL 2) victim->GetTypeId() ==
 	// TYPEID_PLAYER gated (event 3, the razuvious player-gated
 	// variant precedent). The stateful JustDied arms
@@ -11712,7 +11712,7 @@ func init() {
 	// NPC_CAPTAIN_*_UNDEAD — kalecgos pass; bindings DB-side). C++
 	// switches entry via UpdateEntry() on SPELL_REVIVE_CHAMPION hit
 	// without replacing the AI; Eluna dispatches by current entry,
-	// so the undead entries share the npc_argent_captains.lua
+	// so the undead entries share the boss_sister_svalna.lua
 	// handlers (event 1 idempotent; per-cast spell variants resolve
 	// via GetEntry()). Tenth group of the "// Icecrown Citadel"
 	// block.

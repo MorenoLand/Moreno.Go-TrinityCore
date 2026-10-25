@@ -55,15 +55,16 @@
 -- SPELL_BERSERK 26662 self-cast 10min one-shot + Talk(SAY_BERSERK 15)
 -- (:296-300); SPELL_DEATH_AND_DECAY 71001 — no GROUP arg, survives
 -- phase transition (:301-306): random-target cast init 17s / re-arm
--- {22s,30s} unconditional (:305-306). Phase-ONE GROUP_ONE arm ported:
+-- {22s,30s} unconditional (:305-306). SPELL_DOMINATE_MIND 71289
+-- PORTED 2026-10-25 (onDominateMind): phase-independent, Talk-first,
+-- count RAID_MODE(0,1,1,3) with the :307 gate exactly (IsHeroic() or
+-- Is25ManRaid()), tank + already-dominated excluded, init 27s /
+-- re-arm {40s,45s} unconditional. Phase-ONE GROUP_ONE arm ported:
 -- SPELL_SHADOW_BOLT 71254 (:318-326) — init 2s / re-arm {2450ms,3600ms}
 -- unconditional, cancelled at the phase-2 transition
--- (CancelGroup(GROUP_ONE) :419). The other phase-one scheduler seeds
--- stay out: SummonWaveP1 (summon machine); Dominate Mind
--- (multi-target SelectTargetList + -SPELL_DOMINATE_MIND exclusion +
--- the GetDifficulty() != 10MAN_NORMAL gate, which IsHeroic() does not
--- express exactly); DoImproveCultist (cross-creature machine) — see
--- documented-only.
+-- (CancelGroup(GROUP_ONE) :419). The other phase-one scheduler seed
+-- stays out: SummonWaveP1 (summon machine). DoImproveCultist is
+-- PORTED 2026-10-23 (see documented-only note below).
 -- npc_cult_fanatic (37890, icecrown_citadel.h:175) — C++ schedules in
 --   Reset() (:601-615); re-keyed to the add's own OnEnterCombat
 --   (summoned mid-combat with immediate AttackStart, boss JustSummoned
@@ -142,13 +143,11 @@
 -- 6) ride the intro scheduler machine (intro machine — no bridge).
 -- boss_lady_deathwhisper JustEngagedWith scheduler legs —
 -- Talk(SAY_BERSERK 15) is PORTED (10-min berserk timer, above);
--- Talk(SAY_DOMINATE_MIND 10) rides a scheduler task with
--- multi-target SelectTargetList (randomPlayer is the in-tree bridge —
--- the earlier "no random-target bridge" claim is STALE, retracted) and
--- a GetDifficulty() != RAID_DIFFICULTY_10MAN_NORMAL gate (:307; stays
--- out: IsHeroic() is bridged but false for 25N, which the gate passes,
--- so no exact difficulty bridge; the list also carries the
--- -SPELL_DOMINATE_MIND aura exclusion); SummonWaveP1 /
+-- Talk(SAY_DOMINATE_MIND 10) is PORTED 2026-10-25 (onDominateMind:
+-- the :307 gate is exactly (IsHeroic() or Is25ManRaid()), the
+-- -SPELL_DOMINATE_MIND aura exclusion rides player:HasAura, the tank
+-- exclusion rides the GetVictim twin of GetLastVictim; the old "no
+-- exact difficulty bridge" stay-out is retracted); SummonWaveP1 /
 -- Shadow Bolt scheduler tasks with
 -- Talk(SAY_DARK_EMPOWERMENT 11 / SAY_DARK_TRANSFORMATION 12) ride
 -- summon / random-target machines (no bridge); the DoImproveCultist
@@ -217,11 +216,11 @@
 -- no-SpellScript-bridge queue.
 -- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
 -- queue (the pit_of_saron cavern-triggers precedent).
--- All 19 Talk() calls in the file accounted for (19 = ported (9): lady
+-- All 19 Talk() calls in the file accounted for (19 = ported (10): lady
 -- aggro 7 + berserk 15 + phase-2 8 + emote 9 + kill 14 + death 16 +
--- dark empowerment 11 + dark transformation 12 +
--- darnavan aggro 0; documented-only (10): intro 0-6 (7) + dominate 10
--- + animate-dead 13 (2) + darnavan rescued 1 (1)).
+-- dark empowerment 11 + dark transformation 12 + dominate 10 +
+-- darnavan aggro 0; documented-only (9): intro 0-6 (7)
+-- + animate-dead 13 (1) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
 local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
@@ -247,6 +246,7 @@ local SAY_PHASE_2 = 8 -- boss_lady_deathwhisper.cpp:43
 local EMOTE_PHASE_2 = 9 -- :44
 local SAY_DARNAVAN_AGGRO = 0
 local SAY_DARK_EMPOWERMENT = 11 -- boss_lady_deathwhisper.cpp:46
+local SAY_DOMINATE_MIND = 10 -- boss_lady_deathwhisper.cpp:45
 local SAY_DARK_TRANSFORMATION = 12 -- boss_lady_deathwhisper.cpp:47
 local SAY_ANIMATE_DEAD = 13 -- boss_lady_deathwhisper.cpp:48
 
@@ -283,6 +283,7 @@ local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
 local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
 local SPELL_DEATH_AND_DECAY = 71001 -- :63
+local SPELL_DOMINATE_MIND = 71289 -- :64
 local SPELL_SHADOW_BOLT = 71254 -- :62
 local SPELL_CURSE_OF_TORPOR = 71237 -- :102 (adherent)
 local SPELL_BLADESTORM = 65947
@@ -431,6 +432,53 @@ local function onShadowBolt(creature, guid)
     end)
 end
 
+-- C++ :307-317 phase-INDEPENDENT (no GROUP arg — survives the
+-- CancelGroup(GROUP_ONE) at phase transition :419): Talk(SAY_DOMINATE_MIND
+-- 10) first, then SelectTargetList(count, Random, 0, 0.0f, playerOnly,
+-- withTank=false, -SPELL_DOMINATE_MIND) — the tank is the
+-- DefaultTargetSelector exception (UnitAI.cpp:254-256, GetLastVictim),
+-- so the pool excludes the current victim; the -aura arg excludes
+-- players already carrying SPELL_DOMINATE_MIND (UnitAI.cpp:276-283).
+-- Gate GetDifficulty() != RAID_DIFFICULTY_10MAN_NORMAL (:307) is
+-- exactly (IsHeroic() or Is25ManRaid()): 10N is the only difficulty
+-- with both false; count RAID_MODE(0,1,1,3) is 1 except 25H = 3.
+-- Init 27s, re-arm {40s,45s} unconditional (Repeat after the cast
+-- loop). Pool idiom is randomPlayer's (threat-list exactness caveat
+-- documented there); distinct picks via the putricide table.remove
+-- idiom. Non-triggered casts.
+local function onDominateMind(creature, guid)
+    creature:Talk(SAY_DOMINATE_MIND)
+    local count = 1
+    if creature:Is25ManRaid() and creature:IsHeroic() then
+        count = 3
+    end
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and not plr:HasAura(SPELL_DOMINATE_MIND)
+                and (victimGuid == nil or plr:GetGUID() ~= victimGuid) then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    for _ = 1, count do
+        if #candidates == 0 then
+            break
+        end
+        local target = table.remove(candidates, math.random(#candidates))
+        creature:CastSpell(target, SPELL_DOMINATE_MIND)
+    end
+    schedule(guid, "dominate", {40000, 45000}, function()
+        onDominateMind(creature, guid)
+    end)
+end
+
 -- C++ DamageTaken phase-2 transition (:407-417): gate
 -- _phase == PHASE_ONE && damage > me->GetPower(POWER_MANA); then
 -- Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9), damage -= mana,
@@ -562,9 +610,9 @@ end
 
 -- C++ boss_lady_deathwhisper::JustEngagedWith (:281-342): the
 -- CheckRequiredBosses evade branch has no bridge; the phase-one
--- scheduler seeds that stay out are SummonWaveP1 (summon machine),
--- Dominate Mind (multi-target SelectTargetList + the GetDifficulty()
--- != 10MAN_NORMAL gate) and DoImproveCultist (cross-creature machine).
+-- scheduler seed that stays out is SummonWaveP1 (summon machine).
+-- Dominate Mind (phase-independent) and DoImproveCultist are PORTED
+-- (onDominateMind, onImproveCultist).
 -- Shadow Bolt (GROUP_ONE) and Death and Decay (phase-INDEPENDENT) ARE
 -- ported below — the C++ SelectTarget(Random) playerOnly=FALSE default
 -- is documented on randomPlayer (the tuten_kash pets/totems caveat).
@@ -590,6 +638,12 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     schedule(guid, "deathanddecay", 17000, function() onDeathAndDecay(creature, guid) end)
     schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)
     schedule(guid, "improve", 15000, function() onImproveCultist(creature, guid) end)
+    -- C++ :307 dominate-mind gate, exactly (IsHeroic() or Is25ManRaid())
+    -- — 10N is the only difficulty with both false; phase-independent,
+    -- so it is NOT cancelled at the phase-2 transition.
+    if creature:IsHeroic() or creature:Is25ManRaid() then
+        schedule(guid, "dominate", 27000, function() onDominateMind(creature, guid) end)
+    end
 end
 
 local function deathwhisperLeaveCombat(event, creature)

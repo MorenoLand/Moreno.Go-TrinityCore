@@ -17,7 +17,10 @@
 -- The 4 argent captains (npc_captain_arnath / npc_captain_brandon /
 -- npc_captain_grondel / npc_captain_rupert over the shared
 -- npc_argent_captainAI base) are also registered from this AddSC
--- unit and live in npc_argent_captains.lua.
+-- unit and live in THIS file (npc_argent_captains.lua was removed
+-- 2026-10-25: it registered the same 8 captain entries, and hooks
+-- append, so every captain timer/Talk fired twice — the tree-wide
+-- duplicate-registration census found this as the only collision).
 -- Entries: 37126 Sister Svalna (icecrown_citadel.h NPC_SISTER_SVALNA,
 -- line 283; DATA_SISTER_SVALNA = 9, line 83;
 -- instance_icecrown_citadel.cpp OnCreatureCreate binds case
@@ -93,7 +96,8 @@
 --   smite (:947/:978-980) + rupert bomb/gun/rocket
 --   (:1138-1140/:1157-1169) ported this run with entry-gated
 --   undead spell picks; arnath flash-heal/PW-shield stay out on
---   friendly-search legs, dominate-mind on the Is25ManRaid gate,
+--   friendly-search legs, arnath dominate-mind PORTED this run
+--   (Is25ManRaid + undead-entry gates, skip-first player pool),
 --   registered for both the living and undead entries (same
 --   struct/AI survives UpdateEntry): brandon
 --   EVENT_BRANDON_CRUSADER_STRIKE {6s,10s} -> DoCastVictim(
@@ -122,10 +126,11 @@
 -- (npc_crok_scourgebane :526-809, EscortAI) has NO JustEngagedWith
 -- override in C++; the SetHomePosition port formerly in crokEnterCombat
 -- was a fabricated leg and is REMOVED. The captain leg itself —
--- SetHomePosition :861 (ported) + the IsUndead-gated DoZoneInCombat
+-- SetHomePosition :861 (ported, in all four captain enterCombat
+-- handlers below) + the IsUndead-gated DoZoneInCombat
 -- :862-863 (stays out: dead latch, set-arm rides the unported
--- setDeathState/UpdateEntry machine) — lives in
--- npc_argent_captains.lua.)
+-- setDeathState/UpdateEntry machine) — lives in this file's
+-- captain handlers.)
 -- npc_crok_scourgebane::CanAIAttack x2 (:792-796, :866-870) — the
 --   Y > 2660 Frostwing-Halls gate ("do not see targets inside
 --   Frostwing Halls when we are not there") stays out: creature:GetY
@@ -173,9 +178,9 @@
 --   gothik phase-machine precedent.
 -- boss_sister_svalna JustEngagedWith EVENT_IMPALING_SPEAR
 --   (:359, 40-50s, re-arm 20-25s, :500-509) — PORTED: self-cast
---   AETHER_SHIELD 71463 then victim-cast IMPALING_SPEAR 71443 on
---   a map-wide random player; the -71443 aura-exclusion leg and
---   the offset-1 tank-skip are documented unbridged caveats.
+--   AETHER_SHIELD 71463 then victim-cast IMPALING_SPEAR 71443 on a
+--   threat-list target (skip-first MaxThreat head, playerOnly,
+--   -71443 aura exclusion via randomNonHeadPlayerTarget).
 -- boss_sister_svalna JustEngagedWith EVENT_AETHER_SHIELD
 --   (:360, 100-110s) — scheduled but has NO case in the UpdateAI
 --   switch: dead event, nothing to port (upstream finding).
@@ -320,6 +325,7 @@ local SPELL_DIVINE_SHIELD = 71550 -- :98
 local SPELL_HAMMER_OF_BETRAYAL = 71784 -- :100
 local SPELL_SMITE_NORMAL = 71546 -- :91
 local SPELL_SMITE_UNDEAD = 71778 -- :94
+local SPELL_DOMINATE_MIND = 14515 -- :88
 local SPELL_FEL_IRON_BOMB_NORMAL = 71592 -- :109
 local SPELL_FEL_IRON_BOMB_UNDEAD = 71787 -- :112
 local SPELL_MACHINE_GUN_NORMAL = 71594 -- :110
@@ -386,6 +392,31 @@ local function randomPlayerTarget(creature, maxDist)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ SelectTarget(Random, 1, 0.0f, playerOnly=TRUE) offset-1
+-- tank-skip twin: GetAITargets is threat-descending
+-- (threat.go SortedEntries), so index 1 is the MaxThreat head C++
+-- skips (UnitAI.h:217-218); the playerOnly gate applies AFTER the
+-- skip, matching DefaultTargetSelector order (UnitAI.cpp:254-289);
+-- excludeAura (nil or a spell id) drops carriers (the -aura arg).
+local function randomNonHeadPlayerTarget(creature, excludeAura)
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
+        return nil
+    end
+    local candidates = {}
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player"
+                and (excludeAura == nil or not t:HasAura(excludeAura)) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ boss_sister_svalna::JustEngagedWith :353-362 — DoCastSelf(
 -- SPELL_DIVINE_SURGE, true) is a TRIGGERED self-cast; the
 -- EVENT_SVALNA_COMBAT seed (9s) is a one-shot Talk arm.
@@ -393,9 +424,10 @@ end
 -- Random, 1, 0.0f, true, true, -SPELL_IMPALING_SPEAR 71443) ->
 -- DoCast(me, SPELL_AETHER_SHIELD 71463) then DoCast(target,
 -- SPELL_IMPALING_SPEAR 71443), re-arm 20-25s unconditional
--- (re-scheduled outside the target guard). The -71443
--- aura-exclusion leg and the offset-1 tank-skip are documented
--- unbridged caveats, not blockers.
+-- (re-scheduled outside the target guard). The offset-1 tank-skip +
+-- playerOnly + -71443 aura-exclusion legs ride
+-- randomNonHeadPlayerTarget (threat-list pool, skip-first, aura
+-- filter); the old "documented unbridged caveats" claim is retracted.
 -- C++ :499-502: SetReactState(REACT_DEFENSIVE 1) then Talk(
 -- SAY_SVALNA_AGGRO 3) — arm order kept.
 local function onSvalnaCombat(creature)
@@ -404,7 +436,7 @@ local function onSvalnaCombat(creature)
 end
 
 local function onSvalnaImpalingSpear(creature, guid)
-    local target = randomPlayerTarget(creature)
+    local target = randomNonHeadPlayerTarget(creature, SPELL_IMPALING_SPEAR)
     if target then
         creature:CastSpell(creature, SPELL_AETHER_SHIELD)
         creature:CastSpell(target, SPELL_IMPALING_SPEAR)
@@ -776,8 +808,7 @@ end
 -- (HealthBelowPct(20) -> self-cast 71550, unconditional 500ms
 -- re-arm) + EVENT_BRANDON_HAMMER_OF_BETRAYAL {25s,30s} ->
 -- randomPlayerTarget -> 71784, re-arm {45s,60s} (undead-entry
--- gated; the position-1 offset has no bridge — tyrannus
--- precedent).
+-- gated; the position-1 offset rides randomNonHeadPlayerTarget).
 local function onBrandonCrusaderStrike(creature, guid)
     creature:CastSpell(nil, SPELL_CRUSADER_STRIKE)
     schedule(guid, "crusader", {6000, 12000},
@@ -808,10 +839,12 @@ end
 -- IsUndead (Reset :1021-1022; IsUndead flips exactly with the entry
 -- remap to 37493, :896-898) — SelectTarget(Random, 1, 0.0f, true) ->
 -- DoCast(target, SPELL_HAMMER_OF_BETRAYAL 71784) non-triggered;
--- re-arm {45s,60s} unconditional. The position-1 offset has no
--- bridge — plain random alive player (the tyrannus precedent).
+-- re-arm {45s,60s} unconditional. The position-1 offset rides
+-- randomNonHeadPlayerTarget (threat-list pool, skip-first,
+-- playerOnly); the old "offset has no bridge — tyrannus precedent"
+-- claim is retracted.
 local function onBrandonHammerOfBetrayal(creature, guid)
-    local target = randomPlayerTarget(creature)
+    local target = randomNonHeadPlayerTarget(creature, nil)
     if target then
         creature:CastSpell(target, SPELL_HAMMER_OF_BETRAYAL)
     end
@@ -820,6 +853,9 @@ local function onBrandonHammerOfBetrayal(creature, guid)
 end
 
 local function brandonEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859):
+    -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "crusader", {6000, 10000},
@@ -879,6 +915,9 @@ local function onGrondelConflagration(creature, guid)
 end
 
 local function grondelEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859):
+    -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "charge", 500,
@@ -963,8 +1002,8 @@ end
 -- 71778 : 71546 (:218) — the entry flips exactly with IsUndead
 -- (:896-898), so the entry gates the spell pick. Flash heal / PW
 -- shield stay out on friendly-search legs (FindFriendlyCreature /
--- DoFindFriendlyMissingBuff, no bridge); dominate mind stays out on
--- the Is25ManRaid gate (no 25-man-raid bridge).
+-- DoFindFriendlyMissingBuff, no bridge); dominate mind PORTED
+-- below (Is25ManRaid() + undead-entry gates, both bridged).
 local function onArnathSmite(creature, guid)
     local spell = SPELL_SMITE_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
@@ -975,11 +1014,34 @@ local function onArnathSmite(creature, guid)
         function() onArnathSmite(creature, guid) end)
 end
 
+-- C++ npc_captain_arnath::Reset :948-949 — if (Is25ManRaid() &&
+-- IsUndead) ScheduleEvent(EVENT_ARNATH_DOMINATE_MIND, 22s, 27s);
+-- UpdateAI :982-985 — SelectTarget(Random, 1, 0.0f, true) ->
+-- DoCast(target, SPELL_DOMINATE_MIND 14515) non-triggered, re-arm
+-- {28s,37s} unconditional (outside the target-if). The IsUndead Reset
+-- gate resolves via the current entry (the smite-leg precedent);
+-- the offset-1 tank-skip + playerOnly ride randomNonHeadPlayerTarget.
+local function onArnathDominateMind(creature, guid)
+    local target = randomNonHeadPlayerTarget(creature, nil)
+    if target then
+        creature:CastSpell(target, SPELL_DOMINATE_MIND)
+    end
+    schedule(guid, "dominate", {28000, 37000},
+        function() onArnathDominateMind(creature, guid) end)
+end
+
 local function arnathEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859):
+    -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "smite", {3000, 6000},
         function() onArnathSmite(creature, guid) end)
+    if creature:Is25ManRaid() and creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
+        schedule(guid, "dominate", {22000, 27000},
+            function() onArnathDominateMind(creature, guid) end)
+    end
 end
 
 -- C++ SelectTarget(Random, N) with playerOnly=FALSE (UnitAI.h:170):
@@ -1062,6 +1124,9 @@ local function onRupertRocketLaunch(creature, guid)
 end
 
 local function rupertEnterCombat(event, creature, target)
+    -- C++ npc_argent_captainAI::JustEngagedWith (:859):
+    -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
+    creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "bomb", {15000, 20000},
