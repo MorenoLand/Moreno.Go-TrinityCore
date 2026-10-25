@@ -66,16 +66,19 @@
 -- SHIELD 3) + DoCast(me, SPELL_RIFT_SHIELD) + SummonCreature(NPC_
 -- CHAOTIC_RIFT 26918, RiftLocation[urand(0,5)], TEMPSUMMON_TIMED_
 -- DESPAWN_OUT_OF_COMBAT 1s) + Rift AttackStart(SelectTarget(Random,0))
--- + Talk(SAY_RIFT 2) machine stays out: the summon bridge is live but
--- 26918 is entry-unverifiable local-enum-only (gothik-minions
--- precedent — no template row, the summon would return nil), the
--- rift's AttackStart has no bridge, and the rift AI (burst + wraith
--- summons) has no bearer (herod precedent).
+-- + Talk(SAY_RIFT 2) machine stays out: the summon bridge is live and
+-- EngageWithTarget is the AttackStart twin, but 26918 is
+-- entry-unverifiable local-enum-only (gothik-minions precedent — no
+-- template row, the summon would return nil, and a nil rift must NOT
+-- early-return the spark block: C++ falls through when the rift GUID
+-- is empty), the shield-gated burst rides the instance GetGuidData
+-- leg, and the rift AI (burst + wraith summons) has no bearer
+-- (herod precedent). Revisit only with a sourced 26918/26746 entry.
 -- Ported: uiSparkTimer — SelectTarget(Random, 0) -> DoCast(SPELL_SPARK
--- 47751), 5s init, 5s repeat, non-triggered — via randomPlayer +
--- CreateLuaEvent (keleseth / thorim / archavon GetPlayersInWorld
--- precedent); C++ fires 47751 unconditionally (H_SPELL_SPARK never
--- referenced at :182), so no IsHeroic gating needed.
+-- 47751), 5s init, 5s repeat, non-triggered — via randomPlayer
+-- (GetAITargets + alive, 2026-10-25 fix) + CreateLuaEvent; C++
+-- fires 47751 unconditionally (H_SPELL_SPARK never referenced at
+-- :182), so no IsHeroic gating needed.
 -- npc_chaotic_rift — entry-unverifiable (26918, local-enum-only) — no
 -- registration, no lua; its arms are documented here only:
 -- SetCombatMovement(false); Reset — SetDisplayId(Modelid2) +
@@ -85,7 +88,7 @@
 -- SelectTarget(Random, 0) -> DoCast(SPELL_CHAOTIC_ENERGY_BURST 47688 /
 -- charged 47737 when Anomalus via instance->GetGuidData(DATA_ANOMALUS)
 -- HasAura(SPELL_RIFT_SHIELD)), 1s init, 1s repeat — no instance /
--- cross-creature / random-target bridges; UpdateAI
+-- cross-creature bridge (GetAITargets IS the random-target bridge); UpdateAI
 -- uiSummonCrazedManaWraithTimer — SummonCreature(NPC_CRAZED_MANA_
 -- WRAITH 26746 local-enum-only entry-unverifiable) + AttackStart(
 -- SelectTarget(Random, 0)) + 5s repeat when Anomalus shielded else 10s
@@ -137,18 +140,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
--- the same map/instance, no distance filter (the keleseth / thorim /
--- archavon GetPlayersInWorld precedent); only threat-listed units
--- qualify in practice.
+-- C++ SelectTarget(SelectTargetMethod::Random, 0) draws the threat
+-- list, playerOnly defaults false, no distance filter (UnitAI.h) —
+-- so the pool is GetAITargets, any unit, alive-filtered (C++ skips
+-- offline refs; Go SortedEntries returns dead entries too). The old
+-- instance-player pool (keleseth / thorim / archavon precedent) is
+-- retired: it cast spark on players outside the threat list.
 local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

@@ -61,9 +61,9 @@
 -- PORTED via creature:RemoveAura (the old "no aura-removal bridge —
 -- boss_amanitar / boss_anub_arak precedent" claim was stale).
 -- EVENT_CHARGE_COMMANDER — PORTED (see chargeTick; the "no
--- random-target SelectTarget bridge" claim was stale — the C++
--- playerOnly=TRUE pool is exactly what the Lua alive-player pool
--- models, moragg palehoof precedent).
+-- random-target SelectTarget bridge" claim was stale — GetAITargets
+-- + Player + alive + in-range is the C++ playerOnly=TRUE threat
+-- pool, 2026-10-25 fix).
 
 local ENTRY_STOUTBEARD = 26796
 local ENTRY_KOLURG = 26798
@@ -102,17 +102,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- random alive player within maxDist of the creature in the instance
--- (moragg palehoof randomPlayerTarget precedent); C++
--- SelectTarget(Random, 0, 100.0f, true): playerOnly TRUE — the only
--- SelectTarget arm in this batch whose pool is C++-exact.
+-- C++ SelectTarget(Random, 0, 100.0f, true) draws the threat list
+-- filtered to players within maxDist (UnitAI.h) — so the pool is
+-- GetAITargets + Player + alive + in-range, not instance players
+-- (2026-10-25 fix; the old pool could charge a player outside the
+-- threat list).
 local function randomPlayerTarget(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, maxDist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:IsWithinDist(t, maxDist) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

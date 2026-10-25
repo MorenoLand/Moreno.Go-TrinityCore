@@ -135,16 +135,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- maiden_of_virtue precedent: random alive player in the instance
--- within range (the C++ SelectTarget(Random, 0, range, true)
--- eligibility gate, playerOnly = true).
+-- C++ SelectTarget(Random, 0, range, true) draws the threat list
+-- filtered to players within range (UnitAI.h) — so the pool is
+-- GetAITargets + Player + alive + in-range, not instance players
+-- (2026-10-25 fix; the old instance-player pool could pick a player
+-- outside the threat list).
 local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:IsWithinDist(t, range) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

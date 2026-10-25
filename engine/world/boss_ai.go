@@ -9825,6 +9825,22 @@ func init() {
 	// queue (kelthuzad/thaddius precedent).
 	RegisterLuaBoss("boss_anomalus", 26763)
 
+	// Ormorok the Tree-Shaper (26794), The Nexus —
+	// lua_scripts/northrend/boss_ormorok.lua. Entry wowhead-verified
+	// 2026-10-25 (no NPC_ORMOROK const in the C++ tree). Ported arms:
+	// JustEngagedWith Talk(1) + spikes 12s / trample 10s / reflection
+	// 30s / heroic tangler 15s schedules; spikes Talk(4) + DoCastVictim
+	// 47958 12s; trample self-cast 48016 10s; reflection Talk(3) +
+	// self-cast 47981 30s; tangler threat-list pick with 2D >= 5yd
+	// predicate (UnitAI.h:176, no playerOnly filter) + DoCast 61564
+	// 15s; DamageTaken HealthBelowPct(25) CURRENT-health one-shot
+	// latch (not Damaged form — DamageTaken fires pre-application) +
+	// Talk(6) + self-cast 48017; KilledUnit Talk(5) player-gated;
+	// JustDied Talk(2). Documented-only: BossAI instance legs,
+	// casting-state gate, crystal-spike trigger AI + AuraScript
+	// (IsSummonedBy / GO-Use / GetData legs, no bridges).
+	RegisterLuaBoss("boss_ormorok", 26794)
+
 	// Keristrasza (26723), The Nexus —
 	// lua_scripts/northrend/boss_keristrasza.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) (the

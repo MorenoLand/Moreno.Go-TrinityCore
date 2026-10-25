@@ -16,6 +16,9 @@
 -- creature:CastSpell(target, spell) = DoCast,
 -- creature:CastSpell(creature, spell) = DoCastSelf.
 -- Ported arms (C++-exact at 1s granularity, documented below):
+-- 2026-10-25: randomThreatTarget alive-filtered (C++ SelectTarget
+-- skips offline refs, UnitAI.h); phase latches in floor form
+-- (HealthBelowPct = health < CalculatePct trunc, Unit.h:872).
 -- JustEngagedWith Talk(SAY_AGGRO 0) (event 1; BossAI-less
 -- ScriptedAI, no instance leg in C++ JustEngagedWith) + 1s pump;
 -- pump arms in C++ order: waiting branch (StopMoving +
@@ -119,7 +122,16 @@ local function randomThreatTarget(creature)
     if targets == nil or #targets == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if t:IsAlive() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
+        return nil
+    end
+    return alive[math.random(#alive)]
 end
 
 local function splitPersonality(creature, st, newPhase)
@@ -195,7 +207,7 @@ local function telestraPump(creature, guid)
         end)
         return
     end
-    if st.phase == 0 and creature:GetHealthPct() < 50 then
+    if st.phase == 0 and creature:GetHealth() < math.floor(creature:GetMaxHealth() * 50 / 100) then
         splitPersonality(creature, st, 1)
         schedule(guid, "pump", 1000, function()
             telestraPump(creature, guid)
@@ -203,7 +215,7 @@ local function telestraPump(creature, guid)
         return
     end
     if creature:IsHeroic() and st.phase == 2
-            and creature:GetHealthPct() < 10 then
+            and creature:GetHealth() < math.floor(creature:GetMaxHealth() * 10 / 100) then
         splitPersonality(creature, st, 3)
         schedule(guid, "pump", 1000, function()
             telestraPump(creature, guid)
