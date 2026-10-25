@@ -5,14 +5,12 @@
 -- (NPC_MAJORDOMO_EXECUTUS = 12018).
 -- Creature entry: 12018 Majordomo Executus (C++ ScriptName
 -- "boss_majordomo" per AddSC_boss_majordomo). Talk lines used:
--- SAY_AGGRO=0 (pull), SAY_SLAY=2 (25% on kill), SAY_SUMMON_MAJ=5
--- (gossip summon), SAY_ARRIVAL2_MAJ=6 (outro); SAY_DEFEAT=4 belongs
--- to the unmodeled defeat arm (see deviations); SAY_SPAWN=1 and
--- SAY_SPECIAL=3 are declared in C++ but unused by the AI
+-- SAY_AGGRO=0 (pull), SAY_SLAY=2 (25% on kill), SAY_DEFEAT=4 (defeat
+-- pump), SAY_SUMMON_MAJ=5 (gossip summon), SAY_ARRIVAL2_MAJ=6 (outro);
+-- SAY_SPAWN=1 and SAY_SPECIAL=3 are declared in C++ but unused by the AI
 -- (instance-side use).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 9 OnDamageTaken (pre-damage hook, moroes
--- convention), 23 OnReset. Eluna gossip events: 2 OnGossipSelect.
+-- OnTargetDied, 4 OnDied, 23 OnReset. Eluna gossip events: 2 OnGossipSelect.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat:
@@ -24,25 +22,24 @@
 -- the current victim (C++ SelectTarget(Random, 1) skips position 0;
 -- a sole-victim tick casts nothing but keeps the schedule). Nil-
 -- victim ticks cast nothing but keep the schedule (jeklik
--- convention). OnTargetDied(3): 25% Talk(SAY_SLAY). OnDamageTaken(9,
--- pre-damage hook): current (pre-damage) health strictly below 50%
--- (C++ HealthBelowPct(50) reads current health; the engine's event 9
--- fires before damage is applied, matching C++ Unit::DealDamage) ->
--- triggered self-cast Aegis of Ragnaros 20620 (C++-exact — no
--- once-guard; C++ re-casts every UpdateAI tick below 50%). OnDied/
--- OnLeaveCombat/OnReset: cancel timers. OnGossipSelect (DB menu 4108
+-- convention). OnTargetDied(3): 25% Talk(SAY_SLAY). 1s aegis pump
+-- (geddon convention): current health strictly below 50% (C++ HealthBelowPct(50)
+-- reads current health; C++ re-casts every UpdateAI tick below 50%, no
+-- once-guard) -> triggered self-cast Aegis of Ragnaros 20620. 1s defeat
+-- pump: no Flamewaker Healer (11663) and no Flamewaker Elite (11664)
+-- within 100 yd -> SetFaction(35 FRIENDLY) + Talk(SAY_DEFEAT) + combat
+-- timers stop + 32s OUTRO_1 (NearTeleportTo RagnarosTelePos + gossip
+-- flag). OnDied/OnLeaveCombat/OnReset: cancel timers. OnGossipSelect (DB menu 4108
 -- option 0 — the defeated-majordomo "summon Ragnaros" menu): close
 -- the menu, Talk(SAY_SUMMON_MAJ), arm the 8s Ragnaros summon + 24s
 -- outro Talk(SAY_ARRIVAL2_MAJ).
--- The defeat sequence stays out: the flamewakers are instance-summoned
--- (instance_molten_core.cpp SummonMajordomoExecutus — no instance-spawn
--- model, so the no-flamewaker presence check is unevaluatable in Go),
--- EnterEvadeMode has no bridge, and the instance DONE / _JustDied legs
--- have no bridge. EVENT_OUTRO_1's NearTeleportTo(RagnarosTelePos) +
--- gossip-flag arm rides that defeat sequence, so it stays out (its
--- teleport leg IS bridged — creature:Teleport — and its flag leg IS
--- bridged — RemoveFlag field 82 — but neither fires without the
--- defeat trigger). EVENT_OUTRO_2 + the DoAction(ACTION_START_RAGNAROS)
+-- The defeat sequence's remaining legs stay out: EnterEvadeMode has no
+-- bridge, and the instance DONE / _JustDied legs have no bridge. The
+-- flamewakers are instance-summoned (instance_molten_core.cpp
+-- SummonMajordomoExecutus), but the presence check itself runs on the
+-- bridged FindNearestCreature gate, so the trigger + visible legs
+-- (faction, Talk, OUTRO_1 teleport + gossip flag) are PORTED below.
+-- EVENT_OUTRO_2 + the DoAction(ACTION_START_RAGNAROS)
 -- arms are PORTED in the gossip handler below (RemoveFlag, Talk,
 -- 8s Ragnaros summon, 24s Talk). DoAction(ACTION_START_RAGNAROS_ALT)
 -- stays out (instance-summon entry point, no bearer); SPELL_SUMMON_
@@ -58,6 +55,7 @@ local NPC_RAGNAROS = 11502
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
+local SAY_DEFEAT = 4
 local SAY_SUMMON_MAJ = 5
 local SAY_ARRIVAL2_MAJ = 6
 
@@ -67,7 +65,17 @@ local SPELL_MAGIC_REFLECTION = 20619
 local SPELL_AEGIS_OF_RAGNAROS = 20620
 local SPELL_DAMAGE_REFLECTION = 21075
 
+local ENTRY_FLAMEWAKER_HEALER = 11663
+local ENTRY_FLAMEWAKER_ELITE = 11664
+local FACTION_FRIENDLY = 35
+local UNIT_NPC_FLAG_GOSSIP = 1
+local RAGNAROS_TELE_X = 829.159
+local RAGNAROS_TELE_Y = -815.773
+local RAGNAROS_TELE_Z = -228.972
+local RAGNAROS_TELE_O = 5.305
+
 local timers = {}
+local defeated = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -151,6 +159,34 @@ local function onTeleport(creature, guid)
     end)
 end
 
+-- C++ UpdateAI defeat arm (boss_majordomo_executus.cpp:108-124): while
+-- boss state != DONE (unmodeled — the pump only runs in combat, and the
+-- combat timers die with it), if no Flamewaker Healer (11663) and no
+-- Flamewaker Elite (11664) is found within 100 yd -> SetFaction(35
+-- FRIENDLY) + Talk(SAY_DEFEAT) + combat timers stop + EVENT_OUTRO_1
+-- at 32s (NearTeleportTo RagnarosTelePos + gossip flag). EnterEvadeMode,
+-- instance DONE and _JustDied legs have no bridge and stay out.
+local function onDefeatPump(creature, guid)
+    if defeated[guid] then
+        return
+    end
+    if creature:FindNearestCreature(ENTRY_FLAMEWAKER_HEALER, 100.0) == nil
+            and creature:FindNearestCreature(ENTRY_FLAMEWAKER_ELITE, 100.0) == nil then
+        defeated[guid] = true
+        cancelTimers(guid)
+        creature:SetFaction(FACTION_FRIENDLY)
+        creature:Talk(SAY_DEFEAT)
+        schedule(guid, "outro1", 32000, function()
+            creature:Teleport(RAGNAROS_TELE_X, RAGNAROS_TELE_Y, RAGNAROS_TELE_Z, RAGNAROS_TELE_O)
+            creature:SetFlag(82, UNIT_NPC_FLAG_GOSSIP)
+        end)
+        return
+    end
+    schedule(guid, "defeat", 1000, function()
+        onDefeatPump(creature, guid)
+    end)
+end
+
 -- Forward declaration: majordomoEnterCombat's timer closures reference
 -- onAegisPump textually before its local definition; without this the
 -- name compiles to a global and the aegis pump stream calls nil.
@@ -174,6 +210,9 @@ local function majordomoEnterCombat(event, creature, target)
     end)
     schedule(guid, "aegis", 1000, function()
         onAegisPump(creature, guid)
+    end)
+    schedule(guid, "defeat", 1000, function()
+        onDefeatPump(creature, guid)
     end)
 end
 
@@ -204,6 +243,7 @@ onAegisPump = function(creature, guid)
 end
 
 local function majordomoResetState(guid)
+    defeated[guid] = nil
     cancelTimers(guid)
 end
 
