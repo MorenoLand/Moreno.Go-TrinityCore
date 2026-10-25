@@ -91,26 +91,27 @@ end
 -- engages them (documented gap). Re-arm {15s,25s}, unconditional
 -- (nil-target ticks summon nothing but keep the schedule, jeklik
 -- convention). PORTED 2026-10-23 (position-leg axis).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ EVENT_ILLUSIONS (boss_hazzarah.cpp:90): SelectTarget(Random, 0,
+-- 0.f, true) — threat-list players alive, no range cap.
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 local function onIllusions(creature, guid)
     -- C++ re-picks the random target per illusion (the SelectTarget call
     -- is inside the loop), so each summon gets its own fresh pick.
     for _ = 1, 3 do
-        local target = randomPlayer(creature)
+        local target = randomThreatPlayer(creature)
         if target then
             creature:SummonCreature(ENTRY_NIGHTMARE_ILLUSION, target:GetX(),
                 target:GetY(), target:GetZ(), target:GetO(), 1, 30000)

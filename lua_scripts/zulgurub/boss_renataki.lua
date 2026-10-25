@@ -68,16 +68,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, 100.0f, true) (boss_renataki.cpp:83/:116):
+-- threat-list players alive within 100 yd.
+local function randomThreatPlayerInRange(creature, range)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            out[#out + 1] = unit
         end
     end
-    return found
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ invisible timer :67-74: InterruptSpell is a no-op (no cast state
@@ -107,14 +112,8 @@ end
 local function onAmbush(creature, guid)
     local st = renatakiState[guid]
     if st and st.invisible then
-        local candidates = {}
-        for _, p in ipairs(alivePlayersInInstance(creature)) do
-            if creature:GetDistance(p) <= 100 then
-                candidates[#candidates + 1] = p
-            end
-        end
-        if #candidates > 0 then
-            local target = candidates[math.random(#candidates)]
+        local target = randomThreatPlayerInRange(creature, 100)
+        if target then
             creature:Teleport(target:GetX(), target:GetY(), target:GetZ())
             creature:CastSpell(target, SPELL_AMBUSH)
         end
@@ -150,13 +149,7 @@ end
 local function onAggroSwitch(creature, guid)
     local st = renatakiState[guid]
     if not (st and st.invisible) then
-        local candidates = {}
-        for _, p in ipairs(alivePlayersInInstance(creature)) do
-            if creature:GetDistance(p) <= 100 then
-                candidates[#candidates + 1] = p
-            end
-        end
-        if #candidates > 0 then
+        if randomThreatPlayerInRange(creature, 100) then
             local victim = creature:GetVictim()
             if victim and creature:GetThreat(victim) ~= 0 then
                 creature:ModifyThreatByPercent(victim, -50)

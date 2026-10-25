@@ -126,24 +126,21 @@ local function arlokkState(guid)
     return st
 end
 
-local function alivePlayers(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ EVENT_MARK_OF_ARLOKK (boss_arlokk.cpp:221): MaxThreat with a
+-- random 1-3 offset (the first 1-3 threat entries are skipped before
+-- filtering, UnitAI.h), any unit (playerOnly=false), excluding units
+-- already carrying the mark (aura -24210); the first surviving entry
+-- in threat order wins, not a random draw.
+local function markTarget(creature)
+    local targets = creature:GetAITargets()
+    local skip = math.random(1, 3)
+    for i, unit in ipairs(targets) do
+        if i > skip and not unit:IsDead()
+                and not unit:HasAura(SPELL_MARK_OF_ARLOKK) then
+            return unit
         end
     end
-    return found
-end
-
-local function randomPlayer(creature)
-    local candidates = alivePlayers(creature)
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
+    return nil
 end
 
 -- C++ shadow word pain (troll): triggered victim cast, re-arm {5s,7s}
@@ -173,10 +170,11 @@ local function onGouge(creature, guid)
     end
 end
 
--- C++ mark of arlokk (both phases): triggered cast on a random alive
--- player (victim fallback), then Talk(1); re-arm {120s,130s}.
+-- C++ mark of arlokk (both phases): triggered cast on the
+-- MaxThreat-offset pick (victim fallback), then Talk(1); re-arm
+-- {120s,130s}.
 local function onMarkOfArlokk(creature, guid)
-    local target = randomPlayer(creature) or creature:GetVictim()
+    local target = markTarget(creature) or creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_MARK_OF_ARLOKK, true)
         creature:Talk(SAY_FEAST_PROWLER, target)

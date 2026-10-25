@@ -55,19 +55,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+-- C++ EVENT_LIGHTNINGWAVE (boss_wushoolay.cpp:69): SelectTarget
+-- (Random, 0, 100, true) — threat-list players alive within 100 yd
+-- (the old pool had no range cap).
+local function randomThreatPlayerInRange(creature, range)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_LIGHTNINGCLOUD: triggered DoCastVictim(25033); re-arm
@@ -85,7 +88,7 @@ end
 -- C++ EVENT_LIGHTNINGWAVE: non-triggered DoCast on
 -- SelectTarget(Random, 0, 100, true); re-arm {12s,16s}.
 local function onLightningWave(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_LIGHTNINGWAVE)
     end

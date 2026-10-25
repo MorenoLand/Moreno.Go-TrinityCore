@@ -85,16 +85,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ EVENT_WILL_OF_HAKKAR (boss_hakkar.cpp:137-139): the cast lands
+-- on the top-threat player within 100 yd (MaxThreat, 0, 100, true).
+local function topThreatPlayerInRange(creature, range)
+    local targets = creature:GetAITargets()
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            return unit
         end
     end
-    return found
+    return nil
 end
 
 -- C++ EVENT_BLOOD_SIPHON: triggered DoCastVictim(24322); re-arm 90s.
@@ -121,14 +122,14 @@ local function onCorruptedBlood(creature, guid)
 end
 
 -- C++ EVENT_WILL_OF_HAKKAR: only when more than one unit is fighting
--- (SelectTargetList MaxThreat, max 2, count > 1), cast on the MaxThreat
--- player. No threat model, no pet scan — the count gate is approximated
--- by >1 alive player in the instance and the target by the victim.
+-- (SelectTargetList MaxThreat, max 2, playerOnly=false — pets and
+-- guardians count toward the gate), cast on the top-threat player
+-- within 100 yd.
 local function onWillOfHakkar(creature, guid)
-    if #alivePlayersInInstance(creature) > 1 then
-        local victim = creature:GetVictim()
-        if victim then
-            creature:CastSpell(victim, SPELL_WILL_OF_HAKKAR, false)
+    if #creature:GetAITargets() > 1 then
+        local target = topThreatPlayerInRange(creature, 100)
+        if target then
+            creature:CastSpell(target, SPELL_WILL_OF_HAKKAR, false)
         end
     end
     schedule(guid, "willofhakkar", math.random(25000, 35000), function()
