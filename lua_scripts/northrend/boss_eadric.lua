@@ -68,50 +68,47 @@
 -- lua_creature_events.go:214).
 -- boss_eadric bDone-reset MovePoint(0, 746.87, 665.87, 411.75)
 -- leg — no motion-master bridge.
--- boss_paletress — zero registration. Constructor legs
+-- boss_paletress — combat arms PORTED below; constructor legs
 -- (SetReactState(REACT_PASSIVE) + SetFlag(NON_ATTACKABLE) +
 -- RestoreFaction) — SetReactState + SetFlag(59) + SetFaction ALL
 -- IS bridged (lua_creature_events.go:524/:968; eadric:51) — same
 -- intro-machine grounding as boss_eadric above: the announcer
--- un-gating has no bearer; Reset's
--- RemoveAllAuras + ObjectAccessor::GetCreature(MemoryGUID)
--- RemoveFromWorld — the "no aura-removal (aeranas precedent)"
--- wording is stale (creature:RemoveAllAuras() is bridged,
--- lua_creature_events.go:169), but the paired leg is cross-AI
--- ObjectAccessor -> RemoveFromWorld with no creature bridge
--- (gameobject-only) on an unregistered npc_memory bearer;
+-- un-gating has no bearer; Reset's RemoveAllAuras is PORTED below
+-- (paletressReset, ev23) and Initialize re-inits the timers/latches;
+-- the paired ObjectAccessor::GetCreature(MemoryGUID) RemoveFromWorld
+-- leg stays out (cross-AI, no creature bridge, unregistered
+-- npc_memory bearer);
 -- SetData(1) ->
 -- RemoveAura(SPELL_SHIELD 66515) — the "no aura-removal" wording
 -- is stale (creature:RemoveAura is bridged), but the arm is
 -- triggered cross-AI via SetData (no bridge) from unregistered
 -- npc_memory JustDied; DamageTaken / MovementInform — same bridges
 -- absent as
--- boss_eadric; uiHolyFireTimer — SelectTarget(Random, 0, 250,
--- true) -> DoCast(Holy Fire 66538), 9-12s init, 13s shielded /
--- 9-12s unshielded repeat; uiHolySmiteTimer — SelectTarget(Random,
--- 0, 250, true) -> DoCast(Smite 66536), 5-7s init, 9s shielded /
--- 5-7s unshielded repeat — the random-target bridge now EXISTS
--- (randomPlayer, anomalus precedent), but both timers'
--- shielded/unshielded re-arms ride the 25%-health one-shot's Shield
--- product (unported: SpellScript riders + InterruptNonMeleeSpells +
--- no instance model), so porting the casts without the machine would
--- mis-model the repeat branches; Renew
--- machine (HasAura(SPELL_SHIELD) gate -> urand(0,1) self-cast
--- Renew 66537 / cross-AI DoCast(pMemory, Renew)) — the HasAura leg IS
--- bridged (lua_objects.go:228) but the cross-AI ObjectAccessor leg is
--- absent and Shield itself is unported (one-shot machine); the 25%
--- HealthAbovePct one-shot (InterruptNonMeleeSpells +
--- DoCastAOE(Holy Nova 66546, false) + DoCastSelf(Shield 66515) +
--- DoCastAOE(Summon Memory 66545, false) + DoCastAOE(Confess
--- 66680, false)) — the whole one-shot rides the unbridged
--- HealthAbovePct(25) latch (doomwalker precedent); ungated
--- emulation of the Shield self-cast leg would over-cast vs C++
--- (jedoga precedent);
+-- boss_eadric; uiHolyFireTimer — PORTED below: SelectTarget(Random,
+-- 0, 250, true) via threat-list randomPlayer -> DoCast(Holy Fire
+-- 66538), 9-12s init, 13s shielded / 9-12s unshielded repeat
+-- (HasAura-gated re-arm reads the modeled Shield state, so the
+-- unshielded branch is C++-exact while Shield is absent);
+-- uiHolySmiteTimer — PORTED below: same pick -> DoCast(Smite 66536),
+-- 5-7s init, 9s shielded / 5-7s unshielded repeat; Renew
+-- machine — PORTED below (HasAura(SPELL_SHIELD) gate, bridged
+-- lua_objects.go:228; urand(0,1): self-cast Renew 66537 on 0, the
+-- cross-AI DoCast(pMemory, Renew) leg on 1 stays out — no memory
+-- bearer — while the re-arm stays unconditional per C++; the
+-- shielded-only decrement is modeled by a 1s poll + remainder
+-- counter, since the timer freezes while Shield is absent); the 25%
+-- HealthAbovePct one-shot — PORTED below as an ev9 postDamage latch
+-- (UpdateAI !HealthAbovePct(25) form, Unit.h:874: fires when
+-- postDamage <= floor(max*25/100) with the postDamage > 0 guard, so
+-- it never fires on the absorbed lethal hit): InterruptNonMeleeSpells
+-- + Holy Nova 66546 + Shield 66515 + Confess 66680 as self-casts
+-- (DoCastAOE convention); Summon Memory 66545 stays out (DB-side
+-- summon effect, no Go producer — Army of the Dead precedent);
 -- JustSummoned MemoryGUID latch — summon STRAND absent
 -- (standing). Entry 34928 verifiable (trial_of_the_champion.h
--- NPC_PALETRESS — kalecgos pass) but every combat arm rides an
--- absent bridge — bridgeable-but-entry-blocked does not apply;
--- nothing wired.
+-- NPC_PALETRESS — kalecgos pass); the remaining stay-outs are the
+-- constructor/intro-machine legs, MovementInform, and the
+-- memory/soldier/SpellScript machines above.
 -- boss_paletress DamageTaken — PORTED (same arm as boss_eadric,
 -- boss_argent_challenge.cpp:320-328): damage >= health -> damage =
 -- 0 + EnterEvadeMode (AttackStop + ClearThreatList) +
@@ -171,6 +168,13 @@ local SPELL_RADIANCE = 66935
 local SPELL_HAMMER_JUSTICE = 66863
 local SPELL_HAMMER_RIGHTEOUS = 66867
 
+local SPELL_HOLY_FIRE = 66538 -- boss_argent_challenge.cpp:70
+local SPELL_SMITE = 66536 -- boss_argent_challenge.cpp:68
+local SPELL_RENEW = 66537 -- boss_argent_challenge.cpp:72
+local SPELL_SHIELD = 66515 -- boss_argent_challenge.cpp:75
+local SPELL_HOLY_NOVA = 66546 -- boss_argent_challenge.cpp:74
+local SPELL_CONFESS = 66680 -- boss_argent_challenge.cpp:76
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -215,19 +219,19 @@ local function radianceTick(creature, guid)
     end)
 end
 
--- C++ SelectTarget(Random, 0, 250, true) — random alive player on the
--- same map/instance within 250y (keleseth / thorim / archavon
--- GetPlayersInWorld precedent; the C++ target->IsAlive() re-check is
--- subsumed by the alive filter). Only threat-listed units qualify in
--- practice.
+-- C++ SelectTarget(Random, 0, 250, true) — threat-list players alive
+-- within 250y (UnitAI.h: SelectTarget draws the threat list; the
+-- GetPlayersInWorld instance pool used here before was the stale-pool
+-- class fixed across the 2026-10-25 strips — instance players outside
+-- combat are not threat-listed). Bridged via creature:GetAITargets()
+-- (threat-ordered; lua_creature_events.go:345); the C++ target->IsAlive()
+-- re-check is subsumed by the alive filter.
 local function randomPlayer(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:IsWithinDist(t, maxDist) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -278,10 +282,10 @@ end
 
 local function eadricReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ boss_eadricAI::Reset (boss_argent_challenge.cpp:305): ungated
-    -- me->RemoveAllAuras(). The paired MemoryGUID RemoveFromWorld leg
-    -- stays out (cross-AI ObjectAccessor, no creature bridge).
-    creature:RemoveAllAuras()
+    -- C++ boss_eadricAI::Reset is Initialize() only (timers re-init);
+    -- the :305 RemoveAllAuras belongs to boss_paletressAI::Reset, not
+    -- eadric — a prior tick misattributed it here, fixed this tick
+    -- (paletress ev23 now carries it).
 end
 
 -- C++ boss_eadricAI::DamageTaken (boss_argent_challenge.cpp:192-200)
@@ -299,9 +303,151 @@ local function argentDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- Paletress combat arms (boss_argent_challenge.cpp, boss_paletressAI).
+local paletressState = {}
+
+local function getPaletressState(guid)
+    local st = paletressState[guid]
+    if not st then
+        st = { shieldHealth = false, renewRemaining = 0 }
+        paletressState[guid] = st
+    end
+    return st
+end
+
+-- C++ uiHolyFireTimer: SelectTarget(Random, 0, 250, true) -> Holy Fire,
+-- urand(9000,12000) init; re-arm 13000 if shielded else
+-- urand(9000,12000). Re-arm unconditional (the SelectTarget if only
+-- wraps the cast).
+local function holyFireTick(creature, guid)
+    local target = randomPlayer(creature, 250)
+    if target then
+        creature:CastSpell(target, SPELL_HOLY_FIRE)
+    end
+    if creature:HasAura(SPELL_SHIELD) then
+        schedule(guid, "holy_fire", 13000, function()
+            holyFireTick(creature, guid)
+        end)
+    else
+        schedule(guid, "holy_fire", math.random(9000, 12000), function()
+            holyFireTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ uiHolySmiteTimer: same pick -> Smite, urand(5000,7000) init;
+-- re-arm 9000 if shielded else urand(5000,7000).
+local function holySmiteTick(creature, guid)
+    local target = randomPlayer(creature, 250)
+    if target then
+        creature:CastSpell(target, SPELL_SMITE)
+    end
+    if creature:HasAura(SPELL_SHIELD) then
+        schedule(guid, "holy_smite", 9000, function()
+            holySmiteTick(creature, guid)
+        end)
+    else
+        schedule(guid, "holy_smite", math.random(5000, 7000), function()
+            holySmiteTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ uiRenewTimer: decrements ONLY while HasAura(SHIELD); on fire,
+-- InterruptNonMeleeSpells(true) + urand(0,1): self Renew on 0, memory
+-- Renew on 1 (cross-AI leg stays out, re-arm unconditional). The freeze
+-- is modeled by a 1s poll holding the remainder counter (cthun poll
+-- precedent); re-arm urand(15000,17000).
+local function renewTick(creature, guid)
+    local st = getPaletressState(guid)
+    if not creature:HasAura(SPELL_SHIELD) then
+        schedule(guid, "renew", 1000, function()
+            renewTick(creature, guid)
+        end)
+        return
+    end
+    st.renewRemaining = st.renewRemaining - 1000
+    if st.renewRemaining > 0 then
+        schedule(guid, "renew", 1000, function()
+            renewTick(creature, guid)
+        end)
+        return
+    end
+    creature:InterruptNonMeleeSpells(true)
+    if math.random(0, 1) == 0 then
+        creature:CastSpell(creature, SPELL_RENEW)
+    end
+    st.renewRemaining = math.random(15000, 17000)
+    schedule(guid, "renew", 1000, function()
+        renewTick(creature, guid)
+    end)
+end
+
+local function paletressEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local st = getPaletressState(guid)
+    st.shieldHealth = false
+    st.renewRemaining = math.random(2000, 5000)
+    schedule(guid, "holy_fire", math.random(9000, 12000), function()
+        holyFireTick(creature, guid)
+    end)
+    schedule(guid, "holy_smite", math.random(5000, 7000), function()
+        holySmiteTick(creature, guid)
+    end)
+    schedule(guid, "renew", 1000, function()
+        renewTick(creature, guid)
+    end)
+end
+
+local function paletressLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function paletressDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_paletressAI::Reset: RemoveAllAuras + Initialize (timers /
+-- latches re-init); the MemoryGUID RemoveFromWorld leg stays out.
+local function paletressReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    getPaletressState(guid).shieldHealth = false
+    creature:RemoveAllAuras()
+end
+
+-- C++ UpdateAI 25% one-shot (!bHealth && !HealthAbovePct(25)):
+-- InterruptNonMeleeSpells + Holy Nova + Shield + Confess (Summon
+-- Memory stays out). Ev9 postDamage form: fires when the hit leaves
+-- health at or below floor(max*25/100) without killing (postDamage >
+-- 0 guard — the lethal hit is absorbed by argentDamageTaken, which
+-- runs first and chains damage to 0).
+local function paletressHealthLatch(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = getPaletressState(guid)
+    if st.shieldHealth then
+        return
+    end
+    local postDamage = creature:GetHealth() - damage
+    local threshold = math.floor(creature:GetMaxHealth() * 25 / 100)
+    if postDamage > 0 and postDamage <= threshold then
+        st.shieldHealth = true
+        creature:InterruptNonMeleeSpells(true)
+        creature:CastSpell(creature, SPELL_HOLY_NOVA)
+        creature:CastSpell(creature, SPELL_SHIELD)
+        creature:CastSpell(creature, SPELL_CONFESS)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EADRIC, 1, eadricEnterCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 2, eadricLeaveCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 4, eadricDied)
 RegisterCreatureEvent(ENTRY_EADRIC, 9, argentDamageTaken)
 RegisterCreatureEvent(ENTRY_EADRIC, 23, eadricReset)
+RegisterCreatureEvent(ENTRY_PALETRESS, 1, paletressEnterCombat)
+RegisterCreatureEvent(ENTRY_PALETRESS, 2, paletressLeaveCombat)
+RegisterCreatureEvent(ENTRY_PALETRESS, 4, paletressDied)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, argentDamageTaken)
+RegisterCreatureEvent(ENTRY_PALETRESS, 9, paletressHealthLatch)
+RegisterCreatureEvent(ENTRY_PALETRESS, 23, paletressReset)

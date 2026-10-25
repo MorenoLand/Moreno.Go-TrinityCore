@@ -8956,22 +8956,19 @@ func init() {
 	// bDone-reset MovePoint(0, 746.87, 665.87, 411.75) (no motion
 	// bridge), uiHammerJusticeTimer (SelectTarget(Random,0,250,true)
 	// -> Hammer of Justice 66863 + Hammer of the Righteous 66867,
-	// 25s — random-target SelectTarget bridge absent, cairne/kazzak
-	// precedent), uiRadianceTimer (DoCastAOE 66935, 16s — no
-	// DoCastAOE bridge, terestian/shazzrah precedent). boss_paletress
-	// (34928 NPC_PALETRESS — kalecgos pass): zero registration —
-	// constructor / Reset (RemoveAllAuras + ObjectAccessor::GetCreature
-	// (MemoryGUID) RemoveFromWorld) / SetData(1) RemoveAura(SHIELD
-	// 66515) / DamageTaken / MovementInform / Holy Fire 66538 9-12s +
-	// Smite 66536 5-7s (random-target SelectTarget absent) / shield-
-	// gated Renew 66537 machine (aura + cross-AI ObjectAccessor
-	// bridges absent) / 25% one-shot (health-pct bridge absent —
-	// doomwalker precedent — + DoCastAOE triplet (Holy Nova 66546 /
-	// Summon Memory 66545 / Confess 66680) — terestian/shazzrah
-	// precedent; the Shield 66515 self-cast leg rides the unbridged
-	// gate — jedoga precedent) / JustSummoned MemoryGUID latch
-	// (summon STRAND absent) — every combat arm rides an absent
-	// bridge. npc_memory: ENTRY UNVERIFIABLE (no NPC constant in C++
+	// 25s — threat-list randomPlayer bridge, PORTED in
+	// boss_eadric.lua), uiRadianceTimer (DoCastAOE 66935, 16s —
+	// self-cast convention, PORTED). boss_paletress
+	// (34928 NPC_PALETRESS — kalecgos pass): combat arms PORTED in
+	// boss_eadric.lua (ev1/2/4/9/23) — Holy Fire 66538 9-12s +
+	// Smite 66536 5-7s (threat-list picks, HasAura-gated re-arms),
+	// shield-gated Renew 66537 machine (self-cast leg only),
+	// 25% one-shot as an ev9 postDamage latch (Holy Nova 66546 /
+	// Shield 66515 / Confess 66680; Summon Memory 66545 stays out),
+	// Reset RemoveAllAuras. Still out: constructor intro-machine legs,
+	// SetData(1) RemoveAura(SHIELD) (cross-AI SetData, no bridge),
+	// MovementInform, JustSummoned MemoryGUID latch (summon STRAND
+	// absent), memory/soldier/SpellScript machines. npc_memory: ENTRY UNVERIFIABLE (no NPC constant in C++
 	// — the memory creatures materialize via DB-side summon spells
 	// SPELL_MEMORY_* — belnistrasz/willix precedent): joins the
 	// bridgeable-but-entry-blocked queue (Waking Nightmare 66552
@@ -9018,8 +9015,7 @@ func init() {
 	// (SetFullHealth + DoCastSelf(Black Knight Res 67693, true) +
 	// uiPhase++ + ClearUnitState, gated on the unbridged DamageTaken leg
 	// — jedoga bar); uiDeathRespiteTimer (PHASE_UNDEAD: SelectTarget
-	// (Random,0,100,true) -> Death's Respite 67745, urand(15000,16000) —
-	// random-target SelectTarget absent, cairne/kazzak precedent);
+	// (Random,0,100,true) -> Death's Respite 67745, urand(15000,16000), PORTED in boss_black_knight.lua;
 	// PHASE_SKELETON legs — phase never arrives (bSummonArmy one-shot
 	// ROOT/STUNNED + DoCastSelf(Army of the Dead 67761) — no unit-state
 	// bridge — + DeathArmyCheckTimer ClearUnitState; Desecration 67778

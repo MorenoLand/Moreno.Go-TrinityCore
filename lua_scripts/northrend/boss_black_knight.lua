@@ -68,10 +68,9 @@
 -- without re-arming the timer (C++ never re-arms uiResurrectTimer
 -- mid-window either). summons.DespawnAll() has no summon bridge.
 -- Unmodeled (no bridges — documented, not wired):
--- boss_black_knight uiDeathRespiteTimer (PHASE_UNDEAD) —
--- SelectTarget(Random, 0, 100, true) -> DoCast(Death's Respite 67745),
--- urand(15000,16000) — random-target SelectTarget bridge absent
--- (cairne/kazzak precedent).
+-- boss_black_knight uiDeathRespiteTimer (PHASE_UNDEAD) — PORTED below
+-- (threat-list pick, urand(15000,16000), phase + fake-death gating
+-- per the icy-touch idiom).
 -- boss_black_knight PHASE_SKELETON legs: phase arrives via the ported
 -- DamageTaken/resurrect machine; the bSummonArmy one-shot ROOT leg, the
 -- uiDeathArmyCheckTimer clear, and the melee-gate leg are PORTED
@@ -80,7 +79,8 @@
 -- gate on the armyWindow latch while re-arming, as in the fake-death
 -- window). DoCastSelf(Army of the Dead 67761) stays out (DB-side summon
 -- effect, ghoul entry unverifiable, no Go spell-effect producer);
--- uiDesecration stays out (random-target bridge absent); uiGhoulExplode
+-- uiDesecration PORTED below (skeleton-entry + urand(15000,16000));
+-- uiGhoulExplode
 -- PORTED 2026-10-24 — DoCastSelf (67751), 8000 repeat, scheduled at
 -- skeleton entry (its C++ timer is frozen at 8000 until PHASE_SKELETON),
 -- gated on the resurrecting / armyWindow latches while re-arming,
@@ -92,9 +92,8 @@
 -- (its C++ timer is frozen until PHASE_GHOST); the UNDEAD/SKELETON
 -- rotation timers STOP at PHASE_GHOST (C++ PHASE_GHOST case carries
 -- only death bite + marked death — no re-arm, phase never leaves
--- ghost). uiMarkedDeathTimer — SelectTarget(Random, 0, 100, true)
--- -> DoCast(Marked for Death 67882), urand(5000,7000) — random-target
--- bridge absent.
+-- ghost). uiMarkedDeathTimer — PORTED below (ghost-entry +
+-- urand(5000,7000), threat-list pick).
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)
 -- + ClearUnitState(ROOT | STUNNED) — the despawn leg stays out: the
 -- ghoul entry is unverifiable (DB-side SPELL_ARMY_DEAD summon) so no
@@ -110,8 +109,8 @@
 -- 67761 summon effect — belnistrasz/willix precedent). Joins the
 -- bridgeable-but-entry-blocked queue with a port-pattern-ready rotation
 -- arm: uiAttackTimer — SelectTarget(Random, 1, 100, true) ->
--- DoCast(Leap 67749), 3500 repeat — random-target SelectTarget bridge
--- absent (cairne/kazzak precedent).
+-- DoCast(Leap 67749), 3500 repeat — entry unverifiable, so
+-- unregistrable despite the live GetAITargets bridge.
 -- npc_black_knight_skeletal_gryphon — zero registration: ENTRY
 -- UNVERIFIABLE (no NPC constant ties the script name to an entry in
 -- C++ — the creature_template binding is DB-side; the header's
@@ -128,6 +127,9 @@ local SPELL_KILL_CREDIT = 68663
 local SPELL_BLACK_KNIGHT_RES = 67693 -- boss_black_knight.cpp:56
 local SPELL_GHOUL_EXPLODE = 67751 -- boss_black_knight.cpp:51
 local SPELL_DEATH_BITE = 67808 -- boss_black_knight.cpp:55
+local SPELL_DEATH_RESPITE = 67745 -- boss_black_knight.cpp:37
+local SPELL_DESECRATION = 67778 -- boss_black_knight.cpp:46
+local SPELL_MARKED_DEATH = 67882 -- boss_black_knight.cpp:53
 
 local MODEL_SKELETON = 29846 -- boss_black_knight.cpp:66
 local MODEL_GHOST = 21300 -- boss_black_knight.cpp:67
@@ -268,6 +270,79 @@ local function deathBiteTick(creature, guid)
     end)
 end
 
+-- C++ SelectTarget(Random, 0, 100, true) — threat-list players alive
+-- within 100y (UnitAI.h; same stale-pool class as the eadric fix).
+local function randomThreatPlayer(creature, maxDist)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:IsWithinDist(t, maxDist) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ uiDeathRespiteTimer (PHASE_UNDEAD only): SelectTarget -> Death's
+-- Respite, urand(15000,16000) init/repeat, unconditional re-arm. The
+-- timer freezes once the phase leaves UNDEAD (never returns), so a
+-- non-UNDEAD tick stops without re-arming. Casts fail on STUNNED in
+-- C++ during the fake-death window, so the resurrecting latch gates
+-- the cast while the re-arm continues (icy-touch idiom).
+local function deathRespiteTick(creature, guid)
+    local st = getBlackKnightState(guid)
+    if st.phase ~= PHASE_UNDEAD then
+        return
+    end
+    if not st.resurrecting then
+        local target = randomThreatPlayer(creature, 100)
+        if target then
+            creature:CastSpell(target, SPELL_DEATH_RESPITE)
+        end
+    end
+    schedule(guid, "death_respite", math.random(15000, 16000), function()
+        deathRespiteTick(creature, guid)
+    end)
+end
+
+-- C++ uiDesecration (PHASE_SKELETON only): same pick -> Desecration,
+-- urand(15000,16000) init/repeat; frozen until skeleton entry, so
+-- skeleton-entry + window is C++-exact (ghoul-explode precedent).
+local function desecrationTick(creature, guid)
+    local st = getBlackKnightState(guid)
+    if st.phase ~= PHASE_SKELETON then
+        return
+    end
+    if not st.resurrecting and not st.armyWindow then
+        local target = randomThreatPlayer(creature, 100)
+        if target then
+            creature:CastSpell(target, SPELL_DESECRATION)
+        end
+    end
+    schedule(guid, "desecration", math.random(15000, 16000), function()
+        desecrationTick(creature, guid)
+    end)
+end
+
+-- C++ uiMarkedDeathTimer (PHASE_GHOST only): same pick -> Marked for
+-- Death, urand(5000,7000) init/repeat; frozen until ghost entry.
+local function markedDeathTick(creature, guid)
+    local st = getBlackKnightState(guid)
+    if st.phase ~= PHASE_GHOST then
+        return
+    end
+    local target = randomThreatPlayer(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_MARKED_DEATH)
+    end
+    schedule(guid, "marked_death", math.random(5000, 7000), function()
+        markedDeathTick(creature, guid)
+    end)
+end
+
 local function blackKnightEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -282,6 +357,9 @@ local function blackKnightEnterCombat(event, creature, target)
     end)
     schedule(guid, "obliterate", math.random(17000, 19000), function()
         obliterateTick(creature, guid)
+    end)
+    schedule(guid, "death_respite", math.random(15000, 16000), function()
+        deathRespiteTick(creature, guid)
     end)
 end
 
@@ -327,9 +405,15 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                     schedule(guid, "ghoul_explode", 8000, function()
                         ghoulExplodeTick(creature, guid)
                     end)
+                    schedule(guid, "desecration", math.random(15000, 16000), function()
+                        desecrationTick(creature, guid)
+                    end)
                 elseif st.phase == PHASE_GHOST then
                     schedule(guid, "death_bite", math.random(2000, 4000), function()
                         deathBiteTick(creature, guid)
+                    end)
+                    schedule(guid, "marked_death", math.random(5000, 7000), function()
+                        markedDeathTick(creature, guid)
                     end)
                 end
             end)
