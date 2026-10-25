@@ -144,32 +144,17 @@ local function getState(guid)
     return s
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention, gruul precedent) — the C++ SelectTarget(Random, 0)
--- equivalent for the son-of-flame summon positions.
 -- C++ SelectTarget(Random, 0): random over the threat list (boss_midnight
--- precedent); GetAITargets is the bridged threat-ordered list.
+-- precedent); GetAITargets is the bridged threat-ordered list. Used for
+-- the emerge re-engage and the son-of-flame summon positions; the son
+-- EngageWithTarget relay no-ops on non-player picks (player-session-only
+-- bearer, lua_creature_events.go:498).
 local function randomThreatTarget(creature)
     local targets = creature:GetAITargets()
     if #targets == 0 then
         return nil
     end
     return targets[math.random(#targets)]
-end
-
-local function pickRandomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
 end
 
 -- C++ EVENT_ERUPTION: non-triggered DoCastVictim(17731); re-arm
@@ -384,7 +369,7 @@ onSubmerge = function(creature, guid)
     s.addsDeaths = 0
     s.banished = true
     for _ = 1, 8 do
-        local target = pickRandomPlayer(creature)
+        local target = randomThreatTarget(creature)
         if target then
             local son = creature:SummonCreature(ENTRY_SON_OF_FLAME,
                 target:GetX(), target:GetY(), target:GetZ(), 0, 1, 900000)

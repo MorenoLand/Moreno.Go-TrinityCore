@@ -44,8 +44,8 @@
 --   Talk arm of SAY_BANISH; the MoveInLineOfSight Time Keeper arm is
 --   unreachable (see below).
 -- - Arcane Discharge 31472: C++ DoCast(SelectTarget(Random, 0),
---   31472) — unbounded random player; nil target -> no cast
---   (nefarian randomAlivePlayer convention), non-triggered, init
+--   31472) — random threat-list target, any unit, alive;
+--   nil target -> no cast, non-triggered, init
 --   {20s,30s} -> {20s,30s}.
 -- Modeled (creature:IsHeroic() bridge, per-instance difficulty,
 -- lua_creature_events.go):
@@ -111,20 +111,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) defaults playerOnly=false (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible; dead entries
+-- filtered per the settled strip convention (dead picks are no-op casts).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_ARCANE_BLAST: DoCastVictim(31457), non-triggered, init
@@ -152,7 +153,7 @@ end
 -- C++ EVENT_ARCANE_DISCHARGE: DoCast(SelectTarget(Random, 0), 31472),
 -- non-triggered, init {20s,30s} -> {20s,30s}; nil target -> no cast.
 local function onArcaneDischarge(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_DISCHARGE)
     end

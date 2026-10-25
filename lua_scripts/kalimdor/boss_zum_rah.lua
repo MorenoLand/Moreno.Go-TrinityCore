@@ -92,23 +92,6 @@ local function randomThreatTarget(creature)
     return targets[math.random(#targets)]
 end
 
--- thespia convention: random alive player in the instance, no distance
--- limit (C++ SelectTarget(Random, 0) carries the 0.0f dist default).
-local function randomPlayerInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
 -- C++ EVENT_SHADOW_BOLT: DoCastVictim(SPELL_SHADOW_BOLT), non-triggered;
 -- reschedule 4s unconditional.
 local function onShadowBolt(creature, guid)

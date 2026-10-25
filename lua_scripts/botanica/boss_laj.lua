@@ -238,24 +238,24 @@ RegisterCreatureEvent(ENTRY_LAJ, 1, function(_, creature)
     end, 1000, 0)
 end)
 
--- C++ JustSummoned (boss_laj.cpp:172-175): any summon from
--- Laj engages a random target while Laj has a victim
--- (SelectTarget(Random, 0) — any random alive player in
--- the instance, victim included); EngageWithTarget is the
--- player-target AttackStart twin (2026-10-24 bridge).
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+-- C++ JustSummoned (boss_laj.cpp:172-175): summon AttackStarts a
+-- SelectTarget(Random, 0) pick; defaults playerOnly=false, but the Go
+-- EngageWithTarget bearer resolves player sessions only
+-- (lua_creature_events.go:498), so the pool is threat players alive
+-- (skyriss JustSummoned precedent) — instance players off the threat
+-- list are ineligible in C++; victim included.
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 local function onJustSummoned(_, creature, summoned)
@@ -263,7 +263,7 @@ local function onJustSummoned(_, creature, summoned)
         return
     end
     if creature:GetVictim() then
-        local target = randomAlivePlayer(creature)
+        local target = randomThreatPlayer(creature)
         if target then
             summoned:EngageWithTarget(target)
         end

@@ -30,8 +30,8 @@
 -- - Impending Death 31916 on the victim (C++ DoCastVictim), non-triggered,
 --   init {25s,30s} -> 25000 + rand32() % 5000.
 -- - Wing Buffet 31475 on SelectTargetMethod::Random, 0 with no range cap
---   -> unbounded random alive player in the instance (nefarian
---   randomAlivePlayer convention), non-triggered, init 35s ->
+--   -> random threat-list target, any unit, alive (defaults
+--   playerOnly=false, UnitAI.h:170), non-triggered, init 35s ->
 --   25000 + rand32() % 10000.
 -- - Magic Disruption Aura 33834 self-cast (C++ DoCast(me)), non-triggered,
 --   init 40s -> 15s.
@@ -85,20 +85,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) defaults playerOnly=false (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible; dead entries
+-- filtered per the settled strip convention (dead picks are no-op casts).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- C++ SandBreath_Timer: InterruptNonMeleeSpells(false) + DoCastVictim(31914), non-triggered, init
@@ -132,7 +133,7 @@ end
 -- C++ WingBuffet_Timer: DoCast(SelectTarget(Random, 0), 31475),
 -- non-triggered, init 35s -> 25000 + rand32() % 10000.
 local function onWingBuffet(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_WING_BUFFET)
     end
