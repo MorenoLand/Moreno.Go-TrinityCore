@@ -28,7 +28,9 @@
 -- ported via GetAITargets (the bridged threat list; midnight
 -- precedent) + the IsWithinDistInMap(t, 100.0) player filter (the
 -- shaffar MoveInLOS precedent) + "Player" object-type gate (the
--- illidan convention). DoCast(target, SPELL_VOID_BLAST 32325) 2-arg
+-- illidan convention) + IsAlive (C++ threat refs go offline on
+-- death, ThreatManager.cpp ShouldBeOffline, and SelectTargetList
+-- skips offline refs; Go's SortedEntries returns dead entries too). DoCast(target, SPELL_VOID_BLAST 32325) 2-arg
 -- (non-triggered) — CastSpell(target, spell); ++VoidBlastCounter
 -- ONLY when a target was found (the increment sits inside the
 -- target-found leg, :90-93). Counter == 5: counter = 0 and re-arm
@@ -97,7 +99,7 @@ end
 local function randomPlayerIn100(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetObjectType() == "Player"
+        if t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:IsWithinDistInMap(t, 100.0) then
             candidates[#candidates + 1] = t
         end

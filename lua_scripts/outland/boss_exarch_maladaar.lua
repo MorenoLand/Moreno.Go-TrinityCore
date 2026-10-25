@@ -181,9 +181,17 @@ end
 
 -- C++ SelectTarget(Random, 0): random over the full threat list
 -- (no offset skip). No player pre-filter — the C++ gates the pick
--- itself for the stolen-soul arm.
+-- itself for the stolen-soul arm. The pool is alive-filtered: C++
+-- threat refs go offline on death (ThreatManager.cpp
+-- ShouldBeOffline / _IsTargetAcceptable) and SelectTargetList skips
+-- offline refs, while Go's SortedEntries returns dead entries too.
 local function randomThreatTarget(creature)
-    local pool = creature:GetAITargets()
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t and t:IsAlive() then
+            pool[#pool + 1] = t
+        end
+    end
     if #pool == 0 then
         return nil
     end
