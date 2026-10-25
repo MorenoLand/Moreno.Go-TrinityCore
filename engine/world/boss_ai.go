@@ -5264,9 +5264,10 @@ func init() {
 	// point-1 immunity drop await the immune / movement /
 	// world-search bridges; npc_clintar_spirit (quest-10965
 	// escort machine) awaits the escort / quest / talk / summon
-	// bridges; npc_giant_spotlight (5-min despawn sweep) awaits
-	// the world-search / despawn bridges — documented only.
+	// bridges; npc_giant_spotlight (5-min despawn sweep) ported —
+	// see lua_scripts/kalimdor/npc_giant_spotlight.lua.
 	RegisterLuaBoss("npc_omen", 15467)
+	RegisterLuaBoss("npc_giant_spotlight", 15902)
 	// npc_thrall_warchief (Orgrimmar zone script): combat rotation
 	// only — chain lightning (16033, 2s init then 9s) + shock
 	// (16034, 8s init then 15s), both non-triggered DoCastVictim
