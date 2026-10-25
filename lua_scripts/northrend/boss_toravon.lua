@@ -103,16 +103,25 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 1) — random threat-listed
--- unit excluding the threat head: offset 1 skips the first entry in
--- MaxThreat order (UnitAI.h); playerOnly=false default, so non-players
--- qualify (midnight precedent).
+-- unit excluding the threat head: UnitAI.h SelectTargetList builds the
+-- list skipping OFFLINE refs (dead targets go offline via
+-- ShouldBeOffline -> _IsTargetAcceptable UNIT_STATE_DIED), then pops the
+-- first MaxThreat entry (offset), then predicate-filters. Lua twin:
+-- alive-filter first, then skip-first, then random pick (the eck
+-- offset-before-filter precedent); playerOnly=false default, so
+-- non-players qualify (midnight precedent).
 local function randomNonTankThreatTarget(creature)
-    local targets = creature:GetAITargets()
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
     -- C++ shortcut: threat list size <= offset ignores ALL elements.
-    if #targets <= 1 then
+    if #candidates <= 1 then
         return nil
     end
-    return targets[1 + math.random(#targets - 1)]
+    return candidates[1 + math.random(#candidates - 1)]
 end
 
 -- C++ EVENT_FROZEN_ORB (:76-82): me->CastSpell(me,

@@ -38,8 +38,9 @@
 -- EVENT_ROCK_SHARDS (:94-98) — SelectTarget(Random, 0) (:95, no
 -- distance filter) -> DoCast(target, SPELL_ROCK_SHARDS 58678) (:96,
 -- 2-arg = non-triggered) -> CastSpell(target, 58678); re-arm 15s
--- (:97). Random-player pool: GetPlayersInWorld, same map/instance,
--- alive (the keleseth / thorim GetPlayersInWorld precedent).
+-- (:97). Pool: threat list, any unit, alive-filtered (C++
+-- SelectTarget skips dead/offline refs; Go SortedEntries returns dead
+-- too — the anomalus / telestra alive-filter class).
 -- EVENT_CHOKING_CLOUD (:99-106) — SelectTarget(Random, 0, -10.0f,
 -- true) (:101; random player, min 10y, playerOnly) -> DoCast(target,
 -- SPELL_CRUSHING_LEAP 58960, true) (:102, 3-arg = TRIGGERED) ->
@@ -65,9 +66,9 @@
 -- unconditionally on their timers (the hodir UNIT_STATE_CASTING
 -- precedent).
 -- EVENT_CHOKING_CLOUD's SelectTarget min-range gate (-10.0f = skip
--- targets within 10y, :100) has no bridge — the cast fires on any
--- alive same-map/instance player (the thorim colossus
--- MaxDistance->random documented-deviation precedent).
+-- targets within 10y, :100) is ported via not IsWithinDist(t, 10)
+-- (generic-fallback twin of IsWithinCombatRange to within reach
+-- epsilon); the old "no bridge" note is retired.
 -- DOCUMENTED-ONLY (in this header; entry 31125 is the sole
 -- registration):
 -- spell_archavon_rock_shards (SpellScriptLoader :138-182;
@@ -122,25 +123,29 @@ end
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
 -- the boss_midnight randomTargetAnywhere precedent.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
--- the same map/instance, no distance filter (the keleseth / thorim
--- GetPlayersInWorld precedent); only threat-listed units qualify in
--- practice.
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, -10.0f, true) — threat-list
+-- players alive and NOT within 10yd (UnitAI.cpp:273-276: a negative dist
+-- is a min-range gate; UnitAI.h:170: SelectTarget draws the threat list).
+-- The old GetPlayersInWorld pool (instance players outside combat) is
+-- retired — the same stale-pool class fixed across the 2026-10-25 strips.
 local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and not creature:IsWithinDist(t, 10) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -167,8 +172,8 @@ end
 
 -- C++ EVENT_CHOKING_CLOUD (:99-106): DoCast(target,
 -- SPELL_CRUSHING_LEAP, true) — 3-arg = TRIGGERED; Talk(EMOTE_LEAP,
--- target); re-arm unconditional, 30s. The 10y min-range SelectTarget
--- gate is unmodeled (documented in the header).
+-- target); re-arm unconditional, 30s. Pool: threat-list players alive,
+-- NOT within 10yd (UnitAI.cpp min-range gate).
 local function chokingCloudTick(creature, guid)
     local target = randomPlayer(creature)
     if target then

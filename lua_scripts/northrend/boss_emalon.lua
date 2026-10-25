@@ -30,9 +30,9 @@
 -- EVENT_CHAIN_LIGHTNING (:136-139) — SelectTarget(Random, 0) (:137,
 -- no distance filter) -> DoCast(target, SPELL_CHAIN_LIGHTNING
 -- 64213) (:138, 2-arg = non-triggered) -> CastSpell(target, 64213);
--- re-arm unconditional (:139), 25s. Random-player pool:
--- GetPlayersInWorld, same map/instance, alive (the keleseth / thorim
--- precedent); only threat-listed units qualify in practice.
+-- re-arm unconditional (:139), 25s. Pool: threat list, any unit,
+-- alive-filtered (C++ SelectTarget skips dead/offline refs; Go
+-- SortedEntries returns dead too — the anomalus / telestra class).
 -- EVENT_LIGHTNING_NOVA (:141-143) — DoCastAOE(SPELL_LIGHTNING_NOVA
 -- 64216) (:142) = self-cast per the in-tree DoCastAOE convention
 -- (boss_ai.go) -> CastSpell(creature, 64216); re-arm 40s (:143).
@@ -137,11 +137,16 @@ end
 -- on the threat list are eligible — no Player filter (the midnight
 -- randomTargetAnywhere precedent). No distance filter.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_CHAIN_LIGHTNING (:136-139): DoCast(target,
