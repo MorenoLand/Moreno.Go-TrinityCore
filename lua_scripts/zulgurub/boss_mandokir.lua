@@ -113,31 +113,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, range, true) (boss_mandokir.cpp:261/
+-- :269): random threat-list player alive within range, nil when none
+-- qualify.
+local function randomThreatPlayerInRange(creature, range)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0, range, true): random alive player in
--- range, nil when none qualify.
-local function randomPlayerInRange(creature, range)
-    local candidates = {}
-    for _, p in ipairs(alivePlayersInInstance(creature)) do
-        if creature:GetDistance(p) <= range then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
 end
 
 local function mandokirState(guid)
@@ -189,7 +180,7 @@ end
 -- player as a whisper target (CreatureAI::Talk(id, whisperTarget),
 -- CreatureAI.cpp:48); re-arm {12s,15s}.
 local function onWatchPlayer(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_WATCH)
         creature:Talk(SAY_WATCH, target)
@@ -203,7 +194,7 @@ end
 -- 0, 40.0f, true), SPELL_CHARGE); re-arm {22s,30s}. Nil-target ticks
 -- cast nothing but keep the schedule.
 local function onChargePlayer(creature, guid)
-    local target = randomPlayerInRange(creature, 40)
+    local target = randomThreatPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
     end

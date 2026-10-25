@@ -30,10 +30,11 @@
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
 -- phase -> 3; the phase-2 timers are canceled (C++ phase
--- mask); arm charge 22911 1.5s then every 8s on a random player (up
--- to 3 draws breaking on a mana user, not the current victim — C++
--- "not aggro leader" is approximated as excluding the victim; no
--- threat model; the C++ charges the last draw even when all three miss
+-- mask); arm charge 22911 1.5s then every 8s on a random threat-list player
+-- (up to 3 draws breaking on a mana user; C++ Random,1 skips the
+-- first MaxThreat entry before filters — "not aggro leader" is the
+-- threat head, not the victim; the C++ charges the last draw even
+-- when all three miss
 -- a mana user, C++-exact) /
 -- transform back 25s. Transform back: RemoveAura(24084), phase -> 2,
 -- re-arm aspect 12s, transform 45s + {35s,60s} (C++-exact double
@@ -55,7 +56,8 @@
 -- are modeled); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
--- the charge "not aggro leader" exclusion is approximated with the current victim; no
+-- the charge "not aggro leader" exclusion is the Random,1 skip-first
+-- threat entry (offset-before-filter, UnitAI.h:173-174); no
 -- stat-modifier bridge — the DamageIncrease/Decrease ApplyStatPctModifier
 -- hack (including the Reset PHASE_THREE rollback) is skipped; no
 -- movement model — the charge AttackStart arm is skipped (cast lands,
@@ -127,16 +129,24 @@ local function marliState(guid)
     return st
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 1, 100, true) (boss_marli.cpp:187): the
+-- first MaxThreat entry is skipped BEFORE the player/alive/dist
+-- filters (UnitAI.h:173-174) — "not aggro leader" is the threat head,
+-- not the current victim — then a random surviving threat-list
+-- player within 100 yd is picked.
+local function randomThreatPlayerSkipFirstInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    return found
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_POISON_VOLLEY: triggered DoCastVictim(24099); re-arm
@@ -209,22 +219,11 @@ local function onChargePlayer(creature, guid)
     if st.phase ~= PHASE_THREE then
         return
     end
-    local victim = creature:GetVictim()
     local target = nil
     for _ = 1, 3 do
-        local candidates = {}
-        for _, p in ipairs(alivePlayersInInstance(creature)) do
-            if p ~= victim and creature:GetDistance(p) <= 100 then
-                candidates[#candidates + 1] = p
-            end
-        end
-        if #candidates == 0 then
-            target = nil
-        else
-            target = candidates[math.random(#candidates)]
-            if target:GetPowerType() == POWER_MANA then
-                break
-            end
+        target = randomThreatPlayerSkipFirstInRange(creature, 100)
+        if target and target:GetPowerType() == POWER_MANA then
+            break
         end
     end
     if target then

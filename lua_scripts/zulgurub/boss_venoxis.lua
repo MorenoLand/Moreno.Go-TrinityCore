@@ -44,7 +44,8 @@
 -- the holy-nova SelectTarget(MaxThreat) scan is PORTED via the
 -- threat-ordered GetAITargets list (see onHolyNova below) — the old
 -- "(no threat model)" note is retracted; gate is creature:IsWithinMeleeRange; SelectTarget
--- (Random) targets are random alive players in the instance; the
+-- (Random) targets are random threat-list units alive (playerOnly
+-- defaults false, UnitAI.h:170); the
 -- parasitic-serpent summons 14884 never spawn (no summon model) — only
 -- the 15s re-arm cycle is modeled (jeklik six-bat convention).
 
@@ -117,24 +118,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random) with no args (boss_venoxis.cpp:208/:213/
+-- :223/:228/:233): defaults are offset 0, no range cap, playerOnly =
+-- false (UnitAI.h:170) — a random threat-list unit alive; pets and
+-- totems are eligible, unlike the old instance-player pool.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
-local function randomAlivePlayer(creature)
-    local players = alivePlayersInInstance(creature)
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_THRASH: triggered self-cast 3391; fires in all phases;
@@ -195,7 +194,7 @@ end
 -- player, phase one; nil-target ticks cast nothing but keep the
 -- schedule. Re-arm {45s,60s}.
 local function onHolyFire(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HOLY_FIRE)
     end
@@ -208,7 +207,7 @@ end
 -- player, phase one; nil-target ticks cast nothing but keep the
 -- schedule. Re-arm {45s,60s}.
 local function onHolyWrath(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HOLY_WRATH)
     end
@@ -221,7 +220,7 @@ end
 -- player, phase two; nil-target ticks cast nothing but keep the
 -- schedule. Re-arm {5s,15s}.
 local function onVenomSpit(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_VENOM_SPIT)
     end
@@ -234,7 +233,7 @@ end
 -- player, phase two; nil-target ticks cast nothing but keep the
 -- schedule. Re-arm {15s,20s}.
 local function onPoisonCloud(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_POISON_CLOUD)
     end
@@ -248,7 +247,7 @@ end
 -- summon model — only the re-arm cycle is modeled, jeklik six-bat
 -- convention). Re-arm 15s.
 local function onParasiticSerpent(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SUMMON_PARASITIC_SERPENT)
     end

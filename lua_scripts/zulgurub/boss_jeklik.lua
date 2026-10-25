@@ -52,8 +52,9 @@
 -- frenzied bat (14965) summons ARE ported (2026-10-22 summon bridge); no instance-script model — boss admission
 -- via the luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith and
 -- the GetZulGurubAI bookkeeping arms skipped); no threat model — the
--- charge and shadow-word-pain targets are random alive players with no
--- victim fallback; ResetThreatList PORTED 2026-10-19
+-- charge, shadow-word-pain, flying-bat and batrider-bomb targets are
+-- random threat-list players alive (no victim fallback);
+-- ResetThreatList PORTED 2026-10-19
 -- (creature:ResetAllThreat, bridged lua_creature_events.go); no movement
 -- model — the
 -- charge AttackStart arm skipped; SetCanFly IS bridged
@@ -120,24 +121,20 @@ local function jeklikState(guid)
     return st
 end
 
-local function alivePlayers(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, 0.f, true) (boss_jeklik.cpp:145/
+-- :168/:187/:243): threat-list players alive, no range cap.
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
-local function randomPlayer(creature)
-    local candidates = alivePlayers(creature)
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_CHARGE_JEKLIK: non-triggered 22911 on a random player
@@ -146,7 +143,7 @@ local function onCharge(creature, guid)
     if jeklikState(guid).phase ~= PHASE_ONE then
         return
     end
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
     end
@@ -200,7 +197,7 @@ local function onShadowWordPain(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
         return
     end
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_WORD_PAIN)
     end
@@ -264,7 +261,7 @@ local function onSpawnFlyingBats(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
         return
     end
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:SummonCreature(ENTRY_FRENZIED_BAT, target:GetX(),
             target:GetY(), target:GetZ() + 15.0, creature:GetO(), 3, 15000)
@@ -384,7 +381,7 @@ RegisterCreatureEvent(ENTRY_JEKLIK, 23, jeklikReset)
 local batTimers = {}
 
 local function batriderBomb(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_BOMB)
         batTimers[guid] = CreateLuaEvent(function()
