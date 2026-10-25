@@ -115,3 +115,21 @@ func (s *session) sendCastFailed(ctx context.Context, castID uint8, spell wotlk.
 	params := s.castFailedExtParams(ctx, spell, result)
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spell.ID, result, params...), true)
 }
+
+// sendCastResult is the Spell::SendCastResult twin (Spell.cpp) for a
+// spell id resolved at the call site: the failure packet carries castID 0
+// (no in-flight cast) and the extended payload for results that carry one
+// (TOO_MANY_OF_ITEM rides the spell's first ItemType effect, as in
+// castFailedExtParams). An unknown spell id still sends the bare packet
+// with the requested spell id, since C++ callers pass a non-nil SpellInfo
+// and the packet's spell field is the id, not the record. Backs the
+// soulwell already-has-stone arm (go_scripts.cpp:553-556).
+func (s *session) sendCastResult(ctx context.Context, spellID uint32, result uint8) {
+	spell := wotlk.Spell{ID: spellID}
+	if s.server != nil && s.server.Data != nil {
+		if found, ok, _ := s.server.Data.Spell(spellID); ok {
+			spell = found
+		}
+	}
+	s.sendCastFailed(ctx, 0, spell, result)
+}

@@ -411,6 +411,52 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.castSpellDirect(ctx, spellID, targetGUID)
 		return nil, nil
 	}
+	// SendCastResult(spellID, result) is the Spell::SendCastResult twin
+	// (Spell.cpp): SMSG_CAST_FAILED with castID 0 for this player, the
+	// spell id, and the result's extended payload. Backs the soulwell
+	// already-has-stone arm (go_scripts.cpp:553-556,
+	// SPELL_FAILED_TOO_MANY_OF_ITEM = 129, SharedDefines.h:1111).
+	methods["SendCastResult"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("SendCastResult requires a spell id and a result")
+		}
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		result, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.sendCastResult(ctx, spellID, uint8(result))
+		return nil, nil
+	}
+	// GetSpellEffectItemType(spellID, effectIndex) is the
+	// sSpellMgr->GetSpellInfo(spell)->Effects[i].ItemType read: the DBC
+	// Spell.dbc effect row's created-item entry, 0 when the spell or the
+	// effect index is missing. Backs the soulwell _stoneId derivation
+	// (go_scripts.cpp:534, EFFECT_0).
+	methods["GetSpellEffectItemType"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("GetSpellEffectItemType requires a spell id and an effect index")
+		}
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || s.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		spell, ok, err := s.server.Data.Spell(spellID)
+		if err != nil || !ok || int(index) >= len(spell.Effects) {
+			return []any{uint32(0)}, nil
+		}
+		return []any{spell.Effects[index].ItemType}, nil
+	}
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

@@ -1,7 +1,8 @@
 -- go_scripts.cpp PART 1 (lines 61-682): 13 GameObjectScript ports.
 -- Source: src/server/scripts/World/go_scripts.cpp (C++ line refs below).
 --
--- VERDICT: all 13 are DOCUMENTED-ONLY — no Register calls in this file.
+-- VERDICT: 11 of 13 DOCUMENTED-ONLY; matrix_punchograph + soulwell PORTED
+-- (Register calls at bottom of file).
 -- Bridge verification (grep against the CURRENT runtime, 2026-10-18):
 --   * RegisterGameObjectGossipEvent(entry, 1, fn) hello arm fires as
 --     (event, player, go) via fireGameObjectGossipHelloHook (gameobject_hooks.go:158);
@@ -57,7 +58,7 @@
 -- 8. go_tele_to_violet_stand    :341  DOCUMENTED-ONLY
 -- 9. go_matrix_punchograph      :386  PORTED 2026-10-24
 -- 10. go_blood_filled_orb       :450  DOCUMENTED-ONLY
--- 11. go_soulwell               :495  DOCUMENTED-ONLY
+-- 11. go_soulwell               :495  PORTED 2026-10-24
 -- 12. go_amberpine_outhouse     :594  DOCUMENTED-ONLY
 -- 13. go_massive_seaforium_charge :650 DOCUMENTED-ONLY
 
@@ -201,17 +202,18 @@
 --    SPELL_FAILED_TOO_MANY_OF_ITEM; else owner->CastSpell(player, _stoneSpell,
 --    true), and me->AddUse() only if the item was actually created. Returns
 --    false (gossip consumed on failure paths via `return true`).
---    Bridged 2026-10-24: go:GetOwner (lua_objects.go, dynamic
---    OwnerGUID -> owner player object, nil when ownerless/offline),
---    player:IsInSameRaidWith (lua_player.go, sameRaidGroup twin),
---    go:AddUse/GetUseCount (lua_objects.go, m_usetimes twin on the
---    live dynamic/instance GO state), owner->CastSpell rides
---    player:CastSpell, and the already-has-stone gate rides
---    player:HasItem. Remaining blockers: Spell::SendCastResult
---    (no player error-packet bridge) and the _stoneId derivation
---    (spell EFFECT_0 ItemType has no Lua spell-info read). The
---    owner-aura variant selection rides owner:HasAura (bridged).
---    DOCUMENTED-ONLY despite C++-named entries.
+--    PORTED 2026-10-24 (see bottom of file): go:GetOwner (lua_objects.go),
+--    player:IsInSameRaidWith (lua_player.go), go:AddUse (lua_objects.go),
+--    owner->CastSpell rides player:CastSpell, the already-has-stone gate
+--    rides player:HasItem, the failure packet rides
+--    player:SendCastResult (lua_player.go, SMSG_CAST_FAILED castID 0,
+--    SPELL_FAILED_TOO_MANY_OF_ITEM = 129), and _stoneId rides
+--    player:GetSpellEffectItemType(stoneSpell, 0) (lua_player.go, DBC
+--    Spell.dbc EFFECT_0 ItemType). C++ true == Lua true (blocked paths
+--    return true, success returns false). Deviation: C++ latches the
+--    stone variant in the GO-AI ctor at spawn; Go has no GO-AI ctor hook,
+--    so the Lua port reads the owner aura at hello instead — identical
+--    whenever the aura state is unchanged between spawn and first use.
 -- ============================================================================
 
 -- ============================================================================
@@ -287,3 +289,54 @@ RegisterGameObjectGossipEvent(142345, 1, onMatrixPunchographGossip)
 RegisterGameObjectGossipEvent(142475, 1, onMatrixPunchographGossip)
 RegisterGameObjectGossipEvent(142476, 1, onMatrixPunchographGossip)
 RegisterGameObjectGossipEvent(142696, 1, onMatrixPunchographGossip)
+
+-- 11. go_soulwell (go_scripts.cpp:495-592; ctor :503-536, OnGossipHello :538-564)
+--    PORTED 2026-10-24: per GO entry, the stone-spell triple (master
+--    34130/34149/34150 for 181621, fel 58890/58896/58898 for 193169);
+--    owner aura 18692 selects the R1 variant, aura 34150 the R2 variant
+--    (C++-exact, including the 34150-as-aura quirk); stone item id from
+--    EFFECT_0 ItemType; blocked paths (unknown entry, no owner, no stone,
+--    user not in the owner's raid, user already has the stone) return
+--    true, the failure packet rides SendCastResult(129), the owner casts
+--    the stone spell triggered on the user, and AddUse fires only when
+--    the item was actually created. C++ returns true == Lua true.
+local SOULWELL_STONE_SPELLS = {
+    [181621] = { 34130, 34149, 34150 }, -- master R0/R1/R2
+    [193169] = { 58890, 58896, 58898 }, -- fel R0/R1/R2
+}
+
+local function onSoulwellGossip(_, player, go)
+    local spells = SOULWELL_STONE_SPELLS[go:GetEntry()]
+    if spells == nil then
+        return true
+    end
+    local owner = go:GetOwner()
+    if owner == nil then
+        return true
+    end
+    local stoneSpell = spells[1]
+    if owner:HasAura(18692) then
+        stoneSpell = spells[2]
+    elseif owner:HasAura(34150) then
+        stoneSpell = spells[3]
+    end
+    local stoneId = player:GetSpellEffectItemType(stoneSpell, 0)
+    if stoneSpell == 0 or stoneId == 0 then
+        return true
+    end
+    if not player:IsInSameRaidWith(owner) then
+        return true
+    end
+    if player:HasItem(stoneId) then
+        player:SendCastResult(stoneSpell, 129)
+        return true
+    end
+    owner:CastSpell(player, stoneSpell, true)
+    if player:HasItem(stoneId) then
+        go:AddUse()
+    end
+    return false
+end
+
+RegisterGameObjectGossipEvent(181621, 1, onSoulwellGossip)
+RegisterGameObjectGossipEvent(193169, 1, onSoulwellGossip)
