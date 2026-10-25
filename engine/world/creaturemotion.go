@@ -975,6 +975,16 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion
 			motions[stdKey] = motion
+			// Creature::CreateFromProto (Creature.cpp:1657) twin, same
+			// as the motionForLocked fresh-motion branch: this fallback
+			// runs only when no tracked motion exists, so a template
+			// VehicleId creates the kit on first materialization,
+			// gated on a Vehicle.dbc entry like Unit::CreateVehicleKit.
+			if st.VehicleID != 0 && s.Data != nil {
+				if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
+					s.createVehicleKit(motion.Map, instanceID, creatureGUID, st.VehicleID, entry, false)
+				}
+			}
 		}
 	}
 	if motion != nil && motion.Health > 0 {

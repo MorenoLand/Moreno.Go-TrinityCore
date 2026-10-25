@@ -7013,8 +7013,8 @@ func init() {
 	// both phases, kept pending on transform) / crusadershammer 17286
 	// 8s->12s / crusaderstrike 17281 12s->15s / holystrike 17284 18s->15s
 	// (all DoCastVictim -> GetVictim + CastSpell, nil-victim keeps
-	// schedule). Per-tick HealthBelowPct(40) check approximated by a 1s
-	// poll (no OnAIUpdate bridge, event 7 unfired): transform cancels the
+	// schedule). Per-tick HealthBelowPct(40) check on creature event 7
+	// (100ms world tick, victim-gated per UpdateVictim): transform cancels the
 	// Dathrohan arms, self-casts 17288 (barthilas convention), and starts
 	// the Balnazzar arms at their C++-frozen initials — shadowshock 17399
 	// 4s->11s / psychicscream 13704 16s->20s / sleep 12098 20s->15s

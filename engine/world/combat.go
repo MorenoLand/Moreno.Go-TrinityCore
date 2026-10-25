@@ -2888,6 +2888,16 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 		if guid != target.GUID {
 			motions[guid] = motion
 		}
+		// Creature::CreateFromProto (Creature.cpp:1657) twin, same as
+		// the motionForLocked fresh-motion branch: this else branch runs
+		// only when no tracked motion exists, so a template VehicleId
+		// creates the kit on first materialization, gated on a
+		// Vehicle.dbc entry like Unit::CreateVehicleKit.
+		if st.VehicleID != 0 && s.Data != nil {
+			if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
+				s.createVehicleKit(target.Map, instanceID, target.GUID, st.VehicleID, uint32(entry), false)
+			}
+		}
 	}
 	s.motionMu.Unlock()
 	return target, nil

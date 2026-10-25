@@ -1163,9 +1163,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// bit, set in CreateVehicleKit and cleared in RemoveVehicleKit
 	// (Unit.cpp:12047-12070) — a live vehicle kit is the exact twin, the
 	// same predicate creatureCasterCanApplyResilience already uses
-	// (resilience.go). Creature kits are only created by the player-
-	// vehicle spell path today, so template vehicles read false until
-	// the creature-spawn kit path (Creature.cpp:1657) lands.
+	// (resilience.go). Creature kits are created by the player-vehicle
+	// spell path and by the Creature.cpp:1657 spawn twin (motionFor
+	// fresh-motion branch, combat-target and aggro materialization).
 	methods["IsVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
 		if motion == nil {
 			return []any{false}, nil

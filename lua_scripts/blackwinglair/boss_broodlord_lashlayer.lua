@@ -7,7 +7,9 @@
 -- GameObjectScript from the same C++ file is not registered: the
 -- RegisterGameObjectEvent bridge and the GO GetGoState/SetGoState surface
 -- exist (lua_objects.go:1080/1095), but the device's GameObjectAI
--- OnAIUpdate/OnLootState legs have no engine fire sites and the JustDied
+-- OnAIUpdate/OnLootState legs have no engine fire sites (creature event
+-- 7 fires, but GameObjectEventOnAIUpdate = 1 and OnLootState = 9 are
+-- const-only, zero Trigger sites — re-verified 2026-10-24) and the JustDied
 -- device scan rides the unbridged grid enumeration — machine unmodeled
 -- (2026-10-23 re-key of the stale "no gameobject model" claim).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,

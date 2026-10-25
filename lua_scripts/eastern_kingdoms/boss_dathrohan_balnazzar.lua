@@ -28,9 +28,11 @@
 --   8s->12s / CRUSADERSTRIKE 17281 12s->15s / HOLYSTRIKE 17284
 --   18s->15s (all DoCastVictim non-triggered -> doCastVictim).
 -- - Transform check: C++ evaluates HealthBelowPct(40) every UpdateAI
---   tick in the not-transformed branch. No OnAIUpdate bridge (event 7
---   is unfired in this engine), so a 1s repeating poll approximates it
---   (documented granularity trade-off): on crossing, the Dathrohan
+--   tick in the not-transformed branch (UpdateAI gates on UpdateVictim()
+--   first, boss_dathrohan_balnazzar.cpp:136). Creature event 7 fires on
+--   the 100ms world tick (creaturemotion.go:2747, razuvious precedent),
+--   so onAIUpdate twins it at C++ granularity, victim-gated like C++:
+--   on crossing, the Dathrohan
 --   arms + poll are cancelled, DoCast(me, SPELL_BALNAZZARTRANSFORM
 --   17288, false) self-cast fires (barthilas furious-anger convention),
 --   transformed latch set, and the Balnazzar arms start at their
@@ -230,7 +232,7 @@ end
 -- entry registers the 2/4/23 handlers, ingvar precedent) ->
 -- transformed = true. The shared
 -- mindblast timer is kept pending exactly like the C++ member; the
--- Dathrohan-only arms and the transform poll stop.
+-- Dathrohan-only arms stop; the event-7 transform check stops via the latch.
 local function doTransform(creature, guid)
     local st = getState(guid)
     if st.transformed then
@@ -240,7 +242,6 @@ local function doTransform(creature, guid)
     cancelTimer(guid, "hammer")
     cancelTimer(guid, "strike")
     cancelTimer(guid, "holy")
-    cancelTimer(guid, "transformcheck")
     creature:CastSpell(creature, SPELL_BALNAZZARTRANSFORM)
     creature:UpdateEntry(ENTRY_BALNAZZAR)
     schedule(guid, "shadowshock", 4000,
@@ -253,20 +254,23 @@ local function doTransform(creature, guid)
         function() onMindControl(creature, guid) end)
 end
 
--- C++ checks HealthBelowPct(40) every UpdateAI tick while not
--- transformed. No OnAIUpdate bridge (event 7 unfired) — 1s poll.
-local function onTransformCheck(creature, guid)
-    local st = getState(guid)
+-- C++ UpdateAI (boss_dathrohan_balnazzar.cpp:134-185) gates on
+-- UpdateVictim() first, then checks HealthBelowPct(40) every tick while
+-- not transformed. Creature event 7 fires on the 100ms world tick
+-- (creaturemotion.go:2747) and this handler returns nothing, so it
+-- never vetoes the engine AI step (razuvious precedent).
+local function onAIUpdate(event, creature, diff)
+    local st = getState(creature:GetGUID())
     if st.transformed then
+        return
+    end
+    if creature:GetVictim() == nil then
         return
     end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 40 / 100) then
-        doTransform(creature, guid)
-        return
+        doTransform(creature, creature:GetGUID())
     end
-    schedule(guid, "transformcheck", 1000,
-        function() onTransformCheck(creature, guid) end)
 end
 
 -- C++ Initialize(): hammer 8000, strike 12000, mindblast 6000,
@@ -285,8 +289,6 @@ local function onEnterCombat(event, creature)
         function() onCrusaderStrike(creature, guid) end)
     schedule(guid, "holy", 18000,
         function() onHolyStrike(creature, guid) end)
-    schedule(guid, "transformcheck", 1000,
-        function() onTransformCheck(creature, guid) end)
 end
 
 local function onLeaveCombat(event, creature)
@@ -323,6 +325,7 @@ local function onReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_DATHROHAN, 1, onEnterCombat)
+RegisterCreatureEvent(ENTRY_DATHROHAN, 7, onAIUpdate)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_DATHROHAN, 23, onReset)
