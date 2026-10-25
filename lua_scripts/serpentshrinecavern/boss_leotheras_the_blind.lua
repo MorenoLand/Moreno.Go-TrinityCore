@@ -126,8 +126,11 @@
 -- {8s,15s} regardless. The out-of-combat
 -- CastChanneling arm (BANISH_BEAM 38909 on leotheras via the
 -- instance DATA_LEOTHERAS GUID) and the no-event-starter evade
--- arm are instance/cross-creature blocked (hydross precedent —
--- no out-of-combat update hook in the Lua model). OnDied(4):
+-- arm stay instance/cross-creature blocked (re-keyed 2026-10-24:
+-- the event-7 out-of-combat pump EXISTS per the hydross/
+-- dathrohan precedents — the block is the instance GUID +
+-- cross-creature lookup, not the pump; the evade arm also
+-- needs EnterEvadeMode, unbridged). OnDied(4):
 -- cleanup (C++ JustDied is empty). OnLeaveCombat(2)/OnReset(23):
 -- cleanup (the Reset re-summon relay into leotheras's
 -- CheckChannelers is cross-creature blocked).

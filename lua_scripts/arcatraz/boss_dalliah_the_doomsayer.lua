@@ -19,13 +19,13 @@
 -- from the EVENT_WHIRLWIND arm, C++-exact), SAY_HEAL = 4
 -- (heal — fired from the EVENT_HEAL arm, C++-exact), SAY_
 -- DEATH = 5 (death — fired from the C++ JustDied, C++-exact);
--- SAY_SOCCOTHRATES_DEATH = 7 fires only from the
--- EVENT_SOCCOTHRATES_DEATH arm, unreachable in this model
--- (see deviations). SAY_AGGRO_DALLIAH_FIRST = 0 and SAY_
--- DALLIAH_25_PERCENT = 5 are Soccothrates' creature-text
--- lines, fired via soccothrates->AI()->Talk(...) — owned by
--- the boss_wrath_scryer_soccothrates.cpp port, unreachable
--- here (cross-creature blocked).
+-- SAY_SOCCOTHRATES_DEATH = 7 fires from the
+-- EVENT_SOCCOTHRATES_DEATH arm, PORTED 2026-10-24 via
+-- event 7 + creature:SetData (see onAIUpdate). SAY_AGGRO_
+-- DALLIAH_FIRST = 0 and SAY_DALLIAH_25_PERCENT = 5 are
+-- Soccothrates' creature-text lines, fired via soccothrates->
+-- AI()->Talk(...) — PORTED 2026-10-24 in bossTick via the
+-- FindNearestCreature / grid twin (see below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent (per-GUID scheduler pump); melee is
@@ -41,7 +41,8 @@
 -- of UpdateAI in C++ arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump; the soccothratesDeath out-of-combat branch is
--- unreachable in this model — no data-set bridge). Pump:
+-- PORTED 2026-10-24 via event 7 + creature:SetData (see
+-- onAIUpdate below). Pump:
 -- gift of the doomsayer 36173 — {1s,4s} init then {16s,21s},
 -- TRIGGERED DoCastVictim (C++ `DoCastVictim(SPELL_GIFT_OF_
 -- THE_DOOMSAYER, true)`, C++-exact), re-arm {16s,21s}
@@ -63,8 +64,8 @@
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++ talks unconditionally —
 -- no player gate, C++-exact). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the _JustDied arm is instance-blocked; the
--- soccothrates->AI()->SetData(1, 1) death relay has no cross-
--- creature bridge). OnLeaveCombat(2)/OnReset(23): cancel the
+-- soccothrates->AI()->SetData(1, 1) death relay is PORTED
+-- below via FindNearestCreature + SetData). OnLeaveCombat(2)/OnReset(23): cancel the
 -- pump, drop per-GUID state (the C++ Reset() observable
 -- remainder — the schedule re-latch — lands on OnEnterCombat
 -- per the gargolmar precedent; the _Reset arm is instance-
@@ -76,19 +77,18 @@
 -- Reset/JustEngagedWith/JustDied skipped); no cross-creature
 -- bridge — the EVENT_ME_FIRST 6s arm (Talk(SAY_AGGRO_DALLIAH_
 -- FIRST) on Soccothrates' AI via instance GetGuidData(DATA_
--- SOCCOTHRATES)) unmodeled; the HealthBelowPct(25) taunt
--- (Talk(SAY_DALLIAH_25_PERCENT) on Soccothrates' AI)
--- unmodeled — soccothrates-side origin only; the JustDied
--- soccothrates->AI()->SetData(1, 1) relay unmodeled; no
--- data-set bridge — the EVENT_SOCCOTHRATES_DEATH machine
+-- SOCCOTHRATES)) PORTED 2026-10-24 in bossTick; the
+-- HealthBelowPct(25) taunt (Talk(SAY_DALLIAH_25_PERCENT) on
+-- Soccothrates' AI) PORTED 2026-10-24 in bossTick; the JustDied
+-- soccothrates->AI()->SetData(1, 1) relay PORTED 2026-10-24
+-- in OnDied below; and the EVENT_SOCCOTHRATES_DEATH machine
 -- (Soccothrates' JustDied calls dalliah->AI()->SetData(1, 1)
 -- when Dalliah is alive and out of combat; 6s later Dalliah
 -- says SAY_SOCCOTHRATES_DEATH = 7 via the !UpdateVictim arm)
--- re-keyed 2026-10-24: creature:SetData IS bridged
--- (lua_creature_events.go, ScriptData store) — the relay leg is now
--- portable via the FindNearestCreature twin idiom, but the 6s
--- !UpdateVictim Talk leg stays out (no out-of-combat pump and no
--- instance GUID lookup for the twin); the heroic-only
+-- PORTED 2026-10-24 via event 7 + creature:SetData
+-- (ScriptData store, lua_creature_events.go) + the
+-- FindNearestCreature / grid twin idiom (see bossTick,
+-- onAIUpdate and the OnDied relay below); the heroic-only
 -- EVENT_SHADOW_WAVE 39016 arm (TRIGGERED DoCastVictim
 -- {11s,16s}) is modeled via creature:IsHeroic(); no
 -- cast-state bridge — the UNIT_STATE_CASTING early-return
@@ -105,11 +105,16 @@ local SAY_SLAY = 2
 local SAY_WHIRLWIND = 3
 local SAY_HEAL = 4
 local SAY_DEATH = 5
+local SAY_SOCCOTHRATES_DEATH = 7
+local SAY_AGGRO_DALLIAH_FIRST = 0
+local SAY_DALLIAH_25_PERCENT = 5
 
 local ENTRY_DALLIAH = 20885
+local ENTRY_SOCCOTHRATES = 20886
 
 local timers = {}
 local states = {}
+local deathTalk = {}
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -122,6 +127,7 @@ end
 local function resetBoss(guid)
     cancelPump(guid)
     states[guid] = nil
+    deathTalk[guid] = nil
 end
 
 -- C++ JustEngagedWith schedule (the BossAI arm is instance
@@ -136,6 +142,7 @@ local function freshState()
         heal = nil,
         shadowWave = nil,
         soccothratesTaunt = false,
+        meFirst = 6000,
     }
 end
 
@@ -194,17 +201,82 @@ local function bossTick(creature, guid)
         end
     end
 
+    -- EVENT_ME_FIRST 6s one-shot (boss_dalliah_the_doomsayer.cpp:94, 167-171):
+    -- PORTED 2026-10-24 — at engage + 6s, if Soccothrates is alive
+    -- and out of combat, Soccothrates' AI talks SAY_AGGRO_DALLIAH_FIRST.
+    -- FindNearestCreature is live-only (lua_creature_events.go), so the
+    -- alive gate rides it; the !IsInCombat() check is explicit, and
+    -- 200yd stands in for the instance GUID. Fires once: a guarded
+    -- target costs the arm, as the C++ event is consumed on fire.
+    if st.meFirst then
+        if st.meFirst <= 1000 then
+            st.meFirst = nil
+            local soccothrates = creature:FindNearestCreature(ENTRY_SOCCOTHRATES, 200)
+            if soccothrates ~= nil and not soccothrates:IsInCombat() then
+                soccothrates:Talk(SAY_AGGRO_DALLIAH_FIRST)
+            end
+        else
+            st.meFirst = st.meFirst - 1000
+        end
+    end
+
     -- HealthBelowPct(25) latch (halazzi strict-fraction
-    -- precedent): the C++ arm fires Talk(SAY_DALLIAH_25_
-    -- PERCENT) on Soccothrates' AI via the instance GUID —
-    -- no cross-creature bridge, so the yell is unreachable
-    -- and the latch is bookkeeping only (omor precedent).
+    -- precedent): PORTED 2026-10-24 — the C++ arm fires
+    -- Talk(SAY_DALLIAH_25_PERCENT) on Soccothrates' AI
+    -- (boss_dalliah_the_doomsayer.cpp:180-184); the C++ arm
+    -- null-checks the instance GUID only, so the grid twin
+    -- (dead-inclusive, twin-emperor precedent) talks on the
+    -- first grid match with no alive/in-combat gate, and
+    -- 200yd stands in for the instance GUID.
     if not st.soccothratesTaunt then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then
             st.soccothratesTaunt = true
+            local soccothrates = creature:GetCreaturesInGrid(ENTRY_SOCCOTHRATES, 200)
+            if #soccothrates > 0 then
+                soccothrates[1]:Talk(SAY_DALLIAH_25_PERCENT)
+            end
         end
+    end
+end
+
+-- C++ SetData(1, 1) / EVENT_SOCCOTHRATES_DEATH machine
+-- (boss_dalliah_the_doomsayer.cpp:103-109 SetData schedules the
+-- 6s event; :116-136 the !UpdateVictim branch executes it):
+-- Soccothrates' JustDied relays SetData(1, 1) when Dalliah is
+-- alive and out of combat. Creature event 7 fires on the 100ms
+-- world tick incl. pre-pull (hydross precedent); GetVictim() ==
+-- nil is the !UpdateVictim twin (dathrohan precedent). The
+-- countdown starts on the first event-7 tick that sees
+-- GetData(1) == 1; entering combat drops it (the C++ combat
+-- branch consumes the event via default), as do the
+-- leave-combat/reset/enter-combat state clears. Returns
+-- nothing, so it never vetoes the engine AI step.
+local function onAIUpdate(event, creature, diff)
+    local guid = creature:GetGUID()
+    if creature:GetData(1) ~= 1 then
+        deathTalk[guid] = nil
+        return
+    end
+    if creature:GetVictim() ~= nil then
+        deathTalk[guid] = nil
+        creature:SetData(1, 0)
+        return
+    end
+    if diff == nil then
+        diff = 100
+    end
+    local remaining = deathTalk[guid]
+    if remaining == nil then
+        remaining = 6000
+    end
+    if remaining <= diff then
+        creature:Talk(SAY_SOCCOTHRATES_DEATH)
+        deathTalk[guid] = nil
+        creature:SetData(1, 0)
+    else
+        deathTalk[guid] = remaining - diff
     end
 end
 
@@ -233,9 +305,21 @@ end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied relay (boss_dalliah_the_doomsayer.cpp:77-84):
+    -- soccothrates alive and out of combat -> soccothrates->
+    -- AI()->SetData(1, 1). FindNearestCreature is live-only
+    -- (lua_creature_events.go), so the alive gate rides it;
+    -- 200yd (midnight precedent) stands in for the instance
+    -- GUID — a single soccothrates per instance.
+    local soccothrates = creature:FindNearestCreature(ENTRY_SOCCOTHRATES, 200)
+    if soccothrates ~= nil and not soccothrates:IsInCombat() then
+        soccothrates:SetData(1, 1)
+    end
     resetBoss(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 23, function(_, creature)
     resetBoss(creature:GetGUID())
 end)
+
+RegisterCreatureEvent(ENTRY_DALLIAH, 7, onAIUpdate)
