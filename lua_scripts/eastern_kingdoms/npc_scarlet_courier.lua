@@ -38,9 +38,13 @@
 --   precedent), so none of it is ported.
 -- - MovementInform(POINT_ID 1) -> uiStage = 2 (no MovementInform
 --   bridge — kalecgos precedent).
--- - Stage 2's tree->GetOwner() + AttackStart(unit): no gameobject-
---   owner bridge and no AttackStart bridge (unworthy_initiate
---   precedent) — strands the entire stage-2 arm.
+-- - Stage 2's tree->GetOwner() + AttackStart(unit): the owner
+--   leg (GO GetOwner, lua_objects.go) and the attack leg
+--   (EngageWithTarget, 2026-10-24 bridge) both exist now —
+--   the arm stays out on the stage-1 MovePoint ->
+--   MovementInform chain alone (arrival never happens in
+--   Lua, so stage 2 has no trigger; a standalone timer
+--   would fabricate arrival — kalecgos precedent).
 -- - SPELL_SHOOT (52818) has no C++-verifiable use in the AI body
 --   (nothing schedules a shoot arm), so it stays an enum literal.
 local SAY_TREE2 = 1

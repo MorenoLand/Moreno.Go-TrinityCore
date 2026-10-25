@@ -38,12 +38,12 @@
 --    SUMMON_LASHER_1..4 34681/34684/34686/34688 / SPELL_
 --    SUMMON_FLAYER_1..4 34682/34685/34690/34687 — the four
 --    rand32() % 4 lasher/flayer pairs) summon via spell data (the
---    summoned entry IDs are not in the C++ sources, unverifiable —
---    sarannis "can't see inside a spell script" precedent), so the
---    casts are skipped and only the talk and the latch bookkeeping
---    are modeled. The JustSummoned summon->AI()->AttackStart(
---    SelectTarget(Random, 0)) arm is unreachable (no summons exist)
---    and has no AttackStart bridge — unmodeled.
+--    summoned entry IDs are not in the C++ sources — the engine
+--    resolves them from spell data, and the Go cast path's SUMMON
+--    arm fires event 19 on the caster), so the casts are PORTED
+--    below (triggered, C++ case order) and the JustSummoned
+--    summon->AI()->AttackStart(SelectTarget(Random, 0)) arm lands
+--    in onJustSummoned below (EngageWithTarget bridge, 2026-10-24).
 -- 2. Allergic arm: 5s init then 25000 + rand32() % 15000 —
 --    DoCastVictim(SPELL_ALLERGIC_REACTION 34697) non-
 --    triggered (C++-exact), re-arm 25000 + rand32() % 15000
@@ -74,10 +74,10 @@
 -- shim (instance_the_botanica.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_LAJ = 3
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
--- no summon bridge — the DoSummons TRIGGERED lasher/flayer
--- summon casts ride spell data (summoned entries unverifiable)
--- and the JustSummoned AttackStart relay has no bridge —
--- unmodeled (see above); the display / immune arms WERE ported
+-- the DoSummons TRIGGERED lasher/flayer summon casts are
+-- PORTED below (they summon via spell data; the Go cast path's
+-- SUMMON arm fires event 19 on the caster) and the JustSummoned
+-- engage is PORTED in onJustSummoned (see above); the display / immune arms WERE ported
 -- 2026-10-20 (SetDisplayId + ApplySpellImmune school matrix in
 -- the event-23 hook and the DoTransform() rotation in the pump)
 -- — the old "no display / immune bridge" claim is stale;
@@ -89,6 +89,16 @@
 
 local SPELL_ALLERGIC_REACTION = 34697
 local SPELL_TELEPORT_SELF = 34673
+
+-- C++ boss_laj.cpp:34-41 case order (note the FLAYER_3/FLAYER_4
+-- swap: case 2 pairs LASHER_3 34686 with FLAYER_3 34690,
+-- case 3 pairs LASHER_4 34688 with FLAYER_4 34687).
+local SUMMON_PAIRS = {
+    { 34681, 34682 },
+    { 34684, 34685 },
+    { 34686, 34690 },
+    { 34688, 34687 },
+}
 
 -- C++ boss_laj.cpp :46-51 model enum.
 local MODEL_DEFAULT = 13109
@@ -135,13 +145,18 @@ local function combatTick(creature, guid)
     end
 
     -- 1. Summon arm (only while canSummon, C++ gate order —
-    -- always first): Talk(EMOTE_SUMMON) + CanSummon = false,
-    -- the eight TRIGGERED summon casts skipped (spell-data summons,
-    -- entries unverifiable — see header), re-arm 2500
-    -- (C++-exact).
+    -- always first): Talk(EMOTE_SUMMON) + DoSummons (one
+    -- rand32() % 4 lasher/flayer pair, both TRIGGERED casts
+    -- on self — the casts summon via spell data and the Go
+    -- cast path's SUMMON arm fires event 19 on the caster,
+    -- landing the JustSummoned engage in onJustSummoned
+    -- below) + CanSummon = false, re-arm 2500 (C++-exact).
     if st.canSummon then
         if st.summon <= 1000 then
             creature:Talk(EMOTE_SUMMON)
+            local pair = SUMMON_PAIRS[math.random(4)]
+            creature:CastSpell(creature, pair[1], true)
+            creature:CastSpell(creature, pair[2], true)
             st.canSummon = false
             st.summon = 2500
         else
@@ -222,6 +237,40 @@ RegisterCreatureEvent(ENTRY_LAJ, 1, function(_, creature)
         combatTick(creature, guid)
     end, 1000, 0)
 end)
+
+-- C++ JustSummoned (boss_laj.cpp:172-175): any summon from
+-- Laj engages a random target while Laj has a victim
+-- (SelectTarget(Random, 0) — any random alive player in
+-- the instance, victim included); EngageWithTarget is the
+-- player-target AttackStart twin (2026-10-24 bridge).
+local function randomAlivePlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local players = {}
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            players[#players + 1] = p
+        end
+    end
+    if #players == 0 then
+        return nil
+    end
+    return players[math.random(#players)]
+end
+
+local function onJustSummoned(_, creature, summoned)
+    if not summoned then
+        return
+    end
+    if creature:GetVictim() then
+        local target = randomAlivePlayer(creature)
+        if target then
+            summoned:EngageWithTarget(target)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_LAJ, 19, onJustSummoned)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_LAJ, 2, function(_, creature)

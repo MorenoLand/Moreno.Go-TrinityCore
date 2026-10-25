@@ -67,15 +67,15 @@
 -- unbridgeable). Combat pump: image splits — if not yet
 -- split at 66% and health is at or below 66% (C++ !HealthAbove
 -- Pct(66), nethekurse precedent), DoSplit(66): Talk(SAY_
--- IMAGE) and set the 66 latch; then if not yet split at 33%
+-- IMAGE), cast 36931, and set the 66 latch; then if not yet split at 33%
 -- and health is at or below 33% (C++ !HealthAbovePct(33)),
--- DoSplit(33): Talk(SAY_IMAGE) and set the 33 latch (the C++
+-- DoSplit(33): Talk(SAY_IMAGE), cast 36932, and set the 33 latch (the C++
 -- checks both arms in order on the same tick — a single hit
 -- into <=33% fires both yells, C++-exact; the SPELL_66_
--- ILLUSION 36931 / SPELL_33_ILLUSION 36932 casts summon via spell
--- data (summon type/duration unverifiable — sarannis "can't see
--- inside a spell script" precedent), and the JustSummoned
--- AttackStart relay has no bridge, so only the talk is modeled); mind rend 36924 — 3s init then 8s,
+-- ILLUSION 36931 / SPELL_33_ILLUSION 36932 casts summon entries
+-- 21466/21467 via spell data (per the C++ enum comments), and
+-- the JustSummoned legs land in onJustSummoned below
+-- (EngageWithTarget bridge, 2026-10-24); mind rend 36924 — 3s init then 8s,
 -- target = random alive player in the instance excluding the
 -- current victim (C++ SelectTarget(Random, 1), thespia
 -- precedent), nil pick falls back to DoCastVictim (C++-
@@ -114,11 +114,11 @@
 -- via the bridged unit-flags surface (see resetImmuneFlags); no
 -- LoS-aggro bridge — the
 -- MoveInLineOfSight Intro gate unmodeled (gargolmar
--- precedent); the DoSplit illusion summons ride spell casts (type/
--- duration are spell data, unverifiable) and the JustSummoned
--- health-set (66%/33%)/AttackStart-random-target/Summon/immunity
--- arms stay out (no AttackStart bridge; the illusion AI 21466/21467
--- is unregistered) — unmodeled; the illusion SpellIds H_SPELL_MIND_REND_IMAGE
+-- precedent); the DoSplit illusion summons ride spell casts and
+-- the JustSummoned health-set (66%/33%)/AttackStart-random-target/
+-- Summon/immunity arms are PORTED in onJustSummoned below
+-- (EngageWithTarget bridge, 2026-10-24; the illusion AI 21466/21467
+-- stays unregistered — its own AI is a no-op); the illusion SpellIds H_SPELL_MIND_REND_IMAGE
 -- 39021 never fire in the C++ AI — not bridged; the heroic-only
 -- H_SPELL_MANA_BURN 39020 {16s,32s} arm is PORTED (the old "no
 -- difficulty bridge" claim was stale — creature:IsHeroic() is
@@ -142,6 +142,10 @@
 local SPELL_MIND_REND = 36924
 local SPELL_FEAR = 39415
 local SPELL_DOMINATION = 37162
+local SPELL_66_ILLUSION = 36931
+local SPELL_33_ILLUSION = 36932
+local ENTRY_ILLUSION_66 = 21466
+local ENTRY_ILLUSION_33 = 21467
 local H_SPELL_MANA_BURN = 39020
 
 local SAY_INTRO = 0
@@ -202,8 +206,8 @@ end
 -- = 59, UNIT_FLAG_IMMUNE_TO_PC 0x100 | UNIT_FLAG_IMMUNE_TO_NPC 0x200;
 -- Unit.cpp:8440-8451); ValidateAttackersAndOwnTarget / EndAllCombat are
 -- engine-combat legs with no Lua bridge). The JustSummoned
--- summon->SetImmuneToAll(false) arm (:136) stays out — cross-creature,
--- the illusions are unregistered (see file header).
+-- summon->SetImmuneToAll(false) arm (:136) is PORTED in onJustSummoned
+-- below via RemoveFlag (summoned objects need no registration).
 local function resetImmuneFlags(creature, guid)
     if introStates[guid].done then
         creature:RemoveFlag(59, 0x300)
@@ -277,11 +281,22 @@ end
 
 -- C++ DoSplit: InterruptNonMeleeSpells (no cast-state
 -- bridge — netherspite precedent), Talk(SAY_IMAGE), then
--- DoCast(me, SPELL_66/33_ILLUSION) — the casts summon via spell
--- data (unverifiable) and the JustSummoned AttackStart relay has no
--- bridge, so only the talk is modeled.
-local function doSplit(creature)
+-- DoCast(me, SPELL_66/33_ILLUSION) non-triggered — the casts
+-- summon entries 21466/21467 via spell data (per the C++ enum
+-- comments) and the Go cast path's SUMMON arm funnels through
+-- summonTempCreature, which fires event 19 on the caster — the
+-- JustSummoned legs land in onJustSummoned below. st.splitPct
+-- records the split BEFORE the cast so a synchronously resolving
+-- summon reads the right health pct (C++ outcome: 66-split
+-- illusions at 66%, 33-split at 33%).
+local function doSplit(creature, st, pct)
+    st.splitPct = pct
     creature:Talk(SAY_IMAGE)
+    if pct == 66 then
+        creature:CastSpell(creature, SPELL_66_ILLUSION)
+    else
+        creature:CastSpell(creature, SPELL_33_ILLUSION)
+    end
 end
 
 -- C++ combat timers (Initialize values; the C++ JustEngaged
@@ -296,6 +311,7 @@ local function freshCombatState()
         manaBurn = 25000,
         isImage66 = false,
         isImage33 = false,
+        splitPct = nil,
     }
 end
 
@@ -309,11 +325,11 @@ local function combatTick(creature, guid)
     -- <=33% fires both yells. C++ !HealthAbovePct(66/33) —
     -- nethekurse <= precedent.
     if not st.isImage66 and creature:GetHealthPct() <= 66 then
-        doSplit(creature)
+        doSplit(creature, st, 66)
         st.isImage66 = true
     end
     if not st.isImage33 and creature:GetHealthPct() <= 33 then
-        doSplit(creature)
+        doSplit(creature, st, 33)
         st.isImage33 = true
     end
 
@@ -408,6 +424,43 @@ RegisterCreatureEvent(ENTRY_SKYRISS, 5, function(_, creature)
         introTick(creature, guid)
     end, 1000, 0)
 end)
+
+-- C++ JustSummoned (boss_harbinger_skyriss.cpp:123-137),
+-- entry-gated to the two illusion entries (21466/21467 per
+-- the C++ enum comments): health-set to the last split's pct
+-- of max (CountPctFromMaxHealth twin), then — only while
+-- Skyriss has a victim — AttackStart on a random target
+-- (SelectTarget(Random, 0): any random alive player in the
+-- instance, victim included), then SetImmuneToAll(false)
+-- via the unit-flags surface (see resetImmuneFlags). The
+-- summons.Summon bookkeeping has no Lua-visible effect.
+-- EngageWithTarget is the player-target AttackStart twin
+-- (2026-10-24 bridge); a non-player C++ pick no-ops
+-- through the funnel.
+local function onJustSummoned(_, creature, summoned)
+    if not summoned then
+        return
+    end
+    if summoned:GetEntry() ~= ENTRY_ILLUSION_66
+            and summoned:GetEntry() ~= ENTRY_ILLUSION_33 then
+        return
+    end
+    local st = combatStates[creature:GetGUID()]
+    local pct = st and st.splitPct or 66
+    local maxHealth = summoned:GetMaxHealth()
+    if maxHealth > 0 then
+        summoned:SetHealth(math.floor(maxHealth * pct / 100))
+    end
+    if creature:GetVictim() then
+        local players = playersInInstance(creature)
+        if #players > 0 then
+            summoned:EngageWithTarget(players[math.random(#players)])
+        end
+    end
+    summoned:RemoveFlag(59, 0x300)
+end
+
+RegisterCreatureEvent(ENTRY_SKYRISS, 19, onJustSummoned)
 
 -- C++ JustEngagedWith is empty — the combat timer schedule
 -- lands on OnEnterCombat (omor precedent); the pull yell is

@@ -18,16 +18,14 @@
 -- early return in this UpdateAI — no casting gate modeled).
 -- summon-spirits arm — C++ SummonSpirit x4 (DoSpawnCreature(9178,
 -- frand(-9,9), frand(-9,9)) + AttackStart(victim),
--- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 60s) then re-arm 30s. The
--- DoSpawnCreature positional-spawn primitive has no bridge
--- (standing no-summon-bridge), so the event keeps its C++-exact
--- 24s/30s schedule but the spawn leg is unmodeled (azuregos
--- nil-tick schedule convention).
+-- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 60s) then re-arm 30s.
+-- PORTED below: live-position offsets + EngageWithTarget(victim)
+-- (the 24s/30s schedule stays C++-exact).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers (the
 -- C++ Reset() _events.Reset() has no other observable arms).
 -- Deliberate deviations (all await engine bridges): no
--- DoSpawnCreature/AttackStart-victim bridge — the Burning Spirit
--- 9178 summon leg of EVENT_SUMMON_SPIRITS unmodeled; no Talk lines
+-- the Burning Spirit 9178 summon leg of EVENT_SUMMON_SPIRITS is
+-- PORTED below (EngageWithTarget bridge, 2026-10-24); no Talk lines
 -- exist in the C++.
 
 local SPELL_FIREBLAST = 15573
@@ -69,18 +67,31 @@ local function castFireblast(creature, guid)
     end)
 end
 
--- C++ SummonSpirit x4 (DoSpawnCreature(9178) + AttackStart): the
--- positional spawn itself IS expressible via creature:SummonCreature
--- (the old "no DoSpawnCreature bridge" note was stale) but the
--- AttackStart(victim) leg has no bridge and 9178 has no Lua bearer, so
--- a summon-only half would leave idle spirits C++ never produces —
--- the event keeps its C++-exact schedule (24s init, 30s repeat) with
--- the spawn leg unmodeled.
-local function summonSpiritsTick(guid)
-    -- no AttackStart bridge (standing) — NPC_BURNING_SPIRIT
-    -- 9178 summons unmodeled; the schedule stays C++-exact.
+-- C++ SummonSpirit x4 (DoSpawnCreature(9178, frand(-9,9),
+-- frand(-9,9), 0, 0, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 60s)
+-- + AttackStart(victim)): DoSpawnCreature spawns at the boss's
+-- live position plus the offsets — creature:GetX/GetY/GetZ
+-- resolve via the object-Fields fallback — and the AttackStart
+-- leg ports via EngageWithTarget (2026-10-24 bridge; summoned
+-- objects need no registration — aran precedent). A nil victim
+-- still spawns (C++ spawns before the AttackStart) but engages
+-- nothing (aran precedent). Summon type 1 is the bridge's
+-- 0-based TIMED_OR_CORPSE_DESPAWN; o 0 rides the bridge's
+-- summoner-orientation fallback.
+local function summonSpiritsTick(creature, guid)
+    local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
+    local victim = creature:GetVictim()
+    for _ = 1, 4 do
+        local spirit = creature:SummonCreature(NPC_BURNING_SPIRIT,
+            bx + math.random() * 18 - 9,
+            by + math.random() * 18 - 9,
+            bz, 0, 1, 60000)
+        if spirit and victim then
+            spirit:EngageWithTarget(victim)
+        end
+    end
     schedule(guid, "spirits", 30000, function()
-        summonSpiritsTick(guid)
+        summonSpiritsTick(creature, guid)
     end)
 end
 
@@ -92,7 +103,7 @@ local function onEnterCombat(event, creature, target)
         castFireblast(creature, guid)
     end)
     schedule(guid, "spirits", 24000, function()
-        summonSpiritsTick(guid)
+        summonSpiritsTick(creature, guid)
     end)
 end
 

@@ -27,7 +27,10 @@
 --   untouched).
 -- Unmodeled (documented-only, no bridges):
 -- - AttackStart: AttackStartCaster(victim, 10) (keep back & toss
---   bombs/shoot) — no AttackStart bridge.
+--   bombs/shoot) — stays out: EngageWithTarget (2026-10-24
+--   bridge) is the melee aggro funnel, not a substitute for
+--   the ranged keep-back override, and the engine's combat
+--   entry has no Lua AttackStart call site for Weegli.
 -- - Shoot 6660 + SetSheath(SHEATH_STATE_RANGED/MELEE): PORTED 2026-10-20
 --   (zulfarrak.cpp:311-322) via the new creature:SetSheath bridge
 --   (Unit::SetSheath, Unit.h:903). The isAttackReady swing gate has no

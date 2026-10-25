@@ -41,13 +41,11 @@
 -- - JustDied: 30x SummonCreature(NPC_MINDLESS_UNDEAD 11030,
 --   3969.35+irand(-10,10), -3391.87+irand(-10,10), 119.11, 5.91,
 --   TEMPSUMMON_TIMED_OR_DEAD_DESPAWN=2, 30min=1800000ms) via
---   creature:SummonCreature (malchezaar type-2 precedent); the
---   mob->AI()->AttackStart(SelectNearestTarget(100)) leg stays out
---   (no AttackStart / spawned-summon attack hook).
+--   creature:SummonCreature (malchezaar type-2 precedent) + the
+--   mob->AI()->AttackStart(SelectNearestTarget(100)) leg PORTED
+--   below (nearest-alive-player twin + EngageWithTarget).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - JustDied's mob->AI()->AttackStart(SelectNearestTarget(100))
---   leg: no AttackStart bridge / spawned-summon attack hook
---   (the summon half is ported above).
+-- - JustDied's AttackStart leg: PORTED above (see Ported arms).
 -- - JustDied's instance->SetData(TYPE_RAMSTEIN, DONE) leg and
 --   the GetStratholmeAI -> GetInstanceAI leg (instance-script
 --   model blocked, standing).
@@ -109,15 +107,42 @@ end
 -- C++ JustDied: 30x SummonCreature(NPC_MINDLESS_UNDEAD,
 -- 3969.35+irand(-10,10), -3391.87+irand(-10,10), 119.11, 5.91,
 -- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 30min); irand is inclusive
--- on both ends, matching math.random(-10, 10). The instance
--- SetData(TYPE_RAMSTEIN, DONE) leg stays out (no instance bridge).
+-- on both ends, matching math.random(-10, 10). Each mob then
+-- AttackStarts the nearest target within 100 yd (C++
+-- SelectNearestTarget(100): nearest HOSTILE unit — the
+-- players-only twin below is the EngageWithTarget funnel's
+-- player-target-only limit, so a non-player C++ pick no-ops
+-- through it; the pick is computed once — positions are
+-- static across the synchronous loop and the new summons
+-- share Ramstein's faction, so they are never candidates).
+-- The instance SetData(TYPE_RAMSTEIN, DONE) leg stays out
+-- (no instance bridge).
+local function nearestAlivePlayer(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local best, bestDist = nil, nil
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            local dist = creature:GetDistance(p)
+            if dist <= maxDist and (bestDist == nil or dist < bestDist) then
+                best, bestDist = p, dist
+            end
+        end
+    end
+    return best
+end
+
 local function onJustDied(_, creature)
     cancelTimers(creature:GetGUID())
+    local target = nearestAlivePlayer(creature, 100)
     for _ = 1, 30 do
-        creature:SummonCreature(NPC_MINDLESS_UNDEAD,
+        local mob = creature:SummonCreature(NPC_MINDLESS_UNDEAD,
             3969.35 + math.random(-10, 10),
             -3391.87 + math.random(-10, 10),
             119.11, 5.91, 2, 1800000)
+        if mob and target then
+            mob:EngageWithTarget(target)
+        end
     end
 end
 
