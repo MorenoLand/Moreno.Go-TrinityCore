@@ -55,7 +55,9 @@
 -- JustSummoned Nazan SetSpeedRate(MOVE_FLIGHT, 2.5) leg stays
 -- out (SetSpeedRate supports MOVE_RUN=1 only) and the
 -- AttackStartNoMove(victim) leg stays out (no bridge);
--- the UnsummonAdds DisappearAndDie sweeps, the adds-alive/
+-- the UnsummonAdds sweep is PORTED below (Reset() leg:
+-- FindNearestCreature(5000) fallback + Despawn + SetRooted(false)
+-- + SetVisible(true), summoned-latched); the adds-alive/
 -- adds-victim watch arm and the both-dead DisappearAndDie arm
 -- stay out with EnterEvadeMode (no bridge); no cross-creature
 -- bridge — the
@@ -92,6 +94,7 @@ end
 local function freshState()
     return {
         phase = 0,
+        summoned = false,
     }
 end
 
@@ -130,7 +133,7 @@ end
 -- (event 19 on the summoner, heraldJustSummoned below);
 -- the Nazan AttackStart(nearest player 60) leg lands after
 -- the Nazan summon returns, matching the C++ order.
-local function summonAdds(creature)
+local function summonAdds(creature, guid)
     creature:SummonCreature(ENTRY_VAZRUDEN, MIDDLE_X, MIDDLE_Y,
         MIDDLE_Z, 0, SUMMON_TYPE_CORPSE_TIMED, SUMMON_DESPAWN_MS)
     local nazan = creature:SummonCreature(ENTRY_NAZAN, MIDDLE_X,
@@ -142,8 +145,39 @@ local function summonAdds(creature)
             nazan:EngageWithTarget(player)
         end
     end
+    local st = states[guid]
+    if st then
+        st.summoned = true
+    end
     creature:SetVisible(false)
     creature:SetRooted(true)
+end
+
+-- C++ boss_vazruden_the_heraldAI::UnsummonAdds
+-- (boss_vazruden_the_herald.cpp:320-343, called from Reset()):
+-- Nazan then Vazruden via the GUID latch with the
+-- FindNearestCreature(5000) fallback, then summoned=false,
+-- ClearUnitState(UNIT_STATE_ROOT), SetVisible(true). The
+-- GUID-latch leg collapses into the fallback here (no
+-- GetCreature-by-GUID bridge); the fallback is the C++'s own
+-- second leg, and only the summoned pair carries these
+-- entries in the instance. No-op unless summoned latched.
+local function unsummonAdds(creature, guid)
+    local st = states[guid]
+    if not st or not st.summoned then
+        return
+    end
+    st.summoned = false
+    local nazan = creature:FindNearestCreature(ENTRY_NAZAN, 5000)
+    if nazan then
+        nazan:Despawn()
+    end
+    local vazruden = creature:FindNearestCreature(ENTRY_VAZRUDEN, 5000)
+    if vazruden then
+        vazruden:Despawn()
+    end
+    creature:SetRooted(false)
+    creature:SetVisible(true)
 end
 
 -- C++ phase-1 UpdateAI check (boss_vazruden_the_herald.cpp:401-417,
@@ -161,7 +195,7 @@ local function heraldTick(creature, guid)
         local dy = creature:GetY() - MIDDLE_Y
         local dz = creature:GetZ() - MIDDLE_Z
         if dx * dx + dy * dy + dz * dz <= 25 then
-            summonAdds(creature)
+            summonAdds(creature, guid)
             st.phase = 2
         end
     end
@@ -212,8 +246,10 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 19, heraldJustSummoned)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 2,
     function(_, creature)
-        cancelPump(creature:GetGUID())
-        resetHerald(creature:GetGUID())
+        local guid = creature:GetGUID()
+        unsummonAdds(creature, guid)
+        cancelPump(guid)
+        resetHerald(guid)
     end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 4,
@@ -224,6 +260,8 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 4,
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 23,
     function(_, creature)
-        cancelPump(creature:GetGUID())
-        resetHerald(creature:GetGUID())
+        local guid = creature:GetGUID()
+        unsummonAdds(creature, guid)
+        cancelPump(guid)
+        resetHerald(guid)
     end)
