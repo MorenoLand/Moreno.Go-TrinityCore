@@ -40,16 +40,18 @@
 -- - KilledUnit (event 3): Talk(SAY_SLAY 3), no target gate (C++
 --   ignores the victim).
 -- - SpellHit (event 14, midnight convention): weakness spell ID ->
---   RemoveAura(SUPREME 25176) (netherspite RemoveAura convention).
---   The crystal despawn + SpawnNextCrystal have no bridge — GO Delete
---   and the summon-machine SpawnNextCrystal are the true blockers
---   (stale "no despawn bridge" wording: creature:Despawn() IS bridged,
---   but the trigger-creature bearer exists only via the unbridged
---   SummonCreature machine, so the leg is stranded).
+--   RemoveAura(SUPREME 25176) (netherspite RemoveAura convention),
+--   crystal Delete via caster:FindNearestGameObject(180619, 5.0) +
+--   RemoveFromWorld (dynamic-GO leg, lua_objects.go) in C++ order,
+--   caster Despawn, then SpawnNextCrystal (below).
 -- Unmodeled (documented-only, no bridges):
 -- - Weather (WEATHER_STATE_HEAVY_SANDSTORM): no bridge.
--- - Crystal/trigger summons (SpawnNextCrystal): SummonCreature no
---   bridge.
+-- - Crystal/trigger summons (SpawnNextCrystal): PORTED (see spawnNextCrystal
+--   below); the weakness-cast chain that drives SpellHit stays out —
+--   crystal gossip -> boss DoAction -> trigger cast has no bridge
+--   (GO handler cannot reach TriggerGUID; see the go_ossirian_crystal
+--   note below), so the SpellHit arm fires only if a weakness spell
+--   lands by other means.
 -- - onReset despawns the sand-vortex summons (C++ EnterEvadeMode
 --   summons.DespawnAll(), boss_ossirian.cpp:183-188).
 -- - go_ossirian_crystal (GameObjectAI OnGossipHello): the GO gossip
@@ -98,6 +100,28 @@ local WEAKNESSES = {
     SPELL_WEAKNESS_ARCANE,
     SPELL_WEAKNESS_SHADOW,
 }
+
+local ENTRY_OSSIRIAN_TRIGGER = 15590 -- NPC_OSSIRIAN_TRIGGER (ruins_of_ahnqiraj.h:51)
+local GO_OSSIRIAN_CRYSTAL = 180619 -- ruins_of_ahnqiraj.h:60
+
+-- C++ CrystalCoordinates (boss_ossirian.cpp:78-91), 12 room positions
+-- cycled by SpawnNextCrystal (iterator wraps at NUM_CRYSTALS).
+local CRYSTAL_COORDS = {
+    { -9188.4404296875, 1940.2099609375, 85.6390991210937, 3.17650008201599 },
+    { -9244.41015625, 1808.97998046875, 85.6390991210937, 5.63741016387939 },
+    { -9248.41015625, 1974.82995605469, 85.6390991210937, 5.89920997619629 },
+    { -9282.080078125, 1887.33996582031, 85.6390991210937, 2.00712990760803 },
+    { -9299.73046875, 1748.44995117187, 85.6390991210937, 1.44861996173859 },
+    { -9357.8603515625, 1929.07995605469, 85.6390991210937, 1.06465005874634 },
+    { -9367.169921875, 1780.89001464844, 85.6390991210937, 1.90241003036499 },
+    { -9383.2900390625, 2012.68005371094, 85.6511001586914, 2.93214988708496 },
+    { -9406.099609375, 1862.38000488281, 85.6390991210937, 6.2308201789856 },
+    { -9407.7197265625, 1960.2099609375, 85.6390991210937, 1.11700999736786 },
+    { -9432.400390625, 1782.53002929687, 85.6390991210937, 5.86430978775024 },
+    { -9506.1904296875, 1865.56994628906, 85.6390991210937, 4.27606010437012 },
+}
+
+local crystalIndex = {}
 
 local timers = {}
 
@@ -189,6 +213,28 @@ local function checkKiting(creature, guid)
     end)
 end
 
+-- C++ SpawnNextCrystal (boss_ossirian.cpp:202-216): summon the trigger
+-- at CrystalCoordinates[i], then the crystal GO from the trigger at
+-- the same spot; advance the iterator only when the crystal lands
+-- (C++ increments inside the crystal branch). Trigger summon type 7
+-- = MANUAL_DESPAWN in the bridge's 0-based scheme (firework
+-- precedent); crystal respawnTime 0 = persists (C++ Seconds::max()
+-- timed despawn, effectively never).
+local function spawnNextCrystal(creature, guid)
+    local idx = crystalIndex[guid] or 0
+    if idx >= 12 then
+        idx = 0
+    end
+    local c = CRYSTAL_COORDS[idx + 1]
+    local trigger = creature:SummonCreature(ENTRY_OSSIRIAN_TRIGGER, c[1], c[2], c[3], c[4], 7, 0)
+    if trigger then
+        local crystal = trigger:SummonGameObject(GO_OSSIRIAN_CRYSTAL, c[1], c[2], c[3], c[4], 0)
+        if crystal then
+            crystalIndex[guid] = idx + 1
+        end
+    end
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -198,8 +244,7 @@ local function onEnterCombat(event, creature, target)
     -- map->SummonCreature(NPC_SAND_VORTEX, GetRandomPoint(RoomCenter,
     -- 165yd)) + triggered self-cast SPELL_SAND_STORM on each — summon
     -- bridge live 2026-10-22 (2-arg map summon = TEMPSUMMON_DEAD_
-    -- DESPAWN); weather arm has no bridge; the SpawnNextCrystal
-    -- machine stays out (documented below). GetRandomPoint is twinned
+    -- DESPAWN); weather arm has no bridge. GetRandomPoint is twinned
     -- in-Lua (herod idiom: Object.cpp:1422 signed folded radius,
     -- center z kept — no ground-height model).
     for _ = 1, 5 do
@@ -216,6 +261,10 @@ local function onEnterCombat(event, creature, target)
             tornado:CastSpell(tornado, SPELL_SAND_STORM, true)
         end
     end
+    -- C++ JustEngagedWith ends with SpawnNextCrystal (after the vortex
+    -- summons); the weakness-cast chain that consumes the crystal
+    -- stays out (crystal gossip -> boss DoAction, no bridge).
+    spawnNextCrystal(creature, guid)
     schedule(guid, "silence", 30000, function()
         onSilence(creature, guid)
     end)
@@ -238,11 +287,20 @@ local function onLeaveCombat(event, creature)
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ Initialize (Reset, boss_ossirian.cpp:108-113): the crystal
+    -- iterator restarts at 0 on every evade/reset.
+    crystalIndex[guid] = nil
     -- C++ EnterEvadeMode (boss_ossirian.cpp:183-188): summons.DespawnAll()
-    -- — despawn the sand-vortex summons (anubarak frost-sphere precedent).
+    -- — despawn the sand-vortex summons (anubarak frost-sphere precedent)
+    -- and the crystal triggers (same sweep idiom; the crystal GOs
+    -- themselves linger, as in C++ where Cleanup only Uses them).
     for _, v in ipairs(creature:GetCreaturesInGrid(ENTRY_SAND_VORTEX, 500)) do
         v:Despawn()
+    end
+    for _, t in ipairs(creature:GetCreaturesInGrid(ENTRY_OSSIRIAN_TRIGGER, 500)) do
+        t:Despawn()
     end
 end
 
@@ -251,16 +309,21 @@ local function onTargetDied(event, creature, victim)
     creature:Talk(3)
 end
 
--- C++ SpellHit: weakness spell -> strip SUPREME + despawn the
--- weakness-casting trigger (ToCreature twin; the crystal
--- Delete/SpawnNextCrystal legs have no bridge).
+-- C++ SpellHit (boss_ossirian.cpp:127-141), in C++ order: strip
+-- SUPREME, Delete the crystal nearest the caster (5yd, dynamic-GO
+-- leg), despawn the weakness-casting trigger, SpawnNextCrystal.
 local function onSpellHit(event, creature, caster, spellId)
     for _, w in ipairs(WEAKNESSES) do
         if spellId == w then
             creature:RemoveAura(SPELL_SUPREME)
             if caster and caster:ToCreature() then
+                local crystal = caster:FindNearestGameObject(GO_OSSIRIAN_CRYSTAL, 5.0)
+                if crystal then
+                    crystal:RemoveFromWorld()
+                end
                 caster:Despawn()
             end
+            spawnNextCrystal(creature, creature:GetGUID())
             return
         end
     end

@@ -1405,7 +1405,15 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		return []any{srv.luaMotionCreature(summoned)}, nil
 	}
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
-		srv.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
+		// C++ GameObject::Delete removes the object outright; for a
+		// runtime GO that means despawning it (destroy broadcast +
+		// GO_EVENT_ON_REMOVE), while a static DB spawn has no live
+		// state and is removed by hiding it in the instance.
+		if srv.gameObjectState(state.Map, state.InstanceID, state.GUID) != nil {
+			srv.despawnDynamicGameObjectInInstance(state.Map, state.InstanceID, state.GUID)
+		} else {
+			srv.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
+		}
 		return nil, nil
 	}
 	methods["SetGoState"] = func(_ context.Context, args []any) ([]any, error) {
@@ -1572,9 +1580,9 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 // nearestGameObject for the creature surface's FindNearestGameObject:
 // WorldObject::FindNearestGameObject (Object.cpp) searches the grid for the
 // nearest gameobject of entry within range using the 3D distance metric.
-// The engine's GO model is the static gameobject spawn table, so the search
-// covers DB spawns only (dynamic GOs have no model here). Instance-hidden
-// objects are skipped, matching the unfiltered twin.
+// The search covers the static spawn table plus runtime GOs
+// (SummonGameObject/spell/BG summons), which C++'s grid search also finds.
+// Instance-hidden objects are skipped, matching the unfiltered twin.
 func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instanceID uint32, x, y, z float32, entry uint32, distance float32) *scripting.Object {
 	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
@@ -1600,6 +1608,44 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 		if currentDistance <= distance && currentDistance < nearestDistance {
 			nearest, nearestDistance = candidate, currentDistance
 		}
+	}
+	// Runtime GOs live in the dynamic/instance stores, not the spawn table,
+	// so they compete with the DB best on the same 3D metric. Snapshot
+	// under objectsMu, then filter hidden after release
+	// (isGameObjectHiddenInInstance takes the same lock).
+	type dynCandidate struct {
+		state    luaGameObjectState
+		distance float32
+	}
+	var dynCandidates []dynCandidate
+	srv.objectsMu.RLock()
+	collectDyn := func(dyn *dynamicGameObjectState) {
+		if dyn == nil || dyn.Entry != entry || dyn.Map != mapID || dyn.InstanceID != instanceID {
+			return
+		}
+		dx, dy, dz := float64(dyn.X-x), float64(dyn.Y-y), float64(dyn.Z-z)
+		currentDistance := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
+		if currentDistance > distance {
+			return
+		}
+		dynCandidates = append(dynCandidates, dynCandidate{state: luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, Type: uint32(dyn.Type), GoState: uint32(dyn.State), LootState: 1}, distance: currentDistance})
+	}
+	for _, dyn := range srv.dynamicGameObjects {
+		collectDyn(dyn)
+	}
+	for _, dyn := range srv.instanceGameObjects[instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}] {
+		collectDyn(dyn)
+	}
+	srv.objectsMu.RUnlock()
+	sort.Slice(dynCandidates, func(i, j int) bool { return dynCandidates[i].distance < dynCandidates[j].distance })
+	for _, cand := range dynCandidates {
+		if srv.isGameObjectHiddenInInstance(cand.state.Map, cand.state.InstanceID, cand.state.GUID) {
+			continue
+		}
+		if cand.distance < nearestDistance {
+			return srv.luaGameObjectObject(cand.state)
+		}
+		break
 	}
 	if nearest.GUID == 0 {
 		return nil

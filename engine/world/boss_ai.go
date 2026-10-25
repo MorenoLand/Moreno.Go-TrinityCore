@@ -7819,9 +7819,10 @@ func init() {
 	// convention) + SAY_SUPREME on a 5s timer; the 60-120yd
 	// no-kiting summon (moroes GetDistance convention) on a 5s
 	// timer; KilledUnit Talk(SAY_SLAY 3) via event 3; SpellHit
-	// weakness -> RemoveAura(SUPREME) via event 14 (midnight
-	// convention). Unwired: weather, tornado/crystal/trigger
-	// summons (SummonCreature — zero Lua usage); go_ossirian_crystal
+	// weakness -> RemoveAura(SUPREME) + crystal Delete +
+	// SpawnNextCrystal via event 14 (midnight convention); engage
+	// summons the crystal machine (trigger 15590 + crystal GO
+	// 180619, 12-coord cycle). Unwired: weather; go_ossirian_crystal
 	// (GameObjectAI); MoveInLineOfSight intro; DoAction weakness
 	// trigger (cross-AI); Cleanup/JustDied/Evade instance legs.
 	// BossAI's ctor leg DATA_OSSIRIAN and _Reset() ride the absent

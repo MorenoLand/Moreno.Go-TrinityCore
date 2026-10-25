@@ -2906,7 +2906,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// FindNearestGameObject(entry, dist) is
 	// WorldObject::FindNearestGameObject (Object.cpp): the nearest
 	// gameobject of entry within dist yards (3D metric) in the same
-	// map+instance; nil when none. DB-spawn model only (see
+	// map+instance; nil when none. DB spawns plus runtime GOs (see
 	// nearestGameObjectByEntry). Backs the tallhorn-stag haunch arm and the
 	// 8 HEADER-ONLY FindNearestGameObject sites the 2026-10-23 triage queued
 	// for re-key.
