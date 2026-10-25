@@ -26,8 +26,8 @@
 -- timers; the !UpdateVictim early return collapses into the
 -- pump). Pump: mark of shadow 30937: 5000+rand32()%2000 init
 -- then 15000+rand32()%5000 (C++ {15s,20s}) — target = random
--- alive player in the instance (C++ SelectTarget(Random, 0),
--- thespia precedent), nil pick casts nothing, non-triggered
+-- threat-list unit alive, no distance gate (C++ SelectTarget(Random, 0)
+-- defaults playerOnly=false), nil pick casts nothing, non-triggered
 -- DoCast on the target (C++ DoCast(target), C++-exact), re-arm
 -- {15s,20s} regardless (C++-exact); shadow bolt 12739
 -- (H_SPELL_SHADOW_BOLT 15472 is an unused C++ enum member —
@@ -76,17 +76,15 @@ local function resetAdd(guid)
     states[guid] = nil
 end
 
--- C++ SelectTarget(Random, 0): random alive player in the
--- instance, no distance gate (thespia precedent). Nil when the
--- instance is empty — the caller skips the cast (C++-exact).
+-- C++ SelectTarget(Random, 0): random threat-list unit alive, no
+-- distance gate (defaults playerOnly=false, so pets/totems are
+-- eligible, council precedent). Nil when the threat list holds no
+-- living unit — the caller skips the cast (C++-exact).
 local function pickRandomPlayer(creature)
     local found = {}
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, u in ipairs(creature:GetAITargets()) do
+        if not u:IsDead() then
+            found[#found + 1] = u
         end
     end
     if #found == 0 then
@@ -113,8 +111,8 @@ local function addTick(creature, guid)
     end
 
     -- Mark of shadow 30937: 5000+rand32()%2000 init then
-    -- 15000+rand32()%5000 (C++ {15s,20s}) — random alive player
-    -- in the instance (thespia precedent), nil pick casts
+    -- 15000+rand32()%5000 (C++ {15s,20s}) — random threat-list
+    -- unit alive, no distance gate, nil pick casts
     -- nothing, non-triggered DoCast on the target (C++
     -- DoCast(target), C++-exact), re-arm {15s,20s} regardless
     -- (C++-exact).

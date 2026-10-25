@@ -30,14 +30,13 @@
 -- (C++ {15s,23s}) — non-triggered DoCastVictim (felmyst
 -- convention), re-arm {15s,23s} regardless (C++-exact);
 -- exploding breaker 30925: 6s init then {4s,12s} — target =
--- random alive player within 30 yd (C++ SelectTarget(Random,
--- 0, 30.0f, true), position arg 0 = victim not excluded,
--- thespia distance-gate convention), nil pick casts nothing,
--- non-triggered DoCast on the target (C++ DoCast(target),
+-- random threat-list player alive within 30 yd (C++ SelectTarget(Random,
+-- 0, 30.0f, true), position arg 0 = victim not excluded), nil pick
+-- casts nothing, non-triggered DoCast on the target (C++ DoCast(target),
 -- C++-exact), re-arm {4s,12s} regardless (C++-exact);
 -- domination 25772: 120s init then 120s — target = random
--- alive player, no distance limit (C++ SelectTarget(Random, 0,
--- 0.0f, true), thespia precedent), nil pick casts nothing,
+-- threat-list player alive, no distance limit (C++ SelectTarget(Random, 0,
+-- 0.0f, true)), nil pick casts nothing,
 -- non-triggered DoCast on the target (C++-exact), re-arm
 -- 120000 regardless (C++-exact); knockdown 20276: 10s init
 -- then {4s,12s} — non-triggered DoCastVictim (C++-exact),
@@ -82,27 +81,31 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 0, 30.0f, true): random alive player
--- within 30 yd, victim NOT excluded (thespia distance-gate
--- convention). Nil when no player is in range — the caller
--- skips the cast (C++-exact).
+-- C++ SelectTarget(Random, 0, 30.0f, true): random threat-list player
+-- alive within 30 yd, victim NOT excluded (offset 0). Nil when no
+-- threat player is in range — the caller skips the cast (C++-exact).
 local function pickRandomPlayerIn30Yd(creature)
     local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 30.0 then
-            found[#found + 1] = p
+    for _, u in ipairs(creature:GetAITargets()) do
+        if u:GetObjectType() == "Player" and not u:IsDead()
+                and creature:GetDistance(u) <= 30.0 then
+            found[#found + 1] = u
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
+-- C++ SelectTarget(Random, 0, 0.0f, true): random threat-list player
+-- alive, no distance limit. Nil when the threat list holds no
+-- living player — the caller skips the cast (C++-exact).
+local function pickRandomThreatPlayer(creature)
+    local found = {}
+    for _, u in ipairs(creature:GetAITargets()) do
+        if u:GetObjectType() == "Player" and not u:IsDead() then
+            found[#found + 1] = u
         end
     end
     if #found == 0 then
@@ -141,8 +144,7 @@ local function bossTick(creature, guid)
     end
 
     -- Exploding breaker 30925: 6s init then {4s,12s} — random
-    -- alive player within 30 yd (thespia distance-gate
-    -- convention), nil pick casts nothing, non-triggered
+    -- threat-list player alive within 30 yd, nil pick casts nothing, non-triggered
     -- DoCast on the target (C++-exact), re-arm {4s,12s}
     -- regardless (C++-exact).
     if st.explodingBreaker <= 1000 then
@@ -155,15 +157,14 @@ local function bossTick(creature, guid)
         st.explodingBreaker = st.explodingBreaker - 1000
     end
 
-    -- Domination 25772: 120s init then 120s — random alive
-    -- player in the instance, no distance limit (thespia
-    -- precedent), nil pick casts nothing, non-triggered
+    -- Domination 25772: 120s init then 120s — random
+    -- threat-list player alive, no distance limit, nil pick casts nothing, non-triggered
     -- DoCast on the target (C++-exact), re-arm 120000
     -- regardless (C++-exact).
     if st.domination <= 1000 then
-        local players = playersInInstance(creature)
-        if #players > 0 then
-            creature:CastSpell(players[math.random(#players)], SPELL_DOMINATION)
+        local target = pickRandomThreatPlayer(creature)
+        if target then
+            creature:CastSpell(target, SPELL_DOMINATION)
         end
         st.domination = 120000
     else
