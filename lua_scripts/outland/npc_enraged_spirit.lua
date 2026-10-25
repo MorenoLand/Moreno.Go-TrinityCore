@@ -102,9 +102,11 @@
 -- Zone set status: zone_shadowmoon_valley.cpp — the Torloth
 -- / Illidan cinematic event machine, the infernal summon
 -- pair, the mature/enslaved drake quest arms and the wilda
--- escort remain documented-only behind the no-summon /
--- movement / SpellHit / cross-creature / quest / escort
--- bridges; npc_illidari_spawn ported for 22075/22074/19797;
+-- escort waypoint machine remain documented-only behind the
+-- no-summon / movement / SpellHit / cross-creature / quest /
+-- escort bridges; wilda quest-accept Talk + SetFaction, aggro
+-- Talk and sub-30% heal pump ported in npc_earthmender_wilda.lua
+-- (21027); npc_illidari_spawn ported for 22075/22074/19797;
 -- npc_enraged_spirit ported for 21050/21061/21060/21059;
 -- spell_unlocking_zuluheds_chains + npc_shadowmoon_tuber_
 -- node documented-only. Next per outland_script_loader.cpp
