@@ -321,21 +321,49 @@ local function championDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ npc_toc_rogue::Reset (boss_faction_champions.cpp:1816-1829):
--- SetEquipmentSlots(false, 47422, 49982, EQUIP_NO_CHANGE) +
+-- C++ champion Reset equipment legs (boss_faction_champions.cpp):
+-- paladin :960 (50771, 47079, NO_CHANGE), shadow priest :1152 (50040,
+-- NO_CHANGE, NO_CHANGE) + DoCast SHADOWFORM 16592 (:1153, :95),
+-- mage :1338 (47524, NO_CHANGE, NO_CHANGE), hunter :1432 (47156,
+-- NO_CHANGE, 48711), warrior :1630 (47427, 46964, NO_CHANGE),
+-- dk :1729 (47518, 51021, NO_CHANGE), retro paladin :2065 (47519,
+-- NO_CHANGE, NO_CHANGE), rogue :1826 (47422, 49982, NO_CHANGE) +
 -- SetPowerType(POWER_ENERGY) + SetFullPower(POWER_ENERGY). The event
 -- schedules ride championEnterCombat; the base Reset's instance/team
 -- legs have no Lua-visible arms. SetPowerType fills the energy max
 -- (100) per Creature::UpdateMaxPower, so SetFullPower is SetPower(3,
 -- max 3) with the live max read (the snapshot fallback goes stale
--- after a mid-handler type change). The other classes' equipment
--- Reset legs (paladin/shadow priest/mage/hunter/warrior/dk/retro
--- paladin) are not ported here; they are the follow-up unit.
+-- after a mid-handler type change). Only the rogue Reset sets a power
+-- type; no other class Reset touches one.
+local CHAMPION_EQUIPMENT = {
+    [34465] = {50771, 47079, 0xFFFFFFFF},
+    [34445] = {50771, 47079, 0xFFFFFFFF},
+    [34473] = {50040, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34441] = {50040, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34468] = {47524, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34449] = {47524, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34467] = {47156, 0xFFFFFFFF, 48711},
+    [34448] = {47156, 0xFFFFFFFF, 48711},
+    [34475] = {47427, 46964, 0xFFFFFFFF},
+    [34453] = {47427, 46964, 0xFFFFFFFF},
+    [34461] = {47518, 51021, 0xFFFFFFFF},
+    [34458] = {47518, 51021, 0xFFFFFFFF},
+    [34471] = {47519, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34456] = {47519, 0xFFFFFFFF, 0xFFFFFFFF},
+    [34472] = {47422, 49982, 0xFFFFFFFF},
+    [34454] = {47422, 49982, 0xFFFFFFFF},
+}
 local function championReset(event, creature)
     cancelTimers(creature:GetGUID())
     local entry = creature:GetEntry()
+    local slots = CHAMPION_EQUIPMENT[entry]
+    if slots ~= nil then
+        creature:SetEquipmentSlots(slots[1], slots[2], slots[3])
+    end
+    if entry == 34473 or entry == 34441 then
+        creature:CastSpell(creature, 16592)
+    end
     if entry == 34472 or entry == 34454 then
-        creature:SetEquipmentSlots(47422, 49982, 0xFFFFFFFF)
         creature:SetPowerType(3)
         creature:SetPower(3, creature:GetMaxPower(3))
     end

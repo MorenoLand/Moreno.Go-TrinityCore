@@ -17,6 +17,8 @@
 -- EVENT_HEAL_BARKSKIN — HealthBelowPct(30) -> DoCastSelf(Barkskin
 -- 65860) + 60s re-arm, else 3s re-arm; 15-25s init
 -- (boss_faction_champions.cpp:771/816-824).
+-- Reset — SetEquipmentSlots(51799, NO_CHANGE, NO_CHANGE)
+-- (boss_faction_champions.cpp:774).
 
 local ENTRY_DRUID_ALLIANCE = 34469 -- trial_of_the_crusader.h:183
 local ENTRY_DRUID_HORDE = 34459 -- trial_of_the_crusader.h:197
@@ -92,6 +94,9 @@ end
 
 local function druidReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_toc_druid::Reset (boss_faction_champions.cpp:774):
+    -- SetEquipmentSlots(false, 51799, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE).
+    creature:SetEquipmentSlots(51799, 0xFFFFFFFF, 0xFFFFFFFF)
 end
 
 -- C++ boss_faction_championsAI::KilledUnit relay (see
