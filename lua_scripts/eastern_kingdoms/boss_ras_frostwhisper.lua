@@ -11,9 +11,10 @@
 -- DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnReset:
 -- non-triggered self-cast ice armor 18100. OnEnterCombat: ice armor
--- 2s->3min (self) / frostbolt 21369 8s->8s (random alive player
--- within 40yd incl. victim, jeklik convention — nil pick casts
--- nothing but keeps the schedule) / chill nova 18099 12s->14s
+-- 2s->3min (self) / frostbolt 21369 8s->8s (random threat-list
+-- player within 40yd, victim included — UnitAI.h: SelectTarget
+-- draws from the threat list; nil pick casts nothing but keeps
+-- the schedule) / chill nova 18099 12s->14s
 -- (non-triggered DoCastVictim) / freeze 18763 18s->24s
 -- (non-triggered DoCastVictim) / fear 26070 45s->30s
 -- (non-triggered DoCastVictim). Non-triggered DoCastVictim ->
@@ -59,15 +60,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 40, true): random alive player within
--- maxDist yards, victim included (janalai/kelris convention).
+-- C++ SelectTarget(Random, 0, 40, true): random threat-list
+-- player within maxDist yards, victim included (UnitAI.h:
+-- SelectTarget draws from the threat list; offset 0, no skip).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
