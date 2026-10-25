@@ -58,6 +58,18 @@ local function cancelTimers(guid)
     end
 end
 
+-- Cancel one keyed timer only (evade-order split: Go fires ev23 ahead
+-- of ev2 on the evade path, and C++ CreatureAI::EnterEvadeMode ends
+-- with Reset(), so the OOC loop re-arms on evade and must survive
+-- OnLeaveCombat — see onLeaveCombat below).
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
     if not per then
@@ -77,8 +89,8 @@ local function castVictim(creature, spell)
     end
 end
 
--- C++ EVENT_OOC_1..4: out-of-combat-only talk loop; emote leg has
--- no bridge and is documented-only (timing preserved).
+-- C++ EVENT_OOC_1..4: out-of-combat-only talk loop; the OOC_3 emote
+-- leg IS ported via creature:PerformEmote(5) below.
 local function oocLoop(creature, guid)
     creature:Talk(SAY_OOC_1)
     schedule(guid, "ooc", 8000, function()
@@ -130,8 +142,18 @@ local function onEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ CreatureAI::EnterEvadeMode (CreatureAI.cpp:214-238) ends with
+-- Reset(), which re-arms EVENT_OOC_1 at 10s — so the OOC loop RESUMES
+-- after an evade. Go fires Lua ev23 ahead of ev2 on the evade path
+-- (triggerCreatureEvade, creaturemotion.go), so a cancel-all here
+-- would kill the loop ev23 just re-armed (the pre-fix bug). Cancel
+-- only the combat timers; the ooc chain survives evade, and
+-- onEnterCombat still clears it via cancelTimers (C++
+-- JustEngagedWith events.Reset()).
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelKey(guid, "fireball")
+    cancelKey(guid, "firenova")
 end
 
 -- C++ Reset: arm the OOC talk loop at 10s (fires out-of-combat
