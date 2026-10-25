@@ -65,9 +65,9 @@
 -- via the {min,max} randtime table, unconditional even when the
 -- cast is skipped. Documented deviation: the SelectTarget
 -- (MaxDistance) gate (cpp:304) is emulated as a null-selection
--- skip via anyAlivePlayer (GetPlayersInWorld bridge, the vezax
--- precedent); the stored eyebeamTarget for the JustSummoned
--- MoveChase leg has no summon/motion bridge.
+-- skip via anyThreatPlayer (threat-list players alive); the stored
+-- eyebeamTarget for the JustSummoned MoveChase leg has no
+-- summon/motion bridge.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 32930):
 -- Constructor (cpp:107-117) — RemoveFlag(NOT_SELECTABLE) +
@@ -209,13 +209,12 @@ end
 -- a null selection skips the cast but the re-arm (cpp:311) stays
 -- unconditional. The selection only stores eyebeamTarget for the
 -- unbridged JustSummoned MoveChase leg, so it is emulated as a
--- null-selection skip via anyAlivePlayer; the GetPlayersInWorld
--- bridge (the vezax precedent) has no threat-list/dist filters.
-local function anyAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+-- null-selection skip over threat-list players alive (C++
+-- SelectTarget draws the threat list, UnitAI.h — the old
+-- instance-player anyAlivePlayer pool misread the draw).
+local function anyThreatPlayer(creature)
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
             return true
         end
     end
@@ -227,7 +226,7 @@ end
 -- self-cast — 21s init, re-arm ScheduleEvent(15s, 35s) (cpp:311),
 -- unconditional even when the SelectTarget gate skips the cast.
 local function focusedEyebeamTick(creature, guid)
-    if anyAlivePlayer(creature) then
+    if anyThreatPlayer(creature) then
         creature:CastSpell(creature, SPELL_SUMMON_FOCUSED_EYEBEAM, true)
     end
     schedule(guid, "focusedeyebeam", {15000, 35000}, function()
@@ -326,9 +325,9 @@ local function kologarnTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: DoCast PACIFY + MoveTargetedHome + SetFlag +
--- SetCorpseDelay + _JustDied() + Talk(SAY_DEATH) — only the
--- Talk arm is ported (the PACIFY cast is bridgeable but a no-op
--- on a dead caster — see header).
+-- SetCorpseDelay + _JustDied() + Talk(SAY_DEATH) — the Talk and
+-- SetFlag arms are ported (the PACIFY cast is bridgeable but a
+-- no-op on a dead caster — see header).
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
@@ -359,7 +358,10 @@ local function kologarnJustSummoned(event, creature, summon)
         summon:CastSpell(creature, SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT, true)
     elseif entry == ENTRY_FOCUSED_EYEBEAM_RIGHT then
         summon:CastSpell(creature, SPELL_FOCUSED_EYEBEAM_VISUAL_RIGHT, true)
-    elseif entry ~= ENTRY_RUBBLE then
+    else
+        -- C++ boss_kologarn.cpp:214-235: NPC_RUBBLE summons.Summon
+        -- then falls through to default: return — rubble never
+        -- reaches the PERIODIC/VISUAL/PASSIVE legs below.
         return
     end
     summon:CastSpell(summon, SPELL_FOCUSED_EYEBEAM_PERIODIC, true)

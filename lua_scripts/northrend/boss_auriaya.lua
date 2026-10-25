@@ -48,12 +48,14 @@
 -- (SPELL_ACTIVATE_DEFENDER 64449) 2-arg non-triggered, fires 2s
 -- after SUMMON_DEFENDER, no re-arm.
 -- EVENT_SWARMING_GUARDIAN (:255-258) — SelectTarget(Random, 1,
--- 0.0f, true) -> randomNonVictimPlayer (C++-exact: non-victim,
--- playerOnly=true, 0.0f unlimited), nil-guarded pick, DoCast 2-arg
--- non-triggered (SPELL_SUMMON_SWARMING_GUARDIAN 64396), re-arm
--- {25s,45s} unconditional, 51s init (:168); the old "no
--- target-selection bridge / summon leg unbridged" claim was stale
--- (twilight-corrupter precedent).
+-- 0.0f, true) -> randomThreatPlayerSkipFirst (UnitAI.h: skip the
+-- first MaxThreat-order entry BEFORE the player/alive filter, then
+-- random over threat-list players alive, 0.0f unlimited),
+-- nil-guarded pick, DoCast 2-arg non-triggered
+-- (SPELL_SUMMON_SWARMING_GUARDIAN 64396), re-arm {25s,45s}
+-- unconditional, 51s init (:168); the old instance-player pool
+-- (randomNonVictimPlayer) misread the draw — C++ SelectTarget
+-- draws the threat list, not the instance (baltharus precedent).
 -- EVENT_BERSERK (:260-262) — DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(SAY_BERSERK 2), 600s init (:169), no re-arm.
 -- KilledUnit (:172-176) — TYPEID_PLAYER gate AND roll_chance_i(50),
@@ -169,29 +171,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 1) leg: a random alive player in the
--- instance excluding the current victim (the skyriss / thespia
--- randomNonVictimPlayer idiom; position 1 = non-victim,
--- playerOnly=true idiom-exact; the old "no target-selection bridge"
--- claim was stale).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function randomNonVictimPlayer(creature)
-    local victim = creature:GetVictim()
+-- C++ SelectTarget(Random, 1, 0.0f, true) leg (UnitAI.h): skip the
+-- first entry in MaxThreat order (the current victim heads the
+-- list) BEFORE the player/alive filter, then random over the
+-- remaining threat-list players alive (baltharus
+-- randomThreatPlayerSkipFirst precedent; offline refs are skipped
+-- at build in C++, dead = offline here).
+local function randomThreatPlayerSkipFirst(creature)
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victim or p:GetGUID() ~= victim:GetGUID() then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local unit = targets[i]
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -252,7 +244,7 @@ local function summonDefenderTick(creature, guid)
 end
 
 -- C++ EVENT_SWARMING_GUARDIAN (:255-258): SelectTarget(Random, 1,
--- 0.0f, true) -> randomNonVictimPlayer(creature), nil-guarded pick
+-- 0.0f, true) -> randomThreatPlayerSkipFirst(creature), nil-guarded pick
 -- (C++ `if` — skip cast on nil); DoCast 2-arg = non-triggered ->
 -- CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN 64396); re-arm
 -- {25s,45s} unconditional (outside the target-if, C++-exact);
@@ -260,7 +252,7 @@ end
 -- twilight-corrupter precedent); the old "needs target search, and
 -- it is a summon leg; no bridges either way" claim was stale.
 local function swarmingGuardianTick(creature, guid)
-    local target = randomNonVictimPlayer(creature)
+    local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN)
     end
