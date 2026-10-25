@@ -1,7 +1,7 @@
 -- go_scripts.cpp PART 2 (classes at C++ :683-1363; AddSC :1375-1399) — triage notes.
--- Sibling child owns :61-682. All 10 classes below are DOCUMENTED-ONLY gap
--- classes: no Register* calls. Nothing in this part is end-to-end
--- bridgeable; every arm is gated on at least one unbridged call, and 9 of
+-- Sibling child owns :61-682. 9 of the 10 classes below are DOCUMENTED-ONLY gap
+-- classes; go_midsummer_ribbon_pole is PORTED (Register call at file end).
+-- Every other arm is gated on at least one unbridged call, and 9 of
 -- the 10 classes bind by ScriptName with no entry ID named anywhere in the
 -- C++ tree (whole-tree quoted-name grep: go_scripts.cpp is the sole hit),
 -- so the gameobject_template binding stays DB-side per the no-invent rule.
@@ -91,13 +91,30 @@
 -- bridged twin player:GossipClearMenu + player:GossipComplete
 -- (lua_player.go:581-582) — bridge-complete, entry DB-side only.
 
--- DOCUMENTED-ONLY: go_midsummer_ribbon_pole (C++ :808-834)
+-- go_midsummer_ribbon_pole (C++ :808-834) — PORTED 2026-10-24.
 -- OnGossipHello (:817-826): me:FindNearestCreature(
 -- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) bridged 2026-10-24 (lua_objects.go),
 -- player:CastSpell(player, RibbonPoleSpells[urand(0,2)] in {29705, 29726,
--- 29727} — enum :811-813) bridged 2026-10-24; sole block is creature
--- DoAction(ACTION_COSMETIC_FIRES 0) — no DoAction dispatch exists
--- (zero hits in lua_creature_events.go). Entry DB-side.
+-- 29727} — enum :811-813) bridged 2026-10-24. The DoAction(
+-- ACTION_COSMETIC_FIRES 0) leg has no dispatch bridge, so the start
+-- rides the creature:SetData relay: the handler writes the bunny's
+-- running latch (SetData key 1, shared with npcs_special_part1.lua)
+-- and the bunny's event-7 detector starts the ring chain.
+-- Entry IS in-tree (GO_RIBBON_POLE 181605, npcs_special.cpp enum), so
+-- the GO registers — the old "Entry DB-side" ground is retracted.
+-- C++ returns true (handled) == Lua true (native use suppressed).
+local RIBBON_POLE_SPELLS = { 29705, 29726, 29727 }
+
+local function onRibbonPoleGossip(_, player, go)
+    local bunny = go:FindNearestCreature(17066, 10)
+    if bunny ~= nil then
+        if bunny:GetData(1) ~= 1 then
+            bunny:SetData(1, 1)
+        end
+        player:CastSpell(player, RIBBON_POLE_SPELLS[math.random(3)], true)
+    end
+    return true
+end
 
 -- DOCUMENTED-ONLY: go_toy_train_set (C++ :839-869)
 -- UpdateAI (:851-860): GameObjectEventOnAIUpdate has no fire site
@@ -162,3 +179,5 @@
 -- go:PlayDirectSound(_soundId) which IS bridged (lua_objects.go:120), and
 -- GetGameTime() exists, but the trigger and the zone init are dead, so
 -- nothing is registered.
+
+RegisterGameObjectGossipEvent(181605, 1, onRibbonPoleGossip)

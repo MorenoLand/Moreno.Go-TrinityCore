@@ -2660,6 +2660,52 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetPlayersInGrid(dist) is the creature-surface twin of the
+	// gameobject bridge (lua_objects.go): every alive player within dist
+	// yards (3D, source combat reach + 1.5 player reach added — the
+	// GridNotifiers.h AnyPlayerInObjectRangeCheck + Object.cpp
+	// _IsWithinDist metric the GO twin uses, with the source reach
+	// taken from the creature instead of 0) in the same map+instance,
+	// as a Lua array of player objects (GUID-sorted for determinism).
+	// Alive = not dead-or-ghost (death.go isDeadOrGhost twin). Backs
+	// the midsummer ribbon-pole checkNearbyPlayers
+	// (npcs_special.cpp:494-503).
+	methods["GetPlayersInGrid"] = func(_ context.Context, args []any) ([]any, error) {
+		dist32, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist := float64(dist32)
+		srcReach := float64(motion.combatReachOrDefault())
+		s.sessionsMu.RLock()
+		var matches []*session
+		for sess := range s.sessions {
+			if !sess.worldReady.Load() || sess.player == nil {
+				continue
+			}
+			if sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+				continue
+			}
+			if sess.isDeadOrGhost() {
+				continue
+			}
+			dx := float64(sess.player.X - motion.X)
+			dy := float64(sess.player.Y - motion.Y)
+			dz := float64(sess.player.Z - motion.Z)
+			if d := math.Sqrt(dx*dx + dy*dy + dz*dz); d <= dist+srcReach+1.5 {
+				matches = append(matches, sess)
+			}
+		}
+		s.sessionsMu.RUnlock()
+		sort.Slice(matches, func(i, j int) bool { return matches[i].playerGUID < matches[j].playerGUID })
+		out := make([]any, 0, len(matches))
+		for _, sess := range matches {
+			if player := sess.luaPlayer(); player != nil {
+				out = append(out, player)
+			}
+		}
+		return []any{out}, nil
+	}
 	// GetHomePosition is CreatureMethods::GetHomePosition
 	// (CreatureMethods.h:630-644): x, y, z, o from the creature's HOME
 	// position (Creature.h:296-297: m_homePosition) — twin of the

@@ -1,7 +1,8 @@
 -- npcs_special PART 1 (C++ lines 93-1153) — triage result 2026-10-18.
 -- Source: src/server/scripts/World/npcs_special.cpp.
--- VERDICT: 8 of 9 classes are DOCUMENTED-ONLY (gap classes); npc_injured_patient's
--- Reset arm is PORTED below (all legs bridged). Every other class is blocked
+-- VERDICT: 7 of 9 classes are DOCUMENTED-ONLY (gap classes); npc_injured_patient's
+-- Reset arm is PORTED below (all legs bridged) and npc_midsummer_bunny_pole is
+-- PORTED below (SetData relay + ring chain). Every other class is blocked
 -- either by missing entry constants (rule: entries only from C++ NPC_ consts,
 -- never invented) or by missing method bridges, verified against the CURRENT
 -- runtime this run (lua_creature_events.go,
@@ -25,7 +26,10 @@
 
 -- npc_chicken_cluck (C++ :194-292) — DOCUMENTED-ONLY.
 -- Arms: Reset :216-221 (faction FACTION_PREY, remove QUESTGIVER flag);
--- UpdateAI :224-239 (120s questgiver-flag reset); ReceiveEmote :241-260
+-- UpdateAI :224-239 (120s questgiver-flag reset — additionally blocked:
+-- the expiry arm calls EnterEvadeMode(), which has NO Lua bridge
+-- (boss_ai.go explicit), so the timer arm stays out even before the
+-- entry ground); ReceiveEmote :241-260
 -- (TEXT_EMOTE_CHICKEN 22: quest 3861 status NONE + 1/30 roll -> questgiver
 -- flag + FACTION_FRIENDLY + Talk hello; TEXT_EMOTE_CHEER 21: quest COMPLETE
 -- -> questgiver flag + Talk); OnQuestAccept :262-266 / OnQuestReward :268-272.
@@ -56,9 +60,13 @@
 -- ground above).
 -- The me->SetFacingToObject(player) leg (C++ :364) is bridgeable via
 -- the atan2 twin (devourer_of_souls precedent) — the old "no
--- SetFacingToObject bridge" parenthetical is retracted — but the class
--- stays documented-only on the no-entry-consts + no-IsWithinLOS
--- grounds above. Emote/text-emote IDs verified from
+-- SetFacingToObject bridge" parenthetical is retracted — and the
+-- "no-IsWithinLOS" ground is retracted too (IsWithinLOS bridged
+-- 2026-10-23, IsWithinDist + PerformEmote + CastSpell + HasAura all
+-- bridged): the ReceiveEmote + UpdateAI re-dance arms are now
+-- bridge-complete, and the class stays documented-only on the
+-- no-entry-consts ground alone (sole hit npcs_special.cpp).
+-- Emote/text-emote IDs verified from
 -- src/server/shared/SharedDefines.h (TEXT_EMOTE_KISS 58, WAVE 101, BOW 17,
 -- JOKE 329, DANCE 34; EMOTE_ONESHOT_DANCE 94, SHY 24, LAUGH 11) for the
 -- sibling lines 1154+ run if it ever gains entry constants.
@@ -69,16 +77,125 @@
 -- Shape is timer-portable (OnSpawn 5 / OnReset 23 + CreateLuaEvent chains),
 -- but CastSpell(nil, ...) falls back to the creature's victim and is a no-op
 -- without one (lua_creature_events.go:57-95) — there is no null-target cast
--- bridge, so the ported timer would silently cast nothing. Also no entry
--- consts in the C++ tree.
+-- bridge, so the ported timer would silently cast nothing. Doubly
+-- blocked: 45907's effect is a SpellScript (spell_holiday.cpp:1543,
+-- OnEffectHitTarget dummy: hit unit self-casts the indicator spells),
+-- and SpellScript has zero hook kinds in runtime.go — even a
+-- target-carrying cast would fire no picker effect. Also no entry
+-- consts in the C++ tree (sole hit npcs_special.cpp).
 
--- npc_midsummer_bunny_pole (C++ :456-574) — DOCUMENTED-ONLY.
--- Arms: DoAction :484-492 starts the event (EVENT_CAST_RED_FIRE_RING);
--- UpdateAI :499-543 alternates SPELL_RED_FIRE_RING 46836 / SPELL_BLUE_FIRE_RING
--- 46842 casts on GO_RIBBON_POLE 181605 within 10yd, stopping when no nearby
--- player has aura SPELL_RIBBON_DANCE_COSMETIC 29726 (checkNearbyPlayers).
--- No DoAction bridge exists (no creature event for it); checkNearbyPlayers
--- needs a radius player-aura search — no bridge; no entry consts in tree.
+-- npc_midsummer_bunny_pole (C++ :456-574) — PORTED 2026-10-24.
+-- Entry IS in-tree (NPC_POLE_RIBBON_BUNNY 17066, go_scripts.cpp:797),
+-- so the class registers; the old "no entry consts" ground is retracted.
+-- DoAction :484-492 has no dispatch bridge, so the start rides the
+-- creature:SetData relay instead: the ribbon-pole GO gossip handler
+-- (go_scripts_part2.lua) writes the running latch, and the bunny's
+-- event-7 latch-rise detector below starts the ring chain — the GO
+-- handler and the bunny handler share the motion's ScriptData map
+-- (both objects are luaMotionCreature builds), never a DoAction call.
+-- UpdateAI :499-543 ports as a CreateLuaEvent chain (maiden idiom):
+-- red at latch-rise (C++ 1ms schedule), then blue/red every 5000ms,
+-- each step checking nearby players for aura 29726 first (C++ order)
+-- and stopping (latch 0 + timers cancelled) when none has it — note
+-- C++ checkNearbyPlayers returns true when the list is EMPTY, so the
+-- Lua helper below is named for the aura presence, not the C++ name.
+-- Casts land on GO_RIBBON_POLE 181605 via FindNearestGameObject(10).
+local POLE_BUNNY_ENTRY = 17066
+local GO_RIBBON_POLE = 181605
+local SPELL_RIBBON_DANCE_COSMETIC = 29726
+local SPELL_RED_FIRE_RING = 46836
+local SPELL_BLUE_FIRE_RING = 46842
+local DATA_BUNNY_RUNNING = 1
+
+local ringTimers = {}
+local ringRunning = {}
+
+local function cancelRingTimers(guid)
+    local per = ringTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        ringTimers[guid] = nil
+    end
+end
+
+local function scheduleRing(guid, key, delay, fn)
+    local per = ringTimers[guid]
+    if not per then
+        per = {}
+        ringTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function hasRibbonDancer(bunny)
+    for _, player in ipairs(bunny:GetPlayersInGrid(10)) do
+        if player:HasAura(SPELL_RIBBON_DANCE_COSMETIC) then
+            return true
+        end
+    end
+    return false
+end
+
+local onBlueRing
+
+local function onRedRing(bunny, guid)
+    if bunny:GetData(DATA_BUNNY_RUNNING) ~= 1 then
+        return
+    end
+    if not hasRibbonDancer(bunny) then
+        bunny:SetData(DATA_BUNNY_RUNNING, 0)
+        cancelRingTimers(guid)
+        return
+    end
+    local pole = bunny:FindNearestGameObject(GO_RIBBON_POLE, 10)
+    if pole then
+        bunny:CastSpell(pole, SPELL_RED_FIRE_RING, true)
+    end
+    scheduleRing(guid, "blue", 5000, function() onBlueRing(bunny, guid) end)
+end
+
+onBlueRing = function(bunny, guid)
+    if bunny:GetData(DATA_BUNNY_RUNNING) ~= 1 then
+        return
+    end
+    if not hasRibbonDancer(bunny) then
+        bunny:SetData(DATA_BUNNY_RUNNING, 0)
+        cancelRingTimers(guid)
+        return
+    end
+    local pole = bunny:FindNearestGameObject(GO_RIBBON_POLE, 10)
+    if pole then
+        bunny:CastSpell(pole, SPELL_BLUE_FIRE_RING, true)
+    end
+    scheduleRing(guid, "red", 5000, function() onRedRing(bunny, guid) end)
+end
+
+local function onBunnyAIUpdate(event, bunny)
+    local guid = bunny:GetGUID()
+    if bunny:GetData(DATA_BUNNY_RUNNING) == 1 then
+        if not ringRunning[guid] then
+            ringRunning[guid] = true
+            onRedRing(bunny, guid)
+        end
+    else
+        ringRunning[guid] = nil
+    end
+end
+
+local function onBunnyReset(event, bunny)
+    bunny:SetData(DATA_BUNNY_RUNNING, 0)
+    cancelRingTimers(bunny:GetGUID())
+    ringRunning[bunny:GetGUID()] = nil
+end
+
+RegisterCreatureEvent(POLE_BUNNY_ENTRY, 7, onBunnyAIUpdate)
+RegisterCreatureEvent(POLE_BUNNY_ENTRY, 23, onBunnyReset)
+RegisterCreatureEvent(POLE_BUNNY_ENTRY, 4, onBunnyReset)
 
 -- npc_doctor (C++ :583-772; Gustav Vanhowzen 12939 / Gregory Victor 12920,
 -- in-file enum Doctor :534-541) — DOCUMENTED-ONLY (summon-machine).
