@@ -25,8 +25,9 @@
 -- npc_toc_druid.lua precedent (champions spawn opposite-faction to the
 -- raid, so an Alliance-entry champion means a Horde raid -> Garrosh).
 -- Reset — SetEquipmentSlots(49992, NO_CHANGE, NO_CHANGE)
--- (boss_faction_champions.cpp:1063); base Reset threat/CC schedules
--- (:588-593) ride the unported threat/heroic machines.
+-- (boss_faction_champions.cpp:1063); base Reset EVENT_THREAT schedule
+-- (:588-593): UpdateThreat leg PORTED below (AI_HEALER, no armor
+-- read); heroic CC schedule still rides the unported machine.
 
 local ENTRY_PRIEST_ALLIANCE = 34466 -- trial_of_the_crusader.h:187
 local ENTRY_PRIEST_HORDE = 34447 -- trial_of_the_crusader.h:202
@@ -126,12 +127,33 @@ end
 -- DoZoneInCombat() — applies to every champion subclass including
 -- this priest AI (npc_toc_priestAI : public boss_faction_championsAI,
 -- :1049); the npc_toc_druid.lua precedent ports all three bridged arms.
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_HEALER, dist_mod = 1 and armor_mod = 0, so the
+-- amount is 1000000 * 30000 / (health + 1) with no distance or armor
+-- read. Lowered via GetAITargets (the bridged threat list) +
+-- per-victim ModifyThreatByPercent(-100) (ScaleThreat x0) + AddThreat,
+-- in C++ per-victim order; creature entries are left untouched, as in
+-- C++ (no IsDead filter in C++ either).
+local function threatCheck(creature, guid)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+    schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
+end
+
 local function priestEnterCombat(event, creature, target)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
 end
 
 local function priestLeaveCombat(event, creature)

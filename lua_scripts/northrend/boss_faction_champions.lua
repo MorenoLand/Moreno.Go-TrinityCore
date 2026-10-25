@@ -31,9 +31,9 @@
 --   EVENT_SHATTERING_THROW (:1676, init 20-40s) stays out: its gate
 --   is victim HasAuraWithMechanic(MECHANIC_IMMUNE_SHIELD), which has
 --   no Lua surface method. boss_faction_championsAI::UpdateThreat
---   (:611, per-ref ScaleThreat(0) + AddThreat(calculated)) stays out:
---   GetAITargets yields victims, not mutable threat refs, so the
---   per-ref rewrite has no bridge.
+--   (:611) is PORTED below for AI_RANGED/AI_HEALER entries via
+--   GetAITargets + ModifyThreatByPercent(-100) + AddThreat; melee
+--   entries stay out (victim armor read, no player GetArmor bridge).
 -- - boss_faction_championsAI base: EVENT_THREAT 5s + heroic
 --   EVENT_REMOVE_CC 5s (instance-gated), UpdateThreat/UpdatePower,
 --   RemoveCC, JustEngagedWith: DoCast(me, SPELL_ANTI_AOE 68595, true)
@@ -175,17 +175,48 @@ end
 -- C++ boss_faction_championsAI::UpdatePower (:621-624) on EVENT_THREAT
 -- (:721-724, Reset init 5s at :591, then 4s repeats): if the power type
 -- is MANA, ModifyPower(MANA, maxMana / 3) (integer division). The
--- UpdateThreat leg of the same event stays out (per-ref threat rewrite,
--- documented above). GetPowerType reads the enter-combat snapshot
+-- UpdateThreat leg of the same event is PORTED below for
+-- AI_RANGED/AI_HEALER entries (threatCheck, C++ order: power then
+-- threat); melee entries skip it (victim armor, no bridge).
+-- GetPowerType reads the enter-combat snapshot
 -- (object.go fallback); the type never changes in combat for these
 -- champions (SetPowerType only on rogue Reset), so the snapshot is
 -- exact; GetMaxPower(0) is the live typed read
 -- (lua_creature_events.go:1049) and ModifyPower the live clamped write
 -- (:1074).
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, UpdatePower first, UpdateThreat second): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_RANGED/AI_HEALER, dist_mod = 1 and
+-- armor_mod = 0, so the amount is 1000000 * 30000 / (health + 1) with
+-- no distance or armor read. Lowered via GetAITargets (the bridged
+-- threat list) + per-victim ModifyThreatByPercent(-100) (ScaleThreat
+-- x0) + AddThreat, in C++ per-victim order; creature entries are left
+-- untouched, as in C++ (no IsDead filter in C++ either). Melee/pet
+-- champions need victim armor (victim->GetArmor(), no player GetArmor
+-- bridge) and stay out.
+local RANGED_HEALER = {
+    [34465] = true, [34445] = true,
+    [34473] = true, [34441] = true,
+    [34468] = true, [34449] = true,
+    [34467] = true, [34448] = true,
+}
+local function threatCheck(creature)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+end
+
 local function powerCheck(creature, guid)
     if creature:GetPowerType() == 0 then
         local maxMana = creature:GetMaxPower(0)
         creature:ModifyPower(0, math.floor(maxMana / 3))
+    end
+    if RANGED_HEALER[creature:GetEntry()] then
+        threatCheck(creature)
     end
     schedule(guid, "threat", 4000, function()
         powerCheck(creature, guid)

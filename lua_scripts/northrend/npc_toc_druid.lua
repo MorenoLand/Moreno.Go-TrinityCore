@@ -19,6 +19,10 @@
 -- (boss_faction_champions.cpp:771/816-824).
 -- Reset — SetEquipmentSlots(51799, NO_CHANGE, NO_CHANGE)
 -- (boss_faction_champions.cpp:774).
+-- EVENT_THREAT UpdateThreat — per player-victim ScaleThreat(0) +
+-- AddThreat(1000000 * 30000 / (health + 1)) (AI_HEALER, no armor
+-- read); 5s init, 4s repeats (boss_faction_champions.cpp:591,
+-- :611-619, :721-724).
 
 local ENTRY_DRUID_ALLIANCE = 34469 -- trial_of_the_crusader.h:183
 local ENTRY_DRUID_HORDE = 34459 -- trial_of_the_crusader.h:197
@@ -71,6 +75,25 @@ end
 -- DoZoneInCombat() — applies to every champion subclass including
 -- this druid AI (npc_toc_druidAI : public boss_faction_championsAI,
 -- :759); the npc_toc_boomkin.lua precedent ports all three bridged arms.
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_HEALER, dist_mod = 1 and armor_mod = 0, so the
+-- amount is 1000000 * 30000 / (health + 1) with no distance or armor
+-- read. Lowered via GetAITargets (the bridged threat list) +
+-- per-victim ModifyThreatByPercent(-100) (ScaleThreat x0) + AddThreat,
+-- in C++ per-victim order; creature entries are left untouched, as in
+-- C++ (no IsDead filter in C++ either).
+local function threatCheck(creature, guid)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+    schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
+end
+
 local function druidEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -78,6 +101,7 @@ local function druidEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     schedule(guid, "barkskin", {15000, 25000}, function() onBarkskin(creature, guid) end)
+    schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
 end
 
 local function druidLeaveCombat(event, creature)

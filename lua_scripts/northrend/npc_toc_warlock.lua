@@ -27,8 +27,9 @@
 -- npc_toc_druid.lua precedent (champions spawn opposite-faction to the
 -- raid, so an Alliance-entry champion means a Horde raid -> Garrosh).
 -- Reset — SetEquipmentSlots(49992, NO_CHANGE, NO_CHANGE)
--- (boss_faction_champions.cpp:1246); base Reset threat/CC schedules
--- (:588-593) ride the unported threat/heroic machines.
+-- (boss_faction_champions.cpp:1246); base Reset EVENT_THREAT schedule
+-- (:588-593): UpdateThreat leg PORTED below (AI_RANGED, no armor
+-- read); heroic CC schedule still rides the unported machine.
 
 local ENTRY_WARLOCK_ALLIANCE = 34474 -- trial_of_the_crusader.h:192
 local ENTRY_WARLOCK_HORDE = 34450 -- trial_of_the_crusader.h:207
@@ -192,6 +193,25 @@ end
 -- DoZoneInCombat() — applies to every champion subclass including
 -- this warlock AI (npc_toc_warlockAI : public boss_faction_championsAI,
 -- :1232); the npc_toc_druid.lua precedent ports all three bridged arms.
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_RANGED, dist_mod = 1 and armor_mod = 0, so the
+-- amount is 1000000 * 30000 / (health + 1) with no distance or armor
+-- read. Lowered via GetAITargets (the bridged threat list) +
+-- per-victim ModifyThreatByPercent(-100) (ScaleThreat x0) + AddThreat,
+-- in C++ per-victim order; creature entries are left untouched, as in
+-- C++ (no IsDead filter in C++ either).
+local function threatCheck(creature, guid)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+    schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
+end
+
 local function warlockEnterCombat(event, creature, target)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
@@ -202,6 +222,8 @@ local function warlockEnterCombat(event, creature, target)
     -- rides the unbridged summon strand.
     creature:CastSpell(creature, SPELL_SUMMON_FELHUNTER)
     scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
 end
 
 local function warlockLeaveCombat(event, creature)

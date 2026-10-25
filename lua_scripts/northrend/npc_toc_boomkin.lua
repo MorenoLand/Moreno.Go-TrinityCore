@@ -26,13 +26,17 @@
 -- sentinel, mr_smite precedent). The base Reset legs ride unbridged:
 -- _teamInstance = instance->GetData(DATA_TEAM) (no instance bridge),
 -- SetBossBoundary (no boundary bridge), EVENT_THREAT 5s
--- (cross-AI threat-table machine), heroic EVENT_REMOVE_CC 5s.
+-- (UpdateThreat leg PORTED below; heroic EVENT_REMOVE_CC still out).
 -- base JustEngagedWith (event 1): DoCast(me, SPELL_ANTI_AOE 68595,
 -- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
 -- the DoZoneInCombat leg is PORTED 2026-10-23 (bridge live,
 -- engine/world/lua_creature_events.go); the setActive / controller
 -- SetData(2, IN_PROGRESS) legs have no bridges (tharon_ja precedent).
+-- EVENT_THREAT UpdateThreat — per player-victim ScaleThreat(0) +
+-- AddThreat(1000000 * 30000 / (health + 1)) (AI_RANGED, no armor
+-- read); 5s init, 4s repeats (boss_faction_champions.cpp:591,
+-- :611-619, :721-724).
 -- EVENT_CYCLONE — SelectTarget(Random, 0, NonTankTargetSelector) ->
 -- DoCast(Cyclone 65859), 10-20s init, 10-20s re-arm: randomNonTankPlayer
 -- (netherspite / blood_prince_council precedent — alive same-map
@@ -57,10 +61,9 @@
 -- ironaya convention) -> DoCastSelf(Barkskin 65860) + 60s re-arm,
 -- else 5s re-arm; 20-30s init.
 -- Unmodeled (no bridges — documented, not wired):
--- boss_faction_championsAI UpdateAI: UpdateThreat() (threat-manager
--- ScaleThreat/AddThreat), UpdatePower() (mana pump), EVENT_REMOVE_CC
--- RemoveAurasByType legs, EVENT_THREAT 5s scheduler — no
--- threat/power/aura-type bridges.
+-- boss_faction_championsAI UpdateAI: UpdatePower() (mana pump),
+-- EVENT_REMOVE_CC RemoveAurasByType legs — no power/aura-type
+-- bridges; UpdateThreat() PORTED above (AI_RANGED, no armor read).
 -- npc_toc_boomkin UpdateAI DoSpellAttackIfReady(SPELL_WRATH 65862) —
 -- ranged auto-attack leg; Go melee is engine-driven (deviation: the
 -- champion melees instead of wrath-spamming between casts).
@@ -237,10 +240,31 @@ end
 -- DoZoneInCombat() (PORTED 2026-10-23 — bridge live,
 -- engine/world/lua_creature_events.go), controller SetData(2, IN_PROGRESS)
 -- (no instance/SetData bridge).
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_RANGED, dist_mod = 1 and armor_mod = 0, so the
+-- amount is 1000000 * 30000 / (health + 1) with no distance or armor
+-- read. Lowered via GetAITargets (the bridged threat list) +
+-- per-victim ModifyThreatByPercent(-100) (ScaleThreat x0) + AddThreat,
+-- in C++ per-victim order; creature entries are left untouched, as in
+-- C++ (no IsDead filter in C++ either).
+local function threatCheck(creature, guid)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+    schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
+end
+
 local function boomkinEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:646
     creature:DoZoneInCombat() -- C++ :649, in arm order after pulse delay (bridge live 2026-10-23)
+    schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
 end
 
 local function boomkinLeaveCombat(event, creature)
