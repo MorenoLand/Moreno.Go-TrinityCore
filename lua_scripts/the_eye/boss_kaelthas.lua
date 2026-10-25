@@ -132,6 +132,9 @@
 -- 35966-35990 + SPELL_GRAVITY_LAPSE_PERIODIC 34480 /
 -- SPELL_GRAVITY_LAPSE_FLIGHT_AURA 39432) — SpellScript, no
 -- SpellScript bridge (standing blocker) — documented only.
+-- The player self-casts (34480/39432) ride the same HandleScript
+-- as the teleport casts, so the bridged player:CastSpell does
+-- not unlock them — verified 2026-10-24.
 -- Kael'thas himself (19622): the whole phase machine is
 -- unmodeled — DoAction chains (ACTION_START_ENCOUNTER /
 -- ACTION_PREPARE_ADVISORS / ACTION_ACTIVE_ADVISOR /

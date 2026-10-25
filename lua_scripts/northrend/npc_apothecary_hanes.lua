@@ -59,9 +59,10 @@
 -- npc_riven_widow_cocoon — the JustDied player-killer machine
 -- (20% roll: player->CastSpell(me, 43289) + KilledMonsterCredit
 -- 24211; else player->CastSpell(me, one of the 11 cocoon summon
--- spells 43275-43285)) KilledMonsterCredit is bridged, but the summon casts are
--- player->CastSpell(me, ...) with no player-cast bridge (moroes
--- precedent) — documented-only. No NPC_ entry constant for the cocoon in the
+-- spells 43275-43285)) KilledMonsterCredit is bridged and
+-- player:CastSpell is bridged, but the session cast path has no
+-- SPELL_EFFECT_SUMMON executor (lua_player.go) — the summon
+-- spells would fire visuals without spawning — documented-only. No NPC_ entry constant for the cocoon in the
 -- C++ sources either.
 
 local SPELL_HEALING_POTION = 17534

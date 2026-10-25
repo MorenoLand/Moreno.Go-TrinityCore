@@ -74,14 +74,15 @@
 -- _isDemon -> cancel all timers, non-triggered self-cast demon
 -- transform 40511 (C++-exact: events/specialEvents reset,
 -- DoCastSelf default triggered=false) / else _dead=true, cancel
--- all timers, triggered self-cast remove-parasitic 41923 (the
--- parasitic summon-despawn arm has no summon bridge) +
+-- all timers, summons.DespawnEntry parasitic-shadowfiend arm
+-- (ported via grid sweep) + triggered self-cast remove-parasitic
+-- 41923 +
 -- ACTION_START_OUTRO: triggered self-cast death 41218 +
 -- SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) (ported 2026-10-20),
 -- Talk(SAY_ILLIDAN_DEFEATED) 4s, triggered self-cast quiet
 -- suicide 3617 18s later;
--- the maiev DoAction(ACTION_START_OUTRO) and the summon-despawn
--- arms have no cross-creature/summon bridges — skipped. 90% health
+-- the maiev DoAction(ACTION_START_OUTRO) arm has no
+-- cross-creature bridge — skipped. 90% health
 -- & phase<PHASE_MINIONS: Talk(SAY_ILLIDAN_MINION) + the 30s
 -- minions-weave cycle; the weave fires empty — the SummonCreature
 -- bridge is live, but each illidari elite is paired with a summon-
@@ -883,8 +884,14 @@ local function illidanDamageTaken(event, creature, attacker, damage)
             else
                 state.dead = true
                 cancelTimers(guid)
-                -- The parasitic-shadowfiend summon despawn arm has
-                -- no summon bridge.
+                -- boss_illidan.cpp:729 summons.DespawnEntry(
+                -- NPC_PARASITIC_SHADOWFIEND) via the grid-sweep
+                -- idiom (moroes/supremus precedent; C++ SummonList
+                -- is exact, the 100yd sweep is the approximation).
+                for _, fiend in ipairs(creature:GetCreaturesInGrid(
+                        ENTRY_PARASITIC_SHADOWFIEND, 100)) do
+                    fiend:Despawn()
+                end
                 creature:CastSpell(creature,
                     SPELL_REMOVE_PARASITIC_SHADOWFIEND, true)
                 -- C++ DoAction(ACTION_START_OUTRO): AttackStop()
@@ -892,8 +899,8 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 -- 41218 + SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE)
                 -- (ported 2026-10-20), defeated Talk 4s, quiet
                 -- suicide 3617 18s later.
-                -- The maiev DoAction(ACTION_START_OUTRO) and
-                -- summon-despawn arms have no bridges.
+                -- The maiev DoAction(ACTION_START_OUTRO) arm has
+                -- no cross-creature bridge.
                 creature:AttackStop()
                 creature:CastSpell(creature, SPELL_DEATH, true)
                 -- boss_illidan.cpp:641 — C++ arm order after SPELL_DEATH
