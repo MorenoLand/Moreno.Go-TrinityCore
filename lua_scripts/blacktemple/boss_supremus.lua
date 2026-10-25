@@ -27,8 +27,9 @@
 -- the current victim (C++ SelectTarget(Random, 1, 100.0f, true)
 -- skips position 0, player-only) + Talk(EMOTE_NEW_TARGET) / snare
 -- 41922 non-triggered self-cast (C++ DoCast(spellId) resolves
--- AITARGET_SELF for the snare aura) and the taunt immunes go up (no
--- bridge). EVENT_SWITCH_PHASE 60s then 60s alternates the phases
+-- AITARGET_SELF for the snare aura) and the taunt immunes go up
+-- (ported via ApplySpellImmune in changePhase). EVENT_SWITCH_PHASE
+-- 60s then 60s alternates the phases
 -- (C++-exact). Nil-victim / nil-target ticks cast nothing but keep
 -- the schedule (jeklik convention). OnDied(4)/OnLeaveCombat(2)/
 -- OnReset(23): cancel timers.

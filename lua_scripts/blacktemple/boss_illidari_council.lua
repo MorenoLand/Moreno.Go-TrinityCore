@@ -107,8 +107,11 @@
 -- shield 41475 25s then 40s, non-triggered self-cast +
 -- Talk(SAY_COUNCIL_SPECIAL) / divine wrath 41472 32s then 20s,
 -- non-triggered DoCastVictim. The HealReceived -> shared-rule
--- 41342 arm (with -addhealth BP0 on nil target) has no heal hook
--- bridge — unmodeled. The DoSpellAttackIfReady(41471 empowered
+-- 41342 arm (with -addhealth BP0 on nil target) stays out — the heal
+-- hook exists (event 11, read-only Go extension,
+-- lua_creature_events.go:3037) but creature:CastSpell takes no BP args,
+-- so the -addhealth BP0 leg has no bridge. The DoSpellAttackIfReady
+-- (41471 empowered
 -- smite) filler has no spell-attack bridge — unmodeled.
 -- DamageTaken/KilledUnit/Died/LeaveCombat/Reset as Gathios.
 -- Veras Darkshadow (22952): OnEnterCombat: vanish 18s then 60s:
@@ -146,7 +149,8 @@
 -- EnterEvadeMode relay (boss_illidari_council.cpp:274) have no
 -- bearer — no instance/evade bridge; no summon
 -- bridge — SummonCreatureGroup(SUMMON_COUNCIL_GROUP) unmodeled;
--- the 41342 shared-rule Nil-target cast has no heal-hook bearer;
+-- the 41342 shared-rule Nil-target cast stays out on the no-BP-args
+-- bridge (heal hook ev11 exists but read-only);
 -- the boundary/setActive arms have no
 -- bridges; the SetCombatPulseDelay(5) arm is PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
@@ -723,7 +727,8 @@ local function malandeWrath(creature, guid)
 end
 
 -- C++ JustEngagedWith + ScheduleEvents: the three cycle arms.
--- The HealReceived -> shared-rule arm and the DoSpellAttackIfReady
+-- The HealReceived -> shared-rule arm (heal hook ev11 exists,
+-- read-only; BP0 leg unbridged) and the DoSpellAttackIfReady
 -- (41471) filler have no bridges — unmodeled.
 local function malandeEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)

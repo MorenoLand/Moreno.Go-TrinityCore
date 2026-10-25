@@ -62,9 +62,12 @@
 -- SetWalk still has no bridge, and the SetFaction arms live in the
 -- unregistered channeler/sorcerer AIs (the EMOTE_STATE stun/none arms
 -- are PORTED 2026-10-20 via creature:EmoteState); no summon
--- model — the channeler spawns and summons.DespawnEntry(NPC_
--- ASHTONGUE_CHANNELER) have no bridge; the EVENT_INITIALIZE_SPAWNERS
--- grid-creature-list arm has no bridge; the EVENT_EVADE_CHECK arm
+-- model — the channeler spawns ride SummonCreatureGroup (no bridge),
+-- but the JustDied DespawnEntry arm is PORTED in shadeDied via the
+-- grid sweep; the EVENT_INITIALIZE_SPAWNERS list fetch rides
+-- GetCreaturesInGrid but the arm only stores GUIDs for later DoAction
+-- dispatches (no DoAction bridge), so nothing observable ports; the
+-- EVENT_EVADE_CHECK arm
 -- (EnterEvadeModeIfNeeded / IsInBoundary) has no evade or boundary
 -- bridge; the soul-channel SpellHit(40447) event-scheduling and
 -- AttackStart-on-Akama arms have no bridge (the emotestate arm is
@@ -78,6 +81,8 @@ local SPELL_SHADE_OF_AKAMA_TRIGGER = 40955
 local SPELL_AKAMA_SOUL_CHANNEL = 40447
 local SPELL_AKAMA_SOUL_RETRIEVE = 40902
 local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
+
+local ENTRY_ASHTONGUE_CHANNELER = 23421
 
 -- C++ npc_akama_shade::DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when
 -- HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407; _hasYelledOnce
@@ -104,11 +109,22 @@ local function akamaShadeDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ JustDied: non-triggered self-cast of the shade trigger (the
--- akama DoAction, spawner DoActions, channeler despawn and
--- SetBossState DONE arms have no instance/summon bridges).
+-- C++ JustDied: non-triggered self-cast of the shade trigger + the
+-- channeler DespawnEntry arm (PORTED in shadeDied via the grid sweep;
+-- the akama DoAction, spawner DoActions and SetBossState DONE arms have
+-- no instance/summon bridges).
 local function shadeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SHADE_OF_AKAMA_TRIGGER)
+    -- C++ boss_shade_of_akama.cpp:282 JustDied summons.DespawnEntry(NPC_
+    -- ASHTONGUE_CHANNELER) via the grid-sweep idiom (illidan
+    -- parasitic-shadowfiend precedent; C++ SummonList is exact, the
+    -- 100yd sweep is the approximation). C++ order: cast first, then
+    -- the despawn (akama/spawner DoActions + SetBossState DONE stay out
+    -- on the instance bridge).
+    for _, channeler in ipairs(creature:GetCreaturesInGrid(
+            ENTRY_ASHTONGUE_CHANNELER, 100)) do
+        channeler:Despawn()
+    end
 end
 
 -- C++ SpellHit: hit by the soul-retrieve spell -> non-triggered

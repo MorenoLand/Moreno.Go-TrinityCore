@@ -67,15 +67,11 @@
 -- the reliquary->JustSummoned link has no instance bridge; the
 -- 3s DoZoneInCombat scheduler arm is PORTED below). OnDamageTaken(9):
 -- lethal damage is rewritten to 0 (C++ damage = 0, C++-exact)
--- with the once-guard in per-GUID state, plus the triggered
--- self-cast soul release 41542 (the AttackStop/MotionMaster-clear
--- arms have no bridge — the REACT_PASSIVE arm is the Reset arm,
--- PORTED 2026-10-20, creature:SetReactState — and the 500ms-delayed
--- KillSelf arm stays out on the cross-creature DoAction broadcast
--- (creature:Kill() is bridged now, but the arm is ordered by the
--- reliquary's EVENT_SUBMERGE summons.DoAction, which has no
--- bearer) — the soul survives at
--- its pre-lethal health after the release cast). The reliquary-
+-- with the once-guard in per-GUID state, plus the full
+-- HandleSoulRelease (PORTED in soulDamageTaken: REACT_PASSIVE +
+-- AttackStop + StopMoving + non-triggered self-cast soul release
+-- 41542 + 500ms-delayed KillSelf — the header's old "stays out"
+-- wording was stale vs the 2026-10-19 code). The reliquary-
 -- driven DoAction(ACTION_KILL_SELF) soul-release path has no
 -- bearer (no cross-creature DoAction bridge).
 -- Reliquary combat trigger: OnDamageTaken(9) always rewrites
@@ -290,10 +286,12 @@ end
 -- C++ npc_enslaved_soul::DamageTaken (:625-634): lethal damage is zeroed
 -- (damage = 0, C++-exact), and once per soul HandleSoulRelease fires
 -- directly from DamageTaken (not only via the reliquary DoAction path):
--- REACT_PASSIVE + AttackStop + DoCastSelf(SOUL_RELEASE) + KillSelf at
--- 500ms — all ported below. The MotionMaster-clear leg stays out
--- (no bridge); the reliquary DoAction trigger itself stays
--- instance-blocked, but it is a separate trigger from this one.
+-- REACT_PASSIVE + AttackStop + MotionMaster-clear + DoCastSelf(SOUL_
+-- RELEASE) + KillSelf at 500ms — all ported below (the MotionMaster-
+-- clear leg rides creature:StopMoving, the Go motion-stop twin; the
+-- C++ cast is non-triggered DoCastSelf default). The reliquary
+-- DoAction trigger itself stays instance-blocked, but it is a
+-- separate trigger from this one.
 local function soulDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
@@ -311,6 +309,7 @@ local function soulDamageTaken(event, creature, attacker, damage)
             -- defaults non-triggered (UnitAI.h:320, UnitAI.cpp:165).
             creature:SetReactState(0) -- REACT_PASSIVE (HandleSoulRelease order)
             creature:AttackStop()
+            creature:StopMoving() -- MotionMaster-clear leg, C++ order
             creature:CastSpell(creature, SPELL_SOUL_RELEASE)
             schedule(guid, "soulKillSelf", 500, function()
                 creature:Kill()

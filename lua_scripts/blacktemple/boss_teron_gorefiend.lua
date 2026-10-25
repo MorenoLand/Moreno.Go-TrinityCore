@@ -29,8 +29,9 @@
 -- documented) + Talk(SAY_INCINERATE) / summon doom blossom 40188
 -- 8s then
 -- {30s,40s}, triggered self-cast (C++ DoCastSelf(..., true)) +
--- Talk(SAY_BLOSSOM); the doom blossom summon (NPC 23123) has no
--- summon bridge — only the cast and Talk are kept / shadow of death
+-- Talk(SAY_BLOSSOM); the doom blossom arrives via the 40188 spell-effect
+-- summon (creatureEffectSummonType, supremus-volcano precedent) and its
+-- Reset arms ride the event-19 relay below / shadow of death
 -- 40251 8s then {30s,35s}, non-triggered on a random alive player
 -- in the instance within 100 yd excluding the current victim and
 -- excluding players carrying 40268 (spiritual vengeance; the -aura
@@ -101,6 +102,7 @@ local SPELL_SHADOW_OF_DEATH = 40251
 local SPELL_BERSERK = 45078
 local SPELL_SUMMON_DOOM_BLOSSOM = 40188
 local SPELL_DOOM_BLOSSOM_SHADOWBOLT = 40185
+local SPELL_SUMMON_BLOSSOM_MOVE_TARGET = 40186
 local ENTRY_DOOM_BLOSSOM = 23123
 local SPELL_SPIRITUAL_VENGEANCE = 40268
 local SPELL_SHADOW_OF_DEATH_REMOVE = 41999
@@ -296,8 +298,9 @@ RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 23, teronReset)
 -- 40185), Repeat(2s). The blossom arrives via the 40188 spell-effect
 -- summon, so its Reset arm rides the boss event-19 relay (supremus
 -- volcano precedent): if the spell-effect summon never spawns, this
--- never fires and nothing is fabricated. The hover takeoff +8z and
--- the 40186 cast stay out (no MoveTakeoff bridge); the blossom's
+-- never fires and nothing is fabricated. The +8z lift itself stays out
+-- (no MovePoint bridge); the hover leg, the 40186 cast and
+-- DoZoneInCombat are PORTED in teronJustSummoned below; the blossom's
 -- timers die with Teron's timers on leave/died/reset.
 local function blossomShadowboltTick(blossom, bossGuid, blossomGuid)
     local target = randomAnyTarget(blossom)
@@ -313,6 +316,14 @@ local function teronJustSummoned(event, creature, summon)
     if summon:GetEntry() == ENTRY_DOOM_BLOSSOM then
         local bossGuid = creature:GetGUID()
         local blossomGuid = summon:GetGUID()
+        -- C++ npc_doom_blossom::Reset (boss_teron_gorefiend.cpp:225-236):
+        -- MoveTakeoff +8z -> non-triggered self-cast 40186 -> DoZoneInCombat,
+        -- C++ order. The +8z lift itself stays out (no MovePoint bridge);
+        -- the hover leg rides SetDisableGravity(true), the takeoff state
+        -- twin (the C++ comment frames the takeoff as the hover workaround).
+        summon:SetDisableGravity(true)
+        summon:CastSpell(summon, SPELL_SUMMON_BLOSSOM_MOVE_TARGET)
+        summon:DoZoneInCombat()
         schedule(bossGuid, "blossomShadowbolt:" .. blossomGuid, 12000, function()
             blossomShadowboltTick(summon, bossGuid, blossomGuid)
         end)
