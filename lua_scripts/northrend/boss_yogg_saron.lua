@@ -148,15 +148,13 @@
 -- (no bridges; the HasAura(64361) gate is bridged but the cascade
 -- cannot be split); DoAction ACTION_INDUCE_MADNESS /
 -- ACTION_TENTACLE_KILLED have no Talk arms.
--- npc_observation_ring_keeper — Talk(SAY_KEEPER_CHOSEN_1/2,
--- player) gated on OnGossipSelect menuId 10333 — the gossip bridge
--- IS live (RegisterCreatureGossipEvent,
--- engine/world/gossip.go:129/369) but the Lua select hook never
--- receives menuId (sender/action only — gossip.go:351), so the gate
--- is unexpressible; Reset one-shots PORTED below (event
--- 23); (observation-ring
--- keeper entries 33213 / 33241 / 33242 / 33244 entry-verifiable,
--- ulduar.h lines 199-202).
+-- npc_observation_ring_keeper — OnGossipSelect PORTED below
+-- (observationKeeperGossipSelect): menuId 10333 never reaches the
+-- Lua select hook (sender/action only — gossip.go:351), so the gate
+-- uses the sender == 0 DB-menu proxy (akama precedent); the keeper
+-- class defines no hello/quest menu of its own. Reset one-shots
+-- PORTED below (event 23); ring-keeper entries 33213 / 33241 /
+-- 33242 / 33244, ulduar.h lines 199-202.
 -- npc_yogg_saron_keeper (33410 / 33411 / 33412 / 33413,
 -- ulduar.h lines 205-208) — no Talk arms — Reset + JustEnteredCombat
 -- one-shots PORTED below (events 23 / 1).
@@ -600,6 +598,11 @@ local ENTRY_KEEPER_FREYA = 33410
 local ENTRY_KEEPER_HODIR = 33411
 local ENTRY_KEEPER_MIMIRON = 33412
 local ENTRY_KEEPER_THORIM = 33413
+local SPELL_KEEPER_TELEPORT = 62940
+local SAY_KEEPER_CHOSEN_1 = 0
+local SAY_KEEPER_CHOSEN_2 = 1
+local UNIT_NPC_FLAGS_FIELD = 82
+local UNIT_NPC_FLAG_GOSSIP = 1
 
 local SPELL_SANITY_PERIODIC = 63786
 local SPELL_SUMMON_GUARDIAN_2 = 62978
@@ -838,6 +841,41 @@ RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_THORIM, 23, observationKeepe
 RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 23, observationKeeperReset)
+
+-- C++ npc_observation_ring_keeperAI::OnGossipSelect (:1551-1576):
+-- menuId 10333 gate (sender == 0 DB-menu proxy — the Lua select
+-- hook passes sender/action, never menuId) -> RemoveFlag gossip +
+-- 2s despawn + DoCast TELEPORT + Talk 0/1 to player + entry-switched
+-- keeper summon at YSKeepersPos, C++ order. C++ returns false
+-- (native arms proceed); Lua mirrors it.
+local function observationKeeperGossipSelect(event, player, creature, sender, action)
+    if sender ~= 0 then
+        return false
+    end
+    creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+    local guid = creature:GetGUID()
+    schedule(guid, "keeper_despawn", 2000, function()
+        creature:Despawn()
+    end)
+    creature:CastSpell(creature, SPELL_KEEPER_TELEPORT)
+    creature:Talk(SAY_KEEPER_CHOSEN_1, player)
+    creature:Talk(SAY_KEEPER_CHOSEN_2, player)
+    local entry = creature:GetEntry()
+    if entry == ENTRY_OBSERVATION_RING_KEEPER_FREYA then
+        creature:SummonCreature(ENTRY_KEEPER_FREYA, 2036.873, 25.42513, 338.4984, 3.909538)
+    elseif entry == ENTRY_OBSERVATION_RING_KEEPER_HODIR then
+        creature:SummonCreature(ENTRY_KEEPER_HODIR, 1939.045, -90.87457, 338.5426, 0.994837)
+    elseif entry == ENTRY_OBSERVATION_RING_KEEPER_THORIM then
+        creature:SummonCreature(ENTRY_KEEPER_THORIM, 1939.148, 42.49035, 338.5427, 5.235988)
+    elseif entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
+        creature:SummonCreature(ENTRY_KEEPER_MIMIRON, 2036.658, -73.58822, 338.4985, 2.460914)
+    end
+    return false
+end
+RegisterCreatureGossipEvent(ENTRY_OBSERVATION_RING_KEEPER_FREYA, 2, observationKeeperGossipSelect)
+RegisterCreatureGossipEvent(ENTRY_OBSERVATION_RING_KEEPER_HODIR, 2, observationKeeperGossipSelect)
+RegisterCreatureGossipEvent(ENTRY_OBSERVATION_RING_KEEPER_THORIM, 2, observationKeeperGossipSelect)
+RegisterCreatureGossipEvent(ENTRY_OBSERVATION_RING_KEEPER_MIMIRON, 2, observationKeeperGossipSelect)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 1, keeperEnterCombat)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 4, cancelAll)

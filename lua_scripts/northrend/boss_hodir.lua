@@ -172,8 +172,10 @@
 -- npc_toasty_fireAI — Reset: DoCast(me, SPELL_SINGED
 -- 62821, true) (line 967); SpellHit (SPELL_BLOCK_OF_ICE /
 -- SPELL_ICE_SHARD / SPELL_ICE_SHARD_HIT) -> RemoveGameObject
--- + DespawnOrUnsummon (lines 970-978) — SpellHit /
--- despawn legs, no bridges; no registration.
+-- + DespawnOrUnsummon (lines 970-978) — stays out on the
+-- RemoveGameObject leg (unbridged, zero engine hits); Despawn
+-- itself IS bridged (lua_creature_events.go:1218) but a
+-- Despawn-only partial would leave the GO behind; no registration.
 -- spell_biting_cold / spell_biting_cold_dot —
 -- SpellScript / AuraScript — no SpellScript / AuraScript
 -- bridges; both join the no-SpellScript-bridge queue.
