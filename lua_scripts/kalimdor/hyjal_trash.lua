@@ -97,9 +97,15 @@
 --   bridge (onReset, entry-gated); the Zpos-descending MovePoint
 --   approach, forcemove random-target AttackStart and the JustDied
 --   ground-position visuals have no bridges.
--- - npc_necromancer: KilledUnit skeleton spawns 17902/17903 at +/-3
---   offsets TEMPSUMMON_TIMED_DESPAWN 60s + SummonList bookkeeping —
---   no summon model (jeklik precedent). Event 3 not registered.
+-- - npc_necromancer: KilledUnit PORTED (hyjal_trash.cpp:808-823 +
+--   JustSummoned :789-795): urand(0,2) -> 2x 17902 at +/-3, 2x 17903 at
+--   +/-3, or 1x RAND(17902,17903) at +3; DoSpawnCreature = SummonCreature
+--   at (x+dx, y, z, o=0, Go type 2 = C++ TIMED_DESPAWN, 60s); each skeleton
+--   engages a random threat-list player within 30 (SelectTarget Random,0,
+--   30,true) via EngageWithTarget; Reset despawns tracked skeletons
+--   (SummonList/DespawnAll twin). The old "no summon model / event 3 not
+--   registered" claim was stale: event 3 (OnTargetDied) + SummonCreature +
+--   EngageWithTarget are all live.
 -- - npc_banshee / crypt fiend / fel stalker / abomination / ghoul:
 --   IsEvent escort start legs (Start(false/true, true) with
 --   DATA_ALLIANCE_RETREAT-dependent HordeWPs/AllianceWPs) — no bridge.
@@ -395,6 +401,11 @@ local function onLeaveCombat(event, creature)
     end
 end
 
+-- Forward-declared: onReset/onDied below reference this table, and a
+-- later re-`local` would shadow it (malown-class nil-slot bug) — the
+-- assignment at the necromancer block below is a plain assignment.
+local necroSummons
+
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     local st = infernalState[guid]
@@ -420,12 +431,22 @@ local function onReset(event, creature)
     if entry == 17907 or entry == 17906 then -- FROST_WYRM / GARGOYLE
         creature:SetDisableGravity(true)
     end
+    if entry == 17899 then -- NECROMANCER: Reset despawns the tracked
+        local list = necroSummons[guid] -- skeletons (SummonList twin)
+        if list then
+            for _, skel in ipairs(list) do
+                skel:Despawn()
+            end
+            necroSummons[guid] = nil
+        end
+    end
 end
 
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     infernalState[guid] = nil
+    necroSummons[guid] = nil
 end
 
 -- C++ legs ahead of the UpdateVictim gate (abomination disease-cloud
@@ -465,6 +486,56 @@ local function hasSpawnArm(name)
     return false
 end
 
+
+-- npc_necromancer KilledUnit (hyjal_trash.cpp:808-823 + JustSummoned
+-- :789-795). See the header note for the full arm description.
+local SKELETON_1 = 17902
+local SKELETON_2 = 17903
+necroSummons = {}
+
+local function spawnSkeleton(creature, guid, entry, dx)
+    local skel = creature:SummonCreature(entry,
+        creature:GetX() + dx, creature:GetY(), creature:GetZ(),
+        0, 2, 60000)
+    if skel == nil then
+        return
+    end
+    local cands = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+            and creature:GetDistance(t) <= 30 then
+            cands[#cands + 1] = t
+        end
+    end
+    if #cands > 0 then
+        skel:EngageWithTarget(cands[math.random(1, #cands)])
+    end
+    local list = necroSummons[guid]
+    if not list then
+        list = {}
+        necroSummons[guid] = list
+    end
+    list[#list + 1] = skel
+end
+
+local function onNecromancerKilledUnit(event, creature, victim)
+    local guid = creature:GetGUID()
+    local roll = math.random(0, 2)
+    if roll == 0 then
+        spawnSkeleton(creature, guid, SKELETON_1, 3)
+        spawnSkeleton(creature, guid, SKELETON_1, -3)
+    elseif roll == 1 then
+        spawnSkeleton(creature, guid, SKELETON_2, 3)
+        spawnSkeleton(creature, guid, SKELETON_2, -3)
+    else
+        local entry = SKELETON_1
+        if math.random(0, 1) == 1 then
+            entry = SKELETON_2
+        end
+        spawnSkeleton(creature, guid, entry, 3)
+    end
+end
+
 for name, entry in pairs(MOB) do
     RegisterCreatureEvent(entry, 1, onEnterCombat(name))
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
@@ -474,3 +545,5 @@ for name, entry in pairs(MOB) do
         RegisterCreatureEvent(entry, 5, onSpawn(name))
     end
 end
+
+RegisterCreatureEvent(17899, 3, onNecromancerKilledUnit)

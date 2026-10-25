@@ -32,7 +32,9 @@
 --   bookkeeping has no bridge).
 -- - Reset / leave combat: timers canceled (no C++ timer arm on Reset; the
 --   timers arm only on engage); Reset re-casts SPELL_BRILLIANCE_AURA
---   31260 triggered on self for Jaina (hyjalAI.cpp:395).
+--   31260 triggered on self for Jaina (hyjalAI.cpp:395) and sets
+--   far-visible (hyjalAI.cpp:385; setActive has no bridge, gossip-flag
+--   leg unobservable without the instance-gated gossip arms).
 -- Unmodeled (documented-only, no bridges): the hyjalAI wave machine —
 -- StartEvent/Retreat/first-boss/WaveCount/RetreatType/IsDummy escort
 -- choreography (GetHyjalAI -> GetInstanceAI leg; instance-script model
@@ -203,6 +205,12 @@ local function onReset(event, creature)
     -- never runs on death, so the cast is alive-gated.
     if creature:IsAlive() and creature:GetEntry() == ENTRY_JAINA then
         creature:CastSpell(creature, SPELL_BRILLIANCE_AURA, true)
+    end
+    -- C++ hyjalAI::Reset (hyjalAI.cpp:385): setActive(true) +
+    -- SetFarVisible(true); the alive gate mirrors the brilliance arm
+    -- (Go ev23 fires on death too, where C++ Reset never runs).
+    if creature:IsAlive() then
+        creature:SetFarVisible(true)
     end
 end
 
