@@ -55,7 +55,9 @@
 -- not a cast stop); split UpdatePosition(CenterOfRoom)
 -- (no position-set bridge — the boss reappears where it
 -- split instead of room center); magi AttackStart relay
--- (no AttackStart bridge) and magi spellcasting (magi have
+-- ported 2026-10-24 (summoned:EngageWithTarget on a random
+-- threat target, C++ SplitPersonality order); magi spellcasting
+-- (magi have
 -- no AI class in the C++ file — their live casts are
 -- DB-side SmartAI, not in this tree); DoAction
 -- ACTION_MAGUS_DEAD + GetData DATA_SPLIT_PERSONALITY
@@ -136,6 +138,10 @@ local function splitPersonality(creature, st, newPhase)
             creature:GetO(), 3, 1000)
         if summoned ~= nil then
             summoned:CastSpell(summoned, magus[2])
+            local target = randomThreatTarget(creature)
+            if target ~= nil then
+                summoned:EngageWithTarget(target)
+            end
         end
     end
     st.fireDead = false

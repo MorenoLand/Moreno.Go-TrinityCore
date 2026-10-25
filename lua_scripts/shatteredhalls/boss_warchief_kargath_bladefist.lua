@@ -59,13 +59,11 @@
 -- via a 5s one-shot pump — the stale "no summon bridge" claim
 -- is retracted (SummonCreature is bridged; C++ JustSummoned
 -- for assassins only tracks GUIDs, no AttackStart relay to
--- miss). The Summon_Assistant_Timer {25s,35s} arm (summoned
--- NPC_HEARTHEN_GUARD 17621 / NPC_SHARPSHOOTER_GUARD 17622 /
--- NPC_REAVER_GUARD 17623 at AddsEntrance, with the
--- summoned-counter growth arm) stays out: C++ JustSummoned
--- AttackStarts each guard onto a random target (no bridge),
--- so summoning guards would strand them off-target
--- (steamrigger precedent); no movement bridge — the whole
+-- miss). The Summon_Assistant_Timer arm is PORTED 2026-10-24:
+-- 30s init then urand(25s,35s) waves of `summoned` guards
+-- (init 2, +1 on urand(0,9) < 2), urand guard entry at
+-- AddsEntrance, each guard AttackStarted onto a random
+-- threat target via summoned:EngageWithTarget; no movement bridge — the whole
 -- blade-dance machine unmodeled: Blade_Dance_Timer 45s init
 -- then 30s sets target_num = 5 / Wait_Timer = 1 / InBlade =
 -- true / SetSpeedRate(MOVE_RUN, 4), the Wait_Timer arm drives
@@ -88,11 +86,11 @@
 -- rides the GetAITargets convention (gruul second-threat
 -- precedent), so the arm's sole blocker is that MovementInform
 -- trigger, not SelectTarget; porting the gate alone would
--- fabricate a fire arm with no trigger (thespia precedent); no cross-creature/
--- ObjectAccessor bridge — the JustSummoned AttackStart relay
--- for guard adds stays unmodeled; the removeAdds sweep is
--- ported for assassins via stored summon objects (guards never
--- summoned, so their list is empty by construction); no position/home bridge — the resetcheck_timer
+-- fabricate a fire arm with no trigger (thespia precedent);
+-- the JustSummoned guard AttackStart relay is ported via
+-- summoned:EngageWithTarget (random threat target); the
+-- removeAdds sweep is ported for assassins AND guards via
+-- stored summon objects; no position/home bridge — the resetcheck_timer
 -- 5s evade arm (EnterEvadeMode when x is outside [205, 255])
 -- unmodeled (bookkeeping exact: 5s init then 5s); no
 -- unit-state bridge — the C++ UpdateAI skips
@@ -108,6 +106,12 @@ local SAY_DEATH = 2
 
 local ENTRY_KARGATH_BLADEFIST = 16808
 local ENTRY_SHATTERED_ASSASSIN = 17695
+local ENTRY_HEARTHEN_GUARD = 17621
+local ENTRY_SHARPSHOOTER_GUARD = 17622
+local ENTRY_REAVER_GUARD = 17623
+-- C++ AddsEntrance (boss_warchief_kargath_bladefist.cpp:64);
+-- guard summon type 2, 30s (TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT).
+local ADDS_ENTRANCE = { 306.036, -84.29, 1.93 }
 -- C++ AssassEntrance/AssassExit (boss_warchief_kargath_bladefist.cpp:62-63);
 -- SpawnAssassin (:195-198) summons at y +/- 8, orientation 0,
 -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 2), 30s.
@@ -121,6 +125,9 @@ local ASSASSIN_SPOTS = {
 local kargathTimers = {}
 local kargathAssassins = {}
 local kargathAssassinFired = {}
+local kargathGuards = {}
+local kargathGuardTimers = {}
+local kargathSummoned = {}
 
 local function cancelKargath(guid)
     local id = kargathTimers[guid]
@@ -128,7 +135,13 @@ local function cancelKargath(guid)
         RemoveEventById(id)
         kargathTimers[guid] = nil
     end
+    local guardId = kargathGuardTimers[guid]
+    if guardId then
+        RemoveEventById(guardId)
+        kargathGuardTimers[guid] = nil
+    end
     kargathAssassinFired[guid] = nil
+    kargathSummoned[guid] = nil
 end
 
 -- C++ removeAdds (:175-191) for the assassin list: the guard list
@@ -146,11 +159,68 @@ local function despawnAssassins(guid)
     end
 end
 
+local function despawnGuards(guid)
+    local list = kargathGuards[guid]
+    if list then
+        for _, add in ipairs(list) do
+            if add then
+                add:Despawn()
+            end
+        end
+        kargathGuards[guid] = nil
+    end
+end
+
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if targets == nil or #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
+local GUARD_ENTRIES = {
+    ENTRY_HEARTHEN_GUARD, ENTRY_SHARPSHOOTER_GUARD, ENTRY_REAVER_GUARD,
+}
+
+-- C++ Summon_Assistant_Timer (boss_warchief_kargath_bladefist.cpp:279-301):
+-- every wave summons `summoned` guards (init 2, +1 on urand(0,9) < 2),
+-- each a urand(0,2) guard entry at AddsEntrance; JustSummoned (:132-141)
+-- AttackStarts each guard onto a random target, ported via
+-- summoned:EngageWithTarget below; re-arm urand(25000, 35000).
+local function kargathGuardTick(creature, guid)
+    local summoned = kargathSummoned[guid] or 2
+    local list = kargathGuards[guid] or {}
+    for _ = 1, summoned do
+        local guard = creature:SummonCreature(GUARD_ENTRIES[math.random(3)],
+            ADDS_ENTRANCE[1], ADDS_ENTRANCE[2], ADDS_ENTRANCE[3], 0, 2, 30000)
+        if guard then
+            list[#list + 1] = guard
+            local target = randomThreatTarget(creature)
+            if target ~= nil then
+                guard:EngageWithTarget(target)
+            end
+        end
+    end
+    kargathGuards[guid] = list
+    if math.random(0, 9) < 2 then
+        kargathSummoned[guid] = summoned + 1
+    end
+    kargathGuardTimers[guid] = CreateLuaEvent(function()
+        kargathGuardTick(creature, guid)
+    end, math.random(25000, 35000))
+end
+
 local function kargathEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     kargathAssassinFired[guid] = false
     kargathAssassins[guid] = {}
+    kargathGuards[guid] = {}
+    kargathSummoned[guid] = 2
+    kargathGuardTimers[guid] = CreateLuaEvent(function()
+        kargathGuardTick(creature, guid)
+    end, 30000)
     -- C++ Assassins_Timer 5000 one-shot (UpdateAI :207-213):
     -- SpawnAssassin() fires once, then Assassins_Timer = 0.
     -- The 5s pump re-fires but is fired-guarded; canceled on
@@ -177,6 +247,7 @@ local function kargathLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelKargath(guid)
     despawnAssassins(guid)
+    despawnGuards(guid)
 end
 
 local function kargathDied(event, creature, killer)
@@ -184,6 +255,7 @@ local function kargathDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelKargath(guid)
     despawnAssassins(guid)
+    despawnGuards(guid)
 end
 
 local function kargathReset(event, creature)
@@ -195,6 +267,7 @@ local function kargathReset(event, creature)
     local guid = creature:GetGUID()
     cancelKargath(guid)
     despawnAssassins(guid)
+    despawnGuards(guid)
 end
 
 RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 1, kargathEnterCombat)

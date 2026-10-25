@@ -77,9 +77,14 @@
 -- BEGIN_FIGHTING gating (no cross-AI DoAction/GetData
 -- bridge — the fight therefore starts on engage rather
 -- than after the run, a timing deviation, not a spell
--- deviation); BeginFighting threat-empty AttackStart
--- legs (no AttackStart bridge) and lady/sir threat-empty
--- EnterEvadeMode legs (EnterEvadeMode unbridged);
+-- deviation); BeginFighting AttackStart legs: baron/thane
+-- threat-nonempty AttackStart(current victim) ported
+-- 2026-10-24 via EngageWithTarget(GetVictim()) in C++
+-- order; threat-empty nearest-player + AddThreat leg stays
+-- out (no player-search bridge on an empty threat list;
+-- ResetEncounter unbridged); lady/sir have no BeginFighting
+-- AttackStart leg in C++ (their threat-empty EnterEvadeMode
+-- legs stay unbridged);
 -- JustDied instance legs (boss-state check, death-time
 -- latches, CheckIsMovementFinished, EncounterCleared
 -- DoCastAOE ENCOUNTER_CREDIT 59450, timed-kill
@@ -258,6 +263,10 @@ local function beginFighting(creature, guid, which)
     if which == "baron" or which == "thane" then
         creature:SetCombatMovement(true)
         creature:SetReactState(2)
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            creature:EngageWithTarget(victim)
+        end
     end
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
