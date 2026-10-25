@@ -94,24 +94,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance (the keleseth / thorim
--- precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
-end
 
 -- C++ SelectTarget(Random, 0, 50.0f, true) draws the threat list
 -- (UnitAI.h:162-184, playerOnly=true), not instance players: random

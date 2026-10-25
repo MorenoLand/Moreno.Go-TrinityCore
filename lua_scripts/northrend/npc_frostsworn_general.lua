@@ -150,14 +150,11 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 45.0f, true): a random
--- alive player on the same map/instance within 45 yards (the devourer
--- GetPlayersInWorld precedent, plus the C++ distance filter).
+-- alive threat-list player within 45 yards (GetAITargets).
 local function randomPlayer45(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead()
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= 45 then
             candidates[#candidates + 1] = p
         end

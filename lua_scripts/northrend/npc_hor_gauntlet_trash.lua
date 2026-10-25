@@ -24,9 +24,9 @@
 -- devourer_of_souls convention); creature:CastSpell(nil, spellId) =
 -- victim-cast (bridge falls back to TargetGUID);
 -- creature:CastSpell(creature, spellId) = self-cast (the DoCastAOE
--- convention); all casts here are non-triggered. Random-player targets
--- use the random-alive-player helper (the devourer GetPlayersInWorld
--- precedent) filtered to the C++ SelectTarget distance; melee is
+-- convention); all casts here are non-triggered. Random targets use
+-- the threat-list helper (GetAITargets) filtered to the C++ SelectTarget
+-- distance/playerOnly; melee is
 -- engine-driven in Go, like C++ DoMeleeAttackIfReady.
 --
 -- PORTED ARMS (C++ line refs; C++-exact for the modeled arms):
@@ -49,7 +49,8 @@
 --   72169 (:1617), re-arm 15000ms.
 -- EVENT_FROSTBOLT (:1609-1613) — random player within 40 yd, cast
 --   72166 (:1622), re-arm 15000ms.
--- EVENT_CHAINS_OF_ICE (:1614-1618) — random player, no distance
+-- EVENT_CHAINS_OF_ICE (:1614-1618) — random threat-list unit, no distance
+--   (playerOnly=false, unlike every other arm here)
 --   (:1626), cast 72121 (:1627), re-arm 15000ms.
 -- EVENT_HALLUCINATION (:1630-1634) — non-triggered self-cast 72342
 --   (:1633), no re-arm (one-shot, like C++).
@@ -125,8 +126,7 @@
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (the maiden
 -- precedent); SelectTarget's "valid attackable target" nuance is
--- approximated by alive same-map/instance players within the C++
--- distance (the devourer precedent).
+-- approximated by alive threat-list entries within the C++ distance.
 
 local ENTRY_GHOSTLY_PRIEST    = 38175
 local ENTRY_PHANTOM_MAGE      = 38172
@@ -179,16 +179,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, true): a random
--- alive player on the same map/instance within dist yards (the devourer
--- GetPlayersInWorld precedent, plus the C++ distance filter via
--- GetDistance). maxDist nil = no distance filter (CHAINS_OF_ICE).
-local function randomPlayer(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, playerOnly):
+-- the threat list (GetAITargets) filtered to alive entries within dist
+-- yards; playersOnly=true restricts to players, playersOnly=false =
+-- any threat-list unit. maxDist nil = no distance filter (CHAINS_OF_ICE,
+-- SelectTarget(Random) defaults, playerOnly=false).
+local function randomPlayer(creature, maxDist, playersOnly)
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead()
+    for _, p in ipairs(creature:GetAITargets()) do
+        if not p:IsDead()
+                and (playersOnly == false or p:GetObjectType() == "Player")
                 and (maxDist == nil or creature:GetDistance(p) <= maxDist) then
             candidates[#candidates + 1] = p
         end
@@ -207,7 +207,7 @@ end
 -- C++ :1532-1536: random player 40 yd, cast 72318, re-arm {6000,15000}.
 local function priestShadowWordPain(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_WORD_PAIN)
     end
@@ -217,7 +217,7 @@ end
 -- C++ :1537-1541: random player 10 yd, cast 72320, re-arm 12000.
 local function priestCircleOfDestruction(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 10)
+    local target = randomPlayer(creature, 10, true)
     if target then
         creature:CastSpell(target, SPELL_CIRCLE_OF_DESTRUCTION)
     end
@@ -227,7 +227,7 @@ end
 -- C++ :1542-1546: random player 20 yd, cast 72321, re-arm 10000.
 local function priestCowerInFear(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 20)
+    local target = randomPlayer(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_COWER_IN_FEAR)
     end
@@ -247,7 +247,7 @@ end
 -- C++ :1610-1614: random player 40 yd, cast 72163, re-arm 15000.
 local function mageFireball(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FIREBALL)
     end
@@ -257,7 +257,7 @@ end
 -- C++ :1604-1608: random player 40 yd, cast 72169, re-arm 15000.
 local function mageFlamestrike(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FLAMESTRIKE)
     end
@@ -267,7 +267,7 @@ end
 -- C++ :1609-1613: random player 40 yd, cast 72166, re-arm 15000.
 local function mageFrostbolt(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FROSTBOLT)
     end
@@ -277,7 +277,7 @@ end
 -- C++ :1614-1618: random player (no distance), cast 72121, re-arm 15000.
 local function mageChainsOfIce(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, nil)
+    local target = randomPlayer(creature, nil, false)
     if target then
         creature:CastSpell(target, SPELL_CHAINS_OF_ICE)
     end
@@ -325,7 +325,7 @@ end
 -- C++ :1710-1714: random player 100 yd, cast 72326, re-arm 8000.
 local function mercenaryShadowStep(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 100)
+    local target = randomPlayer(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_STEP)
     end
@@ -342,7 +342,7 @@ end
 -- C++ :1711-1715: random player 40 yd, cast 72333, re-arm 10000.
 local function mercenaryDaggerThrow(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_ENVENOMED_DAGGER_THROW)
     end
@@ -401,7 +401,7 @@ end
 -- C++ :1825-1829: random player 40 yd, cast 72208, re-arm 2000.
 local function riflemanShoot(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_SHOOT)
     end
@@ -411,7 +411,7 @@ end
 -- C++ :1822-1826: random player 40 yd, cast 72222, re-arm 10000.
 local function riflemanCursedArrow(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_CURSED_ARROW)
     end
@@ -428,7 +428,7 @@ end
 -- C++ :1831-1835: random player 40 yd, cast 72268, re-arm 15000.
 local function riflemanIceShot(creature, guid)
     if not alive(guid) then return end
-    local target = randomPlayer(creature, 40)
+    local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_ICE_SHOT)
     end

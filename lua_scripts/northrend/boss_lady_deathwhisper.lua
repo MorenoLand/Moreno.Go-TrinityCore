@@ -336,21 +336,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- lavanthor / the_beast precedent: map-wide same-instance alive-player
--- pool standing in for SelectTarget(Random) threat-list selection.
--- FIDELITY CAVEAT: C++ SelectTarget defaults playerOnly=FALSE
--- (UnitAI.h:170), so the pool can include pets/totems — Lua's
--- player-only enumeration is the documented approximation (the
--- tuten_kash precedent); the unit-enumeration bridge IS GetAITargets
+-- C++ SelectTarget(Random) defaults (UnitAI.h:170): offset 0, no dist
+-- cap, playerOnly=false — the pool is the threat list, pets/totems
+-- included; GetAITargets is the threat-list bridge
 -- (lua_creature_events.go:345).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+local function randomThreatTarget(creature)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -371,7 +365,7 @@ end
 -- SPELL_DEATH_AND_DECAY 71001) non-triggered on SelectTarget(Random);
 -- init 17s, re-arm {22s,30s} unconditional (outside the target if).
 local function onDeathAndDecay(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_DEATH_AND_DECAY)
     end
@@ -423,7 +417,7 @@ end
 -- non-triggered on SelectTarget(Random); init 2s, re-arm
 -- {2450ms,3600ms} unconditional.
 local function onShadowBolt(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
     end
@@ -443,8 +437,9 @@ end
 -- exactly (IsHeroic() or Is25ManRaid()): 10N is the only difficulty
 -- with both false; count RAID_MODE(0,1,1,3) is 1 except 25H = 3.
 -- Init 27s, re-arm {40s,45s} unconditional (Repeat after the cast
--- loop). Pool idiom is randomPlayer's (threat-list exactness caveat
--- documented there); distinct picks via the putricide table.remove
+-- loop). Pool is the threat list (GetAITargets), playerOnly=true,
+-- victim-GUID exclusion standing in for the withTank=false
+-- last-victim exclusion; distinct picks via the putricide table.remove
 -- idiom. Non-triggered casts.
 local function onDominateMind(creature, guid)
     creature:Talk(SAY_DOMINATE_MIND)
@@ -452,16 +447,14 @@ local function onDominateMind(creature, guid)
     if creature:Is25ManRaid() and creature:IsHeroic() then
         count = 3
     end
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local victim = creature:GetVictim()
     local victimGuid = nil
     if victim ~= nil then
         victimGuid = victim:GetGUID()
     end
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player"
                 and not plr:IsDead() and not plr:HasAura(SPELL_DOMINATE_MIND)
                 and (victimGuid == nil or plr:GetGUID() ~= victimGuid) then
             candidates[#candidates + 1] = plr
@@ -615,7 +608,7 @@ end
 -- (onDominateMind, onImproveCultist).
 -- Shadow Bolt (GROUP_ONE) and Death and Decay (phase-INDEPENDENT) ARE
 -- ported below — the C++ SelectTarget(Random) playerOnly=FALSE default
--- is documented on randomPlayer (the tuten_kash pets/totems caveat).
+-- (threat list, pets/totems included) via randomThreatTarget.
 -- Talk(SAY_AGGRO)
 -- (:338) then DoCastSelf(SPELL_MANA_BARRIER, true) TRIGGERED (:340).
 local function deathwhisperJustEngagedWith(event, creature, target)
