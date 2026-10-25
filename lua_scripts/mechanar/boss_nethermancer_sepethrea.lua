@@ -60,7 +60,9 @@
 -- DoCastVictim (C++-exact; "Not scripted" on the spell means
 -- no SpellScript, not a skipped cast); fire tail 35278:
 -- 500ms init and re-arm — non-triggered DoCast(me)
--- self-cast (C++-exact). The rest of the C++ has no bridges:
+-- self-cast (C++-exact) on a 500ms pump (shattered-
+-- executioner precedent): the old 1000ms pump fired fire
+-- tail every 1000ms, half the C++ cadence. The rest of the C++ has no bridges:
 -- Reset()'s ApplySpellImmune legs PORTED 2026-10-22 (0, IMMUNITY_
 -- DAMAGE=3, SPELL_SCHOOL_MASK_MAGIC=126 / NORMAL=1, true — C++ :181-182,
 -- creature:ApplySpellImmune bridge, lua_creature_events.go:860;
@@ -235,20 +237,21 @@ local function flameTick(creature, guid)
 
     -- Inferno 35268: 10s init and re-arm — non-triggered
     -- DoCastVictim (C++-exact).
-    if st.inferno <= 1000 then
+    if st.inferno <= 500 then
         creature:CastSpell(nil, SPELL_INFERNO)
         st.inferno = 10000
     else
-        st.inferno = st.inferno - 1000
+        st.inferno = st.inferno - 500
     end
 
     -- Fire Tail 35278: 500ms init and re-arm —
     -- non-triggered DoCast(me) self-cast (C++-exact).
-    if st.flame <= 1000 then
+    -- 500ms pump: the 500ms init fires on the first tick, as C++.
+    if st.flame <= 500 then
         creature:CastSpell(creature, SPELL_FIRE_TAIL)
         st.flame = 500
     else
-        st.flame = st.flame - 1000
+        st.flame = st.flame - 500
     end
 end
 
@@ -258,7 +261,7 @@ RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 1, function(_, creature)
     flameStates[guid] = freshFlameState()
     timers[guid] = CreateLuaEvent(function()
         flameTick(creature, guid)
-    end, 1000, 0)
+    end, 500, 0)
 end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 2, function(_, creature)
