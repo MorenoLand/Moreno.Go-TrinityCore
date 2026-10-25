@@ -42,9 +42,10 @@
 -- timer semantics, yazzai-Polymorph precedent). The Oz AggroTimer
 -- RemoveFlag(NON_ATTACKABLE) arms are PORTED (2026-10-20) via
 -- creature:RemoveFlag(UNIT_FIELD_FLAGS); PretendToDie's
--- NOT_SELECTABLE/SetHealth(0)/stand-state arms and Resurrect's
--- flag/health/stand-state restores stay out (no broader UNIT_FLAG /
--- stand-state model); fake death is timer-cancel plus shared flags.
+-- NOT_SELECTABLE/SetHealth(0)/stand-state arms stay out (fake death is
+-- timer-cancel plus shared flags); Resurrect's flag/health/stand-state
+-- restores are PORTED (RemoveFlag + SetHealth(GetMaxHealth()) +
+-- SetStandState(0) ahead of the res visual, C++ Resurrect order).
 -- No UNIT_STATE_CASTING model — timers
 -- fire unconditionally (InterruptNonMeleeSpells skipped). No facing model —
 -- BackwardLunge's behind-target (HasInArc) gate is ported via the inArc twin. The
@@ -98,6 +99,7 @@ local timers = {}
 -- (engine/world/lua_creature_events.go:725).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 -- Oz intro timers: the AggroTimer arms (bosses_opera.cpp) are kept out
 -- of the shared timer keyspace — C++ never cancels AggroTimer on
@@ -1170,6 +1172,14 @@ local function julianneLeaveCombat(event, creature)
     rajDeadlines[guid] = nil
     raj.julianneFrozen = nil
     if raj.julianneGuid == guid then
+        -- C++ Reset resurrects a faking Julianne (bosses_opera.cpp:1104-1110):
+        -- Resurrect(me) ahead of clearing the faking flag.
+        if raj.julianneFaking then
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetHealth(creature:GetMaxHealth())
+            creature:SetStandState(0)
+            creature:CastSpell(creature, SPELL_RES_VISUAL, true)
+        end
         raj.julianneFaking = false
         raj.romuloDead = false
         raj.romuloSummoned = false
@@ -1292,6 +1302,11 @@ julianneResurrectSelf = function()
         return
     end
     if raj.julianne ~= nil then
+        -- C++ Resurrect (bosses_opera.cpp:1029-1034): RemoveFlag, full
+        -- health, stand, then the res visual, in C++ order.
+        raj.julianne:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        raj.julianne:SetHealth(raj.julianne:GetMaxHealth())
+        raj.julianne:SetStandState(0)
         raj.julianne:CastSpell(raj.julianne, SPELL_RES_VISUAL, true)
     end
     raj.julianneFaking = false
@@ -1326,6 +1341,11 @@ julianneResurrectRomulo = function()
         raj.julianne:Talk(JULIANNE_SAY_RESURRECT)
     end
     if raj.romulo ~= nil then
+        -- C++ Resurrect (bosses_opera.cpp:1029-1034): RemoveFlag, full
+        -- health, stand, then the res visual, in C++ order.
+        raj.romulo:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        raj.romulo:SetHealth(raj.romulo:GetMaxHealth())
+        raj.romulo:SetStandState(0)
         raj.romulo:CastSpell(raj.romulo, SPELL_RES_VISUAL, true)
     end
     raj.romuloFaking = false
@@ -1356,6 +1376,11 @@ romuloResurrectJulianne = function()
         raj.romulo:Talk(ROMULO_SAY_RESURRECT)
     end
     if raj.julianne ~= nil then
+        -- C++ Resurrect (bosses_opera.cpp:1029-1034): RemoveFlag, full
+        -- health, stand, then the res visual, in C++ order.
+        raj.julianne:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        raj.julianne:SetHealth(raj.julianne:GetMaxHealth())
+        raj.julianne:SetStandState(0)
         raj.julianne:CastSpell(raj.julianne, SPELL_RES_VISUAL, true)
     end
     raj.julianneFaking = false

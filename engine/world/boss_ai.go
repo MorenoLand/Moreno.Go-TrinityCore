@@ -4129,7 +4129,7 @@ func init() {
 	// pick is approximated at 10 yd (no combat-reach bridge); the player
 	// self-casts 40617/40603 have no player-side CastSpell bridge and are
 	// applied via AddAura (their whole effect is the aura); the berserk and
-	// death DoPlaySoundToSet arms have no sound bridge; the npc_fel_geyser
+	// death DoPlaySoundToSet arms are ported via creature:PlayDirectSound; the npc_fel_geyser
 	// add AI is not registered (ScriptName bindings are DB-side, no entry
 	// constant in the C++ tree) and its summons have no summon model; the
 	// bloodboil/insignificance target-filter SpellScripts have no
@@ -6422,7 +6422,7 @@ func init() {
 	// DoActions, MovementInform flight path) has no bridges, so porting
 	// the negation alone would make the boss unkillable; the cleave
 	// therefore runs the phase-1 cadence flat (C++ re-arms at 16s/9s in
-	// phases 2/3, unmodeled). EVENT_RANDOM_LAUGH has no sound bridge
+	// phases 2/3, unmodeled). EVENT_RANDOM_LAUGH is ported via creature:PlayDirectSound
 	// (DoPlaySoundToSet); EVENT_CONFLAGRATE has no random-target bridge;
 	// EVENT_SUMMON_PUMPKIN is phase-pinned with no summon bridge; the
 	// instance GetCreature/SetData legs (DATA_HORSEMAN_HEAD,
@@ -7447,7 +7447,7 @@ func init() {
 	// C++-verbatim decreasing MarkTimerBase 45000 -> 40000 -> ... floor
 	// 5500, Talk SAY_MARK on each expiry; engage Talk SAY_ONAGGRO,
 	// KilledUnit Talk SAY_ONSLAY (no TYPEID gate in C++), no death Talk —
-	// DoPlaySoundToSet(11018) has no sound bridge) on C++-verbatim
+	// DoPlaySoundToSet(11018) is ported via creature:PlayDirectSound) on C++-verbatim
 	// timers; melee engine-driven. The IsEvent EscortAI escort machine
 	// (8 C++-verbatim waypoints, WaypointReached(7) AddThreat on the
 	// DATA_THRALL GUID) and DATA_KAZROGALEVENT Reset/engage/death
@@ -7961,8 +7961,8 @@ func init() {
 	// ResetThreatList/AttackStart bridges; InterruptNonMeleeSpells now bridged
 	// but the swap stays blocked on the rest); HandleBugs + Mutate Bug
 	// 802 (creature grid + SetFaction + AttackStart — no bridges);
-	// Aggro/Kill/Death DoPlaySoundToSet 8661/8662/8660 (no sound
-	// bridge; zero Talk in C++); TwinReset/BossAI ctor leg
+	// Aggro/Kill/Death DoPlaySoundToSet 8661/8662/8660 (ported via
+	// creature:PlayDirectSound; zero Talk in C++); TwinReset/BossAI ctor leg
 	// DATA_TWIN_EMPERORS (instance bridge). Full analysis in
 	// lua_scripts/kalimdor/boss_veknilash.lua.
 	RegisterLuaBoss("boss_veknilash", 15275)
@@ -7982,8 +7982,8 @@ func init() {
 	// re-arm (no position/threat/interrupt bridges); Arcane Burst
 	// 568 nearest-melee punishment (no range bridge); HandleBugs +
 	// Explode Bug 804 (no creature-grid/SetFaction bridges);
-	// Aggro/Kill/Death DoPlaySoundToSet 8657/8658/8659 (no sound
-	// bridge; zero Talk in C++); TwinReset/BossAI ctor leg
+	// Aggro/Kill/Death DoPlaySoundToSet 8657/8658/8659 (ported via
+	// creature:PlayDirectSound; zero Talk in C++); TwinReset/BossAI ctor leg
 	// DATA_TWIN_EMPERORS (instance bridge). Full analysis in
 	// lua_scripts/kalimdor/boss_veklor.lua.
 	RegisterLuaBoss("boss_veklor", 15276)
@@ -11900,7 +11900,7 @@ func init() {
 	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
 	// player-gated variant precedent). No other bridgeable arm in the
 	// file: JustDied _JustDied() + DoPlaySoundToSet(SOUND_ID_DEATH 17531)
-	// (no instance-script / play-sound bridges, zero Talk); MovementInform
+	// (no instance-script bridge; sound arm ported via creature:PlayDirectSound, zero Talk); MovementInform
 	// Talk(SAY_CONFLAGRATION 1) rides POINT_FLIGHT (no-movement-inform
 	// bridge); UpdateAI Talk(EMOTE_ENRAGED 2) rides EVENT_ENRAGE
 	// (no-timer-bridge); the two SpellScripts (no-SpellScript bridge);
