@@ -64,14 +64,17 @@ local function onBarkskin(creature, guid)
 end
 
 -- C++ base boss_faction_championsAI::JustEngagedWith
--- (boss_faction_champions.cpp:643-646): DoCast(me, SPELL_ANTI_AOE, true)
--- triggered — applies to every champion subclass including this druid
--- AI (npc_toc_druidAI : public boss_faction_championsAI, :759); the
--- npc_toc_boomkin.lua precedent.
+-- (boss_faction_champions.cpp:646-649): DoCast(me, SPELL_ANTI_AOE, true)
+-- triggered, SetCombatPulseDelay(5), setActive (no bridge),
+-- DoZoneInCombat() — applies to every champion subclass including
+-- this druid AI (npc_toc_druidAI : public boss_faction_championsAI,
+-- :759); the npc_toc_boomkin.lua precedent ports all three bridged arms.
 local function druidEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
+    creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
+    creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     schedule(guid, "barkskin", {15000, 25000}, function() onBarkskin(creature, guid) end)
 end
 

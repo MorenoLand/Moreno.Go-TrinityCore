@@ -448,12 +448,14 @@ local function algalonTimersStart(event, creature)
     -- the REACT_PASSIVE constellation summons. The flag clear rides
     -- this tick in C++ order (before the react flip); it is safe
     -- without the unported JustEngagedWith set leg (a clear can never
-    -- strand combat, unlike a set). SetSheath / SetImmuneToNPC /
-    -- DoCastAOE still ride the unported intro machinery. Without
+    -- strand combat, unlike a set). SetImmuneToNPC / DoCastAOE
+    -- still ride the unported intro machinery; the sheath leg is
+    -- ported in the introdefensive tick below. Without
     -- the react flip the boss keeps the algalonReset REACT_PASSIVE
     -- while engaged and the engine's isCreaturePassive gate never
     -- lets it attack.
     schedule(guid, "introdefensive", introDelay, function()
+        creature:SetSheath(1) -- SHEATH_STATE_MELEE (EVENT_INTRO_TIMER_DONE :563, C++ order before the flag clear)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         creature:SetReactState(1) -- REACT_DEFENSIVE
     end)
