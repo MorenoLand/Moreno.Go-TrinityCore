@@ -55,7 +55,9 @@
 --   FORCEFUL_SMASH 69155 {14000,16000}ms, MARK_OF_RIMEFANG 69275
 --   {25000,27000}ms.
 -- EVENT_OVERLORD_BRAND (:254-257) — SelectTarget(Random, 1, 0.0f, true) ->
---   random alive player; DoCast(target, 69172); re-arm {11000,12000}ms.
+--   random alive threat-list player past the first MaxThreat entry
+--   (GetAITargets[2..], eck precedent); DoCast(target, 69172);
+--   re-arm {11000,12000}ms.
 -- EVENT_FORCEFUL_SMASH (:259-261) — DoCastVictim(69155) victim-cast;
 --   chains EVENT_UNHOLY_POWER at 1000ms (no direct re-arm of smash here).
 -- EVENT_UNHOLY_POWER (:263-267) — Talk(SAY_DARK_MIGHT_1 13) then
@@ -63,7 +65,8 @@
 --   self-cast; re-arms EVENT_FORCEFUL_SMASH {40000,48000}ms (the smash ->
 --   unholy -> smash loop).
 -- EVENT_MARK_OF_RIMEFANG (:269-276) — Talk(SAY_MARK_RIMEFANG_1 11);
---   SelectTarget(Random, 1, 0.0f, true) -> random alive player; if found,
+--   SelectTarget(Random, 1, 0.0f, true) -> random alive threat-list
+--   player past the first MaxThreat entry (GetAITargets[2..]); if found,
 --   Talk(SAY_MARK_RIMEFANG_2 12, target) (whisper-target bridge) +
 --   DoCast(target, 69275); re-arm {24000,26000}ms.
 -- Tyrannus KilledUnit (:187) — Talk(SAY_SLAY 9) player-gated (the
@@ -82,15 +85,16 @@
 -- re-arm 15s unconditional (the SelectTarget if only wraps the cast).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally and the :280-281
--- early-return gate is unmodeled (the maiden / devourer precedent); the
--- SelectTarget position-1 offset on the two Tyrannus random-target arms
--- (:255, :272) has no bridge — a plain random alive player is picked (the
--- bronjahm corrupt-soul precedent), no threat model — no target at all
--- when none qualify (Talk + cast stay inside the C++ target-found legs
--- where C++ has them: overlord brand :255-256, mark :272-275).
+-- early-return gate is unmodeled (the maiden / devourer precedent).
+-- The SelectTarget position-1 offset on the two Tyrannus random-target
+-- arms (:255, :272) IS bridged — GetAITargets[2..] (eck precedent),
+-- fixed 2026-10-25 from the plain GetPlayersInWorld pick; no target at
+-- all when none qualify (Talk + cast stay inside the C++ target-found
+-- legs where C++ has them: overlord brand :255-256, mark :272-275).
 -- Rimefang's SelectTarget(Random, 0) (:369) is not playerOnly in C++ —
--- it is now a plain pick over the bridged threat list GetAITargets (the
--- midnight precedent), no Player filter.
+-- it is an alive-filtered pick over the bridged threat list
+-- GetAITargets (the midnight precedent; C++ SelectTargetList skips
+-- offline refs), no Player filter.
 -- DOCUMENTED-ONLY (in this header; registrations: 36658 + 36661):
 -- Tyrannus intro machine — DoAction(ACTION_START_INTRO) (:207-217:
 --   Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 / EVENT_COMBAT_START
@@ -198,18 +202,20 @@ local function initState(guid)
     cancelTimers(guid)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 1, 0.0f, true) — alive
--- players on the same map/instance (the devourer_of_souls / archavon
--- GetPlayersInWorld precedent); the position-1 offset on the Tyrannus
--- arms has no bridge (see header).
+-- C++ SelectTarget(SelectTargetMethod::Random, 1, 0.0f, true) — the
+-- offset-1 skip pops the first MaxThreat-ordered entry BEFORE the
+-- player filter (UnitAI.h:214-280), then a random alive player from
+-- the rest: threat-ordered GetAITargets[2..] (eck precedent; dead
+-- targets are offline refs, Go SortedEntries returns them too, so
+-- IsAlive filters). Fixed 2026-10-25 from the GetPlayersInWorld
+-- pool, which could pick threat-less players and ignored the skip.
 local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -297,14 +303,21 @@ end
 
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0) with
 -- playerOnly=false default (UnitAI.h:170): the pool is the whole threat
--- list (pets/totems included) — plain pick over GetAITargets (the
--- bridged threat list; midnight precedent), no Player filter.
+-- list (pets/totems included) — alive-filtered pick over GetAITargets
+-- (the bridged threat list; midnight precedent; C++ SelectTargetList
+-- skips offline refs, Go SortedEntries returns dead entries too),
+-- no Player filter.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ :368-371 Rimefang EVENT_ICY_BLAST: DoCast(target, 69232) on a random

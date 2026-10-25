@@ -301,23 +301,18 @@ end
 
 -- C++ SelectTarget(Random, 0, 0.0f, true) (:236-237), called on ICK:
 -- random alive player from ick's threat list, no distance limit, tank
--- included; the GetPlayersInWorld same-map/instance pick is the anomalus
--- precedent (threat-listed units only in practice; no dead-player leg in
--- the C++ predicate, the alive filter rides the precedent).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- included (UnitAI.h: SelectTarget draws the threat list; dead targets
+-- are offline refs, Go SortedEntries returns them too, so IsAlive
+-- filters). Fixed 2026-10-25 from the GetPlayersInWorld same-map/
+-- instance pool, which could pick threat-less players (tharon_ja /
+-- violet-hold fix class).
+local function randomPlayer(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
-    return found
-end
-
-local function randomPlayer(creature)
-    local candidates = playersInInstance(creature)
     if #candidates == 0 then
         return nil
     end
@@ -325,17 +320,20 @@ local function randomPlayer(creature)
 end
 
 -- C++ SelectTarget(Random, 1, 0.0f, true) (:244-245): offset 1 pops the
--- first MaxThreat-ordered entry — the current victim — BEFORE the player
--- filter (UnitAI.h SelectTarget template), then random among the rest;
--- the netherspite exclude-victim precedent. A lone-victim tick casts
--- nothing (C++ returns nil when the list is at most the offset).
+-- first MaxThreat-ordered entry BEFORE the player filter (UnitAI.h
+-- SelectTarget template, :214-280 — skip precedes player/dist filter),
+-- then random among the rest; threat-ordered GetAITargets[2..] is the
+-- eck precedent (the old exclude-victim-by-GUID form was wrong when
+-- the top threat entry is not the current victim). A threat list of
+-- size <= 1 casts nothing (C++ returns nil when the list is at most
+-- the offset).
 local function randomNonVictimPlayer(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

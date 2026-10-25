@@ -57,20 +57,23 @@
 --   razuvious player-gated variant precedent.
 -- JustDied (:122-130) — Talk(SAY_DEATH 3) (:125) unconditional, the
 --   sjonnir JustDied-Talk precedent.
--- DamageTaken (:132-152) — simple latch: event 9 fires pre-application,
---   so the post-damage health decides ((GetHealth()-damage), floored
---   thresholds like C++ !HealthAbovePct — the moroes convention).
---   Phase 1, post-damage <= 66% (:134): flip to PHASE_TWO, Talk(1)
+-- DamageTaken (:132-152) — simple latch: event 9 fires pre-application
+--   (DealDamage calls DamageTaken at Unit.cpp:701, before ModifyHealth
+--   at :894), so CURRENT health decides — !HealthAbovePct(66/33) is
+--   health <= floor(max*pct/100) (Unit.h:874, CalculatePct truncates);
+--   the code comment at garfrostDamageTaken states this correctly.
+--   Phase 1, current-health <= 66% (:134): flip to PHASE_TWO, Talk(1)
 --   (:137), non-triggered self-cast THUNDERING_STOMP 68771 (:139),
 --   DelayEvents approximation (see deviations), forge-jump seed at
---   1500ms (:140). Phase 2, post-damage <= 33% (:144): flip to
+--   1500ms (:140). Phase 2, current-health <= 33% (:144): flip to
 --   PHASE_THREE, Talk(2) (:147), self-cast 68771 (:149), same
 --   scheduling (:150). The first leg returns after flipping (:141),
 --   so one massive hit from >66% to <33% flips only to phase 2 —
 --   replicated by the early return.
--- EVENT_THROW_SARONITE (:206-213) — all phases: random player
---   (SelectTarget Random, 0, 0.0f, playerOnly — the GetPlayersInWorld
---   alive-player precedent; 0.0f = no distance filter), Talk(5, target)
+-- EVENT_THROW_SARONITE (:206-213) — all phases: random threat-list
+--   player (SelectTarget Random, 0, 0.0f, playerOnly — GetAITargets +
+--   Player + alive, tharon_ja precedent; 0.0f = no distance filter),
+--   Talk(5, target)
 --   (:209, 2-arg Talk — the buru precedent), non-triggered cast 68788
 --   on the target (:210); re-arm {12500,20000}ms unconditional (:212,
 --   outside the target-if).
@@ -78,8 +81,8 @@
 --   self-cast non-triggered (:215); re-arm 4000ms phase-2-gated (:216)
 --   — the guard kills the chain on a phase-3 flip, mirroring the
 --   inert queued event.
--- EVENT_DEEP_FREEZE (:218-225) — PHASE_THREE-gated: random player,
---   Talk(6, target) (:221), non-triggered cast 70381 on the target
+-- EVENT_DEEP_FREEZE (:218-225) — PHASE_THREE-gated: random threat-list
+--   player, Talk(6, target) (:221), non-triggered cast 70381 on the target
 --   (:222); re-arm 35000ms phase-3-gated (:224).
 -- EVENT_FORGE_JUMP (:226-232) / EVENT_RESUME_ATTACK (:233-239) —
 --   timer skeleton ported C++-exact: forge-jump fires at 1500ms
@@ -106,11 +109,12 @@
 --   0xFFFFFFFF = untouched.)
 -- Reset (:99-105) — SetEquipmentSlots(true) (:103) is the template-default
 --   form (creature_equip_template default set); the Go bridge only takes
---   explicit IDs, so the form has no expressible mapping — and the arm is
---   inert: the forge-sword/forge-mace equipment arms (:160-170) ride the
---   unported movement machine, so equipment never diverges from the spawn
---   template state in Go. Documented-only; SetPhase(PHASE_ONE) (:102) is
---   the phase init.
+--   explicit IDs, so the form has no expressible mapping — that is the
+--   sole blocker (the old "arm is inert" clause is stale: the
+--   forge-sword/forge-mace landing legs ARE ported in onForgeJump, so
+--   equipment can diverge from template after a phase flip; the
+--   template IDs themselves are DB-side). Documented-only;
+--   SetPhase(PHASE_ONE) (:102) is the phase init.
 -- JustDied :126 me->RemoveAllGameObjects() — no bridge (Go engine
 --   owns object cleanup).
 -- JustDied :128-129 tyrannus->AI()->Talk(SAY_TYRANNUS_DEATH 0) via
@@ -157,13 +161,13 @@
 -- Double-flip corner: two phase flips inside 1.5s would queue two
 --   FORGE_JUMP events in C++; the replace-per-key timer convention
 --   (bronjahm) collapses them to one chain.
--- SelectTarget(Random, 0, 0.0f, true): approximated with a random
---   alive player on the same map/instance (the keleseth / thorim
---   GetPlayersInWorld precedent); C++ applies no distance filter
+-- SelectTarget(Random, 0, 0.0f, true): random alive threat-list player
+--   via GetAITargets (tharon_ja precedent; old GetPlayersInWorld pool
+--   could pick threat-less players); C++ applies no distance filter
 --   (0.0f), so none is applied.
--- DamageTaken hook is pre-application: post-damage health decides,
---   strictly at/below 66 / 33 like C++ !HealthAbovePct (the moroes
---   convention).
+-- DamageTaken hook is pre-application: CURRENT health decides,
+--   strictly at/below 66 / 33 like C++ !HealthAbovePct (Unit.cpp:701
+--   DamageTaken precedes :894 ModifyHealth).
 --
 -- UPSTREAM C++ FINDINGS: none — no typos or dead code on the
 -- name-by-name read. (SAY_TYRANNUS_DEATH = 0 reusing the value 0 is
@@ -235,15 +239,15 @@ local function clearState(guid)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 0.0f, true) — random
--- alive player on the same map/instance; no distance filter (0.0f) —
--- the keleseth / thorim GetPlayersInWorld precedent.
+-- alive player from the threat list (UnitAI.h: SelectTarget draws the
+-- threat list; dead targets are offline refs, Go SortedEntries returns
+-- them too, so IsAlive filters); no distance filter (0.0f) — the
+-- tharon_ja / violet-hold threat-pool fix class (2026-10-25).
 local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
