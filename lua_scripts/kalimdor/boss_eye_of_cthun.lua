@@ -78,8 +78,9 @@
 --   bridged 2026-10-20 via creature:SetTarget). Not ported.
 --
 -- Surrounding machinery, also unbridged (for the record, not
--- wired): Reset (:210-:220, RemoveAurasDueToSpell + SetVisible +
--- FindNearestCreature(NPC_CTHUN_PORTAL) passive — FindNearestCreature
+-- wired): Reset (:210-:220) — its two aura clears port below on event
+-- 23; the SetVisible + FindNearestCreature(NPC_CTHUN_PORTAL) passive
+-- legs stay out — FindNearestCreature
 -- has no bridge (SetVisible IS bridged — creature:SetVisible — but the
 -- arm rides the instance SetData leg); JustEngagedWith (:224-:228): the
 -- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
@@ -104,6 +105,8 @@
 -- 2026-10-23: one arm wired (below).
 
 local ENTRY = 15589
+local SPELL_RED_COLORATION = 22518
+local SPELL_FREEZE_ANIM = 16245
 
 -- boss_cthun.cpp:224-228: eye_of_cthunAI::JustEngagedWith is
 -- DoZoneInCombat() + instance->SetData(DATA_CTHUN_PHASE,
@@ -115,3 +118,12 @@ local function onEnterCombat(event, creature, target)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
+
+-- C++ eye_of_cthunAI::Reset (boss_cthun.cpp:207-211): the two aura clears
+-- are unconditional (they precede the instance SetData leg, which stays out).
+local function eyeReset(_, creature)
+    creature:RemoveAura(SPELL_RED_COLORATION)
+    creature:RemoveAura(SPELL_FREEZE_ANIM)
+end
+
+RegisterCreatureEvent(ENTRY, 23, eyeReset)

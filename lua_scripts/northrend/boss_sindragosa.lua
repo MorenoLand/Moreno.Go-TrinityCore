@@ -415,13 +415,22 @@ end
 -- C++ JustSummoned NPC_FROST_BOMB (boss_sindragosa.cpp:413-421):
 -- CastSpell(summon, SPELL_FROST_BOMB_VISUAL 70022, triggered) +
 -- CastSpell(summon, SPELL_BIRTH_NO_VISUAL 40031, triggered) in C++ order;
--- the 5500ms FrostBombExplosion BasicEvent (SPELL_FROST_BOMB 69845 +
--- visual removal) has no bridge. LATENT: frost bombs spawn only from the
+-- the 5500ms FrostBombExplosion BasicEvent's SPELL_FROST_BOMB 69845 cast
+-- stays out (no exact Lua form); its visual-removal leg ports below via
+-- a 5500ms CreateLuaEvent. LATENT: frost bombs spawn only from the
 -- unported air-phase summon machine (anubrekhan latent precedent).
 local function sindragosaJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_FROST_BOMB then
         summoned:CastSpell(summoned, SPELL_FROST_BOMB_VISUAL, true)
         summoned:CastSpell(summoned, SPELL_BIRTH_NO_VISUAL, true)
+        -- C++ FrostBombExplosion BasicEvent (boss_sindragosa.cpp:192-202,
+        -- added at 5500ms): visual strip. Raw per-summon CreateLuaEvent, not
+        -- the file's schedule() helper — its single per-GUID key would
+        -- collapse concurrent bombs into one timer. The paired
+        -- SPELL_FROST_BOMB 69845 cast stays out (no exact Lua form).
+        CreateLuaEvent(function()
+            summoned:RemoveAura(SPELL_FROST_BOMB_VISUAL)
+        end, 5500)
     end
 end
 

@@ -36,6 +36,7 @@
 -- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
 -- tentacle JustDied relay — no DoAction bridge).
 local ENTRY = 15727
+local SPELL_TRANSFORM = 26232
 local SOUND_WHISPER = 8663
 
 local timers = {}
@@ -69,6 +70,10 @@ end
 
 local function startWhispers(_, creature)
     local guid = creature:GetGUID()
+    -- C++ boss_cthunAI::Reset (boss_cthun.cpp:525): unconditional
+    -- RemoveAurasDueToSpell(SPELL_TRANSFORM); the flag/visible/instance
+    -- legs of the same Reset stay out (no instance bridge).
+    creature:RemoveAura(SPELL_TRANSFORM)
     cancelTimers(guid)
     timers[guid] = {}
     timers[guid]["whisper"] = CreateLuaEvent(function()

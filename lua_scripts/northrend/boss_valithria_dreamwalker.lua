@@ -143,6 +143,11 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local MODEL_INVISIBLE = 11686
 local SPELL_ACHIEVEMENT_CHECK = 72706
+local SPELL_CORRUPTION_VALITHRIA = 70904
+local SPELL_DREAM_PORTAL_VISUAL_PRE = 71304
+local SPELL_NIGHTMARE_PORTAL_VISUAL_PRE = 71986
+local ENTRY_DREAM_PORTAL_PRE_EFFECT = 38186
+local ENTRY_NIGHTMARE_PORTAL_PRE_EFFECT = 38429
 
 local SPELL_ACID_BURST = 70744
 local SPELL_ROT_WORM_SPAWNER = 70675
@@ -367,6 +372,7 @@ local function valithriaHealReceived(_, creature, _, heal)
     if healed > math.floor(maxHealth * 100 / 100) and not st.done then
         st.done = true
         creature:Talk(SAY_VALITHRIA_SUCCESS)
+        creature:RemoveAura(SPELL_CORRUPTION_VALITHRIA)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK)
         creature:CastSpell(creature, SPELL_DREAMWALKERS_RAGE)
         schedule(guid, "dream_slip", 3500, function()
@@ -441,6 +447,26 @@ RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 11, valithriaHealReceived)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 14, valithriaSpellHit)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
+
+-- C++ boss_valithria::JustSummoned (boss_valithria_dreamwalker.cpp:390-403):
+-- each portal pre-effect summon gets a 15s ValithriaAuraRemoveEvent for its
+-- pre visual. The paired 15s delayed portal-summon cast stays out (its
+-- summon leg is a separate arm); only the aura strip ports here.
+local function valithriaJustSummoned(_, creature, summoned)
+    local visual = nil
+    if summoned:GetEntry() == ENTRY_DREAM_PORTAL_PRE_EFFECT then
+        visual = SPELL_DREAM_PORTAL_VISUAL_PRE
+    elseif summoned:GetEntry() == ENTRY_NIGHTMARE_PORTAL_PRE_EFFECT then
+        visual = SPELL_NIGHTMARE_PORTAL_VISUAL_PRE
+    end
+    if visual then
+        CreateLuaEvent(function()
+            summoned:RemoveAura(visual)
+        end, 15000)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 19, valithriaJustSummoned)
 RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 1, gluttonousAbominationJustEngagedWith)

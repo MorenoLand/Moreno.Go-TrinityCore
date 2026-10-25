@@ -141,6 +141,10 @@ local timers = {}
 -- (54312) cast guard.
 local frenzyFired = {}
 
+-- C++ BossAI summons set (boss_ichoron.cpp:181-186): SummonedCreatureDespawn
+-- drops the summon, then strips SPELL_DRAINED when the set empties.
+local ichoronSummons = {}
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -253,6 +257,9 @@ end
 -- true) — triggered self-cast.
 local function ichoronReset(event, creature)
     local guid = creature:GetGUID()
+    for key in pairs(ichoronSummons) do
+        ichoronSummons[key] = nil
+    end
     cancelTimers(guid)
     frenzyFired[guid] = nil
     -- C++ Reset(): DoCast(me, SPELL_THREAT_PROC, true) is Reset-only
@@ -292,6 +299,7 @@ end
 -- periodic summon -- the arm fires correctly if a future path summons
 -- via ichoron (anubrekhan latent precedent).
 local function ichoronJustSummoned(_, creature, summoned)
+    ichoronSummons[summoned:GetGUID()] = true
     if summoned:GetEntry() == ENTRY_ICHOR_GLOBULE then
         summoned:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
     end
@@ -304,6 +312,17 @@ RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronJustDied)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 23, ichoronReset)
 RegisterCreatureEvent(ENTRY_ICHORON, 19, ichoronJustSummoned)
+
+-- C++ SummonedCreatureDespawn (boss_ichoron.cpp:181-186): BossAI drops the
+-- summon, then if summons.empty() -> me->RemoveAurasDueToSpell(SPELL_DRAINED).
+local function ichoronSummonDespawned(_, creature, summon)
+    ichoronSummons[summon:GetGUID()] = nil
+    if next(ichoronSummons) == nil then
+        creature:RemoveAura(SPELL_DRAINED)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ICHORON, 20, ichoronSummonDespawned)
 
 -- C++ npc_ichor_globule::DamageTaken (boss_ichoron.cpp:279-290):
 -- if (!_splashTriggered && damage >= me->GetHealth()): latch,
