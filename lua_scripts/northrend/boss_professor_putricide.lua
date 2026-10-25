@@ -80,7 +80,8 @@
 -- EVENT_ROTFACE_OOZE_FLOOD (:594-596) OUT: DoAction-phase-driven.
 -- The _baseSpeed SetSpeedRate legs (MovementInform waypoints
 -- :377/:384/:391, DoAction ACTION_FESTERGUT/ROTFACE_COMBAT
--- :426/:442) ride the unported phase machine — the SetSpeedRate
+-- :426/:442, DoAction ACTION_CHANGE_PHASE :483) ride the unported
+-- phase machine — the SetSpeedRate
 -- bridge exists (lua_creature_events.go) but the machine gates it.
 -- DamageTaken 80%/35% latches (:512-528) OUT: machine-free in form
 -- but feed the full tear-gas/MovementInform phase machine.

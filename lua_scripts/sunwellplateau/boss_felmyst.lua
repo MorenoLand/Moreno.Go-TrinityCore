@@ -218,6 +218,10 @@ local function felmystEnterCombat(event, creature, target)
     creature:DoZoneInCombat()
     creature:CastSpell(creature, AURA_SUNWELL_RADIANCE, true)
     creature:CastSpell(creature, AURA_NOXIOUS_FUMES, true)
+    -- C++ EnterPhase(PHASE_GROUND) (boss_felmyst.cpp:258): SetSpeedRate(MOVE_RUN, 2.0f)
+    -- ahead of the ground-phase schedule; the landing re-entry (:403) rides the
+    -- unported flight machine and stays out.
+    creature:SetSpeedRate(1, 2.0)
     schedule(guid, "cleave", math.random(5000, 10000), function()
         felmystCleave(creature, guid)
     end)
