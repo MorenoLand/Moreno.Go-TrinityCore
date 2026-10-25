@@ -20,9 +20,10 @@
 --   Initialize() timer-reset half collapses into the engage re-arm).
 -- - Dust Field 21909 self-cast (C++ DoCast(me)), non-triggered (C++
 --   2-arg cast), init 8s -> 14s.
--- - Boulder 21832 on SelectTarget(Random, 0) with no range cap ->
---   unbounded random alive player in the instance (nefarian
---   randomAlivePlayer convention), non-triggered, init 2s -> 10s.
+-- - Boulder 21832 on SelectTarget(Random, 0) with no range cap and
+--   no playerOnly flag (UnitAI.h:170 default false) -> random over the
+--   full threat list (thaurissan Hand precedent), non-triggered,
+--   init 2s -> 10s.
 -- - Repulsive Gaze 21869 on the victim (C++ DoCastVictim — jeklik
 --   GetVictim + CastSpell convention), non-triggered, init 23s -> 20s.
 -- - Thrash 3391 self-cast (C++ DoCast(me)), non-triggered, init 5s
@@ -65,20 +66,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
+-- C++ SelectTarget(Random, 0) - playerOnly=false default
+-- (UnitAI.h:170): the pool is the whole threat list (pets/totems
+-- included) - plain pick over GetAITargets (the bridged threat list;
+-- celebras / thaurissan Hand precedent), no range cap, no Player filter.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ Dustfield: DoCast(me, 21909), non-triggered, init 8s -> 14s.
@@ -93,7 +90,7 @@ end
 -- init 2s -> 10s; jeklik nil-target-keeps-schedule convention (C++
 -- skips the cast when the pick is nil but the re-arm is outside).
 local function onBoulder(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_BOULDER)
     end
