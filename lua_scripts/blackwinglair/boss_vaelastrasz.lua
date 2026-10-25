@@ -30,11 +30,11 @@
 -- fire nova 23462 20s then 15s (non-triggered DoCastVictim, C++-exact)
 -- / tail swipe inert re-arm 15s (the DoCastVictim arm is commented
 -- out upstream — only the re-arm is C++-exact) / burning adrenaline
--- caster 18173 15s then 15s (triggered cast on a random alive
--- mana-using player in the instance that is not the current victim —
--- C++ picks a non-pet mana user without the aura; players are never
--- pets, so the pet filter drops, and player:HasAura(18173) applies
--- the no-duplicate filter) /
+-- caster 18173 15s then 15s (triggered cast on a random
+-- threat-list mana user skipping the first MaxThreat entry —
+-- C++ SelectTarget(Random, 1, predicate), UnitAI.h:162-184; players
+-- are never pets, so the pet filter drops, and player:HasAura(18173)
+-- applies the no-duplicate filter) /
 -- burning adrenaline tank 18173 45s then 45s (triggered self-cast on
 -- the victim, C++ me->CastSpell(victim, ..., true) — non-victim-safe).
 -- Nil-target ticks cast nothing but keep the schedule (jeklik
@@ -131,18 +131,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
 -- C++ EVENT_CLEAVE: non-triggered DoCastVictim(19983); re-arm 15s.
 local function onCleave(creature, guid)
     local victim = creature:GetVictim()
@@ -185,14 +173,21 @@ local function onTailSwipe(creature, guid)
 end
 
 -- C++ EVENT_BURNINGADRENALINE_CASTER: triggered cast on a random
--- non-victim mana user; re-arm 15s unconditionally.
+-- threat-list mana user; re-arm 15s unconditionally.
+-- C++ SelectTarget(Random, 1, predicate) draws from the threat list
+-- (UnitAI.h:162-184, predicate overload: [currentVictim] + sorted
+-- threat list, first <offset>=1 entry popped, then the predicate
+-- !IsPet + POWER_MANA + !HasAura(18173) applied). GetAITargets
+-- returns the list in MaxThreat order (lua_creature_events.go:1912;
+-- fairbanks idiom), so skipping entry 1 is the C++ offset pop;
+-- players are never pets, so the Player filter is the !IsPet leg.
 local function onBurningAdrenalineCaster(creature, guid)
-    local victim = creature:GetVictim()
     local candidates = {}
-    for _, p in ipairs(alivePlayersInInstance(creature)) do
-        if p ~= victim and p:GetPowerType() == POWER_MANA
-                and not p:HasAura(SPELL_BURNINGADRENALINE) then
-            candidates[#candidates + 1] = p
+    for i, t in ipairs(creature:GetAITargets()) do
+        if i ~= 1 and t:GetObjectType() == "Player" and t:IsAlive()
+                and t:GetPowerType() == POWER_MANA
+                and not t:HasAura(SPELL_BURNINGADRENALINE) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates > 0 then

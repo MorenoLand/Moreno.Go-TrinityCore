@@ -5,8 +5,10 @@
 -- 1), :89 (DATA_EGG_EVENT), :49 (NPC_RAZORGORE = 12435). Creature entry:
 -- 12435 Razorgore the Untamed (C++ ScriptName "boss_razorgore" per
 -- AddSC_boss_razorgore). The go_orb_of_domination GameObjectScript and
--- the spell_egg_event SpellScript from the same C++ file have no Lua
--- bridges (no gameobject/spellscript model) and are not registered.
+-- the spell_egg_event SpellScript from the same C++ file are not
+-- registered: the orb arm blocks on instance GetData/GetCreature legs
+-- (GO gossip hello itself is live, gameobject_hooks.go:167) and there
+-- is no spellscript model.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
@@ -37,9 +39,10 @@
 -- have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase have
 -- no bridges; the go_orb_of_domination OnGossipHello (instance
 -- GetCreature(DATA_RAZORGORE_THE_UNTAMED) -> Attack(player, true) +
--- CastSpell SPELL_MINDCONTROL 42013) and the spell_egg_event
+-- CastSpell SPELL_MINDCONTROL 42013) rides instance legs with no bridge
+-- (GO gossip hello itself is live) and the spell_egg_event
 -- SpellScript (OnHit -> instance->SetData(DATA_EGG_EVENT, SPECIAL))
--- have no Lua bridges — the mind-control/orb/egg-destruction gameplay
+-- has no bridge — the mind-control/orb/egg-destruction gameplay
 -- has no bearer, so the fight can never reach phase two (DoAction has
 -- no Lua bridge either).
 

@@ -16,11 +16,11 @@
 -- 0: close the menu, Talk(SAY_GAMESBEGIN_1=12), BeginEvent ->
 -- Talk(SAY_GAMESBEGIN_2=13), arm shadowbolt {3s,10s} then {3s,10s}
 -- (50/50: shadowbolt volley 22665 non-triggered DoCastVictim, or
--- shadowbolt 22677 non-triggered on a random alive player in the
--- instance — C++ DoCast default is triggered=false, vaelastrasz
--- convention) / fear 22678 {10s,20s} then {10s,20s} non-triggered
--- on a random alive player (C++ SelectTarget Random 40 yd; shared
--- arena, the range check skipped) / spawn_add 10s then 4s.
+-- shadowbolt 22677 non-triggered on a random threat-list player
+-- within 40 yd — C++ SelectTarget(Random, 0, 40, true), UnitAI.h
+-- / fear 22678 {10s,20s} then {10s,20s} non-triggered
+-- on a random threat-list player within 40 yd (same SelectTarget
+-- form) / spawn_add 10s then 4s.
 -- EVENT_SPAWN_ADD: SpawnedAdds grows by 2 per wave (C++ sums two
 -- drakonids per 4s firing); at >= 42 the C++ summons Nefarian and
 -- drops Nefarius out of the fight — modeled as: SetVisible(false)
@@ -33,11 +33,13 @@
 -- Talk(SAY_RANDOM=0), arm shadowflame 22539 12s then 12s /
 -- bellowing roar 22686 {25s,35s} / veil of shadow 7068 {25s,35s} /
 -- cleave 20691 7s / classcall {30s,35s} then {30s,35s} — all
--- non-triggered DoCastVictim (C++ default). EVENT_TAILLASH is never
+-- non-triggered DoCastVictim (C++ default). ClassCall picks a random
+-- threat-list player within 100 yd (SelectTarget(Random, 0, 100,
+-- true)). EVENT_TAILLASH is never
 -- scheduled in C++ JustEngagedWith (the line is commented out
 -- upstream), so the tail lash case is dead code and omitted
--- C++-exact. ClassCall: random alive player in the instance (C++
--- SelectTarget Random 100 yd; shared arena) -> switch on C++ class
+-- C++-exact. ClassCall: random threat-list player within 100 yd
+-- (C++ SelectTarget Random 100 yd) -> switch on C++ class
 -- id: mage Talk(4)/self 23410, warrior Talk(5)/self 23397, druid
 -- Talk(6)/cast 23398 on the target, priest Talk(7)/self 23401,
 -- paladin Talk(8)/self 23418, shaman Talk(9)/self 23425, warlock
@@ -196,20 +198,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- Random alive player from the creature's threat list within maxDist
+-- (C++ SelectTarget draws from the threat list, UnitAI.h:162-184;
+-- GetAITargets returns it in MaxThreat order,
+-- lua_creature_events.go:1912; fairbanks idiom, offset 0 so no
+-- entry is skipped). C++ IsWithinCombatRange is 3D distance <
+-- dist + both combat reaches (Unit.cpp:583) — the plain GetDistance
+-- check below is stricter by the reach sum, a granularity delta
+-- in the fairbanks idiom's favor, not a pool difference.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local players = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            players[#players + 1] = t
         end
     end
-    return found
-end
-
-local function randomAlivePlayer(creature)
-    local players = alivePlayersInInstance(creature)
     if #players == 0 then
         return nil
     end
@@ -222,7 +226,8 @@ local function nefariusInit(guid)
 end
 
 -- C++ EVENT_SHADOW_BOLT: 50/50 shadowbolt volley on the victim or
--- shadowbolt on a random alive player; re-arm {3s,10s}.
+-- shadowbolt on a random threat-list player within 40 yd;
+-- re-arm {3s,10s}.
 local function onNefariusShadowBolt(creature, guid)
     if math.random(0, 1) == 0 then
         local victim = creature:GetVictim()
@@ -230,7 +235,7 @@ local function onNefariusShadowBolt(creature, guid)
             creature:CastSpell(victim, SPELL_SHADOWBOLT_VOLLEY)
         end
     else
-        local target = randomAlivePlayer(creature)
+        local target = randomThreatPlayerInRange(creature, 40)
         if target then
             creature:CastSpell(target, SPELL_SHADOWBOLT)
         end
@@ -243,10 +248,11 @@ local function onNefariusShadowBolt(creature, guid)
     end)
 end
 
--- C++ EVENT_FEAR: non-triggered 22678 on a random alive player;
+-- C++ EVENT_FEAR: non-triggered 22678 on a random threat-list
+-- player within 40 yd;
 -- re-arm {10s,20s}.
 local function onNefariusFear(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_FEAR_NEFARIUS)
     end
@@ -421,12 +427,13 @@ local function onNefarianCleave(creature, guid)
     end)
 end
 
--- C++ EVENT_CLASSCALL: random alive player -> Talk + class spell;
+-- C++ EVENT_CLASSCALL: random threat-list player within 100 yd
+-- (SelectTarget(Random, 0, 100, true)) -> Talk + class spell;
 -- druid (23398) is cast on the target, everything else non-triggered
 -- self-cast (C++ DoCast(me, ...) default); re-arm {30s,35s}
 -- unconditional (C++-exact).
 local function onNefarianClassCall(creature, guid)
-    local target = randomAlivePlayer(creature)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         local class = target:GetClass()
         if class == CLASS_MAGE then
