@@ -4,10 +4,11 @@
 -- GetAQ40AI<boss_vemAI>(creature); registered in AddSC_bug_trio();
 -- kalimdor loader decl 91 — fifth "// Temple of ahn'qiraj" group).
 -- Entry: 15544 = NPC_VEM (worker-verified).
--- Ported: Charge 26561 on random player (15-27s -> 8-16s;
--- C++ SelectTarget Random is bridged via the maiden_of_virtue
--- idiom — GetPlayersInWorld filtered by map/instance/alive;
--- the AttackStart leg has no bridge); Knockback 26027 on victim
+-- Ported: Charge 26561 on a random threat-list any-unit alive
+-- (15-27s -> 8-16s; C++ SelectTarget Random,0 defaults, playerOnly
+-- false — the old instance-player pool wrongly excluded pets/totems
+-- and included unengaged bystanders; the AttackStart leg has no
+-- bridge); Knockback 26027 on victim
 -- (8-20s -> 15-25s; the -80% threat modify is PORTED 2026-10-24);
 -- Enrage 34624 is NOT ported: boss_bug_trio.cpp:219's enrage arm is
 -- dead code in this tree — the else-branch decrements Charge_Timer
@@ -46,12 +47,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ Charge_Timer (boss_bug_trio.cpp:195): SelectTarget Random,0
+-- defaults — threat-list any-unit alive, no dist, playerOnly=false;
+-- pets/totems are eligible, unlike the old instance-player pool.
 local function onCharge(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if not p:IsDead() then
             candidates[#candidates + 1] = p
         end
     end

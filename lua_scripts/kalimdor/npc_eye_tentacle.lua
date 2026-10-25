@@ -4,10 +4,10 @@
 -- GetAQ40AI<eye_tentacleAI>(creature); registered in
 -- AddSC_boss_cthun()).
 -- Entry: 15726 (worker-verified from C++ NPC_EYE_TENTACLE).
--- Ported: Mind Flay 26143 on random player (500ms init -> 10s
--- repeat; C++ SelectTarget Random is bridged via the
--- maiden_of_virtue idiom — GetPlayersInWorld filtered by
--- map/instance/alive).
+-- Ported: Mind Flay 26143 on a random threat-list any-unit alive
+-- (500ms init -> 10s repeat; C++ SelectTarget Random,0 defaults —
+-- the old instance-player pool wrongly excluded pets/totems and
+-- included unengaged bystanders).
 -- The 35s KillSelf is PORTED (boss_cthun.cpp:897,939-942 — UpdateAI
 -- KillSelfTimer, victim-gated in C++; the Lua one-shot runs only
 -- while in combat since ev2/ev4 cancel it, kj fiend precedent).
@@ -30,17 +30,23 @@ local function cancelTimers(guid)
     end
 end
 
+-- C++ MindflayTimer (boss_cthun.cpp:948): SelectTarget Random,0
+-- defaults — threat-list any-unit alive — then the Digestive Acid
+-- 26476 gate applies to the PICK (no cast that cycle when the pick
+-- carries it); the old pool pre-filtered the aura out and re-picked,
+-- so an all-acid cycle wrongly cast instead of skipping.
 local function onMindFlay(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and not p:HasAura(26476) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if not p:IsDead() then
             candidates[#candidates + 1] = p
         end
     end
     if #candidates > 0 then
-        creature:CastSpell(candidates[math.random(#candidates)], SPELL_MIND_FLAY)
+        local target = candidates[math.random(#candidates)]
+        if not target:HasAura(26476) then
+            creature:CastSpell(target, SPELL_MIND_FLAY)
+        end
     end
     local per = timers[guid]
     if per then

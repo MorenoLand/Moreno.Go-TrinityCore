@@ -50,7 +50,7 @@
 -- - Arcane Burst 568: PORTED (the old "no range bridge" claim was
 --   stale — GetDistance / IsWithinDist are bridged, blizzard-arm
 --   precedent): nearest alive player within NOMINAL_MELEE_RANGE
---   (5.0f) via the same GetPlayersInWorld pool, non-triggered
+--   (5.0f) via the threat-list pool, non-triggered
 --   DoCast on the pick, null-guarded like the C++ if; 1s init,
 --   5s re-arm on cast, 500ms retry poll on empty (C++ leaves the
 --   timer <= diff on no target — retried next UpdateAI tick, the
@@ -210,11 +210,10 @@ end
 -- 29999]). The 45y eligibility gate is bridged (IsWithinDist —
 -- garaxxas precedent).
 local function onBlizzard(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, 45) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:IsWithinDist(p, 45) then
             candidates[#candidates + 1] = p
         end
     end
@@ -244,11 +243,9 @@ end
 -- tick — emulated as a bounded 500ms retry poll, the krosh
 -- distance-poller idiom).
 local function onArcaneBurst(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local nearest, nearestDist = nil, nil
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead() then
             local d = creature:GetDistance(p)
             if d <= 5.0 and (nearestDist == nil or d < nearestDist) then
                 nearest, nearestDist = p, d

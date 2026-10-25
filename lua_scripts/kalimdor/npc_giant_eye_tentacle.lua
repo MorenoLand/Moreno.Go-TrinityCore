@@ -4,11 +4,10 @@
 -- GetAQ40AI<giant_eye_tentacleAI>(creature); registered in
 -- AddSC_boss_cthun()).
 -- Entry: 15334 (worker-verified from C++ NPC_GIANT_EYE_TENTACLE).
--- Ported: Green Beam 26134 on random player (500ms init -> 2.1s
--- repeat; C++ SelectTarget Random is bridged via the
--- maiden_of_virtue idiom — GetPlayersInWorld filtered by
--- map/instance/alive plus the Digestive Acid 26476
--- exclusion the C++ cast leg applies).
+-- Ported: Green Beam 26134 on a random threat-list any-unit alive
+-- (500ms init -> 2.1s repeat; C++ SelectTarget Random,0 defaults —
+-- the Digestive Acid 26476 exclusion applies to the pick, not the
+-- pool, per the C++ cast leg).
 -- Summon/positioning legs have no bridge — documented, not wired.
 local ENTRY = 15334
 local SPELL_GREEN_BEAM = 26134
@@ -25,17 +24,22 @@ local function cancelTimers(guid)
     end
 end
 
+-- C++ BeamTimer (boss_cthun.cpp:1252): SelectTarget Random,0
+-- defaults — threat-list any-unit alive — then the Digestive Acid
+-- 26476 gate applies to the PICK (no cast that cycle when the pick
+-- carries it); the old pool pre-filtered the aura out and re-picked.
 local function onGreenBeam(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and not p:HasAura(26476) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if not p:IsDead() then
             candidates[#candidates + 1] = p
         end
     end
     if #candidates > 0 then
-        creature:CastSpell(candidates[math.random(#candidates)], SPELL_GREEN_BEAM)
+        local target = candidates[math.random(#candidates)]
+        if not target:HasAura(26476) then
+            creature:CastSpell(target, SPELL_GREEN_BEAM)
+        end
     end
     local per = timers[guid]
     if per then

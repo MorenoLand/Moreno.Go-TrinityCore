@@ -171,15 +171,15 @@ end
 -- the timer keeps decrementing while unsubmerged). The teleport half
 -- is creature:Teleport (NearTeleportTo twin, lua_creature_events.go:523
 -- — the stale "DoTeleportTo has zero Lua usage" claim retracted); the
--- random pick uses the alive-players-in-instance convention (shirrak
--- inhibit precedent). Orientation is preserved (C++ passes no o).
+-- random pick uses the threat-list any-unit pool (C++ SelectTarget
+-- Random,0 defaults, playerOnly=false). Orientation is preserved
+-- (C++ passes no o).
 local function onChangeTarget(creature, guid)
     local s = st(guid)
     if s and s.submerged then
-        local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
         local pool = {}
-        for _, p in ipairs(GetPlayersInWorld()) do
-            if p:GetMapId() == mapId and p:GetInstanceId() == instanceId and not p:IsDead() then
+        for _, p in ipairs(creature:GetAITargets()) do
+            if not p:IsDead() then
                 pool[#pool + 1] = p
             end
         end

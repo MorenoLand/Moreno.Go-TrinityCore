@@ -139,13 +139,15 @@ end
 
 -- C++ EVENT_UPPERCUT: DoCast on random melee-range target, init
 -- urand(14000,29000) -> 15000 + rand32()%15000 = [15000,29999].
--- Random alive player within 5y (NOMINAL_MELEE_RANGE).
+-- Random threat-list player alive within 5y (NOMINAL_MELEE_RANGE).
+-- C++ EVENT_UPPERCUT (boss_twinemperors.cpp:458): SelectTarget
+-- Random,0,5.0f,true — threat-list players alive within 5y; the
+-- old instance-player pool wrongly included unengaged bystanders.
 local function randomMeleePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, 5.0) then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, 5.0) then
             candidates[#candidates + 1] = plr
         end
     end

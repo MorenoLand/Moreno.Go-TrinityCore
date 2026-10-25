@@ -23,10 +23,10 @@
 --   (bridged no-op twin, ported) + clear Frenzy; C++ uint32 underflow freezes the arm while
 --   Frenzy is false, so the 15s repeat arm here is a documented
 --   simplification.
--- - Wyvern Sting 26180 (18-28s -> 15-32s): random player via
---   GetPlayersInWorld filtered by map/instance/alive (maiden_of_virtue
---   convention — C++ SelectTarget Random,0 has no distance limit, so
---   none is applied; the old unfiltered pick could hit other zones).
+-- - Wyvern Sting 26180 (18-28s -> 15-32s): random threat-list
+--   any-unit alive (C++ SelectTarget Random,0 defaults, playerOnly
+--   false — C++ SelectTargetList skips dead entries, so the pool
+--   filters them; no distance limit, so none is applied).
 -- - Acid Spit 26050 (8s -> 5-10s): DoCastVictim (jeklik GetVictim +
 --   CastSpell convention).
 -- - Noxious Poison 26053 (10-20s -> 12-24s): DoCastVictim.
@@ -126,7 +126,12 @@ end
 -- randomTargetAnywhere precedent). DoCast(target, 26180),
 -- init urand(18000,28000) -> urand(15000,32000).
 local function onWyvern(creature, guid)
-    local targets = creature:GetAITargets()
+    local targets = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            targets[#targets + 1] = t
+        end
+    end
     if #targets > 0 then
         local target = targets[math.random(#targets)]
         creature:CastSpell(target, SPELL_WYVERNSTING)

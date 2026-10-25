@@ -24,10 +24,11 @@
 --   init urand(6s,12s) -> urand(8s,18s). The SpellScript target
 --   filter (players + pets only) is no-bridge (SpellScript has
 --   zero Lua usage, viscidus precedent) — documented-only.
--- - True Fulfillment 785 (15s init -> 20-30s): random player via
---   GetPlayersInWorld filtered by map/instance/alive + 45.0f range
---   (C++ SelectTarget Random 1, 45.0f, true; the old unfiltered pick
---   could hit dead players in other zones); the SpellScript charm
+-- - True Fulfillment 785 (15s init -> 20-30s): threat-list pool
+--   minus the MaxThreat head, then alive players within 45.0f
+--   (C++ SelectTarget Random 1, 45.0f, true, offset-before-filter;
+--   the old victim-GUID exclusion was wrong when the victim was
+--   not the threat head); the SpellScript charm
 --   effect legs (dismount 61286 + 2313 recast) are no-bridge,
 --   documented-only.
 -- - Blink (30-45s init -> 10-30s): self-cast one of {4801, 8195,
@@ -62,11 +63,12 @@
 --   despawns on evade, C++-exact).
 -- - BossAI ctor leg DATA_SKERAM and _Reset() — instance bridge,
 --   standing.
--- - SelectTarget/AttackStart/SetVisible/
---   InterruptNonMeleeSpells/GetThreatModifiers — no exact
---   threat-list SelectTarget bridge in the engine's Lua API;
---   random-target selection IS bridged via the documented
---   maiden_of_virtue idiom (used in this file, lines 123-144).
+-- - SelectTarget/AttackStart/GetThreatModifiers — the
+--   fulfillment pool now uses the threat list (GetAITargets,
+--   anastari precedent); the remaining SelectTarget arm is the
+--   JustSummoned image AttackStart pick (boss_skeram.cpp:109),
+--   which stays out with the summon-image AI (no AttackStart
+--   bridge).
 local ENTRY = 15263
 
 local SPELL_ARCANE_EXPLOSION = 26192
@@ -126,21 +128,17 @@ end
 
 -- C++ EVENT_FULLFILMENT: SelectTarget Random,1,45.0f,true ->
 -- DoCast(target, SPELL_TRUE_FULFILLMENT), init 15000 ->
--- urand(20000,30000). Random-player pick via GetPlayersInWorld
--- filtered map/instance/alive + 45.0f (C++ SelectTarget Random 1,
--- 45.0f, true). The C++ position=1 arm skips the first entry in
--- MaxThreat order (the current victim/tank, UnitAI.h:162-163)
--- before the player/range predicate, so the tank is excluded
--- here via GetVictim (malchezaar precedent); threat-list-empty
--- no-cast falls out of the empty-candidates arm.
+-- urand(20000,30000). The position=1 arm skips the first entry
+-- in MaxThreat order BEFORE the player/range predicate
+-- (UnitAI.h offset-before-filter), so the pool is the threat
+-- list minus its head, then alive players within 45.0f
+-- (anastari precedent); the old victim-GUID exclusion was wrong
+-- whenever the victim was not the threat head.
 local function onTrueFulfillment(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local cands = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p and p:IsAlive() and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and creature:IsWithinDist(p, 45.0) and p:GetGUID() ~= victimGuid then
+    for i, p in ipairs(creature:GetAITargets()) do
+        if i > 1 and p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:IsWithinDist(p, 45.0) then
             cands[#cands + 1] = p
         end
     end

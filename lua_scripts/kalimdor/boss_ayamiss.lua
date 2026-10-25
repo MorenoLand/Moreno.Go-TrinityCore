@@ -26,9 +26,8 @@
 -- - EVENT_POISON_STINGER: DoCastVictim 25748 (jeklik GetVictim +
 --   CastSpell convention), reschedule 2-3s; cancelled at ground
 --   phase per C++.
--- - EVENT_PARALYZE: random player via GetPlayersInWorld filtered by
---   map/instance/alive (maiden_of_virtue convention — C++ SelectTarget
---   Random is bridged via this documented idiom), DoCast 25725,
+-- - EVENT_PARALYZE: random threat-list player alive, no dist
+--   (C++ SelectTarget Random,0,0,true), DoCast 25725,
 --   reschedule 15s. The larva summon + instance SetGuidData(DATA_PARALYZED)
 --   have no bridge — documented below.
 -- - Ground phase (event 9 damage leg, C++ UpdateAI's per-tick
@@ -135,15 +134,13 @@ local function onPoisonStinger(creature, guid)
     end)
 end
 
--- C++ EVENT_PARALYZE: SelectTarget Random -> DoCast(25725), 15s.
--- Random-player pick via GetPlayersInWorld (maiden_of_virtue
--- convention); the old "SelectTarget has no bridge" phrasing is stale.
+-- C++ EVENT_PARALYZE: SelectTarget Random,0,0,true -> DoCast(25725),
+-- 15s. Threat-list players alive, no dist; the old instance-player
+-- pool wrongly included unengaged bystanders.
 local function onParalyze(creature, guid)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead() then
             candidates[#candidates + 1] = p
         end
     end
