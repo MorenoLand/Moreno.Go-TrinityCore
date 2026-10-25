@@ -40,26 +40,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 0)
 end
 
--- C++ DeathPlagueTargetSelector (icecrown_citadel.cpp:422-443): player,
--- within 100.0f, not the current victim, no DEATH_PLAGUE_AURA and no
--- RECENTLY_INFECTED. The random-non-victim-player idiom follows the
--- maiden-of-grief precedent (GetPlayersInWorld filtered by map/instance
--- plus the victim-GUID exclusion here).
+-- C++ SelectTarget(Random, 1, DeathPlagueTargetSelector(me))
+-- (icecrown_citadel.cpp:482, selector :426-443): threat-list
+-- player within 100.0f, no DEATH_PLAGUE_AURA and no
+-- RECENTLY_INFECTED; position=1 skips the first threat-list entry
+-- BEFORE the predicate (UnitAI.h offset-before-filter), replacing
+-- the old victim-GUID exclusion. The IsDead gate follows the
+-- settled strip convention (C++ skips only offline refs; dead
+-- picks are no-op casts in both engines).
 local function selectDeathPlagueTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        -- No IsDead leg: the custom-predicate SelectTarget path draws from
-        -- the threat list and filters only IsOffline (UnitAI.h:228-236), so
-        -- a dead player with live threat is a C++ candidate.
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and plr:GetGUID() ~= victimGuid
-                and creature:GetDistance(plr) <= 100.0
-                and not plr:HasAura(SPELL_DEATH_PLAGUE_AURA)
-                and not plr:HasAura(SPELL_RECENTLY_INFECTED) then
-            candidates[#candidates + 1] = plr
+    for i, unit in ipairs(creature:GetAITargets()) do
+        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= 100.0
+                and not unit:HasAura(SPELL_DEATH_PLAGUE_AURA)
+                and not unit:HasAura(SPELL_RECENTLY_INFECTED) then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then

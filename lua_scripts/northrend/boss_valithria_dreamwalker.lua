@@ -188,28 +188,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ random alive player with a minimum distance, on the same
--- map (the falric / keleseth / thorim GetPlayersInWorld precedent).
 -- C++ :715 SelectTarget(Random, 1, ValithriaManaVoidSelector(me)) —
--- POWER_MANA + dist>15.0f; C++ :720 SelectTarget(Random, 1, -10.0f, true)
--- — min 10 yd, playerOnly. Position=1 in both skips the threat head,
--- approximated by the moroes victim-GUID exclusion idiom; GetPowerType
--- is bridged (moroes.lua:294 precedent).
+-- POWER_MANA + dist>15.0f, no player restriction (the selector
+-- carries no TYPEID check; the old "player" wording was wrong);
+-- C++ :720 SelectTarget(Random, 1, -10.0f, true) — min 10 yd,
+-- playerOnly. Position=1 in both skips the first threat-list entry
+-- BEFORE filters (UnitAI.h offset-before-filter); GetPowerType
+-- is bridged (moroes.lua:294 precedent, phase-hunter any-unit gate).
+-- The IsDead gate follows the settled strip convention (C++
+-- skips only offline refs; dead picks are no-op casts).
 local function randomPlayer(creature, minDist, manaOnly)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
-    -- C++ Map* identity (same map + same instance): the moroes.lua
-    -- GetMapId/GetInstanceId precedent. creature:GetMap() has no
-    -- handler-surface bridge and its fresh Map tables never compare
-    -- equal, so the old form nil-called and broke the whole filter.
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetGUID() ~= victimGuid and p:IsAlive()
-                and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and creature:GetDistance(p) > minDist
-                and (not manaOnly or p:GetPowerType() == POWER_MANA) then
-            candidates[#candidates + 1] = p
+    for i, unit in ipairs(creature:GetAITargets()) do
+        if i > 1 and not unit:IsDead()
+                and creature:GetDistance(unit) > minDist
+                and (not manaOnly or unit:GetPowerType() == POWER_MANA)
+                and (manaOnly or unit:GetObjectType() == "Player") then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -246,7 +241,7 @@ local function onFrostboltVolley(creature, guid)
 end
 
 -- C++ :715 EVENT_MANA_VOID — ValithriaManaVoidSelector: POWER_MANA
--- player, dist>15.0f (:161-170), position=1 threat-head exclusion.
+-- threat unit, dist>15.0f (:161-170), position=1 threat-head exclusion.
 local function onManaVoid(creature, guid)
     local target = randomPlayer(creature, 15.0, true)
     if target then

@@ -28,8 +28,8 @@
 -- flag (2-arg overload = non-triggered). Phase-machine-gated,
 -- summon/instance-GUID, adds/hard-mode, MotionMaster and
 -- DoAction-gated arms stay out; random-target legs bridge via
--- the baltharus/maiden GetPlayersInWorld candidate-selection
--- precedent (thorim colossus RUNIC_CHARGE / giant
+-- the threat-list candidate-selection precedent
+-- (thorim colossus RUNIC_CHARGE / giant
 -- RUNE_DETONATION this run).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
@@ -48,8 +48,7 @@
 --     10s-15s) — random player 100y (SelectTarget Random 0
 --     100.0f playerOnly), DoCast(target, SPELL_SUNBEAM
 --     62623), non-triggered; bridged via the
---     baltharus/maiden GetPlayersInWorld candidate-selection
---     precedent.
+--     threat-list candidate-selection below.
 -- Freya KilledUnit — player-gated Talk(SAY_SLAY 2) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
@@ -333,19 +332,19 @@ local function elderTimersActive(creature)
     return not creature:HasAura(SPELL_DRAINED_OF_POWER)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, dist,
--- playerOnly) legs (the baltharus GetPlayersInWorld
--- candidate-selection precedent; thorim this run).
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, true)
+-- legs (boss_freya.cpp:426 sunbeam, :435 unstable energy,
+-- :453 strengthened roots with -SPELL_ROOTS_FREYA, :969 iron
+-- roots with -SPELL_ROOTS_IRONBRANCH): threat-list players
+-- alive + dist, offset 0 (tank eligible).
 local function randomPlayerInRange(creature, minDist, maxDist, excludeAura)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (excludeAura == nil or not plr:HasAura(excludeAura)) then
-            local dist = creature:GetDistance(plr)
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and (excludeAura == nil or not unit:HasAura(excludeAura)) then
+            local dist = creature:GetDistance(unit)
             if dist >= minDist and dist <= maxDist then
-                candidates[#candidates + 1] = plr
+                candidates[#candidates + 1] = unit
             end
         end
     end
