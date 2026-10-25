@@ -23,11 +23,11 @@
 -- itself never spawns — no summon model) / hex 24053 8s then
 -- {12s,20s} on the victim (triggered; the -80% threat cut has no
 -- threat-model bridge — skipped, cast still lands) / delusions of
--- jindo 10s then {4s,12s} on a random alive player within 100 yd
+-- jindo 10s then {4s,12s} on a random threat-list player alive within 100 yd
 -- (triggered 24308 shade-of-jindo summon, then non-triggered 24306
 -- delusion curse, C++-exact order; nil-target ticks cast nothing but
--- keep the schedule) / teleport 5s then {15s,23s} on a random alive
--- player within 100 yd (DoTeleportPlayer to TeleportLoc via
+-- keep the schedule) / teleport 5s then {15s,23s} on a random threat-list
+-- player alive within 100 yd (DoTeleportPlayer to TeleportLoc via
 -- Player:TeleportNear; the -100% threat wipe is PORTED 2026-10-24
 -- (ModifyThreatByPercent, victim-gated, C++ order) and the 10
 -- sacrificed-troll 14826 summons are skipped — the summon leg is bridged
@@ -98,25 +98,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 0, 100.0f, true): random alive player in
--- range, nil when none qualify.
-local function randomPlayer100(creature)
+-- C++ SelectTarget(Random, 0, 100.0f, true): threat-list players
+-- alive within 100yd (UnitAI.h: the pool is the threat list, not
+-- the instance roster), nil when none qualify.
+local function randomThreatPlayer100(creature)
     local candidates = {}
-    for _, p in ipairs(alivePlayersInInstance(creature)) do
-        if creature:GetDistance(p) <= 100 then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= 100 then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -160,11 +150,11 @@ local function onHex(creature, guid)
     end)
 end
 
--- C++ EVENT_DELUSIONS_OF_JINDO: random 100-yd player -> triggered
+-- C++ EVENT_DELUSIONS_OF_JINDO: random threat-list 100-yd player -> triggered
 -- DoCast(target, 24308), then non-triggered DoCast(target, 24306);
 -- nil-target tick casts nothing; re-arm {4s,12s} unconditional.
 local function onDelusions(creature, guid)
-    local target = randomPlayer100(creature)
+    local target = randomThreatPlayer100(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADE_OF_JINDO, true)
         creature:CastSpell(target, SPELL_DELUSIONS_OF_JINDO)
@@ -174,7 +164,7 @@ local function onDelusions(creature, guid)
     end)
 end
 
--- C++ EVENT_TELEPORT: random 100-yd player -> DoTeleportPlayer to
+-- C++ EVENT_TELEPORT: random threat-list 100-yd player -> DoTeleportPlayer to
 -- TeleportLoc (boss_jindo.cpp), then the -100% threat wipe (PORTED 2026-10-24:
 -- victim-gated, target cut, C++ order) and the 10 sacrificed-troll summons
 -- (skipped — AttackStart leg has no bridge).
@@ -182,7 +172,7 @@ end
 local TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O =
     -11583.7783, -1249.4278, 77.5471, 4.745
 local function onTeleport(creature, guid)
-    local target = randomPlayer100(creature)
+    local target = randomThreatPlayer100(creature)
     if target then
         target:TeleportNear(TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O)
         if creature:GetThreat(creature:GetVictim()) ~= 0 then

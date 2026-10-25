@@ -125,26 +125,35 @@ local function resetWraith(guid)
     wraithStates[guid] = nil
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention, gruul precedent).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget pools are threat-list pools (UnitAI.h), not the
+-- instance roster: Random, 0 draws any threat-list unit alive, and
+-- Random, 1 skips the first MaxThreat entry before filters.
+local function randomThreatTarget(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
-    return found
-end
-
-local function pickRandomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return candidates[math.random(#candidates)]
+end
+
+local function randomThreatTargetPastHead(creature)
+    local targets = creature:GetAITargets()
+    local candidates = {}
+    for i = 2, #targets do
+        local unit = targets[i]
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ JustEngagedWith schedules: SUMMON 30s, MANA_TAP
@@ -177,7 +186,7 @@ local function bossTick(creature, guid)
     -- after the loop (C++-exact); re-arm randtime 30-45s.
     if st.summon <= 1000 then
         for _ = 1, 3 do
-            if pickRandomPlayer(creature) then
+            if randomThreatTarget(creature) then
                 creature:SummonCreature(ENTRY_NETHER_WRAITH,
                     creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 25000)
             end
@@ -299,10 +308,9 @@ local function wraithTick(creature, guid)
     -- re-arm — DoCast(target) on a random pick else
     -- DoCastVictim (C++-exact shape). C++ SelectTarget
     -- (Random,1) skips the top-threat target; Lua picks any
-    -- alive player in the instance (gruul/vashj precedent) —
-    -- documented deviation.
+    -- threat-list unit alive past the head (C++-exact).
     if st.arcaneMissiles <= 1000 then
-        local target = pickRandomPlayer(creature)
+        local target = randomThreatTargetPastHead(creature)
         if target then
             creature:CastSpell(target, SPELL_ARCANE_MISSILES)
         else

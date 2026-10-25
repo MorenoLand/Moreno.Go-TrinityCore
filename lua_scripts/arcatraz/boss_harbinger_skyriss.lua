@@ -250,27 +250,36 @@ local function introTick(creature, guid)
     end
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 1): the first MaxThreat entry is
+-- skipped BEFORE filters (UnitAI.h), then any threat-list unit
+-- alive, no range cap (playerOnly defaults false) — nil when none
+-- qualify. The old victim-GUID exclusion was wrong when the victim
+-- is not the threat head, and the old instance-player pool admitted
+-- players with no threat.
+local function randomThreatPastHead(creature)
+    local targets = creature:GetAITargets()
+    local candidates = {}
+    for i = 2, #targets do
+        local unit = targets[i]
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
-    return found
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(Random, 1): a random alive player in the
--- instance excluding the current victim (thespia precedent),
--- player-only.
-local function randomNonVictimPlayer(creature)
-    local victim = creature:GetVictim()
+-- C++ JustSummoned (skyriss.cpp:132): SelectTarget(Random, 0) ->
+-- AttackStart; the pool is the threat list, and the
+-- EngageWithTarget bridge resolves player sessions only, so the
+-- pick stays player-restricted (a pet pick would no-op).
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victim or p:GetGUID() ~= victim:GetGUID() then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -333,12 +342,12 @@ local function combatTick(creature, guid)
         st.isImage33 = true
     end
 
-    -- Mind rend 36924: 3s init then 8s — target = random alive
-    -- player excluding the current victim, nil pick falls
+    -- Mind rend 36924: 3s init then 8s — target = random threat
+    -- entry past the head, nil pick falls
     -- back to DoCastVictim (C++-exact), non-triggered DoCast
     -- (C++-exact), re-arm 8000 (C++-exact).
     if st.mindRend <= 1000 then
-        local target = randomNonVictimPlayer(creature)
+        local target = randomThreatPastHead(creature)
         creature:CastSpell(target, SPELL_MIND_REND)
         st.mindRend = 8000
     else
@@ -352,7 +361,7 @@ local function combatTick(creature, guid)
     -- fires unconditionally (netherspite precedent).
     if st.fear <= 1000 then
         creature:Talk(SAY_FEAR)
-        local target = randomNonVictimPlayer(creature)
+        local target = randomThreatPastHead(creature)
         creature:CastSpell(target, SPELL_FEAR)
         st.fear = 25000
     else
@@ -364,7 +373,7 @@ local function combatTick(creature, guid)
     -- re-arm {16s,32s} (C++-exact; same cast-state caveat).
     if st.domination <= 1000 then
         creature:Talk(SAY_MIND)
-        local target = randomNonVictimPlayer(creature)
+        local target = randomThreatPastHead(creature)
         creature:CastSpell(target, SPELL_DOMINATION)
         st.domination = 16000 + math.random(0, 15999)
     else
@@ -373,7 +382,7 @@ local function combatTick(creature, guid)
 
     -- Heroic-only Mana Burn 39020: 25s init then {16s,32s} —
     -- same targeting (SelectTarget(Random, 1) =
-    -- randomNonVictimPlayer, C++-exact); nil pick casts NOTHING
+    -- randomThreatPastHead, C++-exact); nil pick casts NOTHING
     -- (no DoCastVictim fallback — unlike mind rend / fear /
     -- domination), non-triggered, re-arm {16s,32s} (C++-exact).
     -- The C++ IsNonMeleeSpellCast early-return gate has no
@@ -384,7 +393,7 @@ local function combatTick(creature, guid)
     -- (lua_creature_events.go:260).
     if creature:IsHeroic() then
         if st.manaBurn <= 1000 then
-            local target = randomNonVictimPlayer(creature)
+            local target = randomThreatPastHead(creature)
             if target then
                 creature:CastSpell(target, H_SPELL_MANA_BURN)
             end
@@ -430,8 +439,8 @@ end)
 -- the C++ enum comments): health-set to the last split's pct
 -- of max (CountPctFromMaxHealth twin), then — only while
 -- Skyriss has a victim — AttackStart on a random target
--- (SelectTarget(Random, 0): any random alive player in the
--- instance, victim included), then SetImmuneToAll(false)
+-- (SelectTarget(Random, 0): any random threat-list player alive,
+-- victim included), then SetImmuneToAll(false)
 -- via the unit-flags surface (see resetImmuneFlags). The
 -- summons.Summon bookkeeping has no Lua-visible effect.
 -- EngageWithTarget is the player-target AttackStart twin
@@ -452,9 +461,9 @@ local function onJustSummoned(_, creature, summoned)
         summoned:SetHealth(math.floor(maxHealth * pct / 100))
     end
     if creature:GetVictim() then
-        local players = playersInInstance(creature)
-        if #players > 0 then
-            summoned:EngageWithTarget(players[math.random(#players)])
+        local target = randomThreatPlayer(creature)
+        if target then
+            summoned:EngageWithTarget(target)
         end
     end
     summoned:RemoveFlag(59, 0x300)

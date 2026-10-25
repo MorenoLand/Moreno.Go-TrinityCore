@@ -130,28 +130,17 @@ local function fullReset(guid)
     combatStates[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 1, 0.0f, true): a random alive
--- player in the instance excluding the current victim
--- (thespia / skyriss precedent), player-only. The C++
--- skips the sacrifice arm when it picks no target.
-local function randomNonVictimPlayer(creature)
-    local victim = creature:GetVictim()
+-- C++ SelectTarget(Random, 1, 0.0f, true): the first MaxThreat
+-- entry is skipped BEFORE filters (UnitAI.h), then threat-list
+-- players alive, no range cap. The C++ skips the sacrifice arm
+-- when it picks no target.
+local function randomThreatPlayerPastHead(creature)
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victim or p:GetGUID() ~= victim:GetGUID() then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local unit = targets[i]
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -172,11 +161,12 @@ local function combatTick(creature, guid)
     end
 
     -- 1. Sacrifice arm: TRIGGERED DoCast on a random
-    -- non-victim player (C++-exact); re-arm 29400 regardless
+    -- threat-list player past the head (C++-exact);
+    -- re-arm 29400 regardless
     -- of target pick (the C++ ScheduleEvent is outside the
     -- target if).
     if st.sacrifice <= 1000 then
-        local target = randomNonVictimPlayer(creature)
+        local target = randomThreatPlayerPastHead(creature)
         if target then
             creature:Talk(SAY_CAST_SACRIFICE)
             creature:CastSpell(target, SPELL_SACRIFICE, true)
