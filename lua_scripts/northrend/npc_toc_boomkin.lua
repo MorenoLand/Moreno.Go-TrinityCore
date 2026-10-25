@@ -41,13 +41,14 @@
 -- :611-624, :721-724).
 -- EVENT_CYCLONE — SelectTarget(Random, 0, NonTankTargetSelector) ->
 -- DoCast(Cyclone 65859), 10-20s init, 10-20s re-arm: randomNonTankPlayer
--- (netherspite / blood_prince_council precedent — alive same-map
--- players minus the victim; C++ uses the threat list, the
--- GetPlayersInWorld pool is the documented in-tree approx).
+-- (netherspite / blood_prince_council precedent — threat-list
+-- players alive minus the victim; C++ NonTankTargetSelector
+-- (UnitAI.h:94, playerOnly=true default) excludes the current
+-- victim, lowered via GetAITargets).
 -- EVENT_ENTANGLING_ROOTS — SelectTarget(Random, 0, 30.0f, true) ->
 -- DoCast(Entangling Roots 65857), 10-20s init, 10-20s re-arm:
 -- randomPlayerInRange 30.0f (cyanigosa precedent; tank included,
--- C++-exact).
+-- threat-list players alive; C++-exact).
 -- EVENT_FAERIE_FIRE — DoCastVictim(Faerie Fire 65863), 2-5s init,
 -- 30-40s re-arm.
 -- EVENT_FORCE_OF_NATURE — DoCastVictim(Force of Nature 65861),
@@ -132,12 +133,11 @@ end
 -- (victim) — netherspite / blood_prince_council NonTankTargetSelector
 -- precedent.
 local function randomNonTankPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player"
                 and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = plr
         end
@@ -151,11 +151,9 @@ end
 -- Random alive player within maxDist yards (tank included) —
 -- cyanigosa precedent; C++ SelectTarget(Random, 0, 30.0f, true).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead() then
             if creature:GetDistance(plr) <= maxDist then
                 candidates[#candidates + 1] = plr
             end

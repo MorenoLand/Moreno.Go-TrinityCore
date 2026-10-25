@@ -70,17 +70,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Random alive player on the same map/instance within maxDist yards
--- (tank included) — boomkin randomPlayerInRange precedent; C++
+-- Random alive threat-list entry within maxDist yards (tank
+-- included) — boomkin randomPlayerInRange precedent; C++
 -- SelectTarget(Random, 0, dist[, playerOnly]) picks from the threat
--- list, the GetPlayersInWorld pool is the documented in-tree approx
--- (in ToC every threat ref is a player, so the playerOnly flag is
--- vacuous here).
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- list, lowered via GetAITargets. Corruption/agony/exhaustion use
+-- the playerOnly=false default (pets/totems eligible); fear/UA pass
+-- playerOnly=true.
+local function randomPlayerInRange(creature, maxDist, playersOnly)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if (not playersOnly or plr:GetObjectType() == "Player")
                 and not plr:IsDead() then
             if creature:GetDistance(plr) <= maxDist then
                 candidates[#candidates + 1] = plr
@@ -148,7 +147,7 @@ end
 -- C++ EVENT_FEAR (:1290-1294): random target 20yd playerOnly, init
 -- {5s,15s}, re-arm {5s,20s}.
 local function onFear(creature, guid)
-    local target = randomPlayerInRange(creature, 20.0)
+    local target = randomPlayerInRange(creature, 20.0, true)
     if target then
         creature:CastSpell(target, SPELL_FEAR)
     end
@@ -165,7 +164,7 @@ end
 -- C++ EVENT_UNSTABLE_AFFLICTION (:1299-1303): random target 30yd
 -- playerOnly, init {7s,15s}, re-arm {10s,25s}.
 local function onUnstableAffliction(creature, guid)
-    local target = randomPlayerInRange(creature, 30.0)
+    local target = randomPlayerInRange(creature, 30.0, true)
     if target then
         creature:CastSpell(target, SPELL_UNSTABLE_AFFLICTION)
     end

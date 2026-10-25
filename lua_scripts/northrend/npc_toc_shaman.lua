@@ -71,15 +71,14 @@ end
 
 -- Random alive player on the same map/instance, excluding the tank
 -- (victim) — boomkin NonTankTargetSelector precedent; C++ picks from
--- the threat list, the GetPlayersInWorld pool is the documented
--- in-tree approx.
+-- the threat list (playerOnly=true default), lowered via
+-- GetAITargets.
 local function randomNonTankPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player"
                 and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = plr
         end
