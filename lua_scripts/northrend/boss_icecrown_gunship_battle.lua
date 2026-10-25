@@ -221,6 +221,14 @@ end
 -- C++ :1548-1550 EVENT_WOUNDING_STRIKE: DoCastVictim(SPELL_WOUNDING_STRIKE)
 -- non-triggered, re-arm {9s,13s}.
 local function onWoundingStrike(creature, guid)
+    -- C++ :1533 UpdateAI early-returns while casting or bladestorming,
+    -- so the wounding arm stalls with bladestorm too (not just the
+    -- bladestorm arm); the casting leg has no bridge, the aura leg
+    -- delays 1s, mirroring onBladestorm.
+    if creature:HasAura(SPELL_BLADESTORM) then
+        schedule(guid, "wounding", 1000, function() onWoundingStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_WOUNDING_STRIKE)
     schedule(guid, "wounding", {9000, 13000}, function() onWoundingStrike(creature, guid) end)
 end

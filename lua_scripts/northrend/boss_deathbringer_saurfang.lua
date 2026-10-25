@@ -501,7 +501,10 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = saurfangState[guid]
     if not st then
-        return
+        -- C++ _frenzied/_dead default false; a DamageTaken before any
+        -- engage/reset handler must still apply the never-die cap.
+        st = { frenzied = false, dead = false }
+        saurfangState[guid] = st
     end
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()

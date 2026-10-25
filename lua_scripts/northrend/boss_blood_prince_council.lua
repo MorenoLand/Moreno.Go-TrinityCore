@@ -61,7 +61,7 @@
 -- BloodPrincesBossAI::JustEngagedWith (:455) — the scheduler seeds
 -- plus the SetCombatPulseDelay(5) arm (PORTED — creature:SetCombatPulseDelay
 -- bridge, lua_creature_events.go; event 1, C++ arm order)
--- and the Reset's SetCombatPulseDelay(0) + SetImmuneToPC(false) (:447/:449)
+-- and the Reset's SetCombatPulseDelay(0) + SetImmuneToPC(false) + SetHealth(1) (:447/:449/:451)
 -- arms (PORTED — event 23, C++ arm order); the setActive leg has no bridge
 -- (CORRECTION 2026-10-23: the DoZoneInCombat(controller) :459-460 leg IS
 -- ported in each member's event-1 handler — controller gathered via
@@ -561,6 +561,7 @@ local function princesReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
+    creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
 end
 
 -- C++ boss_prince_valanar_icc::JustSummoned NPC_KINETIC_BOMB case
