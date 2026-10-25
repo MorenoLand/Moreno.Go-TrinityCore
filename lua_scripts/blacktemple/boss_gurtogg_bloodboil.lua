@@ -63,9 +63,10 @@
 -- phase-1 schedule; the
 -- ModifyThreatByPercent(-100) / AddThreat(oldThreat) victim-restore
 -- arms are PORTED in onChangePhase (threat bridges live:
--- GetThreat/ModifyThreatByPercent/AddThreat); AttackStart(oldTarget)
--- stays out (no AttackStart bridge — the victim switch rides the
--- restored threat values), and the GUID state is cleared (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
+-- GetThreat/ModifyThreatByPercent/AddThreat); AttackStart(oldTarget) is
+-- PORTED in C++ order between them (findTargetByGuid resolves the stored
+-- GUID over the AI target list; EngageWithTarget is the player-target
+-- AttackStart twin, 2026-10-24), and the GUID state is cleared (C++ Initialize). OnTargetDied(3): Talk(SAY_SLAY), TYPEID_PLAYER
 -- gate (terestian convention). OnDied(4): _JustDied instance arm is
 -- blocked on the instance-script model; the DoPlaySoundToSet(11439)
 -- arm is ported via creature:PlayDirectSound. OnLeave-
@@ -86,7 +87,7 @@
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith/JustDied/Reset and the
 -- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); threat model
--- partial — the AttackStart(oldTarget) arm has no bridge
+-- partial — the AttackStart(oldTarget) arm is PORTED in onChangePhase
 -- (threat legs ported in onStartPhase2/onChangePhase); the ApplySpellImmune
 -- taunt/attack-me arms ARE bridged (lua_creature_events.go:860) and
 -- ported in onStartPhase2, onChangePhase, and gurtoggReset above.
@@ -420,11 +421,18 @@ function onChangePhase(creature, guid)
         -- IMMUNITY_EFFECT/ATTACK_ME=114, both apply=false), before the
         -- phase-1 schedule. The victim-restore arms are PORTED below
         -- (ModifyThreatByPercent(-100) on the fel-rage GUID +
-        -- AddThreat(oldThreat) on the stored victim GUID; AttackStart stays out).
+        -- AttackStart(oldTarget) via EngageWithTarget + AddThreat(oldThreat)
+        -- on the stored victim GUID, C++ order :293-295; the engage
+        -- additionally gates on AI-target-list resolution while the
+        -- threat legs keep their pre-existing GUID-presence gates).
         creature:ApplySpellImmune(0, 1, 11, false)
         creature:ApplySpellImmune(0, 0, 114, false)
         if rageGuid and oldGuid and oldThreat then
             creature:ModifyThreatByPercent(rageGuid, -100)
+            local oldTarget = findTargetByGuid(creature, oldGuid)
+            if oldTarget then
+                creature:EngageWithTarget(oldTarget)
+            end
             creature:AddThreat(oldGuid, oldThreat)
         end
         schedulePhase1Events(creature, guid)

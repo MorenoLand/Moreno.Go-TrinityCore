@@ -33,11 +33,12 @@
 -- - Whirlwind random-target switch (WhirlWindRandom 3-7s:
 --   SelectTarget Random 100y + AddThreat + AttackStart) and the
 --   AggroReset arms (45-55s -> 2-5s re-arm, AggroResetEnd 5s ->
---   35-45s): no AttackStart bridge (AddThreat/ResetAllThreat bridged)
---   (the "no SelectTarget" parenthetical is retracted as moot — the
---   random-player pool is bridged — but the arms stay out behind
---   AttackStart + threat-modeling; buru precedent — target switching
---   unmodeled).
+--   35-45s): PORTED 2026-10-24 (EngageWithTarget is the player-target
+--   AttackStart twin; the "no AttackStart bridge" claim is retracted).
+--   Deviations: the AggroReset countdown freezes while WhirlWind in C++
+--   (the branch sits under !WhirlWind); the Lua tick re-checks after 5s
+--   instead of freezing. The whirlwind-random tick self-terminates on
+--   s.whirlwind == false, so no cancel is needed at whirlwind end.
 -- - at_aq_battleguard_sartura (AreaTriggerScript 4052):
 --   GetInstanceScript + GetCreature(DATA_SARTURA) + AttackStart —
 --   no at/InstanceScript bridge (document-only, like the ruins
@@ -89,7 +90,7 @@ end
 local function st(guid)
     local s = flags[guid]
     if not s then
-        s = { whirlwind = false, enraged = false, hardEnraged = false }
+        s = { whirlwind = false, enraged = false, hardEnraged = false, aggroReset = false }
         flags[guid] = s
     end
     return s
@@ -98,9 +99,9 @@ end
 -- C++ WhirlWind_Timer: !WhirlWind -> DoCast(me, 26083),
 -- WhirlWind = true, WhirlWindEnd_Timer = 15000 ->
 -- urand(25000,40000). Init 30000.
--- The per-3-7s random-target switch during whirlwind is no-bridge
--- (SelectTarget/AttackStart).
-local startWhirlwind
+-- The per-3-7s random-target switch during whirlwind is PORTED below
+-- (whirlwindRandomTick: AddThreat 1.0 + EngageWithTarget).
+local startWhirlwind, whirlwindRandomTick, aggroResetTick, aggroResetEnd
 local function endWhirlwind(creature, guid)
     local s = st(guid)
     s.whirlwind = false
@@ -115,6 +116,82 @@ startWhirlwind = function(creature, guid)
     creature:CastSpell(creature, SPELL_WHIRLWIND)
     schedule(guid, "whirlwind_end", 15000, function()
         endWhirlwind(creature, guid)
+    end)
+    schedule(guid, "whirlwind_random", math.random(3000, 7000), function()
+        whirlwindRandomTick(creature, guid)
+    end)
+end
+
+-- C++ SelectTarget(Random, 1, 100.0f, true) pool: random alive player
+-- within 100 yd on the same map+instance (wyrmthalak helper idiom).
+local function randomAlivePlayer100(creature)
+    local players = {}
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() and creature:GetDistance(p) <= 100 then
+            players[#players + 1] = p
+        end
+    end
+    if #players == 0 then
+        return nil
+    end
+    return players[math.random(#players)]
+end
+
+-- C++ WhirlWindRandom / AggroReset shared body (boss_sartura.cpp:124-127,
+-- 151-154): AddThreat(target, 1.0) + AttackStart(target); EngageWithTarget
+-- is the player-target AttackStart twin (a non-player C++ pick no-ops
+-- through its session gate, so the engage fires exactly for player picks).
+local function randomTargetSwitch(creature)
+    local target = randomAlivePlayer100(creature)
+    if target then
+        creature:AddThreat(target, 1.0)
+        creature:EngageWithTarget(target)
+    end
+end
+
+whirlwindRandomTick = function(creature, guid)
+    local s = st(guid)
+    if not s.whirlwind then
+        return
+    end
+    randomTargetSwitch(creature)
+    schedule(guid, "whirlwind_random", math.random(3000, 7000), function()
+        whirlwindRandomTick(creature, guid)
+    end)
+end
+
+aggroResetTick = function(creature, guid)
+    local s = st(guid)
+    if s.whirlwind then
+        schedule(guid, "aggro_reset", 5000, function()
+            aggroResetTick(creature, guid)
+        end)
+        return
+    end
+    randomTargetSwitch(creature)
+    if not s.aggroReset then
+        s.aggroReset = true
+        schedule(guid, "aggro_reset_end", 5000, function()
+            aggroResetEnd(creature, guid)
+        end)
+    end
+    schedule(guid, "aggro_reset", math.random(2000, 5000), function()
+        aggroResetTick(creature, guid)
+    end)
+end
+
+aggroResetEnd = function(creature, guid)
+    local s = st(guid)
+    s.aggroReset = false
+    local per = timers[guid]
+    if per and per["aggro_reset"] then
+        RemoveEventById(per["aggro_reset"])
+        per["aggro_reset"] = nil
+    end
+    schedule(guid, "aggro_reset", math.random(35000, 45000), function()
+        aggroResetTick(creature, guid)
     end)
 end
 
@@ -163,6 +240,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "hardenrage", 600000, function()
         onHardEnrage(creature, guid)
+    end)
+    schedule(guid, "aggro_reset", math.random(45000, 55000), function()
+        aggroResetTick(creature, guid)
     end)
 end
 

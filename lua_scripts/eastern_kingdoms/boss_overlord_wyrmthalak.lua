@@ -40,7 +40,8 @@
 -- legs have no bridge on the Lua surface — the adds materialize but idle
 -- until the engine aggros them (aran water-elemental precedent). The stale
 -- "no SummonCreature bridge" claim is retracted (SummonCreature is bridged);
--- "no AttackStart bridge" still holds.
+-- "no AttackStart bridge" claim is retracted 2026-10-24 (EngageWithTarget
+-- twin, player-target-only) and the add engage legs are ported below.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and both
 -- in-loop casting gates are dropped (maiden precedent). The C++
@@ -145,9 +146,10 @@ end
 -- SummonLocation1 + berserker 9268 at SummonLocation2
 -- (TEMPSUMMON_TIMED_DESPAWN, 5min), Summoned = true. The
 -- warlord->AI()->AttackStart(target) / berserker->AI()->AttackStart(target)
--- legs have no bridge on the Lua surface — the adds materialize but idle
--- until the engine aggros them (aran water-elemental precedent). The
--- latch sets only when a target was found, matching C++ (Summoned = true
+-- legs are PORTED below: the SummonCreature return is the add object
+-- (aran elemental precedent) and EngageWithTarget is the player-target
+-- AttackStart twin, C++ order (warlord engage, then berserker engage).
+-- The latch sets only when a target was found, matching C++ (Summoned = true
 -- sits inside the target-found branch, so a target-less tick retries).
 -- C++ reads post-damage health in UpdateAI, so the arm never fires on the
 -- killing blow (nefarian postDamage > 0 rule).
@@ -162,13 +164,20 @@ local function wyrmthalakDamageTaken(event, creature, attacker, damage)
     end
     local postDamage = math.max(health - damage, 0)
     if postDamage > 0 and postDamage < math.floor(maxHealth * 51 / 100) then
-        if randomAlivePlayer(creature, 100) then
-            creature:SummonCreature(NPC_SPIRESTONE_WARLORD,
+        local target = randomAlivePlayer(creature, 100)
+        if target then
+            local warlord = creature:SummonCreature(NPC_SPIRESTONE_WARLORD,
                 SUMMON1_X, SUMMON1_Y, SUMMON1_Z, SUMMON1_O,
                 TEMPSUMMON_TIMED_DESPAWN, 300000)
-            creature:SummonCreature(NPC_SMOLDERTHORN_BERSERKER,
+            if warlord then
+                warlord:EngageWithTarget(target)
+            end
+            local berserker = creature:SummonCreature(NPC_SMOLDERTHORN_BERSERKER,
                 SUMMON2_X, SUMMON2_Y, SUMMON2_Z, SUMMON2_O,
                 TEMPSUMMON_TIMED_DESPAWN, 300000)
+            if berserker then
+                berserker:EngageWithTarget(target)
+            end
             summoned[guid] = true
         end
     end

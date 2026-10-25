@@ -69,8 +69,9 @@
 -- boss_nexusprince_shaffarAI::JustSummoned — beacon visual leg PORTED
 -- below (shaffarJustSummoned: non-triggered ETHEREAL_BEACON_VISUAL
 -- self-cast; ev19 fires for the Lua Reset summons). The
--- Random-SelectTarget AttackStart leg stays out (no AttackStart bridge),
--- as does the beacon AI's own JustSummoned (:223, pure AttackStart).
+-- Random-SelectTarget AttackStart leg PORTED below (EngageWithTarget
+-- twin, 2026-10-24); the beacon AI's own JustSummoned (:223) stays out
+-- (its summons ride the unported apprentice spell-effect summon machine).
 -- boss_nexusprince_shaffarAI::ExecuteEvent:
 -- EVENT_BEACON — urand(0,3)==0-gated Talk(SAY_SUMMON 3) + DoCast(me,
 -- SPELL_ETHEREAL_BEACON 32371, triggered), 10s repeat — stays OUT:
@@ -149,6 +150,26 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SelectTarget(Random, 0) in JustSummoned (:125): dist 0 = no range
+-- gate, playerOnly unset = any attackable unit. The Lua pool is alive
+-- players on the same map+instance (threat-list members the bridge can
+-- address); a non-player C++ pick no-ops through EngageWithTarget's
+-- player-session gate, so the engage fires exactly for player picks.
+local function randomAttackablePlayer(creature)
+    local players = {}
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            players[#players + 1] = p
+        end
+    end
+    if #players == 0 then
+        return nil
+    end
+    return players[math.random(#players)]
 end
 
 -- C++ EVENT_FIREBALL (:165-167): DoCastVictim(SPELL_FROSTBOLT 32364)
@@ -265,12 +286,17 @@ end
 
 -- C++ boss_nexusprince_shaffarAI::JustSummoned (boss_nexusprince_shaffar.cpp:119-127),
 -- beacon case: the visual self-cast is unconditional in C++ (it precedes
--- the target select), so it ports alone; the AttackStart leg stays out.
+-- the target select), so it ports alone; the AttackStart leg is PORTED:
+-- random attackable pick + EngageWithTarget (player-target AttackStart twin).
 local function shaffarJustSummoned(event, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_BEACON then
         return
     end
     summoned:CastSpell(summoned, SPELL_ETHEREAL_BEACON_VISUAL)
+    local target = randomAttackablePlayer(creature)
+    if target then
+        summoned:EngageWithTarget(target)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_SHAFFAR, 19, shaffarJustSummoned)
