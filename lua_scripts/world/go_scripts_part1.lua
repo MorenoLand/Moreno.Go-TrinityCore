@@ -20,8 +20,8 @@
 --     NOT quest status), player:HasItem (lua_player.go:188), player:GetItemCount,
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
---   * MISSING bridges that block classes here: player:GetQuestRewardStatus,
---     player:DestroyItemCount, player:HasItemCount (use HasItem/GetItemCount),
+--   * MISSING bridges that block classes here: player:HasItemCount
+--     (use HasItem/GetItemCount),
 --     player:IsInSameRaidWith, go:GetOwner, go:CastSpell, go:AddUse,
 --     GO-side go:SummonCreature (player/creature surfaces bridged).
 --     Corrected 2026-10-24: player:CastSpell + player:SummonCreature +
@@ -37,6 +37,10 @@
 --     other gates + registration.
 --     (2026-10-24: player:SummonCreature landed in lua_player.go; the
 --     classes below stay blocked on their other gates + registration.)
+--     (2026-10-24: player:GetQuestRewardStatus bridged in lua_player.go;
+--     tele-crystal + violet-stand are now bridge-complete except
+--     registration; outhouse select still blocked on AI SetData +
+--     go:CastSpell.)
 --   * GO entry IDs come from the C++ tree only; classes whose C++ names no GO
 --     entry const are not registered (DB-side binding, unverifiable).
 --
@@ -135,9 +139,10 @@
 --    proceeds). Else player->GetSession()->SendNotification(
 --    "This teleport crystal cannot be used until the teleport crystal in
 --    Dalaran has been used at least once.") and return true (handled).
---    Blocker: player:GetQuestRewardStatus unbridged (player:SendNotification
---    IS bridged but the gate is not; C++ gate is IsQuestRewarded/seasonal,
---    not the GetQuestStatus value — no twin yet). DOCUMENTED-ONLY.
+--    Bridge-complete except registration: player:GetQuestRewardStatus IS
+--    bridged since 2026-10-24 (lua_player.go, rewarded-set twin; seasonal
+--    leg unmodeled) and player:SendNotification IS bridged. Sole block
+--    remains no GO entry const -> no registration. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -146,8 +151,9 @@
 --    -> no registration.
 --    Arm: if player->GetQuestRewardStatus(12790) OR
 --    player->GetQuestStatus(12790) == QUEST_STATUS_INCOMPLETE return false
---    (native use proceeds); else return true. Blocker: GetQuestRewardStatus
---    unbridged (GetQuestStatus IS bridged since 2026-10-24).
+--    (native use proceeds); else return true. Bridge-complete except
+--    registration: GetQuestRewardStatus AND GetQuestStatus both bridged
+--    since 2026-10-24. Sole block remains no GO entry const.
 --    DOCUMENTED-ONLY.
 -- ============================================================================
 

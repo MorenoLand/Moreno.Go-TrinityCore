@@ -547,6 +547,32 @@ func (s *session) luaPlayer() *scripting.Object {
 		status, _ := s.characterQuestStatus(lctx, quest)
 		return []any{status}, nil
 	}
+	// GetQuestRewardStatus is Player::GetQuestRewardStatus
+	// (Player.cpp:16115-16128): for a non-seasonal, non-repeatable quest
+	// it is IsQuestRewarded (Player.cpp:22854), the rewarded-set membership
+	// the characterQuestStatus twin (quests.go) already reads from
+	// character_queststatus_rewarded (active = 1); repeatable quests return
+	// false in C++, and the rewarded-row predicate already mirrors the
+	// repeatable/daily/DF exclusions. The seasonal leg
+	// (!SatisfyQuestSeasonal) is unmodeled: a seasonal quest reports its
+	// rewarded-row membership here. Read directly from the rewarded set,
+	// not via characterQuestStatus, because C++ checks IsQuestRewarded
+	// independently of the active status map.
+	methods["GetQuestRewardStatus"] = func(_ context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{false}, nil
+		}
+		var count int64
+		err = s.server.CharactersStore.DB.QueryRow("SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ? AND active = 1", state.GUID, quest).Scan(&count)
+		if isMissingTableError(err) {
+			return []any{false}, nil
+		}
+		return []any{err == nil && count > 0}, err
+	}
 	methods["CompleteQuest"] = func(_ context.Context, args []any) ([]any, error) {
 		quest, err := luaUint32Arg(args, 0)
 		if err != nil {
