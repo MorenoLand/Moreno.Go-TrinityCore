@@ -38,11 +38,13 @@
 --   position swap + stun/interrupt/ResetThreatList + twin visual
 --   cast 26638 + post-teleport threat arm — no position/SelectTarget/
 --   InterruptNonMeleeSpells/ResetThreatList/AttackStart bridges.
--- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): the
---   dead-bug Respawn half is PORTED 2026-10-24 (onBugsRespawnTick:
---   Respawn + FACTION_CREATURE + RemoveAllAuras, creature:Respawn
---   bridge); this twin's abuse half stays out — CastSpellOnBug
---   adds AttackStart(victim), no bridge.
+-- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): PORTED
+--   2026-10-24 (onBugsTick, veklor twin idiom): dead-bug Respawn
+--   half (Respawn + FACTION_CREATURE + RemoveAllAuras) + abuse
+--   half — SetFaction(FACTION_MONSTER) + bug:EngageWithTarget
+--   (current victim) + AddAura(802) + SetHealth(max); the
+--   AttackStart blocker is retracted (EngageWithTarget is the
+--   aggro funnel, sibling-pull precedent).
 -- - KilledUnit/JustEngagedWith/JustDied DoPlaySoundToSet
 --   (SOUND_VN_AGGRO 8661 / KILL 8662 / DEATH 8660): ported via
 --   creature:PlayDirectSound (the sound bridge is live —
@@ -73,6 +75,9 @@ local UNIT_DYNFLAG_LOOTABLE = 0x0001
 local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_UPPERCUT = 26007
 local SPELL_BERSERK = 26662
+local SPELL_MUTATE_BUG = 802
+local FACTION_MONSTER = 14
+local ABUSE_BUG_RANGE = 20
 
 local SOUND_VN_DEATH = 8660
 local SOUND_VN_AGGRO = 8661
@@ -80,6 +85,7 @@ local SOUND_VN_KILL = 8662
 
 local timers = {}
 local flags = {}
+local bugState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -90,6 +96,7 @@ local function cancelTimers(guid)
         timers[guid] = nil
     end
     flags[guid] = nil
+    bugState[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -154,12 +161,21 @@ local function onBerserk(creature, guid)
     end)
 end
 
--- C++ boss_twinemperorsAI::HandleBugs respawn half (:315-346, shared
--- by both twins' UpdateAI): every 2s, dead bugs of either entry
--- within 150y respawn at full health at home, faction restored to
--- FACTION_CREATURE and auras cleared. The abuse half stays out:
--- this twin's CastSpellOnBug adds AttackStart(victim), no bridge.
-local function onBugsRespawnTick(creature, guid)
+-- C++ boss_twinemperorsAI::HandleBugs (:348-371) + RespawnNearbyBugsAndGetOne
+-- (:315-346, shared by both twins' UpdateAI) + veknilash CastSpellOnBug
+-- (:432-437): every 2s (BugsTimer), dead bugs of either entry within
+-- 150y respawn at full health at home, faction restored to
+-- FACTION_CREATURE and auras cleared; then, when the abuse timer
+-- (urand(10000,17000), 1000ms retry on no pick) is due, a live bug
+-- within 20y (ABUSE_BUG_RANGE) is picked with the C++ rand32()%4 == 0
+-- replacement rule, then SetFaction(FACTION_MONSTER) +
+-- bug:EngageWithTarget(current victim, nil-guarded) + AddAura
+-- (SPELL_MUTATE_BUG 802) + SetHealth(max), in C++ order.
+local function onBugsTick(creature, guid)
+    local st = bugState[guid]
+    if st == nil then
+        return
+    end
     for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
         for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
             if bug:IsDead() then
@@ -169,8 +185,34 @@ local function onBugsRespawnTick(creature, guid)
             end
         end
     end
-    schedule(guid, "bugsrespawn", 2000, function()
-        onBugsRespawnTick(creature, guid)
+    if st.abuse > 2000 then
+        st.abuse = st.abuse - 2000
+    else
+        local pick = nil
+        for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
+            for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+                if not bug:IsDead() and creature:IsWithinDistInMap(bug, ABUSE_BUG_RANGE) then
+                    if pick == nil or math.random(0, 3) == 0 then
+                        pick = bug
+                    end
+                end
+            end
+        end
+        if pick ~= nil then
+            pick:SetFaction(FACTION_MONSTER)
+            local victim = creature:GetVictim()
+            if victim ~= nil then
+                pick:EngageWithTarget(victim)
+            end
+            pick:AddAura(SPELL_MUTATE_BUG)
+            pick:SetHealth(pick:GetMaxHealth())
+            st.abuse = math.random(10000, 17000)
+        else
+            st.abuse = 1000
+        end
+    end
+    schedule(guid, "bugs", 2000, function()
+        onBugsTick(creature, guid)
     end)
 end
 
@@ -178,6 +220,7 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     flags[guid] = {}
+    bugState[guid] = {abuse = math.random(10000, 17000)}
     -- C++ JustEngagedWith: DoPlaySoundToSet(me, SOUND_VN_AGGRO 8661)
     -- behind the !pOtherBoss->IsInCombat() gate (cross-AI — no
     -- bridge); per-creature port.
@@ -191,8 +234,8 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "berserk", 900000, function()
         onBerserk(creature, guid)
     end)
-    schedule(guid, "bugsrespawn", 2000, function()
-        onBugsRespawnTick(creature, guid)
+    schedule(guid, "bugs", 2000, function()
+        onBugsTick(creature, guid)
     end)
     -- C++ boss_twinemperors.cpp:165: JustEngagedWith pulls the other
     -- twin into the fight when it is not yet in combat

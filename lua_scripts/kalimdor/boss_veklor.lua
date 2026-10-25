@@ -136,7 +136,8 @@ end
 -- rule, then SetFaction(FACTION_MONSTER) + AddAura(SPELL_EXPLODEBUG) +
 -- SetFullHealth (SetHealth(GetMaxHealth())); abuse timer
 -- urand(10000,17000), 1000ms retry on no pick. Veknilash's twin leg
--- stays out: its CastSpellOnBug adds AttackStart(victim) (no bridge).
+-- PORTED 2026-10-24 (boss_veknilash.lua onBugsTick): same machine
+-- + bug:EngageWithTarget(current victim) in C++ order.
 local function onBugsTick(creature, guid)
     local st = bugState[guid]
     if st == nil then
