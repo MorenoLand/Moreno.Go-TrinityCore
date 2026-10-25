@@ -1434,7 +1434,7 @@ local function romuloLunge(creature, guid)
         -- C++ !me->HasInArc(M_PI, target) (bosses_opera.cpp:1337):
         -- the atan2 inArc twin was retired 2026-10-24 for the live
         -- creature:IsInBack bridge, twin-exact.
-        if not creature:IsInBack(target) then
+        if creature:IsInBack(target) then
             creature:CastSpell(target, SPELL_BACKWARD_LUNGE)
             rajSchedule(guid, "lunge", math.random(15000, 30000), function()
                 romuloLunge(creature, guid)

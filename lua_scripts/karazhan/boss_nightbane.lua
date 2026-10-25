@@ -131,7 +131,7 @@ local function onTailSweep(creature, guid)
     -- 2026-10-24 for the live creature:IsInBack bridge, twin-exact:
     -- !hasInArc(2*pi - pi) = !HasInArc(pi)); the 20-30s re-arm is
     -- unconditional (:350).
-    if target ~= nil and not creature:IsInBack(target) then
+    if target ~= nil and creature:IsInBack(target) then
         creature:CastSpell(target, SPELL_TAIL_SWEEP)
     end
     schedule(guid, "g_tailsweep", {20000, 30000}, function() onTailSweep(creature, guid) end)
