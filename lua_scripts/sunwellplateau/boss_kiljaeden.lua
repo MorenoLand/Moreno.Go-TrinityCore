@@ -320,18 +320,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- Threat-list players alive within 100 yd (C++ SelectTarget
+-- Random, 0, 100, true pool via GetAITargets).
+local function threatPlayersInRange(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:IsWithinDist(unit, 100) then
+            out[#out + 1] = unit
         end
     end
-    return found
+    return out
 end
 
 local function belowPct(creature, pct)
@@ -425,16 +425,11 @@ local function enterNextPhase(creature, guid, st, phase)
     end
 end
 
--- Random alive player in the instance within 100 yd; up to 6
--- picks, first pick without the vengeance aura wins, otherwise
--- the last pick stands (C++-exact SelectTarget loop).
+-- Up to 6 threat-list picks, first pick without the vengeance
+-- aura wins, otherwise the last pick stands (C++-exact
+-- legion-lightning/armageddon SelectTarget loop, :761/:854).
 local function pickRandomPlayer(creature)
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist(p, 100) then
-            candidates[#candidates + 1] = p
-        end
-    end
+    local candidates = threatPlayersInRange(creature)
     if #candidates == 0 then
         return nil
     end
@@ -446,6 +441,23 @@ local function pickRandomPlayer(creature)
         end
     end
     return pick
+end
+
+-- Single threat-list pick minus the vengeance aura (C++
+-- CastSinisterReflection selector, :677: -vengeance sits in the
+-- selector itself, so nil when every candidate carries it).
+local function pickVengeanceFreePlayer(creature)
+    local candidates = threatPlayersInRange(creature)
+    local out = {}
+    for _, unit in ipairs(candidates) do
+        if not unit:HasAura(SPELL_VENGEANCE_OF_THE_BLUE_FLIGHT) then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 local function fireTimer(creature, st, name)
@@ -478,7 +490,7 @@ local function fireTimer(creature, st, name)
         creature:Talk(SAY_KJ_REFLECTION)
         -- C++ CastSinisterReflection (boss_kiljaeden.cpp:674-687): 4x
         -- SelectTarget(Random, 0, 100, playerOnly, -vengeance) =
-        -- pickRandomPlayer (vengeance-negative, C++-exact) ->
+        -- pickVengeanceFreePlayer (selector-excluded vengeance) ->
         -- me->SummonCreature(NPC_SINISTER_REFLECTION 25708, target pos,
         -- 0, TEMPSUMMON_CORPSE_DESPAWN=4). AttackStart(target) PORTED
         -- 2026-10-24 via EngageWithTarget (the aggro funnel; the
@@ -486,7 +498,7 @@ local function fireTimer(creature, st, name)
         -- SetDisplayId(target display) PORTED via the
         -- player:GetDisplayId bridge (lua_player.go).
         for _ = 1, 4 do
-            local target = pickRandomPlayer(creature)
+            local target = pickVengeanceFreePlayer(creature)
             if target then
                 local reflection = creature:SummonCreature(ENTRY_SINISTER_REFLECTION,
                     target:GetX(), target:GetY(), target:GetZ(), 0, 4, 0)
@@ -932,13 +944,10 @@ local function reflectionWarlockBolt(creature, guid)
     end)
 end
 
+-- C++ npc_sinster_reflection warlock curse (:1403):
+-- SelectTarget(Random, 0, 100, true) threat-list pool.
 local function reflectionWarlockCurse(creature, guid)
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist(p, 100) then
-            candidates[#candidates + 1] = p
-        end
-    end
+    local candidates = threatPlayersInRange(creature)
     if #candidates > 0 then
         creature:CastSpell(candidates[math.random(1, #candidates)], SPELL_SR_CURSE_OF_AGONY, true)
     end

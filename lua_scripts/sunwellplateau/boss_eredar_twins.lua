@@ -40,8 +40,9 @@
 -- 45248 10s then 10s, non-triggered self-cast (C++ DoCast(me, ...),
 -- default triggered=false — vaelastrasz convention) / shadow nova
 -- 45329 30s then {30s,35s}, non-triggered on a random alive player
--- in the instance (C++ SelectTarget(Random, 0), player-only — teron
--- convention; nil pick casts nothing but keeps the schedule),
+-- threat-list unit alive (C++ SelectTarget(Random, 0),
+-- playerOnly=false, UnitAI.h:170; nil pick casts nothing but
+-- keeps the schedule),
 -- Talk(EMOTE_SHADOW_NOVA, on target) + Talk(YELL_SHADOW_NOVA,
 -- even on nil pick — C++-exact) (the
 -- !SisterDeath gate is always true on this path; the emote's C++
@@ -50,7 +51,7 @@
 -- ignore the target) — both emote calls pass the target
 -- (boss_eredar_twins.cpp:254, 597) /
 -- confounding blow 45256 25s then {20s,25s}, non-triggered on a
--- random alive player in the instance, nil pick keeps the schedule
+-- threat-list unit alive, nil pick keeps the schedule
 -- / enrage 46587 6min one-shot: Talk(YELL_ENRAGE), non-triggered
 -- self-cast (C++ DoCast default triggered=false). The shadow-image
 -- summon arm (3 x DoSpawnCreature NPC_SHADOW_IMAGE) has no summon
@@ -77,7 +78,7 @@
 -- arm has no melee-hook bridge — unmodeled (melee is engine-
 -- driven). Grand Warlock Alythess (25166). OnEnterCombat(1):
 -- per-GUID reset, arm conflagration 45342 45s then {30s,35s}, non-
--- triggered on a random alive player in the instance (nil pick
+-- triggered on a threat-list unit alive (nil pick
 -- casts nothing but keeps the schedule), Talk(EMOTE_CONFLAGRATION,
 -- on target) + Talk(YELL_CANFLAGRATION, even on nil pick —
 -- C++-exact), then the blaze timer is re-armed
@@ -215,19 +216,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
 
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
@@ -239,14 +227,6 @@ local function randomThreatTarget(creature)
         return nil
     end
     return targets[math.random(#targets)]
-end
-
-local function pickRandomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
-        return nil
-    end
-    return players[math.random(#players)]
 end
 
 -- ================= Lady Sacrolash (25165) =================

@@ -24,7 +24,7 @@
 -- triggered DoCastVictim (nil ticks cast nothing but keep the
 -- schedule, jeklik convention) / stomp 45185 30s then 30s, Talk(
 -- YELL_LOVE) + non-triggered DoCastVictim / burn 46394 60s then
--- {60s,180s}: random alive player in the instance within 100 yd
+-- {60s,180s}: threat-list player alive within 100 yd
 -- not carrying 46394 (C++ SelectTarget(Random, 0, 100.0f, true,
 -- true, -SPELL_BURN), C++-exact), targeted self-cast burn,
 -- triggered (C++ target->CastSpell(target, SPELL_BURN, true));
@@ -92,18 +92,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- Threat-list players alive within range, minus an aura when
+-- given (C++ SelectTarget Random pool via GetAITargets).
+local function randomThreatPlayerInRange(creature, maxDist, excludeAura)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist
+                and (excludeAura == nil or not unit:HasAura(excludeAura)) then
+            out[#out + 1] = unit
         end
     end
-    return found
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT metor slash: DoCastVictim(45150); repeat 11s.
@@ -123,19 +127,14 @@ local function brutallusStomp(creature, guid)
     end)
 end
 
--- C++ burn arm: random alive player within 100 yd not carrying
--- 46394 gets the targeted self-cast; repeat {60s,180s}. The
--- player-side self-cast has no bridge — AddAura reproduces the
--- whole effect (gurtogg fel-rage convention).
+-- C++ burn arm: threat-list player alive within 100 yd not
+-- carrying 46394 gets the targeted self-cast; repeat {60s,180s}.
+-- The player-side self-cast has no bridge — AddAura reproduces
+-- the whole effect (gurtogg fel-rage convention).
 local function brutallusBurn(creature, guid)
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 100 and not p:HasAura(SPELL_BURN) then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates > 0 then
-        candidates[math.random(1, #candidates)]:AddAura(SPELL_BURN)
+    local target = randomThreatPlayerInRange(creature, 100, SPELL_BURN)
+    if target then
+        target:AddAura(SPELL_BURN)
     end
     schedule(guid, "burn", math.random(60000, 180000), function()
         brutallusBurn(creature, guid)

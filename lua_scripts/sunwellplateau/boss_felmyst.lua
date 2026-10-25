@@ -25,9 +25,9 @@
 -- gas nova 45855 {15s,20s} then {20s,25s}, non-triggered self-cast
 -- (C++ DoCast default is triggered=false — vaelastrasz
 -- convention) / encapsulate 45661 {20s,25s} then {25s,30s}, non-
--- triggered on a random alive player in the instance within 150 yd
--- (C++ SelectTarget(Random, 0, 150, true), player-only — teron
--- convention; nil pick casts nothing but keeps the schedule) /
+-- triggered on a threat-list player alive within 150 yd
+-- (C++ SelectTarget(Random, 0, 150, true), player-only;
+-- nil pick casts nothing but keeps the schedule) /
 -- berserk 45078 10min one-shot: Talk(YELL_BERSERK), triggered
 -- self-cast (C++ DoCast(me, SPELL_BERSERK, true)), then re-armed
 -- at 10s (C++-exact — the PHASE_GROUND arm re-schedules
@@ -140,18 +140,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- Threat-list players alive within range (C++ SelectTarget
+-- Random pool via GetAITargets).
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    return found
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_CLEAVE: DoCastVictim(19983); repeat {5s,10s}.
@@ -178,18 +181,12 @@ local function felmystGasNova(creature, guid)
     end)
 end
 
--- C++ EVENT_ENCAPSULATE: DoCast(random alive player within 150
--- yd, 45661); repeat {25s,30s}.
+-- C++ EVENT_ENCAPSULATE: DoCast(threat-list player alive
+-- within 150 yd, 45661); repeat {25s,30s}.
 local function felmystEncapsulate(creature, guid)
-    local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 150 then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates > 0 then
-        creature:CastSpell(candidates[math.random(1, #candidates)],
-            SPELL_ENCAPSULATE_CHANNEL)
+    local target = randomThreatPlayerInRange(creature, 150)
+    if target then
+        creature:CastSpell(target, SPELL_ENCAPSULATE_CHANNEL)
     end
     schedule(guid, "encapsulate", math.random(25000, 30000), function()
         felmystEncapsulate(creature, guid)
