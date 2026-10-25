@@ -145,32 +145,18 @@ local function schedule(store, guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayers(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
+-- C++ SelectTarget(Random, 0, dist, true): threat-list players alive
+-- within range (UnitAI.h:162-176) — the old instance-player pool could
+-- pick players who never engaged. GetAITargets is the bridged threat
+-- list (lua_creature_events.go); the flame-wreath arm already uses it.
 local function randomPlayer(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
+    local candidates = {}
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= maxDist then
+            candidates[#candidates + 1] = p
+        end
+    end
     if #candidates == 0 then
         return nil
     end

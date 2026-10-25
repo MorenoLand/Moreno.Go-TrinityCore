@@ -104,22 +104,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
+-- C++ SelectTarget(Random, 0, dist, true): threat-list players alive
+-- within range (UnitAI.h:162-176) — the old instance-player pool could
+-- pick players who never engaged. GetAITargets is the bridged threat
+-- list (lua_creature_events.go).
 local function randomTargetInRange(creature, range)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist(p, range) then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:IsWithinDist(p, range) then
             candidates[#candidates + 1] = p
         end
     end
@@ -129,15 +122,17 @@ local function randomTargetInRange(creature, range)
     return candidates[math.random(#candidates)]
 end
 
--- Blind: SelectTarget(MinDistance, 0, 0.0f, true, false) — the 5th arg
--- withTank=false (UnitAI.h:170) excludes the tank; approximated as the
--- nearest alive player that is not the current victim.
+-- Blind: SelectTarget(MinDistance, 0, 0.0f, true, false) — threat list
+-- sorted ascending by distance (UnitAI.h:228-262), offset 0, no range
+-- cap; withTank=false (UnitAI.h:170) excludes the last victim,
+-- approximated as the current victim (fairbanks convention).
 local function nearestTarget(creature)
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local best, bestDist = nil, nil
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() ~= victimGuid then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and p:GetGUID() ~= victimGuid then
             local dist = creature:GetDistance(p)
             if bestDist == nil or dist < bestDist then
                 best, bestDist = p, dist

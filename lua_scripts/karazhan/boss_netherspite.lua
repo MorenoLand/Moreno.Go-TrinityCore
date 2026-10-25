@@ -117,10 +117,16 @@ local function playersInInstance(creature)
     return found
 end
 
+-- C++ SelectTarget(Random, 0, dist, true): threat-list players alive
+-- within range (UnitAI.h:162-176) — the old instance-player pool could
+-- pick players who never engaged. GetAITargets is the bridged threat
+-- list (lua_creature_events.go). playersInInstance stays: the beam
+-- loop below is a C++ map-player loop, not a SelectTarget pool.
 local function randomAlivePlayerInRange(creature, maxDist)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= maxDist then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= maxDist then
             candidates[#candidates + 1] = p
         end
     end
@@ -347,12 +353,17 @@ onNetherbreath = function(creature, guid)
     schedule(guid, "netherbreath", { 5000, 7000 }, function() onNetherbreath(creature, guid) end)
 end
 
+-- C++ SelectTarget(Random, 1, dist, true): the offset-1 head entry in
+-- MaxThreat order is skipped BEFORE the filters (UnitAI.h:162-176,
+-- 270-277) — not a victim-GUID exclusion, which differs when the
+-- victim is not the threat head (teron convention).
 local function randomNonTankPlayerInRange(creature, maxDist)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() ~= victimGuid and creature:GetDistance(p) <= maxDist then
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local p = targets[i]
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= maxDist then
             candidates[#candidates + 1] = p
         end
     end
