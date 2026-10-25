@@ -93,6 +93,10 @@
 -- re-arm {20000,30000}ms.
 -- valanar EVENT_BERSERK (:814-817) — DoCastSelf(SPELL_BERSERK 50334) +
 -- Talk(SAY_VALANAR_BERSERK 5), cast before Talk (C++ order), one-shot.
+-- valanar JustSummoned NPC_KINETIC_BOMB (:778-785) — RemoveFlag(59,
+-- UNIT_FLAG_NOT_SELECTABLE) immediately after the MovePoint call
+-- (not arrival-gated); MovePoint + ground-Z stay out (no motion /
+-- terrain-height bridge).
 -- BloodPrincesBossAI::KilledUnit (:505-521) — Talk(kill text)
 -- victim->GetTypeId() == TYPEID_PLAYER gated, entry-switched (event 3,
 -- the razuvious player-gated variant precedent): keleseth
@@ -207,6 +211,7 @@
 local ENTRY_KELESETH = 37972
 local ENTRY_TALDARAM = 37973
 local ENTRY_VALANAR = 37970
+local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
 local ENTRY_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248 (NPC_BLOOD_ORB_CONTROLLER)
 
@@ -558,9 +563,22 @@ local function princesReset(event, creature)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
 end
 
+-- C++ boss_prince_valanar_icc::JustSummoned NPC_KINETIC_BOMB case
+-- (boss_blood_prince_council.cpp:778-785): the MovePoint to the
+-- ground position stays out (no motion bridge; ground-Z needs the
+-- terrain height query), but the RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE) leg fires IMMEDIATELY after the MovePoint
+-- call in the same handler — not arrival-gated — so it ports here.
+local function valanarJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_KINETIC_BOMB then
+        summoned:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
+    end
+end
+
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 1, valanarEnterCombat)
+RegisterCreatureEvent(ENTRY_VALANAR, 19, valanarJustSummoned)
 
 RegisterCreatureEvent(ENTRY_KELESETH, 2, princesLeaveCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 2, princesLeaveCombat)

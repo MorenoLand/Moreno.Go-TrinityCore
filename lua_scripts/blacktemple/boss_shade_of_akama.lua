@@ -84,6 +84,10 @@ local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
 
 local ENTRY_ASHTONGUE_CHANNELER = 23421
 
+-- Declared here (rather than in the akama section below) so shadeDied
+-- can sweep it: Lua locals scope from their declaration line.
+local ENTRY_AKAMA_SHADE = 23191 -- black_temple.h:88 (NPC_AKAMA_SHADE)
+
 -- C++ npc_akama_shade::DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when
 -- HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407; _hasYelledOnce
 -- cleared in Initialize()/Reset(), so akamaShadeReset clears the Lua
@@ -111,16 +115,28 @@ end
 
 -- C++ JustDied: non-triggered self-cast of the shade trigger + the
 -- channeler DespawnEntry arm (PORTED in shadeDied via the grid sweep;
--- the akama DoAction, spawner DoActions and SetBossState DONE arms have
--- no instance/summon bridges).
+-- the akama DoAction legs are PORTED below via the same sweep, while
+-- the spawner DoActions and SetBossState DONE arms have no
+-- instance/summon bridges).
 local function shadeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SHADE_OF_AKAMA_TRIGGER)
+    -- C++ JustDied then calls akama->AI()->DoAction(ACTION_SHADE_OF_AKAMA_DEAD)
+    -- (boss_shade_of_akama.cpp:274-275): _isInCombat=false + CombatStop(true)
+    -- + SetFaction(FACTION_ASHTONGUE_DEATHSWORN 1820) in C++ order
+    -- (SetWalk/_events.Reset/MovePoint stay out — no motion bridge).
+    -- The instance GetCreature lookup is approximated by the same
+    -- 100yd grid sweep as the channeler arm below.
+    for _, akama in ipairs(creature:GetCreaturesInGrid(
+            ENTRY_AKAMA_SHADE, 100)) do
+        akama:CombatStop(true)
+        akama:SetFaction(1820)
+    end
     -- C++ boss_shade_of_akama.cpp:282 JustDied summons.DespawnEntry(NPC_
     -- ASHTONGUE_CHANNELER) via the grid-sweep idiom (illidan
     -- parasitic-shadowfiend precedent; C++ SummonList is exact, the
     -- 100yd sweep is the approximation). C++ order: cast first, then
-    -- the despawn (akama/spawner DoActions + SetBossState DONE stay out
-    -- on the instance bridge).
+    -- the akama legs above, then the despawn (spawner DoActions +
+    -- SetBossState DONE stay out on the instance bridge).
     for _, channeler in ipairs(creature:GetCreaturesInGrid(
             ENTRY_ASHTONGUE_CHANNELER, 100)) do
         channeler:Despawn()
@@ -164,7 +180,8 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 
 -- Akama shade (npc_akama_shade, C++ ScriptName; black_temple.h:88
 -- NPC_AKAMA_SHADE = 23191): the Reset stealth arm and the JustDied
--- Talk(SAY_DEAD) are modeled — the gossip intro, soul-channel
+-- Talk(SAY_DEAD) are modeled, and the gossip-intro select legs are
+-- PORTED below (akamaShadeGossipSelect) — the soul-channel
 -- sequence and combat/outro arms are instance/react/threat-driven
 -- and stay unregistered (see above).
 -- C++ Reset: DoCastSelf(SPELL_STEALTH 34189), non-triggered (C++
@@ -173,9 +190,36 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 -- lua_creature_events.go) but the C++ Reset() never runs on death,
 -- so the cast is alive-gated (bladeReset convention in
 -- boss_illidan.lua).
-local ENTRY_AKAMA_SHADE = 23191
 
 local SPELL_STEALTH = 34189
+
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001
+
+-- Timers via CreateLuaEvent (vaelastrasz idiom), GUID-keyed,
+-- cancelled on events 4/23 below.
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
 
 -- C++ npc_akama_shade::JustDied (boss_shade_of_akama.cpp:527-534):
 -- Talk(SAY_DEAD 4), unconditional — the sjonnir JustDied-Talk
@@ -185,22 +229,56 @@ local SPELL_STEALTH = 34189
 local SAY_DEAD = 4
 
 local function akamaShadeDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEAD)
 end
 
 local function akamaShadeReset(event, creature)
     -- C++ npc_akama_shade::Reset (boss_shade_of_akama.cpp:364-371):
     -- Initialize() clears _hasYelledOnce, then SetFaction(FACTION_
-    -- ASHTONGUE_DEATHSWORN 1820) before the stealth self-cast (the
-    -- gossip-flag leg rides the instance boss-state read — no bridge).
+    -- ASHTONGUE_DEATHSWORN 1820) before the stealth self-cast.
+    -- The gossip-flag leg: C++ re-adds UNIT_NPC_FLAG_GOSSIP only when
+    -- the instance boss-state is not DONE (no boss-state bridge), so
+    -- it is re-added unconditionally here — the approximation the
+    -- gossip-select port below depends on (without it the hook can
+    -- never fire after the first SHADE_START removal).
     -- SetFaction is bridged (lua_creature_events.go:1125).
     akamaYelledOnce[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUID())
     if creature:IsAlive() then
         creature:SetFaction(1820)
         creature:CastSpell(creature, SPELL_STEALTH)
+        creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(),
+            UNIT_NPC_FLAG_GOSSIP))
     end
+end
+
+-- C++ npc_akama_shade::OnGossipSelect (boss_shade_of_akama.cpp:536-541):
+-- gossipListId 0 -> CloseGossipMenuFor + EVENT_SHADE_START at 500ms.
+-- The Go select hook passes (sender, action), not gossipListId; the
+-- menu is DB-side, so sender == 0 identifies the DB menu's option
+-- (grandmother precedent in bosses_opera.lua). C++ returns false
+-- (native select arms proceed).
+local function akamaShadeGossipSelect(event, player, creature, sender, action)
+    if sender ~= 0 then
+        return false
+    end
+    player:GossipClearMenu()
+    player:GossipComplete()
+    local guid = creature:GetGUID()
+    schedule(guid, "shade_start", 500, function()
+        -- C++ EVENT_SHADE_START (boss_shade_of_akama.cpp:460-467):
+        -- SetBossState IN_PROGRESS (no bridge) + RemoveFlag(UNIT_NPC_FLAGS,
+        -- UNIT_NPC_FLAG_GOSSIP) + RemoveAurasDueToSpell(SPELL_STEALTH)
+        -- (SetWalk/MovePoint stay out — no motion bridge).
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
+            bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
+        creature:RemoveAura(SPELL_STEALTH)
+    end)
+    return false
 end
 
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
+RegisterCreatureGossipEvent(ENTRY_AKAMA_SHADE, 2, akamaShadeGossipSelect)

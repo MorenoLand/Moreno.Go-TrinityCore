@@ -239,7 +239,9 @@
 -- drudge ghoul): cross-creature timed BasicEvent machine;
 -- AttackStart/SelectTarget have no bridge. (VileSpiritActivateEvent
 -- REACT_AGGRESSIVE (:472-484) + JustSummoned legs :750/:761/:777/1059
--- and the ice-sphere :750 / defile :761 legs act on unregistered adds;
+-- (ice-sphere :750 PORTED in lichKingJustSummoned — SelectTarget
+-- approximated by the alive same-map/instance random-player pool,
+-- MoveFollow stays out; defile :761 acts on an unregistered add;
 -- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
@@ -251,6 +253,7 @@ local NPC_FROSTMOURNE_TRIGGER = 38584 -- boss_the_lich_king.h:331
 local ENTRY_SHAMBLING_HORROR = 37698
 local ENTRY_RAGING_SPIRIT = 36701
 local ENTRY_SPIRIT_WARDEN = 36824
+local ENTRY_ICE_SPHERE = 36633 -- icecrown_citadel.h:321 (NPC_ICE_SPHERE)
 
 local SAY_LK_KILL = 10
 local SAY_LK_BERSERK = 11
@@ -263,6 +266,9 @@ local SPELL_SOUL_SHRIEK = 69242
 local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
 local SPELL_BOSS_HITTIN_YA = 73878
+local SPELL_ICE_SPHERE = 69090 -- boss_the_lich_king.cpp:103
+local SPELL_ICE_BURST_TARGET_SEARCH = 69109 -- boss_the_lich_king.cpp:104
+local SPELL_ICE_PULSE = 69091 -- boss_the_lich_king.cpp:105
 local SPELL_DARK_HUNGER = 69383
 local SPELL_SOUL_RIP = 69397
 local SPELL_KILL_FROSTMOURNE_PLAYERS = 75127
@@ -360,10 +366,50 @@ local function lichKingKilledUnit(event, creature, victim)
     end
 end
 
+-- C++ boss_the_lich_king::JustSummoned NPC_ICE_SPHERE case
+-- (boss_the_lich_king.cpp:746-756): random-player gate, then
+-- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_ICE_SPHERE)
+-- + CastSpell(summon, SPELL_ICE_BURST_TARGET_SEARCH) +
+-- CastSpell(target, SPELL_ICE_PULSE), all non-triggered, in C++
+-- order; MoveFollow stays out (no motion bridge). No target ->
+-- DespawnOrUnsummon. C++ SelectTarget(Random, 0, 0.0f, player-only)
+-- has no bridge, so the target pool is the alive same-map/instance
+-- player pool (the BPC randomNonTankPlayerAnywhere precedent shape,
+-- without the victim exclusion — C++ excludes nothing).
+local function randomPlayerAnywhere(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+local function lichKingJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() == ENTRY_ICE_SPHERE then
+        local target = randomPlayerAnywhere(creature)
+        if target then
+            summoned:SetReactState(0) -- REACT_PASSIVE
+            summoned:CastSpell(summoned, SPELL_ICE_SPHERE)
+            summoned:CastSpell(summoned, SPELL_ICE_BURST_TARGET_SEARCH)
+            summoned:CastSpell(target, SPELL_ICE_PULSE)
+        else
+            summoned:Despawn()
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 1, lichKingJustEngagedWith)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 2, lichKingLeaveCombat)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 4, lichKingJustDied)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 19, lichKingJustSummoned)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
 
 -- C++ npc_shambling_horror_icc: Reset seeds EVENT_SHOCKWAVE {20s,25s}
