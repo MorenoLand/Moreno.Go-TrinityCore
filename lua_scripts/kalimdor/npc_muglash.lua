@@ -15,8 +15,10 @@
 -- Ported arms:
 -- - OnQuestAccept (zone_ashenvale.cpp:237-244, event 31): quest id
 --   6641 (QUEST_VORSHA) -> Talk(SAY_MUG_START1 0, untargeted — the
---   willix Talk-only precedent). The rest (SetFaction escorted
---   neutral + EscortAI::Start) has no bridges — documented-only.
+--   willix precedent). SetFaction(113
+--   FACTION_ESCORTEE_N_NEUTRAL_PASSIVE, C++ order: Talk, SetFaction,
+--   Start) also ported; EscortAI::Start alone has no bridge —
+--   documented-only.
 -- Unmodeled (documented-only, no bridges):
 -- - JustEngagedWith Talk(SAY_MUG_ON_GUARD 3, player-targeted) and
 --   JustDied FailQuest(QUEST_VORSHA) + JustSummoned AttackStart —
@@ -34,13 +36,15 @@ local SAY_MUG_START1 = 0
 
 local QUEST_VORSHA = 6641
 
--- C++ OnQuestAccept for quest 6641: Talk(0); the faction swap and
--- EscortAI::Start have no bridges.
+-- C++ OnQuestAccept for quest 6641 (zone_ashenvale.cpp:237-244, C++ order:
+-- Talk, SetFaction, Start): Talk(0) + SetFaction(113); EscortAI::Start
+-- alone has no bridge.
 local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_VORSHA then
         return
     end
     creature:Talk(SAY_MUG_START1)
+    creature:SetFaction(113)
 end
 
 RegisterCreatureEvent(ENTRY_MUGLASH, 31, onQuestAccept)

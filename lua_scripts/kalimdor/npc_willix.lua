@@ -18,8 +18,9 @@
 -- combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms:
 -- - OnQuestAccept (C++ OnQuestAccept, event 31): quest id 1144
---   (QUEST_WILLIX_THE_IMPORTER) -> Talk(SAY_READY 0). The rest
---   (EscortAI Start, SetFaction escorted-neutral) has no bridges —
+--   (QUEST_WILLIX_THE_IMPORTER) -> Talk(SAY_READY 0) +
+--   SetFaction(113 FACTION_ESCORTEE_N_NEUTRAL_PASSIVE, C++ order:
+--   Start, Talk, SetFaction). EscortAI Start alone has no bridge —
 --   documented-only.
 -- - Engage (C++ JustEngagedWith): Talk(SAY_AGGRO1 2), ungated (the
 --   C++ Talk targets the player; the bridge broadcasts — deviation,
@@ -49,13 +50,15 @@ local QUEST_WILLIX_THE_IMPORTER = 1144
 
 local willixEscortPlayer = {}
 
--- C++ OnQuestAccept for quest 1144: Talk(READY); the EscortAI start
--- and faction swap have no bridges.
+-- C++ OnQuestAccept for quest 1144 (razorfen_kraul.cpp:52-59, C++ order:
+-- Start, Talk, SetFaction): Talk(READY) + SetFaction(113); the EscortAI
+-- start alone has no bridge.
 local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_WILLIX_THE_IMPORTER then
         return
     end
     creature:Talk(SAY_READY)
+    creature:SetFaction(113)
     if player then
         willixEscortPlayer[creature:GetGUID()] = player:GetGUID()
     end

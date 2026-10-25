@@ -15,8 +15,9 @@
 -- Ported arms:
 -- - OnQuestAccept (zone_winterspring.cpp:540-547, event 31): quest
 --   id 4901 (QUEST_GUARDIANS_ALTAR) -> Talk(SAY_QUEST_START 0,
---   untargeted — the willix Talk-only precedent). The rest
---   (SetFaction escorted-neutral + EscortAI Start) has no bridges —
+--   untargeted — the willix precedent). SetFaction(10
+--   FACTION_ESCORTEE_A_NEUTRAL_PASSIVE, C++ order: Talk, SetFaction,
+--   Start) also ported; EscortAI Start alone has no bridge —
 --   documented-only.
 -- Unmodeled (documented-only, no bridges):
 -- - The whole Elune-altar event machine (npc_ranshallaAI UpdateAI
@@ -32,13 +33,15 @@ local SAY_QUEST_START = 0
 
 local QUEST_GUARDIANS_ALTAR = 4901
 
--- C++ OnQuestAccept for quest 4901: Talk(0); the faction swap and
--- EscortAI::Start have no bridges.
+-- C++ OnQuestAccept for quest 4901 (zone_winterspring.cpp:540-547, C++ order:
+-- Talk, SetFaction, Start): Talk(0) + SetFaction(10); EscortAI::Start
+-- alone has no bridge.
 local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_GUARDIANS_ALTAR then
         return
     end
     creature:Talk(SAY_QUEST_START)
+    creature:SetFaction(10)
 end
 
 RegisterCreatureEvent(ENTRY_RANSHALLA, 31, onQuestAccept)

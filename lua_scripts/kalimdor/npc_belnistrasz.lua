@@ -30,9 +30,10 @@
 -- - OnQuestAccept (C++ OnQuestAccept, event 31): quest id 3525
 --   (QUEST_EXTINGUISHING_THE_IDOL) -> eventInProgress latch,
 --   Talk(SAY_QUEST_ACCEPTED 0); the RemoveFlag questgiver leg IS
---   bridged (RemoveFlag(82, 2)) and ported. The rest (SetFaction
---   escorted, MovePath(PATH_ESCORT 871710) escort run) has no bridges
---   — documented-only.
+--   bridged (RemoveFlag(82, 2)) and ported, as is SetFaction(250
+--   FACTION_ESCORTEE_N_NEUTRAL_ACTIVE, C++ order: latch, Talk,
+--   RemoveFlag, SetFaction, MovePath). MovePath(PATH_ESCORT 871710)
+--   alone has no bridge — documented-only.
 -- - Engage (C++ JustEngagedWith): arms Fireball at 1s and Frost Nova
 --   at {8s,12s}, and with urand(0,100) > 40 -> Talk(SAY_AGGRO 6);
 --   channeling (never set here — MovementInform has no bridge) ->
@@ -250,9 +251,10 @@ local function onQuestAccept(event, player, creature, quest)
     creature:Talk(SAY_QUEST_ACCEPTED)
     -- C++ npc_belnistraszAI::OnQuestAccept (razorfen_downs.cpp:137):
     -- me->RemoveFlag(UNIT_NPC_FLAGS, GOSSIP_OPTION_QUESTGIVER) — the
-    -- questgiver flag goes away once the escort event starts (the
-    -- SetFaction/MovePath legs have no bridges — documented-only).
+    -- questgiver flag goes away once the escort event starts; the
+    -- MovePath leg alone has no bridge — documented-only.
     creature:RemoveFlag(82, UNIT_NPC_FLAG_QUESTGIVER)
+    creature:SetFaction(250)
 end
 
 local function onDied(event, creature, killer)
