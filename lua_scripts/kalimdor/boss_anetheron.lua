@@ -23,8 +23,8 @@
 --   engage arms each timer at its C++ init cooldown; expiry re-arms at the
 --   C++ repeat ranges (jeklik convention):
 --   - Carrion Swarm 31306 on a random alive player within 100 (C++
---     SelectTargetMethod::Random, 0, 100, true — janalai
---     randomPlayerInRange convention) init 45s -> {45s,60s}, non-triggered.
+--     SelectTargetMethod::Random, 0, 100, true — threat-list player pool
+--     (ras_frostwhisper precedent)) init 45s -> {45s,60s}, non-triggered.
 --     C++ DoCast accepts a nil target (no-op cast) and STILL talks and
 --     re-arms — modeled exactly: cast only if the target is alive,
 --     Talk SAY_SWARM (2) unconditionally, then re-arm.
@@ -125,13 +125,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0, maxDist, true): random threat-list
+-- player within maxDist yards, victim included (UnitAI.h:
+-- SelectTarget draws from the threat list; offset 0, no skip;
+-- ras_frostwhisper precedent).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then

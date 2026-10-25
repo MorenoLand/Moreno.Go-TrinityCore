@@ -25,8 +25,8 @@
 --   convention). SAY_DOOM (2) is marked "Not used?" in C++ and has no
 --   Talk arm — no C++-side Talk to port.
 -- - Rain of Fire 31340 on a random alive player within 30 (C++
---   SelectTargetMethod::Random, 0, 30, true — janalai randomPlayerInRange
---   convention), non-triggered, init 20s -> {20s,35s} (C++ 20000 +
+--   SelectTargetMethod::Random, 0, 30, true — threat-list player
+--   pool, ras_frostwhisper precedent), non-triggered, init 20s -> {20s,35s} (C++ 20000 +
 --   rand32()%15000); nil target leaves the C++ timer expired so the next
 --   tick retries — modeled as cast-if-target-alive, then re-arm.
 -- - Doom 31347 on SelectTargetMethod::Random, 1, 100, true — position 1
@@ -117,18 +117,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- C++ SelectTargetMethod::Random, 0, 100, true — janalai convention; the
--- excludeVictim flag approximates C++ position 1 ("never on tank") for
--- Doom (now a threat-list pick, see below).
+-- C++ SelectTargetMethod::Random, 0, maxDist, true — threat-list
+-- player pool (UnitAI.h: SelectTarget draws from the threat list;
+-- offset 0, no skip; ras_frostwhisper precedent). Only Rain of Fire
+-- still uses this helper (Doom uses randomThreatPlayerInRange below);
+-- excludeVictim is vestigial here since Rain passes false.
 local function randomPlayerInRange(creature, maxDist, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and not (excludeVictim and victim and p == victim) then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then

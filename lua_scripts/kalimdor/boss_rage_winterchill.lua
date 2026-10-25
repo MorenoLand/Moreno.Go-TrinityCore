@@ -23,8 +23,8 @@
 --   init 37s -> [40000,59999]; Death and Decay 31258 on victim init 45s ->
 --   [60000,79999] + Talk SAY_DECAY (2); Frost Nova 31250 on victim init 15s ->
 --   [30000,44999] + Talk SAY_NOVA (3); Icebolt 31249 on a random alive player
---   within 40 (C++ SelectTargetMethod::Random, 0, 40, true — janalai
---   randomPlayerInRange convention) init 10s -> [11000,30999]. All four are
+--   within 40 (C++ SelectTargetMethod::Random, 0, 40, true —
+--   threat-list player pool, ras_frostwhisper precedent) init 10s -> [11000,30999]. All four are
 --   DoCast without the triggered flag (non-triggered, jeklik convention);
 --   every arm re-arms unconditionally on the firing tick — Icebolt's
 --   DoCast(SelectTarget(...)) is null-safe and its timer re-arms even on
@@ -98,13 +98,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0, maxDist, true): random threat-list
+-- player within maxDist yards, victim included (UnitAI.h:
+-- SelectTarget draws from the threat list; offset 0, no skip;
+-- ras_frostwhisper precedent).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
