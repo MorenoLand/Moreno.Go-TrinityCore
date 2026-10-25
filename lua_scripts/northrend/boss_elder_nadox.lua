@@ -20,7 +20,9 @@
 -- SPELL_BROOD_PLAGUE 56130, TRIGGERED), 13s init, 15s repeat — the old
 -- "random-target SelectTarget bridge absent (cairne/kazzak)" header
 -- claim is RETRACTED (randomPlayer is the in-tree bridge: anomalus /
--- eadric / keleseth precedent); no cast on an empty candidate pool
+-- eadric / keleseth precedent); the pool is the THREAT list
+-- (GetAITargets, tharon_ja precedent — 2026-10-25 fix, old
+-- GetPlayersInWorld pool was instance-wide); no cast on an empty candidate pool
 -- (C++ SelectTarget null leg — eadric hammer precedent);
 -- EVENT_RAGE DoCast(H_SPELL_BROOD_RAGE 59465) self-cast non-triggered,
 -- 12s init, 10-50s repeat (math.random — eck spring precedent),
@@ -113,17 +115,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- randomPlayer: the in-tree random-target SelectTarget bridge
--- (anomalus / eadric / keleseth precedent) — GetPlayersInWorld +
--- map/instance/alive filter + maxDist.
+-- randomPlayer: C++ SelectTarget(Random, 0, 100, true) draws the threat
+-- list (UnitAI.h), not instance players — GetAITargets + Player + alive
+-- + 100yd (tharon_ja / violet-hold threat-pool fix class, 2026-10-25).
 local function randomPlayer(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

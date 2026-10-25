@@ -32,6 +32,17 @@
 -- 57942); JustEngagedWith-scheduled 5s init, rescheduled 5s
 -- (task.Repeat() with no args = same duration — TaskScheduler.h
 -- line 485);
+-- C++ EVENT_SHIVER — SelectTarget(Random, 0) -> DoCast(target,
+-- Shiver 57949), 15s init, 15s repeat (task.Repeat() outside the
+-- target-if — unconditional re-arm): PORTED 2026-10-25 — the old
+-- "random-target SelectTarget bridge absent (cairne/kazzak)" claim
+-- is stale (GetAITargets is the bridge, tharon_ja precedent);
+-- playerOnly defaults false and dist 0.0f = any range, so the pick
+-- is a random alive threat-list unit of any type (C++ skips
+-- offline refs, UnitAI.h; Go SortedEntries returns dead too, so
+-- IsAlive filters). The insanity wait-state pause of the scheduler
+-- rides the unported insanity machine and never engages in the
+-- ported model, so ungated timers match the mind-flay/bolt arms.
 -- KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
@@ -48,9 +59,8 @@
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_QUICK_DEMISE_START_EVENT
 -- 20382) — instance-script model absent (standing blocker); Reset
 -- leg _instance->DoStopTimedAchievement — same.
--- EVENT_SHIVER — SelectTarget(SelectTargetMethod::Random, 0) ->
--- DoCast(target, Shiver 57949) (15s repeat): the random-target
--- SelectTarget bridge is absent (cairne/kazzak precedent).
+-- EVENT_SHIVER — PORTED above (see ported-arms list); the old
+-- "random-target SelectTarget bridge absent" note is retired.
 -- DamageTaken: UNIT_FLAG_NOT_SELECTABLE damage-nullification leg
 -- (creature:HasFlag bridged, but the flag is never set in the
 -- ported model — documented only); the 66%/33% crossing arm is
@@ -108,6 +118,7 @@ local ENTRY_HERALD_VOLAZJ = 29311
 
 local SPELL_MIND_FLAY = 57941
 local SPELL_SHADOW_BOLT_VOLLEY = 57942
+local SPELL_SHIVER = 57949
 local SPELL_INSANITY = 57496 -- boss_herald_volazj.cpp:34
 
 -- UnitDefines.h:149; RemoveFlag on UNIT_FIELD_FLAGS (59) is bridged
@@ -199,6 +210,27 @@ local function shadowBoltTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SHIVER: ScheduleTasks 15s init, task.Repeat() = same
+-- 15s, unconditional (outside the target-if); SelectTarget(Random,
+-- 0) = random threat-list unit, any type, any range (playerOnly
+-- defaults false, dist 0.0f); C++ skips offline refs, so the Lua
+-- pool filters IsAlive (UnitAI.h; Go SortedEntries returns dead
+-- too). No cast on an empty pool; DoCast non-triggered.
+local function shiverTick(creature, guid)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_SHIVER)
+    end
+    schedule(guid, "shiver", 15000, function()
+        shiverTick(creature, guid)
+    end)
+end
+
 local function volazjEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -208,6 +240,9 @@ local function volazjEnterCombat(event, creature, target)
     end)
     schedule(guid, "shadowbolt", 5000, function()
         shadowBoltTick(creature, guid)
+    end)
+    schedule(guid, "shiver", 15000, function()
+        shiverTick(creature, guid)
     end)
 end
 
@@ -245,10 +280,11 @@ end
 -- -> me->InterruptNonMeleeSpells(false) (ported below, no-op twin)
 -- + DoCast(me, SPELL_INSANITY, false) = self-cast, non-triggered
 -- (vaelastrasz convention: CastSpell(creature, spell) = DoCastSelf).
--- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg needs the absent flag
--- bridge; the flag is only set by the unported SpellHitTarget
--- insanity machine (stays out on reachability/payload grounds — see
--- header), so it never fires in Lua. Event 9 fires pre-damage
+-- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg is dead code in the
+-- ported model: creature:HasFlag IS bridged, but the flag is only
+-- set by the unported SpellHitTarget insanity machine (stays out
+-- on reachability/payload grounds — see header; 2026-10-23
+-- downgrade), so it never fires in Lua. Event 9 fires pre-damage
 -- carrying damage (eck precedent),
 -- so pre/post pct are C++-exact. No once-latch in C++: a re-cross
 -- after a heal re-fires.

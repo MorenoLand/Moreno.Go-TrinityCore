@@ -32,9 +32,11 @@
 -- init, 30s repeat on cast, 1s fail-fast repeat when no valid
 -- target (C++ :141-147 — the else branch re-arms 1s, not 30s);
 -- EVENT_ROOT — SelectTarget(Random, 1, 100.0f, true):
--- random non-victim (position-1 offset skips the tank —
--- malchezaar/netherspite convention) alive threat target within
--- 100yd, playerOnly=true (the 4th arg, murmur convention) -> DoCast(target, Entangling Roots 57095) TRIGGERED
+-- offset-1 skip of the first MaxThreat entry BEFORE player/dist
+-- filters (UnitAI.h; eck precedent — 2026-10-25 fix, old
+-- victim-GUID exclusion was wrong when top threat != victim),
+-- alive threat target within 100yd, playerOnly=true (the 4th arg,
+-- murmur convention) -> DoCast(target, Entangling Roots 57095) TRIGGERED
 -- (trailing true — apothecary_hanes convention); 5-9s init,
 -- 10-15s repeat (the re-arm sits outside the target check —
 -- C++ :150-152 exact); EVENT_BOLT — SelectTarget(Random, 0,
@@ -182,7 +184,7 @@ end
 local function randomThreatTarget(creature, maxDist, playersOnly, hasAuraExclude)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if (not playersOnly) or t:GetObjectType() == "Player" then
+        if t:IsAlive() and ((not playersOnly) or t:GetObjectType() == "Player") then
             if maxDist <= 0 or creature:GetDistance(t) <= maxDist then
                 if hasAuraExclude == nil or not t:HasAura(hasAuraExclude) then
                     candidates[#candidates + 1] = t
@@ -196,16 +198,17 @@ local function randomThreatTarget(creature, maxDist, playersOnly, hasAuraExclude
     return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(Random, 1, dist, true, ...): position-1 offset
--- skips the first (victim) entry — malchezaar/netherspite
--- convention; playerOnly=true honored by the GetObjectType
--- "Player" filter (murmur convention).
+-- C++ SelectTarget(Random, 1, dist, true): the offset-1 skip runs
+-- BEFORE the player/dist filters in MaxThreat order (UnitAI.h) —
+-- skip GetAITargets()[1], then filter Player + alive + dist (eck
+-- precedent, 2026-10-25; the old victim-GUID exclusion was wrong
+-- when top threat != victim).
 local function randomNonVictimTarget(creature, maxDist)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetObjectType() == "Player" and t:GetGUID() ~= victimGuid
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:IsAlive() and t:GetObjectType() == "Player"
                 and (maxDist <= 0 or creature:GetDistance(t) <= maxDist) then
             candidates[#candidates + 1] = t
         end

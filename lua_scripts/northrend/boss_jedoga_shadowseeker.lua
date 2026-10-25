@@ -73,8 +73,12 @@
 -- 0, 100.0f, true) -> DoCast(target, Lightning Bolt 56891), 7s
 -- init, 15-30s repeat; EVENT_THUNDERSHOCK — same selector ->
 -- DoCast(target, Thundershock 56926), 12s init, 15-30s repeat: the
--- random-target SelectTarget bridge is absent (cairne/kazzak
--- precedent), so both casts are unmodelable — documented-only.
+-- "random-target SelectTarget bridge absent (cairne/kazzak)" claim is
+-- STALE (GetAITargets is the bridge, tharon_ja precedent) — the
+-- blocker is gating, not bridge: both are POINT_GROUND-scheduled
+-- phase-one rotation arms, and ungated engage timers would over-cast
+-- during the unbridged intro/phase-two machines (gothik rule) —
+-- documented-only.
 -- DamageTaken 55% health crossing (events.Reset + SetPhase(
 -- PHASE_TWO) + EVENT_START_PHASE_TWO 1s) — the old "no health-pct
 -- bridge (doomwalker precedent)" claim was stale (event 9 carries
