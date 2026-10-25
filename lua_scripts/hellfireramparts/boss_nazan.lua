@@ -75,7 +75,8 @@
 -- bridged — blood_prince_council precedent); no summon
 -- bridge — the SpellHitTarget liquid-fire arm and the JustSummoned
 -- liquid-fire setup are PORTED 2026-10-23 (nazanSpellHitTarget /
--- liquidFireSummoned below; the stale "no summon bridge" claim was
+-- liquidFireSummoned below; the event-19 binding was FIXED 2026-10-24
+-- (was registered on the summoned entry, never fired); the stale "no summon bridge" claim was
 -- retracted — creature:SummonCreature is bridged,
 -- lua_creature_events.go:728); the JustSummoned SetLevel leg has no
 -- bridge — stays out; no SpellScript/AuraScript scripts in this file.
@@ -95,12 +96,6 @@ local ENTRY_NAZAN = 17536
 
 local timers = {}
 local states = {}
-
--- Pending-slot for the liquid-fire JustSummoned faction leg: set
--- synchronously around the SummonCreature call (event 19 fires inside
--- the call), read by liquidFireSummoned. Declared here so the local
--- exists before any assignment (malown shadowing rule).
-local pendingLiquidFireFaction
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -268,32 +263,33 @@ end)
 -- is bridged on the ev15 args (lethon precedent).
 local function nazanSpellHitTarget(event, creature, target, spellId)
     if spellId == SPELL_FIREBALL and target then
-        pendingLiquidFireFaction = creature:GetFaction()
         creature:SummonCreature(NPC_LIQUID_FIRE, target:GetX(), target:GetY(),
             target:GetZ(), target:GetO(), 2, 30000)
-        pendingLiquidFireFaction = nil
     end
 end
 
 -- C++ boss_nazanAI::JustSummoned (boss_vazruden_the_herald.cpp:103-112),
--- entry-gated: SetFaction(summoner faction, pending-slot idiom) + the
--- DUNGEON_MODE(23971, 30928) triggered self-cast + FIRE_NOVA_VISUAL 19823
--- triggered self-cast (C++ arm order); SetLevel has no bridge — stays out.
-local function liquidFireSummoned(event, creature)
-    if creature:GetEntry() == NPC_LIQUID_FIRE then
-        if pendingLiquidFireFaction then
-            creature:SetFaction(pendingLiquidFireFaction)
-        end
-        if creature:IsHeroic() then
-            creature:CastSpell(creature, SPELL_SUMMON_LIQUID_FIRE_H, true)
+-- entry-gated on the SUMMON: event 19 fires on the SUMMONER's entry
+-- bindings with (event, summoner, summon) (lua_creature_events.go:
+-- fireCreatureSummoned) — the 2026-10-23 port registered it on the
+-- summoned entry with a 2-arg handler, so it never fired; fixed
+-- 2026-10-24 to the summoner entry + 3-arg handler. Arms (C++ order):
+-- SetFaction(summoner faction) + the DUNGEON_MODE(23971, 30928)
+-- triggered self-cast + FIRE_NOVA_VISUAL 19823 triggered self-cast;
+-- SetLevel has no bridge — stays out.
+local function liquidFireSummoned(event, creature, summon)
+    if summon and summon:GetEntry() == NPC_LIQUID_FIRE then
+        summon:SetFaction(creature:GetFaction())
+        if summon:IsHeroic() then
+            summon:CastSpell(summon, SPELL_SUMMON_LIQUID_FIRE_H, true)
         else
-            creature:CastSpell(creature, SPELL_SUMMON_LIQUID_FIRE, true)
+            summon:CastSpell(summon, SPELL_SUMMON_LIQUID_FIRE, true)
         end
-        creature:CastSpell(creature, SPELL_FIRE_NOVA_VISUAL, true)
+        summon:CastSpell(summon, SPELL_FIRE_NOVA_VISUAL, true)
     end
 end
 
 RegisterCreatureEvent(ENTRY_NAZAN, 15, nazanSpellHitTarget)
 -- NPC_LIQUID_FIRE 22515 exists only via the SpellHitTarget summon above
--- (the yor precedent).
-RegisterCreatureEvent(NPC_LIQUID_FIRE, 19, liquidFireSummoned)
+-- (the yor precedent); the event-19 binding lives on the summoner.
+RegisterCreatureEvent(ENTRY_NAZAN, 19, liquidFireSummoned)

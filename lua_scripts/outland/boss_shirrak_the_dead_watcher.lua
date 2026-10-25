@@ -88,12 +88,6 @@ local NPC_FOCUS_FIRE = 18374 -- boss_shirrak_the_dead_watcher.cpp:43
 
 local timers = {}
 
--- Pending-slot for the FocusFire JustSummoned faction leg: set
--- synchronously around the SummonCreature call (event 19 fires inside
--- the call), read by focusFireSummoned. Declared here so the local
--- exists before any assignment (malown shadowing rule).
-local pendingFocusFireFaction
-
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -173,14 +167,8 @@ local function focusfireTick(creature, guid)
     end
     if #candidates > 0 then
         local target = candidates[math.random(#candidates)]
-        -- The JustSummoned visual/faction legs need the summoner's faction;
-        -- the summon bridge fires event 19 synchronously inside this call
-        -- (lua_creature_events.go: fireCreatureSummoned), so the pending
-        -- slot is exact.
-        pendingFocusFireFaction = creature:GetFaction()
         creature:SummonCreature(NPC_FOCUS_FIRE, target:GetX(), target:GetY(),
             target:GetZ(), 0, 2, 5500)
-        pendingFocusFireFaction = nil
         creature:Talk(EMOTE_FOCUSED, target)
     end
     schedule(guid, "focusfire", 15000 + math.random(0, 4999), function()
@@ -188,19 +176,20 @@ local function focusfireTick(creature, guid)
     end)
 end
 
--- C++ JustSummoned (boss_shirrak_the_dead_watcher.cpp:94-107), entry-gated:
--- the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered self-cast + SetFaction
--- (summoner faction, via the pending slot — creature:GetOwner is
--- player-owner-only, so it cannot yield the summoner creature)
--- legs are bridged; the UNIT_STATE_ROOT leg ports via creature:SetRooted
--- (2026-10-24); SetLevel / AttackStart have no bridges, stay out.
-local function focusFireSummoned(event, creature)
-    if creature:GetEntry() == NPC_FOCUS_FIRE then
-        creature:CastSpell(creature, SPELL_FOCUS_FIRE_VISUAL)
-        if pendingFocusFireFaction then
-            creature:SetFaction(pendingFocusFireFaction)
-        end
-        creature:SetRooted(true)
+-- C++ JustSummoned (boss_shirrak_the_dead_watcher.cpp:94-107), entry-gated
+-- on the SUMMON: event 19 fires on the SUMMONER's entry bindings with
+-- (event, summoner, summon) (lua_creature_events.go: fireCreatureSummoned)
+-- — the prior port registered it on the summoned entry with a 2-arg
+-- handler, so it never fired; fixed 2026-10-24 to the summoner entry +
+-- 3-arg handler. Legs: SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered
+-- self-cast + SetFaction(summoner faction); UNIT_STATE_ROOT ports via
+-- creature:SetRooted (2026-10-24); SetLevel / AttackStart(FocusedTargetGUID)
+-- have no bridges, stay out.
+local function focusFireSummoned(event, creature, summon)
+    if summon and summon:GetEntry() == NPC_FOCUS_FIRE then
+        summon:CastSpell(summon, SPELL_FOCUS_FIRE_VISUAL)
+        summon:SetFaction(creature:GetFaction())
+        summon:SetRooted(true)
     end
 end
 
@@ -272,5 +261,6 @@ RegisterCreatureEvent(ENTRY_SHIRRAK, 5, shirrakSpawn)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 23, shirrakReset)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 37, shirrakRemove)
 -- NPC_FOCUS_FIRE 18374 exists only via the FocusFire summon above; its
--- JustSummoned visual/faction setup is ported (the yor precedent).
-RegisterCreatureEvent(NPC_FOCUS_FIRE, 19, focusFireSummoned)
+-- JustSummoned visual/faction setup is ported (the yor precedent) on the
+-- summoner's event-19 binding.
+RegisterCreatureEvent(ENTRY_SHIRRAK, 19, focusFireSummoned)
