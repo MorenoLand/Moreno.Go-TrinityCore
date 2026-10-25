@@ -56,11 +56,12 @@
 -- EnterEvadeMode/UpdatePosition bridge, so living adds stay in place.
 -- The eight adds' class AIs are registered in this file so the summons
 -- fight.
--- Deviations from C++: JustEngagedWith's add AttackStart arm (with its
--- EnterEvadeMode fallback), the 5s CheckAddState re-engage arm, and
--- JustDied's add KillSelf arm have no bearer (no AttackStart /
--- EnterEvadeMode / Kill bridges — the keleseth guard-AttackStart and
--- KillSelf-axis precedents); the 5s ResetTimer room-
+-- Deviations from C++: JustEngagedWith's add AttackStart arm, the 5s
+-- CheckAddState re-engage arm, and JustDied's add KillSelf arm are
+-- PORTED 2026-10-24 via EngageWithTarget / creature:Kill() (the
+-- EnterEvadeMode fallback on a missing/dead add still has no bridge,
+-- so a missing add is skipped and the remaining adds still engage);
+-- the 5s ResetTimer room-
 -- check EnterEvadeMode has no bearer; the add base AI's
 -- GetBossState(IN_PROGRESS) evade gate has no bridge (no
 -- instance-script model, so the BOSS_HEXLORD encounter bookkeeping never
@@ -153,6 +154,7 @@ local ABILITIES = {
 
 local timers = {}
 local state = {}
+local hexlordAddIds
 
 local function cancelTimers(store, guid)
     local per = store[guid]
@@ -272,6 +274,8 @@ local onSpiritBolts
 local onDrainPower
 local onSiphonSoul
 local onAbility
+local engagePickedAdds
+local checkAddState
 
 -- C++ drain power: triggered self-cast, Talk, repeat {40s,55s}. The
 -- os.time deadline lets the spirit-bolts arm compare drain remaining
@@ -379,15 +383,19 @@ onAbility = function(creature, guid)
     end)
 end
 
-local function hexlordEnterCombat(event, creature)
+local function hexlordEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     state[guid] = { drainDeadline = os.time() + 60, playerClass = nil, playerGuid = nil }
     creature:Talk(YELL_AGGRO)
-    -- The C++ JustEngagedWith add AttackStart arm (with its
-    -- EnterEvadeMode fallback) has no bearer — no AttackStart /
-    -- EnterEvadeMode bridges (the keleseth guard-AttackStart precedent);
-    -- the adds engage via the engine's own aggro.
+    -- C++ JustEngagedWith (boss_hexlord.cpp:290-300): each picked add
+    -- engages the boss's victim (EnterEvadeMode fallback stays out —
+    -- no bridge — so a missing add is skipped, see engagePickedAdds).
+    engagePickedAdds(creature, target or creature:GetVictim())
+    -- C++ CheckAddState_Timer = 5000 (boss_hexlord.cpp:383-390).
+    schedule(timers, guid, "checkadds", 5000, function()
+        checkAddState(creature, guid)
+    end)
     schedule(timers, guid, "spirit", 20000, function()
         onSpiritBolts(creature, guid)
     end)
@@ -416,9 +424,19 @@ local function hexlordDied(event, creature)
     cancelTimers(timers, guid)
     state[guid] = nil
     creature:Talk(YELL_DEATH)
-    -- C++ JustDied's add KillSelf arm (boss_hexlord.cpp:326-331) has no
-    -- bearer (the adds are reached via the stored AddGUID[] array —
-    -- no GUID->creature bridge; creature:Kill() itself is bridged now).
+    -- C++ JustDied's add KillSelf arm (boss_hexlord.cpp:326-331):
+    -- each picked add alive is killed (grid scan stands in for the
+    -- stored AddGUID[] array — no GUID->creature bridge).
+    local ids = hexlordAddIds[guid]
+    if ids then
+        for _, entry in ipairs(ids) do
+            for _, add in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+                if not add:IsDead() then
+                    add:Kill()
+                end
+            end
+        end
+    end
 end
 
 -- C++ boss_hexlord.cpp:134-141: Pos_X[4], POS_Y 921.2795, POS_Z 33.8883,
@@ -429,7 +447,53 @@ end
 local HEXLORD_SPAWN_X = {112.8827, 107.8827, 122.8827, 127.8827}
 local HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O = 921.2795, 33.8883, 1.5696
 local HEXLORD_ADD_POOL = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
-local hexlordAddIds = {}
+hexlordAddIds = {}
+
+-- C++ JustEngagedWith (boss_hexlord.cpp:290-300): for each of the 4
+-- picked adds, if alive, AI()->AttackStart(me->GetVictim()); else
+-- EnterEvadeMode + break. The grid scan stands in for AddGUID[]
+-- (no GUID->creature bridge); the 150 yd scan is wider than Reset's
+-- 60 yd so boss-to-add distance cannot hide an add (the eight add
+-- entries are fight-unique, so no false positives). The evade leg
+-- has no bridge: a missing/dead add is skipped and the remaining
+-- alive adds still engage instead of breaking.
+engagePickedAdds = function(creature, victim)
+    if victim == nil then
+        return
+    end
+    local ids = hexlordAddIds[creature:GetGUID()]
+    if not ids then
+        return
+    end
+    for _, entry in ipairs(ids) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+            if not add:IsDead() then
+                add:EngageWithTarget(victim)
+            end
+        end
+    end
+end
+
+-- C++ CheckAddState (boss_hexlord.cpp:383-390): every 5s, each picked
+-- add alive with no victim re-engages the boss's victim.
+checkAddState = function(creature, guid)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        local ids = hexlordAddIds[guid]
+        if ids then
+            for _, entry in ipairs(ids) do
+                for _, add in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
+                    if not add:IsDead() and add:GetVictim() == nil then
+                        add:EngageWithTarget(victim)
+                    end
+                end
+            end
+        end
+    end
+    schedule(timers, guid, "checkadds", 5000, function()
+        checkAddState(creature, guid)
+    end)
+end
 
 local function hexlordReset(event, creature)
     local guid = creature:GetGUID()

@@ -81,22 +81,21 @@
 -- unimplemented in TC per the file comment) +
 -- SetDisplayId(soulmodel) + SetFaction(me->GetFaction()) +
 -- ENSURE_AI SetMyClass(soulclass) + AI()->AttackStart(soulholder
--- target) — no cross-creature AI-method / AttackStart bridges
--- (the maladaar JustSummoned-coordination precedent cited by the
--- shaffar port).
--- StolenSoul_Timer summon leg (:256) — me->SummonCreature(
--- ENTRY_STOLEN_SOUL 18441, 0.0f, 0.0f, 0.0f, 0.0f,
--- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 10s) — the SummonCreature
--- bridge exists, but the leg stays out on the unbridged AttackStart
--- + cross-AI SetMyClass arms (shirrak precedent); the captured
--- soulmodel/soulholder/soulclass exist only for this leg.
+-- target) — PORTED 2026-10-24 (see stolenSoulTick): the summon
+-- returns the soul object, so SetMyClass is a soulClass table store
+-- and AttackStart is EngageWithTarget; only SetDisplayId(soulmodel)
+-- stays out (no player GetDisplayId bridge).
+-- StolenSoul_Timer summon leg (:256) — PORTED 2026-10-24 in
+-- stolenSoulTick (SummonCreature type 3, 10s + JustSummoned arms).
 -- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) — PORTED
 -- (me->SummonCreature(19412, TEMPSUMMON_MANUAL_DESPAWN) on the live
 -- summon bridge; the arm carries no AttackStart/cross-AI follow-ups —
 -- those belong to the stolen-soul JustSummoned leg above).
 -- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
--- npc_stolen_soul (18441) — NOT registered (nothing can summon it
--- without the summon bridge; the yor precedent). Transcribed from
+-- npc_stolen_soul (18441) — REGISTERED 2026-10-24 (soulEnterCombat /
+-- soulCleanup below): the myClass switch runs off soulClass, and
+-- evade/reset clears it (C++ Reset re-inits myClass to NONE).
+-- Transcribed from
 -- boss_exarch_maladaar.cpp:60-133 for the record: Class_Timer 1s
 -- init; the myClass switch (set via SetMyClass from the
 -- summoner): WARRIOR -> DoCastVictim(SPELL_MORTAL_STRIKE 37335)
@@ -126,6 +125,27 @@ local SPELL_SUMMON_AVATAR   = 32424 -- boss_exarch_maladaar.cpp:132
 local timers = {}
 local taunted = {}       -- per-GUID HasTaunted latch (C++ :181)
 local avatarLatched = {} -- per-GUID Avatar_summoned (C++ :179)
+
+local ENTRY_STOLEN_SOUL = 18441 -- boss_exarch_maladaar.cpp:156
+local SPELL_STOLEN_SOUL_VISUAL = 32395 -- boss_exarch_maladaar.cpp:153
+
+-- C++ npc_stolen_soulAI myClass switch (boss_exarch_maladaar.cpp:94-132):
+-- class id (TrinityCore Classes enum) -> {spell, re-arm ms}. Set via
+-- SetMyClass from the summoner; the soul's own handlers read it from
+-- soulClass below (no cross-AI bridge is needed — the summon returns
+-- the soul object and the class is stored at summon time).
+local CLASS_SPELLS = {
+    [1] = {37335, 6000},  -- warrior: mortal strike
+    [2] = {37369, 6000},  -- paladin: hammer of justice
+    [3] = {37368, 20000}, -- hunter: freezing trap
+    [4] = {37331, 10000}, -- rogue: hemorrhage
+    [5] = {37330, 5000},  -- priest: mind flay
+    [7] = {37332, 8000},  -- shaman: frostshock
+    [8] = {37329, 5000},  -- mage: fireball
+    [9] = {37334, 20000}, -- warlock: curse of agony
+    [11] = {37328, 10000}, -- druid: moonfire
+}
+local soulClass = {} -- per-soul-GUID myClass (C++ npc_stolen_soulAI:70)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -174,9 +194,21 @@ local function stolenSoulTick(creature, guid)
         -- IsNonMeleeSpellCast gate has no bridge but is moot for the no-op twin.
         creature:InterruptNonMeleeSpells(true)
         creature:Talk(SAY_ROAR)
-        -- soulmodel/soulholder/soulclass exist only for the
-        -- no-bridge summon leg (documented in the header).
         creature:CastSpell(target, SPELL_STOLEN_SOUL)
+        -- C++ StolenSoul_Timer summon leg (:256) + JustSummoned
+        -- (:204-209): SummonCreature(18441, 0,0,0,0,
+        -- TIMED_DESPAWN_OUT_OF_COMBAT type 3, 10s) then the
+        -- JustSummoned arms — visual self-cast, faction copy,
+        -- SetMyClass (stored in soulClass), AttackStart(soulholder).
+        -- SetDisplayId(soulmodel) stays out: no player GetDisplayId
+        -- bridge (kiljaeden precedent).
+        local soul = creature:SummonCreature(ENTRY_STOLEN_SOUL, 0, 0, 0, 0, 3, 10000)
+        if soul then
+            soul:CastSpell(soul, SPELL_STOLEN_SOUL_VISUAL, false)
+            soul:SetFaction(creature:GetFaction())
+            soulClass[soul:GetGUID()] = target:GetClass()
+            soul:EngageWithTarget(target)
+        end
         schedule(guid, "stolen_soul", {20000, 29999}, function()
             stolenSoulTick(creature, guid)
         end)
@@ -268,8 +300,8 @@ end
 -- C++ boss_exarch_maladaarAI::JustDied (:219-224, Talk(SAY_DEATH 5)) +
 -- the D'ore leg (:248-253): me->SummonCreature(19412, -4.40722f,
 -- -387.277f, 40.6294f, 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — the arm
--- carries no follow-up legs (the AttackStart/SetMyClass arms belong to
--- the stolen-soul JustSummoned leg above), so it ports whole on the
+-- carries no follow-up legs (the AttackStart/SetMyClass arms are
+-- ported in the stolen-soul leg above), so it ports whole on the
 -- live summon bridge (lua_creature_events.go:877).
 local function maladaarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
@@ -294,3 +326,38 @@ RegisterCreatureEvent(ENTRY_MALADAAR, 3, maladaarTargetDied)
 RegisterCreatureEvent(ENTRY_MALADAAR, 4, maladaarDied)
 RegisterCreatureEvent(ENTRY_MALADAAR, 23, maladaarReset)
 RegisterCreatureEvent(ENTRY_MALADAAR, 27, maladaarMoveInLOS)
+
+-- C++ npc_stolen_soulAI (boss_exarch_maladaar.cpp:62-137): Class_Timer
+-- 1000 init, then the myClass victim cast + class re-arm; melee is
+-- engine-driven. JustEngagedWith is empty in C++ — the schedule
+-- starts on event 1 (the soul engages its soulholder at summon).
+-- C++ Reset re-inits myClass to NONE, so evade/reset clears the
+-- class: a re-engaged soul casts nothing, as in C++.
+local function stolenSoulClassTick(creature, guid)
+    local arm = CLASS_SPELLS[soulClass[guid]]
+    if arm then
+        creature:CastSpell(nil, arm[1], false) -- DoCastVictim
+    end
+    schedule(guid, "class", arm and arm[2] or 1000, function()
+        stolenSoulClassTick(creature, guid)
+    end)
+end
+
+local function stolenSoulEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "class", 1000, function()
+        stolenSoulClassTick(creature, guid)
+    end)
+end
+
+local function stolenSoulCleanup(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    soulClass[guid] = nil
+end
+
+RegisterCreatureEvent(ENTRY_STOLEN_SOUL, 1, stolenSoulEnterCombat)
+RegisterCreatureEvent(ENTRY_STOLEN_SOUL, 2, stolenSoulCleanup)
+RegisterCreatureEvent(ENTRY_STOLEN_SOUL, 4, stolenSoulCleanup)
+RegisterCreatureEvent(ENTRY_STOLEN_SOUL, 23, stolenSoulCleanup)

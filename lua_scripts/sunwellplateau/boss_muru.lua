@@ -97,17 +97,16 @@
 -- constructor/Initialize arm, which has no Reset() override (the
 -- class never re-casts it on evade); the SetDisplayId(Modelid2) arm
 -- is ported in darkFiendSpawn via creature:GetTemplateModelId(2)
--- (bridge live 2026-10-22) (the react
--- bridge exists — creature:SetReactState — but the REACT_PASSIVE half
--- stays out: its 2s co-arm (REACT_AGGRESSIVE + summoner-GUID
--- AttackStart) has no cross-creature/AttackStart bridge, and porting
--- PASSIVE alone would strand the fiend passive and starve the
--- proximity arm of victims — one-sided-port class). The 2s arm (REACT_AGGRESSIVE
--- + RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) — both IS bridged
--- (lua_creature_events.go:524/:968) — + summoner-GUID random-target
--- AttackStart) stays out: the IsSummonedBy GUID capture has no
--- cross-creature bridge and AttackStart has no bridge (the fiend
--- entries ride the summon STRAND in any case) — skipped; the 3s
+-- (bridge live 2026-10-22). The 2s arm is PORTED 2026-10-24 in
+-- darkFiendActivate: REACT_PASSIVE at spawn, then at 2s
+-- REACT_AGGRESSIVE + RemoveFlag(NOT_SELECTABLE) unconditionally
+-- (C++-exact) and the summoner random-target AttackStart via
+-- EngageWithTarget — the summoner is entropius (darkness caster),
+-- reached by the 500 yd entry grid scan (the IsSummonedBy GUID
+-- capture itself has no bridge, and the engage is skipped when no
+-- entropius is found, as in C++ when the summoner is gone); the
+-- old one-sided-port objection is retired now the flip ports too.
+-- The 3s
 -- 500ms-repeat proximity arm (victim within
 -- 5yd + HasAura(45934) -> non-triggered DoCastAOE(DARKFIEND_
 -- DAMAGE 45944) + DisappearAndDie): PORTED as darkFiendProximity
@@ -459,18 +458,49 @@ local function darkFiendProximity(creature, guid)
     end
 end
 
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+-- C++ 2s scheduler (boss_muru.cpp:410-419): REACT_AGGRESSIVE +
+-- RemoveFlag(NOT_SELECTABLE) unconditionally, then the summoner's
+-- random threat target AttackStart (summoner-gated).
+local function darkFiendActivate(creature, guid)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    -- The summoner is entropius (darkness 46269 caster); the
+    -- IsSummonedBy GUID has no bridge, so reach it by grid scan
+    -- (entropiusLeaveCombat uses the same 500 yd sweep).
+    for _, summoner in ipairs(creature:GetCreaturesInGrid(ENTRY_ENTROPIUS, 500)) do
+        if not summoner:IsDead() then
+            local targets = summoner:GetAITargets()
+            if #targets > 0 then
+                creature:EngageWithTarget(targets[math.random(#targets)])
+            end
+            break
+        end
+    end
+end
+
 -- C++ constructor (Initialize): triggered self-cast 45934.
 local function darkFiendSpawn(event, creature)
     -- C++ npc_dark_fiendAI constructor (Initialize): SetDisplayId(Modelid2)
-    -- first (boss_muru.cpp:405), then the triggered self-cast
-    -- SPELL_DARKFIEND_SKIN — spawn-only ctor arm (no Reset() override:
-    -- never re-cast on evade), so bound to event 5. Alive-gated;
-    -- cancelTimers rides the death leg deliberately.
+    -- first (boss_muru.cpp:405), SetReactState(REACT_PASSIVE), then the
+    -- triggered self-cast SPELL_DARKFIEND_SKIN — spawn-only ctor arm
+    -- (no Reset() override: never re-cast on evade), so bound to
+    -- event 5. Alive-gated; cancelTimers rides the death leg
+    -- deliberately. The 2s activate arm runs before the first 3s
+    -- proximity check, as in C++.
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsAlive() then
         creature:SetDisplayId(creature:GetTemplateModelId(2))
+        creature:SetReactState(0) -- REACT_PASSIVE
         creature:CastSpell(creature, SPELL_DARKFIEND_SKIN, true)
+        schedule(guid, "activate", 2000,
+            function() darkFiendActivate(creature, guid) end)
         schedule(guid, "proximity", 3000,
             function() darkFiendProximity(creature, guid) end)
     end

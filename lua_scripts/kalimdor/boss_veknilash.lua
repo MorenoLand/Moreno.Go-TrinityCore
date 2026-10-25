@@ -55,8 +55,8 @@
 --   creature:FindNearestCreature(ENTRY_VEKLOR, 150.0) idiom and
 --   other:DoZoneInCombat() fires behind the bridged
 --   other:IsInCombat() gate; the sibling otherAI->AttackStart(who)
---   leg has no bridge (motion leg, standing). 2026-10-23 re-triage;
---   the old "no cross-AI bridge" claim for this leg is retracted.
+--   leg is PORTED 2026-10-24 via other:EngageWithTarget(target)
+--   (the veklor 20 yd MoveChase standoff is not modeled).
 local ENTRY = 15275
 local ENTRY_VEKLOR = 15276 -- temple_of_ahnqiraj.h:74
 local ENTRY_BUG_1 = 15316
@@ -199,12 +199,19 @@ local function onEnterCombat(event, creature, target)
     -- (!pOtherBoss->IsInCombat() gate). GetOtherBoss resolves to the
     -- FindNearestCreature(ENTRY_VEKLOR, 150.0) idiom (the same one
     -- onDamageTaken uses); the otherAI->AttackStart(who) leg has no
-    -- bridge, but other:DoZoneInCombat() engages the twin with every
-    -- alive player in the zone — the arm's effect. No recursion: the
+    -- bridge; PORTED 2026-10-24: other:EngageWithTarget(target) in
+    -- C++ order before other:DoZoneInCombat(). No recursion: the
     -- twin's own event-1 handler hits the same gate and finds this
     -- creature already in combat.
     local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
     if other ~= nil and not other:IsInCombat() then
+        -- C++ order (boss_twinemperors.cpp:164-166): AttackStart(who)
+        -- then DoZoneInCombat. EngageWithTarget is the aggro funnel
+        -- for the AttackStart leg (the sibling's custom MoveChase
+        -- 20 yd standoff for veklor is not modeled — engine chase).
+        if target ~= nil then
+            other:EngageWithTarget(target)
+        end
         other:DoZoneInCombat()
     end
 end

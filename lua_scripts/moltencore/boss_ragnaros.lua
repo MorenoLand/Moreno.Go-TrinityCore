@@ -40,11 +40,12 @@
 -- Emerge: re-arm the combat timers (eruption {20s,45s}, wrath 25s,
 -- hand 20s, lava burst 10s, elemental fire {10s,14s}, magma blast
 -- 2500ms); the C++ faction/flag arms are PORTED 2026-10-24 (below) and
--- the AttackStart resume rides the REACT_AGGRESSIVE flip (no AttackStart
--- bridge — see deviations); see deviations. The
+-- the AttackStart resume is PORTED 2026-10-24 (random threat target
+-- EngageWithTarget, C++ :183-184 guard); see deviations. The
 -- 8-son-of-flame summons are PORTED 2026-10-24 (per-iteration random-
 -- target SummonCreature(12143, target pos, type 1, 15min) — C++-exact;
--- the AttackStart relay has no bridge, sons engage via engine aggro)
+-- the AttackStart relay is PORTED 2026-10-24 (son:EngageWithTarget(target)
+-- per son, C++ :271/:286))
 -- and the DATA_RAGNAROS_ADDS counter rides a Lua-side addsDeaths latch
 -- fed by event 21 (summon-died) — the >8-adds early-emerge arm is
 -- ported, C++-exact (reachable across submerges).
@@ -74,12 +75,13 @@
 -- bridged lua_objects.go:389). The submerge faction change and NOT_SELECTABLE flag
 -- are PORTED 2026-10-24 (SetFaction + SetFlag below, C++ :257-258; the
 -- emerge faction/flag restore is ported in onEmerge, C++ :179-180; the
--- emerge AttackStart resume rides the REACT_AGGRESSIVE flip — no AttackStart
--- bridge); the SUBMERGED/0
+-- emerge AttackStart resume is PORTED 2026-10-24 (onEmerge, C++ :183-184);
+-- the SUBMERGED/0
 -- emotestate arms are PORTED 2026-10-20 (creature:EmoteState,
 -- lua_creature_events.go); the emerge react arm is PORTED
 -- (creature:SetReactState, 2026-10-20); the faction/flag arms are PORTED
--- 2026-10-24 and only the AttackStart arms stay out (no bridge); the
+-- 2026-10-24; the AttackStart arms are PORTED 2026-10-24 (onEmerge /
+-- onSubmerge, C++ :183-184/:271/:286); the
 -- magma blast IsWithinMeleeRange gate has no
 -- bridge; SPELL_RAGSUBMERGE 21107 / SPELL_RAGEMERGE 20568 /
 -- SPELL_SONS_OF_FLAME_DUMMY 21108 are commented out / server-side in
@@ -145,6 +147,16 @@ end
 -- Alive players sharing the creature's map+instance (teron
 -- convention, gruul precedent) — the C++ SelectTarget(Random, 0)
 -- equivalent for the son-of-flame summon positions.
+-- C++ SelectTarget(Random, 0): random over the threat list (boss_midnight
+-- precedent); GetAITargets is the bridged threat-ordered list.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
 local function pickRandomPlayer(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
@@ -286,6 +298,14 @@ local function onEmerge(creature, guid)
     -- then HandleEmoteCommand(EMOTE_ONESHOT_EMERGE=449)
     creature:EmoteState(0)
     creature:PerformEmote(449)
+    -- C++ emerge (boss_ragnaros.cpp:183-184): random threat target
+    -- re-engage (guarded: nil target engages nothing — the submerge
+    -- threat reset usually leaves the list empty, so this is
+    -- usually a no-op, exactly as in C++).
+    local emergeTarget = randomThreatTarget(creature)
+    if emergeTarget then
+        creature:EngageWithTarget(emergeTarget)
+    end
     schedule(guid, "eruption", 20000 + math.random(0, 25000), function()
         onEruption(creature, guid)
     end)
@@ -334,9 +354,8 @@ onSubmerge = function(creature, guid)
     creature:PerformEmote(374)
     -- C++ EVENT_SUBMERGE: ResetThreatList() (bridged lua_objects.go:389,
     -- PORTED 2026-10-19) + AttackStop (:251, arm order AttackStop first).
-    -- The emerge AttackStart resume rides the emerge REACT_AGGRESSIVE flip
-    -- (ported 2026-10-20): the Go combat tick re-arms melee on the flip
-    -- with TargetGUID intact, so the one-shot stop here is faithful.
+    -- The emerge AttackStart resume is PORTED 2026-10-24 in onEmerge
+    -- (random threat target EngageWithTarget, C++ :183-184).
     -- C++ boss_ragnaros.cpp:251: me->AttackStop()
     creature:AttackStop()
     creature:ResetAllThreat()
@@ -360,17 +379,20 @@ onSubmerge = function(creature, guid)
     -- summon 8 sons of flame — per-iteration SelectTarget(Random,0) gate,
     -- me->SummonCreature(12143, target pos, o=0,
     -- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN=1, 15min). The
-    -- summoned->AI()->AttackStart(target) relay has no bridge (keleseth
-    -- precedent) — the sons engage via the engine's own aggro (moroes
-    -- precedent). PORTED 2026-10-24 (creature:SummonCreature bridge live —
-    -- entry/coords/type/duration all C++-verifiable).
+    -- summoned->AI()->AttackStart(target) relay is PORTED 2026-10-24
+    -- (son:EngageWithTarget(target) per son, below).
     s.addsDeaths = 0
     s.banished = true
     for _ = 1, 8 do
         local target = pickRandomPlayer(creature)
         if target then
-            creature:SummonCreature(ENTRY_SON_OF_FLAME,
+            local son = creature:SummonCreature(ENTRY_SON_OF_FLAME,
                 target:GetX(), target:GetY(), target:GetZ(), 0, 1, 900000)
+            -- C++ submerge (boss_ragnaros.cpp:271/286): summoned
+            -- son AI()->AttackStart(target), per son.
+            if son then
+                son:EngageWithTarget(target)
+            end
         end
     end
     cancelCombatTimers(guid)
