@@ -210,9 +210,11 @@
 -- down 40409 + Talk(SAY_MAIEV_SHADOWSONG_DOWN), _canDown=false;
 -- the ACTION_MAIEV_DOWN_FADE re-arm lives in the unmodeled maiev-
 -- down AuraScript (standing AuraScript gap). The appear sequence
--- (summon-driven Talk(SAY_MAIEV_SHADOWSONG_APPEAR)), the outro
+-- (summon-driven Talk(SAY_MAIEV_SHADOWSONG_APPEAR)); the
+-- JustAppeared facing leg (SetFacingToObject illidan) IS ported
+-- via ev5 below (FindNearestCreature + atan2 idiom). The outro
 -- chain (ACTION_START_OUTRO from illidan) and the teleport-
--- despawn have no summon/DoAction/despawn bridges — unmodeled;
+-- despawn have no DoAction/despawn bridges — unmodeled;
 -- the akama/maiev/outro emote arms stay out behind true blockers
 -- (outro/maiev/door choreography: cross-creature DoAction, summon,
 -- instance and phase machines); PerformEmote itself is bridged
@@ -1325,7 +1327,25 @@ local function maievCleanup(event, creature)
     maievState[guid] = nil
 end
 
+local function maievJustAppeared(event, creature)
+    -- C++ npc_maiev::JustAppeared: SetFacingToObject(illidan) when the
+    -- instance lookup finds him; the instance-GUID lookup is substituted
+    -- with FindNearestCreature(22917, 100.0) and the atan2 + SetFacingTo
+    -- idiom (the summonMaiev mirror leg above), nil-guarded like the
+    -- C++ if. Only the facing leg is ported here: REACT_PASSIVE, the
+    -- outro phase and the APPEAR/EXCLAMATION/JUSTICE/TAUNT schedules
+    -- stay out (they would collide with the enter-combat taunt
+    -- relocation).
+    local illidan = creature:FindNearestCreature(ENTRY_ILLIDAN, 100.0)
+    if illidan then
+        local face = math.atan2(illidan:GetY() - creature:GetY(), illidan:GetX() - creature:GetX())
+        if face < 0 then face = face + 2 * math.pi end
+        creature:SetFacingTo(face)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MAIEV, 1, maievEnterCombat)
+RegisterCreatureEvent(ENTRY_MAIEV, 5, maievJustAppeared)
 RegisterCreatureEvent(ENTRY_MAIEV, 2, maievCleanup)
 RegisterCreatureEvent(ENTRY_MAIEV, 4, maievCleanup)
 RegisterCreatureEvent(ENTRY_MAIEV, 9, maievDamageTaken)

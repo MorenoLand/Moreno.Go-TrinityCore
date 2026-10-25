@@ -54,12 +54,12 @@
 -- _JustDied arm is instance-blocked). OnLeaveCombat(2)/OnReset(23):
 -- cancel the pump, drop per-GUID state (the _Reset arm is
 -- instance-blocked; the Reset() REACT_PASSIVE + UNIT_FLAG_NON_
--- ATTACKABLE + SetImmuneToAll(true) arms stay out — the stale
--- 'no flag/react/immune bridges' claim is retracted (the
--- SetFlag/RemoveFlag(59) surface IS bridged): the immune apply
--- is paired with the unbridgeable ChannelerDied clear, so
--- porting the apply alone would leave the boss permanently
--- immune and unpullable — and the
+-- ATTACKABLE arms stay out — the stale 'no flag/react/immune
+-- bridges' claim is retracted (the SetFlag/RemoveFlag(59) surface
+-- IS bridged): the SetImmuneToAll(true) apply IS ported on ev23
+-- below, in C++ order after the flag pair; its ChannelerDied
+-- clear stays out (channeler machine unported), and the bits have
+-- no Go consumer today — and the
 -- SummonChannelers() arm — creature:SummonCreature IS bridged but the
 -- ObjectAccessor GUID latch + channeler AIs are unported (steamrigger
 -- precedent).
@@ -79,13 +79,10 @@
 -- (killer)) and GetChanneled unmodeled, so SAY_ADD_AGGRO is
 -- unreachable in this model; the
 -- pre-fight passive/non-attackable channeling state stays
--- unmodeled (the Reset() SetImmuneToAll(true) apply is paired
--- with the unbridgeable ChannelerDied clear — SetReactState itself
--- IS bridged, so the pair stays out on the clear leg, not react) — porting the apply
--- alone would leave the boss permanently immune and unpullable,
--- so the pair stays out; the stale 'no flag/immune bridges'
--- claim is retracted — the SetFlag/RemoveFlag(59) surface IS
--- bridged), and with it the !UpdateVictim evocation (SPELL_
+-- unmodeled except the Reset() SetImmuneToAll(true) apply, ported
+-- on ev23 (its ChannelerDied clear stays out; the bits are
+-- unconsumed in Go today — see the ev23 note), and with it the
+-- !UpdateVictim evocation (SPELL_
 -- EVOCATION 30935) check_Timer arm, which only fires in that
 -- state; no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the JustEngagedWith and burning-
 -- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
@@ -253,4 +250,10 @@ end)
 
 RegisterCreatureEvent(ENTRY_KELIDAN, 23, function(_, creature)
     resetBoss(creature:GetGUID())
+    -- C++ Reset order after REACT_PASSIVE + NON_ATTACKABLE:
+    -- SetImmuneToAll(true). The ChannelerDied clear stays out
+    -- (channeler machine unported); the 0x100/0x200 bits have no Go
+    -- consumer today, so the apply is a faithful write with no
+    -- behavior change until an immune consumer lands.
+    creature:SetFlag(59, 0x300)
 end)

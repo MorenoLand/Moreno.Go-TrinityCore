@@ -308,12 +308,22 @@ local function mandokirDied(event, creature, killer)
 end
 
 local function mandokirReset(event, creature)
-    -- C++ Reset's Z>140 immunity/intro/summon arms have no bridge (no
-    -- UNIT_STATE/immune flag, movement, instance-script, or summon
-    -- model) — only the timer cancel and the Reset-tail
-    -- Mount(MODEL_OHGAN_MOUNT 15271) are modeled.
+    -- C++ Reset's Z>140 intro/summon arms have no bridge (no movement,
+    -- instance-script, or summon model) — only the timer cancel, the
+    -- Z-gated SetImmuneToAll(true) (SetFlag 59, 0x300, in C++ order
+    -- after Initialize) and the Reset-tail Mount(MODEL_OHGAN_MOUNT
+    -- 15271) are modeled. The EVENT_STARTED clear rides the unported
+    -- intro machine; the JustReachedHome clear is ported below.
     mandokirResetState(creature:GetGUID())
+    if creature:GetZ() > 140.0 then
+        creature:SetFlag(59, 0x300) -- IMMUNE_TO_PC|IMMUNE_TO_NPC
+    end
     creature:Mount(15271)
+end
+
+-- C++ JustReachedHome: me->SetImmuneToAll(false) only.
+local function mandokirReachHome(event, creature)
+    creature:RemoveFlag(59, 0x300)
 end
 
 RegisterCreatureEvent(ENTRY_MANDOKIR, 1, mandokirEnterCombat)
@@ -321,6 +331,7 @@ RegisterCreatureEvent(ENTRY_MANDOKIR, 2, mandokirLeaveCombat)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 3, mandokirTargetDied)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 4, mandokirDied)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 23, mandokirReset)
+RegisterCreatureEvent(ENTRY_MANDOKIR, 24, mandokirReachHome)
 
 -- Ohgan (npc_ohgan, C++ ScriptName for 14988): sunder armor 24317 5s
 -- after Reset then {10s,15s} on the victim (triggered DoCastVictim,

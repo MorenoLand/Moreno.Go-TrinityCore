@@ -234,10 +234,14 @@ end
 -- after a wipe). The RemoveFlag(NOT_SELECTABLE) + REACT_PASSIVE legs
 -- are PORTED below (both surfaces bridged; C++ JustEngagedWith sets
 -- no react state, so PASSIVE at Reset strands nothing beyond C++).
--- The SetImmuneToAll (no Lua surface), flight-speed (member value, no
--- literal), SetPhase, instance boss-state/achievement legs stay out.
+-- The flight-speed (member value, no literal), SetPhase, instance
+-- boss-state/achievement legs stay out. The DoAction land clear for
+-- the immune flag rides the unported land machine; the 0x100/0x200
+-- bits have no Go consumer today, so the Reset apply below is a
+-- faithful write with no behavior change until one lands.
 local function malygosReset(event, creature)
     creature:SetDisableGravity(true)
+    creature:SetFlag(59, 0x300) -- SetImmuneToAll(true), C++ order before the NOT_SELECTABLE clear
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetReactState(0) -- REACT_PASSIVE
 end
