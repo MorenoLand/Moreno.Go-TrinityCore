@@ -53,7 +53,9 @@
 -- per-list copies (kept in per-boss state, mutated across
 -- calls exactly like the C++ member arrays) walked in order,
 -- each pick urand(it, nSpells-1) then swapped into the
--- walked prefix, skipping no spell twice per call.
+-- walked prefix; the outer while(num) loop re-walks the list
+-- when num exceeds the list length (default 3rd+ balcony
+-- wave: 10 champions from 6 spells, 10 guardians from 3).
 -- Phase gating: ground-phase timers are cancelled on
 -- balcony entry and balcony timers on ground entry (the
 -- C++ EventMap phase masks, modeled explicitly — the
@@ -80,9 +82,8 @@
 -- setActive(true) (no bridge); justBlinked MoveChase
 -- workaround (no motion bridge — the boss keeps its victim
 -- via the engine instead); summons.Summon tracking /
--- DespawnAll (no bridge); 25-man detection is the
--- victim-group-size proxy (deathwhisper precedent;
--- Is25ManRaid / GetDifficulty unbridged).
+-- DespawnAll (no bridge); 25-man detection is
+-- creature:Is25ManRaid() (lua_creature_events.go:1830).
 
 local ENTRY_NOTH = 15954
 
@@ -140,34 +141,26 @@ local function cancelKey(guid, key)
     end
 end
 
-local function is25Man(victim)
-    if victim ~= nil and victim.GetGroup ~= nil then
-        local group = victim:GetGroup()
-        if group ~= nil then
-            local members = group:GetMembers()
-            return members ~= nil and #members > 10
-        end
-    end
-    return false
-end
-
-local function raidMode(victim, normal, heroic)
-    if is25Man(victim) then
+local function raidMode(creature, normal, heroic)
+    if creature:Is25ManRaid() then
         return heroic
     end
     return normal
 end
 
 local function handleSummon(creature, list, num)
-    local i = 1
-    while num > 0 and i <= #list do
-        num = num - 1
-        local selected = math.random(i, #list)
-        creature:CastSpell(creature, list[selected])
-        if selected ~= i then
-            list[selected], list[i] = list[i], list[selected]
+    while num > 0 do
+        for i = 1, #list do
+            if num <= 0 then
+                break
+            end
+            num = num - 1
+            local selected = math.random(i, #list)
+            creature:CastSpell(creature, list[selected])
+            if selected ~= i then
+                list[selected], list[i] = list[i], list[selected]
+            end
         end
-        i = i + 1
     end
 end
 
@@ -209,7 +202,7 @@ local function enterPhaseGround(creature, guid)
     schedule(guid, "warrior", math.random(20000, 30000), function()
         nothWarrior(creature, guid)
     end)
-    if is25Man(creature:GetVictim()) then
+    if creature:Is25ManRaid() then
         schedule(guid, "blink", math.random(20000, 30000), function()
             nothBlink(creature, guid)
         end)
@@ -228,7 +221,7 @@ nothWarrior = function(creature, guid)
     creature:Talk(SAY_SUMMON)
     creature:Talk(EMOTE_SUMMON)
     if st ~= nil then
-        castSummon(creature, st, raidMode(creature:GetVictim(), 2, 3), 0, 0)
+        castSummon(creature, st, raidMode(creature, 2, 3), 0, 0)
     end
     schedule(guid, "warrior", 40000, function()
         nothWarrior(creature, guid)
@@ -285,17 +278,16 @@ nothWave = function(creature, guid)
     local st = state[guid]
     creature:Talk(EMOTE_SUMMON_WAVE)
     if st ~= nil then
-        local victim = creature:GetVictim()
         if st.balconyCount == 0 then
-            castSummon(creature, st, 0, raidMode(victim, 2, 4), 0)
+            castSummon(creature, st, 0, raidMode(creature, 2, 4), 0)
         elseif st.balconyCount == 1 then
-            castSummon(creature, st, 0, raidMode(victim, 1, 2),
-                raidMode(victim, 1, 2))
+            castSummon(creature, st, 0, raidMode(creature, 1, 2),
+                raidMode(creature, 1, 2))
         elseif st.balconyCount == 2 then
-            castSummon(creature, st, 0, 0, raidMode(victim, 2, 4))
+            castSummon(creature, st, 0, 0, raidMode(creature, 2, 4))
         else
-            castSummon(creature, st, 0, raidMode(victim, 5, 10),
-                raidMode(victim, 5, 10))
+            castSummon(creature, st, 0, raidMode(creature, 5, 10),
+                raidMode(creature, 5, 10))
         end
     end
     schedule(guid, "wave", math.random(30000, 45000), function()

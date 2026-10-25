@@ -32,7 +32,9 @@
 -- (curator precedent) filtered to players without MUTATING_
 -- INJECTION 28169 (player HasAura bridge, lua_player.go:283),
 -- skipping the first entry (threat head — gurtogg offset-1
--- precedent), random pick among the rest; no target means no
+-- precedent), alive-filtered (C++ SelectTargetList skips offline
+-- refs at build, UnitAI.h; dead = offline via ShouldBeOffline,
+-- ThreatManager.cpp:101), random pick among the rest; no target means no
 -- cast but the arm still re-arms (C++ Repeat sits outside the
 -- target-null check); DoCast(target, MUTATING_INJECTION 28169,
 -- non-triggered); re-arm 8s + round(120 * healthPct) ms, health
@@ -105,6 +107,7 @@ local function injectTick(creature, guid)
     for i = 2, #targets do
         local unit = targets[i]
         if unit:GetObjectType() == "Player"
+                and not unit:IsDead()
                 and not unit:HasAura(SPELL_MUTATING_INJECTION) then
             candidates[#candidates + 1] = unit
         end

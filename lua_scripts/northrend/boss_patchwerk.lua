@@ -34,7 +34,10 @@
 -- latch (UpdateAI HealthBelowPct(5) arm) is folded into the 1s
 -- hateful pump: DoCastSelf(FRENZY 28131, triggered) + Talk(EMOTE_
 -- FRENZY 4) once (C++ checks every UpdateAI tick; 1s granularity
--- documented). EVENT_BERSERK DoCastSelf(BERSERK 26662,
+-- documented). HealthBelowPct(5) = health < floor(max*5/100)
+-- (Unit.h:872 + CalculatePct trunc, Util.h:66); the float
+-- GetHealthPct form fired 1 HP early on odd max (telestra
+-- precedent). EVENT_BERSERK DoCastSelf(BERSERK 26662,
 -- triggered) + Talk(EMOTE_BERSERK 3), one-shot, then EVENT_SLIME
 -- 2s: DoCastAOE(SLIME_BOLT 32309, triggered) lowered to self-cast
 -- (DoCastAOE self-cast convention, selin/mr_smite precedent),
@@ -133,7 +136,7 @@ local function hatefulTick(creature, guid)
         end
         creature:CastSpell(hatefulTarget, SPELL_HATEFUL_STRIKE, true)
     end
-    if not enraged[guid] and creature:GetHealthPct() < 5 then
+    if not enraged[guid] and creature:GetHealth() < math.floor(creature:GetMaxHealth() * 5 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY, true)
         creature:Talk(EMOTE_FRENZY)
         enraged[guid] = true

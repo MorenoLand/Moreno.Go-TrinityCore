@@ -28,9 +28,9 @@
 -- alternating 14s (odd counter) / 17s (even counter) — C++ checks
 -- the incremented counter, mirrored here; EVENT_SPORE DoCastSelf
 -- (SUMMON_SPORE 29234, non-triggered), 36s repeat on 10-man /
--- 15s on 25-man (C++ RAID_MODE(36s, 15s); 25-man is the victim-
--- group-size proxy, deathwhisper precedent; Is25ManRaid
--- unbridged). SummonedCreatureDies (event 21, anomalus
+-- 15s on 25-man (C++ RAID_MODE(36s, 15s); creature:Is25ManRaid()
+-- bridged, lua_creature_events.go:1830 — the old victim-
+-- group-size proxy misread short 25-man raids). SummonedCreatureDies (event 21, anomalus
 -- precedent: handler args are event, creature, summon, killer):
 -- summon casts FUNGAL_CREEP 29232 on itself, triggered — the
 -- _sporeLoser latch itself is unmodeled (its only consumer is the
@@ -86,17 +86,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function is25Man(victim)
-    if victim ~= nil and victim.GetGroup ~= nil then
-        local group = victim:GetGroup()
-        if group ~= nil then
-            local members = group:GetMembers()
-            return members ~= nil and #members > 10
-        end
-    end
-    return false
-end
-
 local function necroticFadingTick(creature, guid)
     creature:Talk(SAY_NECROTIC_AURA_FADING)
 end
@@ -147,7 +136,7 @@ end
 local function sporeTick(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_SPORE)
     local delay = 36000
-    if is25Man(creature:GetVictim()) then
+    if creature:Is25ManRaid() then
         delay = 15000
     end
     schedule(guid, "spore", delay, function()
