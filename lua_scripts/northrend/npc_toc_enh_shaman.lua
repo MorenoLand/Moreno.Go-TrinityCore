@@ -1,12 +1,17 @@
 -- npc_toc_enh_shaman (Trial of the Crusader, Faction Champions) — Lua port of
 -- src/server/scripts/Northrend/CrusadersColiseum/TrialOfTheCrusader/boss_faction_champions.cpp
 -- (class npc_toc_enh_shamanAI (AI_MELEE); C++ CreatureScript("npc_toc_enh_shaman")).
--- Currently only the base engage arms, the KilledUnit relay, and the
--- Reset equipment leg are ported: the melee rotation (earth shock /
--- lava lash / stormstrike / bloodlust-heroism / totem deploy / windfury,
--- boss_faction_champions.cpp:1933-1938 schedules) and the totem machine
--- (DeployTotem / JustSummoned / SummonedCreatureDespawn, Initialize
--- totem counters) are future units.
+-- Base engage arms, the KilledUnit relay, and the Reset equipment leg
+-- are ported, plus the bridgeable melee rotation arms below: earth
+-- shock / lava lash / stormstrike / bloodlust-heroism / windfury
+-- (boss_faction_champions.cpp:1933-1938 schedules, armed on enter
+-- combat per the boss_faction_champions.lua precedent). The totem
+-- machine stays out: DeployTotem (:1955) is bookkeeping-only in
+-- C++ (sets _totemCount = 4 + center, no casts/summons — the totem
+-- effects are comments), so the EVENT_DEPLOY_TOTEM 1s pump has no
+-- observable arm; JustSummoned/SummonedCreatureDespawn only feed
+-- that counter, and Reset/JustDied DespawnAll stays vacuous
+-- in-model.
 -- Entries: 34463 Alliance enhancement shaman / 34455 Horde enhancement
 -- shaman (trial_of_the_crusader.h:190/205 NPC_ALLIANCE_SHAMAN_ENHANCEMENT
 -- / NPC_HORDE_SHAMAN_ENHANCEMENT).
@@ -44,6 +49,102 @@ local function cancelTimers(guid)
     end
 end
 
+local SPELL_HEROISM = 65983 -- boss_faction_champions.cpp:59
+local SPELL_BLOODLUST = 65980 -- boss_faction_champions.cpp:60
+local SPELL_EARTH_SHOCK = 65973 -- boss_faction_champions.cpp:63
+local AURA_EXHAUSTION = 57723 -- boss_faction_champions.cpp:64
+local AURA_SATED = 57724 -- boss_faction_champions.cpp:65
+local SPELL_LAVA_LASH = 65974 -- boss_faction_champions.cpp:174
+local SPELL_STORMSTRIKE = 65970 -- boss_faction_champions.cpp:175
+local SPELL_WINDFURY = 65976 -- boss_faction_champions.cpp:176
+local POWER_MANA = 0 -- moroes.lua:81 precedent
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ boss_faction_championsAI::SelectEnemyCaster (:678, bool ignored):
+-- first PvE combat ref whose player has POWER_MANA; GetAITargets is
+-- the bridged threat list (threat-sorted, same set).
+local function firstManaPlayer(creature)
+    for _, target in ipairs(creature:GetAITargets()) do
+        if target:GetObjectType() == "Player" and target:GetPowerType() == POWER_MANA then
+            return target
+        end
+    end
+    return nil
+end
+
+-- C++ EVENT_DPS_EARTH_SHOCK (:1994): enemy caster, init
+-- {5s,10s}, re-arm {10s,15s}.
+local function onEarthShock(creature, guid)
+    local target = firstManaPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_EARTH_SHOCK)
+    end
+    schedule(guid, "earthshock", {10000, 15000}, function() onEarthShock(creature, guid) end)
+end
+
+-- C++ EVENT_LAVA_LASH (:1999-2003): DoCastVictim, init {3s,5s},
+-- re-arm {5s,15s}.
+local function onLavaLash(creature, guid)
+    creature:CastSpell(nil, SPELL_LAVA_LASH)
+    schedule(guid, "lava", {5000, 15000}, function() onLavaLash(creature, guid) end)
+end
+
+-- C++ EVENT_STORMSTRIKE (:2003): DoCastVictim, init {2s,5s},
+-- re-arm {8s,10s}.
+local function onStormstrike(creature, guid)
+    creature:CastSpell(nil, SPELL_STORMSTRIKE)
+    schedule(guid, "storm", {8000, 10000}, function() onStormstrike(creature, guid) end)
+end
+
+-- C++ EVENT_DPS_BLOODLUST_HEROISM (:2007): same entry-gated
+-- GetFaction arm as the resto shaman (:900-909) — Alliance entry
+-- casts Heroism unless Exhaustion, Horde entry casts Bloodlust
+-- unless Sated; DoCastAOE = self-cast. Init 20s, re-arm 5min.
+local function onBloodlustHeroism(creature, guid)
+    if creature:GetEntry() == ENTRY_ENH_SHAMAN_ALLIANCE then
+        if not creature:HasAura(AURA_EXHAUSTION) then
+            creature:CastSpell(creature, SPELL_HEROISM)
+        end
+    else
+        if not creature:HasAura(AURA_SATED) then
+            creature:CastSpell(creature, SPELL_BLOODLUST)
+        end
+    end
+    schedule(guid, "bloodlust", 300000, function() onBloodlustHeroism(creature, guid) end)
+end
+
+-- C++ EVENT_WINDFURY (:2025): DoCastVictim, init {20s,50s},
+-- re-arm {20s,60s}.
+local function onWindfury(creature, guid)
+    creature:CastSpell(nil, SPELL_WINDFURY)
+    schedule(guid, "windfury", {20000, 60000}, function() onWindfury(creature, guid) end)
+end
+
+-- C++ Reset schedules (:1933-1938, minus the bookkeeping-only
+-- EVENT_DEPLOY_TOTEM) armed on enter combat
+-- (boss_faction_champions.lua precedent: the EventMap ticks only in
+-- combat; canceled on events 2/4/23).
+local function scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "earthshock", {5000, 10000}, function() onEarthShock(creature, guid) end)
+    schedule(guid, "lava", {3000, 5000}, function() onLavaLash(creature, guid) end)
+    schedule(guid, "storm", {2000, 5000}, function() onStormstrike(creature, guid) end)
+    schedule(guid, "bloodlust", 20000, function() onBloodlustHeroism(creature, guid) end)
+    schedule(guid, "windfury", {20000, 50000}, function() onWindfury(creature, guid) end)
+end
+
 -- C++ base boss_faction_championsAI::JustEngagedWith
 -- (boss_faction_champions.cpp:645-649): DoCast(me, SPELL_ANTI_AOE, true)
 -- triggered, SetCombatPulseDelay(5), setActive (no bridge),
@@ -56,6 +157,7 @@ local function enhShamanEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
+    scheduleRotation(creature)
 end
 
 local function enhShamanLeaveCombat(event, creature)

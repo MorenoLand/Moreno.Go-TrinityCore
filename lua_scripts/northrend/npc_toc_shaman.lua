@@ -1,11 +1,14 @@
 -- npc_toc_shaman (Trial of the Crusader, Faction Champions) — Lua port of
 -- src/server/scripts/Northrend/CrusadersColiseum/TrialOfTheCrusader/boss_faction_champions.cpp
 -- (class npc_toc_shamanAI (AI_HEALER); C++ CreatureScript("npc_toc_shaman")).
--- Currently only the base engage arms, the KilledUnit relay, and the
--- Reset equipment leg are ported: the healer rotation (healing wave /
--- riptide / spirit cleanse / bloodlust-heroism / hex / earth shield /
--- earth shock, boss_faction_champions.cpp:859-865 schedules) is a
--- future unit.
+-- Base engage arms, the KilledUnit relay, and the Reset equipment leg
+-- are ported, plus the bridgeable rotation arms below: bloodlust /
+-- heroism, hex, earth shock (boss_faction_champions.cpp:859-865
+-- schedules, armed on enter combat per the boss_faction_champions.lua
+-- precedent). Friendly-select arms stay out (no friendly-enumeration
+-- bridge): healing wave / riptide / spirit cleanse
+-- (DoSelectLowestHpFriendly 40yd) and earth shield
+-- (SelectRandomFriendlyMissingBuff).
 -- Entries: 34470 Alliance restoration shaman / 34444 Horde restoration
 -- shaman (trial_of_the_crusader.h:191/206 NPC_ALLIANCE_SHAMAN_RESTORATION
 -- / NPC_HORDE_SHAMAN_RESTORATION).
@@ -41,6 +44,112 @@ local function cancelTimers(guid)
     end
 end
 
+local SPELL_HEALING_WAVE = 66055 -- boss_faction_champions.cpp:56
+local SPELL_RIPTIDE = 66053 -- boss_faction_champions.cpp:57
+local SPELL_SPIRIT_CLEANSE = 66056 -- boss_faction_champions.cpp:58
+local SPELL_HEROISM = 65983 -- boss_faction_champions.cpp:59
+local SPELL_BLOODLUST = 65980 -- boss_faction_champions.cpp:60
+local SPELL_HEX = 66054 -- boss_faction_champions.cpp:61
+local SPELL_EARTH_SHIELD = 66063 -- boss_faction_champions.cpp:62
+local SPELL_EARTH_SHOCK = 65973 -- boss_faction_champions.cpp:63
+local AURA_EXHAUSTION = 57723 -- boss_faction_champions.cpp:64
+local AURA_SATED = 57724 -- boss_faction_champions.cpp:65
+local POWER_MANA = 0 -- moroes.lua:81 precedent
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Random alive player on the same map/instance, excluding the tank
+-- (victim) — boomkin NonTankTargetSelector precedent; C++ picks from
+-- the threat list, the GetPlayersInWorld pool is the documented
+-- in-tree approx.
+local function randomNonTankPlayer(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = plr
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ boss_faction_championsAI::SelectEnemyCaster (:678, bool ignored):
+-- first PvE combat ref whose player has POWER_MANA; GetAITargets is
+-- the bridged threat list (threat-sorted, same set).
+local function firstManaPlayer(creature)
+    for _, target in ipairs(creature:GetAITargets()) do
+        if target:GetObjectType() == "Player" and target:GetPowerType() == POWER_MANA then
+            return target
+        end
+    end
+    return nil
+end
+
+-- C++ EVENT_HEAL_BLOODLUST_HEROISM (:899): the GetFaction gate is
+-- entry-gated here (no faction bridge; druid entry-faction precedent)
+-- — Alliance entry casts Heroism unless Exhaustion (57723), Horde
+-- entry casts Bloodlust unless Sated (57724); DoCastAOE = self-cast
+-- (phase_hunter precedent). Init 20s, re-arm 5min.
+local function onBloodlustHeroism(creature, guid)
+    if creature:GetEntry() == ENTRY_SHAMAN_ALLIANCE then
+        if not creature:HasAura(AURA_EXHAUSTION) then
+            creature:CastSpell(creature, SPELL_HEROISM)
+        end
+    else
+        if not creature:HasAura(AURA_SATED) then
+            creature:CastSpell(creature, SPELL_BLOODLUST)
+        end
+    end
+    schedule(guid, "bloodlust", 300000, function() onBloodlustHeroism(creature, guid) end)
+end
+
+-- C++ EVENT_HEX (:912-916): random non-tank target, init {5s,30s},
+-- re-arm {15s,30s}.
+local function onHex(creature, guid)
+    local target = randomNonTankPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_HEX)
+    end
+    schedule(guid, "hex", {15000, 30000}, function() onHex(creature, guid) end)
+end
+
+-- C++ EVENT_HEAL_EARTH_SHOCK (:922): enemy caster, init {5s,30s},
+-- re-arm {10s,20s}.
+local function onEarthShock(creature, guid)
+    local target = firstManaPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_EARTH_SHOCK)
+    end
+    schedule(guid, "earthshock", {10000, 20000}, function() onEarthShock(creature, guid) end)
+end
+
+-- C++ Reset schedules (:859-865) armed on enter combat
+-- (boss_faction_champions.lua precedent: the EventMap ticks only in
+-- combat; canceled on events 2/4/23).
+local function scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "bloodlust", 20000, function() onBloodlustHeroism(creature, guid) end)
+    schedule(guid, "hex", {5000, 30000}, function() onHex(creature, guid) end)
+    schedule(guid, "earthshock", {5000, 30000}, function() onEarthShock(creature, guid) end)
+end
+
 -- C++ base boss_faction_championsAI::JustEngagedWith
 -- (boss_faction_champions.cpp:645-649): DoCast(me, SPELL_ANTI_AOE, true)
 -- triggered, SetCombatPulseDelay(5), setActive (no bridge),
@@ -52,6 +161,7 @@ local function shamanEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
+    scheduleRotation(creature)
 end
 
 local function shamanLeaveCombat(event, creature)

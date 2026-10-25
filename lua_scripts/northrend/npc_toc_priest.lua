@@ -1,10 +1,15 @@
 -- npc_toc_priest (Trial of the Crusader, Faction Champions) — Lua port of
 -- src/server/scripts/Northrend/CrusadersColiseum/TrialOfTheCrusader/boss_faction_champions.cpp
 -- (class npc_toc_priestAI (AI_HEALER); C++ CreatureScript("npc_toc_priest")).
--- Currently only the base engage arms, the KilledUnit relay, and the
--- Reset equipment leg are ported: the healer rotation (renew / shield /
--- flash heal / dispel / psychic scream / mana burn / penance,
--- boss_faction_champions.cpp:1056-1062 schedules) is a future unit.
+-- Base engage arms, the KilledUnit relay, and the Reset equipment leg
+-- are ported, plus the bridgeable rotation arms below: psychic scream
+-- and mana burn (boss_faction_champions.cpp:1056-1062 schedules,
+-- armed on enter combat per the boss_faction_champions.lua precedent).
+-- Friendly-select arms stay out (no friendly-enumeration bridge):
+-- renew / shield / flash heal / penance (DoSelectLowestHpFriendly
+-- 40yd); dispel stays out as a mixed leg (urand(0,1) ? random enemy
+-- 30yd : lowest-hp friendly — porting only the enemy half would
+-- misfire on the friendly branch).
 -- Entries: 34466 Alliance discipline priest / 34447 Horde discipline
 -- priest (trial_of_the_crusader.h:187/202 NPC_ALLIANCE_PRIEST_DISCIPLINE
 -- / NPC_HORDE_PRIEST_DISCIPLINE).
@@ -40,6 +45,81 @@ local function cancelTimers(guid)
     end
 end
 
+local SPELL_RENEW = 66177 -- boss_faction_champions.cpp:79
+local SPELL_SHIELD = 66099 -- boss_faction_champions.cpp:80
+local SPELL_FLASH_HEAL = 66104 -- boss_faction_champions.cpp:81
+local SPELL_DISPEL = 65546 -- boss_faction_champions.cpp:82
+local SPELL_PSYCHIC_SCREAM = 65543 -- boss_faction_champions.cpp:83
+local SPELL_MANA_BURN = 66100 -- boss_faction_champions.cpp:84
+local SPELL_PENANCE = 66097 -- boss_faction_champions.cpp:85
+local POWER_MANA = 0 -- moroes.lua:81 precedent
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ EnemiesInRange (10.0f) (:693-697): threat-list victims within
+-- 10.0 yd 2D, strict <; GetAITargets is the bridged threat list
+-- (boss_faction_champions.lua countCheck precedent).
+local function enemiesInRange(creature, dist)
+    local count = 0
+    for _, target in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance2d(target) < dist then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- C++ boss_faction_championsAI::SelectEnemyCaster (:678, bool ignored):
+-- first PvE combat ref whose player has POWER_MANA; GetAITargets is
+-- the bridged threat list (threat-sorted, same set).
+local function firstManaPlayer(creature)
+    for _, target in ipairs(creature:GetAITargets()) do
+        if target:GetObjectType() == "Player" and target:GetPowerType() == POWER_MANA then
+            return target
+        end
+    end
+    return nil
+end
+
+-- C++ EVENT_HEAL_PSYCHIC_SCREAM (:1101-1105): EnemiesInRange(10) >= 2
+-- -> DoCastAOE = self-cast, init {10s,30s}, re-arm {10s,25s}.
+local function onPsychicScream(creature, guid)
+    if enemiesInRange(creature, 10.0) >= 2 then
+        creature:CastSpell(creature, SPELL_PSYCHIC_SCREAM)
+    end
+    schedule(guid, "scream", {10000, 25000}, function() onPsychicScream(creature, guid) end)
+end
+
+-- C++ EVENT_MANA_BURN (:1106-1110): enemy caster, init {15s,30s},
+-- re-arm {15s,30s}.
+local function onManaBurn(creature, guid)
+    local target = firstManaPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_MANA_BURN)
+    end
+    schedule(guid, "manaburn", {15000, 30000}, function() onManaBurn(creature, guid) end)
+end
+
+-- C++ Reset schedules (:1056-1062) armed on enter combat
+-- (boss_faction_champions.lua precedent: the EventMap ticks only in
+-- combat; canceled on events 2/4/23).
+local function scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "scream", {10000, 30000}, function() onPsychicScream(creature, guid) end)
+    schedule(guid, "manaburn", {15000, 30000}, function() onManaBurn(creature, guid) end)
+end
+
 -- C++ base boss_faction_championsAI::JustEngagedWith
 -- (boss_faction_champions.cpp:645-649): DoCast(me, SPELL_ANTI_AOE, true)
 -- triggered, SetCombatPulseDelay(5), setActive (no bridge),
@@ -51,6 +131,7 @@ local function priestEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
+    scheduleRotation(creature)
 end
 
 local function priestLeaveCombat(event, creature)

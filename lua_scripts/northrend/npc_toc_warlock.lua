@@ -1,12 +1,17 @@
 -- npc_toc_warlock (Trial of the Crusader, Faction Champions) — Lua port of
 -- src/server/scripts/Northrend/CrusadersColiseum/TrialOfTheCrusader/boss_faction_champions.cpp
 -- (class npc_toc_warlockAI (AI_RANGED); C++ CreatureScript("npc_toc_warlock")).
--- Currently only the base engage arms, the KilledUnit relay, and the
--- Reset equipment leg are ported: the DPS rotation (hellfire /
--- corruption / curse of agony / curse of exhaustion / fear / searing
--- pain / unstable affliction, boss_faction_champions.cpp:1239-1245
--- schedules) and the JustEngagedWith felhunter summon (:1249) are
--- future units.
+-- Base engage arms, the KilledUnit relay, and the Reset equipment leg
+-- are ported, plus the full DPS rotation below (hellfire / corruption
+-- / curse of agony / curse of exhaustion / fear / searing pain /
+-- unstable affliction, boss_faction_champions.cpp:1239-1245 schedules,
+-- armed on enter combat per the boss_faction_champions.lua precedent)
+-- and the JustEngagedWith felhunter summon (:1249, self-cast; the pet
+-- AI rides the unbridged summon strand, boomkin Force of Nature
+-- precedent). DoSpellAttackIfReady(SHADOW_BOLT) stays out as a
+-- documented deviation (boomkin wrath precedent: Go melee is
+-- engine-driven, the champion melees between casts instead of
+-- shadow-bolt-spamming).
 -- Entries: 34474 Alliance warlock / 34450 Horde warlock
 -- (trial_of_the_crusader.h:192/207 NPC_ALLIANCE_WARLOCK /
 -- NPC_HORDE_WARLOCK).
@@ -42,6 +47,145 @@ local function cancelTimers(guid)
     end
 end
 
+local SPELL_HELLFIRE = 65816 -- boss_faction_champions.cpp:98
+local SPELL_CORRUPTION = 65810 -- boss_faction_champions.cpp:99
+local SPELL_CURSE_OF_AGONY = 65814 -- boss_faction_champions.cpp:100
+local SPELL_CURSE_OF_EXHAUSTION = 65815 -- boss_faction_champions.cpp:101
+local SPELL_FEAR = 65809 -- boss_faction_champions.cpp:102
+local SPELL_SEARING_PAIN = 65819 -- boss_faction_champions.cpp:103
+local SPELL_SHADOW_BOLT = 65821 -- boss_faction_champions.cpp:104
+local SPELL_UNSTABLE_AFFLICTION = 65812 -- boss_faction_champions.cpp:105
+local SPELL_SUMMON_FELHUNTER = 67514 -- boss_faction_champions.cpp:107
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Random alive player on the same map/instance within maxDist yards
+-- (tank included) — boomkin randomPlayerInRange precedent; C++
+-- SelectTarget(Random, 0, dist[, playerOnly]) picks from the threat
+-- list, the GetPlayersInWorld pool is the documented in-tree approx
+-- (in ToC every threat ref is a player, so the playerOnly flag is
+-- vacuous here).
+local function randomPlayerInRange(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local candidates = {}
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and not plr:IsDead() then
+            if creature:GetDistance(plr) <= maxDist then
+                candidates[#candidates + 1] = plr
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EnemiesInRange (10.0f) (:693-697): threat-list victims within
+-- 10.0 yd 2D, strict <; GetAITargets is the bridged threat list
+-- (boss_faction_champions.lua countCheck precedent).
+local function enemiesInRange(creature, dist)
+    local count = 0
+    for _, target in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance2d(target) < dist then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- C++ EVENT_HELLFIRE (:1270): EnemiesInRange(10) >= 2 ->
+-- DoCastAOE = self-cast, init {10s,30s}, re-arm {10s,30s}.
+local function onHellfire(creature, guid)
+    if enemiesInRange(creature, 10.0) >= 2 then
+        creature:CastSpell(creature, SPELL_HELLFIRE)
+    end
+    schedule(guid, "hellfire", {10000, 30000}, function() onHellfire(creature, guid) end)
+end
+
+-- C++ EVENT_CORRUPTION (:1275-1279): random target 30yd, init
+-- {2s,5s}, re-arm {15s,25s}.
+local function onCorruption(creature, guid)
+    local target = randomPlayerInRange(creature, 30.0)
+    if target then
+        creature:CastSpell(target, SPELL_CORRUPTION)
+    end
+    schedule(guid, "corruption", {15000, 25000}, function() onCorruption(creature, guid) end)
+end
+
+-- C++ EVENT_CURSE_OF_AGONY (:1280-1284): random target 30yd, init
+-- {5s,10s}, re-arm {20s,35s}.
+local function onCurseOfAgony(creature, guid)
+    local target = randomPlayerInRange(creature, 30.0)
+    if target then
+        creature:CastSpell(target, SPELL_CURSE_OF_AGONY)
+    end
+    schedule(guid, "agony", {20000, 35000}, function() onCurseOfAgony(creature, guid) end)
+end
+
+-- C++ EVENT_CURSE_OF_EXHAUSTION (:1285-1289): random target 30yd,
+-- init {5s,10s}, re-arm {20s,35s}.
+local function onCurseOfExhaustion(creature, guid)
+    local target = randomPlayerInRange(creature, 30.0)
+    if target then
+        creature:CastSpell(target, SPELL_CURSE_OF_EXHAUSTION)
+    end
+    schedule(guid, "exhaustion", {20000, 35000}, function() onCurseOfExhaustion(creature, guid) end)
+end
+
+-- C++ EVENT_FEAR (:1290-1294): random target 20yd playerOnly, init
+-- {5s,15s}, re-arm {5s,20s}.
+local function onFear(creature, guid)
+    local target = randomPlayerInRange(creature, 20.0)
+    if target then
+        creature:CastSpell(target, SPELL_FEAR)
+    end
+    schedule(guid, "fear", {5000, 20000}, function() onFear(creature, guid) end)
+end
+
+-- C++ EVENT_SEARING_PAIN (:1295-1298): DoCastVictim, init {5s,12s},
+-- re-arm {10s,25s}.
+local function onSearingPain(creature, guid)
+    creature:CastSpell(nil, SPELL_SEARING_PAIN)
+    schedule(guid, "searing", {10000, 25000}, function() onSearingPain(creature, guid) end)
+end
+
+-- C++ EVENT_UNSTABLE_AFFLICTION (:1299-1303): random target 30yd
+-- playerOnly, init {7s,15s}, re-arm {10s,25s}.
+local function onUnstableAffliction(creature, guid)
+    local target = randomPlayerInRange(creature, 30.0)
+    if target then
+        creature:CastSpell(target, SPELL_UNSTABLE_AFFLICTION)
+    end
+    schedule(guid, "ua", {10000, 25000}, function() onUnstableAffliction(creature, guid) end)
+end
+
+-- C++ Reset schedules (:1239-1245) armed on enter combat
+-- (boss_faction_champions.lua precedent: the EventMap ticks only in
+-- combat; canceled on events 2/4/23).
+local function scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "hellfire", {10000, 30000}, function() onHellfire(creature, guid) end)
+    schedule(guid, "corruption", {2000, 5000}, function() onCorruption(creature, guid) end)
+    schedule(guid, "agony", {5000, 10000}, function() onCurseOfAgony(creature, guid) end)
+    schedule(guid, "exhaustion", {5000, 10000}, function() onCurseOfExhaustion(creature, guid) end)
+    schedule(guid, "fear", {5000, 15000}, function() onFear(creature, guid) end)
+    schedule(guid, "searing", {5000, 12000}, function() onSearingPain(creature, guid) end)
+    schedule(guid, "ua", {7000, 15000}, function() onUnstableAffliction(creature, guid) end)
+end
+
 -- C++ base boss_faction_championsAI::JustEngagedWith
 -- (boss_faction_champions.cpp:645-649): DoCast(me, SPELL_ANTI_AOE, true)
 -- triggered, SetCombatPulseDelay(5), setActive (no bridge),
@@ -53,6 +197,11 @@ local function warlockEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
+    -- C++ npc_toc_warlockAI::JustEngagedWith (:1249-1252): base arms
+    -- first, then DoCast(SPELL_SUMMON_FELHUNTER) self-cast; the pet AI
+    -- rides the unbridged summon strand.
+    creature:CastSpell(creature, SPELL_SUMMON_FELHUNTER)
+    scheduleRotation(creature)
 end
 
 local function warlockLeaveCombat(event, creature)
