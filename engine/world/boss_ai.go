@@ -5063,11 +5063,14 @@ func init() {
 	// npc_oscillating_frequency_scanner_master_bunny's
 	// Reset summon machine is bridgeable and its
 	// GetClosestCreatureWithEntry leg is bridged now
-	// (creature:FindNearestCreature) but the unit is unregistered
-	// (no entry constant in the C++ sources) and its IsSummonedBy
-	// player-capture has no bridge (event 19 fires on the summoner); and
-	// spell_oscillating_field is a SpellScript — all
-	// documented only; see hidden_files/CHECKPOINT.md.
+	// (creature:FindNearestCreature); entry 21760 sourced from
+	// Wowhead TBC Classic (no C++ entry constant — DB-side ScriptName
+	// binding) and the Reset arm is ported in lua_scripts/outland/
+	// npc_oscillating_frequency_scanner_master_bunny.lua; its
+	// IsSummonedBy player-capture has no bridge (ev22 is
+	// pet-funnel-only) and spell_oscillating_field is a SpellScript
+	// — both documented only; see hidden_files/CHECKPOINT.md.
+	RegisterLuaBoss("npc_oscillating_frequency_scanner_master_bunny", 21760)
 	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
 	// the C++ files carry no NPC_ entry constants anywhere in
 	// the sources; both entries verified via the 2010
@@ -5447,6 +5450,15 @@ func init() {
 	// Northrend zone (dalaran, borean_tundra, dragonblight,
 	// grizzly_hills closed).
 	RegisterLuaBoss("npc_apothecary_hanes", 23784)
+	// npc_trapped_mammoth_calf (Borean Tundra zone script): the Reset()
+	// trap-activation arm — scan the 22 mammoth-trap GOs in enum order,
+	// first found within 11.0 yards gets SetGoState(GO_STATE_ACTIVE) —
+	// ported in lua_scripts/northrend/npc_trapped_mammoth_calf.lua.
+	// Entry 25850 verifiable from the C++ item script (World/
+	// item_scripts.cpp:167, quest-11876); the UpdateAI MovePoint,
+	// DoAction(1) and MovementInform legs await the movement /
+	// DoAction / MovementInform bridges — documented only.
+	RegisterLuaBoss("npc_trapped_mammoth_calf", 25850)
 	// npc_blessed_banner (Icecrown zone script): the Reset() arm —
 	// non-triggered self-cast SPELL_THREAT_PULSE 58113 (vaelastrasz
 	// self-cast convention) + Talk(BANNER_SAY 0) textId-only
