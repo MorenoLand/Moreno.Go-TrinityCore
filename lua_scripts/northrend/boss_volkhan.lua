@@ -33,7 +33,8 @@
 -- precedent) — entry-verifiable, no registration proceeds for them
 -- (bridge-blocked, see below).
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
--- No timers in the ported arms; melee is engine-driven in Go
+-- One intro timer in the ported arms (EVENT_FORGE_CAST, see below);
+-- melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the SetPhase /
@@ -43,9 +44,10 @@
 -- Talk(SAY_SLAY 3) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — eighteenth player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 4) (event 4; the DespawnGolem leg
--- (ObjectAccessor + summon-list — no bridge) and the _JustDied boss
--- bookkeeping passthrough have no bridges).
+-- JustDied — Talk(SAY_DEATH 4) (event 4) + DespawnGolem PORTED via a
+-- grid sweep (molten 28695 + brittle 28681 — the C++ GUID list holds
+-- transformed golems too, so the brittle entry is swept as well);
+-- the _JustDied boss bookkeeping passthrough has no bridge.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28587):
 -- boss_volkhan Reset / Initialize (m_bIsStriking / m_bHasTemper /
@@ -82,10 +84,13 @@
 -- ShatterGolem cross-creature chain has no summon-list bridge;
 -- EVENT_SHATTER (ShatterGolem + 3s reschedule); EVENT_FORGE_CAST
 -- (DoCast(SPELL_FORGE_VISUAL 52654), 15s, PHASE_INTRO only,
--- :276-278): the real blocker is the Reset-seeded out-of-combat
--- PHASE_INTRO origin (Reset :119-120, phase-restricted reschedule
--- — no Reset-phase bridge), not the timer/cast form; the Talk
--- arms 2, 6, 5 ride the unmodeled machine.
+-- :276-278) — PORTED 2026-10-25 (volkhanForgeStart below): ev23
+-- (spawn / evade-Reset / respawn) schedules it at 2s, ev1 (phase
+-- flip to NORMAL) cancels it — end-state-identical to the C++
+-- EventMap phase rule (ExecuteEvent erases a phase-mismatched event
+-- at expiry, EventMap.cpp:81, so it never fires in combat); it
+-- survives ev2 deliberately, since C++ Reset re-seeds it after an
+-- evade. The Talk arms 2, 6, 5 ride the unmodeled machine.
 -- UpdateAI forge summon-phase machine: the m_uiHealthAmountModifier
 -- health check (HealthBelowPct(100-20*m_uiHealthAmountModifier) ->
 -- Talk(SAY_FORGE 1) + interrupt + m_bHasTemper = true + phase 1);
@@ -144,11 +149,47 @@ local SAY_AGGRO = 0
 local SAY_SLAY = 3
 local SAY_DEATH = 4
 
+-- C++ EVENT_FORGE_CAST (boss_volkhan.cpp:276-278, PHASE_INTRO only):
+-- DoCast(me, SPELL_FORGE_VISUAL 52654) non-triggered, 2s init from
+-- Reset (:119-120) / 15s re-arm, phase-restricted to INTRO. PORTED
+-- 2026-10-25: ev23 (spawn / evade-Reset / respawn) schedules it, ev1
+-- (phase flip to NORMAL) cancels it, ev4 cancels it (no UpdateAI runs
+-- on a corpse). It deliberately survives ev2: on the evade path ev23
+-- fires ahead of ev2, and C++ Reset re-seeds the intro cast after an
+-- evade — canceling on ev2 would kill the post-evade intro casting.
+local SPELL_FORGE_VISUAL = 52654
+
+local volkhanForgeTimers = {}
+
+local function volkhanForgeCancel(guid)
+    local id = volkhanForgeTimers[guid]
+    if id then
+        RemoveEventById(id)
+        volkhanForgeTimers[guid] = nil
+    end
+end
+
+local function volkhanForgeTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FORGE_VISUAL)
+    volkhanForgeTimers[guid] = CreateLuaEvent(function()
+        volkhanForgeTick(creature, guid)
+    end, 15000)
+end
+
+local function volkhanForgeStart(event, creature)
+    local guid = creature:GetGUID()
+    volkhanForgeCancel(guid)
+    volkhanForgeTimers[guid] = CreateLuaEvent(function()
+        volkhanForgeTick(creature, guid)
+    end, 2000)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) + SetPhase(PHASE_NORMAL) +
 -- three ScheduleEvent legs + BossAI passthrough — only the Talk arm
--- is bridgeable.
+-- is bridgeable. The phase flip cancels the PHASE_INTRO forge cast.
 local function volkhanEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    volkhanForgeCancel(creature:GetGUID())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -159,16 +200,24 @@ local function volkhanTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(DEATH) + DespawnGolem + _JustDied() — only
--- the Talk arm is bridgeable.
+-- C++ JustDied: Talk(DEATH) + DespawnGolem + _JustDied() — the Talk
+-- arm and the DespawnGolem leg are bridgeable (below).
 local function volkhanDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    volkhanForgeCancel(creature:GetGUID())
     -- C++ boss_volkhan::JustDied (boss_volkhan.cpp:146-152): DespawnGolem.
     -- The GUID-list loop has no bridge, so sweep the forge arena for his
-    -- molten golems (ENTRY_MOLTEN_GOLEM 28695, the only such creatures in
-    -- the instance) via GetCreaturesInGrid and Despawn the living.
+    -- golems via GetCreaturesInGrid and Despawn the living. Both entries
+    -- are swept: the C++ list holds GUIDs, so a golem transformed to
+    -- brittle by the kill-shot latch is still despawned by C++.
     local golems = creature:GetCreaturesInGrid(ENTRY_MOLTEN_GOLEM, 100)
     for _, golem in pairs(golems) do
+        if golem:IsAlive() then
+            golem:Despawn()
+        end
+    end
+    local brittle = creature:GetCreaturesInGrid(ENTRY_BRITTLE_GOLEM, 100)
+    for _, golem in pairs(brittle) do
         if golem:IsAlive() then
             golem:Despawn()
         end
@@ -178,6 +227,7 @@ end
 RegisterCreatureEvent(ENTRY_VOLKHAN, 1, volkhanEnterCombat)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 3, volkhanTargetDied)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 4, volkhanDied)
+RegisterCreatureEvent(ENTRY_VOLKHAN, 23, volkhanForgeStart)
 
 local SPELL_BLAST_WAVE = 23113
 local SPELL_IMMOLATION_STRIKE = 52433
