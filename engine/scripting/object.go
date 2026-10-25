@@ -180,7 +180,7 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 			if name == "IsWithinDistInMap" && objectMapID(object) != objectMapID(other) {
 				return []any{false}, nil
 			}
-			return []any{float64(objectDistance(object, other, name == "IsWithinDist3d")) <= distance}, nil
+			return []any{float64(objectDistance(object, other, false)) <= distance}, nil
 		}, true
 	case "IsWithinDist2d", "IsInRange2d":
 		return func(_ context.Context, args []any) ([]any, error) {

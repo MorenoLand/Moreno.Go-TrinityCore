@@ -70,17 +70,17 @@
 --    BlindingLight: non-triggered DoCastVictim(SPELL_
 --    BLINDING_LIGHT 33009) (C++-exact), BlindingLight =
 --    false; else target = SelectTarget(Random, 0) — random
---    alive player in the instance (thespia precedent); the
+--    threat-list unit, victim eligible (position 0); the
 --    !HasInArc(2.5f) victim-fallback arm is PORTED via the
 --    inArc twin (arc 2.5);
 --    non-triggered DoCast(target, SPELL_ARCANE_MISSILES
 --    33031) (C++-exact), re-arm 3000 regardless (C++-exact).
 -- 4. Wrath-of-the-astromancer arm — 15000 init: InterruptNon
 --    MeleeSpells unmodeled (no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)); target =
---    SelectTarget(Random, 1) — random alive player in the
---    instance excluding the current victim; the C++ re-arms
---    1000 for non-player (pet) picks — the threat list has no
---    bridge, the player pool makes that arm unreachable;
+--    SelectTarget(Random, 1) — random threat-list unit
+--    excluding the current victim; the C++ re-arms
+--    1000 for non-player (pet) picks (threat list, playerOnly
+--    = false, so the pet leg is reachable);
 --    non-triggered DoCast(target, SPELL_WRATH_OF_THE_
 --    ASTROMANCER 42783) (C++-exact), re-arm 25000 on a player
 --    pick; no pick leaves the timer expired for a next-tick
@@ -159,8 +159,8 @@
 -- see the phase-2/3 note above); the phase-4/reset
 -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
 -- ported (2026-10-23); the SetDisplayId arms are ported,
--- SetObjectScale ported via the scale bridge; no arc
--- bridge — the HasInArc victim fallback unmodeled; no cast-
+-- SetObjectScale ported via the scale bridge; the HasInArc
+-- victim fallback IS ported via the IsInBack twin; no cast-
 -- state bridge — the remaining InterruptNonMeleeSpells arms
 -- unmodeled, casts fire unconditionally (netherspite
 -- precedent); the wrath arms now pick from the threat list
@@ -213,26 +213,20 @@ local function fullReset(guid)
     solarianState[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): any threat-list unit, victim
+-- eligible (position 0 = no skip); dead filtered (the threat
+-- manager drops them, same as the wrath helpers below).
+local function randomThreatUnit(creature)
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            pool[#pool + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): any alive player in the instance
--- (thespia precedent).
-local function randomAlivePlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #pool == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return pool[math.random(#pool)]
 end
 
 -- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random,
@@ -300,7 +294,7 @@ local function combatTick(creature, guid)
         -- 3. Arcane missiles arm — 2000 init then 3000:
         -- BlindingLight latched -> non-triggered Blinding Light
         -- on the victim; else non-triggered Arcane Missiles on
-        -- a random player, falling back to the victim when the pick
+        -- a random threat-list unit, falling back to the victim when the pick
         -- is outside the 2.5-rad frontal arc (C++ HasInArc(2.5, target),
         -- boss_astromancer.cpp:257-258, via the inArc twin); re-arm
         -- regardless (C++-exact).
@@ -309,7 +303,7 @@ local function combatTick(creature, guid)
                 creature:CastSpell(nil, SPELL_BLINDING_LIGHT)
                 st.blindingLight = false
             else
-                local target = randomAlivePlayer(creature)
+                local target = randomThreatUnit(creature)
                 -- C++ !me->HasInArc(2.5f, target) (boss_astromancer.cpp:257):
                 -- IsInBack(t, arc) = !HasInArc(2*pi - arc), so
                 -- IsInBack(target, 2*pi - 2.5) == !HasInArc(2.5).

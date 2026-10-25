@@ -74,8 +74,8 @@
 -- Thaladred (20064): OnEnterCombat(1): Talk(SAY_THALADRED_
 -- AGGRO) + JustEngagedWith AddThreat(who, 5000000.0f) PORTED
 -- (anonymous EnterCombat handler below) + 1s pump (C++ arm
--- order, gaze first): gaze — 100 init then 8500: random alive
--- player pick (randomPlayer pool, thespia precedent) +
+-- order, gaze first): gaze — 100 init then 8500: random threat-list
+-- unit pick (victim eligible, position 0) +
 -- ResetAllThreat (ResetThreatList twin) + AddThreat(5000000) +
 -- Talk(EMOTE_THALADRED_GAZE 2, pick); no pick leaves the timer
 -- at <=1000 for a next-tick retry (C++ leaves Gaze_Timer <= diff
@@ -93,7 +93,7 @@
 -- AGGRO) + 1s pump (C++-exact arm order): fireball — 2000
 -- init then 4000: DoCastVictim(SPELL_CAPERNIAN_FIREBALL
 -- 36971); conflagration — 20000 init then 10000+rand()%5000:
--- random alive player in the instance (thespia precedent);
+-- random threat-list unit (victim eligible, position 0);
 -- if the target is within 30yd (creature:GetDistance,
 -- C++-exact) DoCast(target, SPELL_CONFLAGRATION 37018),
 -- else DoCastVictim. The arcane explosion arm (5000 init
@@ -111,22 +111,23 @@
 -- Telonicus (20063): OnEnterCombat(1): Talk(SAY_TELONICUS_
 -- AGGRO) + 1s pump (C++-exact arm order): bomb — 10000 init
 -- then 25000: DoCastVictim(SPELL_BOMB 37036); remote toy —
--- 5000 init then 10000+rand()%5000: DoCast on a random alive
--- player in the instance (SPELL_REMOTE_TOY 37027, thespia
--- precedent).
+-- 5000 init then 10000+rand()%5000: DoCast on a random threat-list
+-- unit (SPELL_REMOTE_TOY 37027, victim eligible, position 0).
 -- npc_kael_flamestrike — no Talk arms (its AI only casts
 -- SPELL_FLAME_STRIKE_VIS 36730 then SPELL_FLAME_STRIKE_DMG
 -- 36731 5s later and kills itself); it is spawned only by
--- the unmodeled EVENT_FLAMESTRIKE DoCast machine (no summon
--- bridge — steamrigger precedent) — documented only, no
+-- the unmodeled EVENT_FLAMESTRIKE DoCast machine (driver
+-- unmodeled — the SummonCreature bridge itself is live) —
+-- documented only, no
 -- registration. npc_phoenix_tk (21362) — no Talk arms (its
 -- AI self-buffs SPELL_BURN 36720, drains 4500-5500 health
 -- per 2s cycle, and summons NPC_PHOENIX_EGG 21364 on
 -- death); spawned only by the unmodeled SPELL_PHOENIX_
--- ANIMATION 36723 machine (no summon bridge) — documented
--- only, no registration. npc_phoenix_egg_tk (21364) — no
--- Talk arms (15s rebirth timer summoning NPC_PHOENIX 21362
--- — no summon bridge); spawned only by the phoenix's
+-- ANIMATION 36723 machine (driver unmodeled — the SummonCreature
+-- bridge itself is live) — documented only, no registration.
+-- npc_phoenix_egg_tk (21364) — no Talk arms (15s rebirth timer
+-- summoning NPC_PHOENIX 21362 — driver unmodeled, summon bridge
+-- live); spawned only by the phoenix's
 -- JustDied (summon chain, unreachable) — documented only, no
 -- registration. spell_kael_gravity_lapse (25 teleport spells
 -- 35966-35990 + SPELL_GRAVITY_LAPSE_PERIODIC 34480 /
@@ -143,7 +144,7 @@
 -- GetGuidData advisor GUIDs, GO statue/window arms — no
 -- instance/GUID/gameobject bridges); the 7-weapon summon
 -- machine (SPELL_SUMMON_WEAPONS 36976 + SPELL_SUMMON_
--- WEAPONA-G 36958-36964 — no summon bridge); the EVENT_
+-- WEAPONA-G 36958-36964 — driver unmodeled, summon bridge live); the EVENT_
 -- RESUME path after the phase-5 transition MovePoints (no
 -- movement bridge — omor/nightbane precedent); gravity
 -- lapse / nether beam / pyroblast / mind control / phoenix
@@ -192,26 +193,20 @@ local function fullReset(guid)
     combatStates[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): any threat-list unit, victim
+-- eligible (position 0 = no skip); dead filtered (the threat
+-- manager drops them, solarian-missiles precedent).
+local function randomThreatUnit(creature)
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            pool[#pool + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): a random alive player in the
--- instance (thespia precedent), player-only.
-local function randomPlayer(creature)
-    local candidates = playersInInstance(creature)
-    if #candidates == 0 then
+    if #pool == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return pool[math.random(#pool)]
 end
 
 -- Kael'thas (19622): the phase machine is unmodeled (see
@@ -237,15 +232,17 @@ end)
 -- latch exactly where C++ advances out of PHASE_NONE.
 local kaelPreEncounter = {}
 
--- C++ MoveInLineOfSight: PHASE_NONE + target within 30yd ->
--- SetTarget (the DoAction / SetInCombatWith / AddThreat legs
--- have no bridge — documented).
+-- C++ MoveInLineOfSight (boss_kaelthas.cpp:561): PHASE_NONE +
+-- IsValidAttackTarget(who) + target within 30yd -> SetTarget
+-- (the DoAction / SetInCombatWith / AddThreat legs have no
+-- bridge — documented).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
     local guid = creature:GetGUID()
     if kaelPreEncounter[guid] == false then
         return
     end
-    if unit ~= nil and creature:GetDistance(unit) <= 30.0 then
+    if unit ~= nil and creature:IsValidAttackTarget(unit)
+            and creature:GetDistance(unit) <= 30.0 then
         creature:SetTarget(unit)
         kaelPreEncounter[guid] = false
     end
@@ -285,10 +282,10 @@ local function thaladredTick(creature, guid)
         return
     end
 
-    -- 0. Gaze arm: 100 init then 8500 re-arm; random alive player
-    -- pick + ResetAllThreat + AddThreat(5000000) + Talk(2, pick).
+    -- 0. Gaze arm: 100 init then 8500 re-arm; random threat-list
+    -- unit pick + ResetAllThreat + AddThreat(5000000) + Talk(2, pick).
     if st.gaze <= 1000 then
-        local pick = randomPlayer(creature)
+        local pick = randomThreatUnit(creature)
         if pick ~= nil then
             creature:ResetAllThreat()
             creature:AddThreat(pick, 5000000)
@@ -422,7 +419,7 @@ RegisterCreatureEvent(ENTRY_SANGUINAR, 23, function(_, creature)
 end)
 
 -- Grand Astromancer Capernian (20062): C++ UpdateAI in arm
--- order (arcane explosion arm unmodeled — see header; the
+-- order (arcane explosion arm ported 2026-10-23 — see header; the
 -- !UpdateVictim / _inFakeDeath early return collapses into
 -- the pump) — 1s granularity exact for all C++ timers.
 local function capernianTick(creature, guid)
@@ -445,7 +442,7 @@ local function capernianTick(creature, guid)
     -- instance — within 30yd DoCast on the target, else
     -- DoCastVictim (C++ IsWithinDistInMap branch, C++-exact).
     if st.conflagration <= 1000 then
-        local target = randomPlayer(creature)
+        local target = randomThreatUnit(creature)
         if target and creature:GetDistance(target) <= 30 then
             creature:CastSpell(target, SPELL_CONFLAGRATION)
         else
@@ -536,10 +533,10 @@ local function telonicusTick(creature, guid)
     end
 
     -- 2. Remote toy arm: 5000 init then 10000+rand()%5000
-    -- re-arm (C++-exact); DoCast on a random alive player in
-    -- the instance (thespia precedent).
+    -- re-arm (C++-exact); DoCast on a random threat-list unit
+    -- (victim eligible, position 0).
     if st.remoteToy <= 1000 then
-        local target = randomPlayer(creature)
+        local target = randomThreatUnit(creature)
         if target then
             creature:CastSpell(target, SPELL_REMOTE_TOY)
         end

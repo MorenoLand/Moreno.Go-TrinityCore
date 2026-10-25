@@ -47,7 +47,7 @@
 --    random pick, empty -> me->GetVictim(). No threat-list
 --    bridge — the pick runs over alive players in the instance
 --    (vashj playersInInstance convention) gated on distance
---    > 18yd, empty -> creature:GetVictim() (the C++ fallback).
+--    2D > 18yd (C++ IsWithinDist(me, 18, false)), empty -> creature:GetVictim() (the C++ fallback).
 --    The C++ `if (target)` nil guard is ported (C++-exact).
 -- 3. Knock away 25778: 30s init then 30s — non-triggered
 --    DoCastVictim (C++-exact), re-arm 30s regardless
@@ -106,7 +106,7 @@ local function freshState()
     }
 end
 
--- C++ EVENT_ARCANE_ORB target leg: random alive player >18yd
+-- C++ EVENT_ARCANE_ORB target leg: random alive player >18yd 2D
 -- from the boss, drawn from the threat list (boss_void_reaver.cpp:115-125:
 -- GetUnsortedThreatList filtered TYPEID_PLAYER + IsAlive + !IsWithinDist(18)),
 -- empty -> me->GetVictim() fallback. creature:GetAITargets() is the bridged
@@ -116,7 +116,7 @@ local function pickArcaneOrbTarget(creature)
     local found = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) > ARCANE_ORB_MIN_DIST then
+                and not creature:IsWithinDist2d(unit, ARCANE_ORB_MIN_DIST) then
             found[#found + 1] = unit
         end
     end
