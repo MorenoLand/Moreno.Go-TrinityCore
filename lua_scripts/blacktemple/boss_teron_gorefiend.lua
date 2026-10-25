@@ -22,19 +22,19 @@
 -- Talk(SAY_AGGRO), arm berserk 45078 10min, non-triggered
 -- self-cast, one-shot (C++ DoCast default is triggered=false —
 -- vaelastrasz convention) / incinerate 40239 12s then {12s,20s},
--- non-triggered on a random alive player in the instance (C++
--- SelectTarget(Random, 0) takes any alive threat target — playerOnly
--- defaults false so pets/totems are eligible; the Lua has no
--- threat/pet-target bridge and approximates with players only,
--- documented) + Talk(SAY_INCINERATE) / summon doom blossom 40188
+-- non-triggered on a random alive threat-list unit (C++
+-- SelectTarget(Random, 0), playerOnly defaults false, so
+-- pets/totems are eligible; GetAITargets threat-list pool)
+-- + Talk(SAY_INCINERATE) / summon doom blossom 40188
 -- 8s then
 -- {30s,40s}, triggered self-cast (C++ DoCastSelf(..., true)) +
 -- Talk(SAY_BLOSSOM); the doom blossom arrives via the 40188 spell-effect
 -- summon (creatureEffectSummonType, supremus-volcano precedent) and its
 -- Reset arms ride the event-19 relay below / shadow of death
--- 40251 8s then {30s,35s}, non-triggered on a random alive player
--- in the instance within 100 yd excluding the current victim and
--- excluding players carrying 40268 (spiritual vengeance; the -aura
+-- 40251 8s then {30s,35s}, non-triggered on a random alive
+-- threat-list player within 100 yd with the first MaxThreat entry
+-- skipped before filters, excluding players carrying 40268
+-- (spiritual vengeance; the -aura
 -- filter has a target-HasAura bridge here — C++-exact) / crushing
 -- shadows 40243 18s then {18s,30s}, non-triggered self-cast + Talk
 -- (SAY_CRUSHING); the SPELLVALUE_MAX_TARGETS=5 arm has no bridge —
@@ -131,22 +131,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): any alive threat-list unit, no
+-- range cap, no player gate (playerOnly defaults false), victim
+-- included. Shared by Teron's incinerate and the doom blossom's
+-- shadowbolt — each caller passes its own creature, so each reads
+-- its own threat list.
+local function randomAnyTarget(creature)
+    local candidates = {}
+    for _, u in ipairs(creature:GetAITargets()) do
+        if not u:IsDead() then
+            candidates[#candidates + 1] = u
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): any alive player in the instance,
--- no range cap, victim included.
-local function randomAnyTarget(creature)
-    local candidates = playersInInstance(creature)
     if #candidates == 0 then
         return nil
     end
@@ -154,14 +150,16 @@ local function randomAnyTarget(creature)
 end
 
 -- C++ SelectTarget(Random, 1, 100.0f, true, true,
--- -SPELL_SPIRITUAL_VENGEANCE): any alive player in the instance
--- within 100 yd, excluding the current victim (position 1), minus
--- players carrying 40268.
+-- -SPELL_SPIRITUAL_VENGEANCE): threat-list players alive within
+-- 100 yd, with the first MaxThreat entry skipped BEFORE the
+-- filters (UnitAI.h offset-before-filter) — not a victim-GUID
+-- exclusion — minus players carrying 40268.
 local function randomShadowDeathTarget(creature)
-    local victim = creature:GetVictim()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if (not victim or p:GetGUID() ~= victim:GetGUID())
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local p = targets[i]
+        if p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= 100
                 and not p:HasAura(SPELL_SPIRITUAL_VENGEANCE) then
             candidates[#candidates + 1] = p

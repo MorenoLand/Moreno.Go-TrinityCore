@@ -105,25 +105,16 @@ local function cancelTimer(guid, key)
     end
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 1, 200.0f): any alive player in the
--- instance within 200 yd, excluding the current victim (position 0).
+-- C++ SelectTarget(Random, 1, 200.0f, true): threat-list players
+-- alive within 200 yd, with the first MaxThreat entry skipped
+-- BEFORE the filters (UnitAI.h offset-before-filter) — not a
+-- victim-GUID exclusion; differs when victim != threat head.
 local function randomSpineTarget(creature)
-    local victim = creature:GetVictim()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if (not victim or p:GetGUID() ~= victim:GetGUID())
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local p = targets[i]
+        if p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= 200 then
             candidates[#candidates + 1] = p
         end
