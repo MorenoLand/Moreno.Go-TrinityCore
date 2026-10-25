@@ -229,13 +229,22 @@ end
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
--- the boss_midnight randomTargetAnywhere precedent.
+-- the boss_midnight randomTargetAnywhere precedent. C++ SelectTargetList
+-- skips offline refs and dead targets are offline (UNIT_STATE_DIED fails
+-- _IsTargetAcceptable, Creature.cpp:2508-2524), while Go SortedEntries
+-- returns dead entries too — so the pool is alive-filtered (erekem
+-- precedent); without it a well/unleashed/beam cast could hit a corpse.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_PHANTOM_BLAST (:255-256): DoCastVictim(SPELL_PHANTOM_BLAST),

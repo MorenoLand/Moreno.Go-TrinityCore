@@ -42,8 +42,8 @@
 --   casts only when the victim is outside melee range (:181-183).
 -- EVENT_MAGIC_BANE (:170-173) — DoCastAOE(68793) self-cast, both phases.
 -- EVENT_CORRUPT_SOUL (:187-194) — random player target
---   (SelectTarget Random position 1 playerOnly :188; approximated with a
---   random alive player like the maiden precedent), Talk(SAY_CORRUPT_SOUL 4)
+--   (SelectTarget Random position 1 playerOnly :188; threat-list
+--   skip-first + alive-player filter, eck precedent), Talk(SAY_CORRUPT_SOUL 4)
 --   (:190) + cast 68839 on the target (:191), phase-1 only (re-arm :193
 --   PHASE_1-gated, so no fabricated phase-2 casts).
 -- DamageTaken 30%-hp PHASE_1->PHASE_2 flip (:117-125) — simple latch:
@@ -90,9 +90,10 @@
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts are
 -- packet-visual), so timers fire unconditionally (the maiden precedent);
--- no threat model — corrupt-soul target is a random alive player with no
--- target at all when none qualify (Talk + cast stay inside the C++ :188
--- target-found leg); EVENT_FEAR's { SPELLVALUE_MAX_TARGETS, 1 } custom leg
+-- corrupt-soul/fear picks draw the threat list (GetAITargets) rather than
+-- the C++ spell-target machinery, with no target at all when none qualify
+-- (Talk + cast stay inside the C++ :188 target-found leg); EVENT_FEAR's
+-- { SPELLVALUE_MAX_TARGETS, 1 } custom leg
 -- (:201) has no bridge, so fear is not limited to 1 target and Lua's nil
 -- falls back to the victim rather than C++'s self-centered AoE; phase-2
 -- melee keeps swinging (C++ :212 gates DoMeleeAttackIfReady on phase-1;
@@ -157,17 +158,15 @@ local function initState(guid)
 end
 
 -- C++ :187 SelectTarget(Random, 1, 0.0f, true) — position=1 skips the
--- threat head, playerOnly=true; the netherspite victim-GUID exclusion
--- idiom approximates both.
+-- threat head BEFORE the player filter (UnitAI.h:214-280, eck
+-- precedent): drop GetAITargets()[1], then keep alive players.
 local function randomPlayer(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetGUID() ~= victimGuid and p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -228,15 +227,17 @@ end
 -- random-enemy selection capped at 1 target, not a victim cast. The Go cast
 -- path binds an explicit target GUID only, so nil would always fear the
 -- tank; randomFearTarget restores the C++ pick (tank stays in the pool, per
--- the implicit targeting; the existing randomPlayer helper excludes the
--- victim for the Corrupt Soul SelectTarget(Random, 1) arm and does not
+-- the implicit targeting; the existing randomPlayer helper excludes the threat head
+-- for the Corrupt Soul SelectTarget(Random, 1) arm and does not
 -- apply here). Re-arm {8000,12000}ms.
 local function randomFearTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    -- C++ :201 CastSpell(nullptr, FEAR) runs the spell's implicit
+    -- random-enemy selection over combat enemies, not instance players:
+    -- threat-list players alive, tank included (the old
+    -- GetPlayersInWorld pool could fear a player never in combat).
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead() then
             candidates[#candidates + 1] = plr
         end
     end
