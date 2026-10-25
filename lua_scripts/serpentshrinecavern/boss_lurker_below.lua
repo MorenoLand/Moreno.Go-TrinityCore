@@ -85,8 +85,8 @@
 -- OnDied(4): cleanup (the SetData DONE/IN_PROGRESS and
 -- Summons.DespawnAll arms are instance/summon blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
--- state (the Reset arms — SetSwim (no bridge), SetDisableGravity
--- (PORTED via the creature:SetDisableGravity bridge, lurkerReset),
+-- state (the Reset arms — SetSwim + SetDisableGravity (both
+-- PORTED via their creature bridges, lurkerReset),
 -- the SPELL_SUBMERGE self-cast, SetVisible(false), the NOT_
 -- SELECTABLE flag + ImmuneToPC arms, Summons.DespawnAll and
 -- the SetData NOT_STARTED arms — are movement/display/flag/
@@ -440,9 +440,10 @@ end
 local function lurkerReset(event, creature)
     resetLurker(creature:GetGUID())
     -- C++ boss_the_lurker_below::Reset (boss_lurker_below.cpp:147-156):
-    -- me->SetSwim(true) (no bridge) -> me->SetDisableGravity(true)
-    -- (:150, ports via the creature:SetDisableGravity bridge) ->
+    -- me->SetSwim(true) -> me->SetDisableGravity(true) (:150), both
+    -- ported via their creature bridges, in C++ arm order ->
     -- Initialize() (timer re-init, covered by resetLurker).
+    creature:SetSwim(true)
     creature:SetDisableGravity(true)
     -- Reset hygiene: an evade mid-submerge would strand the submerged
     -- IMMUNE_TO_PC bit (the modeled fight restarts unsubmerged on the

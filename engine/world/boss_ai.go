@@ -5178,11 +5178,12 @@ func init() {
 	// aggro engage, matching the empty AttackStart/JustEngagedWith
 	// overrides); entry 23025 verifiable from the C++ enum —
 	// see lua_scripts/kalimdor/npc_depth_charge.lua. The Reset
-	// SetHover/SetSwim/NOT_SELECTABLE arms have no unit-flag
-	// bridges; the summoning leg (SPELL_PERIODIC_DEPTH_CHARGE)
-	// and npc_rizzle_sprysprocket (escort / quest-status /
-	// gossip / MotionMaster machine, entry not C++-verifiable)
-	// are documented-only.
+	// SetHover/SetSwim/NOT_SELECTABLE arms are ported in
+	// npc_depth_charge.lua onReset (bridged); the summoning leg
+	// (SPELL_PERIODIC_DEPTH_CHARGE) and npc_rizzle_sprysprocket
+	// (escort / quest-status / MotionMaster machine) are
+	// documented-only, though rizzle gossip itself is ported
+	// (entry 23002, World/go_scripts.cpp:268).
 	RegisterLuaBoss("npc_depth_charge", 23025)
 	// npc_engineer_spark_overgrind (Azuremyst Isle zone script): Reset
 	// restores UNIT_NPC_FLAGS via per-GUID first-seen capture +

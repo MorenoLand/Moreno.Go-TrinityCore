@@ -9,7 +9,7 @@
 -- C++ empty AttackStart/JustEngagedWith overrides.
 -- Zero Talk() in C++.
 -- Reset's SetHover(true) ports on onReset below (bridged); SetSwim
--- stays out (no bridge); the SetFlag(UNIT_FIELD_FLAGS,
+-- (true) ports on onReset below (bridged); the SetFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) leg IS bridged and ported on onReset
 -- below (zone_azshara.cpp:339). The trap's passive/invisible posture
 -- is a template concern, not scripted here. The rizzle
@@ -51,11 +51,12 @@ RegisterCreatureEvent(ENTRY, 1, function(_, creature)
 end)
 
 -- C++ npc_depth_chargeAI::Reset (zone_azshara.cpp:336-342): SetHover(true)
--- ported (bridged, lua_creature_events.go); SetSwim stays out (no
--- bridge); SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
--- ported, in C++ arm order after the hover/swim legs.
+-- + SetSwim(true) ported (bridged, lua_creature_events.go);
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) ported, in
+-- C++ arm order after the hover/swim legs.
 local function onReset(event, creature)
     creature:SetHover(true)
+    creature:SetSwim(true)
     creature:SetFlag(59, 0x2000000)
 end
 

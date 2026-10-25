@@ -1516,6 +1516,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
 		return nil, nil
 	}
+	// SetSwim is Unit::SetSwim (Unit.cpp:13728): flips
+	// MOVEMENTFLAG_SWIMMING with the C++ no-op-on-unchanged early-out.
+	// Unlike Creature::SetHover, C++ SetSwim itself sends no packet (a
+	// flag flip only); the Go twin broadcasts SMSG_SPLINE_MOVE_START_SWIM/
+	// STOP_SWIM (packed GUID only, via broadcastCreatureSplineMove) so
+	// clients observe the change, the same broadcast-leg approach as
+	// SetHover/SetCanFly.
+	methods["SetSwim"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetSwim requires a bool, got no args")
+		}
+		enable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetSwim requires a bool")
+		}
+		s.motionMu.Lock()
+		if motion.Swimming == enable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Swimming = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		return nil, nil
+	}
 	// SetCombatPulseDelay is Creature::SetCombatPulseDelay (Creature.h:270):
 	// the interval in SECONDS at which the creature pulses its whole zone
 	// into combat (only fires on dungeon maps). The C++ setter stores the
