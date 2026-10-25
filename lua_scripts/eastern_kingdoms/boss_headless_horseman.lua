@@ -286,6 +286,7 @@ end
 -- C++ npc_headless_horseman_head::JustAppeared -> HandleInitialSetup
 -- (boss_headless_horseman.cpp:194): non-triggered DoCastSelf(42408).
 local function onHeadSpawn(_, creature)
+    creature:SetDisplayId(creature:GetTemplateModelId(1))
     creature:CastSpell(creature, SPELL_HEAD_STUN)
 end
 

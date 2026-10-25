@@ -174,7 +174,8 @@
 -- GO removal rides the GO RemoveFromWorld hide-in-instance idiom
 -- (spotlight precedent); the C++ owner check inside RemoveGameObject
 -- is unmodeled (no Go GO owner read for nearest GOs). Ctor
--- SetDisplayId(Modelid2) skipped (no template-model bridge). The add
+-- SetDisplayId(Modelid2) ported in snowpackedIcicleReset via
+-- GetTemplateModelId(2) (bridge live). The add
 -- registers in this file — summoned adds need no separate boss_ai.go
 -- registration (yogg-guardian precedent).
 -- npc_toasty_fireAI — PORTED (toastyFireReset /
@@ -185,7 +186,8 @@
 -- (lines 970-978). The header's "RemoveGameObject unbridged"
 -- claim is RETIRED: GO RemoveFromWorld (hide-in-instance,
 -- lua_objects.go:1407, spotlight precedent) is the Go removal idiom.
--- Ctor SetDisplayId(Modelid2) skipped (no template-model bridge).
+-- Ctor SetDisplayId(Modelid2) ported in toastyFireReset via
+-- GetTemplateModelId(2) (bridge live).
 -- spell_biting_cold / spell_biting_cold_dot —
 -- SpellScript / AuraScript — no SpellScript / AuraScript
 -- bridges; both join the no-SpellScript-bridge queue.
@@ -455,6 +457,7 @@ local function hodirDamageTaken(event, creature, attacker, damage)
 end
 
 local function snowpackedIcicleReset(_, creature)
+    creature:SetDisplayId(creature:GetTemplateModelId(2))
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
     creature:SetRooted(true)
     creature:SetReactState(REACT_PASSIVE)
@@ -473,6 +476,7 @@ local function snowpackedIcicleDied(_, creature)
 end
 
 local function toastyFireReset(_, creature)
+    creature:SetDisplayId(creature:GetTemplateModelId(2))
     creature:CastSpell(creature, SPELL_SINGED, true)
 end
 

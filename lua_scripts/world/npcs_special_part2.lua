@@ -69,7 +69,9 @@
 -- (bridged — creature:PerformEmote), target->AI()->DoAction — the movement
 -- + cross-AI legs stay out; no entry in C++ tree.
 -- npc_argent_squire_gruntling (:2314-2500) — ScheduleTasks (:2338):
--- tired-copy arm: GetOwner + aura SetDuration, both unbridged. The 1s
+-- tired-copy arm: creature GetOwner IS bridged (player-owner squire) but
+-- aura SetDuration has no bridge; the arm stays out on the
+-- guardian-summon strand (the squire never materializes). The 1s
 -- tired-flag strip arm (HasAura/HasFlag/RemoveFlag all bridged) stays
 -- out on the summon strand: the squire never materializes in Go — the
 -- SummonGuardian arm is unmodeled (boss_ai.go:2445 skips guardian

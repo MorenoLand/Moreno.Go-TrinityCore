@@ -200,6 +200,7 @@ local function captainLeaveCombat(event, creature)
 end
 
 local function captainReset(event, creature)
+    creature:SetRegenerateHealth(false)
     cancelTimers(creature:GetGUID())
 end
 
