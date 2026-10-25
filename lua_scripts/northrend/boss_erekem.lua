@@ -143,10 +143,15 @@ end
 -- default (UnitAI.h:170): any threat-listed unit within 40y
 -- (IsWithinCombatRange 3D check) — plain pick over GetAITargets (the
 -- bridged threat list; midnight precedent), no Player filter.
+-- Alive filter: C++ SelectTargetList skips offline refs
+-- (UnitAI.h:162-184) and dead targets are offline (UNIT_STATE_DIED
+-- fails _IsTargetAcceptable, Creature.cpp:2508-2524); Go
+-- SortedEntries returns dead entries too, so the pool is
+-- alive-filtered (pandemonius/maladaar precedent).
 local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance(t) <= maxDist then
+        if t:IsAlive() and creature:GetDistance(t) <= maxDist then
             candidates[#candidates + 1] = t
         end
     end

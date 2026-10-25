@@ -47,9 +47,9 @@
 -- ScheduleTasks ARCANE_BUFFET — SelectTarget(Random, 0, 45.0f, true)
 -- -> DoCast(target, SPELL_ARCANE_BUFFET 54226), 2-arg =
 -- non-triggered; init {10s,11s} / Repeat {15s,20s} — unconditional
--- re-arm. Random-player pool: GetPlayersInWorld, same map/instance,
--- alive, within 45 yd (creature:GetDistance — the zuljin maxDist
--- precedent).
+-- re-arm. Random-player pool corrected 2026-10-25: threat-list
+-- players within 45 yd (see randomThreatPlayerInRange); the old
+-- instance-wide pool was the same bug class as moragg/erekem.
 -- DOCUMENTED DEVIATIONS: none on the ported arms — both timers carry
 -- C++-exact timing and targeting. The UpdateAI
 -- DoMeleeAttackIfReady() leg has no bridge — melee is unmodeled.
@@ -123,17 +123,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 45.0f, true) — alive players on the same
--- map/instance within 45 yd (the zuljin maxDist precedent).
-local function randomPlayer(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 45.0f, true) draws the threat list
+-- (UnitAI.h:162-184, playerOnly=true), not instance players: random
+-- alive threat-list player within 45y (nefarian/vaelastrasz
+-- precedent; the old instance-wide pool could buffet a player with
+-- zero threat). Alive filter: dead targets are offline
+-- (UNIT_STATE_DIED fails _IsTargetAcceptable, Creature.cpp:2508)
+-- and skipped by SelectTargetList, while Go SortedEntries returns
+-- dead entries too. C++ IsWithinCombatRange adds both combat
+-- reaches (Unit.cpp:583); plain GetDistance is the standing
+-- granularity delta.
+local function randomThreatPlayerInRange(creature, maxDist)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (maxDist == nil or creature:GetDistance(plr) <= maxDist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -156,7 +161,7 @@ end
 -- true) -> DoCast(target, 54226), 2-arg = non-triggered; init
 -- {10s,11s} / Repeat {15s,20s} — re-armed unconditionally.
 local function buffetTick(creature, guid)
-    local target = randomPlayer(creature, 45)
+    local target = randomThreatPlayerInRange(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_BUFFET)
     end

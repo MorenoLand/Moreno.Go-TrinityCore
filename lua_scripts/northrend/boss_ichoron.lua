@@ -30,9 +30,11 @@
 -- boss_ichoron.cpp):
 -- boss_ichoronAI::Reset (:98-101) — DoCast(me, SPELL_THREAT_PROC
 -- 61732, true) (:100, triggered) -> CastSpell(creature, 61732, true);
--- fires on event 23 (evade/reset — the spawn-time Reset cast has no
--- spawn-event bridge, documented); the BossAI::Reset passthrough leg
--- has no bridge.
+-- fires on event 23 (evade/reset — and on spawn too, since
+-- fireCreatureSpawned dispatches 23 then 5 on the spawn funnel,
+-- lua_creature_events.go:3733 + creaturemotion.go:755; the old
+-- "no spawn-event bridge" note was stale); the BossAI::Reset
+-- passthrough leg has no bridge.
 -- boss_ichoronAI::JustEngagedWith (:103-107) — Talk(SAY_AGGRO 0)
 -- (:106) kept; seeds the three combat timers below (the
 -- BossAI::JustEngagedWith passthrough leg has no bridge).
@@ -63,10 +65,9 @@
 -- frenzyFired[], wiped on events 2/4/23; the poll stops re-arming
 -- once the latch fires.
 -- DOCUMENTED DEVIATIONS:
--- The water-blast SelectTarget 50.0f distance filter (:221) has no
--- bridge — the randomPlayer pool (alive same-map/instance players,
--- the keleseth / thorim precedent) ignores distance. C++ also omits
--- the player-only flag on this arm, so strictly any unit qualifies.
+-- The water-blast pool was corrected 2026-10-25: threat-list
+-- any-unit alive within 50y (see randomThreatTargetInRange); the old
+-- instance-player pool was player-only and distance-blind.
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-check has no
 -- bridge — casts fire unconditionally on their timers (the hodir
 -- precedent).
@@ -167,17 +168,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0) — alive players on
--- the same map/instance; the 50.0f distance filter is unbridged
--- (documented in the header; the keleseth / thorim precedent).
-local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 50.0f) — no
+-- playerOnly flag, so any threat-listed unit within 50y qualifies
+-- (UnitAI.h:170, playerOnly=false default); C++ IsWithinCombatRange
+-- adds both combat reaches (Unit.cpp:583), plain GetDistance is the
+-- standing granularity delta. Alive filter: dead targets are offline
+-- (UNIT_STATE_DIED fails _IsTargetAcceptable, Creature.cpp:2508)
+-- and skipped by SelectTargetList, while Go SortedEntries returns
+-- dead entries too (erekem/pandemonius precedent).
+local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() and creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -199,7 +202,7 @@ end
 -- C++ ScheduleTasks water-blast leg (:219-224): DoCast(target,
 -- SPELL_WATER_BLAST), 2-arg = non-triggered; init 6-9s / re-arm 6-9s.
 local function waterBlastTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTargetInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_WATER_BLAST)
     end
@@ -293,7 +296,10 @@ local function ichoronJustDied(event, creature)
 end
 
 -- C++ JustSummoned (boss_ichoron.cpp:173-179): ichor-globule entry gate
--- -> DoCast(summon, SPELL_WATER_GLOBULE_VISUAL 54260), non-triggered;
+-- -> DoCast(summon, SPELL_WATER_GLOBULE_VISUAL 54260), non-triggered,
+-- cast BY ichoron ON the summon (corrected 2026-10-25 from a summon
+-- self-cast; the globule SpellHit arm only gates on spellId, so the
+-- old form fired, but with the wrong caster);
 -- the summons.Summon bookkeeping leg has no Lua twin. LATENT: globules
 -- spawn only from the unported spell_ichoron_splatter AuraScript
 -- periodic summon -- the arm fires correctly if a future path summons
@@ -301,7 +307,7 @@ end
 local function ichoronJustSummoned(_, creature, summoned)
     ichoronSummons[summoned:GetGUID()] = true
     if summoned:GetEntry() == ENTRY_ICHOR_GLOBULE then
-        summoned:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
+        creature:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
     end
 end
 

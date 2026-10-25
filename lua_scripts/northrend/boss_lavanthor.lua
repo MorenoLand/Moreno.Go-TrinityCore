@@ -45,13 +45,11 @@
 -- stale — IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- the cyanigosa mana-destruction port).
 -- DOCUMENTED DEVIATIONS:
--- The SelectTarget distance filters are PORTED (firebolt 40.0f :68
--- player-only, lava-burn 50.0f :81) via the GetDistance filter on
--- randomPlayer (cyanigosa / eadric precedent).
--- C++ SelectTarget defaults playerOnly=FALSE (UnitAI.h:170), so the
--- lava-burn pool (:82) can include pets/totems; Lua's player-only
--- enumeration is the documented approximation (the tuten_kash
--- precedent) — no Lua unit-enumeration bridge.
+-- The SelectTarget pools are threat-list picks (firebolt 40.0f :68
+-- player-only, lava-burn 50.0f :81 any-unit) via GetAITargets
+-- (corrected 2026-10-25; the old "no Lua unit-enumeration bridge"
+-- claim was stale — GetAITargets IS the threat-list bridge, and
+-- the old player-only lava-burn approximation is closed).
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-check has no
 -- bridge — casts fire unconditionally on their timers (the hodir
 -- precedent).
@@ -90,19 +88,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, ...) — alive
--- players on the same map/instance; maxDist narrows to the C++
--- distance filter (cyanigosa / eadric precedent: creature:GetDistance
--- on the player object); nil maxDist keeps the unfiltered pool.
-local function randomPlayer(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget draws the threat list (UnitAI.h:162-184), not
+-- instance players (corrected 2026-10-25 — the old instance-wide
+-- pool was the same bug class as moragg/erekem/xevozz/zuramat).
+-- Firebolt is playerOnly=true; lava-burn omits the flag
+-- (playerOnly=false default), so any threat-listed unit within
+-- range qualifies. Alive filter: dead targets are offline
+-- (UNIT_STATE_DIED fails _IsTargetAcceptable, Creature.cpp:2508)
+-- and skipped by SelectTargetList, while Go SortedEntries returns
+-- dead entries too. C++ IsWithinCombatRange adds both combat
+-- reaches (Unit.cpp:583); plain GetDistance is the standing
+-- granularity delta.
+local function randomThreatTargetInRange(creature, maxDist, playerOnly)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (not maxDist or creature:GetDistance(plr) <= maxDist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() and creature:GetDistance(t) <= maxDist
+                and (not playerOnly or t:GetObjectType() == "Player") then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -114,7 +116,7 @@ end
 -- C++ ScheduleTasks firebolt leg (:67-72): DoCast(target,
 -- SPELL_FIREBOLT), 2-arg = non-triggered; init 1s, re-arm 5-13s.
 local function fireboltTick(creature, guid)
-    local target = randomPlayer(creature, 40.0)
+    local target = randomThreatTargetInRange(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FIREBOLT)
     end
@@ -136,7 +138,7 @@ end
 -- C++ ScheduleTasks lava-burn leg (:80-85): DoCast(target,
 -- SPELL_LAVA_BURN), 2-arg = non-triggered; init 10s, re-arm 15-23s.
 local function lavaBurnTick(creature, guid)
-    local target = randomPlayer(creature, 50.0)
+    local target = randomThreatTargetInRange(creature, 50, false)
     if target then
         creature:CastSpell(target, SPELL_LAVA_BURN)
     end

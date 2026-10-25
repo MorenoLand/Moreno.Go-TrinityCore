@@ -39,6 +39,8 @@
 -- (SPELL_CORROSIVE_SALIVA 54527) (:89, 1-arg = non-triggered) ->
 -- CastSpell(nil, 54527); init 5s, re-arm 10s.
 -- DOCUMENTED DEVIATIONS:
+-- Optic-link pool corrected 2026-10-25: threat-list players, not
+-- instance players (see randomPlayerInRange).
 -- (retracted 2026-10-17: the "no distance bridge" claim was stale —
 -- creature:IsWithinDist is bridged (engine/scripting/object.go:167,
 -- the maiden / kiljaeden / marwyn precedent); the optic-link pool is
@@ -111,17 +113,19 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- Same pool with the C++ SelectTarget 50.0f distance filter
--- (creature:IsWithinDist is the bridged distance check — the
--- maiden / kiljaeden / marwyn 100.0f precedent).
+-- C++ SelectTarget(Random, 0, 50.0f, true) draws the threat list
+-- (UnitAI.h:162-184, playerOnly=true), not instance players: random
+-- alive threat-list player within 50y (nefarian/vaelastrasz
+-- precedent; the old instance-wide pool could optic-link a player
+-- with zero threat). C++ IsWithinCombatRange adds both combat
+-- reaches (Unit.cpp:583); plain GetDistance is the standing
+-- granularity delta.
 local function randomPlayerInRange(creature, dist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, dist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= dist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
