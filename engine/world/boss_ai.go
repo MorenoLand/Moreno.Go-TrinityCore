@@ -4465,12 +4465,13 @@ func init() {
 
 	// Lady Vashj (21212) — shock blast / static charge / entangle
 	// + shoot-or-multishot melee-range arm in phase 1, Talk on the
-	// once-guarded <70% phase-2 switch, forked lightning in phase 2.
-	// Teleport, shield-channel/enchanted/tainted/Coilfang summons,
-	// the DATA_CANSTARTPHASE3 poll and the intro machine are
-	// unmodeled. Tainted Elemental (22009) runs poison bolt
-	// {5s,10s} + 30s despawn; the JustDied death relay is
-	// unmodeled. Fight logic in
+	// once-guarded <70% phase-2 switch, teleport + shield-channel
+	// summons + forked lightning + enchanted/tainted/Coilfang
+	// summons in phase 2, intro Talk + NON_ATTACKABLE flag arms.
+	// The DATA_CANSTARTPHASE3 poll, phase 3, the shield-barrier
+	// upkeep and the enchanted waypoint machine are unmodeled.
+	// Tainted Elemental (22009) runs poison bolt {5s,10s} + 30s
+	// despawn + the JustDied 50s-clamp relay. Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_lady_vashj.lua.
 	RegisterLuaBoss("boss_lady_vashj", 21212)
 	RegisterLuaBoss("npc_tainted_elemental", 22009)

@@ -28,7 +28,9 @@
 -- 10000 / wateryGrave 30000 / earthquake 40000 / wateryGlobules
 -- 0 / earthquakeArm false / phase2 false) + Talk(SAY_AGGRO) +
 -- 1s scheduler pump (a port of boss_morogrim_tidewalkerAI::
--- UpdateAI — 1s granularity is exact for all C++ timers here).
+-- UpdateAI — 1s granularity (not exact: the earthquake re-arm
+-- 40000+rand%5000 is generally not a multiple of 1000, and the
+-- globule re-arm is 500ms — both admitted below).
 -- Pump: earthquake 40s init — first fire -> DoCastVictim 37764,
 -- earthquakeArm=true, re-arm 10000; second fire -> Talk(SAY_
 -- SUMMON) + 10x Tidewalker Lurker summons at the MurlocCords
@@ -41,9 +43,12 @@
 -- targeting). Tidal wave 37730 10s then 20s -> DoCastVictim (C++-
 -- exact). Phase 1 (!phase2): watery grave 30s -> Talk(SAY_
 -- SUMMON_BUBL) + Talk(EMOTE_WATERY_GRAVE), re-arm 30000 (C++-
--- exact; the 4-target distinct pick, the waterfall teleport and
--- the player-side triggered casts of 38023/38024/38025/37850
--- have no player bridges — unmodeled, below). Phase 2: once-
+-- exact; the 4-target distinct pick and the player-side triggered
+-- casts of 38023/38024/38025/37850 stay out — the true blockers are
+-- (a) no random-players-only pick and (b) no triggered flag on
+-- player:CastSpell (it exists but takes no triggered arg); C++
+-- itself does no teleport call here, any waterfall movement is a
+-- spell effect of the grave spells — unmodeled, below). Phase 2: once-
 -- guarded GetHealthPct() < 25 (C++ HealthBelowPct(25)) ->
 -- phase2=true; watery globules — 0 init so it fires on the
 -- first phase-2 tick -> Talk(EMOTE_WATERY_GLOBULES), re-arm
@@ -81,11 +86,11 @@
 -- stale "no summon bridge" claim retracted — the per-lurker
 -- separately-random target assignment stays out, zone aggro substitutes);
 -- cross-creature bridge — the murloc AttackStart relay
--- unmodeled; no player bridges — the watery-grave waterfall
--- teleport + the player-side triggered casts (38023/38024/
--- 38025/37850) and the globule-summon player-side triggered
--- casts (37854/37858/37860/37861) unmodeled (the C++ target-
--- pick loops with dedup collapse with the unbridgeable casts);
+-- unmodeled; the watery-grave player-side triggered casts
+-- (38023/38024/38025/37850) and the globule-summon player-side
+-- triggered casts (37854/37858/37860/37861) stay out for the
+-- (a)/(b) blockers above (the C++ target-pick loops with dedup
+-- collapse with the unbridgeable casts);
 -- the globule no-melee arm IS ported (creature:SetMeleeAttack bridge is live, 2026-10-23 — the stale "no no-melee bridge" claim is retracted); LOS event 27 exists but the AttackStart relay is still unbridged;
 -- the globule Check_Timer runs at 1s pump granularity instead
 -- of the C++ 500ms re-arm; no SpellScript/AuraScript scripts
@@ -254,9 +259,12 @@ local function morogrimEnterCombat(event, creature)
     resetMorogrim(guid)
     morogrimState[guid] = freshMorogrimState()
     creature:Talk(SAY_AGGRO)
+    -- Repeats arg 0 = infinite (runtime.go:1189-1194: default repeats is
+    -- 1, i.e. one-shot — the 2026-10-25 audit caught both pumps here
+    -- firing exactly once, leaving the boss melee-only).
     morogrimTimers[guid] = CreateLuaEvent(function()
         morogrimTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function morogrimLeaveCombat(event, creature)
@@ -294,7 +302,7 @@ local function globuleTick(creature, guid)
     -- Check_Timer: within 5 yd of the victim -> DoCastVictim
     -- 37871 + DespawnOrUnsummon (C++-exact; 1s pump granularity
     -- instead of the C++ 500ms re-arm — header).
-    if creature:GetDistance(victim) <= GLOBULE_EXPLOSION_RANGE then
+    if creature:IsWithinDistInMap(victim, GLOBULE_EXPLOSION_RANGE) then
         creature:CastSpell(victim, SPELL_GLOBULE_EXPLOSION)
         creature:Despawn()
         cancelPump(globuleTimers, guid)
@@ -308,7 +316,7 @@ local function globuleEnterCombat(event, creature)
     cancelPump(globuleTimers, guid)
     globuleTimers[guid] = CreateLuaEvent(function()
         globuleTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function globuleCleanup(event, creature)

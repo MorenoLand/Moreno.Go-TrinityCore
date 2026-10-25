@@ -422,9 +422,11 @@ local function lurkerEnterCombat(event, creature)
     local guid = creature:GetGUID()
     resetLurker(guid)
     lurkerState[guid] = freshLurkerState()
+    -- Repeats 0 = infinite (runtime.go:1189-1194 default is one-shot;
+    -- the morogrim audit this tick caught this same missing arg class).
     lurkerTimers[guid] = CreateLuaEvent(function()
         lurkerTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function lurkerLeaveCombat(event, creature)
@@ -507,7 +509,7 @@ local function ambusherEnterCombat(event, creature)
     ambusherState[guid] = freshAmbusherState()
     ambusherTimers[guid] = CreateLuaEvent(function()
         ambusherTick(creature, guid)
-    end, 1000)
+    end, 1000, 0)
 end
 
 local function ambusherCleanup(event, creature)

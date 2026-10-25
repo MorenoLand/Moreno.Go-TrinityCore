@@ -2,8 +2,9 @@
 -- src/server/scripts/Outland/CoilfangReservoir/SerpentShrine/
 -- boss_lady_vashj.cpp (boss_lady_vashj, npc_enchanted_elemental,
 -- npc_tainted_elemental, npc_toxic_sporebat,
--- npc_shield_generator_channel — documented below, only the first
--- two registered; item_tainted_core documented below, not
+-- npc_shield_generator_channel — documented below; three entries
+-- carry handlers (21212, 22009, 19870), the other two documented
+-- only; item_tainted_core documented below, not
 -- registered; AddSC_boss_lady_vashj registers those five C++
 -- ScriptNames plus the item script).
 -- Entry 21212 verified from instance_serpent_shrine.cpp's
@@ -19,8 +20,9 @@
 -- SAY_SLAY=6 (kill — NO TYPEID gate in C++, C++-exact), SAY_DEATH
 -- =7 (death). SAY_INTRO=0 fires from the MoveInLineOfSight intro
 -- (event 27, per-GUID constructor latch — "no need do intro if
--- wiped"); SAY_PHASE1=2 is defined but never called anywhere in the
--- file — unused enum member, documented only (gruul precedent).
+-- wiped"); SAY_PHASE1=2 has no Lua constant (C++-only enum member,
+-- never talked in C++ either — omission correct). SAY_PHASE3=4
+-- likewise has no constant: its branch is instance-gate-blocked (D1).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset, 27 OnMoveInLineOfSight. Timers via CreateLuaEvent
 -- (per-GUID scheduler pump); melee is engine-driven in Go
@@ -33,9 +35,10 @@
 -- 30000 / check 15000 / forkedLightning 2000 / entangled false /
 -- phase 1) + Talk(SAY_AGGRO) + start of a 1s scheduler pump (a
 -- port of boss_lady_vashjAI::UpdateAI — 1s granularity is exact
--- for all C++ timers). The instance SetData(IN_PROGRESS) arm and
--- the per-player DestroyItemCount(31088) tainted-core sweep arm
--- are instance/player-item blocked (below). Phase 1: Shock blast
+-- for all C++ timers). The instance SetData(IN_PROGRESS) arm stays
+-- blocked; the per-player DestroyItemCount(31088) tainted-core sweep
+-- is PORTED on engage (DestroyItemCount is bridged, D5). Phase 1:
+-- Shock blast
 -- 38509 1..60000ms init then {1s,15s} — DoCastVictim (C++-exact).
 -- Static charge 38280 10000..25000ms init then {10s,30s} — random
 -- alive player within 200 yd (C++ SelectTarget(Random, 0, 200,
@@ -46,9 +49,9 @@
 -- 10s; else -> CastShootOrMultishot, entangled=false, re-arm
 -- {20s,25s} (C++-exact). Phase 1: once-guarded GetHealthPct() <
 -- 70 (C++ HealthBelowPct(70)) -> phase=2, Talk(SAY_PHASE2) (the
--- MotionMaster Clear + DoTeleportTo(MIDDLE_X/Y/Z) and the four
--- shield-generator-channel summons have no movement/teleport/
--- summon bridges — unmodeled, below). CheckTimer 15s init then
+-- MotionMaster Clear stays out (no bridge); the DoTeleportTo and
+-- the four shield-generator-channel summons are PORTED below.
+-- CheckTimer 15s init then
 -- 5s: if no alive player in the instance is within melee range (the
 -- C++ threat-list IsWithinMeleeRange scan — GetAITargets is the bridged
 -- threat list, code already uses it) -> CastShoot
@@ -57,8 +60,9 @@
 -- only when math.random(0,2) != 0 (the C++ rand32()%3 gate).
 -- Phase 2: Forked lightning 40088 2s then {2s,8s} — random alive
 -- player pick, victim fallback (C++-exact). The enchanted/
--- tainted/Coilfang-elite/Coilfang-strider summon arms are summon
--- blocked (below); the phase-3 CheckTimer poll is instance-
+-- tainted summon arms are ported below, as are the Coilfang-elite/
+-- Coilfang-strider summon arms (2026-10-25); the phase-3 CheckTimer
+-- poll is instance-
 -- blocked (instance->GetData(DATA_CANSTARTPHASE3)), so phase 3
 -- is unreachable in this model (below). OnTargetDied(3): Talk(
 -- SAY_SLAY) — no TYPEID gate (C++-exact). OnDied(4): Talk(SAY_
@@ -76,9 +80,12 @@
 -- claim is retracted): 4x shield-generator-channel (19870) at the
 -- phase-2 transition, enchanted-elemental (21958, cycling ElementPos)
 -- and tainted-elemental (22009, random ElementPos) on their C++-exact
--- timers. STAY-OUT: Coilfang-elite (22055), Coilfang-strider (22056)
--- and sporebat (22140) — all ride spawned-AI()->AttackStart(random
--- target) and their sole role is combat (dropped leg guts the arm);
+-- timers, and the Coilfang-elite (22055) / Coilfang-strider (22056)
+-- phase-2 summon arms are PORTED below (SummonCreature type 3, 5s +
+-- EngageWithTarget, kargath-guard precedent — the old "sole role is
+-- combat" stay-out is retracted). STAY-OUT: sporebat (22140) — phase 3
+-- is unreachable (instance DATA_CANSTARTPHASE3 gate), so its summon
+-- arm can never fire;
 -- the phase-2 MotionMaster Clear stays out (no bridge) but its
 -- DoTeleportTo is PORTED in the phase-2 arm below (2026-10-24 — the old
 -- "no teleport bridge" claim was stale); the enchanted-elemental MovePoint
@@ -118,9 +125,10 @@
 -- random alive player pick, cast only when within 30 yd (C++
 -- SelectTarget(Random, 0) + IsWithinDistInMap(me, 30): gate
 -- after pick, so an out-of-range pick wastes the round with no
--- cast; timer re-arms regardless). Pick is player-only by the
--- teron convention — C++ playerOnly defaults false (pets etc.
--- eligible), no any-hostile enumeration bridge. DespawnTimer 30s ->
+-- cast; timer re-arms regardless). C++ playerOnly defaults false
+-- (pets etc. eligible): the pick is the bridged threat list
+-- (GetAITargets, D4), not the teron player-only pick. DespawnTimer
+-- 30s ->
 -- creature:Despawn() + cancel pump (C++ setDeathState(DEAD), the
 -- 1s anti-crash re-arm folded into the cancel). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup (the JustDied tainted-
@@ -151,6 +159,8 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 local ENTRY_TAINTED_ELEMENTAL = 22009
 local ENTRY_SHIELD_GENERATOR_CHANNEL = 19870 -- boss_lady_vashj.cpp:60 (C++ spells it SHIED_GENERATOR_CHANNEL)
 local ENTRY_ENCHANTED_ELEMENTAL = 21958
+local ENTRY_COILFANG_ELITE = 22055
+local ENTRY_COILFANG_STRIDER = 22056
 
 -- boss_lady_vashj.cpp:69-71 (MIDDLE_X/Y/Z): the platform center Vashj
 -- teleports to at the phase-2 transition (:401-402).
@@ -175,6 +185,19 @@ local ELEMENT_POSITIONS = {
     {9.8, -1012, 21.7, 1.4},
     {-35.0, -987.6, 21.5, 0.8},
     {-58.9, -901.6, 21.5, 6.0},
+}
+
+-- boss_lady_vashj.cpp:119-124 (CoilfangElitePos) and :126-131
+-- (CoilfangStriderPos), literal tables.
+local COILFANG_ELITE_POSITIONS = {
+    {28.84, -923.28, 42.9, 6.0},
+    {31.183281, -953.502625, 41.523602, 1.640957},
+    {58.895180, -923.124268, 41.545307, 3.152848},
+}
+local COILFANG_STRIDER_POSITIONS = {
+    {66.427010, -948.778503, 41.262245, 2.584220},
+    {7.513962, -959.538208, 41.300422, 1.034629},
+    {-12.843201, -907.798401, 41.239620, 6.087094},
 }
 
 local STATIC_CHARGE_RANGE = 200
@@ -216,6 +239,34 @@ local function pickRandomAlivePlayerInRange(creature, maxDist)
     for _, p in ipairs(playersInInstance(creature)) do
         if creature:GetDistance(p) <= maxDist then
             found[#found + 1] = p
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
+-- C++ SelectTarget(Random, 0): random unit from the THREAT list
+-- (any unit, pets included) — GetAITargets is the bridged threat
+-- list (lua_creature_events.go:1705). Used for forked/poison/
+-- Coilfang arms (2026-10-25 audit D4; the instance-player pick is
+-- retired for these arms).
+local function pickRandomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
+        return nil
+    end
+    return targets[math.random(#targets)]
+end
+
+-- C++ SelectTarget(Random, 0, <dist>, true): random THREAT-LIST
+-- player within <dist> yd (GetTypeId() == 4 is TYPEID_PLAYER).
+local function pickRandomThreatPlayerInRange(creature, maxDist)
+    local found = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetTypeId() == 4 and creature:GetDistance(unit) <= maxDist then
+            found[#found + 1] = unit
         end
     end
     if #found == 0 then
@@ -280,11 +331,11 @@ local function vashjTick(creature, guid)
             st.shockBlast = st.shockBlast - 1000
         end
 
-        -- Static Charge: random player within 200 yd, cast only
-        -- when the pick lacks the trigger aura; re-arm {10s,30s}
-        -- regardless (C++-exact).
+        -- Static Charge: random threat-list player within 200 yd,
+        -- cast only when the pick lacks the trigger aura; re-arm
+        -- {10s,30s} regardless (C++-exact).
         if st.staticCharge <= 1000 then
-            local pick = pickRandomAlivePlayerInRange(creature, STATIC_CHARGE_RANGE)
+            local pick = pickRandomThreatPlayerInRange(creature, STATIC_CHARGE_RANGE)
             if pick and not pick:HasAura(SPELL_STATIC_CHARGE_TRIGGER) then
                 creature:CastSpell(pick, SPELL_STATIC_CHARGE_TRIGGER)
             end
@@ -316,25 +367,37 @@ local function vashjTick(creature, guid)
         -- has no bridge" claim was stale), 4x SummonCreature(
         -- SHIED_GENERATOR_CHANNEL 19870 at ShieldGeneratorChannelPos,
         -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4), then Talk(SAY_PHASE2).
-        -- The ShieldGeneratorChannel GUID latch feeds the
-        -- instance-blocked Reset cleanup only.
+        -- The stored channel returns feed the ev23 Reset cleanup
+        -- (D3); the instance SetData bookkeeping stays blocked.
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 70 / 100) then
             creature:Teleport(VASHJ_MIDDLE_X, VASHJ_MIDDLE_Y, VASHJ_MIDDLE_Z)
+            -- Store channel returns: C++ Reset kills each stored
+            -- channel (setDeathState JUST_DIED); Lua despawns them
+            -- on ev23 (D3).
+            st.channels = {}
             for _, pos in ipairs(SHIELD_GENERATOR_CHANNEL_POSITIONS) do
-                creature:SummonCreature(ENTRY_SHIELD_GENERATOR_CHANNEL,
+                local ch = creature:SummonCreature(ENTRY_SHIELD_GENERATOR_CHANNEL,
                     pos[1], pos[2], pos[3], pos[4], 4, 0)
+                if ch then
+                    st.channels[#st.channels + 1] = ch
+                end
             end
             creature:Talk(SAY_PHASE2)
             st.phase = 2
-            -- Elemental summon arms (:474-495) are phase-3 in C++; the
-            -- phase-3 DATA_CANSTARTPHASE3 poll has no bridge so the Lua
-            -- hosts them in the phase-2 branch (documented delta),
-            -- seeded at phase-2 entry with the C++ init values.
+            -- Enchanted/tainted summon arms (:474-495) run in the C++
+            -- phase-2 branch; like the elite/strider timers below they
+            -- decrement only there, so the C++ init values still hold
+            -- at transition and are seeded here.
             st.enchantedElementalPos = 0
             st.enchantedElemental = 5000
             st.taintedElemental = 50000
+            st.enchanted = {}
+            -- Coilfang elite/strider timers (C++ Initialize :173-174):
+            -- elite 45000+rand5000, strider 60000+rand10000.
+            st.coilfangElite = 45000 + math.random(0, 4999)
+            st.coilfangStrider = 60000 + math.random(0, 9999)
         end
 
         -- CheckTimer (boss_lady_vashj.cpp:438-448): if nobody on the
@@ -358,13 +421,14 @@ local function vashjTick(creature, guid)
         else
             st.check = st.check - 1000
         end
-    else
+    elseif st.phase == 2 then
         -- Phase 2: forked lightning 2s then {2s,8s} — random
-        -- player pick, victim fallback (C++-exact). The summon
-        -- arms and the phase-3 DATA_CANSTARTPHASE3 poll are
-        -- blocked (header), so phase 3 is unreachable here.
+        -- threat-list pick, victim fallback (C++-exact). Phase 3 has
+        -- no branch: entry needs DATA_CANSTARTPHASE3 (instance-
+        -- blocked), and this guard keeps phase-2 arms from running
+        -- under any other phase value.
         if st.forkedLightning <= 1000 then
-            local pick = pickRandomAlivePlayer(creature)
+            local pick = pickRandomThreatTarget(creature)
             if not pick then
                 pick = creature:GetVictim()
             end
@@ -382,8 +446,15 @@ local function vashjTick(creature, guid)
         -- type 4; re-arm 10000+rand5000 (C++-exact).
         if st.enchantedElemental <= 1000 then
             local pos = ELEMENT_POSITIONS[st.enchantedElementalPos + 1]
-            creature:SummonCreature(ENTRY_ENCHANTED_ELEMENTAL,
+            local el = creature:SummonCreature(ENTRY_ENCHANTED_ELEMENTAL,
                 pos[1], pos[2], pos[3], pos[4], 4, 0)
+            -- Stored for the D7 mitigation: C++ elementals KillSelf
+            -- once vashj leaves combat or dies; Lua despawns them on
+            -- leave/reset/died (the MovePoint/surge machine itself
+            -- stays out, no bridge).
+            if el then
+                st.enchanted[#st.enchanted + 1] = el
+            end
             st.enchantedElementalPos = (st.enchantedElementalPos == 7) and 0 or (st.enchantedElementalPos + 1)
             st.enchantedElemental = 10000 + math.random(0, 4999)
         else
@@ -403,6 +474,75 @@ local function vashjTick(creature, guid)
         else
             st.taintedElemental = st.taintedElemental - 1000
         end
+
+        -- Coilfang elites (:497-510): SummonCreature(COILFANG_ELITE
+        -- 22055 at CoilfangElitePos[rand3], TEMPSUMMON_TIMED_DESPAWN_
+        -- OUT_OF_COMBAT Eluna type 3, 5s) + AttackStart(random target,
+        -- victim fallback) via EngageWithTarget (kargath-guard
+        -- precedent); re-arm 45000+rand5000 (C++-exact).
+        if st.coilfangElite <= 1000 then
+            local pos = COILFANG_ELITE_POSITIONS[math.random(1, 3)]
+            local elite = creature:SummonCreature(ENTRY_COILFANG_ELITE,
+                pos[1], pos[2], pos[3], pos[4], 3, 5000)
+            if elite then
+                local pick = pickRandomThreatTarget(creature)
+                if not pick then
+                    pick = creature:GetVictim()
+                end
+                if pick then
+                    elite:EngageWithTarget(pick)
+                end
+            end
+            st.coilfangElite = 45000 + math.random(0, 4999)
+        else
+            st.coilfangElite = st.coilfangElite - 1000
+        end
+
+        -- Coilfang striders (:512-524): same shape as elites, entry
+        -- 22056 at CoilfangStriderPos[rand3], re-arm 60000+rand10000.
+        if st.coilfangStrider <= 1000 then
+            local pos = COILFANG_STRIDER_POSITIONS[math.random(1, 3)]
+            local strider = creature:SummonCreature(ENTRY_COILFANG_STRIDER,
+                pos[1], pos[2], pos[3], pos[4], 3, 5000)
+            if strider then
+                local pick = pickRandomThreatTarget(creature)
+                if not pick then
+                    pick = creature:GetVictim()
+                end
+                if pick then
+                    strider:EngageWithTarget(pick)
+                end
+            end
+            st.coilfangStrider = 60000 + math.random(0, 9999)
+        else
+            st.coilfangStrider = st.coilfangStrider - 1000
+        end
+    end
+end
+
+-- Despawn stored phase-2 summons; MUST run before resetVashj nils
+-- state. withChannels=true only on the ev23 Reset path (C++ Reset
+-- kills channels; JustDied does not, and leave-combat has no
+-- channel arm — elementals KillSelf on any vashj-out-of-combat/dead
+-- leg, so they despawn on all three paths).
+local function despawnStoredSummons(guid, withChannels)
+    local st = vashjState[guid]
+    if not st then
+        return
+    end
+    if withChannels and st.channels then
+        for _, ch in ipairs(st.channels) do
+            if ch then
+                ch:Despawn()
+            end
+        end
+    end
+    if st.enchanted then
+        for _, el in ipairs(st.enchanted) do
+            if el then
+                el:Despawn()
+            end
+        end
     end
 end
 
@@ -410,6 +550,16 @@ local function vashjEnterCombat(event, creature)
     local guid = creature:GetGUID()
     resetVashj(guid)
     vashjState[guid] = freshVashjState()
+    -- C++ JustEngagedWith tainted-core sweep (D5): every map player
+    -- loses one Tainted Core (31088); DestroyItemCount is bridged
+    -- (lua_player.go:360). The SetData(IN_PROGRESS) leg stays
+    -- instance-blocked. (Sighting-engage also lands here via ev1, a
+    -- minor over-fire vs C++'s engage-only sweep.)
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == creature:GetMapId() and p:GetInstanceId() == creature:GetInstanceId() then
+            p:DestroyItemCount(31088, 1, true)
+        end
+    end
     creature:Talk(SAY_AGGRO)
     vashjTimers[guid] = CreateLuaEvent(function()
         vashjTick(creature, guid)
@@ -417,6 +567,9 @@ local function vashjEnterCombat(event, creature)
 end
 
 local function vashjLeaveCombat(event, creature)
+    -- C++ elementals KillSelf when vashj leaves combat; channels are
+    -- Reset-only (not leave-combat), so only enchanted despawn here.
+    despawnStoredSummons(creature:GetGUID(), false)
     resetVashj(creature:GetGUID())
 end
 
@@ -427,16 +580,21 @@ end
 
 local function vashjDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ elementals KillSelf on vashj death; channels are untouched
+    -- by JustDied (CORPSE_DESPAWN is engine-side).
+    despawnStoredSummons(creature:GetGUID(), false)
     resetVashj(creature:GetGUID())
 end
 
 local function vashjReset(event, creature)
+    -- C++ Reset kills each stored shield channel (JUST_DIED) and the
+    -- elementals KillSelf once vashj is out of combat (D3/D7).
+    despawnStoredSummons(creature:GetGUID(), true)
     resetVashj(creature:GetGUID())
-    -- C++ Reset() :592: SetSpeedRate(MOVE_RUN, 0.6f) — the persistent run
-    -- rate (never restored in C++); the adjacent MOVE_WALK 0.6f leg (:591)
-    -- has no walk model and stays out, as do the walk-machine waypoint
-    -- search and the instance leg (documented above).
-    creature:SetSpeedRate(1, 0.6)
+    -- C++ boss_lady_vashjAI::Reset has no speed leg: the MOVE_WALK /
+    -- MOVE_RUN 0.6f pair (:591-592) belongs to npc_enchanted_elementalAI::
+    -- Reset, and the elemental is unregistered (movement-driven, header).
+    -- A prior port wrongly applied the run rate to vashj here; removed.
 end
 
 -- C++ MoveInLineOfSight: one-shot Talk(SAY_INTRO 0) on first sight,
@@ -502,14 +660,14 @@ local function elementalTick(creature, guid)
         return
     end
 
-    -- Poison bolt: random alive player pick, cast only when within
+    -- Poison bolt: random threat-list pick, cast only when within
     -- 30 yd — an out-of-range pick wastes the round (C++ SelectTarget
     -- (Random, 0) + IsWithinDistInMap(me, 30) gate-after-pick; timer
-    -- re-arms regardless). Player-only pick is the teron convention
-    -- (no any-hostile enumeration bridge).
+    -- re-arms regardless). GetAITargets is the bridged threat list
+    -- (2026-10-25 audit D4; the old teron player-only pick is retired).
     if st.poisonBolt <= 1000 then
-        local pick = pickRandomAlivePlayer(creature)
-        if pick and creature:GetDistance(pick) <= POISON_BOLT_RANGE then
+        local pick = pickRandomThreatTarget(creature)
+        if pick and creature:IsWithinDistInMap(pick, POISON_BOLT_RANGE) then
             creature:CastSpell(pick, SPELL_POISON_BOLT)
         end
         st.poisonBolt = 5000 + math.random(0, 4999)

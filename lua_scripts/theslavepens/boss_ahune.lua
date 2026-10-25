@@ -41,10 +41,11 @@
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the _Reset arm is instance-blocked). Melee
 -- is engine-driven. The ctor's SetControlled(true, UNIT_STATE_ROOT)
--- is PORTED 2026-10-24 via creature:SetRooted on OnEnterCombat(1):
--- the root is never cleared in C++, and Go event 5 fires only on the
--- respawn path (not first summon), so combat entry is where the root
--- first has observable effect (mennu/thespia precedent retired).
+-- is PORTED via creature:SetRooted on event 5 (spawn, which fires on
+-- fresh spawn too, not only on respawn — creaturemotion.go:719-747 —
+-- so the 2026-10-24 engage-time placement is retired to a redundant
+-- re-assert below) + OnEnterCombat(1): the root is never cleared in
+-- C++ (frozen-core event-5 ctor precedent).
 -- EnterEvadeMode is instance/cross-creature/
 -- summon gated (ahuneBunny DoAction STOP_EVENT,
 -- summons.DespawnAll, DespawnOrUnsummon) — unmodeled.
@@ -86,7 +87,8 @@
 -- RESURFACE, Reset via the bunny's ResetFlameCallers) or
 -- movement driven (MovementInform MovePoint arms) and would
 -- be an empty skeleton; go_ahune_ice_stone (187882) is a
--- GameObjectScript — no GO bridge (lurker precedent);
+-- GameObjectScript — RegisterGameObjectEvent exists, but the stone's
+-- select body stays blocked (bunny DoAction + instance lookup);
 -- SAY_PLAYER_TEXT_1/2/3 (0/1/2), EMOTE_EARTHEN_ASSAULT 0,
 -- EMOTE_RETREAT 0, EMOTE_RESURFACE 1 and the Events/Actions/
 -- Phases/Points/Misc enums are referenced only by the
@@ -131,7 +133,8 @@ local function bossTick(creature, guid)
     -- bookkeeping only: the fire arm is instance->GetCreature
     -- (DATA_FROZEN_CORE) cross-creature gated (DoCast
     -- (frozenCore, 46430, true), else DoCastSelf(45254)), no
-    -- cross-creature bridge (kalithresh precedent).
+    -- instance-DATA creature lookup / DoAction bridge (grid lookup by
+    -- entry exists, but the synch effect itself is SpellScript-gated).
     if st.synchHealth <= 1000 then
         st.synchHealth = 3000
     else
@@ -139,10 +142,15 @@ local function bossTick(creature, guid)
     end
 end
 
+-- C++ ctor (boss_ahune.cpp:175) SetControlled(true, ROOT), never
+-- cleared in C++ — event 5 (spawn) placement, frozen-core precedent.
+RegisterCreatureEvent(ENTRY_AHUNE, 5, function(_, creature)
+    creature:SetRooted(true)
+end)
+
 RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
-    -- C++ ctor (boss_ahune.cpp:175) SetControlled(true, ROOT), never
-    -- cleared in C++; rides combat entry (Go event 5 fires only on the
-    -- respawn path, not first summon) via creature:SetRooted.
+    -- Re-assert the ctor root on engage (idempotent; the event-5
+    -- handler above is the C++-exact placement).
     creature:SetRooted(true)
     local guid = creature:GetGUID()
     resetBoss(guid)
