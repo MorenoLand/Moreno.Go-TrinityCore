@@ -48,8 +48,7 @@
 -- EVENT_TRANSFORM at 5s once counter >= 2 (:207-:211).
 -- PHASE_RHINO (:137-:141): EVENT_STOMP — DoCastAOE(Stomp 55292)
 -- non-triggered, 25s init / 20s re-arm (:194-:196); EVENT_IMPALING_CHARGE —
--- SelectTarget(Random, 0, 60.0f, true) playerOnly=TRUE (jaraxxus /
--- coren_direbrew precedent) -> DoCast(target, Impaling Charge 54956)
+-- SelectTarget(Random, 0, 60.0f, true) threat-list player pool (randomThreatPlayerInRange) -> DoCast(target, Impaling Charge 54956)
 -- non-triggered, null-guarded like the C++ if, 21s init / 31s re-arm
 -- unconditional, _phaseCounter++ unconditional, EVENT_TRANSFORM at 5s
 -- once counter >= 2 (:187-:192); EVENT_ENRAGE — DoCastSelf(Enrage 55285)
@@ -93,14 +92,16 @@
 -- RemoveAura bridge — the "no aura-removal bridge (aeranas precedent)"
 -- header claim is stale). The cast of 55299 itself is the transform
 -- tick's DoCast, exactly as in C++.
--- EnterEvadeMode summons.DespawnAll + _DespawnAtEvade (:111-:115) — no
--- despawn bridge (terestian precedent) — documented-only.
+-- EnterEvadeMode summons.DespawnAll + _DespawnAtEvade (:111-:115) — the
+-- boss despawn is PORTED via creature:Despawn on event 2 (drakkari
+-- colossus precedent; the old "no despawn bridge" claim is stale);
+-- summons.DespawnAll stays out (no summon tracking in Lua).
 -- JustEngagedWith InterruptNonMeleeSpells(false) — PORTED below
 -- (no-op twin, curator precedent); BossAI _Reset/_JustDied
 -- instance bookkeeping has no bridge.
 -- C++ threat-list caveat (shared with the keleseth/thorim/beast ports):
--- C++ SelectTarget draws from the threat list; the bridge draws from
--- GetPlayersInWorld in range, which can include nearby unengaged players.
+-- C++ SelectTarget draws from the threat list; the impaling-charge arm
+-- now draws the same pool via GetAITargets (see randomThreatPlayerInRange).
 
 local ENTRY_GAL_DARAH = 29306
 
@@ -153,16 +154,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, idx, range, true) playerOnly=true arms ride the
--- jaraxxus GetPlayersInWorld precedent (0.0f = any-range modeled with
--- 100 — curator precedent).
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 60.0f, true) draws the threat list
+-- filtered to players (UnitAI.h:162-184, playerOnly=true) — the
+-- GetPlayersInWorld pool this replaces could pick instance players
+-- with no threat entry, which C++ never does (the 2026-10-25
+-- Utgarde/Gruul threat-pool fix class; eck spring precedent).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+    for _, tgt in ipairs(creature:GetAITargets()) do
+        if tgt:GetObjectType() == "Player" and not tgt:IsDead()
+                and creature:IsWithinDist(tgt, range) then
+            candidates[#candidates + 1] = tgt
         end
     end
     if #candidates == 0 then
@@ -214,7 +216,7 @@ end
 -- null-guarded; 21s init / 31s re-arm unconditional; _phaseCounter++
 -- unconditional; EVENT_TRANSFORM at 5s once >= 2.
 local function impalingTick(creature, guid)
-    local target = randomPlayerInRange(creature, 60)
+    local target = randomThreatPlayerInRange(creature, 60)
     if target then
         creature:CastSpell(target, SPELL_IMPALING_CHARGE)
     end
@@ -327,8 +329,15 @@ local function galDarahEnterCombat(event, creature, target)
     scheduleTrollPhase(creature, guid)
 end
 
+-- C++ EnterEvadeMode (:111-:115): _EnterEvadeMode +
+-- summons.DespawnAll + _DespawnAtEvade. The boss despawn rides
+-- creature:Despawn (drakkari colossus precedent): event 2 fires only
+-- on the evade path (triggerCreatureEvade), and DB-spawned creatures
+-- respawn on their normal spawntime. The summons.DespawnAll leg stays
+-- out (no summon tracking in Lua).
 local function galDarahLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:Despawn()
 end
 
 local function galDarahTargetDied(event, creature, victim)
