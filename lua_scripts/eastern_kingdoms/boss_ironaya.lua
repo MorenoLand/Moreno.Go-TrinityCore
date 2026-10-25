@@ -36,10 +36,13 @@
 --   <50%/<25% legs run every UpdateAI tick): <50% one-shot
 --   (per-guid latch, kirtonos/brutallus precedent) ->
 --   DoCastVictim(10101, true) -> GetVictim + CastSpell
---   (mr_smite convention); <25% one-shot -> self-cast 11876.
+--   (mr_smite convention) + ResetThreat(victim) via
+--   ModifyThreatByPercent(victim, -100); <25% one-shot -> self-cast 11876.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The Knockaway leg's me->GetThreatManager().ResetThreat(me->
---   EnsureVictim()): no threat-table bridge in engine/scripting.
+--   EnsureVictim()) is PORTED (ModifyThreatByPercent(victim, -100)
+--   = ScaleThreat x0 = ThreatManager::ResetThreat, bridged;
+--   the old "no threat-table bridge" claim was stale).
 -- - GetUldamanAI -> GetInstanceAI leg: instance-script model
 --   blocked (standing).
 -- - The instance-side ActivateIronaya choreography
@@ -106,6 +109,7 @@ local function onHealthCheck(creature, guid)
             local victim = creature:GetVictim()
             if victim then
                 creature:CastSpell(victim, SPELL_KNOCKAWAY, true)
+                creature:ModifyThreatByPercent(victim, -100)
                 st.knockaway = true
             end
         end

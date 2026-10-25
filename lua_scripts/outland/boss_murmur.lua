@@ -60,7 +60,8 @@
 -- real bridge — documented-only.
 -- The melee leg ("select nearest most aggro target if top aggro too
 -- far" + DoMeleeAttackIfReady) — engine-driven melee is a genuine
--- gap (aran precedent) — documented-only.
+-- gap (aran precedent) — documented-only; the ResetThreat(victim)
+-- half IS ported via the 1s meleerange poll (see meleeRangeTick).
 -- spell_murmur_sonic_boom (33923 → CastSpell(33666) triggered),
 -- spell_murmur_sonic_boom_effect (33666 damage = 80% of target max
 -- health), spell_murmur_thundering_storm (25-100y target band) —
@@ -221,6 +222,24 @@ local function sonicShockTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI tail (:143-149): if the victim is NOT within melee
+-- range, GetThreatManager().ResetThreat(victim) (= ScaleThreat x0 =
+-- ModifyThreatByPercent(victim, -100), bridged) before
+-- DoMeleeAttackIfReady. No per-tick UpdateAI Lua event exists, so
+-- the leg rides a 1s poll (ironaya 1s-check precedent); the
+-- isAttackReady gate has no bridge and the casting gate is
+-- unmodelable (IsCasting stub, see header) — both noted, neither
+-- blocks the reset itself. DoMeleeAttackIfReady stays engine-driven.
+local function meleeRangeTick(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and not creature:IsWithinMeleeRange(victim) then
+        creature:ModifyThreatByPercent(victim, -100)
+    end
+    schedule(guid, "meleerange", 1000, function()
+        meleeRangeTick(creature, guid)
+    end)
+end
+
 -- C++ boss_murmurAI::Reset (:98-117): _Reset() (instance leg —
 -- documented-only) + schedules EVENT_SONIC_BOOM 30s,
 -- EVENT_MURMURS_TOUCH 8-20s rand, EVENT_RESONANCE 5s,
@@ -265,6 +284,9 @@ end
 local function murmurEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_murmur.cpp:64 (ranged AI stands and casts)
     scheduleReset(creature)
+    schedule(creature:GetGUID(), "meleerange", 1000, function()
+        meleeRangeTick(creature, creature:GetGUID())
+    end)
 end
 
 local function murmurLeaveCombat(event, creature)
