@@ -26,7 +26,9 @@
 -- repeat — PORTED (the 2026-10-14 "random-target SelectTarget bridge
 -- absent / cairne-kazzak precedent" verdict is retracted: randomPlayer
 -- is the in-tree bridge (anomalus spark port); the offset-1 MaxThreat
--- skip is modeled via the GetVictim top-threat proxy).
+-- skip rides threat-ordered GetAITargets[2..] (UnitAI.h:214-280 —
+-- skip precedes the player/dist filter), fixed 2026-10-25 from the
+-- GetPlayersInWorld pool, which could pick threat-less players).
 -- Unmodeled (no bridges — documented, not wired):
 -- The BossAI ctor Talk(EMOTE_SPAWN 0) fires at AI construction
 -- (first grid spawn); the only OnSpawn hook on the Go Lua surface
@@ -108,24 +110,21 @@ local function berserkTick(creature, guid)
     end
 end
 
--- C++ SelectTarget(Random, 1, 35.0f, true) — random alive player on
--- the same map/instance within 35y (keleseth / thorim / archavon
--- GetPlayersInWorld precedent), skipping the first entry in MaxThreat
--- order for Random (UnitAI.h:163-166); the current victim is the
--- top-threat proxy. Only threat-listed units qualify in practice.
-local function randomNonTankPlayer(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
-    local victimGuid = 0
-    local victim = creature:GetVictim()
-    if victim then
-        victimGuid = victim:GetGUID()
-    end
+-- C++ SelectTarget(Random, 1, 35.0f, true) — UnitAI.h:214-280:
+-- the threat list in MaxThreat order (current victim first) drops
+-- its first entry BEFORE the predicate filter, then player-only +
+-- within-35y units are the pool (withTank defaults true, so the tank
+-- is not excluded by rule — only MaxThreat #1 is skipped). The
+-- GetPlayersInWorld pool + victim-GUID exclusion this replaces could
+-- pick instance players with no threat entry, which C++ never does
+-- (the 2026-10-25 Utgarde/Gruul threat-pool fix class).
+local function randomSpringTarget(creature, maxDist)
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist
-                and plr:GetGUID() ~= victimGuid then
+    for i = 2, #targets do
+        local plr = targets[i]
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:GetDistance(plr) <= maxDist then
             candidates[#candidates + 1] = plr
         end
     end
@@ -141,7 +140,7 @@ end
 -- (C++ SelectTarget returns null when the threat list is empty past
 -- the offset).
 local function springTick(creature, guid)
-    local target = randomNonTankPlayer(creature, 35)
+    local target = randomSpringTarget(creature, 35)
     if target then
         creature:CastSpell(target, ({SPELL_ECK_SPRING_1, SPELL_ECK_SPRING_2})[math.random(1, 2)])
     end
