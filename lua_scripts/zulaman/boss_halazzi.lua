@@ -124,26 +124,6 @@ local function randomThreatTarget(creature)
     return targets[math.random(#targets)]
 end
 
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function randomPlayerInRange(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
-    if #candidates == 0 then
-        return nil
-    end
-    return candidates[math.random(#candidates)]
-end
-
 local function halazziState(guid)
     local st = state[guid]
     if not st then

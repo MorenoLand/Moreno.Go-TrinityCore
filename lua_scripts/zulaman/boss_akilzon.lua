@@ -9,11 +9,12 @@
 -- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape: on aggro Talk(SAY_AGGRO) and arm static disruption 43622
--- {10s,20s} first / {10s,18s} repeat on a random alive player (C++
--- Random,1) with victim fallback; gust of wind 43621 {20s,30s} /
--- {20s,30s} repeat on a random alive player with victim fallback; call
--- lightning 43661 {10s,20s} / {12s,17s} repeat on the victim; electrical
--- storm 43648 every 60s on a random alive player within 50 yd (the storm
+-- {10s,20s} first / {10s,18s} repeat on a random threat-list unit
+-- (C++ Random,1, skip-first) with victim fallback; gust of wind 43621
+-- {20s,30s} / {20s,30s} repeat on a random threat-list unit with victim
+-- fallback; call lightning 43661 {10s,20s} / {12s,17s} repeat on the
+-- victim; electrical storm 43648 every 60s on a random threat-list
+-- player alive within 50 yd (the storm
 -- zap sequence never runs — see the HandleStormSequence note below);
 -- berserk 45078 one-shot 10min with Talk(SAY_ENRAGE) and 10min repeat.
 -- The soaring eagle (24858) swoops a random threat-list unit with
@@ -42,8 +43,7 @@
 -- is ported via player:CastSpell (2026-10-24 bridge).
 -- The C++ EnterEvadeMode arms (storm target gone) have no bridge, so a
 -- missing storm target is a no-op. No instance-script model — admission
--- only via the luaBossAI shim. No threat model — "random,1" picks any
--- random alive player and AddThreat for eagles is skipped. The commented-
+-- only via the luaBossAI shim. AddThreat for eagles is skipped. The commented-
 -- out static-disruption AOE visual arm in C++ is not modeled (dead code).
 
 local ENTRY_AKILZON = 23574
@@ -93,30 +93,46 @@ local function schedule(store, guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 1) (boss_akilzon.cpp:236/:251): the pool is
+-- the threat list, not the instance players. Offset 1 skips the first
+-- MaxThreat entry BEFORE the filters (UnitAI.h offset-before-filter);
+-- defaults carry no dist cap and playerOnly=false, so pets/totems are
+-- eligible. The selector skips dead units, mirrored by the IsDead gate.
+local function randomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
-local function randomPlayerInRange(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
+end
+
+-- C++ SelectTarget(Random, 0, 50, true) (boss_akilzon.cpp:265): threat
+-- players alive within 50 yd.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_STATIC_DISRUPTION: SelectTarget(Random, 1) with victim
 -- fallback; DoCast(target, STATIC_DISRUPTION, false). Repeat {10s,18s}.
 local function onStaticDisruption(creature, guid)
-    local target = randomPlayerInRange(creature, 100) or creature:GetVictim()
+    local target = randomThreatTargetSkipFirst(creature) or creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_STATIC_DISRUPTION)
     end
@@ -128,7 +144,7 @@ end
 -- C++ EVENT_GUST_OF_WIND: SelectTarget(Random, 1) with victim fallback;
 -- DoCast(target, GUST_OF_WIND). Repeat {20s,30s}.
 local function onGustOfWind(creature, guid)
-    local target = randomPlayerInRange(creature, 100) or creature:GetVictim()
+    local target = randomThreatTargetSkipFirst(creature) or creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_GUST_OF_WIND)
     end
@@ -172,7 +188,7 @@ end
 -- sequence that used it as caster is dead code), but its 9,999,999-HP
 -- pool is now C++-exact (boss_akilzon.cpp:292-293).
 local function onElectricalStorm(creature, guid)
-    local target = randomPlayerInRange(creature, 50)
+    local target = randomThreatPlayerInRange(creature, 50)
     if target then
         target:CastSpell(target, SPELL_CLOUD_VISUAL, true)
         creature:CastSpell(target, SPELL_ELECTRICAL_STORM)

@@ -92,24 +92,23 @@ local function schedule(store, guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 1, 45, true) (boss_nalorakk.cpp:385): the pool
+-- is the threat list, not the instance players. Offset 1 skips the first
+-- MaxThreat entry BEFORE the player/alive/range filters (UnitAI.h
+-- offset-before-filter; malchezaar idiom).
+local function randomThreatPlayerSkipFirst(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
-local function randomPlayerInRange(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
 end
 
 local function nalorakkState(guid)
@@ -136,11 +135,13 @@ local function armTrollTimers(creature, guid)    schedule(timers, guid, "surge",
     end)
 end
 
--- C++ surge (troll form): Talk, cast 42402 on a random target within 45 yd
--- (C++-exact repeat {15s,20s}).
+-- C++ surge (troll form): Talk, cast 42402 on a random threat-list
+-- player alive within 45 yd, first MaxThreat entry skipped
+-- (SelectTarget(Random, 1, 45, true)); nil skips the cast, re-arm
+-- {15s,20s} unconditional.
 onSurge = function(creature, guid)
     creature:Talk(YELL_SURGE)
-    local target = randomPlayerInRange(creature, 45)
+    local target = randomThreatPlayerSkipFirst(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_SURGE)
     end

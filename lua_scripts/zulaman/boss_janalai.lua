@@ -167,25 +167,28 @@ local function janalaiState(guid)
     return st
 end
 
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) (boss_janalai.cpp:415): the pool is the
+-- threat list, not the instance players. Defaults carry no dist cap and
+-- playerOnly=false, so pets/totems are eligible; the old 100 yd cap was
+-- invented. The selector skips dead units, mirrored by the IsDead gate.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
--- C++ flame breath: random target (Random,0 includes the tank), 8s
--- repeat; no triggered flag on the cast.
+-- C++ flame breath: random threat-list target (Random,0 includes the
+-- tank; no dist cap), 8s repeat; no triggered flag on the cast.
 local function onFlameBreath(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatTarget(creature)
     if target then
         -- C++ boss_janalai.cpp:417-420: me->AttackStop() + DoCast
         -- before the flame breath cast; me->StopMoving() stops the
