@@ -48,7 +48,8 @@
 --    30000 (PORTED 2026-10-23 — the stale "no summon-object
 --    drive" claim was retracted: creature:SummonCreature is
 --    bridged, lua_creature_events.go:728); the WE_DIE /
---    WE_REVIVE MovePoint/Interrupt legs stay unbridged — the WE_DIE
+--    WE_REVIVE MovePoint leg stays unbridged (the :208 Interrupt
+--    leg is PORTED in OnDamageTaken below, no-op twin) — the WE_DIE
 --    5.0f speed arm rides the unbridged MovePoint (SetSpeedRate is
 --    bridged but the motion leg is not); the DoZoneInCombat arm is
 --    engine-driven; SetFlag/SetTarget/SetHealth/RemoveFlag/
@@ -575,10 +576,12 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
     if st.phase == 1 and damage >= creature:GetHealth() then
         st.dying = true
         st.revive = 5000
-        -- boss_alar.cpp:207 — SetHealth(0) before the flag arm; the
-        -- Interrupt(:208) leg stays unbridged.
+        -- boss_alar.cpp:207 — SetHealth(0) before the interrupt arm.
+        -- boss_alar.cpp:208 — C++ arm order after SetHealth / before
+        -- RemoveAllAuras(:209); no-op twin (caststate axiom, geddon precedent).
         creature:SetHealth(0)
-        -- boss_alar.cpp:209 — C++ arm order after SetHealth / before
+        creature:InterruptNonMeleeSpells(true)
+        -- boss_alar.cpp:209 — C++ arm order after Interrupt / before
         -- SetFlag(:210); the "no aura bridge" note from the 14:24 tick
         -- is retracted — creature:RemoveAllAuras is bridged
         -- (lua_creature_events.go:169, venoxis precedent).
@@ -589,8 +592,8 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         -- SetTarget(:212) (hodir/freya lethal-arm precedent).
         creature:AttackStop()
         -- boss_alar.cpp:212 — clear the visual target
-        -- (ObjectGuid::Empty); the Interrupt(:208)/speed(:213)/motion
-        -- (:214-215) legs stay unbridged.
+        -- (ObjectGuid::Empty); the speed(:213)/motion
+        -- (:214-215) legs stay unbridged (Interrupt(:208) PORTED above).
         creature:SetTarget(0)
         return 0, 0
     end
