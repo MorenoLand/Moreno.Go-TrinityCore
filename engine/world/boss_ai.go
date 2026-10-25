@@ -10822,7 +10822,10 @@ func init() {
 	// hard-mode-failed / berserk), the DamageTaken companion
 	// legs (faction flip, despawn, kill credit), helper-NPC
 	// DoAction legs and both spell scripts are bridge-blocked
-	// — documented in the lua header.
+	// — documented in the lua header. Snowpacked-icicle
+	// (33174) Reset/despawn + toasty-fire (33342) Reset/SpellHit
+	// add arms are ported in the same file (ev23/ev4/ev14;
+	// summoned adds need no separate registration).
 	RegisterLuaBoss("boss_hodir", 32845)
 
 	// boss_freya.lua (lua_scripts/northrend/boss_freya.lua):

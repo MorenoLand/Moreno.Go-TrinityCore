@@ -165,17 +165,27 @@
 -- SPELL_FALL_SNOWDRIFT 62460) + DoCast(me, SPELL_ICICLE_FALL
 -- 69428) — plain timer self-casts but on summoned icicle
 -- adds; adds legs BLOCKED per doctrine; no registration.
--- npc_snowpacked_icicleAI — 12s despawnTimer ->
--- RemoveGameObject(GO_SNOWDRIFT 194173) +
--- DespawnOrUnsummon (lines 632-642) — despawn leg, no
--- bridge; no registration.
--- npc_toasty_fireAI — Reset: DoCast(me, SPELL_SINGED
--- 62821, true) (line 967); SpellHit (SPELL_BLOCK_OF_ICE /
--- SPELL_ICE_SHARD / SPELL_ICE_SHARD_HIT) -> RemoveGameObject
--- + DespawnOrUnsummon (lines 970-978) — stays out on the
--- RemoveGameObject leg (unbridged, zero engine hits); Despawn
--- itself IS bridged (lua_creature_events.go:1218) but a
--- Despawn-only partial would leave the GO behind; no registration.
+-- npc_snowpacked_icicleAI — PORTED (snowpackedIcicleReset /
+-- snowpackedIcicleDied, below): ctor SetFlag(NON_ATTACKABLE |
+-- NOT_SELECTABLE | PACIFIED) + SetControlled(root) + SetReactState
+-- (REACT_PASSIVE); Reset re-inits the 12s despawnTimer; UpdateAI
+-- expiry -> FindNearestGameObject(GO_SNOWDRIFT 194173, 2.0) +
+-- RemoveGameObject(go, true) + DespawnOrUnsummon (lines 632-642).
+-- GO removal rides the GO RemoveFromWorld hide-in-instance idiom
+-- (spotlight precedent); the C++ owner check inside RemoveGameObject
+-- is unmodeled (no Go GO owner read for nearest GOs). Ctor
+-- SetDisplayId(Modelid2) skipped (no template-model bridge). The add
+-- registers in this file — summoned adds need no separate boss_ai.go
+-- registration (yogg-guardian precedent).
+-- npc_toasty_fireAI — PORTED (toastyFireReset /
+-- toastyFireSpellHit, below): Reset -> triggered self-cast SINGED
+-- 62821 (line 967); SpellHit (BLOCK_OF_ICE 61969 / ICE_SHARD 62457 /
+-- ICE_SHARD_HIT 65370) -> FindNearestGameObject(GO_TOASTY_FIRE
+-- 194300, 1.0) + RemoveGameObject(go, true) + DespawnOrUnsummon
+-- (lines 970-978). The header's "RemoveGameObject unbridged"
+-- claim is RETIRED: GO RemoveFromWorld (hide-in-instance,
+-- lua_objects.go:1407, spotlight precedent) is the Go removal idiom.
+-- Ctor SetDisplayId(Modelid2) skipped (no template-model bridge).
 -- spell_biting_cold / spell_biting_cold_dot —
 -- SpellScript / AuraScript — no SpellScript / AuraScript
 -- bridges; both join the no-SpellScript-bridge queue.
@@ -211,6 +221,17 @@ local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h:125
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
 local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:125
+local UNIT_FLAG_PACIFIED = 0x00020000 -- UnitDefines.h:141
+
+local ENTRY_SNOWPACKED_ICICLE = 33174 -- boss_hodir.cpp:99
+local ENTRY_TOASTY_FIRE = 33342 -- boss_hodir.cpp:102
+local GO_SNOWDRIFT = 194173 -- boss_hodir.cpp:108
+local GO_TOASTY_FIRE = 194300 -- boss_hodir.cpp:107
+local SPELL_SINGED = 62821 -- boss_hodir.cpp:87
+local SPELL_BLOCK_OF_ICE = 61969 -- boss_hodir.cpp:61
+local SPELL_ICE_SHARD = 62457 -- boss_hodir.cpp:70
+local SPELL_ICE_SHARD_HIT = 65370 -- boss_hodir.cpp:71
 
 local timers = {}
 
@@ -432,6 +453,43 @@ local function hodirDamageTaken(event, creature, attacker, damage)
         creature:DoZoneInCombat()
     end
 end
+
+local function snowpackedIcicleReset(_, creature)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
+    creature:SetRooted(true)
+    creature:SetReactState(REACT_PASSIVE)
+    local guid = creature:GetGUID()
+    schedule(guid, "snowpacked", 12000, function()
+        local drift = creature:FindNearestGameObject(GO_SNOWDRIFT, 2.0)
+        if drift then
+            drift:RemoveFromWorld()
+        end
+        creature:Despawn()
+    end)
+end
+
+local function snowpackedIcicleDied(_, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function toastyFireReset(_, creature)
+    creature:CastSpell(creature, SPELL_SINGED, true)
+end
+
+local function toastyFireSpellHit(_, creature, _caster, spellId)
+    if spellId == SPELL_BLOCK_OF_ICE or spellId == SPELL_ICE_SHARD or spellId == SPELL_ICE_SHARD_HIT then
+        local fire = creature:FindNearestGameObject(GO_TOASTY_FIRE, 1.0)
+        if fire then
+            fire:RemoveFromWorld()
+        end
+        creature:Despawn()
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SNOWPACKED_ICICLE, 23, snowpackedIcicleReset)
+RegisterCreatureEvent(ENTRY_SNOWPACKED_ICICLE, 4, snowpackedIcicleDied)
+RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 23, toastyFireReset)
+RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 14, toastyFireSpellHit)
 
 RegisterCreatureEvent(ENTRY_HODIR, 1, hodirEnterCombat)
 RegisterCreatureEvent(ENTRY_HODIR, 2, hodirLeaveCombat)
