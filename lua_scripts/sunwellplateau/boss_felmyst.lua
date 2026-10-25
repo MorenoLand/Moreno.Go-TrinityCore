@@ -40,9 +40,8 @@
 -- Initialize/events.Reset arms (phase tracking lives only in the
 -- unmodeled flight sequence — see below); the DisableGravity arm
 -- ports via the creature:SetDisableGravity bridge (felmystResetState;
--- stale "no bridge" retracted); the bounding-radius/combat-reach,
--- setActive(false) and DespawnSummons(NPC_VAPOR_TRAIL) arms have no
--- flag/combat-reach/active/creature-enumeration bridges and the
+-- stale "no bridge" retracted); the bounding-radius (no creature
+-- motion slot) and setActive(false) arms stay out, and the
 -- SetBossState(NOT_STARTED) arm is blocked on the instance-script
 -- model. OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Trail (25267): OnSpawn(5): NOT_SELECTABLE SetFlag + triggered
@@ -50,7 +49,9 @@
 -- arms, C++-exact — the constructor runs once at AI creation; C++
 -- Reset() is empty, so OnReset(23) would wrongly re-fire on evade;
 -- stale "no flag bridge" retracted — SetFlag(59, x) is bridged);
--- the 0.01 bounding-radius arm has no combat-reach bridge.
+-- the 0.01 bounding-radius arm has no bridge (bounding radius has
+-- no creature motion slot; the combat-reach bridge covers only
+-- UNIT_FIELD_COMBATREACH).
 -- Vapor (25265, "npc_felmyst_vapor") is not registered: its only
 -- C++ arms are the NOT_SELECTABLE flag, the 0.8 run-speed arm and
 -- the no-victim random-target AttackStart selection, none of which
@@ -250,11 +251,13 @@ local function felmystResetState(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ boss_felmyst::Reset (boss_felmyst.cpp:143-156): Initialize()
     -- -> events.Reset() (both internal; timer cancel above is the Lua
-    -- twin) -> me->SetDisableGravity(true) (:149) — the
-    -- SetFloatValue(BOUNDINGRADIUS/COMBATREACH, 10), setActive(false)
-    -- and SetBossState(NOT_STARTED) legs have no bridges (documented
+    -- twin) -> me->SetDisableGravity(true) (:149) ->
+    -- SetFloatValue(COMBATREACH, 10) (:151) — the BOUNDINGRADIUS leg
+    -- (:150) has no creature motion slot and stays out, as do the
+    -- setActive(false) and SetBossState(NOT_STARTED) legs (documented
     -- in the header).
     creature:SetDisableGravity(true)
+    creature:SetCombatReach(10)
     -- C++ DespawnSummons(NPC_VAPOR_TRAIL) (:153, :488-508): every
     -- creature of the entry within 100 yd (2D) -> SetVisible(false) +
     -- DespawnOrUnsummon; the NPC_DEAD-summon arm only fires when phase

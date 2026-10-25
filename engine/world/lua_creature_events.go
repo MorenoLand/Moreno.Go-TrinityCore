@@ -2806,6 +2806,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{float64(reach)}, nil
 	}
+	// SetCombatReach is Unit::SetFloatValue(UNIT_FIELD_COMBATREACH, v)
+	// (Unit.cpp): the raw combat-reach slot write, twin of GetCombatReach
+	// above — motion.CombatReach is the live slot the distance, melee
+	// range and aggro calcs read (combatReachOrDefault, 1.5 default).
+	// Backs the setdemand hunt (felmyst Reset 10, kiljaeden Reset 12);
+	// UNIT_FIELD_BOUNDINGRADIUS has no creature motion slot, so those
+	// arms stay out.
+	methods["SetCombatReach"] = func(_ context.Context, args []any) ([]any, error) {
+		reach, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.CombatReach = reach
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// IsWithinMeleeRange is Unit::IsWithinMeleeRange (Unit.h:798) =
 	// IsWithinMeleeRangeAt(GetPosition(), obj) (Unit.cpp:599-612): same map
 	// and phase, 3D distance <= GetMeleeRange(obj) = max(self reach +

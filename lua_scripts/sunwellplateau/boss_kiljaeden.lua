@@ -621,10 +621,14 @@ local function kjCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     kjState[guid] = nil
-    -- C++ Reset (boss_kiljaeden.cpp:268): me->SetFarVisible(true)
-    -- (the SetDisableGravity/SetFlag-NOT_SELECTABLE/setActive legs
-    -- ride their own axes; the orb-loop leg is GO-side, no bridge).
-    creature:SetFarVisible(true)
+    -- C++ boss_kiljaedenAI::Reset (boss_kiljaeden.cpp:587-598):
+    -- Initialize() -> kalec RemoveDynObject (cross-creature, blocked)
+    -- -> SetFloatValue(COMBATREACH, 12) -> summons.DespawnAll()
+    -- (blocked, no summon-list bridge). NOTE: the SetFarVisible(true)
+    -- previously ported here was misattributed — that arm (:268)
+    -- belongs to boss_kalecgos_kjAI::Reset (Kalecgos 25319, not
+    -- registered), not to Kiljaeden's own Reset, so it is removed.
+    creature:SetCombatReach(12)
 end
 
 local function kjDied(event, creature, killer)
