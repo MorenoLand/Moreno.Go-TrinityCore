@@ -129,21 +129,20 @@ local function stopEmoteMachine(guid)
 end
 
 -- SelectTarget(Random, 0, 0.0f, true[, false][, -auraId]) twin: random
--- alive player in the map/instance, optionally excluding auras (the
--- maiden-of-grief randomPlayerTarget idiom). Arms whose C++ passes
--- withTank=false (DefaultTargetSelector drops GetLastVictim(),
--- UnitAI.cpp:254-257) pass excludeVictim=true.
-local function randomDarkfallenTarget(creature, excludeAura, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- alive threat-list entry, player-gated unless playersOnly=false
+-- (amplify magic is Random, 0 defaults = any-unit, :956). Arms whose
+-- C++ passes withTank=false (DefaultTargetSelector drops
+-- GetLastVictim(), UnitAI.cpp:254-257) pass excludeVictim=true.
+local function randomDarkfallenTarget(creature, excludeAura, excludeVictim, playersOnly)
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (excludeVictim ~= true or plr:GetGUID() ~= victimGuid)
-                and (excludeAura == nil or not plr:HasAura(excludeAura)) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if (playersOnly == false or t:GetObjectType() == "Player")
+                and not t:IsDead()
+                and (excludeVictim ~= true or t:GetGUID() ~= victimGuid)
+                and (excludeAura == nil or not t:HasAura(excludeAura)) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -221,7 +220,7 @@ local function darkfallenEngage(entry, creature)
         creature:SetMeleeAttack(false)
         schedule(guid, "amplify", 1000, 0, function()
             local function amplifyTick()
-                local target = randomDarkfallenTarget(creature, nil)
+                local target = randomDarkfallenTarget(creature, nil, nil, false)
                 if target then
                     creature:CastSpell(target, SPELL_AMPLIFY_MAGIC)
                 end

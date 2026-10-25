@@ -68,17 +68,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, 8.0f, true): a random
--- alive player on the same map/instance within 8 yards (the devourer
--- GetPlayersInWorld precedent, plus the C++ distance filter).
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, 8.0f, true)
+-- (halls_of_reflection.cpp:2014): a random alive threat-list player
+-- within 8 yards.
 local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead()
-                and creature:GetDistance(p) <= 8 then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= 8 then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

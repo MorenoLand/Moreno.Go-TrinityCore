@@ -22,17 +22,10 @@
 -- false, true, -SPELL_HAS_DARK_BREWMAIDENS_BREW 47331) ->
 -- DoCast(target, SPELL_CHUCK_MUG 50276), Repeat(4s). The scheduler's
 -- !HasUnitState(UNIT_STATE_CASTING) validator is dropped (no bridge —
--- maiden precedent). The aura exclusion is bridged (plr:HasAura on the
--- player Lua surface, lua_player.go:203); the 0.0f any-range target is
--- modeled with 100 (curator precedent).
--- Deviations from C++: C++ SelectTarget passes playerOnly=false /
--- withTank=true — pets/totems can be picked and the tank is
--- preferred; the Lua port draws random from alive players only
--- (threat-list caveat shared with the keleseth/thorim/beast ports:
--- C++ draws from the threat list; the bridge can include nearby
--- unengaged players and excludes non-player units — dagran
--- HAND_OF_THAURISSAN counter-precedent documented in
--- boss_coren_direbrew.lua). The control-aura ticks are unported
+-- maiden precedent). The aura exclusion is bridged (HasAura on threat
+-- entries, brutallus precedent); the 0.0f any-range target is unlimited.
+-- The pick is C++-exact (threat-list any-unit, victim included).
+-- The control-aura ticks are unported
 -- AuraScripts (hellfire_peninsula precedent); only the engage casts
 -- are ported.
 -- Note: the DamageTaken sister summons in boss_coren_direbrew.cpp
@@ -74,19 +67,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 0.0f, false, true, -47331): any-range
--- random pick, playerOnly=false, withTank=true, excluding targets
--- with aura 47331. Bridged as random alive player within 100yd
--- excluding HasAura(47331) (curator any-range precedent; beast
--- threat-list caveat applies).
+-- C++ SelectTarget(Random, 0, 0.0f, false, true, -47331)
+-- (boss_coren_direbrew.cpp:320): threat-list any-unit pick, victim
+-- included (withTank=true), excluding 47331 carriers, no distance
+-- gate (dist 0 = unlimited; the old 100yd cap was invented).
 local function chuckTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and not plr:HasAura(SPELL_HAS_DARK_BREWMAIDENS_BREW)
-                and creature:IsWithinDist(plr, 100) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() and not t:HasAura(SPELL_HAS_DARK_BREWMAIDENS_BREW) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

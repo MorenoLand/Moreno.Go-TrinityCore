@@ -64,9 +64,8 @@
 -- npc_coren_direbrew_sisters (26764/26822) — PORTED in
 -- npc_coren_direbrew_sisters.lua: JustEngagedWith self-cast PORT_TO_COREN
 -- 52850 + control aura 47369/50278, then a 2s->4s SelectTarget(Random, 0,
--- 0.0f, false, true, -47331) mug chuck 50276, ported via the maiden/beast
--- random-player convention (HasAura(47331) exclusion on the Lua surface;
--- C++ playerOnly=false/withTank=true unmodeled — threat-list caveat);
+-- 0.0f, false, true, -47331) mug chuck 50276, ported via the threat-list
+-- pick (GetAITargets any-unit + HasAura(47331) exclusion);
 -- the control-aura ticks remain unported AuraScripts. The old "has no
 -- SelectTarget bridge, so no lua file" claim is retracted.
 -- Unmodeled: npc_direbrew_minion (faction latch + DoZoneInCombat + JustSummoned

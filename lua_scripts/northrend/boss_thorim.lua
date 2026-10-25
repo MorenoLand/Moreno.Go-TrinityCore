@@ -35,8 +35,8 @@
 -- Repeat(15s,18s)) — DoCastAOE(SPELL_SMASH 62339), non-triggered.
 -- npc_runic_colossusAI EVENT_RUNIC_CHARGE (enum line 119; arm lines
 -- 1472-1479, Repeat(20s)) — random player 8-40y,
--- DoCast(target, SPELL_RUNIC_CHARGE 62613), non-triggered (the baltharus
--- GetPlayersInWorld candidate-selection precedent).
+-- DoCast(target, SPELL_RUNIC_CHARGE 62613), non-triggered (threat-list
+-- pick, baltharus precedent).
 -- npc_ancient_rune_giantAI JustEngagedWith (boss_thorim.cpp:1531-1536) —
 -- the DoZoneInCombat first arm is PORTED 2026-10-23 (bridge live,
 -- engine/world/lua_creature_events.go).
@@ -190,16 +190,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, range, playerOnly) legs (baltharus precedent).
+-- C++ SelectTarget legs: runic charge is a lambda pick (TYPEID_PLAYER
+-- + IsInRange(me, 8, 40), boss_thorim.cpp:1475) and rune detonation is
+-- Random, 0, 60, true (:1568) — both draw from the threat list, not
+-- the map-player list (baltharus precedent).
 local function randomPlayerInRange(creature, minDist, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            local dist = creature:GetDistance(plr)
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            local dist = creature:GetDistance(t)
             if dist >= minDist and dist <= maxDist then
-                candidates[#candidates + 1] = plr
+                candidates[#candidates + 1] = t
             end
         end
     end

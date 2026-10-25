@@ -21,8 +21,8 @@
 -- - Haunting Phantom: 8000 init -> 11000 re-arm, non-triggered
 --   DoCast(SelectTarget(Random, 0)). C++ DefaultTargetSelector with
 --   dist = 0 means "ignored" = unlimited (UnitAI.h:63), so the pick
---   is a random alive player on map+instance with no distance bound
---   (baron_rivendare precedent); nil pick casts nothing but the
+--   is a random alive threat-list entry (playerOnly=false by
+--   default); nil pick casts nothing but the
 --   re-arm is unconditional, like C++ (the C++ arm re-arms even when
 --   SelectTarget returns null).
 -- - Debilitating Touch: 2000 init -> 7000 re-arm, same target/pick
@@ -119,16 +119,14 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0): random alive player on the creature's
--- map+instance, no distance bound (dist 0 = ignored = unlimited,
--- baron_rivendare precedent).
-local function randomPlayerUnbounded(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) defaults (stratholme.cpp:279/:288):
+-- random alive threat-list entry, playerOnly=false, no distance
+-- bound (dist 0 = ignored = unlimited, UnitAI.h:63).
+local function randomThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -140,7 +138,7 @@ end
 -- C++ EVENT-less timer: HauntingTimer 8000 init, 11000 re-arm;
 -- non-triggered DoCast(target, 16336). Nil pick keeps the schedule.
 local function onHauntingPhantom(creature, guid)
-    local target = randomPlayerUnbounded(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HAUNTING_PHANTOM)
     end
@@ -151,7 +149,7 @@ end
 
 -- TouchTimer 2000 init, 7000 re-arm; non-triggered DoCast(16333).
 local function onDebilitatingTouch(creature, guid)
-    local target = randomPlayerUnbounded(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_DEBILITATING_TOUCH)
     end
