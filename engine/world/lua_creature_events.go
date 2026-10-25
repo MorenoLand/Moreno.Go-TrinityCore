@@ -639,6 +639,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// ResetPlayerDamageReq is Creature::ResetPlayerDamageReq
+	// (Creature.h:324): m_PlayerDamageReq = GetHealth() / 2. Go models
+	// the field as motion.PlayerDamageReq, consumed by the kill-path
+	// loot-eligibility gates (kill.go), so this is a live write, not a
+	// latch. It reads the motion's current health, so it must follow
+	// any SetHealth in the same handler to match C++ call order.
+	methods["ResetPlayerDamageReq"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		motion.PlayerDamageReq = motion.Health / 2
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// DoZoneInCombat is CreatureAI::DoZoneInCombat (CreatureAI.cpp:73-103):
 	// on a dungeon map, the handler creature engages every alive,
 	// world-ready, non-GM player on its map/instance with a zero-threat

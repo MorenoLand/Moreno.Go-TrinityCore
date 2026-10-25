@@ -18,8 +18,8 @@
 -- EVENT_MAGNETIC_PULL (15-30s rand), heroic-only
 -- EVENT_THUNDERING_STORM (15s) + EVENT_SONIC_SHOCK (10s);
 -- sets health to 40% max (creature:SetHealth bridged,
--- lua_creature_events.go:187) — ResetPlayerDamageReq rides the
--- no-player-damage-req bridge — documented-only (event 23).
+-- lua_creature_events.go:187) + ResetPlayerDamageReq (bridged:
+-- current health / 2), C++ order, in scheduleReset.
 -- EVENT_SONIC_BOOM — Talk(EMOTE_SONIC_BOOM 0) + DoCast(me,
 -- SPELL_SONIC_BOOM_CAST 33923) 2-arg (non-triggered); 30s init,
 -- 30s repeat; ALSO schedules EVENT_RESONANCE 1500ms (unconditional
@@ -231,6 +231,7 @@ local function scheduleReset(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetHealth(math.floor(creature:GetMaxHealth() * 40 / 100))
+    creature:ResetPlayerDamageReq()
     schedule(guid, "sonic_boom", 30000, function()
         sonicBoomTick(creature, guid)
     end)

@@ -23,7 +23,7 @@
 -- speech timers C++-exact (in C++ the combat branch of UpdateAI
 -- silently consumes unmatched speech events). OnEnterCombat: self-cast
 -- essence of the red 23513 + SetHealth(30% of max) (C++-exact via the
--- creature SetHealth bridge; ResetPlayerDamageReq has no bridge), then
+-- creature SetHealth bridge) + ResetPlayerDamageReq, then
 -- arm cleave 19983
 -- 10s then 15s (non-triggered DoCastVictim, C++-exact) / flame breath
 -- 23461 15s then {8s,14s} (non-triggered DoCastVictim, C++-exact) /
@@ -277,9 +277,10 @@ local function onEnterCombat(event, creature, target)
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_ESSENCEOFTHERED)
     -- C++ JustEngagedWith also: SetHealth(CountPctFromMaxHealth(30))
-    -- (bridged: floor(maxHealth*30/100)); ResetPlayerDamageReq has no
-    -- bridge.
+    -- (bridged: floor(maxHealth*30/100)) + ResetPlayerDamageReq
+    -- (bridged: current health / 2), C++ order.
     creature:SetHealth(math.floor(creature:GetMaxHealth() * 30 / 100))
+    creature:ResetPlayerDamageReq()
     schedule(guid, "cleave", 10000, function()
         onCleave(creature, guid)
     end)
