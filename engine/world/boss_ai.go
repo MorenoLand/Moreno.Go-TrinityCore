@@ -11976,16 +11976,19 @@ func init() {
 	// (event 4, the sjonnir precedent). Entry 18344 NPC_SHAFFAR from the
 	// file's own Creatures enum; ScriptName bindings are DB-side as usual
 	// — see lua_scripts/outland/boss_nexusprince_shaffar.lua. The
-	// one-shot 100-unit MoveInLineOfSight SAY_INTRO Talk has the
-	// maladaar event-27 fire-site mismatch (documented-only); the Reset
+	// one-shot 100-unit MoveInLineOfSight SAY_INTRO Talk, the Reset
 	// three-beacon summon legs, the JustSummoned beacon-visual /
-	// random-target AttackStart legs, and the whole ExecuteEvent machine
-	// (urand-gated SAY_SUMMON, blink/frostbolt/frostnova beacon casts)
-	// sit behind the no-summon / no-cast / no-timer / no-random-target
-	// bridges (documented-only). npc_ethereal_beacon (18431),
-	// npc_ethereal_apprentice, and npc_yor are zero-Talk — not
-	// registered.
+	// random-target AttackStart legs, and the ExecuteEvent machine
+	// (urand-gated SAY_SUMMON, frostbolt/frostnova casts; blink stays
+	// out on no motion/interrupt bridge) are ported there. The beacon
+	// AI (18431 arcane-bolt 1s/2-4.5s + apprentice timer, beacon
+	// JustSummoned victim engage) and the apprentice AI (18430 3s
+	// fire/frost ping-pong) are ported in the same file. npc_yor is
+	// zero-Talk and NOT registered: its entry is DB-side only (no
+	// Creatures entry constant in the C++ file) and is not guessed.
 	RegisterLuaBoss("boss_nexusprince_shaffar", 18344)
+	RegisterLuaBoss("npc_ethereal_beacon", 18431)
+	RegisterLuaBoss("npc_ethereal_apprentice", 18430)
 	// boss_ambassador_hellmaw (Shadow Labyrinth, Outland dungeon
 	// pass): the bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO
 	// 1) (event 1, the auriaya precedent; the SetBossState IN_PROGRESS

@@ -46,12 +46,11 @@
 -- never touches it, ossirian precedent); returns true to veto the
 -- default aggro engage, matching the C++ body which never calls
 -- the base (depth_charge precedent).
--- DOCUMENTED-ONLY (in this header; only entry 18344 registered):
+-- DOCUMENTED-ONLY (in this header; entries 18344/18431/18430 registered):
 -- boss_nexusprince_shaffarAI::Reset — the three initial beacon
 -- SummonCreature(NPC_BEACON 18431, TEMPSUMMON_CORPSE_TIMED_DESPAWN 2h)
 -- legs are PORTED on ev23 (live summon bridge 2026-10-22); the beacon
--- AI (npc_ethereal_beaconAI) stays unported — beacons spawn but stand
--- idle (shirrak precedent for the machine, not the summon).
+-- AI (npc_ethereal_beaconAI) is PORTED below (18431 registrations).
 -- boss_nexusprince_shaffarAI::MoveInLineOfSight — Talk(SAY_INTRO 0)
 -- (line 101) one-shot _hasTaunted-gated on a player within 100.0f —
 -- PORTED on event 27 (CREATURE_EVENT_ON_MOVE_IN_LOS): Go's fire
@@ -71,8 +70,8 @@
 -- below (shaffarJustSummoned: non-triggered ETHEREAL_BEACON_VISUAL
 -- self-cast; ev19 fires for the Lua Reset summons). The
 -- Random-SelectTarget AttackStart leg PORTED below (EngageWithTarget
--- twin, 2026-10-24); the beacon AI's own JustSummoned (:223) stays out
--- (its summons ride the unported apprentice spell-effect summon machine).
+-- twin, 2026-10-24); the beacon AI's own JustSummoned (:223) is PORTED
+-- below (beaconJustSummoned: apprentice engages the beacon's victim).
 -- boss_nexusprince_shaffarAI::ExecuteEvent:
 -- EVENT_BEACON — urand(0,3)==0-gated Talk(SAY_SUMMON 3) + DoCast(me,
 -- SPELL_ETHEREAL_BEACON 32371, triggered), 10s repeat — PORTED as a
@@ -81,34 +80,31 @@
 -- so the port summons it at shaffar's position (type 5, 2h, as
 -- the Reset beacons); the JustSummoned visual + random-engage
 -- arms fire via event 19 exactly as for Reset beacons. The beacon
--- AI itself stays unported (next tick: 18431 arcane-bolt /
--- apprentice + 18430 ping-pong registrations, legs verified
--- this run; yor entry still DB-side unverified, not guessed);
+-- AI itself is PORTED below (18431 arcane-bolt / apprentice +
+-- 18430 ping-pong registrations); yor entry still DB-side
+-- unverified, not guessed;
 -- EVENT_BLINK — interrupt + Clear(MOTION_PRIORITY_NORMAL) +
 -- DoCast(SPELL_BLINK 34605) — stays OUT: the interrupt/motion legs
 -- have no bridge (the blink teleport effect has no lua-bridge model);
 -- EVENT_FIREBALL / EVENT_FROSTBOLT / EVENT_FROST_NOVA ported above.
--- npc_ethereal_beacon (18431) — zero Talk; NOT registered (no Lua
--- file for 18431/18430/yor): re-keyed 2026-10-15 (timer doctrine) —
--- the timer and cast legs bridge (CreateLuaEvent / CastSpell are
--- live), but the machines stay out on the real legs: the
--- JustEngagedWith cross-creature leg (FindNearestCreature(NPC_SHAFFAR
--- 18344, 100f) + AttackStart(who) when shaffar not in combat) has no
--- cross-creature bridge; EVENT_APPRENTICE (DUNGEON_MODE 20s/10s —
--- DoCast(SPELL_ETHEREAL_APPRENTICE 32372, triggered, summons 18430))
--- rides the missing summon bridge (the old "no despawn bridge" was
--- stale — creature:Despawn() is bridged, lua_creature_events.go:214;
--- the summon bridge is the true blocker); EVENT_ARCANE_BOLT (1s init
--- -> 2-4.5s loop,
--- non-triggered victim cast) would bridge but has no registered
--- creature to host it. The stale "no-timer / no-cast" claim is
--- corrected — the absence of registrations is the true blocker.
--- npc_ethereal_apprentice (18430) — zero Talk; NOT registered:
--- the alternating EVENT_ETHEREAL_APPRENTICE_FIREBOLT (SPELL_FIREBOLT
--- 32369, triggered) / EVENT_ETHEREAL_APPRENTICE_FROSTBOLT (SPELL_
--- FROSTBOLT 32370, triggered) 3s-ping-pong victim-cast machine —
--- timer + triggered-cast legs would bridge (CastSpell(target, spell,
--- true)), but with no registered Lua file the whole class stays out.
+-- npc_ethereal_beacon (18431) — zero Talk; PORTED below (registered
+-- as npc_ethereal_beacon in boss_ai.go): JustEngagedWith cross-creature
+-- leg via FindNearestCreature(18344, 100.0) + shaffar:EngageWithTarget
+-- (who) when shaffar not in combat (FindNearestCreature /
+-- IsInCombat / EngageWithTarget all bridged); EVENT_APPRENTICE
+-- DUNGEON_MODE 20s/10s (IsHeroic bridge) as a direct summon of 18430
+-- (type 7 manual-despawn — the spell's duration is not C++-visible,
+-- maladaar D'ore precedent) + Despawn, replacing the triggered
+-- spell-effect summon (shaffar EVENT_BEACON precedent); EVENT_ARCANE_BOLT
+-- 1s init -> 2-4.5s loop, non-triggered victim cast. The C++ UpdateAI
+-- casting-state early return has no Lua model (as in all timer ports).
+-- The stale "no-timer / no-cast" claim is corrected — the legs bridge.
+-- npc_ethereal_apprentice (18430) — zero Talk; PORTED below (registered
+-- as npc_ethereal_apprentice in boss_ai.go): the alternating
+-- EVENT_ETHEREAL_APPRENTICE_FIREBOLT (SPELL_FIREBOLT 32369, triggered)
+-- / EVENT_ETHEREAL_APPRENTICE_FROSTBOLT (SPELL_FROSTBOLT 32370,
+-- triggered) 3s-ping-pong victim-cast machine (forward-declared
+-- locals, tharon_ja/gal_darah idiom — never re-local function).
 -- The stale "no-timer / no-cast" claim is corrected.
 -- npc_yor — zero Talk; NOT registered: the EVENT_DOUBLE_BREATH
 -- 6-9s machine (IsWithinDist(victim, ATTACK_DISTANCE)-gated
@@ -116,8 +112,10 @@
 -- DoMeleeAttackIfReady) — timer + cast + IsWithinDist gate legs
 -- would all bridge (the gate is IsWithinDist itself, generic
 -- fallback in engine/scripting/object.go — the "no bridge" claim
--- is stale), but no registered Lua file hosts the class, so the
--- arm stays out on no-registration alone.
+-- is stale), but the entry is DB-side only: a whole-C++-tree grep
+-- for npc_yor hits only boss_nexusprince_shaffar.cpp itself (no
+-- Creatures entry constant), so no entry can be registered without
+-- guessing — stays out on unverified entry alone.
 -- All Talk() calls in the file accounted for (3 ported above +
 -- SAY_INTRO 0 MoveInLineOfSight + SAY_SUMMON 3 EVENT_BEACON machine
 -- documented above).
@@ -134,6 +132,11 @@ local SAY_DEAD  = 4
 local SPELL_FROSTBOLT = 32364 -- boss_nexusprince_shaffar.cpp:42
 local SPELL_FROSTNOVA = 32365 -- boss_nexusprince_shaffar.cpp:44
 local SPELL_ETHEREAL_BEACON_VISUAL = 32368 -- boss_nexusprince_shaffar.cpp:47
+local SPELL_ARCANE_BOLT = 15254 -- boss_nexusprince_shaffar.cpp:50
+local SPELL_ETHEREAL_APPRENTICE = 32372 -- boss_nexusprince_shaffar.cpp:51 (summon spell; ported as a direct summon, see beaconApprenticeTick)
+local SPELL_APPRENTICE_FIREBOLT = 32369 -- boss_nexusprince_shaffar.cpp:268
+local SPELL_APPRENTICE_FROSTBOLT = 32370 -- boss_nexusprince_shaffar.cpp:269
+local ENTRY_APPRENTICE = 18430 -- summoned by SPELL_ETHEREAL_APPRENTICE (comment at boss_nexusprince_shaffar.cpp:51)
 
 local timers = {}
 local taunted = {} -- per-GUID _hasTaunted latch (C++ _hasTaunted, :184)
@@ -263,8 +266,7 @@ local function shaffarReset(event, creature)
     -- C++ Reset (boss_nexusprince_shaffar.cpp:86-97): three initial
     -- beacon SummonCreature(NPC_BEACON, home±8, TEMPSUMMON_CORPSE_TIMED_
     -- DESPAWN 2h) legs — summon bridge live 2026-10-22; the beacon AI
-    -- (npc_ethereal_beaconAI) stays unported (documented above), so the
-    -- beacons spawn but stand idle until the AI is ported.
+    -- (npc_ethereal_beaconAI) is ported below, so the beacons fight.
     local hx, hy, hz, ho = creature:GetHomePosition()
     creature:SummonCreature(ENTRY_BEACON, hx - 8.0, hy - 8.0, hz, ho, 5, 7200000)
     creature:SummonCreature(ENTRY_BEACON, hx - 8.0, hy + 8.0, hz, ho, 5, 7200000)
@@ -323,6 +325,116 @@ local function shaffarJustSummoned(event, creature, summoned)
     end
 end
 
+
+-- C++ npc_ethereal_beaconAI::JustEngagedWith (:213-221): FindNearestCreature
+-- (NPC_SHAFFAR 18344, 100.0f) + shaffar AttackStart(who) when shaffar not
+-- in combat, then EVENT_APPRENTICE DUNGEON_MODE(20s, 10s) +
+-- EVENT_ARCANE_BOLT 1s. DUNGEON_MODE(normal, heroic) via IsHeroic.
+-- C++ npc_ethereal_beaconAI::UpdateAI (:232-251): UpdateVictim gate +
+-- casting-state early return (no Lua model, as in all timer ports).
+local function beaconBoltTick(creature, guid)
+    creature:CastSpell(nil, SPELL_ARCANE_BOLT)
+    schedule(guid, "beacon_bolt", math.random(2000, 4500), function()
+        beaconBoltTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_APPRENTICE (:241-245): triggered DoCast(me,
+-- SPELL_ETHEREAL_APPRENTICE 32372) + DespawnOrUnsummon. Ported as a
+-- direct summon at the beacon (shaffar EVENT_BEACON precedent): the
+-- spell's summon target is the caster, and no C++-visible duration
+-- exists, so type 7 manual-despawn (maladaar D'ore precedent). The
+-- beacon's ev19 arm engages the apprentice to the beacon's victim
+-- (C++ beacon JustSummoned :223).
+local function beaconApprenticeTick(creature, guid)
+    creature:SummonCreature(ENTRY_APPRENTICE, creature:GetX(), creature:GetY(),
+        creature:GetZ(), 0, 7)
+    creature:Despawn()
+end
+
+local function beaconEnterCombat(event, creature, target)
+    local shaffar = creature:FindNearestCreature(ENTRY_SHAFFAR, 100.0)
+    if shaffar and not shaffar:IsInCombat() then
+        shaffar:EngageWithTarget(target)
+    end
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local apprenticeDelay = 20000
+    if creature:IsHeroic() then
+        apprenticeDelay = 10000
+    end
+    schedule(guid, "beacon_apprentice", apprenticeDelay, function()
+        beaconApprenticeTick(creature, guid)
+    end)
+    schedule(guid, "beacon_bolt", 1000, function()
+        beaconBoltTick(creature, guid)
+    end)
+end
+
+local function beaconLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function beaconDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function beaconReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_ethereal_beaconAI::JustSummoned (:223-226):
+-- summoned->AI()->AttackStart(me->GetVictim()).
+local function beaconJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_APPRENTICE then
+        return
+    end
+    local victim = creature:GetVictim()
+    if victim then
+        summoned:EngageWithTarget(victim)
+    end
+end
+
+-- C++ npc_ethereal_apprenticeAI::JustEngagedWith (:288-291) +
+-- UpdateAI (:304-318): 3s ping-pong of triggered victim casts
+-- (firebolt 32369 / frostbolt 32370). Cyclic pair, so the locals are
+-- forward-declared and plain-assigned (tharon_ja/gal_darah idiom) —
+-- a later `local function` would shadow the forward slot and every
+-- pump stream would call nil (malown-class bug).
+local apprenticeFireTick, apprenticeFrostTick
+apprenticeFireTick = function(creature, guid)
+    creature:CastSpell(nil, SPELL_APPRENTICE_FIREBOLT, true)
+    schedule(guid, "appr_frost", 3000, function()
+        apprenticeFrostTick(creature, guid)
+    end)
+end
+apprenticeFrostTick = function(creature, guid)
+    creature:CastSpell(nil, SPELL_APPRENTICE_FROSTBOLT, true)
+    schedule(guid, "appr_fire", 3000, function()
+        apprenticeFireTick(creature, guid)
+    end)
+end
+
+local function apprenticeEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "appr_fire", 3000, function()
+        apprenticeFireTick(creature, guid)
+    end)
+end
+
+local function apprenticeLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function apprenticeDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
+local function apprenticeReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_SHAFFAR, 19, shaffarJustSummoned)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 1, shaffarEnterCombat)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 2, shaffarLeaveCombat)
@@ -330,3 +442,12 @@ RegisterCreatureEvent(ENTRY_SHAFFAR, 3, shaffarTargetDied)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 4, shaffarDied)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 23, shaffarReset)
 RegisterCreatureEvent(ENTRY_SHAFFAR, 27, shaffarMoveInLOS)
+RegisterCreatureEvent(ENTRY_BEACON, 19, beaconJustSummoned)
+RegisterCreatureEvent(ENTRY_BEACON, 1, beaconEnterCombat)
+RegisterCreatureEvent(ENTRY_BEACON, 2, beaconLeaveCombat)
+RegisterCreatureEvent(ENTRY_BEACON, 4, beaconDied)
+RegisterCreatureEvent(ENTRY_BEACON, 23, beaconReset)
+RegisterCreatureEvent(ENTRY_APPRENTICE, 1, apprenticeEnterCombat)
+RegisterCreatureEvent(ENTRY_APPRENTICE, 2, apprenticeLeaveCombat)
+RegisterCreatureEvent(ENTRY_APPRENTICE, 4, apprenticeDied)
+RegisterCreatureEvent(ENTRY_APPRENTICE, 23, apprenticeReset)
