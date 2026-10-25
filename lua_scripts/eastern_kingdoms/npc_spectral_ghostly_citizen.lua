@@ -35,7 +35,7 @@
 -- - JustDied (event 4): if tagged, four urand(1, i) == 1 rolls
 --   summon NPC_RESTLESS at a random point within 20f
 --   (GetRandomNearPosition approximated: uniform angle and radius
---   around the citizen's position, same Z; type 6
+--   around the citizen's position, same Z; type 5
 --   CORPSE_TIMED_DESPAWN, 600000ms). The summoned soul has no Lua
 --   bearer, so its MoveFollow/quest-credit legs stay out.
 -- - ReceiveEmote dance -> EnterEvadeMode: no EnterEvadeMode bridge,
@@ -211,7 +211,7 @@ local function onDied(_, creature)
             if math.random(1, i) == 1 then
                 local angle = math.random() * 2 * math.pi
                 local dist = math.random() * 20
-                creature:SummonCreature(NPC_RESTLESS, cx + math.cos(angle) * dist, cy + math.sin(angle) * dist, cz, co, 6, 600000)
+                creature:SummonCreature(NPC_RESTLESS, cx + math.cos(angle) * dist, cy + math.sin(angle) * dist, cz, co, 5, 600000)
             end
         end
     end

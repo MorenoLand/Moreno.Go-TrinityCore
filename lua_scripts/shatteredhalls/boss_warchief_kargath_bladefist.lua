@@ -110,11 +110,11 @@ local ENTRY_HEARTHEN_GUARD = 17621
 local ENTRY_SHARPSHOOTER_GUARD = 17622
 local ENTRY_REAVER_GUARD = 17623
 -- C++ AddsEntrance (boss_warchief_kargath_bladefist.cpp:64);
--- guard summon type 2, 30s (TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT).
+-- guard summon type 3, 30s (TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT).
 local ADDS_ENTRANCE = { 306.036, -84.29, 1.93 }
 -- C++ AssassEntrance/AssassExit (boss_warchief_kargath_bladefist.cpp:62-63);
 -- SpawnAssassin (:195-198) summons at y +/- 8, orientation 0,
--- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 2), 30s.
+-- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 3), 30s.
 local ASSASSIN_SPOTS = {
     {275.136, -84.29 + 8, 2.3},
     {275.136, -84.29 - 8, 2.3},
@@ -192,7 +192,7 @@ local function kargathGuardTick(creature, guid)
     local list = kargathGuards[guid] or {}
     for _ = 1, summoned do
         local guard = creature:SummonCreature(GUARD_ENTRIES[math.random(3)],
-            ADDS_ENTRANCE[1], ADDS_ENTRANCE[2], ADDS_ENTRANCE[3], 0, 2, 30000)
+            ADDS_ENTRANCE[1], ADDS_ENTRANCE[2], ADDS_ENTRANCE[3], 0, 3, 30000)
         if guard then
             list[#list + 1] = guard
             local target = randomThreatTarget(creature)
@@ -233,7 +233,7 @@ local function kargathEnterCombat(event, creature)
         kargathAssassinFired[guid] = true
         local list = kargathAssassins[guid] or {}
         for _, spot in ipairs(ASSASSIN_SPOTS) do
-            local add = creature:SummonCreature(ENTRY_SHATTERED_ASSASSIN, spot[1], spot[2], spot[3], 0, 2, 30000)
+            local add = creature:SummonCreature(ENTRY_SHATTERED_ASSASSIN, spot[1], spot[2], spot[3], 0, 3, 30000)
             if add then
                 list[#list + 1] = add
             end
