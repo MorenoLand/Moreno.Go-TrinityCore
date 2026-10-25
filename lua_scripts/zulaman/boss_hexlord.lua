@@ -27,8 +27,8 @@
 -- timer, and re-arms siphon soul at 10s; siphon soul 43501 at 100s / 10s
 -- after each spirit bolts (the C++ 23920 trigger vehicle has no
 -- summon-model bearer, so the boss casts the spell triggered on the
--- target directly): picks a random alive player within 70 yd (no threat
--- model) and records its class for the ability cycle; player abilities
+-- target directly): picks a random threat-list player alive within 70 yd
+-- (SelectTarget Random, 0, 70, true) and records its class for the ability cycle; player abilities
 -- every {8s,10s} from the stolen class's row (C++-exact 0-based row index
 -- = class-1; monk lands on the druid row like C++; druid is guarded —
 -- see deviations). Kills: random Talk(YELL_KILL_ONE=1/YELL_KILL_TWO=2)
@@ -43,7 +43,7 @@
 -- then 700ms on victim; Lord Raadan — thunderclap 43583 13s then 12s / flame breath
 -- 43582 8s then 12s on victim; Darkheart — psychic wail 43590 8s then
 -- 12s on victim; Slither — venom spit 43579 5s then 2.5s on a random
--- alive player within 100 yd; Fenstalker — volatile infection 43586 15s
+-- threat-list player alive within 100 yd; Fenstalker — volatile infection 43586 15s
 -- then 12s on victim; Koragg — mighty blow 43592 / cold stare 43593
 -- are upstream-dead (timers never decrement, boss_hexlord.cpp:984-993)
 -- and are not modeled.
@@ -79,8 +79,8 @@
 -- alyson/slither 20-yd AttackStart
 -- chase and gazakroth's AttackStartCaster have no movement bridge;
 -- fenstalker's "core bug" victim-self-cast has no caster-override
--- bridge, so the boss-side creature casts on the victim; no threat model
--- — random targeting is threat-blind; the commented-out dispelmagic_timer
+-- bridge, so the boss-side creature casts on the victim; random target
+-- pools are threat-list (siphon/ability/slither/alyson); the commented-out dispelmagic_timer
 -- arm and the commented-out MoveChase fallback in Alyson's flashheal arm
 -- are dead C++ code, not modeled; the commented-out target-alive check
 -- in the PlayerAbility arm is upstream-dead, so abilities fire
@@ -196,30 +196,39 @@ local function bossState(guid)
 end
 
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
--- random over the threat list, pets/totems eligible. Bridged via
+-- random over the threat list, pets/totems eligible, dead entries skipped
+-- (C++ SelectTargetList skip). Bridged via
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
 -- the boss_midnight randomTargetAnywhere precedent.
 local function randomThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
-        return nil
-    end
-    return targets[math.random(#targets)]
-end
-
-local function randomAlivePlayer(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
+end
+
+-- C++ SelectTarget(Random, 0, maxDist, true): threat-list players alive
+-- within maxDist (akilzon idiom).
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- The boss's friendly set: itself plus the eight adds (zulaman.h:49,
@@ -312,8 +321,8 @@ onSpiritBolts = function(creature, guid)
     end)
 end
 
--- C++ siphon soul: random alive player within 70 yd (SelectTarget Random,
--- no threat model), DoSpawnCreature(NPC_TEMP_TRIGGER 23920, 0,0,0,0,
+-- C++ siphon soul: threat-list player alive within 70 yd (SelectTarget
+-- Random, 0, 70, true), DoSpawnCreature(NPC_TEMP_TRIGGER 23920, 0,0,0,0,
 -- TEMPSUMMON_TIMED_DESPAWN 30s) + SetDisplayId(11686 invisible) +
 -- SetFlag(NOT_SELECTABLE) + trigger casts the spell triggered on the
 -- target (MoveChase stays out: no motion bridge, so the trigger stands
@@ -323,7 +332,7 @@ end
 -- fallback keeps the old boss-direct cast (C++ would EnterEvadeMode
 -- on a failed spawn; no evade bridge).
 onSiphonSoul = function(creature, guid)
-    local target = randomAlivePlayer(creature, 70)
+    local target = randomThreatPlayerInRange(creature, 70)
     if target then
         local trigger = creature:SummonCreature(ENTRY_TEMP_TRIGGER, 0, 0, 0, 0, 2, 30000)
         if trigger then
@@ -365,7 +374,7 @@ onAbility = function(creature, guid)
         elseif tgt == TGT_VICTIM then
             creature:CastSpell(nil, spell, false)
         elseif tgt == TGT_ENEMY then
-            local target = randomAlivePlayer(creature, 100)
+            local target = randomThreatPlayerInRange(creature, 100)
             if target then
                 creature:CastSpell(target, spell, false)
             end
@@ -630,9 +639,11 @@ local ADD_ARMS = {
           end },
     },
     [ENTRY_SLITHER] = {
+        -- C++ venom spit (boss_hexlord.cpp:885): SelectTarget(Random, 0,
+        -- 100, true) — threat-list players alive within 100 yd.
         { key = "venomspit", first = 5000, min = 2500, max = 2500,
           fire = function(creature)
-              local target = randomAlivePlayer(creature, 100)
+              local target = randomThreatPlayerInRange(creature, 100)
               if target then
                   creature:CastSpell(target, SPELL_VENOM_SPIT, false)
               end

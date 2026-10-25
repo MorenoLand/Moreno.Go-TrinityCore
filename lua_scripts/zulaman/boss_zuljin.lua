@@ -15,8 +15,8 @@
 -- 2 eagle, 3 lynx, 4 dragonhawk; transitions at 80/60/40/20% health via
 -- health_20 = 20% of max):
 --   troll: Talk YELL_INTRO, then YELL_AGGRO at 37s; whirlwind 17207 at
---     7s (repeat {15s,20s}); grievous throw 43093 at 8s on a random
---     player within 100 yd (repeat 10s).
+--     7s (repeat {15s,20s}); grievous throw 43093 at 8s on a
+--     threat-list player alive within 100 yd (repeat 10s).
 --   bear: Talk TRANSFORM_TO_BEAR, triggered-adjacent self-cast 42594;
 --     creeping paralysis 43095 at 7s after entering (repeat 20s).
 --   eagle: Talk TRANSFORM_TO_EAGLE, self-cast 42606, triggered energy
@@ -27,8 +27,8 @@
 --     (each repeat {15s,20s} after its sequence ends).
 --   dragonhawk: Talk TRANSFORM_TO_DRAGONHAWK, self-cast 42608; flame
 --     whirl 43213 at 5s (repeat 12s); pillar of fire 43216 at 7s on a
---     random player (repeat 10s); flame breath 43215 at 6s on self after
---     facing a random player (repeat 10s).
+--     random threat-list unit (repeat 10s); flame breath 43215 at 6s on
+--     self after facing a random threat-list unit (repeat 10s).
 --   berserk 45078 one-shot at 600s with Talk YELL_BERSERK, then every
 --     60s (C++-exact re-arm quirk).
 -- Claw rage / lynx rush sequences (C++ TankGUID set while active): the
@@ -54,7 +54,7 @@
 -- entry) have no bearer, so the rush sequences are modeled as
 -- damage-only 500ms loops (the SetSpeedRate 5.0/1.2 arms ride the
 -- ported loops via creature:SetSpeedRate); claw rage hits the current victim (random
--- player fallback), lynx rush hits a random alive player per jump
+-- threat-list fallback), lynx rush hits a random threat-list unit per jump
 -- (C++-exact per-hit spell, count, and 500ms cadence); the C++
 -- interleaving when a sequence starter fires while the other sequence
 -- is active spin-waits on a 500ms retry (the C++ TankGUID gate: the
@@ -167,29 +167,38 @@ local function zuljinState(guid)
     return st
 end
 
-local function alivePlayers(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
+-- random over the threat list, pets/totems eligible, dead entries skipped
+-- (C++ SelectTargetList skip).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
-local function randomPlayer(creature, maxDist)
-    local candidates = {}
-    for _, p in ipairs(alivePlayers(creature)) do
-        if maxDist == nil or creature:GetDistance(p) <= maxDist then
-            candidates[#candidates + 1] = p
-        end
-    end
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
+end
+
+-- C++ SelectTarget(Random, 0, maxDist, true): threat-list players alive
+-- within maxDist (akilzon idiom).
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- isTargetableForAttack: Unit::isTargetableForAttack (Unit.h:1077, Unit.cpp)
@@ -227,10 +236,11 @@ local function onWhirlwind(creature, guid)
     end)
 end
 
--- C++ grievous throw (troll): random player within 100 yd, DoCast
--- 43093; the 10s re-arm happens even with no target.
+-- C++ grievous throw (troll): threat-list player alive within 100 yd
+-- (SelectTarget Random, 0, 100, true), DoCast 43093; the 10s re-arm
+-- happens even with no target.
 local function onGrievousThrow(creature, guid)
-    local target = randomPlayer(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_GRIEVOUS_THROW)
     end
@@ -248,8 +258,8 @@ local function onCreepingParalysis(creature, guid)
 end
 
 -- Shared claw-rage / lynx-rush 500ms loop (C++ Claw_Loop_Timer).
--- claw: hits the current victim (random alive player fallback) with
--- triggered 43150, 12 hits; lynx: a random alive player per jump with
+-- claw: hits the current victim (random threat-list fallback) with
+-- triggered 43150, 12 hits; lynx: a random threat-list unit per jump with
 -- triggered 43153, 9 hits. No-target ends the sequence (the C++
 -- EnterEvadeMode arm has no bridge).
 local onSeqLoop
@@ -264,15 +274,15 @@ onSeqLoop = function(creature, guid)
     local target
     if seq == "claw" then
         -- C++ claw loop (boss_zuljin.cpp:444-448): victim, then stored
-        -- tank, then random — each leg gated on isTargetableForAttack.
+        -- tank, then random threat-list target — each leg gated on isTargetableForAttack.
         -- The tank GUID has no bearer here, so it collapses to
         -- victim-if-targetable else random.
         target = creature:GetVictim()
         if target == nil or not isTargetableForAttack(target) then
-            target = randomPlayer(creature)
+            target = randomThreatTarget(creature)
         end
     else
-        target = randomPlayer(creature)
+        target = randomThreatTarget(creature)
     end
     if target == nil or not creature:IsWithinMeleeRange(target) then
         if target == nil then
@@ -330,7 +340,7 @@ onClawRage = function(creature, guid)
         end)
         return
     end
-    if #alivePlayers(creature) == 0 then
+    if randomThreatTarget(creature) == nil then
         schedule(timers, guid, "clawrage", 1000, function()
             onClawRage(creature, guid)
         end)
@@ -339,7 +349,7 @@ onClawRage = function(creature, guid)
     st.sequence = "claw"
     st.seqCount = 0
     -- C++ claw-rage starter (boss_zuljin.cpp:434): SetSpeedRate(MOVE_RUN,
-    -- 5.0f) on target acquire (the Lua alivePlayers gate is the analog).
+    -- 5.0f) on target acquire (the Lua threat-list existence gate is the analog).
     creature:SetSpeedRate(1, 5.0)
     schedule(timers, guid, "seqloop", 500, function()
         onSeqLoop(creature, guid)
@@ -357,7 +367,7 @@ onLynxRush = function(creature, guid)
         end)
         return
     end
-    if #alivePlayers(creature) == 0 then
+    if randomThreatTarget(creature) == nil then
         schedule(timers, guid, "lynxrush", 1000, function()
             onLynxRush(creature, guid)
         end)
@@ -366,7 +376,7 @@ onLynxRush = function(creature, guid)
     st.sequence = "lynx"
     st.seqCount = 0
     -- C++ lynx-rush starter (boss_zuljin.cpp:488): SetSpeedRate(MOVE_RUN,
-    -- 5.0f) on target acquire (the Lua alivePlayers gate is the analog).
+    -- 5.0f) on target acquire (the Lua threat-list existence gate is the analog).
     creature:SetSpeedRate(1, 5.0)
     schedule(timers, guid, "seqloop", 500, function()
         onSeqLoop(creature, guid)
@@ -381,10 +391,10 @@ local function onFlameWhirl(creature, guid)
     end)
 end
 
--- C++ pillar of fire (dragonhawk): random player, DoCast 43216;
--- re-arms even with no target.
+-- C++ pillar of fire (dragonhawk): random threat-list unit
+-- (SelectTarget Random, 0), DoCast 43216; re-arms even with no target.
 local function onPillar(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SUMMON_PILLAR)
     end
@@ -393,15 +403,13 @@ local function onPillar(creature, guid)
     end)
 end
 
--- C++ flame breath (dragonhawk): face a random player
--- (SetFacingToObject via the creature:SetFacingTo bridge — facing computed
--- with math.atan2 from the random player's coordinates, the
--- Unit::GetAbsoluteAngle twin), then DoCast(me, 43215); re-arms even with
--- no target. Deviation: C++ SelectTarget picks from the threat list
--- (pets/totems possible), Lua randomPlayer from all alive in-instance
--- players.
+-- C++ flame breath (dragonhawk): face a random threat-list unit
+-- (SelectTarget Random, 0; SetFacingToObject via the creature:SetFacingTo
+-- bridge — facing computed with math.atan2 from the target's
+-- coordinates, the Unit::GetAbsoluteAngle twin), then DoCast(me, 43215);
+-- re-arms even with no target.
 local function onFlameBreath(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         local dx = target:GetX() - creature:GetX()
         local dy = target:GetY() - creature:GetY()
