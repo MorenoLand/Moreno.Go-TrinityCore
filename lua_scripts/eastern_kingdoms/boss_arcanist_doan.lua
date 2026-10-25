@@ -20,10 +20,10 @@
 -- 9433 3s then 8s (non-triggered DoCastVictim; nil-victim ticks cast
 -- nothing but keep the schedule — jeklik convention) / polymorph 13323
 -- 30s then 20s (C++ SelectTarget(Random, 1, 30.0f, true): random alive
--- player within 30 yd skipping position 0 (the current victim) —
--- majordomo victim-excluding convention + opera alivePlayersInRange;
--- a sole-victim tick casts nothing but keeps the schedule; the 20s
--- re-arm is unconditional, matching C++ Repeat outside the if). The
+-- threat-list player within 30 yd skipping the first entry in
+-- MaxThreat order (UnitAI.h:162-184); a one-entry threat list casts
+-- nothing but keeps the schedule; the 20s re-arm is unconditional,
+-- matching C++ Repeat outside the if). The
 -- UpdateAI below-50% latch (Talk(SAY_SPECIALAE 1) + non-triggered
 -- DoCastSelf arcane bubble 9438, once via the _healthAbove50Pct bool) is
 -- modeled on the pre-damage hook: (pre-damage health - incoming damage)
@@ -84,20 +84,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 1, 30.0f, true): random alive player within
--- 30 yd, skipping position 0 (the current victim — majordomo
--- convention); alivePlayersInRange supplies the distance+alive legs
--- (opera convention).
-local function randomAlivePlayerExcludingVictimInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local victimGUID = victim and victim:GetGUID() or 0
+-- C++ SelectTarget(Random, 1, 30.0f, true): random alive player from
+-- the threat list within 30 yd, skipping the first entry in MaxThreat
+-- order (UnitAI.h:162-184 — the list starts with the current victim,
+-- then the sorted threat list, and the first <offset> entries are
+-- popped before the predicate filter; GetAITargets returns that order,
+-- lua_creature_events.go:1912).
+local function randomThreatPlayerSkippingFirstInRange(creature, maxDist)
     local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and p:GetGUID() ~= victimGUID
-                and creature:GetDistance(p) <= maxDist then
-            players[#players + 1] = p
+    for i, t in ipairs(creature:GetAITargets()) do
+        if i ~= 1 and t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            players[#players + 1] = t
         end
     end
     if #players == 0 then
@@ -130,10 +128,11 @@ local function onArcaneExplosion(creature, guid)
     end)
 end
 
--- C++ EVENT_POLYMORPH: DoCast(13323) on a random alive player within
--- 30 yd skipping position 0; re-arm 20s unconditionally.
+-- C++ EVENT_POLYMORPH: DoCast(13323) on a random alive threat-list
+-- player within 30 yd skipping the first MaxThreat entry; re-arm
+-- 20s unconditionally.
 local function onPolymorph(creature, guid)
-    local target = randomAlivePlayerExcludingVictimInRange(creature, 30)
+    local target = randomThreatPlayerSkippingFirstInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_POLYMORPH)
     end

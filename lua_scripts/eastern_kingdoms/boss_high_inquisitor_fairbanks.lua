@@ -23,18 +23,20 @@
 -- HighInquisitorFairbanksDispelMagicTargetSelector: TYPEID_PLAYER
 -- within 30 yd of the boss WITH a dispellable DISPEL_MAGIC aura —
 -- the aura leg has no bridge (shazzrah curse precedent), so the Lua
--- picks a random alive player within 30 yd and skips the cast when
--- none is in range (C++ DoCast is likewise conditional on the
--- selector finding a target; the 30s repeat is unconditional).
+-- picks a random alive threat-list player within 30 yd and skips
+-- the cast when none is in range (C++ DoCast is likewise
+-- conditional on the selector finding a target; the 30s repeat is
+-- unconditional).
 -- C++ EVENT_FEAR: SelectTarget(Random, 1, 20.f, true) — random alive
--- player within 20 yd skipping position 0 — modeled with the
--- majordomo victim-excluding helper restricted to 20 yd; a
--- sole-victim tick casts nothing but keeps the 40s schedule.
+-- threat-list player within 20 yd skipping the first entry in
+-- MaxThreat order (UnitAI.h:162-184) — modeled with the threat-list
+-- helper above; a one-entry threat list casts nothing but keeps the
+-- 40s schedule.
 -- C++ EVENT_SLEEP: SelectTarget(MaxThreat, 0, 30.f, true, false) —
--- top-threat player within 30 yd, approximated by the current
--- victim (jeklik convention) with the 30yd filter enforced via
--- GetDistance (vorpil precedent); nil-victim/out-of-range ticks
--- keep the 30s schedule.
+-- top-threat player within 30 yd excluding the tank
+-- (withTank=false -> LastVictim exception, UnitAI.cpp:243) — the
+-- first qualifying threat-list entry, not the victim; no such
+-- target casts nothing but keeps the 30s schedule.
 -- The DamageTaken latch fires when post-damage health drops strictly
 -- below 25% (C++ HealthBelowPctDamaged(25, damage) — the damaged
 -- class, the same class as the thalnos/azshir latches, NOT the
@@ -95,17 +97,20 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Random alive player in the same map+instance within maxDist of the
--- creature, optionally excluding the given GUID (C++ SelectTarget
--- Random-position / in-range legs).
-local function randomAlivePlayerInRange(creature, maxDist, excludeGUID)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- Random alive player from the creature's threat list within maxDist
+-- (C++ SelectTarget draws from the threat list, UnitAI.h:162-184;
+-- GetAITargets returns it in MaxThreat order,
+-- lua_creature_events.go:1912). skipFirst drops the first entry in
+-- MaxThreat order before the predicate filter (C++ Random offset:
+-- the list starts with the current victim, then the sorted threat
+-- list, and the first <offset> entries are popped first).
+local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
     local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and (not excludeGUID or p:GetGUID() ~= excludeGUID) then
-            players[#players + 1] = p
+    for i, t in ipairs(creature:GetAITargets()) do
+        if not (skipFirst and i == 1)
+                and t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            players[#players + 1] = t
         end
     end
     if #players == 0 then
@@ -129,7 +134,7 @@ end
 -- C++ EVENT_DIPEL_MAGIC: DoCast(pick, 15090) where the pick is the
 -- custom selector; nil pick casts nothing. Repeat(30s) regardless.
 local function onDispelMagic(creature, guid)
-    local target = randomAlivePlayerInRange(creature, 30, nil)
+    local target = randomThreatPlayerInRange(creature, 30, false)
     if target then
         creature:CastSpell(target, SPELL_DISPEL_MAGIC)
     end
@@ -138,13 +143,12 @@ local function onDispelMagic(creature, guid)
     end)
 end
 
--- C++ EVENT_FEAR: DoCast(pick, 12096) on a random alive player within
--- 20 yd excluding the victim; nil pick casts nothing. Repeat(40s)
+-- C++ EVENT_FEAR: DoCast(pick, 12096) on a random alive threat-list
+-- player within 20 yd skipping the first MaxThreat entry; nil pick
+-- casts nothing. Repeat(40s)
 -- regardless.
 local function onFear(creature, guid)
-    local victim = creature:GetVictim()
-    local target = randomAlivePlayerInRange(creature, 20,
-        victim and victim:GetGUID() or nil)
+    local target = randomThreatPlayerInRange(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_FEAR)
     end
@@ -154,13 +158,21 @@ local function onFear(creature, guid)
 end
 
 -- C++ EVENT_SLEEP: non-triggered DoCast(8399) on the top-threat
--- target within 30 yd, approximated by the current victim (jeklik
--- convention); the 30yd filter rides the vorpil GetDistance idiom.
--- Nil-victim or out-of-range ticks keep the schedule. Repeat(30s).
+-- player within 30 yd EXCLUDING the tank (SelectTarget(MaxThreat, 0,
+-- 30.f, true, false): withTank=false sets the DefaultTargetSelector
+-- exception to GetThreatManager().GetLastVictim(), UnitAI.cpp:243) —
+-- the first threat-list player in MaxThreat order that is alive,
+-- within 30 yd and not the victim, via the vorpil GetDistance idiom.
+-- No such target casts nothing. Repeat(30s).
 local function onSleep(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) <= 30 then
-        creature:CastSpell(victim, SPELL_SLEEP)
+    local victimGUID = victim and victim:GetGUID() or 0
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() ~= victimGUID and t:GetObjectType() == "Player"
+                and t:IsAlive() and creature:GetDistance(t) <= 30 then
+            creature:CastSpell(t, SPELL_SLEEP)
+            break
+        end
     end
     schedule(guid, "sleep", 30000, function()
         onSleep(creature, guid)

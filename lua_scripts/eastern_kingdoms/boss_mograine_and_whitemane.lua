@@ -17,11 +17,11 @@
 -- schedule, jeklik convention; urand(10s,15s) initial -> math.random,
 -- sulfuron convention). KilledUnit: Talk(SAY_MO_KILL 1) only when the
 -- victim is a player (TYPEID_PLAYER gate -> victim:GetObjectType() == "Player", herod
--- convention), gated by the 5s _killYellTimer (Reset(0s) in Reset means
--- available immediately — modeled with a per-GUID one-shot clear routed
--- through schedule() so OnReset's cancelTimers clears the pending clear
--- exactly like C++'s Reset(0s) TimeTracker; C++ _Reset() does NOT touch
--- the timer, so the flag is cleared only on event 23). OnReset cancels
+-- convention), but NOT a 5s cooldown — Mograine's UpdateAI never calls
+-- _killYellTimer.Update (Timer.h TimeTracker advances only on Update),
+-- so the yell fires once per combat until Reset clears the latch
+-- (Whitemane's UpdateAI does update its timer, so her 5s cooldown is
+-- real). OnReset cancels
 -- timers + clears the yell flag + self-casts retribution aura 8990
 -- (C++ DoCastSelf(..., true) triggered — Lua CastSpell(creature, spell, true)).
 -- Whitemane: OnEnterCombat Talk(SAY_WH_INTRO 0) + 5s scheduler gate ->
@@ -34,7 +34,7 @@
 -- self/victim casts (smite nil-victim keeps schedule). KilledUnit:
 -- player-gated Talk(SAY_WH_KILL 1), same 5s cooldown shape. OnReset
 -- cancels timers + clears the yell flag + self-cast retribution aura
--- 8990 (C++ non-triggered).
+-- 8990 (C++ non-triggered) + SetReactState(REACT_AGGRESSIVE).
 --
 -- Documented-unmodeled (no bridges):
 -- Mograine's fake-death DamageTaken machine: first lethal hit sets
@@ -107,6 +107,7 @@ local SPELL_HOLY_SMITE = 9481
 
 local timers = {}
 local killYellOnCooldown = {}
+local mograineKillYellDone = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -191,8 +192,24 @@ local function mograineEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ Mograine KilledUnit: player-gated Talk(SAY_MO_KILL 1), but the
+-- 5s _killYellTimer NEVER advances — Mograine's UpdateAI
+-- (boss_mograine_and_whitemane.cpp:214-232) never calls
+-- _killYellTimer.Update, and TimeTracker only advances on Update
+-- (Timer.h:115-134), so after the first kill yell Passed() stays
+-- false until Reset. Once per combat, modeled as a Reset-only latch
+-- (Whitemane's UpdateAI does update its timer, so her 5s cooldown
+-- via onTargetDied is real).
 local function mograineTargetDied(event, creature, victim)
-    onTargetDied(event, creature, victim, SAY_MO_KILL)
+    if victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local guid = creature:GetGUID()
+    if mograineKillYellDone[guid] then
+        return
+    end
+    mograineKillYellDone[guid] = true
+    creature:Talk(SAY_MO_KILL)
 end
 
 local function mograineLeaveCombat(event, creature)
@@ -210,7 +227,7 @@ end
 local function mograineReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    killYellOnCooldown[guid] = nil
+    mograineKillYellDone[guid] = nil
     -- C++ Reset: triggered self-cast (Reset-only arm); ev23 fires on death
     -- too (engine reset-then-died order) but C++ Reset() never runs on
     -- death, so the cast is alive-gated.
@@ -295,7 +312,8 @@ end
 
 -- C++ Reset: _events.Reset + _scheduler.CancelAll +
 -- _killYellTimer.Reset(0s) + DoCastSelf(retribution aura) +
--- REACT_AGGRESSIVE (bridgeless leg documented-only).
+-- SetReactState(REACT_AGGRESSIVE) — bridged (same surface as
+-- mograineReset above).
 local function whitemaneReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -305,6 +323,7 @@ local function whitemaneReset(event, creature)
     -- on death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_RETRIBUTION_AURA)
+        creature:SetReactState(2) -- REACT_AGGRESSIVE, C++ Reset leg
     end
 end
 
