@@ -33,8 +33,9 @@
 --
 -- DOCUMENTED-BLOCKED (no registration beyond entry 36627):
 -- boss_rotface UpdateAI — Talk(EMOTE_SLIME_SPRAY 2) rides the
--- EVENT_SLIME_SPRAY scheduler leg (random-target + DoSummon — no
--- bridge); PORTED (2026-10-13): EVENT_MUTATED_INFECTION —
+-- EVENT_SLIME_SPRAY scheduler leg — PORTED 2026-10-25 (SummonCreature
+-- + GetAITargets skip-first pool; see onSlimeSpray below).
+-- PORTED (2026-10-13): EVENT_MUTATED_INFECTION —
 -- DoCastAOE(SPELL_MUTATED_INFECTION 69674) non-triggered as
 -- self-cast, 14s init on the lua-local hasten machine
 -- (EVENT_HASTEN_INFECTIONS 90s ticks, -2s per tick, min 6s —
@@ -45,11 +46,11 @@
 -- (engine/world/lua_creature_events.go:260) — the 2026-10-14 "no
 -- IsHeroic bridge" claim was stale.
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
--- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out on
--- trigger-path grounds: the slime-spray cast rides the unported
--- EVENT_SLIME_SPRAY scheduler leg (random-target + DoSummon, no
--- bridges), so event 15 never fires for it in Go (event 15 itself is
--- live — boss_ai.go:1904).
+-- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out:
+-- the C++ arm Talks once per hit target of the spray AoE, but Go's
+-- self-cast path carries only the explicit target, so the ev15
+-- target correspondence is unverified (event 15 itself is live —
+-- boss_ai.go:1904, grobbulus precedent fires per hit target).
 -- boss_rotface JustEngagedWith instance legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
 -- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) (no-DoAction
@@ -141,6 +142,9 @@ local SPELL_MUTATED_INFECTION = 69674
 -- convention).
 local MUTATED_INFECTION_AURAS = { 69674, 71224, 73022, 73023 }
 local SPELL_VILE_GAS_TRIGGER = 72285 -- boss_rotface.cpp:82
+local SPELL_SLIME_SPRAY = 69508 -- boss_rotface.cpp:55
+local NPC_OOZE_SPRAY_STALKER = 37986 -- icecrown_citadel.h:228
+local EMOTE_SLIME_SPRAY = 2
 
 local timers = {}
 
@@ -167,6 +171,34 @@ local function schedule(guid, key, delay, fn)
 end
 
 local infection = {}
+
+-- C++ EVENT_SLIME_SPRAY (:200-208): SelectTarget(Random, 1, 0.0f,
+-- playerOnly) — offset 1 skips the first MaxThreat-ordered entry
+-- (UnitAI.h:162-174) — then DoSummon(NPC_OOZE_SPRAY_STALKER,
+-- *target, 8s, TEMPSUMMON_TIMED_DESPAWN), Talk(EMOTE_SLIME_SPRAY),
+-- DoCastSelf(SPELL_SLIME_SPRAY) non-triggered; re-arm 20s
+-- unconditional (the ScheduleEvent sits outside the target-pick
+-- if). Pool via GetAITargets (threat-sorted, SortedEntries) with
+-- the head skipped, Player + alive filter (grobbulus/festergut
+-- precedents); summonType 2 = TIMED_DESPAWN, 8000ms.
+local function onSlimeSpray(creature, guid)
+    local pool = {}
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local unit = targets[i]
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            pool[#pool + 1] = unit
+        end
+    end
+    if #pool > 0 then
+        local target = pool[math.random(#pool)]
+        creature:SummonCreature(NPC_OOZE_SPRAY_STALKER, target:GetX(),
+            target:GetY(), target:GetZ(), target:GetO(), 2, 8000)
+        creature:Talk(EMOTE_SLIME_SPRAY)
+        creature:CastSpell(creature, SPELL_SLIME_SPRAY)
+    end
+    schedule(guid, "slime_spray", 20000, function() onSlimeSpray(creature, guid) end)
+end
 
 -- C++ EVENT_MUTATED_INFECTION: DoCastAOE(SPELL_MUTATED_INFECTION)
 -- non-triggered -> self-cast (selin_fireheart/mr_smite DoCastAOE
@@ -217,6 +249,7 @@ local function rotfaceJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)
     infection[guid] = { stage = 0, cooldown = 14000 }
     schedule(guid, "mutated_infection", 14000, function() onMutatedInfection(creature, guid) end)
+    schedule(guid, "slime_spray", 20000, function() onSlimeSpray(creature, guid) end)
     schedule(guid, "hasten", 90000, function() onHastenInfections(creature, guid) end)
     if creature:IsHeroic() then
         schedule(guid, "vile_gas", math.random(22000, 27000), function() onVileGas(creature, guid) end)
