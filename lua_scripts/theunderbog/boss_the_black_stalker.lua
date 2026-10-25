@@ -30,24 +30,26 @@
 -- — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump). Pump:
 -- levitate 31704: 12s init then 12000+rand32()%3000 — target
--- = random alive player excluding the victim (C++
--- SelectTarget(Random, 1), quagmirran convention), nil pick
--- casts nothing, non-triggered DoCast on the target, re-arm
+-- = random alive threat-list unit with the threat head skipped
+-- (C++ SelectTarget(Random, 1), offset-before-filter,
+-- steamrigger convention), nil pick casts nothing,
+-- non-triggered DoCast on the target, re-arm
 -- regardless (C++-exact — the re-arm is outside the if
 -- (target) block). Chain lightning 31717: 6s init then 7000
--- — random alive player in the instance (C++ SelectTarget
--- (Random, 0), thespia precedent), nil pick casts nothing,
--- re-arm 7000 regardless (C++-exact). Static charge 31715:
--- 10s init then 10000 — random alive player within 30 yd (C++
--- SelectTarget(Random, 0, 30, true), thespia distance-gate
--- convention), nil pick casts nothing, re-arm 10000
--- regardless (C++-exact). Spore striders 38755:
+-- — random alive threat-list unit (C++ SelectTarget
+-- (Random, 0) defaults, kalithresh precedent), nil pick casts
+-- nothing, re-arm 7000 regardless (C++-exact). Static charge
+-- 31715: 10s init then 10000 — random alive threat-list
+-- player within 30 yd (C++ SelectTarget(Random, 0, 30, true),
+-- thespia distance-gate convention), nil pick casts nothing,
+-- re-arm 10000 regardless (C++-exact). Spore striders 38755:
 -- 10000+rand32()%5000 init then 10000+rand32()%5000 — timer
 -- bookkeeping exact; the IsHeroic()-gated fire arm IS ported
 -- (creature:IsHeroic(), see deliberate deviations below);
 -- re-arm regardless (C++-exact). JustSummoned(19): spore
 -- strider AttackStart relay PORTED (entry-gated 22299, random
--- non-victim player pick or victim fallback, EngageWithTarget
+-- threat-list unit with the threat head skipped or victim
+-- fallback, EngageWithTarget
 -- — skyriss ev19 precedent; Go spell-summon funnel fires ev19
 -- on the caster). OnDied(4): cleanup (the
 -- Striders.DespawnAll arm is summon-bridgeless, steamrigger
@@ -102,39 +104,16 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0): random alive
+-- unit from the boss's threat list, tank included, no distance
+-- gate (kalithresh precedent). Nil when the threat list is
+-- empty — the caller skips the cast (C++-exact).
+local function pickThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): random alive player in the
--- instance, no distance gate (thespia precedent). Nil when the
--- instance is empty — the caller skips the cast (C++-exact).
-local function pickRandomPlayer(creature)
-    local found = playersInInstance(creature)
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
--- C++ SelectTarget(Random, 1): random alive player excluding
--- the victim (quagmirran convention). Nil when no other
--- player is present — the caller skips the cast (C++-exact).
-local function pickRandomPlayerExcludingVictim(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim and victim:GetGUID() or nil
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victimGuid or p:GetGUID() ~= victimGuid then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -143,14 +122,39 @@ local function pickRandomPlayerExcludingVictim(creature)
     return found[math.random(#found)]
 end
 
--- C++ SelectTarget(Random, 0, 30, true): random alive player
--- within 30 yd (thespia distance-gate convention). Nil when
--- none is in range — the caller skips the cast (C++-exact).
-local function pickRandomPlayerIn30Yd(creature)
+-- C++ SelectTarget(Random, 1): the threat head is skipped
+-- BEFORE the alive filter (UnitAI.h:172-174
+-- offset-before-filter, steamrigger convention) — the head is
+-- the current victim in the C++ list construction, so this is
+-- not a victim-GUID exclusion: a non-victim head is still
+-- skipped. Nil when the threat list holds only the head —
+-- the caller skips the cast (C++-exact).
+local function pickThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
     local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= 30.0 then
-            found[#found + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if not t:IsDead() then
+            found[#found + 1] = t
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
+-- C++ SelectTarget(Random, 0, 30, true): random alive
+-- threat-list player within 30 yd (thespia distance-gate
+-- convention; IsWithinCombatRange approximated by GetDistance).
+-- Nil when none is in range — the caller skips the cast
+-- (C++-exact).
+local function pickThreatPlayerIn30Yd(creature)
+    local found = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= 30.0 then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -250,15 +254,16 @@ local function bossTick(creature, guid)
     end
 
     -- Levitate 31704: 12s init then 12000+rand32()%3000 —
-    -- random alive player excluding the victim (quagmirran
-    -- convention), nil pick casts nothing, non-triggered cast
-    -- on the target (C++-exact), re-arm regardless (the re-arm
-    -- is outside the if (target) block, C++-exact). A cast
-    -- stores the target GUID + 2000ms followup timer +
-    -- InAir=false (C++ Levitate_Timer arm, overwriting any
-    -- pending followup); a nil pick leaves the latch clear.
+    -- random alive threat-list unit with the threat head
+    -- skipped (steamrigger convention), nil pick casts nothing,
+    -- non-triggered cast on the target (C++-exact), re-arm
+    -- regardless (the re-arm is outside the if (target) block,
+    -- C++-exact). A cast stores the target GUID + 2000ms
+    -- followup timer + InAir=false (C++ Levitate_Timer arm,
+    -- overwriting any pending followup); a nil pick leaves the
+    -- latch clear.
     if st.levitate <= 1000 then
-        local target = pickRandomPlayerExcludingVictim(creature)
+        local target = pickThreatTargetSkipFirst(creature)
         if target then
             creature:CastSpell(target, SPELL_LEVITATE)
             st.levitatedGuid = target:GetGUID()
@@ -271,10 +276,11 @@ local function bossTick(creature, guid)
     end
 
     -- Chain lightning 31717: 6s init then 7000 — random alive
-    -- player in the instance (thespia precedent), nil pick
-    -- casts nothing, re-arm 7000 regardless (C++-exact).
+    -- threat-list unit (SelectTarget(Random, 0) defaults),
+    -- nil pick casts nothing, re-arm 7000 regardless
+    -- (C++-exact).
     if st.chainLightning <= 1000 then
-        local target = pickRandomPlayer(creature)
+        local target = pickThreatTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
         end
@@ -284,11 +290,11 @@ local function bossTick(creature, guid)
     end
 
     -- Static charge 31715: 10s init then 10000 — random alive
-    -- player within 30 yd (thespia distance-gate convention),
-    -- nil pick casts nothing, re-arm 10000 regardless
-    -- (C++-exact).
+    -- threat-list player within 30 yd (thespia distance-gate
+    -- convention), nil pick casts nothing, re-arm 10000
+    -- regardless (C++-exact).
     if st.staticCharge <= 1000 then
-        local target = pickRandomPlayerIn30Yd(creature)
+        local target = pickThreatPlayerIn30Yd(creature)
         if target then
             creature:CastSpell(target, SPELL_STATIC_CHARGE)
         end
@@ -321,8 +327,9 @@ end)
 
 -- C++ JustSummoned (boss_the_black_stalker.cpp:109-119):
 -- entry-gated spore strider AttackStart relay — random alive
--- player excluding the victim (quagmirran convention), victim
--- fallback when the pick is nil (C++-exact); EngageWithTarget
+-- threat-list unit with the threat head skipped (steamrigger
+-- convention), victim fallback when the pick is nil
+-- (C++-exact); EngageWithTarget
 -- is the AttackStart funnel (skyriss ev19 precedent). The Go
 -- spell-summon funnel fires ev19 on the caster
 -- (boss_ai.go:2083-2085, lua_creature_events.go:166), so the
@@ -332,7 +339,7 @@ RegisterCreatureEvent(ENTRY_BLACK_STALKER, 19, function(_, creature, summoned)
     if not summoned or summoned:GetEntry() ~= ENTRY_SPORE_STRIDER then
         return
     end
-    local target = pickRandomPlayerExcludingVictim(creature)
+    local target = pickThreatTargetSkipFirst(creature)
     if not target then
         target = creature:GetVictim()
     end

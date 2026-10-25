@@ -36,12 +36,13 @@
 -- creature:SummonCreature bridge live):
 -- me->SummonCreature(17990, target pos + rand32()%8 offsets,
 -- TEMPSUMMON_TIMED_DESPAWN (2) 22s = 22000ms), random-target leg
--- via pickRandomPlayer (the file's SelectTarget(Random, 0)
--- equivalent), boss-position fallback when no target
+-- via pickThreatTarget (threat-list any-unit, C++
+-- SelectTarget(Random, 0) defaults playerOnly=false, kalithresh
+-- precedent), boss-position fallback when no target
 -- (C++-exact); re-arm 10000 regardless (C++-exact). Acid geyser 38739:
 -- 10s init then 10000+rand32()%7500 — target = random alive
--- player in the instance (C++ SelectTarget(Random, 0), thespia
--- precedent), nil pick casts nothing, DoCast(target, 38739)
+-- threat-list unit (C++ SelectTarget(Random, 0) defaults),
+-- nil pick casts nothing, DoCast(target, 38739)
 -- non-triggered (C++-exact), re-arm regardless. OnDied(4):
 -- cleanup (no JustDied override in C++). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state (the
@@ -83,23 +84,18 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0): random alive
+-- unit from the boss's threat list, tank included, no distance
+-- gate (kalithresh precedent). Nil when the threat list is
+-- empty — the caller skips the cast / falls back (C++-exact).
+local function pickThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): random alive player in the
--- instance, no distance gate (thespia precedent). Nil when the
--- instance is empty — the caller skips the cast (C++-exact).
-local function pickRandomPlayer(creature)
-    local found = playersInInstance(creature)
     if #found == 0 then
         return nil
     end
@@ -135,12 +131,12 @@ local function bossTick(creature, guid)
     -- random target's position (+ rand32()%8 x/y offsets, o =
     -- rand32()%5), TEMPSUMMON_TIMED_DESPAWN (2) 22s = 22000ms
     -- (creature:SummonCreature bridge, PORTED 2026-10-22); the
-    -- random-target leg uses pickRandomPlayer (the file's
-    -- SelectTarget(Random, 0) equivalent), boss-position fallback
-    -- when no target (C++-exact); re-arm 10000 regardless
-    -- (C++-exact).
+    -- random-target leg uses pickThreatTarget (threat-list
+    -- any-unit, SelectTarget(Random, 0) defaults), boss-position
+    -- fallback when no target (C++-exact); re-arm 10000
+    -- regardless (C++-exact).
     if st.mushroom <= 1000 then
-        local target = pickRandomPlayer(creature)
+        local target = pickThreatTarget(creature)
         local mx, my, mz
         if target then
             mx, my, mz = target:GetX(), target:GetY(), target:GetZ()
@@ -156,11 +152,11 @@ local function bossTick(creature, guid)
     end
 
     -- Acid geyser 38739: 10s init then 10000+rand32()%7500 —
-    -- random alive player in the instance (thespia precedent),
-    -- nil pick casts nothing, non-triggered cast on the target
-    -- (C++-exact), re-arm regardless.
+    -- random alive threat-list unit (SelectTarget(Random, 0)
+    -- defaults), nil pick casts nothing, non-triggered cast
+    -- on the target (C++-exact), re-arm regardless.
     if st.acidGeyser <= 1000 then
-        local target = pickRandomPlayer(creature)
+        local target = pickThreatTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_ACID_GEYSER)
         end
