@@ -208,6 +208,22 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// IsFlying is Unit::IsFlying (Unit.h:1644): HasMovementFlag(FLYING |
+	// DISABLE_GRAVITY) on the player's movement info. Go's twin is the
+	// session's last client movement packet (lastMovementInfoSnapshot),
+	// sanitized like C++ WorldSession validation (flying kept only with
+	// a fly aura or GM security), so legitimate flyers keep the flag. A
+	// player with no movement packet yet reads false, matching C++'s
+	// zero-flag default. Taxi passengers read pre-boarding flags: Go
+	// simulates taxi server-side with no spline model, so no in-flight
+	// packet ever lands. Backs the air-force tripwire flying skip
+	// (npcs_special.cpp:174).
+	methods["IsFlying"] = luaNoArgs(func() any {
+		if mi, ok := s.lastMovementInfoSnapshot(); ok {
+			return mi.Flags&(movementFlying|movementDisableGravity) != 0
+		}
+		return false
+	})
 	// IsHostileTo(target) is WorldObject::IsHostileTo (Object.cpp:2842-2845)
 	// from the player side, via playerHostileToUnit: the target's faction
 	// template id resolves from a creature object (its motion's faction) or

@@ -10,8 +10,9 @@
 -- lua_objects.go, lua_player.go, scripting/object.go).
 -- Sibling file handles C++ lines 1154+.
 
--- npc_air_force_bots (C++ :43-188) — ALARMBOT PORTED in
--- lua_scripts/world/npc_air_force_bots.lua; TRIPWIRE DOCUMENTED-ONLY.
+-- npc_air_force_bots (C++ :43-188) — ALARMBOT + TRIPWIRE PORTED in
+-- lua_scripts/world/npc_air_force_bots.lua (TRIPWIRE on the 2026-10-24
+-- player:IsFlying bridge; 22126 refiled TRIPWIRE, see that file).
 -- Entries ARE in-file (airforceSpawns table :72-98: 2614,2615,21974,21993,
 -- 21996,21997,21999,22001,22002,22003,22063,22065,22066,22068,22069,22070,
 -- 22071,22078,22079,22080,22086,22087,22088,22090,22124,22125,22126).
@@ -23,9 +24,9 @@
 -- Bridges live since 2026-10-24: creature:IsHostileTo,
 -- player:IsHostileTo, creature:IsValidAttackTarget, creature:IsEngagedBy,
 -- creature:EngageWithTarget (the creature:SummonCreature bridge was already
--- live). TRIPWIRE stays out: the :174 flying skip has no player:IsFlying
--- bridge. The old "unit-flag manipulation" block is retracted: neither arm
--- touches unit flags.
+-- live); player:IsFlying landed the same night, closing the :174 flying
+-- skip and the TRIPWIRE port. The old "unit-flag manipulation" block is
+-- retracted: neither arm touches unit flags.
 
 -- npc_chicken_cluck (C++ :194-292) — DOCUMENTED-ONLY.
 -- Arms: Reset :216-221 (faction FACTION_PREY, remove QUESTGIVER flag);
@@ -79,7 +80,8 @@
 -- a nullptr target at 2s / 5s / 7s / 10s ... (outer Repeat 5s, inner +3s).
 -- Shape is timer-portable (OnSpawn 5 / OnReset 23 + CreateLuaEvent chains),
 -- but CastSpell(nil, ...) falls back to the creature's victim and is a no-op
--- without one (lua_creature_events.go:57-95) — there is no null-target cast
+-- without one (lua_creature_events.go:314-330, re-verified 2026-10-24)
+-- — there is no null-target cast
 -- bridge, so the ported timer would silently cast nothing. Doubly
 -- blocked: 45907's effect is a SpellScript (spell_holiday.cpp:1543,
 -- OnEffectHitTarget dummy: hit unit self-casts the indicator spells),
@@ -321,7 +323,11 @@ end
 -- all: ScriptName binding only, no entry const in the C++ tree);
 -- UpdateAI :1141-1148 (UpdateVictim gate; isAttackReady ->
 -- DoCastVictim(SPELL_DEATHTOUCH 5, triggered); resetAttackTimer).
--- No melee-swing-timing bridge exists (isAttackReady / resetAttackTimer not
--- exposed; no creature melee event) — the attack-speed interval cannot be
--- read, and inventing a CreateLuaEvent interval would fabricate behavior.
--- No entry consts in the C++ tree.
+-- Re-keyed 2026-10-24: the swing-readiness DATA exists (engine tick
+-- swings when now-LastAttack >= UNIT_FIELD_BASEATTACKTIME x aura factor,
+-- creaturemotion.go) but no Lua bridge exposes it (isAttackReady /
+-- resetAttackTimer unexposed) — and a bridge alone would unlock nothing:
+-- no entry const in the C++ tree means no registration, and the port
+-- would also need NoMeleeAttack suppression (the C++ UpdateAI never
+-- melee-swings; the Go engine tick would swing alongside the cast).
+-- Inventing a CreateLuaEvent interval would fabricate behavior.
