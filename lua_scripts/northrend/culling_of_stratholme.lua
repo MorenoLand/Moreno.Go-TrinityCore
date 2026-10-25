@@ -7,11 +7,19 @@
 -- 53435), non-triggered. The Lua select hook receives (sender,
 -- action); GOSSIP_OFFSET_TELEPORT = 2 (enum :238-240), so the gate
 -- is action == GOSSIP_ACTION_INFO_DEF + 2 = 1002 (exact).
+-- Ported: GOSSIP_OFFSET_SKIP_1 (1005) falls through to the TELEPORT
+-- case in C++ (AdvanceDungeonFar leg drops — instance SetData, no
+-- instance bridge), so it teleports exactly like TELEPORT.
+-- Ported: GOSSIP_OFFSET_EXPLAIN_2 (1004) sends GOSSIP_TEXT_EXPLAIN_3
+-- 12952 with no items (kalecgos terminal-step idiom); the
+-- AdvanceDungeon leg drops (instance SetData) and the AddItem
+-- (ITEM_ARCANE_DISRUPTOR 37888) leg drops (no item-grant bridge).
 -- Documented-only: the instance-gated OnGossipHello menu (skip /
 -- explain arms ride instance->GetStableStateFor / AdvanceDungeon /
--- SetGuidData — no instance bridge), the EXPLAIN / SKIP menu-nav
--- select arms (fire only from the ungated menu), the AddItem
--- (ITEM_ARCANE_DISRUPTOR) leg (no item-grant bridge), and the GM
+-- SetGuidData — no instance bridge), the EXPLAIN / SKIP /
+-- EXPLAIN_1 menu-nav select arms (their option texts live only in
+-- DB gossip_menu_option rows — C++ carries no string constants for
+-- them, unlike the kalecgos GOSSIP_ITEM_* precedent), and the GM
 -- instance-control arms (SetData / SetGuidData — no instance
 -- bridge).
 -- Documented-only (nearest-creature axis): npc_hearthsinger_forresten_cot
@@ -49,12 +57,19 @@ local ENTRY_CHROMIE_START = 26527
 
 local GOSSIP_ACTION_INFO_DEF = 1000
 local GOSSIP_OFFSET_TELEPORT = 2
+local GOSSIP_OFFSET_EXPLAIN_2 = 4
+local GOSSIP_OFFSET_SKIP_1 = 5
+local GOSSIP_TEXT_EXPLAIN_3 = 12952
 local SPELL_TELEPORT_PLAYER = 53435
 
 local function chromieGossipSelect(event, player, creature, sender, action)
-    if action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT then
+    if action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT
+        or action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_SKIP_1 then
         player:GossipComplete()
         creature:CastSpell(player, SPELL_TELEPORT_PLAYER)
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN_2 then
+        player:GossipClearMenu()
+        player:GossipSendMenu(GOSSIP_TEXT_EXPLAIN_3, creature)
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
