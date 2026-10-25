@@ -26,7 +26,7 @@
 -- Reset — SetEquipmentSlots(49992, NO_CHANGE, NO_CHANGE)
 -- (boss_faction_champions.cpp:866); base Reset EVENT_THREAT schedule
 -- (:588-593): UpdatePower + UpdateThreat legs PORTED below (AI_HEALER, no armor
--- read); heroic CC schedule still rides the unported machine.
+-- read); heroic CC schedule PORTED below (removeCCCheck).
 
 local ENTRY_SHAMAN_ALLIANCE = 34470 -- trial_of_the_crusader.h:191
 local ENTRY_SHAMAN_HORDE = 34444 -- trial_of_the_crusader.h:206
@@ -182,6 +182,24 @@ local function threatCheck(creature, guid)
     schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
 end
 
+-- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
+-- EVENT_REMOVE_CC (:726-734): breakable-CC gate, then
+-- RemoveAurasByType STUN 12 / FEAR 7 / ROOT 26 / PACIFY 25 / CONFUSE 5
+-- in C++ order; 2min re-arm after a strip, 3s re-check otherwise.
+-- Full arm note in boss_faction_champions.lua (removeCCCheck).
+local function removeCCCheck(creature, guid)
+    if creature:HasBreakableByDamageCrowdControlAura() then
+        creature:RemoveAurasByType(12)
+        creature:RemoveAurasByType(7)
+        creature:RemoveAurasByType(26)
+        creature:RemoveAurasByType(25)
+        creature:RemoveAurasByType(5)
+        schedule(guid, "removecc", 120000, function() removeCCCheck(creature, guid) end)
+    else
+        schedule(guid, "removecc", 3000, function() removeCCCheck(creature, guid) end)
+    end
+end
+
 local function shamanEnterCombat(event, creature, target)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
@@ -190,6 +208,9 @@ local function shamanEnterCombat(event, creature, target)
     scheduleRotation(creature)
     local guid = creature:GetGUID()
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
+    end
 end
 
 local function shamanLeaveCombat(event, creature)

@@ -100,6 +100,24 @@ local function threatCheck(creature, guid)
     schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
 end
 
+-- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
+-- EVENT_REMOVE_CC (:726-734): breakable-CC gate, then
+-- RemoveAurasByType STUN 12 / FEAR 7 / ROOT 26 / PACIFY 25 / CONFUSE 5
+-- in C++ order; 2min re-arm after a strip, 3s re-check otherwise.
+-- Full arm note in boss_faction_champions.lua (removeCCCheck).
+local function removeCCCheck(creature, guid)
+    if creature:HasBreakableByDamageCrowdControlAura() then
+        creature:RemoveAurasByType(12)
+        creature:RemoveAurasByType(7)
+        creature:RemoveAurasByType(26)
+        creature:RemoveAurasByType(25)
+        creature:RemoveAurasByType(5)
+        schedule(guid, "removecc", 120000, function() removeCCCheck(creature, guid) end)
+    else
+        schedule(guid, "removecc", 3000, function() removeCCCheck(creature, guid) end)
+    end
+end
+
 local function druidEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -108,6 +126,9 @@ local function druidEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     schedule(guid, "barkskin", {15000, 25000}, function() onBarkskin(creature, guid) end)
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
+    end
 end
 
 local function druidLeaveCombat(event, creature)

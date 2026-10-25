@@ -613,6 +613,49 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.clearCreatureAuras(auraKey())
 		return nil, nil
 	}
+	// HasBreakableByDamageCrowdControlAura is Unit::HasBreakableByDamageCrowdControlAura
+	// (Unit.cpp:673-683) for the creature itself: the shared breakableCCAuraPresent
+	// scan over its live engine-applied auras. The Lua AddAura presence set carries
+	// no aura type, so a Lua-added aura never triggers the gate, the GetStackAmount
+	// convention. The excludeCasterChannel leg is vacuous in Go (no creature
+	// channeled-spell state, creaturemotion.go:1651-1667).
+	methods["HasBreakableByDamageCrowdControlAura"] = func(_ context.Context, _ []any) ([]any, error) {
+		key := auraKey()
+		s.auraMu.Lock()
+		snapshot := make(map[uint32]*activeAura, len(s.activeCreatureAuras[key]))
+		for spellID, aura := range s.activeCreatureAuras[key] {
+			snapshot[spellID] = aura
+		}
+		s.auraMu.Unlock()
+		return []any{breakableCCAuraPresent(snapshot)}, nil
+	}
+	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp) for handler creatures:
+	// every live engine-applied aura whose stored AuraType matches is removed via
+	// the removeCreatureAura funnel. Lua-added presence-only auras carry no type
+	// and are never matched. The caster-GUID / except-Aura legs take their C++
+	// defaults (any caster, no exception).
+	methods["RemoveAurasByType"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		var toRemove []uint32
+		for spellID, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if aura.AuraType == auraType {
+				toRemove = append(toRemove, spellID)
+			}
+		}
+		s.auraMu.Unlock()
+		for _, spellID := range toRemove {
+			s.removeCreatureAura(key, spellID)
+		}
+		return nil, nil
+	}
 	// AttackStop is Unit::AttackStop (Unit.cpp:5763) for handler creatures:
 	// the current victim is dropped (TargetGUID=0), SMSG_ATTACK_STOP goes
 	// to the instance, and the no-call-assistance flag resets (the

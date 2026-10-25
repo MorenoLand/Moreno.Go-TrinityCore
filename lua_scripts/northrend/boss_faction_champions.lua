@@ -34,9 +34,11 @@
 --   (:611) is PORTED below for AI_RANGED/AI_HEALER entries via
 --   GetAITargets + ModifyThreatByPercent(-100) + AddThreat; melee
 --   entries stay out (victim armor read, no player GetArmor bridge).
--- - boss_faction_championsAI base: EVENT_THREAT 5s + heroic
---   EVENT_REMOVE_CC 5s (instance-gated), UpdateThreat/UpdatePower,
---   RemoveCC, JustEngagedWith: DoCast(me, SPELL_ANTI_AOE 68595, true)
+-- - boss_faction_championsAI base: EVENT_THREAT 5s,
+--   UpdateThreat/UpdatePower, heroic EVENT_REMOVE_CC 5s + RemoveCC
+--   (PORTED 2026-10-25 on the new HasBreakableByDamageCrowdControlAura /
+--   RemoveAurasByType bridges, engine/world/lua_creature_events.go),
+--   JustEngagedWith: DoCast(me, SPELL_ANTI_AOE 68595, true)
 --   (:646) + SetCombatPulseDelay(5) (:647) + DoZoneInCombat (:649) are
 --   PORTED 2026-10-23 in C++ arm order (the old "no bridges" claim was
 --   stale — triggered CastSpell and the SetCombatPulseDelay bridge at
@@ -327,6 +329,37 @@ local function countCheck(creature, guid, arm)
     end
 end
 
+-- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
+-- EVENT_REMOVE_CC (:726-734, Reset init 5s, 2min re-arm after a strip,
+-- 3s re-check otherwise; Reset gates on IsHeroic and aiType != AI_PET,
+-- and no Lua file covers the pet champions, so the gate here is
+-- IsHeroic alone): HasBreakableByDamageCrowdControlAura first, then
+-- RemoveAurasByType in C++ order STUN/FEAR/ROOT/PACIFY/CONFUSE.
+-- TRANSFORM is in the breakable set but RemoveCC does not strip it.
+-- Aura-type numbers are SpellAuraDefines.h (Go spells.go twins).
+local AURA_MOD_CONFUSE = 5
+local AURA_MOD_FEAR = 7
+local AURA_MOD_STUN = 12
+local AURA_MOD_PACIFY = 25
+local AURA_MOD_ROOT = 26
+
+local function removeCCCheck(creature, guid)
+    if creature:HasBreakableByDamageCrowdControlAura() then
+        creature:RemoveAurasByType(AURA_MOD_STUN)
+        creature:RemoveAurasByType(AURA_MOD_FEAR)
+        creature:RemoveAurasByType(AURA_MOD_ROOT)
+        creature:RemoveAurasByType(AURA_MOD_PACIFY)
+        creature:RemoveAurasByType(AURA_MOD_CONFUSE)
+        schedule(guid, "removecc", 120000, function()
+            removeCCCheck(creature, guid)
+        end)
+    else
+        schedule(guid, "removecc", 3000, function()
+            removeCCCheck(creature, guid)
+        end)
+    end
+end
+
 local function championEnterCombat(event, creature, target)
     local championCfg = CHAMPIONS[creature:GetEntry()]
     if championCfg == nil then
@@ -362,6 +395,11 @@ local function championEnterCombat(event, creature, target)
     schedule(guid, "threat", 5000, function()
         powerCheck(creature, guid)
     end)
+    if creature:IsHeroic() then
+        schedule(guid, "removecc", 5000, function()
+            removeCCCheck(creature, guid)
+        end)
+    end
     schedule(guid, "def", math.random(championCfg.initMin, championCfg.initMax), function()
         defensiveCheck(creature, guid, championCfg)
     end)

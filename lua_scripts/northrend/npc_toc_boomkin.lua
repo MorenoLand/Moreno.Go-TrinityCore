@@ -26,7 +26,9 @@
 -- sentinel, mr_smite precedent). The base Reset legs ride unbridged:
 -- _teamInstance = instance->GetData(DATA_TEAM) (no instance bridge),
 -- SetBossBoundary (no boundary bridge), EVENT_THREAT 5s
--- (UpdatePower + UpdateThreat legs PORTED below; heroic EVENT_REMOVE_CC still out).
+-- (UpdatePower + UpdateThreat legs PORTED below; heroic EVENT_REMOVE_CC
+-- + RemoveCC legs PORTED below on the new HasBreakable /
+-- RemoveAurasByType bridges).
 -- base JustEngagedWith (event 1): DoCast(me, SPELL_ANTI_AOE 68595,
 -- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
@@ -63,7 +65,8 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_faction_championsAI UpdateAI: UpdatePower() + UpdateThreat()
 -- PORTED above (AI_RANGED, no armor read); EVENT_REMOVE_CC
--- RemoveAurasByType legs — no aura-type bridge.
+-- RemoveAurasByType legs — PORTED below (see
+-- boss_faction_champions.lua removeCCCheck for the C++ arm shape).
 -- npc_toc_boomkin UpdateAI DoSpellAttackIfReady(SPELL_WRATH 65862) —
 -- ranged auto-attack leg; Go melee is engine-driven (deviation: the
 -- champion melees instead of wrath-spamming between casts).
@@ -265,12 +268,33 @@ local function threatCheck(creature, guid)
     schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
 end
 
+-- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
+-- EVENT_REMOVE_CC (:726-734): breakable-CC gate, then
+-- RemoveAurasByType STUN 12 / FEAR 7 / ROOT 26 / PACIFY 25 / CONFUSE 5
+-- in C++ order; 2min re-arm after a strip, 3s re-check otherwise.
+-- Full arm note in boss_faction_champions.lua (removeCCCheck).
+local function removeCCCheck(creature, guid)
+    if creature:HasBreakableByDamageCrowdControlAura() then
+        creature:RemoveAurasByType(12)
+        creature:RemoveAurasByType(7)
+        creature:RemoveAurasByType(26)
+        creature:RemoveAurasByType(25)
+        creature:RemoveAurasByType(5)
+        schedule(guid, "removecc", 120000, function() removeCCCheck(creature, guid) end)
+    else
+        schedule(guid, "removecc", 3000, function() removeCCCheck(creature, guid) end)
+    end
+end
+
 local function boomkinEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:646
     creature:DoZoneInCombat() -- C++ :649, in arm order after pulse delay (bridge live 2026-10-23)
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
+    end
 end
 
 local function boomkinLeaveCombat(event, creature)

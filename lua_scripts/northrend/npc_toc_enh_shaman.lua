@@ -27,8 +27,9 @@
 -- npc_toc_druid.lua precedent (champions spawn opposite-faction to the
 -- raid, so an Alliance-entry champion means a Horde raid -> Garrosh).
 -- Reset — SetEquipmentSlots(51803, 48013, NO_CHANGE)
--- (boss_faction_champions.cpp:1941); base Reset threat/CC schedules
--- (:588-593) ride the unported threat/heroic machines, and the Reset
+-- (boss_faction_champions.cpp:1941); base Reset threat schedule rides
+-- the unported melee-threat machine (victim armor bridge), and the
+-- heroic CC schedule is PORTED below (removeCCCheck); the Reset
 -- summons.DespawnAll() (:1942) is vacuous in-model (no totem summons
 -- are tracked until the totem machine ports).
 
@@ -152,12 +153,34 @@ end
 -- this enhancement shaman AI (npc_toc_enh_shamanAI : public
 -- boss_faction_championsAI, :1916); the npc_toc_druid.lua precedent
 -- ports all three bridged arms.
+-- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
+-- EVENT_REMOVE_CC (:726-734): breakable-CC gate, then
+-- RemoveAurasByType STUN 12 / FEAR 7 / ROOT 26 / PACIFY 25 / CONFUSE 5
+-- in C++ order; 2min re-arm after a strip, 3s re-check otherwise.
+-- Full arm note in boss_faction_champions.lua (removeCCCheck).
+local function removeCCCheck(creature, guid)
+    if creature:HasBreakableByDamageCrowdControlAura() then
+        creature:RemoveAurasByType(12)
+        creature:RemoveAurasByType(7)
+        creature:RemoveAurasByType(26)
+        creature:RemoveAurasByType(25)
+        creature:RemoveAurasByType(5)
+        schedule(guid, "removecc", 120000, function() removeCCCheck(creature, guid) end)
+    else
+        schedule(guid, "removecc", 3000, function() removeCCCheck(creature, guid) end)
+    end
+end
+
 local function enhShamanEnterCombat(event, creature, target)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     scheduleRotation(creature)
+    if creature:IsHeroic() then
+        local guid = creature:GetGUID()
+        schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
+    end
 end
 
 local function enhShamanLeaveCombat(event, creature)
