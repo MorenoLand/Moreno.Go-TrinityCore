@@ -243,11 +243,16 @@ end
 -- the bridged threat list (murmur/thaurissan precedent), not
 -- the instance player pool.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if targets == nil or #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 local function bossTick(creature, guid)

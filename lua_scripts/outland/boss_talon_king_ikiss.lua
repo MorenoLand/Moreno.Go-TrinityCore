@@ -111,7 +111,9 @@ end
 local function randomThreatTarget(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        candidates[#candidates + 1] = t
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
     end
     if #candidates == 0 then
         return nil
@@ -129,9 +131,16 @@ local function polymorphTick(creature, guid)
         target = randomThreatTarget(creature)
     else
         -- C++ SelectTarget(MaxThreat, 1) (playerOnly defaults FALSE per
-        -- UnitAI.h:170): the second threat-list entry outright, pets/totems
-        -- eligible — NOT the second-highest-threat player.
-        target = creature:GetAITargets()[2]
+        -- UnitAI.h:170): the second ALIVE threat-list entry (offline refs
+        -- skipped before the offset), pets/totems eligible — NOT the
+        -- second-highest-threat player.
+        local alive = {}
+        for _, t in ipairs(creature:GetAITargets()) do
+            if not t:IsDead() then
+                alive[#alive + 1] = t
+            end
+        end
+        target = alive[2]
     end
     if target then
         creature:CastSpell(target, SPELL_POLYMORPH)

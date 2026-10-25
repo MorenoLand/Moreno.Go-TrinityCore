@@ -28,7 +28,7 @@
 -- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
 -- and ported at onReset below; InterruptNonMeleeSpells(false) before
 -- Evocation is bridged (no-op twin, lua_creature_events.go) and ported in onAstralFlare below. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
--- i.e. a non-tank — is PORTED via creature:GetAITargets()[2] (threat-ordered,
+-- i.e. a non-tank — is PORTED via the alive-filtered GetAITargets()[2] (threat-ordered,
 -- lua_creature_events.go; the stale "no threat model" note is retracted).
 
 local ENTRY = 15691
@@ -86,11 +86,19 @@ end
 -- C++ EVENT_HATEFUL_BOLT: SelectTarget(MaxThreat, 1), all defaults (no
 -- range cap, playerOnly false, withTank true) — the second entry of the
 -- threat-ordered GetAITargets list; nil when fewer than 2 entries (C++
--- returns nullptr when the threat list size <= offset). C++ applies no
--- dead filter, so none added (midnight precedent).
+-- returns nullptr when the threat list size <= offset). C++ SelectTargetList
+-- skips offline refs BEFORE the offset (UnitAI.h; ThreatManager
+-- ShouldBeOffline via UNIT_STATE_DIED, Creature.cpp) — the Go list
+-- carries dead entries, so filter alive first, then take [2] (midnight
+-- dead-filter precedent).
 local function onHatefulBolt(creature, guid)
-    local targets = creature:GetAITargets()
-    local target = targets[2]
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    local target = alive[2]
     if target then
         creature:CastSpell(target, SPELL_HATEFUL_BOLT)
     end

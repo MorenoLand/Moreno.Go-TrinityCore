@@ -170,12 +170,17 @@ end
 -- default, UnitAI.h:170), excluding the threat head — offset 1 skips the
 -- first entry in MaxThreat order (UnitAI.h); no range cap.
 local function randomAnyTarget(creature)
-    local targets = creature:GetAITargets()
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
     -- C++ shortcut: threat list size <= offset ignores ALL elements.
-    if #targets <= 1 then
+    if #alive <= 1 then
         return nil
     end
-    return targets[1 + math.random(#targets - 1)]
+    return alive[1 + math.random(#alive - 1)]
 end
 
 -- C++ SelectTarget(Random, 0, me->GetCombatReach()): any threat-listed
@@ -186,7 +191,7 @@ local function randomTargetWithinReach(creature)
     local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance(t) <= reach then
+        if not t:IsDead() and creature:GetDistance(t) <= reach then
             candidates[#candidates + 1] = t
         end
     end

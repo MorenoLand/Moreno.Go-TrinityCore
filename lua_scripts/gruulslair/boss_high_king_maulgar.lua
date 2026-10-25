@@ -166,11 +166,16 @@ end
 -- randomTargetAnywhere precedent). Used by the three random-target
 -- arms below (maulgar charge, olm death coil, kiggler polymorph).
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- krosh blast wave (boss_high_king_maulgar.cpp:560): random

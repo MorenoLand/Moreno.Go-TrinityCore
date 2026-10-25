@@ -150,11 +150,16 @@ end
 -- EngageWithTarget relay no-ops on non-player picks (player-session-only
 -- bearer, lua_creature_events.go:498).
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- C++ EVENT_ERUPTION: non-triggered DoCastVictim(17731); re-arm

@@ -124,7 +124,7 @@ end
 local function randomThreatTarget(creature, maxDist, playersOnly)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if (not playersOnly) or t:GetObjectType() == "Player" then
+        if not t:IsDead() and ((not playersOnly) or t:GetObjectType() == "Player") then
             if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
                 candidates[#candidates + 1] = t
             end
