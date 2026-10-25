@@ -213,8 +213,9 @@
 -- into freyaDied (see above).
 -- Elder DamageTaken — stonebark petrified-bark reflect
 -- (:841-855: who->CastSpell(who, SPELL_PETRIFIED_BARK_DMG
--- 62379) with AddSpellBP0(damage) + damage = 0): the
--- spell-BP damage mod has no bridge; not timer-driven.
+-- 62379) + damage = 0) PORTED as event 9 (attacker self-cast
+-- via attacker:CastSpell, doomwalker precedent); only the
+-- AddSpellBP0(damage) mod stays out (no extra-args bridge).
 -- npc_snaplasher /
 -- npc_storm_lasher / npc_ancient_water_spirit /
 -- npc_detonating_lasher / npc_sun_beam / npc_nature_bomb /
@@ -253,6 +254,9 @@ local SPELL_DRAINED_OF_POWER = 62467
 local SPELL_ENRAGE = 47008
 local SPELL_SUMMON_EONAR_GIFT = 62572
 local SPELL_SUNBEAM = 62623
+local SPELL_FREYA_UNSTABLE_SUNBEAM = 62450
+local SPELL_FREYA_GROUND_TREMOR = 62437
+local SPELL_ROOTS_FREYA = 62283
 
 -- Elder Brightleaf
 local SPELL_UNSTABLE_SUN_BEAM_SUMMON = 62207
@@ -261,6 +265,7 @@ local SPELL_FLUX_AURA = 62239
 
 -- Elder Stonebark
 local SPELL_PETRIFIED_BARK = 62337
+local SPELL_PETRIFIED_BARK_DMG = 62379
 local SPELL_FISTS_OF_STONE = 62344
 local SPELL_GROUND_TREMOR = 62325
 
@@ -278,6 +283,8 @@ local SAY_BERSERK = 4
 local SAY_AGGRO = 0 -- boss_freya.cpp:32
 local SAY_AGGRO_WITH_ELDER = 1 -- boss_freya.cpp:33
 local EMOTE_LIFEBINDERS_GIFT = 8
+local EMOTE_GROUND_TREMOR = 10
+local EMOTE_IRON_ROOTS = 11
 
 local SAY_ELDER_AGGRO = 0
 local SAY_ELDER_SLAY = 1
@@ -292,6 +299,8 @@ local REACT_PASSIVE = 0 -- UnitDefines.h:340
 -- OnLeaveCombat / OnDied / OnReset. A {min, max} delay is a
 -- randtime range, matching C++ ScheduleEvent(min, max).
 local timers = {}
+
+local freyaFinished = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -327,12 +336,13 @@ end
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, dist,
 -- playerOnly) legs (the baltharus GetPlayersInWorld
 -- candidate-selection precedent; thorim this run).
-local function randomPlayerInRange(creature, minDist, maxDist)
+local function randomPlayerInRange(creature, minDist, maxDist, excludeAura)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+                and not plr:IsDead()
+                and (excludeAura == nil or not plr:HasAura(excludeAura)) then
             local dist = creature:GetDistance(plr)
             if dist >= minDist and dist <= maxDist then
                 candidates[#candidates + 1] = plr
@@ -372,6 +382,42 @@ local function onSunbeam(creature, guid)
     schedule(guid, "sunbeam", {10000, 15000}, function() onSunbeam(creature, guid) end)
 end
 
+-- C++ EVENT_UNSTABLE_ENERGY (boss_freya.cpp:434-437): random
+-- player 100y, DoCast(target, SPELL_FREYA_UNSTABLE_SUNBEAM 62450,
+-- true) triggered; init 10s-20s (:364), repeat 15s-20s. Gated on
+-- Brightleaf alive at engage (see freyaEnterCombat).
+local function onUnstableEnergy(creature, guid)
+    local target = randomPlayerInRange(creature, 0, 100)
+    if target then
+        creature:CastSpell(target, SPELL_FREYA_UNSTABLE_SUNBEAM, true)
+    end
+    schedule(guid, "unstable_energy", {15000, 20000}, function() onUnstableEnergy(creature, guid) end)
+end
+
+-- C++ EVENT_GROUND_TREMOR (boss_freya.cpp:457-460): Talk
+-- (EMOTE_GROUND_TREMOR 10) + DoCastAOE (self-cast)
+-- SPELL_FREYA_GROUND_TREMOR 62437, non-triggered; init 10s-20s
+-- (:370), repeat 25s-28s. Gated on Stonebark alive at engage.
+local function onFreyaGroundTremor(creature, guid)
+    creature:Talk(EMOTE_GROUND_TREMOR)
+    creature:CastSpell(creature, SPELL_FREYA_GROUND_TREMOR)
+    schedule(guid, "freya_ground_tremor", {25000, 28000}, function() onFreyaGroundTremor(creature, guid) end)
+end
+
+-- C++ EVENT_STRENGTHENED_IRON_ROOTS (boss_freya.cpp:451-455):
+-- Talk(EMOTE_IRON_ROOTS 11) + random player 100y without
+-- SPELL_ROOTS_FREYA -> target self-cast 62283, triggered; init
+-- 10s-20s (:376), repeat 12s-20s. Gated on Ironbranch alive at
+-- engage.
+local function onStrengthenedIronRoots(creature, guid)
+    creature:Talk(EMOTE_IRON_ROOTS)
+    local target = randomPlayerInRange(creature, 0, 100, SPELL_ROOTS_FREYA)
+    if target then
+        target:CastSpell(target, SPELL_ROOTS_FREYA, true)
+    end
+    schedule(guid, "strengthened_iron_roots", {12000, 20000}, function() onStrengthenedIronRoots(creature, guid) end)
+end
+
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -383,10 +429,13 @@ local function freyaEnterCombat(event, creature, target)
     -- the alive-elder count (C++: Elder[n] && Elder[n]->IsAlive(),
     -- :357) reconstructed via GetCreaturesInGrid + IsAlive.
     local eldersAlive = 0
-    for _, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
+    local elderAlive = {}
+    for i, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
+        elderAlive[i] = false
         for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
             if elder:IsAlive() then
                 eldersAlive = eldersAlive + 1
+                elderAlive[i] = true
             end
         end
     end
@@ -404,6 +453,19 @@ local function freyaEnterCombat(event, creature, target)
     end)
     schedule(guid, "eonar_gift", 25000, function() onEonarGift(creature, guid) end)
     schedule(guid, "sunbeam", {5000, 15000}, function() onSunbeam(creature, guid) end)
+    -- C++ JustEngagedWith elder-gated arms (:362-377): the gate is
+    -- the same per-entry alive scan as the Talk choice above
+    -- (C++ reads instance GuidData; the grid scan is this file's
+    -- engage-time precedent). Inits are all 10s-20s.
+    if elderAlive[1] then
+        schedule(guid, "unstable_energy", {10000, 20000}, function() onUnstableEnergy(creature, guid) end)
+    end
+    if elderAlive[2] then
+        schedule(guid, "freya_ground_tremor", {10000, 20000}, function() onFreyaGroundTremor(creature, guid) end)
+    end
+    if elderAlive[3] then
+        schedule(guid, "strengthened_iron_roots", {10000, 20000}, function() onStrengthenedIronRoots(creature, guid) end)
+    end
 end
 
 local function freyaLeaveCombat(event, creature)
@@ -419,8 +481,7 @@ end
 -- events.Reset as cancelTimers). The elder _JustDied instance SetBossState
 -- has none; EngagementOver is freya-side housekeeping on the dying boss
 -- (its Go analog, InCombat=false, rides CombatStop). Both stay out.
-local function freyaDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+local function freyaElderShutdown(creature)
     for _, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
         for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
             if elder:IsAlive() then
@@ -433,6 +494,15 @@ local function freyaDied(event, creature, killer)
             end
         end
     end
+end
+
+-- Fallback for true-kill paths: on the lethal DamageTaken path the
+-- kill funnel never runs (damage is rewritten to 0), so the sweep
+-- is driven from freyaDamageTaken below; this stays as the
+-- event-4 fallback.
+local function freyaDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    freyaElderShutdown(creature)
 end
 
 local function freyaReset(event, creature)
@@ -469,21 +539,34 @@ end
 -- summon (summonSpell indexed by GetMap()->GetDifficulty() —
 -- no 10/25 raid-size bridge; creature:IsHeroic is heroic-only).
 -- InterruptNonMeleeSpells (no-op twin) and RemoveAllAttackers are ported
--- above in C++ JustDied order; the live-elder shutdown sweep is ported
--- into freyaDied 2026-10-24.
+-- above in C++ JustDied order. The live-elder shutdown sweep runs
+-- here, after the credit cast (C++ JustDied order: self legs, then
+-- the elder sweep :630-641) — event 4 never fires on this path
+-- because the damage rewrite keeps health above 0. The GUID-keyed
+-- freyaFinished latch mirrors C++ JustDied's _encounterFinished
+-- early-return (:602-606): later lethal hits only re-zero damage.
+-- C++ Reset also early-returns when finished (:318-322), so the
+-- latch is deliberately NOT cleared on Reset; a respawned Freya is
+-- a new GUID.
 local function freyaDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
     if damage >= creature:GetHealth() then
+        if freyaFinished[guid] then
+            return false, 0
+        end
+        freyaFinished[guid] = true
         creature:Talk(SAY_DEATH)
         creature:SetReactState(REACT_PASSIVE)
         creature:InterruptNonMeleeSpells()
         creature:RemoveAllAttackers()
         creature:AttackStop()
         creature:SetFaction(FACTION_FRIENDLY)
-        cancelTimers(creature:GetGUID())
+        cancelTimers(guid)
         CreateLuaEvent(function()
             creature:Despawn()
         end, 7500)
         creature:CastSpell(creature, SPELL_KNOCK_ON_WOOD_CREDIT, true)
+        freyaElderShutdown(creature)
         return false, 0
     end
 end
@@ -609,14 +692,14 @@ end
 -- player 100y (playerOnly, -SPELL_ROOTS_IRONBRANCH
 -- aura-filter), target->CastSpell(target,
 -- SPELL_ROOTS_IRONBRANCH 62438, true) — triggered;
--- init 12s-17s (:927), repeat 10s-20s. The "without aura"
--- filter has no bridge; the cast source is the boss rather
--- than the target (documented deviations).
+-- init 12s-17s (:927), repeat 10s-20s. The aura filter rides
+-- randomPlayerInRange's excludeAura (player:HasAura); the
+-- target self-casts (player:CastSpell, vezax precedent).
 local function onIronRoots(creature, guid)
     if elderTimersActive(creature) then
-        local target = randomPlayerInRange(creature, 0, 100)
+        local target = randomPlayerInRange(creature, 0, 100, SPELL_ROOTS_IRONBRANCH)
         if target then
-            creature:CastSpell(target, SPELL_ROOTS_IRONBRANCH, true)
+            target:CastSpell(target, SPELL_ROOTS_IRONBRANCH, true)
         end
     end
     schedule(guid, "iron_roots", {10000, 20000}, function() onIronRoots(creature, guid) end)
@@ -664,6 +747,20 @@ local function elderDied(event, creature, killer)
     creature:Talk(SAY_ELDER_DEATH)
 end
 
+-- C++ boss_stonebarkAI::DamageTaken (boss_freya.cpp:841-855): if
+-- the attacker exists, isn't self (GUID compare, malchezaar
+-- precedent), and Stonebark carries SPELL_PETRIFIED_BARK, the
+-- attacker self-casts SPELL_PETRIFIED_BARK_DMG 62379, triggered,
+-- and damage = 0. Only the AddSpellBP0(damage) mod stays out
+-- (no extra-args bridge).
+local function stonebarkDamageTaken(event, creature, attacker, damage)
+    if attacker and attacker:GetGUID() ~= creature:GetGUID()
+            and creature:HasAura(SPELL_PETRIFIED_BARK) then
+        attacker:CastSpell(attacker, SPELL_PETRIFIED_BARK_DMG, true)
+        return false, 0
+    end
+end
+
 RegisterCreatureEvent(ENTRY_FREYA, 1, freyaEnterCombat)
 RegisterCreatureEvent(ENTRY_FREYA, 2, freyaLeaveCombat)
 RegisterCreatureEvent(ENTRY_FREYA, 3, freyaTargetDied)
@@ -681,6 +778,7 @@ RegisterCreatureEvent(ENTRY_STONEBARK, 1, stonebarkEnterCombat)
 RegisterCreatureEvent(ENTRY_STONEBARK, 2, elderLeaveCombat)
 RegisterCreatureEvent(ENTRY_STONEBARK, 3, elderTargetDied)
 RegisterCreatureEvent(ENTRY_STONEBARK, 4, elderDied)
+RegisterCreatureEvent(ENTRY_STONEBARK, 9, stonebarkDamageTaken)
 RegisterCreatureEvent(ENTRY_STONEBARK, 23, elderReset)
 
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 1, ironbranchEnterCombat)

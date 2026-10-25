@@ -144,6 +144,10 @@ local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
 local SAY_SLAY = 4
+local SAY_DEATH = 7
+
+local SPELL_CREDIT_KILL = 64985
+local FACTION_FRIENDLY = 35
 
 local SPELL_SHEATH_OF_LIGHTNING = 62276
 
@@ -171,6 +175,8 @@ local function cancelTimers(guid)
         timers[guid] = nil
     end
 end
+
+local thorimFinished = {}
 
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
@@ -224,18 +230,22 @@ local function thorimLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ boss_thorimAI::Reset (boss_thorim.cpp:461): me->SetControlled(true,
--- UNIT_STATE_ROOT) — the balcony-phase root (lifted only by the unported
--- EVENT_JUMPDOWN), PORTED as SetRooted. The pre-phase-add summon loop
--- (:487, TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) is PORTED below,
+-- C++ boss_thorimAI::Reset (boss_thorim.cpp:465-477): early-return if
+-- _encounterFinished (GUID-keyed latch below — a respawned Thorim is a
+-- new GUID, so the latch never leaks across spawns), then
+-- SetReactState(REACT_PASSIVE) + SetDisableGravity(true) +
+-- SetControlled(true, UNIT_STATE_ROOT) (PORTED as SetRooted; the root is
+-- lifted only by the unported EVENT_JUMPDOWN). The pre-phase-add summon
+-- loop (:487, TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) is PORTED below,
 -- IsAlive-guarded: Go event 23 also fires on death, and C++ Reset never
--- runs on death. SetReactState(REACT_PASSIVE), SetDisableGravity(true),
--- SetImmuneToPC(true), the phase machine and the mini-boss respawn stay
--- out (balcony-phase gating; no instance bridge for the respawn).
+-- runs on death. SetImmuneToPC(true), the phase machine and the
+-- mini-boss respawn stay out (balcony-phase gating; no instance bridge
+-- for the respawn).
 local function thorimReset(event, creature)
-    -- C++ Reset (boss_thorim.cpp:475): SetDisableGravity(true) before the
-    -- root leg; the _encounterFinished early-return latch is not tracked
-    -- in Lua (same guard gap the existing summon loop already has).
+    if thorimFinished[creature:GetGUID()] then
+        return
+    end
+    creature:SetReactState(0)
     creature:SetDisableGravity(true)
     creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
@@ -266,21 +276,33 @@ end
 
 -- C++ boss_thorimAI::DamageTaken else-if (boss_thorim.cpp:940-943):
 -- HealthBelowPctDamaged(1, damage) -> damage = 0 + FinishEncounter().
--- Only the SetFlag(UNIT_FLAG_RENAME) leg (:579) is ported here; the
--- faction/credit/attack-stop/Talk legs of FinishEncounter stay out.
--- The phase-1 jumpdown branch is the else-if's guard in C++, but it
--- cannot fire this arm: Thorim enters phase 1 at full health, so no
--- single hit can cross 99% of max health — the arm is effectively
--- phase-2-only. The RENAME set is idempotent, so no latch is needed
--- (repeated sub-1% hits re-zero, the same outcome as C++'s
--- friendly-faction leg, which has no bridge).
+-- The floor form is C++-exact: HealthBelowPctDamaged compares strict <
+-- against integer-truncated max/100 (Unit.h:873); no postDamage > 0
+-- guard — the Damaged form fires on lethal hits by definition. The
+-- FinishEncounter self-legs are ported in C++ order (:572-579, :597):
+-- credit DoCastAOE (self-cast, triggered) -> ReactPassive ->
+-- Interrupt -> RemoveAllAttackers -> AttackStop -> FactionFriendly ->
+-- RENAME flag -> Talk(SAY_DEATH). The phase-1 jumpdown branch is the
+-- else-if's guard in C++, but it cannot fire this arm: Thorim enters
+-- phase 1 at full health, so no single hit can cross 99% of max
+-- health — the arm is effectively phase-2-only. Controller/pillar
+-- aura clears, hard-mode Sif despawn, _JustDied instance-DONE and the
+-- outro Talks 8-13 (hard-mode branch timing) stay out.
 local function thorimDamageTaken(event, creature, attacker, damage)
     local postDamage = creature:GetHealth() - damage
-    if postDamage < creature:GetMaxHealth() / 100 then
-        -- C++ boss_thorim.cpp FinishEncounter order: AttackStop
-        -- precedes the RENAME flag set.
+    if postDamage < math.floor(creature:GetMaxHealth() / 100) then
+        if thorimFinished[creature:GetGUID()] then
+            return false, 0
+        end
+        thorimFinished[creature:GetGUID()] = true
+        creature:CastSpell(creature, SPELL_CREDIT_KILL, true)
+        creature:SetReactState(0)
+        creature:InterruptNonMeleeSpells()
+        creature:RemoveAllAttackers()
         creature:AttackStop()
+        creature:SetFaction(FACTION_FRIENDLY)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
+        creature:Talk(SAY_DEATH)
         return false, 0
     end
 end

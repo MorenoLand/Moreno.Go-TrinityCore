@@ -58,9 +58,9 @@
 -- DoCast(target, SPELL_SHADOW_CRASH 62660) 2-arg non-triggered,
 -- init {8s,10s} (:142), re-arm {8s,12s} (:171) — bridged via the
 -- freya/gal_darah GetPlayersInWorld candidate-selection
--- precedent; the RAID_MODE(4,9) 10/25-man count gate has no raid-size
--- selector and is approximated as "any alive player in the 15-50y
--- ring" (fallback: random player within 150y); cast if target.
+-- precedent; the RAID_MODE(4,9) count gate is the Is25ManRaid
+-- gate in vezaxRandomTarget below (ring needs >= 4 / >= 9 players);
+-- fallback: threat-list player within 150y; cast if target.
 -- EVENT_SEARING_FLAMES (:174-176) — DoCastAOE
 -- (SPELL_SEARING_FLAMES 62661) 2-arg non-triggered self-cast,
 -- 12s init (:143), re-arm {14s,17500ms} (:176) — the hard-mode
@@ -218,30 +218,34 @@ local function berserkTick(creature)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
--- C++ SelectTarget player arms (the freya/gal_darah GetPlayersInWorld
--- candidate-selection precedent; the gal_darah threat-list caveat holds).
--- EVENT_SHADOW_CRASH / EVENT_MARK_OF_THE_FACELESS select via
--- CheckPlayersInRange(RAID_MODE(4,9), 15.0f, 50.0f) with fallback
--- SelectTarget(Random, 0, 150.0f, true) (:164-187). The RAID_MODE(4,9)
--- 10/25-man count gate has no raid-size selector, so the primary leg
--- is approximated as "any alive player in the 15-50y ring"; the 150y
--- fallback leg is exact.
+-- C++ SelectTarget player arms (boss_general_vezax.cpp:283-306
+-- CheckPlayersInRange + :168/:182 fallback SelectTarget).
+-- CheckPlayersInRange iterates the MAP player list, distance-only:
+-- no alive test, and it returns null unless at least RAID_MODE(4,9)
+-- players are in the 15-50y ring (Is25ManRaid gate). The fallback
+-- SelectTarget(Random, 0, 150.0f, true) draws the THREAT list, so the
+-- wide pool is IsEngagedBy-filtered + alive (threat refs skip dead /
+-- offline at build, UnitAI.h) — not the whole instance pool.
 local function vezaxRandomTarget(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local playersMin = 4
+    if creature:Is25ManRaid() then
+        playersMin = 9
+    end
     local ring, wide = {}, {}
     for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
             local dist = creature:GetDistance(plr)
             if dist >= 15 and dist <= 50 then
                 ring[#ring + 1] = plr
             end
-            if dist <= 150 then
+            if dist <= 150 and not plr:IsDead()
+                    and creature:IsEngagedBy(plr) then
                 wide[#wide + 1] = plr
             end
         end
     end
-    if #ring > 0 then
+    if #ring >= playersMin then
         return ring[math.random(#ring)]
     end
     if #wide > 0 then
