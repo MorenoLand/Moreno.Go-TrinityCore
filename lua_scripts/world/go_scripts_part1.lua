@@ -20,12 +20,15 @@
 --     NOT quest status), player:HasItem (lua_player.go:188), player:GetItemCount,
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
---   * MISSING bridges that block every class here: player:GetQuestRewardStatus,
---     player:CastSpell,
+--   * MISSING bridges that block classes here: player:GetQuestRewardStatus,
 --     player:DestroyItemCount, player:HasItemCount (use HasItem/GetItemCount),
---     player:GetNativeGender, player:IsInSameRaidWith, go:GetGoType,
---     go:GetOwner, go:CastSpell, go:AddUse, go:SummonCreature,
---     GetClosestCreatureWithEntry. All verified zero hits in
+--     player:IsInSameRaidWith, go:GetOwner, go:CastSpell, go:AddUse,
+--     GO-side go:SummonCreature (player/creature surfaces bridged).
+--     Corrected 2026-10-24: player:CastSpell + player:SummonCreature +
+--     player:GetQuestStatus bridged; this tick: go:GetGoType (lua_objects.go)
+--     + player:GetNativeGender (lua_player.go) bridged;
+--     GetClosestCreatureWithEntry rides the player:FindNearestCreature
+--     twin (entry-filtered nearest == C++ closest). All verified zero hits in
 --     engine/world/lua_player.go, engine/world/lua_objects.go,
 --     engine/scripting/object.go (2026-10-18). Corrected 2026-10-24:
 --     player:GetQuestStatus left this list — it IS bridged since
@@ -61,7 +64,8 @@
 --    player->SummonCreature(17716, 8106.11, -7542.06, 151.775, 3.02598,
 --    TEMPSUMMON_DEAD_DESPAWN, 1min) then AttackStart(player). Returns true
 --    (handled; native use suppressed).
---    Blockers: no go:GetGoType bridge; no registration.
+--    Blockers: no registration; AttackStart(player) on the summoned
+--    creature unbridged (go:GetGoType IS bridged 2026-10-24).
 --    player:GetQuestStatus IS bridged since 2026-10-24 and
 --    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
@@ -73,9 +77,9 @@
 --    player->GetQuestStatus(4296) == QUEST_STATUS_INCOMPLETE (3),
 --    player->CastSpell(player, 15065, false). Returns true (handled).
 --    C++ TODO notes a "Transcript the Tablet" gossip option pending
---    Trinity support. Blockers: player:CastSpell, go:GetGoType
---    unbridged (player:GetQuestStatus IS bridged since 2026-10-24).
---    DOCUMENTED-ONLY.
+--    Trinity support. Blockers: no registration (no GO entry const) only —
+--    player:CastSpell + go:GetGoType + player:GetQuestStatus all bridged
+--    since 2026-10-24. DOCUMENTED-ONLY (bridge-complete, entry DB-side).
 -- ============================================================================
 
 -- ============================================================================
@@ -107,8 +111,9 @@
 --    Enum: NPC_GOGGEROC = 11920. No GO entry const -> no registration.
 --    Arm: if go type == GAMEOBJECT_TYPE_GOOBER,
 --    me->SummonCreature(11920, 0,0,0,0, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT,
---    5min). Returns false. Blockers: go:GetGoType and GO-side SummonCreature
---    unbridged. DOCUMENTED-ONLY.
+--    5min). Returns false. Blockers: GO-side SummonCreature unbridged
+--    (player:SummonCreature with 0,0,0,0 spawns at the player close point,
+--    not the GO position; go:GetGoType IS bridged 2026-10-24). DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -131,7 +136,8 @@
 --    "This teleport crystal cannot be used until the teleport crystal in
 --    Dalaran has been used at least once.") and return true (handled).
 --    Blocker: player:GetQuestRewardStatus unbridged (player:SendNotification
---    IS bridged but the gate is not). DOCUMENTED-ONLY.
+--    IS bridged but the gate is not; C++ gate is IsQuestRewarded/seasonal,
+--    not the GetQuestStatus value — no twin yet). DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -154,9 +160,10 @@
 --    (card,1,true) then player->CastSpell(player, upgrade spell, true).
 --    142345: white->yellow; 142475: yellow->blue; 142476: blue->red;
 --    142696: red->prismatic. Returns false.
---    Blockers: player:DestroyItemCount and player:CastSpell unbridged
---    (player:HasItem is bridged but cannot substitute the arm). DOCUMENTED-ONLY
---    despite C++-named entries.
+--    Blockers: player:DestroyItemCount unbridged (player:CastSpell IS
+--    bridged since 2026-10-24; player:HasItem cannot substitute the arm).
+--    DOCUMENTED-ONLY despite C++-named entries — DestroyItemCount is the
+--    sole remaining gate to a registrable port.
 -- ============================================================================
 
 -- ============================================================================
@@ -165,8 +172,9 @@
 --    Arm: if go type == GAMEOBJECT_TYPE_GOOBER,
 --    player->SummonCreature(17830, -369.746, 166.759, -21.50, 5.235,
 --    TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 30s). Returns true (handled).
---    Blockers: go:GetGoType unbridged + no registration;
---    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
+--    Blockers: no registration (no GO entry const) only;
+--    go:GetGoType IS bridged 2026-10-24 and player:SummonCreature IS
+--    bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -182,9 +190,11 @@
 --    SPELL_FAILED_TOO_MANY_OF_ITEM; else owner->CastSpell(player, _stoneSpell,
 --    true), and me->AddUse() only if the item was actually created. Returns
 --    false (gossip consumed on failure paths via `return true`).
---    Blockers: go:GetOwner unbridged; player:IsInSameRaidWith unbridged;
---    owner->CastSpell unbridged; go:AddUse unbridged; Spell::SendCastResult
---    unbridged. DOCUMENTED-ONLY despite C++-named entries.
+--    Blockers: go:GetOwner unbridged (DB GO state carries no owner;
+--    dynamic OwnerGUID not exposed on the Lua GO surface);
+--    player:IsInSameRaidWith unbridged; owner->CastSpell unbridged;
+--    go:AddUse unbridged (m_usetimes not modeled in Go);
+--    Spell::SendCastResult unbridged. DOCUMENTED-ONLY despite C++-named entries.
 -- ============================================================================
 
 -- ============================================================================
@@ -210,8 +220,9 @@
 --    are bridged. Blockers: the hello gate needs player:GetQuestStatus
 --    (bridged 2026-10-24 — the gate is portable, but the arm stays unregistered:
 --    no GO entry const);
---    select needs GetClosestCreatureWithEntry, creature AI SetData,
---    go:CastSpell, player:GetNativeGender (all unbridged). DOCUMENTED-ONLY.
+--    select needs creature AI SetData + go:CastSpell (unbridged);
+--    GetClosestCreatureWithEntry rides player:FindNearestCreature and
+--    player:GetNativeGender IS bridged 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================

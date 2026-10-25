@@ -80,6 +80,12 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetRace"] = luaNoArgs(func() any { return state.Race })
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
+	// GetNativeGender is Player::GetNativeGender (Player.h:993): the
+	// PLAYER_BYTES_3 gender byte. Go tracks a single gender
+	// (characters.gender, the same field GetGender reads); no
+	// display-gender transform is modeled, so native == current here.
+	// Backs the outhouse bunny SetData arm (go_scripts.cpp:615-641).
+	methods["GetNativeGender"] = luaNoArgs(func() any { return state.Gender })
 	methods["GetDbcLocale"] = luaNoArgs(func() any { return uint32(0) })
 	methods["GetPowerType"] = luaNoArgs(func() any { return playerPowerType(state) })
 	methods["GetCoinage"] = luaNoArgs(func() any { return state.Money })

@@ -51,6 +51,7 @@ type luaGameObjectState struct {
 	Y           float32
 	Z           float32
 	Orientation float32
+	Type        uint32
 	GoState     uint32
 	LootState   uint32
 }
@@ -1124,7 +1125,7 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
 	var state luaGameObjectState
 	var mapID int64
-	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation); err != nil {
+	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation, t.type FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &state.Type); err != nil {
 		return state, false
 	}
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
@@ -1140,6 +1141,13 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["GetDBTableGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
 	methods["GetGoState"] = luaNoArgs(func() any { return state.GoState })
 	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
+	// GetGoType is GameObject::GetGoType (GameObject.h:160): the
+	// template type (GAMEOBJECT_BYTES_1 byte 1), 0-50 per the
+	// GameObjectType constants (gameobjects.go). DB-loaded GOs read
+	// gameobject_template.type; runtime-spawned GOs carry dyn.Type.
+	// Backs the goober gates in go_scripts.cpp:61-474 (gilded_brazier,
+	// resonite_cask, blood_filled_orb, tablet_of_the_seven).
+	methods["GetGoType"] = luaNoArgs(func() any { return state.Type })
 	methods["IsSpawned"] = luaNoArgs(func() any { return !srv.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
 	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
