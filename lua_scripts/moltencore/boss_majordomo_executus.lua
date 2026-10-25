@@ -18,9 +18,10 @@
 -- non-triggered self-cast / damage reflection 21075 15s then 30s,
 -- non-triggered self-cast / blast wave 20229 10s then 10s,
 -- non-triggered DoCastVictim / teleport 20618 20s then 20s,
--- non-triggered on a random alive player in the instance excluding
--- the current victim (C++ SelectTarget(Random, 1) skips position 0;
--- a sole-victim tick casts nothing but keeps the schedule). Nil-
+-- non-triggered on a threat-list target alive with the first
+-- MaxThreat entry skipped BEFORE filters (C++ SelectTarget(Random, 1);
+-- UnitAI.h offset-before-filter, not a victim-GUID exclusion; a
+-- sole-entry tick casts nothing but keeps the schedule). Nil-
 -- victim ticks cast nothing but keep the schedule (jeklik
 -- convention). OnTargetDied(3): 25% Talk(SAY_SLAY). 1s aegis pump
 -- (geddon convention): current health strictly below 50% (C++ HealthBelowPct(50)
@@ -129,28 +130,27 @@ local function onBlastWave(creature, guid)
     end)
 end
 
--- C++ EVENT_TELEPORT: non-triggered DoCast on a random alive player
--- in the instance excluding the current victim (SelectTarget(Random,
--- 1) skips position 0); a sole-victim tick casts nothing. Re-arm
+-- C++ EVENT_TELEPORT: non-triggered DoCast on a threat-list target
+-- alive with the first MaxThreat entry skipped BEFORE filters
+-- (SelectTarget(Random, 1); UnitAI.h offset-before-filter — not a
+-- victim-GUID exclusion); a sole-entry tick casts nothing. Re-arm
 -- 20s regardless (C++ re-arms unconditionally).
-local function randomAlivePlayerExcluding(creature, victim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victimGUID = victim and victim:GetGUID() or 0
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and p:GetGUID() ~= victimGUID then
-            players[#players + 1] = p
+local function randomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 local function onTeleport(creature, guid)
-    local pick = randomAlivePlayerExcluding(creature, creature:GetVictim())
+    local pick = randomThreatTargetSkipFirst(creature)
     if pick then
         creature:CastSpell(pick, SPELL_TELEPORT)
     end

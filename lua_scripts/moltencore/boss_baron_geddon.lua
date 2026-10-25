@@ -11,14 +11,14 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat arms
 -- inferno 19695 45s then 45s, non-triggered self-cast (C++ DoCast
 -- default is triggered=false — vaelastrasz convention) / ignite mana
--- 19659 30s then 30s, non-triggered on a random alive player in the
--- instance (the C++ -SPELL_IGNITE_MANA no-aura filter is unmodeled —
+-- 19659 30s then 30s, non-triggered on a threat-list player alive
+-- (the C++ -SPELL_IGNITE_MANA no-aura filter is unmodeled —
 -- player HasAura is bridged (lua_player.go:203) but the engine's
 -- creature-cast path never applies auras to targets (boss_ai.go:1481,
 -- no applyAura arm; player-cast path only, spells.go:8922), so
 -- HasAura(19659) would always read false) /
--- living bomb 20475 35s then 35s, non-triggered on a random alive
--- player in the instance. Nil-target ticks cast nothing but keep the
+-- living bomb 20475 35s then 35s, non-triggered on a threat-list
+-- player alive. Nil-target ticks cast nothing but keep the
 -- schedule (jeklik convention). Per-tick UpdateAI armageddon check
 -- (Lua 1s pump): health at-or-below 2% -> Talk(EMOTE_SERVICE=0) +
 -- non-triggered self-cast armageddon 20478, C++-exact (no once-guard:
@@ -94,14 +94,14 @@ local function onInferno(creature, guid)
     end)
 end
 
--- Random alive player in the instance (wushoolay helper).
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- Threat-list players alive (C++ SelectTarget(Random, 0, 0.0f, true)
+-- for both arms — playerOnly, no dist cap).
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
     local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            players[#players + 1] = unit
         end
     end
     if #players == 0 then
@@ -110,13 +110,13 @@ local function randomAlivePlayer(creature)
     return players[math.random(#players)]
 end
 
--- C++ EVENT_IGNITE_MANA: non-triggered cast 19659 on a random alive
--- player in the instance (the -SPELL_IGNITE_MANA no-aura filter is
+-- C++ EVENT_IGNITE_MANA: non-triggered cast 19659 on a threat-list
+-- player alive (the -SPELL_IGNITE_MANA no-aura filter is
 -- unmodeled — creature casts apply no auras engine-side, so the
 -- bridged player HasAura(19659) would always read false); re-arm 30s.
 local function onIgniteMana(creature, guid)
     if not armageddonSuppress[guid] then
-        local pick = randomAlivePlayer(creature)
+        local pick = randomThreatPlayer(creature)
         if pick then
             creature:CastSpell(pick, SPELL_IGNITE_MANA)
         end
@@ -126,11 +126,11 @@ local function onIgniteMana(creature, guid)
     end)
 end
 
--- C++ EVENT_LIVING_BOMB: non-triggered cast 20475 on a random alive
--- player in the instance; re-arm 35s.
+-- C++ EVENT_LIVING_BOMB: non-triggered cast 20475 on a threat-list
+-- player alive; re-arm 35s.
 local function onLivingBomb(creature, guid)
     if not armageddonSuppress[guid] then
-        local pick = randomAlivePlayer(creature)
+        local pick = randomThreatPlayer(creature)
         if pick then
             creature:CastSpell(pick, SPELL_LIVING_BOMB)
         end

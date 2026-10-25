@@ -15,10 +15,11 @@
 -- Fight shape (C++-exact for the modeled arms): OnReset: triggered
 -- self-cast magmasplash 13879 (C++ DoCast(me, SPELL_MAGMASPLASH,
 -- true)). OnEnterCombat: arm pyroblast 20228 7s then 7s,
--- non-triggered on a random alive player in the instance (C++ DoCast
--- default is triggered=false — vaelastrasz convention; C++
--- SelectTarget(Random, 0) takes any alive target — wushoolay
--- randomAlivePlayer helper). Nil-target ticks cast nothing but keep
+-- non-triggered on a threat-list target alive (C++ DoCast default is
+-- triggered=false — vaelastrasz convention; C++ SelectTarget(Random,
+-- 0) defaults playerOnly=false, so pets/totems are eligible — the old
+-- "any alive player" wording was wrong). Nil-target ticks cast nothing
+-- but keep
 -- the schedule (jeklik convention). OnDamageTaken(9, pre-damage
 -- hook): current (pre-damage) health strictly below 10%
 -- (C++ HealthBelowPct(10) — the engine's event 9 fires before damage is
@@ -73,27 +74,26 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0): any alive player in the instance
--- (wushoolay helper).
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+-- C++ SelectTarget(Random, 0): threat-list target alive, any unit
+-- (playerOnly defaults false).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
--- C++ EVENT_PYROBLAST: non-triggered cast 20228 on a random alive
--- player in the instance; re-arm 7s.
+-- C++ EVENT_PYROBLAST: non-triggered cast 20228 on a threat-list
+-- target alive; re-arm 7s.
 local function onPyroblast(creature, guid)
-    local pick = randomAlivePlayer(creature)
+    local pick = randomThreatTarget(creature)
     if pick then
         creature:CastSpell(pick, SPELL_PYROBLAST)
     end

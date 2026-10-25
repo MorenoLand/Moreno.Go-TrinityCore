@@ -11,10 +11,11 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat arms
 -- Gehennas curse 19716 12s then {22s,30s}, non-triggered
 -- DoCastVictim / rain of fire 19717 10s then {4s,12s}, non-triggered
--- on a random alive player in the instance (wushoolay
--- randomAlivePlayer helper) / shadow bolt 19728 6s then 7s,
--- non-triggered on a random alive player in the instance excluding the
--- current victim (C++ SelectTarget(Random, 1) skips position 0).
+-- on a threat-list target alive (C++ SelectTarget(Random, 0)
+-- defaults playerOnly=false) / shadow bolt 19728 6s then 7s,
+-- non-triggered on a threat-list target alive with the first MaxThreat
+-- entry skipped BEFORE filters (C++ SelectTarget(Random, 1);
+-- UnitAI.h offset-before-filter, not a victim-GUID exclusion).
 -- Nil-target ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
@@ -67,25 +68,25 @@ local function onGehennasCurse(creature, guid)
     end)
 end
 
--- C++ EVENT_RAIN_OF_FIRE: non-triggered cast 19717 on a random alive
--- player in the instance; re-arm {4s,12s}.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+-- C++ EVENT_RAIN_OF_FIRE: non-triggered cast 19717 on a threat-list
+-- target alive (SelectTarget(Random, 0) defaults playerOnly=false);
+-- re-arm {4s,12s}.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 local function onRainOfFire(creature, guid)
-    local pick = randomAlivePlayer(creature)
+    local pick = randomThreatTarget(creature)
     if pick then
         creature:CastSpell(pick, SPELL_RAIN_OF_FIRE)
     end
@@ -94,28 +95,27 @@ local function onRainOfFire(creature, guid)
     end)
 end
 
--- C++ EVENT_SHADOW_BOLT: non-triggered cast 19728 on a random alive
--- player in the instance excluding the current victim (C++
--- SelectTarget(Random, 1) skips position 0); a sole-victim tick casts
--- nothing but keeps the schedule. Re-arm 7s regardless.
-local function randomAlivePlayerExcluding(creature, victim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victimGUID = victim and victim:GetGUID() or 0
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and p:GetGUID() ~= victimGUID then
-            players[#players + 1] = p
+-- C++ EVENT_SHADOW_BOLT: non-triggered cast 19728 on a threat-list
+-- target alive with the first MaxThreat entry skipped BEFORE filters
+-- (C++ SelectTarget(Random, 1); UnitAI.h offset-before-filter — not a
+-- victim-GUID exclusion); a sole-entry tick casts nothing but keeps
+-- the schedule. Re-arm 7s regardless.
+local function randomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 local function onShadowBolt(creature, guid)
-    local pick = randomAlivePlayerExcluding(creature, creature:GetVictim())
+    local pick = randomThreatTargetSkipFirst(creature)
     if pick then
         creature:CastSpell(pick, SPELL_SHADOW_BOLT)
     end

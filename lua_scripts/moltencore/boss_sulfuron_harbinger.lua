@@ -16,9 +16,10 @@
 -- self-cast (the random-friendly-missing-buff arm has no bridge —
 -- see deviations) / knockdown 19780 6s then {12s,15s}, non-triggered
 -- DoCastVictim / flamespear 19781 2s then {12s,16s}, non-triggered
--- on a random alive player in the instance (wushoolay
--- randomAlivePlayer helper; the C++ SelectTarget(Random) arm takes
--- any alive target — C++-exact here). Nil-victim ticks cast nothing
+-- on a threat-list player alive (C++ SelectTarget(Random, 0, 0.0f,
+-- true) — playerOnly, not any-unit; the old "any alive target" claim
+-- was wrong, though the old player-only pool accidentally matched it).
+-- Nil-victim ticks cast nothing
 -- but keep the schedule (jeklik convention). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- The npc_flamewaker_priest AI in the same C++ file (heal 19775 on
@@ -133,15 +134,14 @@ local function onKnockdown(creature, guid)
     end)
 end
 
--- C++ EVENT_FLAMESPEAR: non-triggered DoCast on a random alive
--- target (SelectTarget(Random) — any alive target); re-arm {12s,16s}.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ EVENT_FLAMESPEAR: non-triggered DoCast on a threat-list player
+-- alive (SelectTarget(Random, 0, 0.0f, true)); re-arm {12s,16s}.
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
     local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            players[#players + 1] = unit
         end
     end
     if #players == 0 then
@@ -151,7 +151,7 @@ local function randomAlivePlayer(creature)
 end
 
 local function onFlamespear(creature, guid)
-    local pick = randomAlivePlayer(creature)
+    local pick = randomThreatPlayer(creature)
     if pick then
         creature:CastSpell(pick, SPELL_FLAMESPEAR)
     end
