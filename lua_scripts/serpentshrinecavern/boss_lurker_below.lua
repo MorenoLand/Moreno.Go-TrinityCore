@@ -206,25 +206,11 @@ local function resetAmbusher(guid)
     ambusherState[guid] = nil
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
 -- Raw map player list (dead players included): the CheckTimer
 -- melee-range scan iterates the raw PlayerList with no alive
 -- check — a corpse in melee range sets InRange=true and
 -- suppresses waterbolt (boss_lurker_below.cpp:270-280). The
--- random-target arms keep the alive-only pick above.
+-- random-target arms use the threat-list picks below.
 local function playersInInstanceRaw(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local found = {}
@@ -236,30 +222,38 @@ local function playersInInstanceRaw(creature)
     return found
 end
 
--- C++ SelectTarget(Random, 0): random alive player in the
--- instance.
-local function pickRandomAlivePlayer(creature)
-    local found = playersInInstance(creature)
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
--- C++ SelectTarget(Random, 1): random alive player other than
--- the victim. Returns nil when no such pick exists.
-local function pickRandomNonVictim(creature)
-    local victim = creature:GetVictim()
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p ~= victim then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): random alive unit from the threat
+-- list (any unit, pets included) — GetAITargets is the bridged
+-- threat list; dead entries skipped (C++ SelectTargetList skip).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
+end
+
+-- C++ SelectTarget(Random, 1): skip the first threat-list entry
+-- BEFORE filters (UnitAI.h offset-before-filter), then a random
+-- alive any-unit from the rest; nil when the rest is empty.
+local function randomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and not unit:IsDead() then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
 end
 
 -- C++ Initialize(): spoutAnim 1000, rot 0, waterbolt 15000,
@@ -353,11 +347,11 @@ local function lurkerTick(creature, guid)
             return
         end
 
-        -- Geyser {15s,20s}: random non-victim player pick with
-        -- victim fallback (C++-exact), triggered cast 37478;
+        -- Geyser {15s,20s}: random threat pick skipping the threat head,
+        -- with victim fallback (C++-exact), triggered cast 37478;
         -- the timer re-arms regardless (C++-exact).
         if st.geyser <= 1000 then
-            local target = pickRandomNonVictim(creature)
+            local target = randomThreatTargetSkipFirst(creature)
             if not target then
                 target = creature:GetVictim()
             end
@@ -369,12 +363,12 @@ local function lurkerTick(creature, guid)
             st.geyser = st.geyser - 1000
         end
 
-        -- Waterbolt when no player is in melee range: random
-        -- alive player pick with victim fallback (C++-exact),
+        -- Waterbolt when no player is in melee range: random threat-list
+        -- pick with victim fallback (C++-exact),
         -- triggered cast 37138; 15s init, 3s re-arm.
         if not st.inRange then
             if st.waterbolt <= 1000 then
-                local target = pickRandomAlivePlayer(creature)
+                local target = randomThreatTarget(creature)
                 if not target then
                     target = creature:GetVictim()
                 end
@@ -512,12 +506,12 @@ local function ambusherTick(creature, guid)
         st.multishot = st.multishot - 1000
     end
 
-    -- Shoot bow: random alive player pick -> triggered cast
+    -- Shoot bow: random threat-list pick -> triggered cast
     -- 37770 (the C++ AddSpellBP0(1100) arg has no bridge —
     -- quake/blaze precedent, header); re-arm 4000+rand()%5000;
     -- the multishot timer gains the 1500ms GCD arm (C++-exact).
     if st.shootbow <= 1000 then
-        local target = pickRandomAlivePlayer(creature)
+        local target = randomThreatTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_SHOOT, true)
         end

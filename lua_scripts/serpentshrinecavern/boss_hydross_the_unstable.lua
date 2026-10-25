@@ -224,43 +224,38 @@ local function despawnAdds(guid)
     hydrossAdds[guid] = nil
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): random alive unit from the threat
+-- list (any unit, pets included) — GetAITargets is the bridged
+-- threat list; dead entries skipped (C++ SelectTargetList skip).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): random alive player in the instance.
-local function pickRandomAlivePlayer(creature)
-    local found = playersInInstance(creature)
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
--- C++ SelectTarget(Random, 0, 100, true): random alive player in the
--- instance within 100 yd (netherspite convention — the GetDistance
--- bridge stands in for the C++ distance gate).
-local function pickRandomAlivePlayerInRange(creature, maxDist)
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, <dist>, true): random alive
+-- threat-list player within <dist> yd.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 local function cancelPump(guid)
@@ -313,7 +308,7 @@ local function hydrossTick(creature, guid)
         -- Vile Sludge: random pick, nil keeps the schedule (C++-exact).
         st.vileSludge = st.vileSludge - 1000
         if st.vileSludge <= 0 then
-            local pick = pickRandomAlivePlayer(creature)
+            local pick = randomThreatTarget(creature)
             if pick then
                 creature:CastSpell(pick, SPELL_VILE_SLUDGE)
             end
@@ -362,11 +357,11 @@ local function hydrossTick(creature, guid)
             st.markHydross = 15000
         end
 
-        -- Water Tomb: random alive player within 100 yd; nil pick
+        -- Water Tomb: random threat-list player within 100 yd; nil pick
         -- skips the cast, timer re-arms (C++-exact).
         st.waterTomb = st.waterTomb - 1000
         if st.waterTomb <= 0 then
-            local pick = pickRandomAlivePlayerInRange(creature, 100)
+            local pick = randomThreatPlayerInRange(creature, 100)
             if pick then
                 creature:CastSpell(pick, SPELL_WATER_TOMB)
             end

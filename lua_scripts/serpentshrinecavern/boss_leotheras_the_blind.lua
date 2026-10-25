@@ -249,13 +249,21 @@ local function playersInInstance(creature)
     return found
 end
 
--- C++ SelectTarget(Random, 0): random alive player in the instance.
-local function pickRandomAlivePlayer(creature)
-    local found = playersInInstance(creature)
-    if #found == 0 then
+-- C++ SelectTarget(Random, 0): random alive unit from the threat
+-- list (any unit, pets included) — GetAITargets is the bridged
+-- threat list; dead entries skipped (C++ SelectTargetList skip).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 local function cancelPump(timers, guid)
@@ -387,7 +395,7 @@ local function leotherasTick(creature, guid)
         -- Teleport sets Moving=false, subsuming the Clear leg).
         if creature:HasAura(SPELL_WHIRLWIND) then
             if st.whirlwind <= 1000 then
-                local target = pickRandomAlivePlayer(creature)
+                local target = randomThreatTarget(creature)
                 if target then
                     creature:ResetAllThreat()
                     creature:Teleport(target:GetX(), target:GetY(), target:GetZ())
@@ -672,11 +680,11 @@ local function binderTick(creature, guid)
         return
     end
 
-    -- Mind blast: {3s,8s} init then {10s,15s} — random alive
-    -- player pick (C++ SelectTarget(Random, 0)); nil pick casts
+    -- Mind blast: {3s,8s} init then {10s,15s} — random threat-list
+    -- pick (C++ SelectTarget(Random, 0)); nil pick casts
     -- nothing, timer re-arms (C++-exact).
     if st.mindblast <= 1000 then
-        local pick = pickRandomAlivePlayer(creature)
+        local pick = randomThreatTarget(creature)
         if pick then
             creature:CastSpell(pick, SPELL_MINDBLAST)
         end

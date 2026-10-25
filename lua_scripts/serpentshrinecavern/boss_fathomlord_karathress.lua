@@ -188,34 +188,21 @@ local sharkkisState = {}
 local tidalvessState = {}
 local caribdisState = {}
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 1): skip the first threat-list entry
+-- BEFORE filters (UnitAI.h offset-before-filter), then a random
+-- alive any-unit from the rest; nil when the rest is empty.
+local function randomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 1): random alive player other than the
--- main tank (the victim). Returns nil when no such pick exists.
-local function pickRandomNonTank(creature)
-    local victim = creature:GetVictim()
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victim or p:GetGUID() ~= victim:GetGUID() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 local function cancelPump(guid)
@@ -250,10 +237,10 @@ local function karathressTick(creature, guid)
         return
     end
 
-    -- Cataclysmic Bolt: random non-tank player, else the victim.
+    -- Cataclysmic Bolt: random threat pick skipping the threat head, else the victim.
     st.cataclysmicBolt = st.cataclysmicBolt - 1000
     if st.cataclysmicBolt <= 0 then
-        local pick = pickRandomNonTank(creature)
+        local pick = randomThreatTargetSkipFirst(creature)
         if pick then
             creature:CastSpell(pick, SPELL_CATACLYSMIC_BOLT)
         else

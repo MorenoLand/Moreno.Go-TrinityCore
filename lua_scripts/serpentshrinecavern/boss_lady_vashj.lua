@@ -208,45 +208,6 @@ local vashjState = {}
 local elementalTimers = {}
 local elementalState = {}
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): random alive player in the instance.
-local function pickRandomAlivePlayer(creature)
-    local found = playersInInstance(creature)
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
--- C++ SelectTarget(Random, 0, <dist>, true): random alive player in
--- the instance within <dist> yd (netherspite convention — the
--- GetDistance bridge stands in for the C++ distance gate).
-local function pickRandomAlivePlayerInRange(creature, maxDist)
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
-        return nil
-    end
-    return found[math.random(#found)]
-end
-
 -- C++ SelectTarget(Random, 0): random unit from the THREAT list
 -- (any unit, pets included) — GetAITargets is the bridged threat
 -- list (lua_creature_events.go:1705). Used for forked/poison/
@@ -254,10 +215,16 @@ end
 -- retired for these arms).
 local function pickRandomThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return out[math.random(#out)]
 end
 
 -- C++ SelectTarget(Random, 0, <dist>, true): random THREAT-LIST
@@ -265,7 +232,8 @@ end
 local function pickRandomThreatPlayerInRange(creature, maxDist)
     local found = {}
     for _, unit in ipairs(creature:GetAITargets()) do
-        if unit:GetTypeId() == 4 and creature:GetDistance(unit) <= maxDist then
+        if unit:GetTypeId() == 4 and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
             found[#found + 1] = unit
         end
     end
