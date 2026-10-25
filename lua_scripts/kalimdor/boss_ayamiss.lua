@@ -17,10 +17,11 @@
 -- melee on phase without a motion bridge — documented below).
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule STINGER_SPRAY (20-30s), POISON_STINGER (5s),
---   PARALYZE (15s). (C++ also schedules SUMMON_SWARMER /
---   SWARMER_ATTACK — the bridge is live but the swarmer legs ride
---   the unbridged cross-AI AttackStart relay (EVENT_SWARMER_ATTACK,
---   boss_ayamiss.cpp:212-219), so those timers are not armed.)
+--   PARALYZE (15s), SUMMON_SWARMER (5s -> 5s, boss_ayamiss.cpp:220-226).
+--   SWARMER_ATTACK stays out — its cross-AI AttackStart relay on the
+--   summoned swarmers (boss_ayamiss.cpp:211-218) has no bridge, so Go
+--   swarmers idle (SummonCreature is NOT auto-aggroed per the bridge;
+--   herod-trainee precedent).
 -- - EVENT_STINGER_SPRAY: self-cast 25749, reschedule 15-20s.
 -- - EVENT_POISON_STINGER: DoCastVictim 25748 (jeklik GetVictim +
 --   CastSpell convention), reschedule 2-3s; cancelled at ground
@@ -54,10 +55,10 @@
 --   SetDisableGravity(true) ports via the creature:SetDisableGravity
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
--- - SummonCreature (NPC_SWARMER 15546, NPC_LARVA 15555): the bridge
---   is live, but the larva's paired JustSummoned leg is a MovePoint to
---   AltarPos (no motion bridge) and the swarmer leg is the cross-AI
---   AttackStart relay — both stay out (stale "no bridge" retracted).
+-- - SummonCreature: SWARMER leg PORTED (below); the larva's paired
+--   JustSummoned leg is a MovePoint to AltarPos (no motion bridge)
+--   and the SWARMER_ATTACK relay stays out (stale "no bridge"
+--   retracted for the summon leg itself).
 -- - EVENT_SWARMER_ATTACK's cross-AI AttackStart on swarmers: no
 --   bridge (zero SelectTarget/AttackStart usage in lua_scripts).
 -- - npc_hive_zara_larva: MovementInform/AttackStart/MoveInLineOfSight
@@ -73,6 +74,11 @@ local SPELL_PARALYZE = 25725
 local SPELL_TRASH = 3391
 local SPELL_FRENZY = 8269
 local SPELL_LASH = 25852
+
+local ENTRY_SWARMER = 15546 -- ruins_of_ahnqiraj.h:54
+local SWARMER_POS_X = -9647.352 -- boss_ayamiss.cpp:83 SwarmerPos
+local SWARMER_POS_Y = 1578.062
+local SWARMER_POS_Z = 55.32
 
 local PHASE_AIR = 0
 local PHASE_GROUND = 1
@@ -172,6 +178,31 @@ local function onTrash(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON_SWARMER: SummonCreature(NPC_SWARMER 15546,
+-- GetRandomPoint(SwarmerPos, 80yd)), init 5s -> 5s, unconditional
+-- re-arm (boss_ayamiss.cpp:220-226; not phase-gated, not cancelled at
+-- ground phase). GetRandomPoint twinned in-Lua (herod idiom:
+-- Object.cpp:1422 signed folded radius, anchor z kept); o = 0 falls
+-- back to the summoner's orientation (C++ GetRandomPoint returns the
+-- summoner's orientation); type 7 = MANUAL_DESPAWN, the C++ default
+-- for me->SummonCreature(entry, pos). The SWARMER_ATTACK relay stays
+-- out (no AttackStart bridge), so summoned swarmers idle.
+local function onSummonSwarmer(creature, guid)
+    local a = math.random() * 2 * math.pi
+    local r = math.random() + math.random()
+    if r > 1 then
+        r = r - 2
+    end
+    local d = 80.0 * r
+    creature:SummonCreature(ENTRY_SWARMER,
+        SWARMER_POS_X + d * math.cos(a),
+        SWARMER_POS_Y + d * math.sin(a),
+        SWARMER_POS_Z, 0, 7)
+    schedule(guid, "swarmer", 5000, function()
+        onSummonSwarmer(creature, guid)
+    end)
+end
+
 -- C++ ground-phase leg: GetHealthPct() < 70 in PHASE_AIR ->
 -- PHASE_GROUND, cancel POISON_STINGER, arm LASH + TRASH. Checked on
 -- damage (event 9); event 9 fires pre-damage so the subtraction
@@ -252,6 +283,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "paralyze", 15000, function()
         onParalyze(creature, guid)
+    end)
+    schedule(guid, "swarmer", 5000, function()
+        onSummonSwarmer(creature, guid)
     end)
     -- C++ JustEngagedWith (boss_ayamiss.cpp:140-152): schedules (above),
     -- SetCanFly(true) (:150), me->SetDisableGravity(true) (:151),

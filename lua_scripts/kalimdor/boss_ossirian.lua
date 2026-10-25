@@ -200,12 +200,17 @@ local function onEnterCombat(event, creature, target)
     -- bridge live 2026-10-22 (2-arg map summon = TEMPSUMMON_DEAD_
     -- DESPAWN); weather arm has no bridge; the SpawnNextCrystal
     -- machine stays out (documented below). GetRandomPoint is twinned
-    -- in-Lua (uniform disc, center z kept — no ground-height model).
+    -- in-Lua (herod idiom: Object.cpp:1422 signed folded radius,
+    -- center z kept — no ground-height model).
     for _ = 1, 5 do
         local a = math.random() * 2 * math.pi
-        local r = 165.0 * math.sqrt(math.random())
+        local r = math.random() + math.random()
+        if r > 1 then
+            r = r - 2
+        end
+        local d = 165.0 * r
         local tornado = creature:SummonCreature(ENTRY_SAND_VORTEX,
-            -9343.042 + r * math.cos(a), 1923.278 + r * math.sin(a),
+            -9343.042 + d * math.cos(a), 1923.278 + d * math.sin(a),
             85.556, 0, 6)
         if tornado then
             tornado:CastSpell(tornado, SPELL_SAND_STORM, true)
