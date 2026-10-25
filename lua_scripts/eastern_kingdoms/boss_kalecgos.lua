@@ -54,8 +54,9 @@
 -- boss_sathrovarr (24892), OnEnterCombat(1):
 -- - Talk(0) aggro; Shadowbolt: 7-10s init -> Repeat {7s,10s};
 --   20% Talk(3); DoCastAOE(45031).
--- - Agony Curse: 20s init -> Repeat 20s; random non-tank target
---   (CurseAgonySelector) else victim; DoCast(45032, triggered).
+-- - Agony Curse: 20s init -> Repeat 20s; threat pick per
+--   CurseAgonySelector (!NonTank + no-45032/no-45034 + 46021)
+--   else victim; DoCast(45032, triggered).
 -- - Corruption Strike: 13s init -> Repeat 13s; 20% Talk(4);
 --   DoCastVictim(45029) -> GetVictim + CastSpell.
 -- - 1s check: <10% -> enrage latch (the cross-AI DoAction(
@@ -115,11 +116,11 @@
 --   spell_kalecgos_spectral_realm_aura 46021 /
 --   spell_kalecgos_curse_of_boundless_agony 45032): SpellScript/
 --   AuraScript-check-handler-blocked class (standing).
--- - AgonyCurseSelector's no-SPECTRAL_REALM_AURA (46021) and
---   SPECTRAL_EXHAUSTION (44867) filters and SpectralBlast's own
---   target filter: the aura-side filter legs have no Go model;
---   the port targets a random in-range enemy (maiden
---   convention), noted as the approximation.
+-- - AgonyCurseSelector's SPECTRAL_REALM_AURA (46021) /
+--   no-45032 / no-45034 gates: PORTED via pickAgonyTarget
+--   (threat list, !NonTank + aura gates, no distance gate;
+--   nil falls back to the victim, the C++ DoCastVictim leg).
+--   SpectralBlast's own target filter stays SpellScript-side.
 -- - Dragon's DoAction(ACTION_ENRAGE) / DoAction(ACTION_START_
 --   OUTRO): cross-AI action legs, no bridge.
 
@@ -141,6 +142,8 @@ local SPELL_BANISH = 44836
 local SPELL_ENRAGE = 44807
 local SPELL_SHADOW_BOLT = 45031
 local SPELL_AGONY_CURSE = 45032
+local SPELL_AGONY_CURSE_ALLY = 45034
+local SPELL_SPECTRAL_REALM_AURA = 46021
 local SPELL_CORRUPTION_STRIKE = 45029
 local SPELL_REVITALIZE = 45027
 local SPELL_HEROIC_STRIKE = 45026
@@ -270,23 +273,25 @@ end
 
 -- boss_sathrovarr (24892) --
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function randomTargetInRange(creature, range)
+-- C++ EVENT_AGONY_CURSE (boss_kalecgos.cpp:526-534): SelectTarget(Random, 0,
+-- CurseAgonySelector) over the threat list — offset 0, no distance gate.
+-- CurseAgonySelector (:434-447) keeps entries where !NonTankTargetSelector
+-- (UnitAI.cpp:363: true for players that are NOT the current victim) holds,
+-- i.e. the current victim or a non-player, AND no 45032 / no 45034 aura AND
+-- the 46021 spectral-realm aura; dead entries are offline refs, skipped.
+-- Nil -> the caller falls back to the victim (C++ DoCastVictim leg).
+local function pickAgonyTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead()
+                and (t:GetObjectType() ~= "Player"
+                    or (victimGuid ~= nil and t:GetGUID() == victimGuid))
+                and not t:HasAura(SPELL_AGONY_CURSE)
+                and not t:HasAura(SPELL_AGONY_CURSE_ALLY)
+                and t:HasAura(SPELL_SPECTRAL_REALM_AURA) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -304,7 +309,7 @@ local function onSathShadowbolt(creature, guid)
 end
 
 local function onSathAgony(creature, guid)
-    local target = randomTargetInRange(creature, 100)
+    local target = pickAgonyTarget(creature)
     if not target then
         target = creature:GetVictim()
     end

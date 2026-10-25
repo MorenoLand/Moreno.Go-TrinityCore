@@ -287,18 +287,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Random-player pool excluding the tank (the netherspite
--- randomNonTankPlayerInRange precedent, map-wide here: C++ passes
--- dist 0.0f): alive same-map/instance players minus the victim.
+-- C++ SelectTarget(Random, 1, 0.0f, true) (boss_blood_prince_council.cpp:819
+-- kinetic bomb, :835 shock vortex): offset 1 skips the MaxThreat head BEFORE
+-- the playerOnly/alive filters (UnitAI.h offset-before-filter; the head is
+-- the current victim by list construction), then random alive threat player,
+-- no distance gate. The old map-player minus-victim pool is retired.
 local function randomNonTankPlayerAnywhere(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
+        return nil
+    end
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = plr
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

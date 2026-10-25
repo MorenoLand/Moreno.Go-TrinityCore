@@ -388,16 +388,14 @@ end
 -- CastSpell(target, SPELL_ICE_PULSE), all non-triggered, in C++
 -- order; MoveFollow stays out (no motion bridge). No target ->
 -- DespawnOrUnsummon. C++ SelectTarget(Random, 0, 0.0f, player-only)
--- has no bridge, so the target pool is the alive same-map/instance
--- player pool (the BPC randomNonTankPlayerAnywhere precedent shape,
--- without the victim exclusion — C++ excludes nothing).
+-- (boss_the_lich_king.cpp:748) over the threat list: offset 0, so the
+-- tank stays in the pool and nothing is excluded; dead entries are
+-- offline refs, skipped. The old map-player pool is retired.
 local function randomPlayerAnywhere(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

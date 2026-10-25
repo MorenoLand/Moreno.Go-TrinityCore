@@ -240,8 +240,8 @@
 -- npc_frostwing_ymirjar_vrykul UpdateAI random-target arms —
 --   EVENT_YMIRJAR_TWISTED_WINDS (71306), EVENT_YMIRJAR_ICE_TRAP
 --   (71249), EVENT_YMIRJAR_VOLLEY (71252), EVENT_YMIRJAR_BANISH
---   (71298) PORTED via the map-wide randomPlayerTarget pool
---   (the skadi precedent); EVENT_YMIRJAR_SUMMON (71303) stays
+--   (71298) PORTED via the threat-list randomPlayerTarget pool
+--   (offset-1 arms ride skipFirst); EVENT_YMIRJAR_SUMMON (71303) stays
 --   parked (summon machine + _events.DelayEvents(2s) leg).
 -- npc_frostwing_ymirjar_vrykul Reset (:1189-1213) — the
 --   RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL) leg is PORTED (stale "no aura
@@ -372,18 +372,26 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- boss_skadi randomPlayerTarget precedent: map/instance-scoped
--- alive-player pool, optional max-distance filter. C++
--- SelectTarget offset-1 tank-skip and aura-exclusion legs have
--- no bridge; the pool caveat is documented, not blocking.
-local function randomPlayerTarget(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, offset, dist, true) over the threat list
+-- (UnitAI.h offset-before-filter): skipFirst drops the MaxThreat head
+-- BEFORE the playerOnly/alive/distance filters; maxDist is the C++ dist
+-- gate (IsWithinDist approximation). The old map-player pool is retired;
+-- the stale "offset-1 has no bridge" claim is retracted.
+local function randomPlayerTarget(creature, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        if #targets <= 1 then
+            return nil
+        end
+        start = 2
+    end
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (not maxDist or creature:IsWithinDist(plr, maxDist)) then
-            candidates[#candidates + 1] = plr
+    for i = start, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and (not maxDist or creature:IsWithinDist(t, maxDist)) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -397,7 +405,8 @@ end
 -- (threat.go SortedEntries), so index 1 is the MaxThreat head C++
 -- skips (UnitAI.h:217-218); the playerOnly gate applies AFTER the
 -- skip, matching DefaultTargetSelector order (UnitAI.cpp:254-289);
--- excludeAura (nil or a spell id) drops carriers (the -aura arg).
+-- excludeAura (nil or a spell id) drops carriers (the -aura arg);
+-- dead entries are offline refs, skipped (SelectTargetList skip).
 local function randomNonHeadPlayerTarget(creature, excludeAura)
     local targets = creature:GetAITargets()
     if #targets <= 1 then
@@ -406,7 +415,7 @@ local function randomNonHeadPlayerTarget(creature, excludeAura)
     local candidates = {}
     for i = 2, #targets do
         local t = targets[i]
-        if t:GetObjectType() == "Player"
+        if t:GetObjectType() == "Player" and not t:IsDead()
                 and (excludeAura == nil or not t:HasAura(excludeAura)) then
             candidates[#candidates + 1] = t
         end
@@ -684,7 +693,7 @@ end
 -- {15s,20s} unconditional; seeded :1260 {5s,10s} on the
 -- huntress.
 local function onYmirjarIceTrap(creature, guid)
-    local target = randomPlayerTarget(creature, 20)
+    local target = randomPlayerTarget(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_ICE_TRAP)
     end
@@ -697,7 +706,7 @@ end
 -- {10s,20s} unconditional; seeded :1261 {20s,30s} on the
 -- huntress.
 local function onYmirjarVolley(creature, guid)
-    local target = randomPlayerTarget(creature, 40)
+    local target = randomPlayerTarget(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_VOLLEY)
     end
@@ -710,7 +719,7 @@ end
 -- {10s,20s} unconditional; seeded :1267 {10s,20s} on the
 -- deathbringer.
 local function onYmirjarBanish(creature, guid)
-    local target = randomPlayerTarget(creature, 20)
+    local target = randomPlayerTarget(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_BANISH)
     end
