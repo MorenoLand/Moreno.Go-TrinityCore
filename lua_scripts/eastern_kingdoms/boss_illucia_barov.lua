@@ -55,21 +55,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 100, true): random alive player within
--- maxDist yards (janalai/kelris convention).
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, 100, true): random alive
+-- threat-list player within maxDist yards.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- C++ triggered DoCastVictim -> nil-victim keeps schedule (moroes/maiden
@@ -92,7 +92,7 @@ end
 -- C++ EVENT_SHADOWSHOCK: triggered DoCast(random alive player within
 -- 100yd, 17234); Repeat(12s). Nil pick casts nothing.
 local function onShadowShock(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_SHOCK, true)
     end

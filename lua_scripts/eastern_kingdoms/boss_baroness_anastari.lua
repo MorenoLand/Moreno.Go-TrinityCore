@@ -104,23 +104,21 @@ local function doCastVictim(creature, spell)
     end
 end
 
--- C++ SelectTarget(Random, 1, 0, true, false) — random alive player on
--- the same map+instance excluding the given GUID (position 1 excludes
--- the victim, fairbanks-fear convention); 0 distance = any range, LOS
--- leg not modeled (no bridge).
-local function randomAlivePlayerExcluding(creature, excludeGUID)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and p:GetGUID() ~= excludeGUID then
-            players[#players + 1] = p
+-- C++ SelectTarget(Random, 1, 0, true, false): skip the first
+-- threat-list entry BEFORE filters (UnitAI.h offset-before-filter),
+-- then a random alive threat-list player; nil when the rest is empty.
+local function randomThreatPlayerSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for i, unit in ipairs(targets) do
+        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #players == 0 then
+    if #out == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return out[math.random(#out)]
 end
 
 -- C++ ScheduleEvent(EVENT_SPELL_POSSESS, 20s, 30s) / Repeat(20s, 30s):
@@ -176,13 +174,12 @@ onCheckPossessed = function(creature, guid)
     end
 end
 
--- C++ EVENT_SPELL_POSSESS: random non-victim player pick; triggered
+-- C++ EVENT_SPELL_POSSESS: skip-first threat-list player pick; triggered
 -- casts on pick + invisibility self-cast + GUID latch + 0s-delay check
 -- scheduling (Lua uses 1ms: the next-tick equivalent); no pick ->
 -- Repeat(20s, 30s).
 onPossess = function(creature, guid)
-    local victim = creature:GetVictim()
-    local target = randomAlivePlayerExcluding(creature, victim and victim:GetGUID() or nil)
+    local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_POSSESS, true)
         creature:CastSpell(target, SPELL_POSSESSED, true)

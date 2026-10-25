@@ -150,30 +150,28 @@ local function onDemonArmor(creature, guid)
     end)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent. Caveat shared with the
--- keleseth/thorim/beast ports: C++ draws from the threat list
--- (engaged units); the bridge can include nearby unengaged players.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+-- C++ SelectTarget(Random, 0, 100, true): random alive
+-- threat-list player within maxDist yards.
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    if #candidates == 0 then
+    if #out == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_IMMOLATE: SelectTarget(Random, 0, 100.0f, true)
 -- playerOnly, DoCast(target, 12742) non-triggered, 18s init,
 -- Repeat(25s) outside the target check (re-arm unconditional).
 local function onImmolate(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_IMMOLATE)
     end
