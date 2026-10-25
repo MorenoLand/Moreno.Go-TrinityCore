@@ -222,15 +222,23 @@ end
 
 -- C++ SelectTarget(Random, 1) (playerOnly defaults FALSE, UnitAI.h:170;
 -- offset 1 skips the first MaxThreat entry for Random, UnitAI.h:162-163)
--- — threat-list pick via GetAITargets; threatListSize <= 1 yields nil
+-- — threat-list pick via GetAITargets; C++ skips offline refs before the
+-- offset pop (SelectTargetList), so the skip hits the first LIVE entry —
+-- alive-filter then skip-first; threatListSize <= 1 yields nil
 -- (the C++ offset shortcut), and a nil pick keeps the schedule
 -- (the C++ Repeat sits outside the if).
 local function randomThreatTargetSkippingFirst(creature)
     local targets = creature:GetAITargets()
-    if not targets or #targets <= 1 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive <= 1 then
         return nil
     end
-    return targets[math.random(2, #targets)]
+    return alive[math.random(2, #alive)]
 end
 
 -- ================= Magtheridon (17257) =================

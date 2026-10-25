@@ -33,9 +33,10 @@
 --   precedent), non-triggered, init 42s -> 42s.
 -- - Air Burst 32014: Talk SAY_AIR_BURST (3) + cast on
 --   SelectTargetMethod::Random, 1 (C++ comment "not on tank" —
---   PORTED: random pick from GetAITargets()[2..], i.e. the threat list
---   minus its first (top-threat) entry, all C++ defaults — no range
---   cap, playerOnly false, no dead filter, midnight precedent),
+--   PORTED: random pick from the alive-filtered GetAITargets list minus
+--   its first live entry (C++ skips offline refs before the offset pop,
+--   UnitAI.h SelectTargetList), all C++ defaults otherwise — no range
+--   cap, playerOnly false, creatures included,
 --   non-triggered, init 30s -> {25s,40s}.
 -- - Grip of the Legion 31972: SelectTargetMethod::Random, 0 with no
 --   range cap — the pool is the THREAT LIST (UnitAI.h: SelectTarget
@@ -280,15 +281,22 @@ end
 -- SelectTarget(Random, 1), 32014) — position 1 ("not on tank") = skip
 -- the first MaxThreat-order entry, then a random pick from the rest;
 -- all defaults (no range cap, playerOnly false, withTank true), so the
--- pool is the threat-ordered GetAITargets list, creatures included,
--- with no dead filter (midnight precedent). Nil when fewer than 2
+-- pool is the alive-filtered threat-ordered GetAITargets list minus
+-- its first live entry (C++ offline-skip-then-offset, UnitAI.h
+-- SelectTargetList; creatures included). Nil when fewer than 2 live
 -- entries (C++ returns nullptr when the threat list size <= offset).
 local function onAirBurst(creature, guid)
     creature:Talk(SAY_AIR_BURST)
     local targets = creature:GetAITargets()
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
     local target = nil
-    if #targets >= 2 then
-        target = targets[math.random(2, #targets)]
+    if #alive >= 2 then
+        target = alive[math.random(2, #alive)]
     end
     if target then
         creature:CastSpell(target, SPELL_AIR_BURST)

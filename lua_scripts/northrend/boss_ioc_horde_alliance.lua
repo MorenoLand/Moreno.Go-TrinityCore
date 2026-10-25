@@ -56,15 +56,22 @@ end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 1) — the bridged,
 -- threat-ordered GetAITargets list (lua_creature_events.go:345);
--- offset 1 skips the first (MaxThreat-ordered) entry, i.e. the current
--- tank; the pick runs over the REST of the threat list — players,
+-- offset 1 skips the first (MaxThreat-ordered) LIVE entry — C++ skips
+-- offline refs before the offset pop (UnitAI.h SelectTargetList);
+-- the pick runs over the REST of the alive threat list — players,
 -- pets, totems (playerOnly defaults FALSE, UnitAI.h:170).
 local function randomNonTankThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets <= 1 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive <= 1 then
         return nil
     end
-    return targets[1 + math.random(#targets - 1)]
+    return alive[1 + math.random(#alive - 1)]
 end
 
 -- C++ :90-99 EVENT_BRUTAL_STRIKE: DoCastVictim(SPELL_BRUTAL_STRIKE)
