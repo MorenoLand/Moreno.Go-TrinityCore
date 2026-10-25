@@ -20,9 +20,8 @@
 -- gates with rand32()%2, C++-exact 50%, kelidan precedent),
 -- SAY_DIE = 4 (death — fired from the C++ JustDied, C++-exact),
 -- SAY_WIPE = 5 (wipe — fired from the C++ Reset, C++-exact);
--- SAY_SUMMON = 1 fires only from the JustSummoned arm — no
--- summon bridge, the fiendish hound never materializes, so it
--- is unreachable in this model.
+-- SAY_SUMMON = 1 fires from the JustSummoned arm (ported
+-- below; fires when the 30707 summon materializes).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent (per-GUID scheduler pump); melee is
@@ -42,11 +41,10 @@
 -- re-arm {15s,30s} regardless (C++-exact 15000+rand32()%15000);
 -- the InterruptNonMeleeSpells arm is ported in the pump (C++ :129); the
 -- JustSummoned arm (Talk(SAY_SUMMON), the AttackStart relay,
--- ++SummonedCount) is unreachable — the hound never
--- materializes (steamrigger precedent), so summonedCount stays
--- 0 and the gate stays open; orbital strike 30637 — 25s init
+-- ++SummonedCount) is ported below and closes the gate after
+-- two hounds; orbital strike 30637 — 25s init
 -- then {14s,16s}, target = victim when within melee range else
--- a random alive player in the instance (the C++
+-- a random alive threat-list unit (the C++
 -- IsWithinMeleeRange gate is ported via creature:IsWithinMeleeRange
 -- (lua_creature_events.go); C++
 -- SelectTarget(Random, 0), thespia precedent), nil pick casts
@@ -67,8 +65,8 @@
 -- precedent), 1s init then 15s — non-triggered DoCastSelf
 -- (C++-exact), re-arm 15000 (C++-exact; the timer only ticks
 -- while the health gate holds); treacherous aura 30695 — 10s init
--- then {8s,16s}, Talk(SAY_CURSE), target = random alive player
--- in the instance, nil pick casts nothing, non-triggered
+-- then {8s,16s}, Talk(SAY_CURSE), target = random alive
+-- threat-list unit, nil pick casts nothing, non-triggered
 -- DoCast on the target (C++-exact), re-arm {8s,16s} only when
 -- a target was picked (C++-exact); shadow bolt 30686 — 2s init then {4s,6.5s}: the
 -- C++ picks SelectTarget(Random, 0) for the null check then
@@ -93,11 +91,9 @@
 -- (instance_hellfire_ramparts.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_OMOR_THE_
 -- UNSCARRED = 1 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); no summon bridge — the SPELL_SUMMON_FIENDISH_HOUND
--- cast never produces a hound (steamrigger precedent), so the
--- JustSummoned arm (Talk(SAY_SUMMON), the AttackStart relay,
--- ++SummonedCount) is unreachable and SAY_SUMMON is
--- unreachable; no movement-flag bridge — the orbital-strike/
+-- skipped); the JustSummoned arm is ported below (fires when
+-- the 30707 summon materializes via the Go spell-summon funnel);
+-- no movement-flag bridge — the orbital-strike/
 -- shadow-whip pullback machine's MOVEMENTFLAG_FALLING_FAR gate
 -- is unbridgeable, so the shadow whip never fires (the
 -- ScriptData temporary-solution caveat is upstream,
@@ -164,24 +160,24 @@ local function freshState()
     }
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0; UnitAI.h
+-- SelectTargetList skips offline refs and Creature.cpp
+-- _IsTargetAcceptable rejects dead targets): random alive
+-- unit from the boss's threat list, tank included, no
+-- distance gate (black stalker precedent). Nil when the
+-- threat list holds no alive unit.
+local function pickThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    return found
-end
-
-local function randomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #found == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return found[math.random(#found)]
 end
 
 local function healthBelowPct(creature, pct)
@@ -201,9 +197,8 @@ local function bossTick(creature, guid)
     -- re-arm {15s,30s} regardless (C++-exact). The
     -- InterruptNonMeleeSpells(false) ported (C++ :129). The
     -- JustSummoned arm (Talk(SAY_SUMMON), AttackStart relay,
-    -- ++SummonedCount) is unreachable — the hound never
-    -- materializes (steamrigger precedent), so summonedCount
-    -- stays 0 and the gate stays open.
+    -- ++SummonedCount) is ported below (omorJustSummoned) and
+    -- closes the gate after two hounds.
     if st.summonedCount < 2 then
         if st.summon <= 1000 then
             creature:InterruptNonMeleeSpells(false)
@@ -232,7 +227,7 @@ local function bossTick(creature, guid)
     else
         -- Orbital strike 30637: 25s init then {14s,16s} —
         -- target = victim when within melee range else a
-        -- random alive player in the instance (creature:IsWithinMeleeRange
+        -- random alive threat-list unit (creature:IsWithinMeleeRange
         -- ports the C++ gate, lua_creature_events.go; C++ SelectTarget(Random, 0),
         -- thespia precedent). The TYPEID_PLAYER gate is C++-
         -- exact (kargath GetObjectType convention) — the timer
@@ -244,7 +239,7 @@ local function bossTick(creature, guid)
             if victim and creature:IsWithinMeleeRange(victim) then
                 target = victim
             else
-                target = randomPlayer(creature)
+                target = pickThreatTarget(creature)
             end
             if target and target:GetObjectType() == "Player" then
                 creature:CastSpell(target, SPELL_ORBITAL_STRIKE)
@@ -272,13 +267,13 @@ local function bossTick(creature, guid)
 
     -- Treacherous aura 30695 (heroic 37566 — unused enum in the C++,
     -- no heroic leg: the C++ casts 30695 unconditionally): 10s init
-    -- then {8s,16s} — Talk(SAY_CURSE), target = random alive player
-    -- in the instance, nil pick casts nothing, non-triggered DoCast
+    -- then {8s,16s} — Talk(SAY_CURSE), target = random alive
+    -- threat-list unit, nil pick casts nothing, non-triggered DoCast
     -- on the target (C++-exact), re-arm {8s,16s} only when a
     -- target was picked (C++-exact).
     if st.aura <= 1000 then
         creature:Talk(SAY_CURSE)
-        local target = randomPlayer(creature)
+        local target = pickThreatTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_TREACHEROUS_AURA)
             st.aura = 8000 + math.random(0, 7999)
@@ -295,7 +290,7 @@ local function bossTick(creature, guid)
     -- re-arm {4s,6.5s} only when a target was picked (C++-
     -- exact).
     if st.shadowbolt <= 1000 then
-        if randomPlayer(creature) then
+        if pickThreatTarget(creature) then
             creature:CastSpell(nil, SPELL_SHADOW_BOLT)
             st.shadowbolt = 4000 + math.random(0, 2499)
         end
@@ -319,6 +314,27 @@ end)
 -- evade hook: Eluna's On_Reset (23) also fires ahead of
 -- OnDied and OnSpawn, so keying the yell to it would put
 -- SAY_WIPE ahead of SAY_DIE on every kill.
+-- C++ JustSummoned (boss_omor_the_unscarred.cpp): Talk(SAY_SUMMON),
+-- AttackStart relay on a random threat target, ++SummonedCount
+-- (no entry gate in the C++). Fires when the 30707 summon
+-- materializes: the Go cast path runs HIT-mode summon effects
+-- through summonTempCreature (boss_ai.go), which fires ev19 on
+-- the summoner (lua_creature_events.go). The count gate then
+-- closes after two hounds, C++-exact.
+local function omorJustSummoned(_, creature, summon)
+    creature:Talk(SAY_SUMMON)
+    local target = pickThreatTarget(creature)
+    if summon and target then
+        summon:EngageWithTarget(target)
+    end
+    local st = states[creature:GetGUID()]
+    if st then
+        st.summonedCount = st.summonedCount + 1
+    end
+end
+
+RegisterCreatureEvent(ENTRY_OMOR, 19, omorJustSummoned)
+
 RegisterCreatureEvent(ENTRY_OMOR, 2, function(_, creature)
     creature:Talk(SAY_WIPE)
     resetBoss(creature:GetGUID())

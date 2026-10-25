@@ -53,8 +53,8 @@
 -- non-triggered DoCastVictim (felmyst convention), re-arm
 -- {5s,13s} regardless (C++-exact); surge 34645 — 4s init
 -- then {5s,13s}, Talk(SAY_SURGE), target = random alive
--- player in the instance (C++ SelectTarget(Random, 0),
--- thespia precedent), nil pick casts nothing, non-triggered
+-- threat-list unit (C++ SelectTarget(Random, 0) defaults,
+-- black stalker precedent), nil pick casts nothing, non-triggered
 -- DoCast on the target (C++-exact), re-arm {5s,13s}
 -- regardless (C++-exact); retaliation 22857 — scheduled 1s
 -- after health drops strictly below 20% (C++ HealthBelowPct
@@ -135,16 +135,25 @@ local function freshState()
     }
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0; UnitAI.h
+-- SelectTargetList skips offline refs and Creature.cpp
+-- _IsTargetAcceptable rejects dead targets): random alive
+-- unit from the boss's threat list, tank included, no
+-- distance gate (black stalker precedent). Nil when the
+-- threat list holds no alive unit — the caller skips the
+-- cast (C++-exact).
+local function pickThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    return found
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
 end
 
 local function healthBelowPct(creature, pct)
@@ -170,16 +179,16 @@ local function bossTick(creature, guid)
     end
 
     -- Surge 34645: 4s init then {5s,13s} — Talk(SAY_SURGE),
-    -- target = random alive player in the instance (C++
-    -- SelectTarget(Random, 0), thespia precedent), nil pick
+    -- target = random alive threat-list unit (C++
+    -- SelectTarget(Random, 0) defaults, black stalker precedent),
+    -- nil pick
     -- casts nothing, non-triggered DoCast on the target
     -- (C++-exact), re-arm {5s,13s} regardless (C++-exact).
     if st.surge <= 1000 then
         creature:Talk(SAY_SURGE)
-        local players = playersInInstance(creature)
-        if #players > 0 then
-            creature:CastSpell(players[math.random(#players)],
-                SPELL_SURGE)
+        local target = pickThreatTarget(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SURGE)
         end
         st.surge = math.random(5000, 13000)
     else

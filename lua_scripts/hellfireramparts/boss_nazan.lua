@@ -31,8 +31,9 @@
 -- UpdateAI in C++ arm order — 1s granularity exact for the
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump). Pump: fireball 34653 — 4s init then {4s,7s},
--- target = random alive player in the instance (C++
--- SelectTarget(Random, 0), thespia precedent), nil pick
+-- target = random alive threat-list unit (C++
+-- SelectTarget(Random, 0) defaults, black stalker precedent),
+-- nil pick
 -- casts nothing, TRIGGERED DoCast on the target (C++
 -- `DoCast(victim, SPELL_FIREBALL, true)`, C++-exact),
 -- re-arm {4s,7s} regardless (C++-exact) — fires in both
@@ -140,16 +141,25 @@ local function freshState()
     }
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
+-- playerOnly=false, withTank=true, dist=0, aura=0; UnitAI.h
+-- SelectTargetList skips offline refs and Creature.cpp
+-- _IsTargetAcceptable rejects dead targets): random alive
+-- unit from the boss's threat list, tank included, no
+-- distance gate (black stalker precedent). Nil when the
+-- threat list holds no alive unit — the caller skips the
+-- cast (C++-exact).
+local function pickThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    return found
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
 end
 
 local function bossTick(creature, guid)
@@ -159,17 +169,16 @@ local function bossTick(creature, guid)
     end
 
     -- Fireball 34653: 4s init then {4s,7s} — target = random
-    -- alive player in the instance (C++ SelectTarget(Random,
-    -- 0), thespia precedent), nil pick casts nothing,
+    -- alive threat-list unit (C++ SelectTarget(Random, 0)
+    -- defaults, black stalker precedent), nil pick casts nothing,
     -- TRIGGERED DoCast on the target (C++-exact), re-arm
     -- {4s,7s} regardless (C++-exact) — fires in both phases.
     -- The SpellHitTarget liquid-fire summon arm is PORTED
     -- (nazanSpellHitTarget, ev15 — both bridges live).
     if st.fireball <= 1000 then
-        local players = playersInInstance(creature)
-        if #players > 0 then
-            creature:CastSpell(players[math.random(#players)],
-                SPELL_FIREBALL, true)
+        local target = pickThreatTarget(creature)
+        if target then
+            creature:CastSpell(target, SPELL_FIREBALL, true)
         end
         st.fireball = math.random(4000, 7000)
     else
