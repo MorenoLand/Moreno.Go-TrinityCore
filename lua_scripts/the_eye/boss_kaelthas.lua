@@ -447,8 +447,8 @@ local function capernianTick(creature, guid)
     end
 
     -- 2. Conflagration arm: 20000 init then 10000+rand()%5000
-    -- re-arm (C++-exact); random alive player in the
-    -- instance — within 30yd DoCast on the target, else
+    -- re-arm (C++-exact); random threat-list unit —
+    -- within 30yd DoCast on the target, else
     -- DoCastVictim (C++ IsWithinDistInMap branch, C++-exact).
     if st.conflagration <= 1000 then
         local target = randomThreatUnit(creature)

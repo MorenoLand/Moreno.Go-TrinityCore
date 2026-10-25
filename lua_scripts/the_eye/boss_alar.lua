@@ -67,8 +67,8 @@
 --    movement bridge — the 5s meteor wait approximates the
 --    flight, nightbane precedent); dive (+4s, C++-exact) —
 --    TRIGGERED DoCast(target, SPELL_DIVE_BOMB 35181, true) on
---    a random alive player in the instance (C++ SelectTarget
---    (Random, 0), thespia precedent; the RemoveAurasDueToSpell
+--    a random threat-list unit (C++ SelectTarget
+--    (Random, 0), threat-pool lens; the RemoveAurasDueToSpell
 --    arm is ported below (stale "no aura bridge" claim
 --    retracted — creature RemoveAura is bridged); the UpdatePosition
 --    teleport is PORTED 2026-10-23 via creature:Teleport (NearTeleportTo
@@ -102,9 +102,9 @@
 --    unmodeled (nightbane precedent).
 -- 5. Phase 2 arms (C++ arm order): charge — 30s: non-
 --    triggered DoCast(target, SPELL_CHARGE 35412) on a random
---    alive player in the instance within 100 yd excluding the
---    current victim (C++ SelectTarget(Random, 1, 100, true),
---    najentus precedent; nil pick casts nothing — C++-exact),
+--    threat-list player within 100 yd, first MaxThreat entry
+--    skipped before filters (C++ SelectTarget(Random, 1, 100, true),
+--    offset-before-filter; nil pick casts nothing — C++-exact),
 --    re-arm 30000 regardless (C++-exact); melt armor — 60s:
 --    non-triggered DoCastVictim(SPELL_MELT_ARMOR 35410)
 --    (C++-exact), re-arm 60000 (C++-exact); dive bomb —
@@ -217,38 +217,34 @@ local function fullReset(guid)
     alarState[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0): any threat-list unit, victim
+-- eligible (position 0 = no skip); dead filtered (the threat
+-- manager drops them, solarian-missiles precedent).
+local function randomThreatUnit(creature)
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            pool[#pool + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): any alive player in the instance
--- (thespia precedent).
-local function randomAlivePlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #pool == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return pool[math.random(#pool)]
 end
 
--- C++ SelectTarget(Random, 1, 100, true): any alive player in the
--- instance within 100 yd, excluding the current victim (position
--- 0) — najentus precedent.
+-- C++ SelectTarget(Random, 1, 100, true): the first MaxThreat
+-- entry is skipped BEFORE the filters (UnitAI.h:163-174),
+-- then player + alive + within 100 yd (GetDistance approx
+-- for IsWithinCombatRange, zereketh precedent).
 local function randomChargeTarget(creature)
-    local victim = creature:GetVictim()
-    local victimGUID = victim and victim:GetGUID() or 0
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetGUID() ~= victimGUID and creature:GetDistance(p) <= 100 then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= 100 then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -290,7 +286,7 @@ local function advanceDive(creature, guid)
         -- the evade hooks land the reset). C++ arm order:
         -- RemoveAurasDueToSpell(SPELL_DIVE_BOMB_VISUAL) before
         -- the dive-bomb cast (C++-exact).
-        local target = randomAlivePlayer(creature)
+        local target = randomThreatUnit(creature)
         if not target then
             fullReset(guid)
             return
@@ -478,7 +474,7 @@ local function combatTick(creature, guid)
         -- SetFlag(NOT_SELECTABLE) / SetDisplayId(11686) / SetFaction /
         -- non-triggered self-cast SPELL_FLAME_PATCH 35380 legs are bridged.
         if st.flamePatch <= 1000 then
-            local target = randomAlivePlayer(creature)
+            local target = randomThreatUnit(creature)
             if target then
                 local flame = creature:SummonCreature(CREATURE_FLAME_PATCH_ALAR,
                     target:GetX(), target:GetY(), target:GetZ(), 0, 2, 120000)

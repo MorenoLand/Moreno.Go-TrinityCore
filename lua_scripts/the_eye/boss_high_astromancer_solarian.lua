@@ -61,8 +61,9 @@
 -- 2. Wrath arm — 20000+rand()%5000 init then 20000+rand()%
 --    5000: InterruptNonMeleeSpells(false) ported (no-op twin);
 --    target = SelectTarget (Random, 1, 100, true) — random
---    threat-list player within 100 yd excluding the current
---    victim (GetAITargets pick); TRIGGERED DoCast(target, SPELL_
+--    threat-list player within 100 yd, first MaxThreat entry
+--    skipped before filters (GetAITargets pick); TRIGGERED
+--    DoCast(target, SPELL_
 --    WRATH_OF_THE_ASTROMANCER 42783, true) (C++-exact),
 --    re-arm 20000+rand()%5000 regardless of target pick
 --    (C++-exact).
@@ -77,8 +78,9 @@
 --    33031) (C++-exact), re-arm 3000 regardless (C++-exact).
 -- 4. Wrath-of-the-astromancer arm — 15000 init: InterruptNon
 --    MeleeSpells unmodeled (no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)); target =
---    SelectTarget(Random, 1) — random threat-list unit
---    excluding the current victim; the C++ re-arms
+--    SelectTarget(Random, 1) — random threat-list unit,
+--    first MaxThreat entry skipped before filters; the C++
+--    re-arms
 --    1000 for non-player (pet) picks (threat list, playerOnly
 --    = false, so the pet leg is reachable);
 --    non-triggered DoCast(target, SPELL_WRATH_OF_THE_
@@ -230,22 +232,19 @@ local function randomThreatUnit(creature)
 end
 
 -- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random,
--- 1): any alive player in the instance excluding the current
--- victim, within `maxDist` yd (nil = no distance limit) —
--- najentus precedent.
--- C++ SelectTarget(Random, 1) threat-list pick (UnitAI.h:163-174):
--- offset 1 pops the first MaxThreat entry, which C++ constructs
--- as the current victim first; the Go list is threat-descending
--- so the victim entry is dropped by GUID instead. playerOnly
--- and maxDist filter like DefaultTargetSelector; dead members
--- are offline in C++ (skipped at list build) so they are
--- filtered here. playerOnly=false leaves pets/totems eligible.
+-- 1): the first MaxThreat entry is skipped BEFORE the filters
+-- (UnitAI.h:163-174, offset-before-filter — not a victim-GUID
+-- exclusion, which differs when the victim is not the threat
+-- head); playerOnly and maxDist filter like
+-- DefaultTargetSelector; dead members are offline in C++
+-- (skipped at list build) so they are filtered here.
+-- playerOnly=false leaves pets/totems eligible.
 local function randomThreatTarget(creature, playerOnly, maxDist)
-    local victim = creature:GetVictim()
-    local victimGUID = victim and victim:GetGUID() or 0
+    local targets = creature:GetAITargets()
     local pool = {}
-    for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetGUID() ~= victimGUID and not t:IsDead()
+    for i = 2, #targets do
+        local t = targets[i]
+        if not t:IsDead()
                 and (not playerOnly or t:GetObjectType() == "Player")
                 and (not maxDist or creature:GetDistance(t) <= maxDist) then
             pool[#pool + 1] = t
@@ -277,8 +276,9 @@ local function combatTick(creature, guid)
             st.blindingLightTimer = st.blindingLightTimer - 1000
         end
         -- 2. Wrath arm — 20000+rand()%5000: TRIGGERED cast on
-        -- a random threat-list player within 100 yd excluding
-        -- the victim (C++ SelectTarget(Random, 1, 100, true),
+        -- a random threat-list player within 100 yd, first
+        -- MaxThreat entry skipped before filters
+        -- (C++ SelectTarget(Random, 1, 100, true),
         -- boss_astromancer.cpp:236-241); re-arm regardless of
         -- target pick (C++-exact).
         if st.wrathTimer <= 1000 then
@@ -321,7 +321,8 @@ local function combatTick(creature, guid)
         -- 4. Wrath-of-the-astromancer arm — 15000 init:
         -- C++ SelectTarget(Random, 1) from the threat list
         -- (boss_astromancer.cpp:268-285): offset 1 pops the
-        -- current victim, playerOnly=false so non-players are
+        -- first MaxThreat entry before filters,
+        -- playerOnly=false so non-players are
         -- eligible; player pick -> non-triggered cast + 25000,
         -- non-player pick -> 1000 re-arm, no pick -> timer
         -- stays expired for a next-tick retry (C++-exact).
