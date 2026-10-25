@@ -123,7 +123,7 @@ end
 
 -- C++ boss_ioc_horde_alliance::JustEngagedWith (:72-78): the EventMap
 -- seeds — BRUTAL_STRIKE / CRUSHING_LEAP / DAGGER_THROW / CHECK_RANGE
--- port (below); SpellHit + Reset guard-respawn legs stay out.
+-- port (below); SpellHit ported in iocBossSpellHit below.
 local function iocBossJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -170,22 +170,35 @@ end
 -- "no home-position accessor" rationale recorded here 2026-10-21 is stale
 -- (lua_creature_events.go:1241), and the C++ compare is on the
 -- reach-adjusted distance (Object.cpp:1175-1179).
--- SpellHit (:80-88): unitCaster->IsVehicle() -> Unit::Kill(me, unitCaster)
--- — stale "no-SpellHit bridge" retracted (2026-10-21): ev14
--- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
--- (engine/scripting/runtime.go:227; fired boss_ai.go:2125/2134,
--- spells.go:11765); arm stays out: caster->IsVehicle() has no Lua
--- bridge (no IsVehicle on the unit method set) and Unit::Kill(me,
--- unitCaster) has no Lua bridge — the vehicle-caster gate can't be
--- reproduced, so no port.
+-- SpellHit (:71-78): unitCaster = caster->ToUnit(); if (!unitCaster)
+-- return; if (unitCaster->IsVehicle()) Unit::Kill(me, unitCaster) —
+-- PORTED in iocBossSpellHit below via ev14 (event, creature, caster,
+-- spellId; no spellId gate — C++ fires on ANY spell hit). IsVehicle
+-- rides the live-kit twin on the creature + player surfaces
+-- (lua_creature_events.go / lua_player.go); Kill(caster) passes the
+-- vehicle as killer, so tap/credit flow to the driver through
+-- creatureInstaKillVictim. Dormant factor: creature kits are only
+-- created by the player-vehicle spell path today, so template
+-- vehicles read false until the creature-spawn kit path
+-- (Creature.cpp:1657) lands.
 -- UpdateAI UNIT_STATE_CASTING early-out — unmodeled (maiden
 -- precedent). DoMeleeAttackIfReady — engine-side.
+
+-- C++ SpellHit (:71-78) PORTED: any spell hit whose caster is a vehicle
+-- kills the boss with the vehicle as killer (C++-exact, no spellId gate).
+local function iocBossSpellHit(event, creature, caster, spellId)
+    if caster ~= nil and caster:IsVehicle() then
+        creature:Kill(caster)
+    end
+end
 
 RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 1, iocBossJustEngagedWith)
 RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 2, iocBossLeaveCombat)
 RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 4, iocBossDied)
 RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 23, iocBossReset)
+RegisterCreatureEvent(ENTRY_HALFORD_WYRMBANE, 14, iocBossSpellHit)
 RegisterCreatureEvent(ENTRY_OVERLORD_AGMAR, 1, iocBossJustEngagedWith)
 RegisterCreatureEvent(ENTRY_OVERLORD_AGMAR, 2, iocBossLeaveCombat)
 RegisterCreatureEvent(ENTRY_OVERLORD_AGMAR, 4, iocBossDied)
 RegisterCreatureEvent(ENTRY_OVERLORD_AGMAR, 23, iocBossReset)
+RegisterCreatureEvent(ENTRY_OVERLORD_AGMAR, 14, iocBossSpellHit)

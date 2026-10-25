@@ -389,6 +389,14 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.isImmuneToDamage(mask)}, nil
 	}
+	// IsVehicle is Unit::IsVehicle (Unit.h:842) for players: the
+	// UNIT_MASK_VEHICLE bit, set in CreateVehicleKit and cleared in
+	// RemoveVehicleKit (Unit.cpp:12047-12070) — a live player vehicle
+	// kit is the exact twin. A passenger has no own kit (the kit sits
+	// on the vehicle creature), so passengers read false, as in C++.
+	methods["IsVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID) != nil}, nil
+	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

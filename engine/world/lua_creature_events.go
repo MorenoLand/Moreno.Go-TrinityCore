@@ -1119,8 +1119,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// a player-owned victim's owner path already funnels through
 	// onCreatureKilled, which fires both events, so firing again
 	// would double-dispatch. Already-dead callers are a no-op (the
-	// victim path's Health == 0 early-out).
-	methods["Kill"] = func(ctx context.Context, _ []any) ([]any, error) {
+	// victim path's Health == 0 early-out). An optional first argument
+	// names the killer creature (object or GUID, the ev14 caster idiom):
+	// Unit::Kill(victim, killer) with the receiver as victim — the killer's
+	// charmer/owner player takes the tap through creatureInstaKillVictim.
+	// An unresolvable killer falls back to the caller (the old KillSelf
+	// behavior); player killers have no motion twin and fall back the same way.
+	methods["Kill"] = func(ctx context.Context, args []any) ([]any, error) {
 		if motion == nil {
 			return nil, nil
 		}
@@ -1130,7 +1135,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				ownerPlayer = true
 			}
 		}
-		s.creatureInstaKillVictim(ctx, motion, motion.GUID)
+		killer := motion
+		if len(args) >= 1 {
+			if killerGUID := luaObjectGUID(args[0]); killerGUID != 0 {
+				if km := s.findCreatureMotion(motion.Map, motion.InstanceID, killerGUID); km != nil {
+					killer = km
+				}
+			}
+		}
+		s.creatureInstaKillVictim(ctx, killer, motion.GUID)
 		if ownerPlayer || s.Features == nil || s.Features.Scripts == nil {
 			return nil, nil
 		}
@@ -1145,6 +1158,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
 		return nil, nil
+	}
+	// IsVehicle is Unit::IsVehicle (Unit.h:842): the UNIT_MASK_VEHICLE
+	// bit, set in CreateVehicleKit and cleared in RemoveVehicleKit
+	// (Unit.cpp:12047-12070) — a live vehicle kit is the exact twin, the
+	// same predicate creatureCasterCanApplyResilience already uses
+	// (resilience.go). Creature kits are only created by the player-
+	// vehicle spell path today, so template vehicles read false until
+	// the creature-spawn kit path (Creature.cpp:1657) lands.
+	methods["IsVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil {
+			return []any{false}, nil
+		}
+		return []any{s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil}, nil
 	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
