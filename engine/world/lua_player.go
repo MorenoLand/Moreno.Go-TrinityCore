@@ -113,6 +113,11 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
+	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):
+	// the Player::UpdateArmor result (player_state.go), the same value the
+	// damage fold reads for player targets (combat.go). Backs the faction
+	// champions melee UpdateThreat armor leg.
+	methods["GetArmor"] = luaNoArgs(func() any { return state.Armor })
 	methods["GetHealthPct"] = luaNoArgs(func() any {
 		if state.MaxHealth == 0 {
 			return float32(0)

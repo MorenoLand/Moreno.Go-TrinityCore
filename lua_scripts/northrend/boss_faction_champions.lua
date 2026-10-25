@@ -32,8 +32,9 @@
 --   is victim HasAuraWithMechanic(MECHANIC_IMMUNE_SHIELD), which has
 --   no Lua surface method. boss_faction_championsAI::UpdateThreat
 --   (:611) is PORTED below for AI_RANGED/AI_HEALER entries via
---   GetAITargets + ModifyThreatByPercent(-100) + AddThreat; melee
---   entries stay out (victim armor read, no player GetArmor bridge).
+--   GetAITargets + ModifyThreatByPercent(-100) + AddThreat, and for
+--   AI_MELEE entries via the full distance/armor formula (victim
+--   armor reads player:GetArmor, lua_player.go).
 -- - boss_faction_championsAI base: EVENT_THREAT 5s,
 --   UpdateThreat/UpdatePower, heroic EVENT_REMOVE_CC 5s + RemoveCC
 --   (PORTED 2026-10-25 on the new HasBreakableByDamageCrowdControlAura /
@@ -178,8 +179,8 @@ end
 -- (:721-724, Reset init 5s at :591, then 4s repeats): if the power type
 -- is MANA, ModifyPower(MANA, maxMana / 3) (integer division). The
 -- UpdateThreat leg of the same event is PORTED below for
--- AI_RANGED/AI_HEALER entries (threatCheck, C++ order: power then
--- threat); melee entries skip it (victim armor, no bridge).
+-- AI_RANGED/AI_HEALER entries (threatCheck) and AI_MELEE entries
+-- (meleeThreatCheck), C++ order: power then threat.
 -- GetPowerType reads the enter-combat snapshot
 -- (object.go fallback); the type never changes in combat for these
 -- champions (SetPowerType only on rogue Reset), so the snapshot is
@@ -194,20 +195,42 @@ end
 -- no distance or armor read. Lowered via GetAITargets (the bridged
 -- threat list) + per-victim ModifyThreatByPercent(-100) (ScaleThreat
 -- x0) + AddThreat, in C++ per-victim order; creature entries are left
--- untouched, as in C++ (no IsDead filter in C++ either). Melee/pet
--- champions need victim armor (victim->GetArmor(), no player GetArmor
--- bridge) and stay out.
+-- untouched, as in C++ (no IsDead filter in C++ either). Pet
+-- champions stay out (no Lua file covers the pet champions).
+-- For AI_MELEE, CalculateThreat (:603-609) is full-form:
+-- dist_mod = 15 / (15 + GetDistance2d), armor_mod = victim armor /
+-- 16635, eh = (health + 1) * (1 + armor_mod), amount = 1000000 *
+-- dist_mod * 30000 / eh; victim armor reads player:GetArmor()
+-- (lua_player.go, Player::UpdateArmor result).
 local RANGED_HEALER = {
     [34465] = true, [34445] = true,
     [34473] = true, [34441] = true,
     [34468] = true, [34449] = true,
     [34467] = true, [34448] = true,
 }
+local MELEE = {
+    [34475] = true, [34453] = true,
+    [34461] = true, [34458] = true,
+    [34472] = true, [34454] = true,
+    [34471] = true, [34456] = true,
+}
 local function threatCheck(creature)
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
             creature:ModifyThreatByPercent(victim, -100)
             creature:AddThreat(victim, 1000000.0 * (30000.0 / (victim:GetHealth() + 1)))
+        end
+    end
+end
+
+local function meleeThreatCheck(creature)
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            local distMod = 15.0 / (15.0 + creature:GetDistance2d(victim))
+            local armorMod = victim:GetArmor() / 16635.0
+            local eh = (victim:GetHealth() + 1) * (1.0 + armorMod)
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * distMod * 30000.0 / eh)
         end
     end
 end
@@ -219,6 +242,8 @@ local function powerCheck(creature, guid)
     end
     if RANGED_HEALER[creature:GetEntry()] then
         threatCheck(creature)
+    elseif MELEE[creature:GetEntry()] then
+        meleeThreatCheck(creature)
     end
     schedule(guid, "threat", 4000, function()
         powerCheck(creature, guid)

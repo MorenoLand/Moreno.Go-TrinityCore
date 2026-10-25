@@ -27,9 +27,10 @@
 -- npc_toc_druid.lua precedent (champions spawn opposite-faction to the
 -- raid, so an Alliance-entry champion means a Horde raid -> Garrosh).
 -- Reset — SetEquipmentSlots(51803, 48013, NO_CHANGE)
--- (boss_faction_champions.cpp:1941); base Reset threat schedule rides
--- the unported melee-threat machine (victim armor bridge), and the
--- heroic CC schedule is PORTED below (removeCCCheck); the Reset
+-- (boss_faction_champions.cpp:1941); base Reset threat schedule is
+-- PORTED below (threatCheck: UpdatePower + melee UpdateThreat, on
+-- the new player:GetArmor bridge), and the heroic CC schedule is
+-- PORTED below (removeCCCheck); the Reset
 -- summons.DespawnAll() (:1942) is vacuous in-model (no totem summons
 -- are tracked until the totem machine ports).
 
@@ -153,6 +154,35 @@ end
 -- this enhancement shaman AI (npc_toc_enh_shamanAI : public
 -- boss_faction_championsAI, :1916); the npc_toc_druid.lua precedent
 -- ports all three bridged arms.
+-- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
+-- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
+-- CalculateThreat). For AI_MELEE, CalculateThreat (:603-609) is
+-- full-form: dist_mod = 15 / (15 + GetDistance2d), armor_mod =
+-- victim armor / 16635, eh = (health + 1) * (1 + armor_mod);
+-- victim armor reads player:GetArmor() (lua_player.go). Lowered via
+-- GetAITargets + per-victim ModifyThreatByPercent(-100) (ScaleThreat
+-- x0) + AddThreat, in C++ per-victim order; creature entries are left
+-- untouched, as in C++ (no IsDead filter in C++ either).
+local function threatCheck(creature, guid)
+    -- C++ UpdatePower (:621-624), first in the EVENT_THREAT case
+    -- (:721-724): mana only, ModifyPower(MANA, GetMaxPower(MANA) / 3)
+    -- (C++ integer division; boss_faction_champions.lua main-file idiom).
+    if creature:GetPowerType() == 0 then
+        creature:ModifyPower(0, math.floor(creature:GetMaxPower(0) / 3))
+    end
+    for _, victim in ipairs(creature:GetAITargets()) do
+        if victim:GetObjectType() == "Player" then
+            local distMod = 15.0 / (15.0 + creature:GetDistance2d(victim))
+            local armorMod = victim:GetArmor() / 16635.0
+            local eh = (victim:GetHealth() + 1) * (1.0 + armorMod)
+            creature:ModifyThreatByPercent(victim, -100)
+            creature:AddThreat(victim, 1000000.0 * distMod * 30000.0 / eh)
+        end
+    end
+    schedule(guid, "threat", 4000, function() threatCheck(creature, guid) end)
+end
+
 -- C++ boss_faction_championsAI::RemoveCC (:628-635) on heroic
 -- EVENT_REMOVE_CC (:726-734): breakable-CC gate, then
 -- RemoveAurasByType STUN 12 / FEAR 7 / ROOT 26 / PACIFY 25 / CONFUSE 5
@@ -177,8 +207,9 @@ local function enhShamanEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     scheduleRotation(creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
     if creature:IsHeroic() then
-        local guid = creature:GetGUID()
         schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
     end
 end
