@@ -8243,17 +8243,18 @@ func init() {
 	// onyxias_lair.h:62; OnyxiaScriptName "instance_onyxias_lair",
 	// map 249) — the four phase-1 timer arms (Flame Breath
 	// DoCastVictim; Tail Sweep DoCastAOE self-cast; Cleave DoCastVictim;
-	// Wing Buffet DoCastVictim) and the engage aggro Talk / ungated
-	// KilledUnit Talk verified present in the port; the
-	// HealthBelowPct(65)/HealthBelowPct(40) phase transitions, the
-	// whole phase-2 flight machine (MoveData[8], MoveTakeoff/MovePoint,
-	// SetCanFly/SetDisableGravity, SpellHit redirect, Deep Breath /
-	// Movement / Fireball events), the phase-3 landing (Bellowing Roar
-	// + floor-eruption GO search), the whelp/lair-guard summons, and
-	// the BossAI instance/achievement/timed-achievement legs have no
-	// movement / MotionMaster / summon / GO-enumeration / SpellHit /
-	// instance-data / achievement bridges — documented in
-	// lua_scripts/kalimdor/boss_onyxia.lua, not wired.
+	// Wing Buffet DoCastVictim), the engage aggro Talk / ungated
+	// KilledUnit Talk, and the DamageTaken phase latches (65%
+	// phase-2: PASSIVE + AttackStop + fly/gravity + Talk 2 + whelp /
+	// lair-guard / deep-breath / fireball / movement-point timers;
+	// 40% phase-3: land + AGGRESSIVE + Talk 3 + Bellowing Roar +
+	// phase-1 timers re-seeded) verified present in the port; the
+	// MovePoint/MoveTakeoff travel legs, the trigger summon/facing,
+	// the tank MoveChase, the floor-eruption GO search, the
+	// BossAI instance/achievement/timed-achievement legs, and the
+	// instance script itself have no movement / MotionMaster /
+	// GO-enumeration / instance-data / achievement bridges —
+	// documented in lua_scripts/kalimdor/boss_onyxia.lua.
 	RegisterLuaBoss("boss_onyxia", 10184)
 
 	// boss_tuten_kash: Razorfen Downs, entry 7355 (razorfen_downs.h
