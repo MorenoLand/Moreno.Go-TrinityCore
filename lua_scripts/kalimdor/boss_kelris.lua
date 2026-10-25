@@ -24,11 +24,13 @@
 -- - JustEngagedWith: Talk SAY_AGGRO(0); RemoveAurasDueToSpell(8734);
 --   Mind Blast 15587 DoCastVictim, init {2s,5s} -> repeat {7s,9s}
 --   (C++-exact; jeklik GetVictim + CastSpell convention, non-triggered).
--- - Sleep 8399: SelectTarget(Random,0,100,true) (janalai
---   randomPlayerInRange convention), Talk SAY_SLEEP(1) + DoCast on the
---   target (C++-exact — no triggered flag), init {9s,12s} -> repeat
---   {15s,20s}. If no target is found the arm no-ops but still re-arms,
---   matching C++'s unconditional re-schedule outside the target gate.
+-- - Sleep 8399: SelectTarget(Random,0,100,true) — random alive player
+--   on the threat list within 100yd (UnitAI.h:162-170: SelectTarget
+--   draws from the threat list; gerstahn randomPlayerTarget precedent),
+--   Talk SAY_SLEEP(1) + DoCast on the target (C++-exact — no triggered
+--   flag), init {9s,12s} -> repeat {15s,20s}. If no target is found the
+--   arm no-ops but still re-arms, matching C++'s unconditional
+--   re-schedule outside the target gate.
 -- - Death: Talk SAY_DEATH(2).
 -- Unmodeled (documented-only, no bridges): the BossAI _Reset() /
 -- _JustReachedHome() / _JustDied() instance bookkeeping legs — no
@@ -71,19 +73,24 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget(Random, 0, 100, true): random alive player on the
+-- threat list within 100yd (UnitAI.h:162-170 — SelectTarget draws from
+-- the threat list; gerstahn randomPlayerTarget precedent). The old
+-- GetPlayersInWorld pool wrongly included players never engaged with
+-- the boss (bystanders in the instance).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
+                candidates[#candidates + 1] = t
+            end
         end
     end
-    if #found == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_MIND_BLAST: DoCastVictim, non-triggered (jeklik convention).
