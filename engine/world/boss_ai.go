@@ -12172,7 +12172,9 @@ func init() {
 	// UpdateAI rebuff timer (immediate + 180s, !HasAura(45631) gate,
 	// non-triggered self-cast 45631) and the SpellHit impact arm
 	// (event 14: 45634->45702 / 48252->48254 non-triggered self-casts,
-	// player-caster gated). Entry 25478 verifiable from the C++
+	// player-caster gated) plus the GotStinged remainder (quest-11648
+	// gate, per-player sting-count step twin of the caster GetAuraCount
+	// read, neural step-4 kill credit, Talk(step, caster)). Entry 25478 verifiable from the C++
 	// ImprisionedBerylSorcerer enum.
 	RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478)
 	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arm in

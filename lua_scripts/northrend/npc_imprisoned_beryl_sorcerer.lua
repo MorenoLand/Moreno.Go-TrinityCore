@@ -1,6 +1,7 @@
 -- Imprisoned Beryl Sorcerer (Borean Tundra, quest 11648) --
 -- Lua port of src/server/scripts/Northrend/zone_borean_tundra.cpp
--- (npc_imprisoned_beryl_sorcererAI — rebuff timer + SpellHit impact arms).
+-- (npc_imprisoned_beryl_sorcererAI — rebuff timer + SpellHit impact arms
+-- + GotStinged remainder).
 -- Zone-script unit per northrend_script_loader.cpp order (decl 199 /
 -- call 394; dalaran done, borean_tundra: 20 registrations).
 -- Retraction re-audit of the 15:34 "CLOSED document-only" entry: that
@@ -30,10 +31,18 @@
 -- SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT) — DoCastSelf is the 2-arg
 -- non-triggered self-cast, unconditional in GotStinged (fires before
 -- the quest gate :1247).
--- Unmodeled: GotStinged quest-11648 status gate + step computation
--- (caster->GetAuraCount(45634) / GetAuraCount(48252)+7, :1250-1255)
--- + Talk(step, caster) + KilledMonsterCredit(25478) (:1260/:1258) —
--- no quest-status / aura-count / kill-credit bridges; the JustEngagedWith
+-- Ported GotStinged remainder (C++ :1242-1261): after the unconditional
+-- impact cast, the quest-11648 gate (player:GetQuestStatus ~= 0, NONE),
+-- then step = prior sting count for this player+spell — the C++ caster
+-- GetAuraCount read, where Spell.cpp:2629 fires the AI SpellHit hook
+-- BEFORE the hit's aura effects apply, so the first sting reads 0
+-- (prototype adds 7); neural step 4 -> player:KilledMonsterCredit(25478),
+-- then creature:Talk(step, caster). The count rides an in-Lua
+-- per-player table (no player aura-count bridge exists); divergence:
+-- if the C++ needle aura expired mid-sequence the C++ count would reset
+-- while the Lua count persists — unobservable in the normal
+-- sting-in-succession quest flow.
+-- Unmodeled: the JustEngagedWith
 -- empty override; Reset's REACT_PASSIVE leg (zone_borean_tundra.cpp
 -- :1204-:1209) IS ported via berylSorcererSpawnOrReset below — the C++
 -- != REACT_PASSIVE gate needs no GetReactState bridge: setting PASSIVE
@@ -50,6 +59,14 @@ local SPELL_NEURAL_NEEDLE = 45634
 local SPELL_PROTOTYPE_NEURAL_NEEDLE = 48252
 local SPELL_NEURAL_NEEDLE_IMPACT = 45702
 local SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT = 48254
+
+local QUEST_THE_ART_OF_PERSUASION = 11648
+
+-- Prior sting counts keyed "<playerGuid>:<spellId>" — the in-Lua twin
+-- of the C++ caster GetAuraCount read (see header note on SpellHit
+-- firing before aura apply). Counts every needle hit, quest or not,
+-- matching the C++ aura stacking under the quest gate.
+local stingCounts = {}
 
 local REBUFF_INTERVAL = 180000
 
@@ -114,17 +131,37 @@ local function berylSorcererDied(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ SpellHit :1232-1240 -> GotStinged :1242-1244: player-caster gate,
--- then the unconditional DoCastSelf impact leg per spell id.
+-- C++ SpellHit :1232-1240 -> GotStinged :1242-1261: player-caster gate,
+-- then the unconditional DoCastSelf impact leg per spell id, then the
+-- quest-gated step arm (see header note): prior sting count, neural
+-- step 4 -> KilledMonsterCredit, Talk(step, caster).
 local function berylSorcererSpellHit(event, creature, caster, spellId)
     if not caster or caster:GetObjectType() ~= "Player" then
         return
     end
-    if spellId == SPELL_NEURAL_NEEDLE then
+    local isNeedle = spellId == SPELL_NEURAL_NEEDLE
+    local isProto = spellId == SPELL_PROTOTYPE_NEURAL_NEEDLE
+    if not isNeedle and not isProto then
+        return
+    end
+    if isNeedle then
         creature:CastSpell(creature, SPELL_NEURAL_NEEDLE_IMPACT)
-    elseif spellId == SPELL_PROTOTYPE_NEURAL_NEEDLE then
+    else
         creature:CastSpell(creature, SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT)
     end
+    local key = caster:GetGUID() .. ":" .. spellId
+    local step = stingCounts[key] or 0
+    stingCounts[key] = step + 1
+    if caster:GetQuestStatus(QUEST_THE_ART_OF_PERSUASION) == 0 then
+        return
+    end
+    if isProto then
+        step = step + 7
+    end
+    if isNeedle and step == 4 then
+        caster:KilledMonsterCredit(ENTRY_IMPRISONED_BERYL_SORCERER)
+    end
+    creature:Talk(step, caster)
 end
 
 RegisterCreatureEvent(ENTRY_IMPRISONED_BERYL_SORCERER, 5, berylSorcererSpawnOrReset)
