@@ -138,8 +138,7 @@
 -- 53617) 5s init, 2-3s repeat; assassin JustEngagedWith backstab
 -- machine (6s init / 6s repeat via task.Repeat(), DoCastVictim(
 -- SPELL_BACKSTAB 52540) gated on victim->isInBack(me) — creature:IsInBack
--- now bridged on the event surface (lua_creature_events.go; krik_thir
--- backstab ported 2026-10-23) — the assassin stays out on
+-- now bridged on the event surface (lua_creature_events.go) — the assassin stays out on
 -- entry-blocked grounds (no C++ NPC constant, summon DB-side).
 -- Additionally unbridged:
 -- the pet-template InitializeAI leg (cross-AI SetGUID(GUID_TYPE_PET)

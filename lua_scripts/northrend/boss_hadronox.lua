@@ -55,12 +55,13 @@
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
 -- summon STRAND + cross-AI SetData/DoAction bridges absent.
--- MovementInform final-step: SetReactState(REACT_AGGRESSIVE) +
--- DoCastAOE(WEB_FRONT_DOORS 53177) + DoCastAOE(WEB_SIDE_DOORS 53185)
--- + _doorsWebbed latch + DoZoneInCombat — stays out: the whole arm
--- fires on the unbridged motion-master step machine, and both
--- spells' effects are delivered by the spell_hadronox_web_doors
--- SpellScript (aura removal — shazzrah precedent).
+-- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
+-- arrival, but DoCastAOE(WEB_FRONT_DOORS 53177) +
+-- DoCastAOE(WEB_SIDE_DOORS 53185) + _doorsWebbed latch + DoZoneInCombat
+-- only at the final step — stays out: the whole arm fires on the
+-- unbridged motion-master step machine, and both spells' effects are
+-- delivered by the spell_hadronox_web_doors SpellScript (aura removal
+-- — shazzrah precedent).
 -- GetData(DATA_HADRONOX_ENTERED_COMBAT/DATA_HADRONOX_WEBBED_DOORS) +
 -- SetGUID(_anubar GUID list) + ObjectAccessor cross-AI — cross-AI
 -- GetData/SetGUID bridges absent.
