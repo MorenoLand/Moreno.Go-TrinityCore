@@ -91,12 +91,16 @@
 --   but a FRIENDLY-at-reset port with no awaken path would brick
 --   the fight after the first evade). The freeze-aura self-cast
 --   is deferred with the stranded-half convention
---   (npc_captured_rageclaw / npc_phoenix_tk).
+--   (npc_captured_rageclaw / npc_phoenix_tk). The ROOT leg alone
+--   is PORTED 2026-10-25 (ev23 onArchaedasReset, SetRooted twin):
+--   it pairs with the ev1 release and needs no awaken path.
 -- - JustEngagedWith's faction/flag/root legs: SetFaction is bridged
 --   (lua_creature_events.go:1208) but the MONSTER flip rides the
 --   unported altar-awaken machine — without the awaken path the
 --   FRIENDLY/MONSTER cycle has no re-trigger, so both faction
---   legs stay documented-only (flag/root still bridgeless).
+--   legs stay documented-only (the flag leg stays out with them;
+--   the ROOT leg alone is PORTED 2026-10-25 on ev1 — it pairs
+--   with the ev23 set and needs no awaken path).
 -- - SpellHit(10347) on boss and minions (the whole awaken
 --   sequence: Talk(SAY_AGGRO), 4s/5s waking-up timers,
 --   AttackStart(instance->GetGuidData(0))): stays out — the
@@ -124,14 +128,16 @@
 --   arms at all — Reset/JustEngagedWith are faction/flag/root/
 --   freeze-aura state legs (faction IS bridged now —
 --   lua_creature_events.go:1208 — but the legs ride the unported
---   awaken machine; flag/root still bridgeless), the SpellHit(10347)
+--   awaken machine; the stay-out is registration/machine grounds,
+--   not bridge grounds — SetRooted is bridged), the SpellHit(10347)
 --   awaken sequence never fires, and the remainder is engine-
 --   driven melee. Unregistered (registering a hook with zero
 --   bridgeable arms would be a firesworn stub), documented
 --   here.
 -- - npc_stonekeepers Reset/JustEngagedWith faction/flag/root
 --   legs: faction bridged but machine-coupled (see above),
---   flag/root bridgeless; JustDied's instance->SetData(DATA_
+--   flag/root bridges exist but the legs are machine-coupled;
+--   JustDied's instance->SetData(DATA_
 --   STONE_KEEPERS, IN_PROGRESS) leg: instance-model blocked.
 -- - go_altar_of_archaedas: entry-unverifiable (no GO entry for
 --   the altar is named anywhere in src/server — fails the
@@ -183,7 +189,19 @@ end
 local function onArchaedasCombatStart(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ boss_archaedas.cpp:128: JustEngagedWith -> SetControlled(false,
+    -- UNIT_STATE_ROOT), after the faction/flag legs (which stay out per
+    -- the header's awaken-machine note); the root leg alone is ported.
+    creature:SetRooted(false)
     schedule(guid, "tremor", 60000, function() onGroundTremor(creature, guid) end)
+end
+
+-- C++ boss_archaedas.cpp:105: Reset -> SetControlled(true,
+-- UNIT_STATE_ROOT). Ev23 only: ev2/ev4 stay on onArchaedasCombatEnd
+-- (C++ JustDied never Resets, so a corpse must not re-root).
+local function onArchaedasReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetRooted(true)
 end
 
 local function onArchaedasCombatEnd(event, creature)
@@ -204,5 +222,5 @@ RegisterCreatureEvent(NPC_ARCHAEDAS, 1, onArchaedasCombatStart)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 2, onArchaedasCombatEnd)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 3, onArchaedasTargetDied)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 4, onArchaedasCombatEnd)
-RegisterCreatureEvent(NPC_ARCHAEDAS, 23, onArchaedasCombatEnd)
+RegisterCreatureEvent(NPC_ARCHAEDAS, 23, onArchaedasReset)
 RegisterCreatureEvent(NPC_STONE_KEEPER, 4, onStoneKeeperDied)

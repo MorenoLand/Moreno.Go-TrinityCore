@@ -136,8 +136,9 @@
 -- summon maiev 40403 9s (cast kept; the creature cast path
 -- dispatches SPELL_EFFECT_SUMMON (creatureEffectSummonType),
 -- so the summon has a dispatch bridge — the spawn rides the
--- spell-DB property filter, and the SetFacingToObject leg stays
--- out on the instance-GUID gap), Talk
+-- spell-DB property filter, and the SetFacingToObject leg is
+-- PORTED 2026-10-25 via FindNearestCreature(23197) + the
+-- atan2/SetFacingTo idiom, nil-guarded like the C++ if), Talk
 -- (SAY_ILLIDAN_CONFRONT_MAIEV) 9s later, resume combat 13s later:
 -- arm the phase-4 schedule (phase-1 arms + agonizing flames 40834
 -- 21s then 53s, non-triggered self-cast + frenzy 40683 40s then
@@ -851,6 +852,18 @@ local function startPhase4(creature, guid)
         creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
         schedule(guid, "summonMaiev", 9000, function()
             creature:CastSpell(creature, SPELL_SUMMON_MAIEV, false)
+            -- C++ boss_illidan.cpp:990-991: SetFacingToObject(maiev) after
+            -- the summon; the instance-GUID lookup is substituted with
+            -- FindNearestCreature(23197 NPC_MAIEV_SHADOWSONG, 100.0) —
+            -- the summon lands at the caster, so the range is generous
+            -- — and the nil-guard mirrors the C++ if. Atan2 + SetFacingTo
+            -- is the zuljin flame-breath idiom.
+            local maiev = creature:FindNearestCreature(23197, 100.0)
+            if maiev then
+                local face = math.atan2(maiev:GetY() - creature:GetY(), maiev:GetX() - creature:GetX())
+                if face < 0 then face = face + 2 * math.pi end
+                creature:SetFacingTo(face)
+            end
             schedule(guid, "confrontMaiev", 9000, function()
                 creature:Talk(SAY_ILLIDAN_CONFRONT_MAIEV)
                 schedule(guid, "resumeCombat4", 13000, function()
