@@ -45,10 +45,9 @@
 --   DoCastVictim(45185) non-triggered.
 -- - Burn: 60s init -> urand(60s, 180s) {60000, 180000} re-arm
 --   (maiden range convention); SelectTarget(Random, 0, 100.0f,
---   true, true, -SPELL_BURN) -> randomTargetInRange (maiden
---   convention; the no-Burn-aura target filter has no Go model,
---   documented approximation — kalecgos AgonyCurseSelector
---   precedent); C++ target->CastSpell(target, 46394, true) ->
+--   true, true, -SPELL_BURN) -> randomTargetInRange: threat-list
+--   players alive <=100 minus the SPELL_BURN aura (HasAura on threat
+--   entries, freya precedent); C++ target->CastSpell(target, 46394, true) ->
 --   creature:CastSpell(target, SPELL_BURN, true) (kalecgos
 --   convention — caster mismatch noted, documented).
 -- - Berserk: 6min (360000) one-shot latch; Talk(YELL_BERSERK =
@@ -140,12 +139,12 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and not unit:HasAura(SPELL_BURN)
+                and creature:GetDistance(unit) <= range then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then

@@ -211,12 +211,11 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -315,9 +314,9 @@ local function onFlameStrike(creature, guid)
     schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
 end
 
--- C++ EVENT_PYROBLAST (cpp:254-258): random-player
--- (SelectTarget(Random, 0, 40.0f, true) — maiden_of_virtue
--- random-player precedent) cast 36819, one-shot: C++ schedules it
+-- C++ EVENT_PYROBLAST (cpp:254-258): SelectTarget(Random, 0,
+-- 40.0f, true) -> randomTargetInRange(creature, 40): threat-list
+-- players alive <=40; cast 36819, one-shot: C++ schedules it
 -- once from the shock-barrier arm, no repeat.
 local function onPyroblast(creature, guid)
     local target = randomTargetInRange(creature, 40)

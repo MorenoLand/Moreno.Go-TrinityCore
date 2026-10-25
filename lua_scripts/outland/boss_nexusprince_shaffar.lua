@@ -164,23 +164,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 0) in JustSummoned (:125): dist 0 = no range
--- gate, playerOnly unset = any attackable unit. The Lua pool is alive
--- players on the same map+instance (threat-list members the bridge can
--- address); a non-player C++ pick no-ops through EngageWithTarget's
--- player-session gate, so the engage fires exactly for player picks.
-local function randomAttackablePlayer(creature)
-    local players = {}
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            players[#players + 1] = p
+-- gate, playerOnly unset = any attackable unit, so the pool is the
+-- threat list, alive entries only (GetAITargets, freya precedent).
+local function randomAttackableTarget(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
-    if #players == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_FIREBALL (:165-167): DoCastVictim(SPELL_FROSTBOLT 32364)
@@ -319,7 +315,7 @@ local function shaffarJustSummoned(event, creature, summoned)
         return
     end
     summoned:CastSpell(summoned, SPELL_ETHEREAL_BEACON_VISUAL)
-    local target = randomAttackablePlayer(creature)
+    local target = randomAttackableTarget(creature)
     if target then
         summoned:EngageWithTarget(target)
     end

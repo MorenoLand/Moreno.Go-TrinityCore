@@ -69,8 +69,8 @@
 -- - Gas Nova: {15s,20s} init -> {20s,25s} re-arm; DoCast(me,
 --   45855) non-triggered (AoE) -> self CastSpell.
 -- - Encapsulate: {20s,25s} init -> {25s,30s} re-arm; SelectTarget
---   (Random, 0, 150) -> randomTargetInRange(creature, 150)
---   (maiden convention); DoCast(target, 45661) non-triggered ->
+--   (Random, 0, 150, true) -> randomTargetInRange(creature, 150):
+--   threat-list players alive <=150; DoCast(target, 45661) non-triggered ->
 --   CastSpell.
 -- - Spawn: Talk(YELL_BIRTH = 0) on event 5 (C++ JustAppeared).
 -- - Death: Talk(YELL_DEATH = 5) on event 4.
@@ -166,12 +166,11 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function randomTargetInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= range then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
