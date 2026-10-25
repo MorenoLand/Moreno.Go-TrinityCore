@@ -246,11 +246,15 @@ end
 -- C++ boss_baltharus_the_warborn::DamageTaken -> EVENT_CLONE (1ms) ->
 -- DoAction(ACTION_CLONE): DoCastSelf(SPELL_CLEAR_DEBUFFS 34098, true) +
 -- DoCastSelf(SPELL_CLONE 74511, true) + DoCastSelf(SPELL_REPELLING_WAVE
--- 74509) + Talk(SAY_CLONE 3). 10-man thresholds only (no difficulty
--- bridge — the jaraxxus/kelidan precedent): _cloneCount == 0 and
--- HealthBelowPctDamaged(50, damage), fired as the 1ms scheduled clone
--- leg; the C++ event-9 hook is pre-damage, so GetHealth() here is the
--- pre-damage value C++ compares against.
+-- 74509) + Talk(SAY_CLONE 3). Thresholds are difficulty-split (C++
+-- DamageTaken :143-166; Is25ManRaid bridged, blood-queen precedent):
+-- 10-man _cloneCount == 0 and HealthBelowPctDamaged(50, damage);
+-- 25-man _cloneCount == 0 and HealthBelowPctDamaged(66, damage), then
+-- _cloneCount == 1 and HealthBelowPctDamaged(33, damage) — the elseif
+-- order matters, a single blow crossing both 25-man thresholds fires
+-- only the 66 arm. Fired as the 1ms scheduled clone leg; the C++
+-- event-9 hook is pre-damage, so GetHealth() here is the pre-damage
+-- value C++ compares against.
 local function baltharusDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if not cloneCount[guid] then
@@ -260,9 +264,23 @@ local function baltharusDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if cloneCount[guid] == 0
+    local fire = false
+    if creature:Is25ManRaid() then
+        if cloneCount[guid] == 0
+                and (creature:GetHealth() - damage) * 100 < maxHealth * 66 then
+            cloneCount[guid] = 1
+            fire = true
+        elseif cloneCount[guid] == 1
+                and (creature:GetHealth() - damage) * 100 < maxHealth * 33 then
+            cloneCount[guid] = 2
+            fire = true
+        end
+    elseif cloneCount[guid] == 0
             and (creature:GetHealth() - damage) * 100 < maxHealth * 50 then
         cloneCount[guid] = 1
+        fire = true
+    end
+    if fire then
         schedule(guid, "clone", 1, function()
             creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS, true)
             creature:CastSpell(creature, SPELL_CLONE, true)
