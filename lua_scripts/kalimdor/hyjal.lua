@@ -124,25 +124,21 @@ end
 -- SelectTarget(targetType, offset=0, dist=0, playerOnly=false,
 -- withTank=TRUE (default), aura=0) (UnitAI.h:170): the tank IS a valid
 -- pick (no _exception at offset 0), and dist=0 means no range cap.
--- Ported as a random alive player in 100yd INCLUDING the current victim —
--- victim-inclusion C++-exact; 100yd cap and player-only candidacy are the
--- documented janalai approximations of the uncapped threat-list pick
--- (no Lua bridge enumerates pets/totems).
-local function randomPlayerInRange(creature, maxDist, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and not (excludeVictim and victim and p == victim) then
-            found[#found + 1] = p
+-- Ported as a random alive threat-list unit INCLUDING the current victim --
+-- victim-inclusion C++-exact (offset 0 pops nothing); no range cap and
+-- any-unit candidacy per the Random, 0 defaults (pets/totems eligible).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- C++ UpdateAI spell leg: pick target per TargetType; cast if alive and
@@ -158,7 +154,7 @@ local function onSpell(creature, guid, name, idx)
     elseif spec.target == "victim" then
         target = creature:GetVictim()
     else
-        target = randomPlayerInRange(creature, 100, false)
+        target = randomThreatTarget(creature)
     end
     if target and not target:IsDead() then
         creature:CastSpell(target, spec.spell)

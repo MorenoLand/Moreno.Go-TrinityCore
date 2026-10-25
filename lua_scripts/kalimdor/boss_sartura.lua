@@ -122,14 +122,16 @@ startWhirlwind = function(creature, guid)
     end)
 end
 
--- C++ SelectTarget(Random, 1, 100.0f, true) pool: random alive player
--- within 100 yd on the same map+instance (wyrmthalak helper idiom).
-local function randomAlivePlayer100(creature)
+-- C++ SelectTarget(Random, 1, 100.0f, true) pool: threat-list players
+-- alive within 100 yd, with the first MaxThreat entry skipped BEFORE
+-- the filters (UnitAI.h offset-before-filter) — not a victim exclusion.
+local function randomThreatPlayer100SkipFirst(creature)
     local players = {}
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= 100 then
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local p = targets[i]
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= 100 then
             players[#players + 1] = p
         end
     end
@@ -144,7 +146,7 @@ end
 -- is the player-target AttackStart twin (a non-player C++ pick no-ops
 -- through its session gate, so the engage fires exactly for player picks).
 local function randomTargetSwitch(creature)
-    local target = randomAlivePlayer100(creature)
+    local target = randomThreatPlayer100SkipFirst(creature)
     if target then
         creature:AddThreat(target, 1.0)
         creature:EngageWithTarget(target)

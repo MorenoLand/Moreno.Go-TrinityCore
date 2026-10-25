@@ -41,7 +41,7 @@
 --   SummonSpawn(random target via SelectTarget Random) 1-3 times —
 --   DoSpawnCreature(15630, offset coords, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT)
 --   has zero Lua usage (cthun precedent — no bridge); random player
---   selection goes through randomPlayerAnywhere above.
+--   selection goes through randomThreatPlayer above.
 -- - SpawnHatchlings_Timer (urand 6000-12000 init -> urand 45000-60000,
 --   gated by HealthAbovePct(3)): PORTED 2026-10-23 (onSpawnHatchlings
 --   above; stale "SummonCreature zero Lua usage" claims retracted — the
@@ -93,7 +93,7 @@ local function onMortalWound(creature, guid)
 end
 
 -- C++ SpawnHatchlings_Timer (boss_fankriss.cpp:139-206): gated on
--- HealthAbovePct(3); on fire pick a random alive player (SelectTarget
+-- HealthAbovePct(3); on fire pick a random alive threat-list player (SelectTarget
 -- Random, 0, 0.0f, playerOnly TRUE — no range cap), DoCast(target,
 -- SPELL_ROOT 28858) non-triggered, ModifyThreatByPercent(target, -100)
 -- (PORTED 2026-10-24), DoTeleportPlayer(target) to one
@@ -112,24 +112,23 @@ local TUNNEL_SPOTS = {
     { -8159.7753, 1127.9064, -76.868660, 0.675 },
 }
 
-local function randomPlayerAnywhere(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+local function randomThreatPlayer(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 local function onSpawnHatchlings(creature, guid)
     if creature:GetHealthPct() > 3 then
-        local target = randomPlayerAnywhere(creature)
+        local target = randomThreatPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_ROOT)
             if creature:GetThreat(target) ~= 0 then

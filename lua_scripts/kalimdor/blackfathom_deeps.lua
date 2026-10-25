@@ -100,19 +100,18 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- npc_blackfathom_deeps_event: 4825 Aku'mai Snapjaw — Ravage (C++-exact
@@ -129,7 +128,8 @@ end
 
 -- npc_blackfathom_deeps_event: 4978 Aku'mai Servant — Frost Nova (C++
 -- non-triggered DoCastAOE, false: vaelastrasz/illidan self-cast
--- convention) + Frostbolt Volley on a random alive player.
+-- convention) + Frostbolt Volley on a random alive threat-list unit
+-- (C++ SelectTarget(Random, 0) defaults: any unit, no range cap).
 local function onFrostNova(creature, guid)
     creature:CastSpell(creature, SPELL_FROST_NOVA, false)
     schedule(guid, "frostnova", math.random(25000, 30000), function()
@@ -138,7 +138,7 @@ local function onFrostNova(creature, guid)
 end
 
 local function onFrostboltVolley(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FROST_BOLT_VOLLEY)
     end

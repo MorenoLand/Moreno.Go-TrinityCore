@@ -24,9 +24,9 @@
 --   GetVictim + CastSpell convention, non-triggered), init 8s -> 8s.
 -- - Sand Trap 25648: C++ SelectTarget(Random, 0, 100, true) casts
 --   target->CastSpell(target, 25648, true); nil target falls back to
---   victim->CastSpell(victim, 25648, true). Ported as a bounded random
---   alive player within 100 (anetheron randomPlayerInRange convention,
---   nil -> no cast) with the C++ victim-fallback wired: victim casts
+--   victim->CastSpell(victim, 25648, true). Ported as a random alive
+--   threat-list player within 100 (Random, 0, 100, true), nil -> victim
+--   fallback wired: victim casts
 --   on itself when no random player exists. Init {5s,15s} -> {5s,15s}.
 -- - Wide Slash 25814 self-cast (C++ DoCast(me)), init 11s -> 11s.
 -- - Trash 3391 self-cast (C++ DoCast(me); the enum comment notes it
@@ -79,19 +79,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+local function randomThreatPlayerInRange(creature, maxDist)
+    local targets = creature:GetAITargets()
+    local out = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
-    if #found == 0 then
+    if #out == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return out[math.random(#out)]
 end
 
 -- C++ EVENT_MORTAL_WOUND: DoCastVictim(25646), non-triggered, init
@@ -115,7 +115,7 @@ end
 -- creatureEffectSummonType) — the switch would lose the spawn, so the
 -- creature casts on the target/victim instead (caster deviates from C++).
 local function onSandTrap(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SAND_TRAP, true)
     else
