@@ -34,9 +34,9 @@
 -- CastSpell(creature, 25805) is C++-exact; re-arm 15-19s
 -- (urand(15s, 19s), C++-exact); creature-of-nightmare arm —
 -- C++ SelectTarget(Random, 0, 0.0f, true) rides
--- randomPlayerInRange(creature, 0, 500) (playerOnly=true is
--- idiom-exact; the old "no target-selection bridge / playerOnly
--- degradation" claim was stale),
+-- randomThreatPlayer(creature) (threat-list players alive, no
+-- distance gate; the old instance-player 500yd pool claim is
+-- retracted),
 -- non-triggered DoCast(target, SPELL_CREATURE_OF_NIGHTMARE
 -- 25806), re-arm 45s (C++-exact). Melee is engine-driven.
 -- OnTargetDied(3): the C++ KilledUnit victim->GetTypeId() ==
@@ -105,22 +105,15 @@ end
 -- collapses into the pump (it only runs in combat). Each
 -- tick decrements every timer (the EventMap::Update(diff)
 -- pass), then expired events fire in C++ arm order.
--- C++ SelectTarget(Random, 0, 0.0f, true) legs — alive players
--- on the same map/instance; playerOnly=true is idiom-exact;
--- 0.0f = unlimited range approximated by a 500yd cap (the
--- thorim randomPlayerInRange idiom; the old "no target-selection
--- bridge / playerOnly degradation" claim was stale).
-local function randomPlayerInRange(creature, minDist, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 0.0f, true): random threat-list
+-- player alive, no distance gate (UnitAI.h:162-176 — the old
+-- instance-player pool with its invented 500yd cap could pick
+-- players who never engaged).
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            local dist = creature:GetDistance(plr)
-            if dist >= minDist and dist <= maxDist then
-                candidates[#candidates + 1] = plr
-            end
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead() then
+            candidates[#candidates + 1] = plr
         end
     end
     if #candidates == 0 then
@@ -150,9 +143,9 @@ local function combatTick(creature, guid)
     -- Creature of nightmare arm — non-triggered DoCast(target,
     -- SPELL_CREATURE_OF_NIGHTMARE 25806), re-arm 45s (C++-exact,
     -- unconditional); C++ SelectTarget(Random, 0, 0.0f, true) ->
-    -- randomPlayerInRange(creature, 0, 500), nil-guarded (C++ `if`).
+    -- randomThreatPlayer(creature), nil-guarded (C++ `if`).
     if st.nightmareTimer <= 0 then
-        local target = randomPlayerInRange(creature, 0, 500)
+        local target = randomThreatPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_CREATURE_OF_NIGHTMARE)
         end

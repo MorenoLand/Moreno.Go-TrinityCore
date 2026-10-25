@@ -122,15 +122,14 @@ local function onKnockAway(creature, guid)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 100, true): random
--- alive player within 100 yd, position 0 (victim included) — the
--- GetPlayersInWorld + mapId/instanceId filter (anastari precedent) with
--- a distance gate (doan precedent).
-local function randomAlivePlayer(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- threat-list player alive within 100 yd, position 0 (victim included)
+-- (UnitAI.h:162-176 — the old instance-player pool could pick players
+-- who never engaged).
+local function randomThreatPlayerInRange(creature, maxDist)
     local players = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player" and not p:IsDead()
+                and creature:GetDistance(p) <= maxDist then
             players[#players + 1] = p
         end
     end
@@ -164,7 +163,7 @@ local function wyrmthalakDamageTaken(event, creature, attacker, damage)
     end
     local postDamage = math.max(health - damage, 0)
     if postDamage > 0 and postDamage < math.floor(maxHealth * 51 / 100) then
-        local target = randomAlivePlayer(creature, 100)
+        local target = randomThreatPlayerInRange(creature, 100)
         if target then
             local warlord = creature:SummonCreature(NPC_SPIRESTONE_WARLORD,
                 SUMMON1_X, SUMMON1_Y, SUMMON1_Z, SUMMON1_O,

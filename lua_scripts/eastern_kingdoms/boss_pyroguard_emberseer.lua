@@ -24,8 +24,8 @@
 -- EVENT_FIRENOVA: self-cast FIRENOVA 23462, 6s init -> 6s loop.
 -- EVENT_FLAMEBUFFET: self-cast FLAMEBUFFET 23341, 3s init -> 14s loop.
 -- EVENT_PYROBLAST: random-player PYROBLAST 17274 — SelectTarget(Random,
--- 0, 100, true) is playerOnly, ported via the keleseth GetPlayersInWorld
--- precedent (same map/instance, alive, within 100yd); 14s init -> 15s
+-- 0, 100, true) is playerOnly, ported via the threat list
+-- (GetAITargets: players alive within 100yd); 14s init -> 15s
 -- loop, re-arm unconditional (C++ Repeat sits outside the target
 -- check), non-triggered DoCast(target).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
@@ -117,14 +117,14 @@ local function onFlameBuffet(creature, guid)
     schedule(guid, "flamebuffet", 14000, function() onFlameBuffet(creature, guid) end)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) playerOnly=true arms ride the
--- keleseth GetPlayersInWorld precedent.
-local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, dist, true): random threat-list
+-- player alive within range (UnitAI.h:162-176 — the old
+-- instance-player pool could pick players who never engaged).
+local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, range) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -138,7 +138,7 @@ end
 -- DoCast(target, 17274) non-triggered, 14s init, Repeat(15s) outside
 -- the target check (re-arm unconditional).
 local function onPyroblast(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_PYROBLAST)
     end
