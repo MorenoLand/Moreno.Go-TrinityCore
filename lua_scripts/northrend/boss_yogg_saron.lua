@@ -72,9 +72,11 @@
 -- and the phase gate has no bridge, so event 15 never fires for them in
 -- Go (event 15 itself is live — boss_ai.go:1904).
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on NPC_DEATH_ORB
--- summon (boss_yogg_saron.cpp:873-876; the orb arrives via a spell
--- summon leg, unported) — the event-19 bridge is live (broggok
--- precedent), but the arm stays out with the unported summon leg.
+-- summon + self-cast SPELL_DEATH_RAY_ORIGIN_VISUAL are PORTED
+-- (saraJustSummoned; the orb arrives via a spell summon leg, unported
+-- — LATENT). The 4 NPC_DEATH_RAY summons in the same arm stay out
+-- (map GetHeight terrain bridge absent — frost-sphere precedent);
+-- the voice-of-Yogg forward stays out (cross-AI, no bridge).
 -- Sara Reset SetReactState(REACT_PASSIVE) (:783-787) stays out: Sara
 -- has no event-23 handler (no reset registration) and the rest of the
 -- Reset machine (RemoveAllAuras / faction-friendly / phase reset)
@@ -197,6 +199,9 @@ local ENTRY_YOGG_SARON = 33288
 
 local SAY_SARA_AGGRO = 2
 local SAY_SARA_KILL = 5
+local SAY_SARA_DEATH_RAY = 10 -- boss_yogg_saron.cpp:49
+local ENTRY_DEATH_ORB = 33882 -- ulduar.h:217
+local SPELL_DEATH_RAY_ORIGIN_VISUAL = 63893 -- boss_yogg_saron.cpp:230
 local SAY_YOGG_SARON_DEATH = 6
 
 local SPELL_SHADOWY_BARRIER_YOGG = 63894
@@ -273,6 +278,18 @@ end
 
 RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
+-- C++ boss_saraAI::JustSummoned (:870-895): every summon
+-- SetReactState(REACT_PASSIVE); NPC_DEATH_ORB -> Talk + self-cast
+-- (non-triggered, C++ :877) in C++ order. LATENT: orbs spawn only
+-- from the unported SPELL_DEATH_RAY cast (anubrekhan precedent).
+local function saraJustSummoned(_, creature, summoned)
+    summoned:SetReactState(0) -- REACT_PASSIVE
+    if summoned:GetEntry() == ENTRY_DEATH_ORB then
+        creature:Talk(SAY_SARA_DEATH_RAY)
+        summoned:CastSpell(summoned, SPELL_DEATH_RAY_ORIGIN_VISUAL)
+    end
+end
+RegisterCreatureEvent(ENTRY_SARA, 19, saraJustSummoned)
 -- C++ SpellHit :951-956 — Val'anyr: SPELL_IN_THE_MAWS_OF_THE_OLD_GOD
 -- (64184) hit -> AddLootMode(32). Pure loot-mode leg, no Talk arm.
 local function yoggSaronSpellHit(event, creature, caster, spellId)

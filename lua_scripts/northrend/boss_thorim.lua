@@ -132,6 +132,14 @@ local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
 local ENTRY_DARK_RUNE_WARBRINGER = 32877
 local ENTRY_LIGHTNING_ORB = 33138 -- ulduar.h:189
+local ENTRY_SIF = 33196 -- ulduar.h:192
+local ENTRY_JORMUNGAR_BEHEMOTH = 32882 -- ulduar.h:173
+local ENTRY_MERCENARY_CAPTAIN_A = 32908 -- ulduar.h:174
+local ENTRY_MERCENARY_SOLDIER_A = 32885 -- ulduar.h:176
+local ENTRY_DARK_RUNE_ACOLYTE_PRE = 32886 -- ulduar.h:178
+local ENTRY_IRON_RING_GUARD = 32874 -- ulduar.h:181
+local ENTRY_IRON_HONOR_GUARD = 32875 -- ulduar.h:182
+local ENTRY_DARK_RUNE_ACOLYTE = 33110 -- ulduar.h:187
 local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
@@ -206,6 +214,10 @@ local function thorimEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO_1)
     creature:CastSpell(creature, SPELL_SHEATH_OF_LIGHTNING)
     cancelTimers(creature:GetGUID())
+    -- C++ JustEngagedWith last leg (:642): SummonCreature(NPC_SIF,
+    -- SifSpawnPosition) — default TEMPSUMMON_MANUAL_DESPAWN, the bridge
+    -- default; the cross-creature colossus/lever legs above it stay out.
+    creature:SummonCreature(ENTRY_SIF, 2148.301, -297.8453, 438.3308, 2.687807)
 end
 
 local function thorimLeaveCombat(event, creature)
@@ -214,12 +226,23 @@ end
 
 -- C++ boss_thorimAI::Reset (boss_thorim.cpp:461): me->SetControlled(true,
 -- UNIT_STATE_ROOT) — the balcony-phase root (lifted only by the unported
--- EVENT_JUMPDOWN). The companion Reset legs (SetReactState(REACT_PASSIVE),
--- SetDisableGravity(true), SetImmuneToPC(true), the phase machine, mini-boss
--- respawn, pre-phase-add summons) have no bridges and stay out.
+-- EVENT_JUMPDOWN), PORTED as SetRooted. The pre-phase-add summon loop
+-- (:487, TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) is PORTED below,
+-- IsAlive-guarded: Go event 23 also fires on death, and C++ Reset never
+-- runs on death. SetReactState(REACT_PASSIVE), SetDisableGravity(true),
+-- SetImmuneToPC(true), the phase machine and the mini-boss respawn stay
+-- out (balcony-phase gating; no instance bridge for the respawn).
 local function thorimReset(event, creature)
     creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
+    if creature:IsAlive() then
+        creature:SummonCreature(ENTRY_JORMUNGAR_BEHEMOTH, 2149.68, -263.477, 419.679, 3.120, 5, 3000)
+        creature:SummonCreature(ENTRY_MERCENARY_CAPTAIN_A, 2131.31, -271.640, 419.840, 2.188, 5, 3000)
+        creature:SummonCreature(ENTRY_MERCENARY_SOLDIER_A, 2127.24, -259.182, 419.974, 5.917, 5, 3000)
+        creature:SummonCreature(ENTRY_MERCENARY_SOLDIER_A, 2123.32, -254.770, 419.840, 6.170, 5, 3000)
+        creature:SummonCreature(ENTRY_MERCENARY_SOLDIER_A, 2120.10, -258.990, 419.840, 6.250, 5, 3000)
+        creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE_PRE, 2129.09, -277.142, 419.756, 1.222, 5, 3000)
+    end
 end
 
 -- C++ FinishEncounter is a 1%-hp pseudo-death, not a hook: C++ never calls
@@ -315,8 +338,21 @@ local function colossusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_runic_colossusAI::Reset (:1395-1406): _summons.DespawnAll (no
+-- summon-tracking bridge — stays out; Go event 23 never fires on
+-- leave-combat, so no evade duplication arises) + the ColossusAddLocations
+-- summon loop (TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s), PORTED below,
+-- IsAlive-guarded like thorimReset. The runic-door instance leg stays out.
 local function colossusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:IsAlive() then
+        creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2218.38, -297.50, 412.18, 1.030, 5, 3000)
+        creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2235.07, -297.98, 412.18, 1.613, 5, 3000)
+        creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2235.26, -338.34, 412.18, 1.589, 5, 3000)
+        creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2217.69, -337.39, 412.18, 1.241, 5, 3000)
+        creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE, 2227.58, -308.30, 412.18, 1.591, 5, 3000)
+        creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE, 2227.47, -345.37, 412.18, 1.566, 5, 3000)
+    end
 end
 
 local function colossusDied(event, creature, killer)
@@ -369,8 +405,19 @@ local function giantLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_ancient_rune_giantAI::Reset (:1517-1529): same shape as
+-- colossusReset — _summons.DespawnAll stays out, the GiantAddLocations
+-- summon loop (TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) PORTED below,
+-- IsAlive-guarded. The stone-door instance leg stays out.
 local function giantReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:IsAlive() then
+        creature:SummonCreature(ENTRY_IRON_HONOR_GUARD, 2198.05, -428.77, 419.95, 6.056, 5, 3000)
+        creature:SummonCreature(ENTRY_IRON_HONOR_GUARD, 2220.31, -436.22, 412.26, 1.064, 5, 3000)
+        creature:SummonCreature(ENTRY_IRON_HONOR_GUARD, 2158.88, -441.73, 438.25, 0.127, 5, 3000)
+        creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE, 2198.29, -436.92, 419.95, 0.261, 5, 3000)
+        creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE, 2230.93, -434.27, 412.26, 1.931, 5, 3000)
+    end
 end
 
 local function giantDied(event, creature, killer)
@@ -387,6 +434,11 @@ local function thorimJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_LIGHTNING_ORB then
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:CastSpell(summoned, SPELL_LIGHTNING_DESTRUCTION, true)
+    elseif summoned:GetEntry() == ENTRY_SIF then
+        -- C++ JustSummoned NPC_SIF (:673-675): bare SetReactState
+        -- (REACT_PASSIVE) — unlike the dark-rune trash, Sif gets no
+        -- TrashJumpEvent, so this leg is complete on its own.
+        summoned:SetReactState(0) -- REACT_PASSIVE
     end
 end
 

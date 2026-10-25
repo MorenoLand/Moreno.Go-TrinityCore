@@ -22,7 +22,10 @@
 -- OnTargetDied, 4 OnDied, 23 OnReset. Melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_jedoga_shadowseeker: JustEngagedWith Talk(SAY_AGGRO 0)
+-- boss_jedoga_shadowseeker: Reset controller summons (event 23,
+-- IsAlive-guarded — Go 23 also fires on death) + beam-visual casts
+-- (jedogaReset; the group / phase / react legs stay below);
+-- JustEngagedWith Talk(SAY_AGGRO 0)
 -- (event 1 — the hook itself is bridged); the
 -- RemoveAurasDueToSpell(SPELL_SPHERE_VISUAL 56075) /
 -- RemoveAurasDueToSpell(SPELL_RANDOM_LIGHTNING_VISUAL 56327) legs are
@@ -44,9 +47,8 @@
 -- bridge), SetReactState(REACT_PASSIVE) (react-state bridge exists
 -- since 2026-10-20 — the arm stays unported because the intro Reset is
 -- instance/phase-gated, drakkari_colossus precedent), SummonCreatureGroup(
--- SUMMON_GROUP_INITIATES) (summon STRAND absent), the two
--- NPC_JEDOGA_CONTROLLER 30181 summons with SPELL_BEAM_VISUAL_
--- JEDOGA 56312 beam-visual casts (summon STRAND absent), and
+-- SUMMON_GROUP_INITIATES) (no SummonCreatureGroup bridge — standing),
+-- and
 -- EVENT_INTRO_SAY (Talk(SAY_PREACHING 5), Minutes(2) repeat —
 -- instance->GetBossState(DATA_PRINCE_TALDARAM) == DONE gate needs
 -- the absent instance-script model).
@@ -164,6 +166,8 @@ local SAY_SLAY = 3
 local SAY_DEATH = 4
 
 local SPELL_SPHERE_VISUAL = 56075            -- boss_jedoga_shadowseeker.cpp:46
+local ENTRY_JEDOGA_CONTROLLER = 30181 -- ahnkahet.h:59
+local SPELL_BEAM_VISUAL_JEDOGA = 56312 -- boss_jedoga_shadowseeker.cpp:53
 local SPELL_RANDOM_LIGHTNING_VISUAL = 56327  -- boss_jedoga_shadowseeker.cpp:43
 
 local function jedogaEnterCombat(event, creature, target)
@@ -187,6 +191,25 @@ local function jedogaDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_jedoga_shadowseeker::Reset (:148-160): the two
+-- NPC_JEDOGA_CONTROLLER summons + SPELL_BEAM_VISUAL_JEDOGA casts on
+-- Jedoga are PORTED below, IsAlive-guarded (Go event 23 also fires on
+-- death; C++ Reset never runs on death). The SummonCreatureGroup
+-- (INITIATES), phase, react-state and EVENT_INTRO_SAY legs of the same
+-- Reset stay documented-only above.
+local function jedogaReset(event, creature)
+    if creature:IsAlive() then
+        local controller = creature:SummonCreature(ENTRY_JEDOGA_CONTROLLER, 402.7893, -748.5251, 29.39399, 2.024582)
+        if controller then
+            controller:CastSpell(creature, SPELL_BEAM_VISUAL_JEDOGA)
+        end
+        controller = creature:SummonCreature(ENTRY_JEDOGA_CONTROLLER, 420.1999, -727.0132, 28.88036, 2.042035)
+        if controller then
+            controller:CastSpell(creature, SPELL_BEAM_VISUAL_JEDOGA)
+        end
+    end
+end
+
 local function jedogaLeaveCombat(event, creature)
     -- C++ EnterEvadeMode: _DespawnAtEvade(Seconds(15)) (cpp:182-186;
     -- summons.DespawnAll is moot — nothing is modeled) — DespawnOrUnsummon
@@ -197,5 +220,6 @@ end
 
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 1, jedogaEnterCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 2, jedogaLeaveCombat)
+RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 23, jedogaReset)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 3, jedogaTargetDied)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 4, jedogaDied)
