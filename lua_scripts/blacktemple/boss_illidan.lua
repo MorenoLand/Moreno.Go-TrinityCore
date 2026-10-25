@@ -87,8 +87,11 @@
 -- minions-weave cycle; the weave fires empty — the SummonCreature
 -- bridge is live, but each illidari elite is paired with a summon-
 -- side AttackStart/AddThreat on Akama via instance GUID (npc_
--- illidari_elite::Reset, boss_illidan.cpp:1791-1797, unbridged
--- cross-creature relay) and CanAIAttack gates everything but Akama;
+-- illidari_elite::Reset, boss_illidan.cpp:1791-1797): AddThreat is
+-- bridged, but AttackStart has no creature-surface method, the
+-- Akama handle needs an unbridged instance-GUID lookup, the
+-- elite (23226) is unregistered, and CanAIAttack gates everything
+-- but Akama;
 -- the elites' only role is attacking the unported Akama, so the arm
 -- stays out (kalecgos precedent). The akama DoAction(
 -- ACTION_START_MINIONS) relay has no cross-creature bridge — skipped. 65% & phase<
@@ -110,10 +113,14 @@
 -- triggered on a random alive player within 150 yd, then re-arm
 -- eye blast 5s and re-arm the pillar timer 30s (C++ adds 30s to
 -- the pending pillar time — approximated, documented); the liftoff
--- emote/sound/gravity arms, the warglaive-point movement and the
--- pillar MovePoints have no movement bridge — the chain keeps the
--- timers, the positions are unmodeled; the two flame-of-azzinoth
--- summons have no summon bridge, so the both-flames-dead finalize
+-- emote/sound/react/attack-stop/gravity arms are PORTED at the
+-- 65% entry (the warglaive-point movement and the pillar
+-- MovePoints have no movement bridge — the chain keeps the
+-- timers, the positions are unmodeled; the NOT_SELECTABLE flag
+-- arm stays out — no finalize bearer, see the entry comment);
+-- the two flame-of-azzinoth summons spawn from the DB summon
+-- group (Reset :476, no SummonCreatureGroup bridge), so the
+-- both-flames-dead finalize
 -- arm (middle move, glaive returns, land, resume-combat phase 3)
 -- has no bearer and the air phase loops on the pillar timer —
 -- documented. 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
@@ -126,7 +133,11 @@
 -- creature:SetReactState; the flag and summon-DoAction arms have
 -- no bridges),
 -- Talk(SAY_ILLIDAN_SHADOW_PRISON) 500ms, non-triggered self-cast
--- summon maiev 40403 9s (the summon itself has no bridge), Talk
+-- summon maiev 40403 9s (cast kept; the creature cast path
+-- dispatches SPELL_EFFECT_SUMMON (creatureEffectSummonType),
+-- so the summon has a dispatch bridge — the spawn rides the
+-- spell-DB property filter, and the SetFacingToObject leg stays
+-- out on the instance-GUID gap), Talk
 -- (SAY_ILLIDAN_CONFRONT_MAIEV) 9s later, resume combat 13s later:
 -- arm the phase-4 schedule (phase-1 arms + agonizing flames 40834
 -- 21s then 53s, non-triggered self-cast + frenzy 40683 40s then
@@ -137,17 +148,20 @@
 -- MORPH) 2s, demon spells 15s (shadow blast 41078 1s then 2s,
 -- non-triggered DoCastVictim / flame burst 41126 6s then 22s,
 -- non-triggered self-cast / summon shadowdemon 41117 {18s,30s}
--- one-shot, non-triggered self-cast — the summon has no bridge,
--- cast kept), cancel demon form 72s one-shot: _isDemon=false,
+-- one-shot, non-triggered self-cast — the summon dispatches via
+-- the creature cast path's SPELL_EFFECT_SUMMON arm (cast kept;
+-- spawn rides the spell-DB property filter), cancel demon form
+-- 72s one-shot: _isDemon=false,
 -- cancel the demon-spell timers, triggered self-cast 40511,
 -- resume-demon 12s re-arms the phase schedule (the ResetThreatList
 -- and equipment arms have no bridges)). OnTargetDied(3):
 -- Talk(SAY_ILLIDAN_KILL), GetObjectType() == "Player" gate (terestian convention).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers, drop
--- per-GUID state (the Reset summon-group/equipment/gravity
--- arms and the akama-intro DoAction have no bridges; the root
--- arm ports via creature:SetRooted (2026-10-21) and the sheath arm
--- via creature:SetSheath(0) (2026-10-22); the
+-- per-GUID state (the Reset summon-group/equipment arms and the
+-- akama-intro DoAction have no bridges; the root arm ports via
+-- creature:SetRooted (2026-10-21), the gravity arm via
+-- creature:SetDisableGravity(false) (illidanCleanup) and the
+-- sheath arm via creature:SetSheath(0) (2026-10-22); the
 -- JustDied instance SetBossState arm is blocked on the
 -- instance-script model).
 -- Akama (23089): OnEnterCombat arms the healing-potion loop 1s:
@@ -243,13 +257,16 @@
 -- the unbridged MovePoint sweep (:910); minion (illidari elite) on
 -- the summon-side AttackStart via instance GUID (:1791-1797);
 -- maiev/shadow-demon/cage-trap/blade-tear are spell-effect summons
--- (no dispatch bridge); spirits have no direct summon arm (akama
+-- that dispatch via the creature cast path's SUMMON arm (the
+-- spawn rides the spell-DB property filter; the flame tear rides
+-- the unregistered flame AI); spirits have no direct summon arm (akama
 -- JustSummoned only captures GUIDs); warglaive blade triggers are
 -- DB-spawned (no summon arm at all); stale 'no gossip bridge'
 -- retracted (bridged) — the
 -- akama intro stays out on the movement/instance machine;
--- no equipment/gravity/threat/immune/sound/despawn bridges —
--- those arms are skipped (flag bridge is live: SetFlag/RemoveFlag on
+-- no equipment/immune/despawn/instance bridges — those arms are
+-- skipped (gravity, sound and threat bridges are live, and the
+-- flag bridge is live: SetFlag/RemoveFlag on
 -- UNIT_FIELD_FLAGS (59) is honored, lua_creature_events.go:968 —
 -- retracted 2026-10-20 for the field-59 arms; react bridge exists —
 -- react arms stay out, documented per-arm; the throw-glaive-2 sheath
@@ -540,9 +557,11 @@ onParasitic = function(creature, guid)
 end
 
 -- C++ EVENT_MINIONS_WEAVE: _dead guard, SummonMinions — fires empty:
--- the illidari-elite summon stays out (summon-side AttackStart/AddThreat
--- on Akama via instance GUID, no bridges; 23226 unregistered, no
--- bearer), repeat 30s.
+-- the illidari-elite summon stays out (summon-side AttackStart on
+-- Akama via instance GUID: AttackStart has no creature-surface
+-- method and the Akama handle needs an unbridged instance-GUID
+-- lookup; AddThreat is bridged but has no bearer here; 23226
+-- unregistered, CanAIAttack gate unbridged), repeat 30s.
 local function onMinionsWeave(creature, guid)
     local state = getIllidanState(guid)
     if state.dead then
@@ -928,9 +947,15 @@ local function illidanDamageTaken(event, creature, attacker, damage)
     elseif healthPct < 65 and state.phase < PHASE_2 then
         state.phase = PHASE_2
         -- C++ DoAction(ACTION_START_PHASE_2) (boss_illidan.cpp:594-605):
-        -- cancels GROUP_PHASE_1 (the react/flag/gravity arms stay
-        -- out: the phase-2 liftoff machine is unported); the LIFTOFF
-        -- emote (:599, EMOTE_ONESHOT_LIFTOFF, SharedDefines.h:2003,
+        -- cancels GROUP_PHASE_1; the REACT_PASSIVE (:596),
+        -- AttackStop (:597) and gravity-disable (:600) arms are
+        -- PORTED below in C++ arm order. The flag arm (:598,
+        -- NOT_SELECTABLE) stays out deliberately: C++ clears it at
+        -- RESUME_COMBAT (:935), which has no Lua bearer (the
+        -- flames-dead finalize never fires), so setting it here
+        -- would leave the boss untargetable through the pillar
+        -- loop and stall the 30% transition; the LIFTOFF emote
+        -- (:599, EMOTE_ONESHOT_LIFTOFF, SharedDefines.h:2003,
         -- value 254) ports via creature:PerformEmote, and the takeoff
         -- sound (:601, ILLIDAN_TAKEOFF_SOUND_ID 11479, boss_illidan.cpp:81)
         -- ports via creature:PlayDirectSound (standalone leg, C++-verbatim
@@ -939,7 +964,18 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 "parasitic" }) do
             cancelTimer(guid, key)
         end
+        -- C++ boss_illidan.cpp:596: me->SetReactState(REACT_PASSIVE),
+        -- in C++ arm order before the AttackStop.
+        creature:SetReactState(0) -- REACT_PASSIVE
+        -- C++ boss_illidan.cpp:597: me->AttackStop(), in C++ arm
+        -- order between the react flip and the (skipped) flag set.
+        creature:AttackStop()
         creature:PerformEmote(254)
+        -- C++ boss_illidan.cpp:600: me->SetDisableGravity(true),
+        -- in C++ arm order between the liftoff emote and the
+        -- takeoff sound; the GLAIVE_EMOTE re-enable (:930) rides
+        -- the unported finalize chain.
+        creature:SetDisableGravity(true)
         creature:PlayDirectSound(11479)
         schedule(guid, "fly", 1000, function()
             onFly(creature, guid)
