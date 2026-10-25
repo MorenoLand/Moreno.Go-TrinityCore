@@ -357,6 +357,9 @@ local function nightbaneLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nightbaneInitState(guid)
+    -- C++ EnterEvadeMode (boss_nightbane.cpp:138): SetDisableGravity(true);
+    -- ev2 is Go's EnterEvadeMode/OnLeaveCombat hook (lua_creature_events.go).
+    creature:SetDisableGravity(true)
 end
 
 local function nightbaneDied(event, creature, killer)

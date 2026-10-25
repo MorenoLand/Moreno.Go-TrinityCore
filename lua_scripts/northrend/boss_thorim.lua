@@ -233,6 +233,10 @@ end
 -- SetImmuneToPC(true), the phase machine and the mini-boss respawn stay
 -- out (balcony-phase gating; no instance bridge for the respawn).
 local function thorimReset(event, creature)
+    -- C++ Reset (boss_thorim.cpp:475): SetDisableGravity(true) before the
+    -- root leg; the _encounterFinished early-return latch is not tracked
+    -- in Lua (same guard gap the existing summon loop already has).
+    creature:SetDisableGravity(true)
     creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
     if creature:IsAlive() then

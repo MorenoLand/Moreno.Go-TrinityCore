@@ -1298,6 +1298,12 @@ julianneResurrectSelf = function()
     raj.phase = PHASE_BOTH
     if raj.julianne ~= nil then
         julianneReArmCombat(raj.julianne, jguid)
+        -- C++ Resurrect(me) + self-resurrect AttackStart (bosses_opera.cpp:1029-1040,
+        -- :1427-1428): re-engage her own victim if she still has one (MoveChase half out).
+        local victim = raj.julianne:GetVictim()
+        if victim ~= nil then
+            raj.julianne:EngageWithTarget(victim)
+        end
     end
     schedule(jguid, "resromulo", 1000, function()
         julianneResurrectRomulo()
@@ -1326,6 +1332,12 @@ julianneResurrectRomulo = function()
     raj.romuloDead = false
     if raj.romulo ~= nil then
         romuloReArmCombat(raj.romulo, rguid)
+        -- C++ Resurrect(target) AttackStart (bosses_opera.cpp:1035-1039): re-engage
+        -- his own victim if he still has one (MoveChase half out).
+        local victim = raj.romulo:GetVictim()
+        if victim ~= nil then
+            raj.romulo:EngageWithTarget(victim)
+        end
     end
 end
 
@@ -1350,6 +1362,12 @@ romuloResurrectJulianne = function()
     raj.julianneDead = false
     if raj.julianne ~= nil then
         julianneReArmCombat(raj.julianne, jguid)
+        -- C++ Resurrect(target) AttackStart (bosses_opera.cpp:1035-1039): re-engage
+        -- her own victim if she still has one (MoveChase half out).
+        local victim = raj.julianne:GetVictim()
+        if victim ~= nil then
+            raj.julianne:EngageWithTarget(victim)
+        end
     end
 end
 

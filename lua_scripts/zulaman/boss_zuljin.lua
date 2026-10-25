@@ -420,13 +420,15 @@ local PHASE_TIMER_KEYS = { "intro", "whirlwind", "grievous", "paralysis",
     "clawrage", "lynxrush", "seqloop", "flamework", "flamebreath", "pillar" }
 
 -- C++ EnterPhase(NextPhase): the teleport arm is ported below via
--- creature:Teleport; AttackStart arms have no bridge;
+-- creature:Teleport; AttackStart arms are ported below via
+-- creature:EngageWithTarget (bridge live lua_creature_events.go:498);
 -- the equipment arm is ported below via creature:SetEquipmentSlots; the
 -- threat reset, transform unaura removal, transform cast, yell,
 -- energy-storm cast/removal, and per-phase timer arming are modeled.
 -- Phase timers start ticking only on phase entry (C++ decrements them
 -- only in their phase's UpdateAI case).
 local function enterPhase(creature, guid, next)
+    local phaseVictim = creature:GetVictim()
     local st = zuljinState(guid)
     local old = st.phase
     for _, key in ipairs(PHASE_TIMER_KEYS) do
@@ -454,6 +456,13 @@ local function enterPhase(creature, guid, next)
         creature:RemoveAura(t.unaura)
         creature:CastSpell(creature, t.spell)
         creature:Talk(t.text)
+    end
+    if next ~= PHASE_EAGLE and next >= PHASE_BEAR and phaseVictim ~= nil then
+        -- C++ EnterPhase cases 1-4 else-branch (boss_zuljin.cpp:336):
+        -- AttackStart(me->GetVictim()) after Teleport + ResetThreatList;
+        -- victim captured pre-teleport (Go TargetGUID persistence across
+        -- Teleport is unproven); the lynx MoveChase half stays out.
+        creature:EngageWithTarget(phaseVictim)
     end
     if next == PHASE_EAGLE then
         creature:CastSpell(creature, SPELL_ENERGY_STORM, true)

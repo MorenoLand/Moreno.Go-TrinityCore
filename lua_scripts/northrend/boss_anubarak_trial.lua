@@ -70,11 +70,13 @@
 -- ev19, LATENT per the anubrekhan precedent: burrows spawn only from
 -- the unported EVENT_SUMMON_NERUBIAN spell-summon, so the arm fires
 -- only if a future path summons via anubarak); JustSummoned
--- NPC_SPIKE 34660 leg —
--- SelectTarget(Random,0,0.0f,true) -> EngageWithTarget (random-target
--- pick IS bridged — cairne/kazzak precedent; sole blocker is
--- EngageWithTarget, no bridge) + Talk(EMOTE_SPIKE 0, target) (rides
--- the unbridged leg).
+-- NPC_SPIKE 34660 leg — PORTED 2026-10-25 (anubarakJustSummoned,
+-- ev19, LATENT as the burrow leg: spikes spawn only from the unported
+-- EVENT_PURSUING_SPIKE spell-summon): SelectTarget(Random,0,0.0f,true)
+-- -> random alive player from the threat list (shade_of_aran idiom)
+-- -> summoned:EngageWithTarget (bridge live lua_creature_events.go:498;
+-- player-session-only funnel, spike target is a player) +
+-- creature:Talk(EMOTE_SPIKE 0, target) (arlokk whisper-target precedent).
 -- boss_anubarak_trial JustEngagedWith — RemoveFlag(
 -- NON_ATTACKABLE | NOT_SELECTABLE) PORTED via the RemoveFlag bridge
 -- (engine/world/lua_creature_events.go; the old "no flag bridge —
@@ -244,6 +246,7 @@ local SAY_AGGRO = 1
 local SAY_LEECHING_SWARM = 5 -- boss_anubarak_trial.cpp:41
 local EMOTE_LEECHING_SWARM = 6 -- boss_anubarak_trial.cpp:42
 local SAY_KILL_PLAYER = 7
+local EMOTE_SPIKE = 0 -- boss_anubarak_trial.cpp:46
 local SAY_DEATH = 8
 
 local SPELL_BERSERK = 26662
@@ -387,6 +390,8 @@ local function anubarakReachHome(event, creature)
     end
 end
 
+-- C++ JustSummoned NPC_SPIKE (boss_anubarak_trial.cpp:259-266): SetDisplayId(Modelid1)
+-- + random-player EngageWithTarget + Talk(EMOTE_SPIKE, target) — see header.
 -- C++ JustSummoned NPC_BURROW (boss_anubarak_trial.cpp:253-257):
 -- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_CHURNING_GROUND
 -- 66969, non-triggered) + SetDisplayId(Modelid2) in C++ order; the
@@ -404,6 +409,20 @@ local function anubarakJustSummoned(_, creature, summoned)
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:CastSpell(summoned, SPELL_FROST_SPHERE)
         summoned:SetDisplayId(summoned:GetTemplateModelId(2))
+    end
+    if summoned:GetEntry() == ENTRY_SPIKE then
+        summoned:SetDisplayId(summoned:GetTemplateModelId(1))
+        local players = {}
+        for _, unit in ipairs(creature:GetAITargets()) do
+            if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                players[#players + 1] = unit
+            end
+        end
+        if #players > 0 then
+            local target = players[math.random(#players)]
+            summoned:EngageWithTarget(target)
+            creature:Talk(EMOTE_SPIKE, target)
+        end
     end
 end
 

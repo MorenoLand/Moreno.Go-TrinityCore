@@ -349,6 +349,21 @@ local function dragonDied(event, creature, killer)
     if spellId then
         creature:RemoveAura(spellId)
     end
+    -- C++ dummy_dragonAI::JustDied (obsidian_sanctum.cpp:342-350): the
+    -- Shadron/Vesperon cases kill the nearest acolyte of their own kind
+    -- within 100yd (instance SetBossState legs stay out, no instance bridge).
+    local acolyteEntry = nil
+    if creature:GetEntry() == ENTRY_SHADRON then
+        acolyteEntry = 31218 -- NPC_ACOLYTE_OF_SHADRON, obsidian_sanctum.cpp:46
+    elseif creature:GetEntry() == ENTRY_VESPERON then
+        acolyteEntry = 31219 -- NPC_ACOLYTE_OF_VESPERON, obsidian_sanctum.cpp:39
+    end
+    if acolyteEntry ~= nil then
+        local acolyte = creature:FindNearestCreature(acolyteEntry, 100.0)
+        if acolyte ~= nil then
+            acolyte:Kill()
+        end
+    end
 end
 
 local function dragonReset(event, creature)

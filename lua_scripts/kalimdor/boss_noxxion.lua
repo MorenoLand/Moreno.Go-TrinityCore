@@ -34,9 +34,8 @@
 --   re-arm adds at 40s (C++-exact: the re-armed 40s stays frozen through
 --   the 15s), toxic volley / uppercut re-armed at full 9s / 12s
 --   (documented skew vs the C++ frozen remainders, at most 9s / 12s).
--- Unmodeled (no bridges): the adds'
---   AttackStart(victim) — the adds idle until the engine aggros them
---   (aran.lua water-elemental precedent). The C++ file declares zero
+-- Unmodeled (no bridges): (adds' AttackStart now ported — see onAdds).
+--   The C++ file declares zero
 --   Talk lines and no KilledUnit override — no event-3 registration.
 
 local ENTRY = 13282
@@ -113,7 +112,8 @@ end
 -- C++ AddsTimer arm: InterruptNonMeleeSpells(false) is bridged
 -- (no-op twin) and ported below; the rest is bridged. 5x DoSpawnCreature(13456, irand(-7,7), irand(-7,7),
 -- 0, 0, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 90s) + AttackStart(victim);
--- the AttackStart leg has no bridge (documented in the header).
+-- the AttackStart leg is PORTED 2026-10-25 below via add:EngageWithTarget
+-- (bridge live lua_creature_events.go:498; victim is a player).
 onAdds = function(creature, guid)
     -- C++ freezes ALL timers while invisible (the early return skips the
     -- UpdateVictim block): freeze toxic volley / uppercut here; the adds
@@ -125,9 +125,13 @@ onAdds = function(creature, guid)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetDisplayId(DISPLAY_INVISIBLE)
     local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+    local victim = creature:GetVictim()
     for _ = 1, 5 do
-        creature:SummonCreature(NPC_SPORE,
+        local spore = creature:SummonCreature(NPC_SPORE,
             x + math.random(-7, 7), y + math.random(-7, 7), z, o, 1, 90000)
+        if spore ~= nil and victim ~= nil then
+            spore:EngageWithTarget(victim)
+        end
     end
     schedule(guid, "reappear", 15000, function()
         onReappear(creature, guid)
