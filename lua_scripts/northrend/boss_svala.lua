@@ -120,11 +120,13 @@
 --   playerOnly) -> DoCast(target, SPELL_CALL_FLAMES 48258),
 --   non-triggered, init {10s,20s} / re-arm {10s,20s} unconditional
 --   (outside the target-if, C++-exact); the 100yd filter is a plain
---   GetDistance check on the garfrost GetPlayersInWorld precedent.
+--   GetDistance check on the threat-list pool (PORTED 2026-10-25).
 -- UpdateAI :244-252 — the one-shot HealthBelowPct(50) latch ->
 --   SACRIFICING, ported on event 9 with the postDamage > 0 guard
 --   (nefarian-form rule — C++ UpdateAI is post-damage) and strict <
---   (C++ HealthBelowPct, Unit.h:872). The ritual summon machine
+--   against the floored threshold (C++ HealthBelowPct, Unit.h:872;
+--   PORTED 2026-10-25 — the old postDamage*100 < max*50 form fired
+--   1 HP early on odd max health). The ritual summon machine
 --   (RITUAL_PREPARATION + CHANNELERS + DISARM, instance SetGuidData
 --   legs, SAY_SACRIFICE_PLAYER fused with the summon — zarithrian
 --   precedent) stays out; the NORMAL timer group goes inert
@@ -270,13 +272,12 @@ end
 local svalaState = {}
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 100.0f, true) — random
--- alive player on the same map/instance within range (the garfrost
--- GetPlayersInWorld precedent + distance filter).
+-- alive player-only threat pick within range (the keleseth
+-- randomFrostTombTarget precedent).
 local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+    for _, p in ipairs(creature:GetAITargets()) do
+        if p:GetObjectType() == "Player"
                 and not p:IsDead() and creature:GetDistance(p) <= range then
             candidates[#candidates + 1] = p
         end
@@ -366,7 +367,7 @@ end
 
 -- C++ UpdateAI :244-252: one-shot HealthBelowPct(50) latch ->
 -- SACRIFICING. UpdateAI is post-damage, so Lua event 9 needs the
--- postDamage > 0 guard (nefarian-form rule); strict < matches C++
+-- postDamage > 0 guard (nefarian-form rule); floor form matches C++ HealthBelowPct (Unit.h:872, CalculatePct trunc)
 -- HealthBelowPct (Unit.h:872). The ritual summon machine
 -- (RITUAL_PREPARATION + CHANNELERS + DISARM, instance SetGuidData
 -- legs, SAY_SACRIFICE_PLAYER fused with the summon — zarithrian
@@ -385,7 +386,7 @@ local function svalaDamageTaken(event, creature, attacker, damage)
         return
     end
     local postDamage = creature:GetHealth() - damage
-    if postDamage > 0 and postDamage * 100 < maxHealth * 50 then
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 50 / 100) then
         st.sacrificed = true
         cancelGroup(guid, GROUP_NORMAL)
         creature:SetCombatMovement(false)

@@ -92,9 +92,10 @@
 --   EVENT_GORE DoCastVictim(SPELL_GORE 48130) -> CastSpell(nil, 48130),
 --   init 10s, Repeat(19s); EVENT_GRIEVOUS_WOUND SelectTarget(Random, 1)
 --   — position 1, dist 0 = unlimited, playerOnly default FALSE
---   (UnitAI.h:170) — the player-only pool is the lavanthor documented
---   approximation; the offset-1 top-threat skip (UnitAI.h:172-174) has
---   no threat-list bridge (ioc dagger-throw precedent) —
+--   (UnitAI.h:170) — any threat-list unit, not player-only; the
+--   offset-1 top-threat skip (UnitAI.h:172-174) ports via the
+--   bridged threat-ordered GetAITargets (PORTED 2026-10-25; the
+--   stale "no threat-list bridge" claim is corrected) —
 --   DoCast(target, SPELL_GRIEVOUS_WOUND 48105), 2-arg = non-triggered
 --   -> CastSpell(target, 48105), init 12s, Repeat(18s); EVENT_STOMP
 --   DoCastSelf(SPELL_STOMP 48131) -> CastSpell(creature, 48131), init
@@ -215,14 +216,30 @@ end
 -- ENERVATING_BRAND / thorim colossus precedent (alive, same map and
 -- instance; maxDist nil = no distance filter, matching C++ SelectTarget
 -- dist 0 = unlimited range — the yogg_saron randomPlayer precedent).
+-- C++ SelectTarget(Random, 0) with playerOnly default FALSE: any
+-- alive threat-list unit (the keleseth GetAITargets precedent).
 local function randomPlayerTarget(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and (maxDist == nil or creature:IsWithinDist(plr, maxDist)) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead()
+                and (maxDist == nil or creature:IsWithinDist(t, maxDist)) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ SelectTarget(Random, 1): offset 1 skips the first MaxThreat
+-- entry (UnitAI.h:172-174); the rest of the threat list is the pool.
+local function randomThreatTargetSkippingFirst(creature)
+    local targets = creature:GetAITargets()
+    local candidates = {}
+    for i = 2, #targets do
+        if not targets[i]:IsDead() then
+            candidates[#candidates + 1] = targets[i]
         end
     end
     if #candidates == 0 then
@@ -371,7 +388,7 @@ local function rhinoEnterCombat(event, creature)
         schedule(guid, "gore", 19000, goreTick)
     end
     local function grievousWoundTick()
-        local target = randomPlayerTarget(creature)
+        local target = randomThreatTargetSkippingFirst(creature)
         if target then
             creature:CastSpell(target, SPELL_GRIEVOUS_WOUND)
         end

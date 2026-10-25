@@ -101,21 +101,22 @@
 -- unbridged vehicle/DoAction machine (the gothik precedent). PORTED
 -- 2026-10-24 as a proxy from graufJustDied: Grauf death ->
 -- skadi->ExitVehicle() -> PassengerBoarded(!apply) -> GAUNTLET_END
--- (:350-356, :362), so the timer kit (not the teleport/flag/react
--- arms) starts there; Skadi rides Grauf, so FindNearestCreature
--- resolves her.
--- The SetReactState(REACT_AGGRESSIVE) (:270) rides the same unbridged
--- ACTION_GAUNTLET_END leg; boss_skadi Reset's SetReactState(REACT_
--- PASSIVE) (:170) stays out with Skadi's unported Reset (the whole
--- combat-entry phase machine is DoAction/vehicle-gated; event 23 not
--- registered for Skadi this run).
+-- (:350-356, :362), so the timer kit starts there (plus, since
+-- 2026-10-25, the Talk/teleport/flag/react arms of the same leg);
+-- Skadi rides Grauf, so FindNearestCreature resolves her.
+-- The SetReactState(REACT_AGGRESSIVE) (:270) PORTED 2026-10-25 via
+-- the graufJustDied proxy; boss_skadi Reset's SetReactState(REACT_
+-- PASSIVE) (:170) + Grauf summon PORTED 2026-10-25 on event 23
+-- (skadiReset; the stale "event 23 not registered for Skadi" claim
+-- is corrected — event 23 was registered, as cancelCombatTimers).
 -- Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (area-trigger
 -- DoAction machine) — event 1 deliberately NOT registered (registering
 -- it would deviate from C++: ground-phase combat entry yells nothing
--- there); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) and Talk
--- (SAY_DRAKE_DEATH 5) (ACTION_GAUNTLET_END) ride the DoAction /
--- cross-creature / harpoon-hit-counter machine — no DoAction /
--- cross-creature bridges. Stay out.
+-- there); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) rides the
+-- DoAction / cross-creature / harpoon-hit-counter machine — no
+-- DoAction / cross-creature bridges. Stay out; Talk(SAY_DRAKE_DEATH
+-- 5) (ACTION_GAUNTLET_END) PORTED 2026-10-25 via the graufJustDied
+-- proxy.
 -- npc_grauf (26893, utgarde_pinnacle.h line 70) — all timer legs are
 -- spline-chain gated (PassengerBoarded / MovementInform SPLINE_CHAIN_
 -- MOTION_TYPE: EMOTE_ON_RANGE / EMOTE_BREATH Talks, FREEZING_CLOUD
@@ -148,6 +149,7 @@ local SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK = 49308 -- boss_skadi.cpp:54
 
 local SAY_KILL = 1
 local SAY_DEATH = 3
+local SAY_DRAKE_DEATH = 5
 
 local SPELL_HAMSTRING = 48639
 local SPELL_STRIKE = 48640
@@ -155,6 +157,7 @@ local SPELL_SHADOW_BOLT = 49084
 local SPELL_CRUSH = 50234
 local SPELL_POISONED_SPEAR = 50255
 local SPELL_WHIRLWIND = 50228
+local SPELL_SKADI_TELEPORT = 61790
 local SPELL_SHRINK = 49089
 local SPELL_NET = 49092
 local SPELL_THROW = 49091
@@ -188,15 +191,31 @@ local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_skadi::Reset (:166-172): REACT_PASSIVE + SummonCreature
+-- (NPC_GRAUF, GraufLoc) when the instance lacks Grauf. The ev23
+-- death-path pre-fire (23 then 4) is guarded: C++ Reset never runs
+-- on death, so a dead Skadi only cancels timers here.
+local function skadiReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsDead() then
+        return
+    end
+    creature:SetReactState(0) -- REACT_PASSIVE
+    if not creature:FindNearestCreature(ENTRY_GRAUF, 500) then
+        creature:SummonCreature(ENTRY_GRAUF, 341.7411, -516.9545, 104.6695, 3.124139)
+    end
+end
+
 -- Farthest-target helper — the SelectTargetMethod::MaxDistance counterpart
 -- of the baltharus / ENERVATING_BRAND / thorim colossus random-target
 -- precedent (alive, same map and instance, within maxDist yards of the
 -- creature; picks the max-distance candidate).
+-- C++ SelectTarget(MaxDistance, 0, 30, true): farthest alive
+-- threat-list player within 30yd.
 local function farthestPlayerTarget(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local best, bestDist = nil, nil
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player"
                 and not plr:IsDead() and creature:IsWithinDist(plr, maxDist) then
             local dist = creature:GetDistance(plr)
             if bestDist == nil or dist > bestDist then
@@ -207,16 +226,13 @@ local function farthestPlayerTarget(creature, maxDist)
     return best
 end
 
--- Random alive player in the same map/instance (SelectTarget(Random)
--- over the hostile set, approximated by the player set — the
--- farthestPlayerTarget idiom above, without the distance ranking).
+-- C++ SelectTarget(Random) with defaults (offset 0, dist 0,
+-- playerOnly false): any alive threat-list unit.
 local function randomPlayerTarget(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -323,7 +339,7 @@ RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 1, skadiEnterCombat)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 3, skadiKilledUnit)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 4, skadiJustDied)
-RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 23, skadiReset)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 1, warriorEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 4, cancelCombatTimers)
@@ -362,6 +378,15 @@ local function graufJustDied(event, creature, killer)
     -- her events 2/4/23.
     local skadi = creature:FindNearestCreature(ENTRY_SKADI_THE_RUTHLESS, 200.0)
     if skadi then
+        -- C++ ACTION_GAUNTLET_END (:264-272, in order; the
+        -- summons.DespawnEntry(NPC_WORLD_TRIGGER) leg is a no-op here —
+        -- Lua never summons the trigger): Talk + self-teleport +
+        -- NOT_SELECTABLE clear + SetImmuneToPC(false) + aggressive.
+        skadi:Talk(SAY_DRAKE_DEATH)
+        skadi:CastSpell(skadi, SPELL_SKADI_TELEPORT)
+        skadi:RemoveFlag(59, 0x02000000) -- UNIT_FIELD_FLAGS NOT_SELECTABLE
+        skadi:RemoveFlag(59, 0x100) -- SetImmuneToPC(false)
+        skadi:SetReactState(2) -- REACT_AGGRESSIVE
         local skadiGuid = skadi:GetGUID()
         local function crushTick()
             skadi:CastSpell(nil, SPELL_CRUSH)

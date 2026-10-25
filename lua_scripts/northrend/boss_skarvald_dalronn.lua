@@ -36,8 +36,8 @@
 -- DoCastVictim; CastSpell(creature, spell) = DoCastSelf; the 3rd
 -- CastSpell arg is the C++ DoCast 3rd arg (2-arg DoCast overloads =
 -- non-triggered). {min,max} table delay = randtime range. Random-target
--- arms via GetPlayersInWorld filtered by map/instance/alive/distance
--- (the baltharus EVENT_ENERVATING_BRAND precedent). The no-timer-bridge
+-- arms via the bridged threat-ordered GetAITargets (dalronn
+-- shadowbolt/debilitate player-only; skarvald charge any-unit). The no-timer-bridge
 -- doctrine from the Oct-2 header is STALE — CreateLuaEvent is a real
 -- registered bridge (engine/scripting/runtime.go:798) and the
 -- engage-schedule legs are ported below.
@@ -55,8 +55,8 @@
 -- ExecuteEvent switch case (EVENT_SKARVALD_CHARGE = 1), so the 5-10s
 -- re-arm never fires the arm again — ported C++-exact as a 5s one-shot
 -- with no re-arm. Target deviation: C++ selects any unit (not
--- playerOnly); the lua selects a random player 5-30yd (baltharus
--- precedent) — the closest available bridge.
+-- playerOnly); the lua selects a random threat-list unit 5-30yd
+-- (randomTargetInBand) — C++-exact.
 -- EVENT_STONE_STRIKE (arm lines 210-213): DoCastVictim(SPELL_STONE_STRIKE
 -- 48583), non-triggered -> CastSpell(nil, 48583); init 10s, repeat
 -- {5s,10s} (line 213).
@@ -112,7 +112,9 @@
 -- ACTION_DESPAWN_SUMMONS (summons.DespawnAll()) — no bridge.
 -- Dalronn EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,
 -- SPELL_SUMMON_SKELETONS 52611) self-cast summon, heroic-gated init
--- 10s, repeat {10s,30s} — summon leg, BLOCKED per doctrine.
+-- 10s, repeat {10s,30s} — PORTED 2026-10-25: creature:IsHeroic() is
+-- bridged (lua_creature_events.go:1806); the stale "BLOCKED per
+-- doctrine" claim is corrected.
 -- Ghost-form Reset DoZoneInCombat (lines 108-116), BossAI
 -- JustEngagedWith/_Reset/_JustDied passthroughs — no bridges.
 
@@ -130,6 +132,7 @@ local SPELL_STONE_STRIKE = 48583
 local SPELL_ENRAGE = 48193
 local SPELL_SHADOW_BOLT = 43649
 local SPELL_DEBILITATE = 43650
+local SPELL_SUMMON_SKELETONS = 52611
 
 local timers = {}
 local enraged = {}
@@ -168,14 +171,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Random living players in the same map/instance within [minDist,
--- maxDist] of the creature (the baltharus precedent).
+-- Random living threat-list players within [minDist, maxDist] of the
+-- creature (C++ SelectTarget(Random, 0, dist, true) = player-only
+-- threat pick; the keleseth randomFrostTombTarget precedent).
 local function randomPlayer(creature, minDist, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
                 and creature:GetDistance(plr) >= minDist
                 and creature:GetDistance(plr) <= maxDist then
             candidates[#candidates + 1] = plr
@@ -338,12 +340,23 @@ end
 -- C++ boss_dalronn_the_controllerAI::JustEngagedWith (lines 244-254):
 -- BossAI passthrough (no bridge); the schedule legs become CreateLuaEvent
 -- timers. No immediate Talk — SAY_AGGRO rides EVENT_DELAYED_AGGRO_SAY.
+local function summonSkeletonsTick(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_SKELETONS)
+    schedule(guid, "summonskeletons", {10000, 30000}, function() summonSkeletonsTick(creature, guid) end)
+end
+
 local function dalronnEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossDeaths = 0
     schedule(guid, "shadowbolt", 1000, function() shadowBoltTick(creature, guid) end)
     schedule(guid, "debilitate", 5000, function() debilitateTick(creature, guid) end)
+    -- C++ EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,
+    -- SPELL_SUMMON_SKELETONS), 2-arg = non-triggered, self-cast;
+    -- heroic-gated init 10s (line 257), repeat {10s,30s} (line 274).
+    if creature:IsHeroic() then
+        schedule(guid, "summonskeletons", 10000, function() summonSkeletonsTick(creature, guid) end)
+    end
     -- C++ EVENT_DELAYED_AGGRO_SAY (lines 276-278): Talk(SAY_AGGRO), init 5s
     -- if !IsInGhostForm (lines 251-252; structural); one-shot.
     schedule(guid, "aggrosay", 5000, function() creature:Talk(SAY_AGGRO) end)
