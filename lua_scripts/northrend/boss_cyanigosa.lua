@@ -42,11 +42,11 @@
 -- Repeat() 10s. (The arcane-vacuum SpellScript's
 -- SPELL_SUMMON_PLAYER 21150 leg stays out — documented below.)
 -- BLIZZARD (:92-97) — SelectTarget(Random, 0, 45.0f, true) (:94,
--- random alive player within 45y, playerOnly, tank included) ->
--- DoCast(target, SPELL_BLIZZARD 58693) (:95, 2-arg = non-triggered)
--- -> CastSpell(target, 58693); 15s init / Repeat() 15s. Random-player
--- pool: GetPlayersInWorld, same map/instance, alive, within 45y (the
--- keleseth / thorim / freya precedent).
+-- random alive threat-list player within 45y, playerOnly, tank
+-- included) -> DoCast(target, SPELL_BLIZZARD 58693) (:95, 2-arg =
+-- non-triggered) -> CastSpell(target, 58693); 15s init / Repeat()
+-- 15s. Pool corrected 2026-10-25: threat list via GetAITargets (the
+-- moragg precedent), not instance players.
 -- TAIL_SWEEP (:99-103) — DoCastVictim(SPELL_TAIL_SWEEP 58690) (:101,
 -- 1-arg = non-triggered) -> CastSpell(nil, 58690); 20s init /
 -- Repeat() 20s.
@@ -55,7 +55,7 @@
 -- -> CastSpell(nil, 58688); 25s init / Repeat() 25s.
 -- MANA_DESTRUCTION (:113-119) — seeded ONLY when IsHeroic() at
 -- engage (:111): SelectTarget(Random, 0, 50.0f, true) (:115, random
--- alive player within 50y, playerOnly, tank included) ->
+-- alive threat-list player within 50y, playerOnly, tank included) ->
 -- DoCast(target, SPELL_MANA_DESTRUCTION 59374) (:116, 2-arg =
 -- non-triggered) -> CastSpell(target, 59374); 30s init / Repeat() 30s
 -- (:117, unconditional — outside the target-pick if). The IsHeroic()
@@ -75,7 +75,8 @@
 -- achievement_defenseless (:129-145) — AchievementCriteriaScript
 -- OnCheck (:134): instance->GetData(DATA_DEFENSELESS): no
 -- achievement-criteria bridge.
--- MoveInLineOfSight (:73) — empty override: nothing to port.
+-- MoveInLineOfSight (:73) — empty override: ported as the ev27
+-- engage veto below (the vashj precedent).
 -- DoMeleeAttackIfReady (:80) — melee is engine-driven in Go (the
 -- hodir / vezax precedent); the scheduler.Update passthrough is
 -- unmodeled.
@@ -119,19 +120,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 0, 45.0f, true) —
--- alive players on the same map/instance within 45y, tank included
--- (the freya randomPlayerInRange precedent).
+-- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, true) draws
+-- the threat list (UnitAI.h: "from the threat list"), not instance
+-- players — same bug class fixed 2026-10-25 in erekem/moragg/
+-- ichoron/xevozz/zuramat/lavanthor. Pool: threat-list players,
+-- alive, within dist (the moragg randomPlayerInRange precedent).
 local function randomPlayerInRange(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            if creature:GetDistance(plr) <= maxDist then
-                candidates[#candidates + 1] = plr
-            end
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= maxDist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

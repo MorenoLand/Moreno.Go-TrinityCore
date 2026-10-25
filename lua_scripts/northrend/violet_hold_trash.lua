@@ -29,9 +29,10 @@
 -- instance-gated and unmodeled; the EscortAI waypoint machine
 -- (SetData(DATA_PORTAL_LOCATION) paths, CreatureStartAttackDoor's
 -- DoCastAOE(SPELL_DESTROY_DOOR_SEAL 58040)) has no bridge; random/nearest
--- target picks are alive players on the same map/instance
--- (keleseth/thorim/moroes precedent); DoMeleeAttackIfReady is
--- engine-driven.
+-- target picks are threat-list picks via GetAITargets (corrected
+-- 2026-10-25 — the C++ SelectTarget calls pass no playerOnly flag, so
+-- the pool is threat-list any-unit, not instance players; the moragg /
+-- lavanthor precedent); DoMeleeAttackIfReady is engine-driven.
 -- DOCUMENTED-ONLY (this file's entries): npc_sinclari_vh — gossip
 -- select arms gate on menuId (GOSSIP_MENU_START_ENCOUNTER 9998 /
 -- GOSSIP_MENU_SEND_ME_IN 10275), which the Lua select hook never
@@ -111,16 +112,14 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, dist) — alive players on the same
--- map/instance within dist (the maiden_of_virtue / moroes precedent).
+-- C++ SelectTarget(Random, 0, dist) with no playerOnly flag draws the
+-- threat list (UnitAI.h: "from the threat list"), any unit, alive,
+-- within dist (the lavanthor any-unit pool precedent).
 local function randomPlayerInRange(creature, range)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() and creature:GetDistance(t) <= range then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -129,19 +128,16 @@ local function randomPlayerInRange(creature, range)
     return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(MinDistance, 0, dist) — approximated as the nearest
--- alive player within dist (the moroes nearestTarget precedent; no
--- threat-list model in Lua).
+-- C++ SelectTarget(MinDistance, 0, dist) with no playerOnly flag — the
+-- nearest alive threat-list unit within dist (any unit, not just
+-- players).
 local function nearestPlayerInRange(creature, range)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local best, bestDist = nil, nil
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            local dist = creature:GetDistance(plr)
-            if bestDist == nil or dist < bestDist then
-                best, bestDist = plr, dist
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            local dist = creature:GetDistance(t)
+            if dist <= range and (bestDist == nil or dist < bestDist) then
+                best, bestDist = t, dist
             end
         end
     end
