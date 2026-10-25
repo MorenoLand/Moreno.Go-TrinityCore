@@ -44,10 +44,10 @@
 -- never cast by the C++ AI — data foundation, not a ported arm).
 -- Ported arms (C++ UpdateAI event arms):
 -- - Shadowbolt: 5s init -> 10s re-arm; SelectTarget(Random, 0) ->
---   random alive player on the same map+instance with NO distance
---   bound (C++ DefaultTargetSelector dist=0 = "ignored" = unlimited
---   range, UnitAI.h:63; the threat-list-only pick is approximated —
---   no threat-list bridge); nil pick casts nothing, 10s re-arm
+--   random alive threat-list unit with NO distance bound (C++
+--   DefaultTargetSelector dist=0 = "ignored" = unlimited range,
+--   UnitAI.h:63; SelectTarget(Random, 0) defaults, playerOnly=false);
+--   nil pick casts nothing, 10s re-arm
 --   unconditional (C++ events.Repeat(10s) sits outside the target
 --   gate).
 -- - Cleave: 8s init -> Repeat(7s, 17s) {7000, 17000} (maiden
@@ -115,23 +115,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomPlayerOnMap(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+local function randomThreatTarget(creature)
+    local found = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    if #candidates == 0 then
+    if #found == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return found[math.random(#found)]
 end
 
 local function onShadowbolt(creature, guid)
-    local target = randomPlayerOnMap(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOWBOLT)
     end

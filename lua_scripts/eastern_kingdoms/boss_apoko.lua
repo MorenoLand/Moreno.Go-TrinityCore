@@ -48,9 +48,8 @@
 -- Purge machine: DoCast(SelectTarget(Random, 0), SPELL_PURGE 27626)
 -- 8000ms init -> 15000ms unconditional re-arm (C++ re-arms outside
 -- the target check), ported via the maiden_of_virtue / thorim
--- random-player pool (GetPlayersInWorld, same map/instance, alive;
--- no distance limit — C++ distance 0.0f is unlimited); stale "no
--- SelectTarget bridge" retracted.
+-- threat-list pool (GetAITargets, alive; no distance limit — C++
+-- distance 0.0f is unlimited); stale "no SelectTarget bridge" retracted.
 -- Healing-potion latch (common-AI UpdateAI arm: !UsedPotion &&
 -- HealthBelowPct(25) -> DoCast(me, SPELL_HEALING_POTION 15503),
 -- UsedPotion = true): via OnDamageTaken(9), per-guid one-shot,
@@ -122,26 +121,24 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) legs (maiden_of_virtue / thorim precedent):
--- GetPlayersInWorld filtered by map/instance/alive; no distance limit
+-- C++ SelectTarget(Random, 0) legs (UnitAI.h defaults, playerOnly=false):
+-- random alive threat-list unit; no distance limit
 -- (C++ distance 0.0f = unlimited).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+local function randomThreatTarget(creature)
+    local found = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    if #candidates == 0 then
+    if #found == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return found[math.random(#found)]
 end
 
 local function onPurge(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_PURGE)
     end

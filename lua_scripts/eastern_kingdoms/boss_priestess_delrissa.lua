@@ -200,15 +200,14 @@ local function cancelTimers(guid)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 100, true)
--- (playerOnly): random alive player within 100 yd on the same map
+-- (playerOnly): random alive threat-list player within 100 yd
 -- (beast/voshgajin precedent).
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+local function randomThreatPlayerInRange(creature, maxDist)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -323,7 +322,7 @@ end
 local function onDispel(creature, guid)
     local target = nil
     if math.random(0, 1) == 1 then
-        target = randomPlayerInRange(creature, 100)
+        target = randomThreatPlayerInRange(creature, 100)
     else
         if math.random(0, 1) == 1 then
             target = creature
@@ -341,7 +340,7 @@ local function onDispel(creature, guid)
 end
 
 local function onSwPain(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SW_PAIN)
     end

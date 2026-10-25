@@ -38,8 +38,8 @@
 --   transformed latch set, and the Balnazzar arms start at their
 --   C++-frozen initial values (C++ never decrements them pre-transform):
 --   SHADOWSHOCK 17399 4s->11s (DoCastVictim) / PSYCHICSCREAM 13704
---   16s->20s (SelectTarget(Random, 0) -> random alive player on
---   map+instance, no distance bound — baron_rivendare precedent;
+--   16s->20s (SelectTarget(Random, 0) -> random alive threat-list
+--   unit, no distance bound — baron_rivendare precedent;
 --   nil pick casts nothing but the 20s re-arm is unconditional, as in
 --   C++) / DEEPSLEEP 12098 20s->15s (same random-pick shape) /
 --   MINDCONTROL 15690 10s->15s (DoCastVictim).
@@ -145,19 +145,17 @@ end
 -- C++ SelectTarget(SelectTargetMethod::Random, 0): dist=0 means
 -- "ignored" (UnitAI.h) = unlimited — random alive player on the
 -- map+instance (baron_rivendare precedent).
-local function randomPlayerOnMap(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+local function randomThreatTarget(creature)
+    local found = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    if #candidates == 0 then
+    if #found == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return found[math.random(#found)]
 end
 
 -- C++ EVENT_MINDBLAST (both phases, shared timer):
@@ -200,7 +198,7 @@ end
 -- C++ EVENT_PSYCHICSCREAM: SelectTarget(Random, 0) -> DoCast(target,
 -- 13704); 20000ms re-arm unconditionally (nil pick casts nothing).
 local function onPsychicScream(creature, guid)
-    local target = randomPlayerOnMap(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_PSYCHICSCREAM)
     end
@@ -211,7 +209,7 @@ end
 -- C++ EVENT_DEEPSLEEP: SelectTarget(Random, 0) -> DoCast(target,
 -- SPELL_SLEEP 12098); 15000ms re-arm unconditionally.
 local function onDeepSleep(creature, guid)
-    local target = randomPlayerOnMap(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SLEEP)
     end
