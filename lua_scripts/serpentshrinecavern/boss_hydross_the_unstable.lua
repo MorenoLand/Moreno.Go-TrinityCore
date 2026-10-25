@@ -80,7 +80,9 @@
 -- exactly as C++ does); the pair lands at pull instead of on the
 -- pre-pull first UpdateAI tick via event 7 (PORTED 2026-10-24:
 -- event 7 fires on the 100ms world tick for every alive motion,
--- creaturemotion.go, so the latch twin lands pre-pull as in C++);
+-- creaturemotion.go, so the latch twin lands pre-pull as in C++;
+-- gated 2026-10-25 to pre-pull/post-evade only, so the corrupt-switch
+-- despawn sticks as in C++ where the beam flag is consumed once);
 -- the 4x pure/tainted spawn DoSpawnCreature arms and
 -- Summons.DespawnAll stay unmodeled;
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
@@ -364,8 +366,17 @@ end
 -- After death the motion stops ticking, so the standing pair is left
 -- alone (C++ JustDied does not despawn beams). Returns nothing, so no
 -- veto of the engine combat step (dathrohan precedent).
+-- 2026-10-25 GATE: event 7 also fires every tick DURING combat, so an
+-- ungated latch re-summoned the pair right after the corrupted-form
+-- switch despawned it — C++ never re-summons there (the beam flag is
+-- consumed on the first UpdateAI tick and only Reset clears it). The
+-- latch therefore fires only while hydrossState[guid] is nil, i.e.
+-- pre-pull / post-evade; in-combat switches summon/despawn directly.
 local function hydrossAIUpdate(event, creature)
     local guid = creature:GetGUID()
+    if hydrossState[guid] then
+        return
+    end
     if not hydrossBeams[guid] or #hydrossBeams[guid] == 0 then
         summonBeams(creature, guid)
     end

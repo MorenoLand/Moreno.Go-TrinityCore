@@ -41,9 +41,12 @@
 -- 20-60s, DoCastVictim (C++-exact). Enrage 24318 600s then 90s
 -- repeat, non-triggered self-cast (C++-exact). Blessing of the
 -- Tides: once-guarded at <=75% health (C++-exact) — non-
--- triggered self-cast 38449; the C++ "at least one advisor
--- alive" precondition has no cross-creature bridge (the advisors'
--- GUID bookkeeping lives in the instance script), and
+-- triggered self-cast 38449, gated on at least one advisor alive
+-- (PORTED 2026-10-25: FindNearestCreature is live-only per entry,
+-- lua_creature_events.go:2627, so one 100.0-yd probe per advisor
+-- entry stands in for the instance-GUID liveness poll — the
+-- shared-chamber range, relay precedent; an advisor alive beyond
+-- 100 yd would false-negative, unlike C++'s instance-wide poll);
 -- the me->Yell(raw string) arm has no raw-text speech bridge
 -- (gurtogg convention) — documented; DoPlaySoundToSet(11278) is
 -- ported via creature:PlayDirectSound.
@@ -98,10 +101,10 @@
 -- the creature wrapper, so another unit cannot be made to cast
 -- — unmodeled); heal 38330 55s then 60s — C++ picks a live
 -- advisor from {karathress, sharkkis, tidalvess, self} via the
--- instance GUIDs, which have no bridge: only the caster itself
--- is resolvable, so the heal is cast on self (documented
--- deviation — the advisor heal support is cross-creature
--- blocked). (Correction 2026-10-23: the cyclone 30-40s arm was
+-- instance GUIDs — PORTED 2026-10-25 as a uniform pick over the
+-- live in-chamber set (FindNearestCreature per advisor entry +
+-- self; dead advisors drop out exactly as the C++ re-roll does).
+-- (Correction 2026-10-23: the cyclone 30-40s arm was
 -- misattributed to Caribdis here — it is boss_fathomlord_
 -- karathressAI's own UpdateAI arm (boss_fathomlord_karathress.
 -- cpp:656-673), PORTED in karathressTick; the commented-out
@@ -123,8 +126,9 @@
 -- (the Seer Olum quest-10944 summon is PORTED in karathressDied;
 -- the boss's own cyclone 30-40s arm is PORTED in karathressTick);
 -- the remaining totem arms stay out as spell-effect casts; no movement/
--- threat/cross-creature bridges — the spitfire-totem target
--- relay, the advisor MoveTargetedHome respawn arms and the
+-- threat/cross-creature bridges — the spitfire-totem target relay
+-- is PORTED 2026-10-25 (FindNearestCreature 22091 + EngageWithTarget),
+-- the advisor MoveTargetedHome respawn arms and the
 -- cataclysmic-bolt tank-pick threat arm approximated (random
 -- alive non-victim player pick); no raw-yell bridge — the
 -- blessing yell (raw string) stays unmodeled while the sound arm
@@ -152,6 +156,7 @@ local SPELL_SPITFIRE_TOTEM = 38236
 local SPELL_POISON_CLEANSING_TOTEM = 38306
 local SPELL_EARTHBIND_TOTEM = 38304
 
+local CREATURE_SPITFIRE_TOTEM = 22091 -- boss_fathomlord_karathress.cpp:85
 local SPELL_WATER_BOLT_VOLLEY = 38335
 local SPELL_TIDAL_SURGE = 38358
 local SPELL_HEAL = 38330
@@ -292,13 +297,21 @@ local function karathressTick(creature, guid)
     end
 
     -- Blessing of the Tides: once-guarded at <=75% health. The
-    -- C++ at-least-one-advisor-alive precondition has no cross-
-    -- creature bridge; the me->Yell(raw string) arm has no
-    -- raw-text speech bridge.
+    -- latch sets even with no advisor alive (C++-exact: the latch
+    -- is set before the liveness poll, so it never retries); the
+    -- cast fires only with at least one advisor live (C++
+    -- boss_fathomlord_karathress.cpp:272-290) — FindNearestCreature
+    -- probes per advisor entry (live-only bridge, 100.0 shared
+    -- chamber range, relay precedent). The me->Yell(raw string)
+    -- arm has no raw-text speech bridge.
     if not st.blessingOfTides and creature:GetHealthPct() <= 75 then
         st.blessingOfTides = true
-        creature:CastSpell(creature, SPELL_BLESSING_OF_THE_TIDES)
-        creature:PlayDirectSound(SOUND_GAIN_BLESSING_OF_TIDES)
+        if creature:FindNearestCreature(ENTRY_SHARKKIS, 100.0)
+                or creature:FindNearestCreature(ENTRY_TIDALVESS, 100.0)
+                or creature:FindNearestCreature(ENTRY_CARIBDIS, 100.0) then
+            creature:CastSpell(creature, SPELL_BLESSING_OF_THE_TIDES)
+            creature:PlayDirectSound(SOUND_GAIN_BLESSING_OF_TIDES)
+        end
     end
 end
 
@@ -379,9 +392,12 @@ local function sharkkisTick(creature, guid)
     -- pick itself stays out). The SummonedPet GUID binding stays out,
     -- so the beast-within pet-enrage (19574) and Reset KillSelf legs
     -- stay out. 1s pump granularity, as elsewhere in this file.
+    -- C++ Pet_Timer uses STRICT < (boss_fathomlord_karathress.cpp:412),
+    -- unlike the <= timers elsewhere: at 1s pump the standard <= 0
+    -- form fires a tick early (leotheras-berserk precedent) — the
+    -- < 1000 form fires on the 11th tick, C++-exact.
     if not st.petDone then
-        st.pet = st.pet - 1000
-        if st.pet <= 0 then
+        if st.pet < 1000 then
             st.petDone = true
             local petId = ENTRY_FATHOM_LURKER
             if math.random(2) == 2 then
@@ -393,6 +409,8 @@ local function sharkkisTick(creature, guid)
             if pet then
                 pet:DoZoneInCombat()
             end
+        else
+            st.pet = st.pet - 1000
         end
     end
 end
@@ -466,6 +484,15 @@ local function tidalvessTick(creature, guid)
     st.spitfire = st.spitfire - 1000
     if st.spitfire <= 0 then
         creature:CastSpell(creature, SPELL_SPITFIRE_TOTEM)
+        -- C++ boss_fathomlord_karathress.cpp:533-535: the spell-summoned
+        -- totem is ordered onto the victim (PORTED 2026-10-25 via
+        -- FindNearestCreature, live-only, 100.0 — nil-guarded: if the
+        -- Go spell summon has not materialized yet, the leg no-ops).
+        local totem = creature:FindNearestCreature(CREATURE_SPITFIRE_TOTEM, 100.0)
+        local victim = creature:GetVictim()
+        if totem and victim then
+            totem:EngageWithTarget(victim)
+        end
         st.spitfire = 60000
     end
 
@@ -535,12 +562,22 @@ local function caribdisTick(creature, guid)
         st.tidalSurge = 15000 + math.random(0, 4999)
     end
 
-    -- Heal: the C++ advisor pick (karathress/sharkkis/tidalvess/
-    -- self via instance GUIDs) has no cross-creature bridge —
-    -- only self is resolvable.
+    -- Heal: C++ picks uniformly among the live of {karathress,
+    -- sharkkis, tidalvess, self} via instance GUIDs, re-rolling dead
+    -- ones (PORTED 2026-10-25: FindNearestCreature per advisor entry
+    -- is live-only, so the live in-chamber set stands in for the
+    -- instance-GUID roll — 100.0 shared-chamber range, relay
+    -- precedent; self is always a candidate while the pump runs).
     st.heal = st.heal - 1000
     if st.heal <= 0 then
-        creature:CastSpell(creature, SPELL_HEAL)
+        local candidates = { creature }
+        for _, entry in ipairs({ ENTRY_KARATHRESS, ENTRY_SHARKKIS, ENTRY_TIDALVESS }) do
+            local found = creature:FindNearestCreature(entry, 100.0)
+            if found then
+                candidates[#candidates + 1] = found
+            end
+        end
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_HEAL)
         st.heal = 60000
     end
 end

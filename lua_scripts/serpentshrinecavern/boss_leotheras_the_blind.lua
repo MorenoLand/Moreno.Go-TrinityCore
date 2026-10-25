@@ -426,6 +426,14 @@ local function leotherasTick(creature, guid)
             end
         end
     else
+        -- C++ demon branch (boss_leotheras_the_blind.cpp:503-505):
+        -- no victim -> return before chaos/inner/switch AND before
+        -- the final-form check below (PORTED 2026-10-25; the old
+        -- nil-guarded fall-through let the switch/final arms run
+        -- victimless, which C++ never does).
+        if not creature:GetVictim() then
+            return
+        end
         -- Chaos blast: 1s init then 3s — cast only when the victim
         -- is within 30 yd; re-arm sits outside the range gate
         -- (C++-exact). The StopMoving leg fires on EVERY tick the
@@ -733,6 +741,14 @@ end
 local function innerTick(creature, guid)
     local st = innerState[guid]
     if not st then
+        return
+    end
+
+    -- C++ inner-demon UpdateAI (boss_leotheras_the_blind.cpp:169-171):
+    -- no victim -> return before the link/alignment/shadowbolt arms
+    -- (PORTED 2026-10-25; the retarget block above those arms stays
+    -- binding-blocked, header).
+    if not creature:GetVictim() then
         return
     end
 
