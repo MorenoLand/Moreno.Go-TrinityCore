@@ -78,32 +78,46 @@
 -- scheduler arms is RETRACTED (CreateLuaEvent is a real bridge,
 -- engine/scripting/runtime.go:798); each arm is classified against
 -- the C++ individually (gothik precedent). Talk(SAY_VAMPIRIC_BITE 1)
--- rides EVENT_VAMPIRIC_BITE (:356-368) — OUT: the pick is
--- deterministic, targets.front() of the sorted threat list after
--- stripping the tank and offtank (:359-361) — not random — and the arm
--- then fires cross-unit TRIGGERED_FULL_MASK self-casts plus a
--- SpellScript chain (:362-368, no cross-unit / no-SpellScript bridge);
--- the event is seeded once (:161) with NO re-arm (one-shot).
+-- rides EVENT_VAMPIRIC_BITE (:356-368) — PORTED (2026-10-25, seeded
+-- once 15s in Reset, NO re-arm): front pick of the threat-sorted
+-- GetAITargets pool minus the victim (GetAITargets IS the threat-list
+-- bridge, anomalus precedent; offtank exclusion unmodeled, Blood
+-- Mirror unported) + DoCast(target, 71726) + DoCastAOE dummy 71837
+-- triggered (self-cast twin) + Talk(1) in C++ order + target self-casts
+-- PRESENCE 70994 + PRESENCE_2 71952 triggered (player:CastSpell
+-- bridged, freya/vezax precedent). The SpellScript IsVampire
+-- CheckTarget fizzle leg has no bridge (a re-bite applies where C++
+-- would fizzle the bite cast only; Talk/presence legs still fire in
+-- C++ on that path). The _vampires set has no ported consumer
+-- (WasVampire feeds SpellScript legs only, :804/:820).
 -- Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
--- EVENT_PACT_OF_THE_DARKFALLEN (:407-420) — OUT: Talk fires only if
--- targets.size() > 1 after SelectRandomTarget + RandomResize(2/3 by
--- Is25ManRaid, :409-413, random-target machine, no bridge).
+-- EVENT_PACT_OF_THE_DARKFALLEN (:407-420) — PORTED (2026-10-25, seed
+-- 15s / re-arm 30500ms unconditional): RandomResize(2/3 by
+-- Is25ManRaid) over the threat-sorted GetAITargets pool minus the
+-- victim (offtank exclusion unmodeled); Talk(6) + DoCast(71340) each
+-- only if picked > 1, C++ order.
 -- PORTED this tick: EVENT_SWARMING_SHADOWS (:421-428) —
--- Talk(SAY_SWARMING_SHADOWS 4) + DoCast(target, SPELL_SWARMING_SHADOWS
--- 71264) (2-arg = non-triggered, :426); 30500ms seed (:166) /
--- unconditional 30500ms re-arm (:427). The targeted
--- Talk(EMOTE_SWARMING_SHADOWS 5, target) leg has no targeted-Talk
--- bridge — dropped (documented). Pool caveat: C++ picks from the
--- threat list excluding the main tank AND offtank (:478-507); the port
--- uses the alive same-map/instance player pool excluding the victim
--- (only threat-listed units qualify in practice; the offtank
--- exclusion is unmodeled).
--- The Blood Mirror / Delirious Slash / Twilight Bloodbolt DoCast legs
--- ride cross-unit triggered casts (Blood Mirror), the deterministic
--- offtank-pick machine (Delirious Slash), the Fly air-phase gate and
--- Is25ManRaid() gates (Twilight Bloodbolt) — OUT; the old "no-cast
--- bridge" wording was stale doctrine (DoCastAOE/CastSpell bridges
--- exist; the blockers are the gates, not the cast).
+-- Talk(EMOTE_SWARMING_SHADOWS 5, target) + Talk(SAY_SWARMING_SHADOWS 4)
+-- + DoCast(target, SPELL_SWARMING_SHADOWS 71264) (2-arg =
+-- non-triggered, :426) in C++ order; 30500ms seed (:166) /
+-- unconditional 30500ms re-arm (:427). Targeted Talk is bridged
+-- (creature:Talk(id, target); emote rows broadcast, only whisper
+-- rows go target-only — creature_text.go), so the old "no
+-- targeted-Talk bridge" drop is retracted. Pool (2026-10-25):
+-- threat-sorted GetAITargets minus the victim (C++ :478-507 threat
+-- list minus maintank minus offtank; offtank exclusion still
+-- unmodeled).
+-- PORTED (2026-10-25): EVENT_TWILIGHT_BLOODBOLT (:430-438, seed
+-- {20,25}s / re-arm {10,15}s) — RandomResize(2/4 by Is25ManRaid)
+-- casts of 71446 + self-cast 71445 (TARGET), threat pool minus
+-- victim. The UpdateAI case has NO air-phase gate (NORMAL group,
+-- only delayed 10s at air phase) — the header's Fly-gate note is
+-- retracted; the TARGET spell's SpellScript filter leg stays out
+-- (no SpellScript bridge). OUT: Blood Mirror (CANCELLABLE group —
+-- cancelled at air phase, and the port has no air-phase cancel
+-- signal — plus the quest-status GUSHING_WOUND leg, no quest
+-- bridge) and Delirious Slash (gated on Blood Mirror's _offtankGUID,
+-- never set in this port, + Fly tier).
 -- boss_blood_queen_lana_thel DoAction — ACTION_KILL_MINCHAR leg
 -- (no-DoAction bridge; the krick ACTION_OUTRO precedent); the
 -- EnterEvadeMode / SetGUID vampire-bloodbolt GUID-set bookkeeping
@@ -136,6 +150,9 @@ local SAY_DEATH = 11
 local SAY_BERSERK = 10
 local EMOTE_BERSERK_RAID = 12
 local SAY_SWARMING_SHADOWS = 4
+local SAY_VAMPIRIC_BITE = 1
+local EMOTE_SWARMING_SHADOWS = 5
+local SAY_PACT_OF_THE_DARKFALLEN = 6
 
 local SPELL_BERSERK = 26662
 local SPELL_SWARMING_SHADOWS = 71264
@@ -166,35 +183,50 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Random-player pool excluding the tank (the netherspite
--- randomNonTankPlayerInRange precedent, map-wide here): alive
--- same-map/instance players minus the victim.
-local function randomNonTankPlayerAnywhere(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectRandomTarget(false) pool shape
+-- (boss_blood_queen_lana_thel.cpp:478-507): the sorted threat list
+-- minus the maintank (victim); GetAITargets is threat-sorted
+-- (SortedEntries, rotface/anomalus precedent). The offtank exclusion
+-- is unmodeled (Blood Mirror unported, _offtankGUID never set here).
+local function threatPlayersMinusVictim(creature)
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = plr
+    local pool = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and unit:GetGUID() ~= victimGuid then
+            pool[#pool + 1] = unit
         end
     end
-    if #candidates == 0 then
-        return nil
+    return pool
+end
+
+-- RandomResize twin: up to count distinct random picks from pool
+-- (pool is consumed; C++ RandomResize keeps min(size, count)).
+local function takeRandom(pool, count)
+    local picked = {}
+    while #picked < count and #pool > 0 do
+        local i = math.random(#pool)
+        picked[#picked + 1] = pool[i]
+        table.remove(pool, i)
     end
-    return candidates[math.random(#candidates)]
+    return picked
 end
 
 -- C++ :421-428 EVENT_SWARMING_SHADOWS: if (target =
 -- SelectRandomTarget(false)) { Talk(EMOTE_SWARMING_SHADOWS, target);
 -- Talk(SAY_SWARMING_SHADOWS); DoCast(target, SPELL_SWARMING_SHADOWS)
 -- (2-arg = non-triggered) }; ScheduleEvent(EVENT_SWARMING_SHADOWS,
--- 30500ms) — unconditional re-arm. The targeted Talk(5) leg is
--- dropped (no targeted-Talk bridge); Talk(4) + the cast port.
+-- 30500ms) — unconditional re-arm. Talk(5, target) + Talk(4) +
+-- the cast port, in C++ order (targeted Talk bridged).
 local function swarmingShadowsTick(creature, guid)
-    local target = randomNonTankPlayerAnywhere(creature)
+    local pool = threatPlayersMinusVictim(creature)
+    local target = nil
+    if #pool > 0 then
+        target = pool[math.random(#pool)]
+    end
     if target ~= nil then
+        creature:Talk(EMOTE_SWARMING_SHADOWS, target)
         creature:Talk(SAY_SWARMING_SHADOWS)
         creature:CastSpell(target, SPELL_SWARMING_SHADOWS)
     end
@@ -227,6 +259,71 @@ local SPELL_BLOOD_MIRROR_DUMMY = 70838
 local SPELL_DELIRIOUS_SLASH = 71623
 local SPELL_PACT_OF_THE_DARKFALLEN = 71340
 local SPELL_PRESENCE_OF_THE_DARKFALLEN = 70994
+local SPELL_VAMPIRIC_BITE = 71726
+local SPELL_VAMPIRIC_BITE_DUMMY = 71837
+local SPELL_PRESENCE_OF_THE_DARKFALLEN_2 = 71952
+local SPELL_TWILIGHT_BLOODBOLT = 71446
+local SPELL_TWILIGHT_BLOODBOLT_TARGET = 71445
+
+-- C++ RAID_MODE macros (boss_blood_queen_lana_thel.cpp:94-98):
+-- FRENZIED_BLOODTHIRST (70877, 71474), DELIRIOUS_SLASH (71623-71626),
+-- PRESENCE_OF_THE_DARKFALLEN (70994, 71962-71964) — expanded like the
+-- essence pools below; the single-variant strips missed 25-man /
+-- heroic auras on Reset/Engage/JustDied wipes.
+local FRENZIED_BLOODTHIRST_AURAS = { 70877, 71474 }
+local DELIRIOUS_SLASH_AURAS = { 71623, 71624, 71625, 71626 }
+local PRESENCE_OF_THE_DARKFALLEN_AURAS = { 70994, 71962, 71963, 71964 }
+
+-- C++ EVENT_VAMPIRIC_BITE (:356-368, one-shot, no re-arm): front
+-- pick of the threat pool (targets.front() after the maintank/offtank
+-- strip) + DoCast bite + DoCastAOE dummy triggered + Talk(1) +
+-- target self-casts PRESENCE + PRESENCE_2 triggered, C++ order.
+local function onVampiricBite(creature)
+    local pool = threatPlayersMinusVictim(creature)
+    local target = pool[1]
+    if target ~= nil then
+        creature:CastSpell(target, SPELL_VAMPIRIC_BITE)
+        creature:CastSpell(creature, SPELL_VAMPIRIC_BITE_DUMMY, true)
+        creature:Talk(SAY_VAMPIRIC_BITE)
+        target:CastSpell(target, SPELL_PRESENCE_OF_THE_DARKFALLEN, true)
+        target:CastSpell(target, SPELL_PRESENCE_OF_THE_DARKFALLEN_2, true)
+    end
+end
+
+-- C++ EVENT_PACT_OF_THE_DARKFALLEN (:407-420): RandomResize(2/3 by
+-- Is25ManRaid); Talk(6) + DoCast each only if picked > 1; the
+-- 30500ms re-arm is unconditional (outside the size check).
+local function pactTick(creature, guid)
+    local pool = threatPlayersMinusVictim(creature)
+    local count = 2
+    if creature:Is25ManRaid() then
+        count = 3
+    end
+    local picked = takeRandom(pool, count)
+    if #picked > 1 then
+        creature:Talk(SAY_PACT_OF_THE_DARKFALLEN)
+        for _, target in ipairs(picked) do
+            creature:CastSpell(target, SPELL_PACT_OF_THE_DARKFALLEN)
+        end
+    end
+    schedule(guid, "pact", 30500, function() pactTick(creature, guid) end)
+end
+
+-- C++ EVENT_TWILIGHT_BLOODBOLT (:430-438): RandomResize(2/4 by
+-- Is25ManRaid) casts of 71446 + unconditional self-cast 71445.
+local function bloodboltTick(creature, guid)
+    local pool = threatPlayersMinusVictim(creature)
+    local count = 2
+    if creature:Is25ManRaid() then
+        count = 4
+    end
+    local picked = takeRandom(pool, count)
+    for _, target in ipairs(picked) do
+        creature:CastSpell(target, SPELL_TWILIGHT_BLOODBOLT)
+    end
+    creature:CastSpell(creature, SPELL_TWILIGHT_BLOODBOLT_TARGET)
+    schedule(guid, "bloodbolt", {10000, 15000}, function() bloodboltTick(creature, guid) end)
+end
 
 -- C++ boss_blood_queen_lana_thel::JustEngagedWith:
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
@@ -243,14 +340,14 @@ local function cleanAuras(creature)
     local pools = {
         ESSENCE_OF_BLOOD_QUEEN_AURAS,
         ESSENCE_OF_BLOOD_QUEEN_PLR_AURAS,
-        { SPELL_FRENZIED_BLOODTHIRST },
+        FRENZIED_BLOODTHIRST_AURAS,
         { SPELL_UNCONTROLLABLE_FRENZY },
         { SPELL_BLOOD_MIRROR_DAMAGE },
         { SPELL_BLOOD_MIRROR_VISUAL },
         { SPELL_BLOOD_MIRROR_DUMMY },
-        { SPELL_DELIRIOUS_SLASH },
+        DELIRIOUS_SLASH_AURAS,
         { SPELL_PACT_OF_THE_DARKFALLEN },
-        { SPELL_PRESENCE_OF_THE_DARKFALLEN },
+        PRESENCE_OF_THE_DARKFALLEN_AURAS,
     }
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
@@ -283,6 +380,9 @@ local function lanaThelJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
     schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
     schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
+    schedule(guid, "bite", 15000, function() onVampiricBite(creature) end)
+    schedule(guid, "pact", 15000, function() pactTick(creature, guid) end)
+    schedule(guid, "bloodbolt", {20000, 25000}, function() bloodboltTick(creature, guid) end)
 end
 
 -- C++ Reset() timer machinery — cancel/re-arm on combat events
