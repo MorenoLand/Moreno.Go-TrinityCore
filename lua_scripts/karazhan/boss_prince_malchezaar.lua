@@ -124,30 +124,18 @@ local function cancelOne(guid, key)
     end
 end
 
-local function alivePlayers(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, offset, 100, true) (boss_prince_malchezaar.cpp:
+-- :531 SWPain phase 3 offset 1, :504 amplify offset 0): the pool is the
+-- threat list, not the instance players. Offset 1 skips the first threat
+-- entry BEFORE the player/alive/range filters (UnitAI.h offset-before-
+-- filter), so it is positional, not a victim-GUID exclusion.
+local function randomThreatPlayer(creature, skipFirst, maxDist)
+    local targets = creature:GetAITargets()
     local out = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            out[#out + 1] = p
-        end
-    end
-    return out
-end
-
-local function randomAlivePlayer(creature, excludeVictim, maxDist)
-    local victimGuid = nil
-    if excludeVictim then
-        local victim = creature:GetVictim()
-        victimGuid = victim ~= nil and victim:GetGUID() or nil
-    end
-    local candidates = alivePlayers(creature)
-    local out = {}
-    for _, p in ipairs(candidates) do
-        if p:GetGUID() ~= victimGuid
-                and (maxDist == nil or creature:GetDistance(p) <= maxDist) then
-            out[#out + 1] = p
+    for i, unit in ipairs(targets) do
+        if (not skipFirst or i > 1) and unit:GetObjectType() == "Player"
+                and not unit:IsDead() and creature:GetDistance(unit) <= maxDist then
+            out[#out + 1] = unit
         end
     end
     if #out == 0 then
@@ -298,7 +286,7 @@ onSWPain = function(creature, guid)
         -- C++ SelectTarget(Random, 1, 100, true): random non-tank within
         -- 100 yd. C++ guards if (target) and skips the cast with no second
         -- target, so a nil pick must NOT fall back to the victim (the tank).
-        local target = randomAlivePlayer(creature, true, 100)
+        local target = randomThreatPlayer(creature, true, 100)
         if target then
             creature:CastSpell(target, SPELL_SW_PAIN)
         end
@@ -330,7 +318,7 @@ local function onAmplifyDamage(creature, guid)
         return
     end
     -- C++ SelectTarget(Random, 0, 100, true): tank included, 100 yd cap.
-    local target = randomAlivePlayer(creature, false, 100)
+    local target = randomThreatPlayer(creature, false, 100)
     if target ~= nil then
         creature:CastSpell(target, SPELL_AMPLIFY_DAMAGE)
     end

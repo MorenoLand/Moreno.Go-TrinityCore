@@ -185,17 +185,9 @@ local function cancelKeys(guid, keys)
     end
 end
 
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
+-- C++ SelectTarget(Random, 0, 100, true) (bosses_opera.cpp:422 brain
+-- wipe, :923 wolf chase, :1352 deadly swathe, :1456 blinding passion):
+-- the pool is the threat list, not the instance players.
 
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
@@ -210,7 +202,13 @@ local function randomThreatTarget(creature)
 end
 
 local function randomPlayerInRange(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            candidates[#candidates + 1] = unit
+        end
+    end
     if #candidates == 0 then
         return nil
     end
@@ -1420,11 +1418,15 @@ RegisterCreatureEvent(ENTRY_JULIANNE, 24, julianneReachHome)
 -- pick leaves the timer expired for a next-tick retry
 -- (yazzai-Polymorph precedent).
 local function romuloLunge(creature, guid)
-    local victim = creature:GetVictim()
+    -- C++ SelectTarget(Random, 1, 100, true) (:1336): offset 1 skips the
+    -- first threat entry BEFORE the player/alive/range filters
+    -- (UnitAI.h offset-before-filter), not a victim exclusion.
     local pool = {}
-    for _, p in ipairs(alivePlayersInRange(creature, 100)) do
-        if p ~= victim then
-            pool[#pool + 1] = p
+    local targets = creature:GetAITargets()
+    for i, unit in ipairs(targets) do
+        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= 100 then
+            pool[#pool + 1] = unit
         end
     end
     if #pool > 0 then

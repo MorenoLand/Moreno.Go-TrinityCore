@@ -104,20 +104,16 @@ local function cancelTimer(store, guid, key)
     end
 end
 
-local function alivePlayersInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, 100, true) (boss_terestian_illhoof.cpp:120):
+-- the pool is the threat list, not the instance players.
+local function randomPlayerInRange(creature, maxDist)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:GetDistance(unit) <= maxDist then
+            candidates[#candidates + 1] = unit
         end
     end
-    return found
-end
-
-local function randomPlayerInRange(creature, maxDist)
-    local candidates = alivePlayersInRange(creature, maxDist)
     if #candidates == 0 then
         return nil
     end

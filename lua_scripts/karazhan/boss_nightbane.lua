@@ -102,13 +102,15 @@ local function cancelPrefix(guid, prefix)
     end
 end
 
+-- C++ SelectTarget(Random, 0, 0.0f, true) (boss_nightbane.cpp:279/:288/
+-- :326/:337/:342/:347: charred earth, distracting ash, rain of bones,
+-- smoking blast x2, tail sweep): the pool is the threat list, not the
+-- instance players; dist 0.0f = no range check.
 local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
