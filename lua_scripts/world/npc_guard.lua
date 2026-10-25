@@ -39,6 +39,12 @@
 -- after the 9s chain, Repeat() on the player-victim miss leg); Reset
 -- cancels via the 2/4/23 maiden convention (C++ Reset/_scheduler
 -- cancel + UpdateAI bails out of combat). Zero Talk in C++.
+-- npc_guard_generic::ReceiveEmote / DoReplyToTextEmote — the
+-- Stormwind 68/1976 + Orgrimmar 3296 emote reply machine, PORTED
+-- (guardGenericReceiveEmote, ev8): IsFriendlyTo(player) gate via the
+-- creature:IsFriendlyTo bridge + KISS->BOW / WAVE->WAVE /
+-- SALUTE->SALUTE / SHY->FLEX / RUDE+CHICKEN->POINT via
+-- creature:PerformEmote, C++ order and entry gate exact.
 -- DOCUMENTED-ONLY:
 -- npc_guard_generic::Reset — the 10-minute _scheduler buff machine
 -- (SelectSpell SELECT_TARGET_ANY_FRIEND / SELECT_EFFECT_AURA self
@@ -47,17 +53,9 @@
 -- npc_guard_generic::ReceiveEmote / DoReplyToTextEmote — the
 -- Stormwind 68/1976 + Orgrimmar 3296 emote reply machine
 -- (TEXT_EMOTE_KISS/WAVE/SALUTE/SHY/RUDE/CHICKEN -> EMOTE_ONESHOT_*
--- HandleEmoteCommand, IsFriendlyTo-gated) — STAYS OUT (not ported):
--- the ev8 text-emote input IS bridged (grizzly_hills lakeFrog
--- precedent; fire site engine/world/emote.go:217) and
--- creature:PerformEmote is bridged (the HandleEmoteCommand twin,
--- engine/world/lua_creature_events.go:1053) — but the
--- me->IsFriendlyTo(player) gate (C++ npc_guard.cpp:106) has NO
--- bridge: nothing on the creature event surface exposes
--- FactionTemplateEntry::IsFriendlyTo to Lua (GetFaction/SetFaction
--- are the raw field, not the relation check). Porting without the
--- gate would make guards bow/point at hostile players, so the
--- emote-reply machine stays documented-only.
+-- HandleEmoteCommand, IsFriendlyTo-gated) — PORTED below
+-- (guardGenericReceiveEmote, ev8; the IsFriendlyTo bridge landed
+-- with it — the old "no bridge" note is retired).
 -- npc_guard_generic::JustEngagedWith _combatScheduler — the 1s melee
 -- machine (roll_chance_i(20) SELECT_TARGET_ANY_ENEMY DoCastVictim /
 -- AttackerStateUpdate) + the 5s spell machine (HealthBelowPct(30)
@@ -83,6 +81,53 @@ local function guardGenericEnterCombat(event, creature, target)
 end
 
 RegisterCreatureEvent(ENTRY_CENARION_HOLD_INFANTRY, 1, guardGenericEnterCombat)
+
+-- npc_guard_generic::ReceiveEmote / DoReplyToTextEmote (C++ npc_guard.cpp:96-110,
+-- DoReplyToTextEmote :66-94): entry-gated in C++ on
+-- NPC_STORMWIND_CITY_GUARD 68 / NPC_STORMWIND_CITY_PATROLLER 1976 /
+-- NPC_ORGRIMMAR_GRUNT 3296; the IsFriendlyTo(player) gate (C++ :106) ports
+-- via the creature:IsFriendlyTo bridge, the reply emotes via
+-- creature:PerformEmote (HandleEmoteCommand twin). Fires on ev8
+-- (grizzly_hills lakeFrog precedent); no boss_ai.go registration: ev8
+-- resolves live creature motions directly (emote.go), and binding these
+-- entries to newLuaBossAI would displace their native GuardAI.
+local ENTRY_STORMWIND_CITY_GUARD = 68
+local ENTRY_STORMWIND_CITY_PATROLLER = 1976
+local ENTRY_ORGRIMMAR_GRUNT = 3296
+
+local TEXT_EMOTE_CHICKEN = 22
+local TEXT_EMOTE_KISS = 58
+local TEXT_EMOTE_RUDE = 77
+local TEXT_EMOTE_SALUTE = 78
+local TEXT_EMOTE_SHY = 84
+local TEXT_EMOTE_WAVE = 101
+
+local EMOTE_ONESHOT_BOW = 2
+local EMOTE_ONESHOT_WAVE = 3
+local EMOTE_ONESHOT_FLEX = 23
+local EMOTE_ONESHOT_POINT = 25
+local EMOTE_ONESHOT_SALUTE = 66
+
+local function guardGenericReceiveEmote(_, creature, player, textEmote)
+    if not creature:IsFriendlyTo(player) then
+        return
+    end
+    if textEmote == TEXT_EMOTE_KISS then
+        creature:PerformEmote(EMOTE_ONESHOT_BOW)
+    elseif textEmote == TEXT_EMOTE_WAVE then
+        creature:PerformEmote(EMOTE_ONESHOT_WAVE)
+    elseif textEmote == TEXT_EMOTE_SALUTE then
+        creature:PerformEmote(EMOTE_ONESHOT_SALUTE)
+    elseif textEmote == TEXT_EMOTE_SHY then
+        creature:PerformEmote(EMOTE_ONESHOT_FLEX)
+    elseif textEmote == TEXT_EMOTE_RUDE or textEmote == TEXT_EMOTE_CHICKEN then
+        creature:PerformEmote(EMOTE_ONESHOT_POINT)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_STORMWIND_CITY_GUARD, 8, guardGenericReceiveEmote)
+RegisterCreatureEvent(ENTRY_STORMWIND_CITY_PATROLLER, 8, guardGenericReceiveEmote)
+RegisterCreatureEvent(ENTRY_ORGRIMMAR_GRUNT, 8, guardGenericReceiveEmote)
 
 -- npc_guard_shattrath_faction::ScheduleVanish (C++ npc_guard.cpp:210-231):
 -- 5s victim-gated banish mark + 9s player-GUID exile/teleport chain.

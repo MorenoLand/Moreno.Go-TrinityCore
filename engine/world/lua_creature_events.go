@@ -437,6 +437,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{false}, nil
 	}
+	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo (Object.cpp:2847-2850):
+	// GetReactionTo(target) >= REP_FRIENDLY, via the existing
+	// creatureFriendlyToTarget helper (boss_ai.go): player targets resolve
+	// through their live session's faction state, creature targets through
+	// a synthetic playerPos carrying the target's faction template. Self
+	// is always friendly (Object.cpp:2711); unresolvable targets read not
+	// friendly.
+	methods["IsFriendlyTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.creatureFriendlyToTarget(motion, targetGUID)}, nil
+	}
 	// IsValidAttackTarget(target) is WorldObject::IsValidAttackTarget
 	// (Object.cpp:2930) restricted to its hostility verdict via
 	// creatureExplicitAttackPasses: the dead, GM, untargetable, visibility

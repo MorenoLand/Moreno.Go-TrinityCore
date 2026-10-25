@@ -12023,9 +12023,10 @@ func init() {
 	// non-triggered + 9s 39533/36643 triggered chain, unconditional
 	// re-arm; the exile/teleport legs deviate: player:CastSpell has no
 	// bridge, so the creature casts them on the player instead; cancel on
-	// 2/4/23). Documented-only: the Reset 10-minute SelectSpell buff
-	// machine and the Stormwind/Orgrimmar ReceiveEmote reply legs
-	// (no-emote bridge).
+	// 2/4/23) and the Stormwind/Orgrimmar ReceiveEmote reply legs
+	// (entries 68/1976/3296, ev8 handler in npc_guard.lua, IsFriendlyTo
+	// bridge). Documented-only: the Reset 10-minute SelectSpell buff
+	// machine.
 	RegisterLuaBoss("npc_guard_generic", 15184)
 	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
 	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
