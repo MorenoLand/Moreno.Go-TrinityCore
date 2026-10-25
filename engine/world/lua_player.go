@@ -286,6 +286,90 @@ func (s *session) luaPlayer() *scripting.Object {
 		count := values[0].(uint32)
 		return []any{count >= required}, nil
 	}
+	// DestroyItemCount(entry, count[, update]) is the
+	// Player::DestroyItemCount twin (Player.cpp:12727): it walks the
+	// player's stacks of the entry in bag/slot order, deleting whole
+	// stacks and trimming the stack that covers the remainder, and
+	// returns the total actually destroyed. C++'s partial-stack branch
+	// returns only the full-stack subtotal; this bridge returns the
+	// full destroyed total instead (the rows left behind are the same).
+	// The update flag mirrors C++'s send-update leg: a live inventory
+	// refresh is pushed only when it is true. The C++ in-trade skip
+	// has no Go row model and is not replicated.
+	methods["DestroyItemCount"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("DestroyItemCount requires an item entry and a count")
+		}
+		item, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		count, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		update := true
+		if len(args) > 2 {
+			if b, ok := args[2].(bool); ok {
+				update = b
+			}
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || count == 0 {
+			return []any{uint32(0)}, nil
+		}
+		db := s.server.CharactersStore.DB
+		rows, err := db.QueryContext(ctx, "SELECT ci.item, ii.count FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot", state.GUID, item)
+		if err != nil {
+			if isMissingTableError(err) {
+				return []any{uint32(0)}, nil
+			}
+			return nil, err
+		}
+		type stack struct {
+			guid  int64
+			count int64
+		}
+		var stacks []stack
+		for rows.Next() {
+			var st stack
+			if err := rows.Scan(&st.guid, &st.count); err == nil {
+				stacks = append(stacks, st)
+			}
+		}
+		rows.Close()
+		remaining := int64(count)
+		destroyed := uint32(0)
+		for _, st := range stacks {
+			if remaining <= 0 {
+				break
+			}
+			if st.count <= remaining {
+				if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, st.guid); err != nil {
+					return nil, err
+				}
+				if _, err := db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", st.guid); err != nil {
+					return nil, err
+				}
+				s.adjustQuestItemCount(ctx, item, uint32(st.count), false)
+				s.applyItemObtainSpells(ctx, item, 0, false)
+				s.despawnItem(uint64(st.guid))
+				destroyed += uint32(st.count)
+				remaining -= st.count
+			} else {
+				if _, err := db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", remaining, st.guid); err != nil {
+					return nil, err
+				}
+				s.adjustQuestItemCount(ctx, item, uint32(remaining), false)
+				destroyed += uint32(remaining)
+				remaining = 0
+			}
+		}
+		if update && destroyed > 0 {
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+		}
+		return []any{destroyed}, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

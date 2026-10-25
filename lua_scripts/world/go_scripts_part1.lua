@@ -49,7 +49,7 @@
 -- 6. go_southfury_moonstone     :273  DOCUMENTED-ONLY
 -- 7. go_tele_to_dalaran_crystal :312  DOCUMENTED-ONLY
 -- 8. go_tele_to_violet_stand    :341  DOCUMENTED-ONLY
--- 9. go_matrix_punchograph      :386  DOCUMENTED-ONLY
+-- 9. go_matrix_punchograph      :386  PORTED 2026-10-24
 -- 10. go_blood_filled_orb       :450  DOCUMENTED-ONLY
 -- 11. go_soulwell               :495  DOCUMENTED-ONLY
 -- 12. go_amberpine_outhouse     :594  DOCUMENTED-ONLY
@@ -160,10 +160,11 @@
 --    (card,1,true) then player->CastSpell(player, upgrade spell, true).
 --    142345: white->yellow; 142475: yellow->blue; 142476: blue->red;
 --    142696: red->prismatic. Returns false.
---    Blockers: player:DestroyItemCount unbridged (player:CastSpell IS
---    bridged since 2026-10-24; player:HasItem cannot substitute the arm).
---    DOCUMENTED-ONLY despite C++-named entries — DestroyItemCount is the
---    sole remaining gate to a registrable port.
+--    PORTED 2026-10-24 (see bottom of file): player:DestroyItemCount
+--    IS bridged (lua_player.go, Player.cpp:12727 twin) and
+--    player:CastSpell IS bridged since 2026-10-24; the HasItemCount gate
+--    rides player:HasItem (GetItemCount >= 1). C++ returns false
+--    (native use continues) == Lua false (gong polarity).
 -- ============================================================================
 
 -- ============================================================================
@@ -240,3 +241,29 @@
 --    entries are not registered. DOCUMENTED-ONLY (registration-ready once a
 --    C++-tree entry source is identified).
 -- ============================================================================
+
+-- 9. go_matrix_punchograph (go_scripts.cpp:386-448; OnGossipHello :390-421)
+--    PORTED 2026-10-24: per GO entry, if the player carries the matching
+--    punch card, DestroyItemCount(card, 1, true) then player self-casts
+--    the upgrade spell triggered, in C++ order. C++ returns false
+--    (native use continues) == Lua false (gong polarity).
+local MATRIX_PUNCHOGRAPH_CARDS = {
+    [142345] = { 9279, 11512 }, -- white -> yellow
+    [142475] = { 9280, 11525 }, -- yellow -> blue
+    [142476] = { 9282, 11528 }, -- blue -> red
+    [142696] = { 9281, 11545 }, -- red -> prismatic
+}
+
+local function onMatrixPunchographGossip(_, player, go)
+    local pair = MATRIX_PUNCHOGRAPH_CARDS[go:GetEntry()]
+    if pair ~= nil and player:HasItem(pair[1]) then
+        player:DestroyItemCount(pair[1], 1, true)
+        player:CastSpell(player, pair[2], true)
+    end
+    return false
+end
+
+RegisterGameObjectGossipEvent(142345, 1, onMatrixPunchographGossip)
+RegisterGameObjectGossipEvent(142475, 1, onMatrixPunchographGossip)
+RegisterGameObjectGossipEvent(142476, 1, onMatrixPunchographGossip)
+RegisterGameObjectGossipEvent(142696, 1, onMatrixPunchographGossip)
