@@ -328,7 +328,8 @@ local powerAuraByEntry = {
 
 -- C++ dummy_dragonAI::JustDied: the _canLoot/SetLootRecipient,
 -- entry-switched SetBossState(DATA_TENEBRON/SHADRON/VESPERON, DONE),
--- and acolyte KillSelf legs have no loot/instance/kill bridges
+-- and acolyte KillSelf legs: SetLootRecipient bridge live, but the
+-- _canLoot leg stays out on the cross-AI SetData relay
 -- (documented); Talk(SAY_DEATH) + the entry-switched SELF
 -- RemoveAurasDueToSpell(spellId) leg are PORTED — creature:RemoveAura
 -- is bridged (stale "only the Talk arm is bridgeable" claim retracted).

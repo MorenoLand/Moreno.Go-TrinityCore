@@ -66,7 +66,8 @@
 -- check, the DONE branch (Talk SAY_ENCOUNTER_DEFEATED 4 +
 -- DoCastAOE SPELL_KILL_CREDIT 65195), the SetLootRecipient
 -- leg and the supercharge DoAction cascade to the surviving
--- bosses have no bridges — the sjonnir JustDied-Talk
+-- bosses — SetLootRecipient bridge live (lua_creature_events.go),
+-- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
 -- precedent).
 -- boss_runemaster_molgeim — JustEngagedWith: Talk(SAY_AGGRO
 -- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
@@ -84,7 +85,8 @@
 -- GetBossState DONE check, the DONE branch (Talk
 -- SAY_ENCOUNTER_DEFEATED 5 + DoCastAOE SPELL_KILL_CREDIT),
 -- the SetLootRecipient leg and the supercharge DoAction
--- cascade have no bridges — the sjonnir JustDied-Talk
+-- cascade — SetLootRecipient bridge live (lua_creature_events.go),
+-- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
 -- precedent).
 -- boss_stormcaller_brundir — JustEngagedWith: Talk(SAY_AGGRO
 -- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
@@ -108,7 +110,8 @@
 -- instance GetBossState DONE check, the DONE branch (Talk
 -- SAY_ENCOUNTER_DEFEATED 5 + DoCastAOE SPELL_KILL_CREDIT),
 -- the SetLootRecipient leg and the supercharge DoAction
--- cascade have no bridges — the sjonnir JustDied-Talk
+-- cascade — SetLootRecipient bridge live (lua_creature_events.go),
+-- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
 -- precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entries 32867 / 32927 / 32857):

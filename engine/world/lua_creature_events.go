@@ -1942,6 +1942,57 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// HasLootRecipient is Creature::hasLootRecipient (Creature.h:218):
+	// a loot-recipient player or group is set. The tap fields live on
+	// the motion (creaturemotion.go:307, the Creature::SetLootRecipient
+	// state), and kill.go honors them when granting loot, so this is
+	// the guard for the SetLootRecipient leg below.
+	methods["HasLootRecipient"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		tapped := motion.TapPlayerGUID != 0 || motion.TapGroupID != 0
+		s.motionMu.Unlock()
+		return tapped
+	})
+	// SetLootRecipient is Creature::SetLootRecipient (Creature.cpp:1328-1355,
+	// Creature.h:221, withGroup defaults true): nil clears the recipient
+	// and sheds LOOTABLE|TAPPED; a player sets TapPlayerGUID plus the
+	// player's group when withGroup holds (optional second arg, default
+	// true). A non-player arg is a no-op, matching C++'s early return
+	// for non-player non-vehicle units (the vehicle charmer-owner chain
+	// is unmodeled). Backs boss_valithria_dreamwalker HealReceived.
+	methods["SetLootRecipient"] = func(_ context.Context, args []any) ([]any, error) {
+		withGroup := true
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				withGroup = b
+			}
+		}
+		if len(args) == 0 || args[0] == nil {
+			s.motionMu.Lock()
+			motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+			motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+			dynFlags := motion.DynamicFlags
+			mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+			s.motionMu.Unlock()
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldDynamicFlags: dynFlags})
+			return nil, nil
+		}
+		playerGUID := luaObjectGUID(args[0])
+		if playerGUID == 0 {
+			return nil, nil
+		}
+		sess := s.findSessionByGUID(playerGUID)
+		if sess == nil {
+			return nil, nil
+		}
+		s.motionMu.Lock()
+		motion.TapPlayerGUID = playerGUID
+		if withGroup {
+			motion.TapGroupID = sess.groupID
+		}
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// EmoteState is Creature::SetUInt32Value(UNIT_NPC_EMOTESTATE, state):
 	// the persistent emote-state update field the client renders
 	// (SharedDefines.h: EMOTE_STATE_SUBMERGED=373, EMOTE_STATE_STUN=64,
@@ -3479,16 +3530,18 @@ func (s *Server) fireCreatureDamageTaken(ctx context.Context, motion *creatureMo
 // ignored, unlike DamageTaken's rewrite, because no Lua consumer adjusts heals
 // and C++ HealReceived's heal-adjustment capability has no Eluna twin to
 // mirror. Args are (event, creature, healer, heal); the healer is the healer
-// creature object, or nil when the healer is a player (no player object is
-// available at the fire site). Fires only for entry handlers; unique-handler
+// creature object, the healer player object when the healer is a player
+// (resolved from healerGUID), or nil when neither resolves. Fires only for entry handlers; unique-handler
 // dispatch is unnecessary here because no per-GUID heal consumer exists.
-func (s *Server) fireCreatureHealReceived(ctx context.Context, victim, healer *creatureMotion, heal uint32) {
+func (s *Server) fireCreatureHealReceived(ctx context.Context, victim, healer *creatureMotion, healerGUID uint64, heal uint32) {
 	if s == nil || victim == nil || s.Features == nil || s.Features.Scripts == nil {
 		return
 	}
 	var healerObj any
 	if healer != nil {
 		healerObj = s.luaMotionCreature(healer)
+	} else if healerGUID != 0 {
+		healerObj = s.findPlayer(healerGUID)
 	}
 	s.fireCreatureLuaEvent(ctx, victim, scripting.CreatureEventOnHealReceived, healerObj, heal)
 }

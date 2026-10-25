@@ -139,7 +139,7 @@ func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatur
 	// the Go-side heal event, fired after the native hooks so existing hook
 	// order is undisturbed. Read-only: the event cannot rewrite addhealth.
 	if victim != nil && addhealth != nil {
-		s.fireCreatureHealReceived(ctx, victim, healer, *addhealth)
+		s.fireCreatureHealReceived(ctx, victim, healer, healerGUID, *addhealth)
 	}
 }
 
@@ -11708,8 +11708,7 @@ func init() {
 	// engage-port precedent). No other bridgeable arm in the file:
 	// boss_valithria_dreamwalker (36789) exposes zero bridgeable arms
 	// (NOT registered) — Talk(SAY_VALITHRIA_SUCCESS 7 /
-	// SAY_VALITHRIA_75_PERCENT 2) ride HealReceived legs (no
-	// HealReceived bridge); Talk(SAY_VALITHRIA_25_PERCENT 3 /
+	// SAY_VALITHRIA_75_PERCENT 2) ride HealReceived legs (event 11); Talk(SAY_VALITHRIA_25_PERCENT 3 /
 	// SAY_VALITHRIA_DEATH 4) ride DamageTaken legs (no DamageTaken
 	// bridge — she never actually dies, damage is negated); Talk
 	// (SAY_VALITHRIA_ENTER_COMBAT 0 / SAY_VALITHRIA_BERSERK 6 /

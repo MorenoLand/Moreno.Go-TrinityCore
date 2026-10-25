@@ -53,7 +53,7 @@
 -- EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP 71196) + its SpellHit
 -- consequence (CLEAR_ALL + REPUTATION + invisible + NOT_SELECTABLE +
 -- 4s despawn, event 14 valithriaSpellHit); still out:
--- hasLootRecipient/SetLootRecipient(healer), LowerPlayerDamageReq,
+-- LowerPlayerDamageReq,
 -- instance->SendEncounterUnit, Initialize, lichKing EnterEvadeMode
 -- (instance GUID), and the NOT_STARTED first-heal combat-start leg
 -- (FindNearestCreature archmage + archmage:DoZoneInCombat() — PORTED
@@ -360,10 +360,17 @@ end
 -- does nothing else on that branch. The
 -- _done/_over75PercentTalkDone latches live in valithriaState, so the
 -- event-23 reset clears them (C++ Initialize()).
-local function valithriaHealReceived(_, creature, _, heal)
+local function valithriaHealReceived(_, creature, healer, heal)
     local guid = creature:GetGUID()
     local st = valithriaState[guid] or {}
     valithriaState[guid] = st
+    -- C++ :317-318 — first heal taps the healer as loot recipient,
+    -- guarded by hasLootRecipient (the healer arg is the player
+    -- object for player heals; a creature healer is a no-op in
+    -- SetLootRecipient, matching C++'s non-player return).
+    if healer and not creature:HasLootRecipient() then
+        creature:SetLootRecipient(healer)
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
