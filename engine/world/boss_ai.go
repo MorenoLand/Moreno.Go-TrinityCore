@@ -11020,6 +11020,13 @@ func init() {
 	// in the lua header.
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
+	// npc_enslaved_proto_drake (Utgarde Keep) — ported arms in
+	// lua_scripts/northrend/npc_enslaved_proto_drake.lua: EnterCombat-seeded
+	// rend/flame-breath/knockaway timers (utgarde_keep.cpp:274-280, :300-330).
+	// MovementInform / SetData legs stay out (no AnimationTier/MovePath bridge);
+	// forge-master + 3 spell scripts stay out (instance/SpellScript bridges).
+	// Entry 24083 ultimowow-only (no C++ NPC_ constant for this trash mob).
+	RegisterLuaBoss("npc_enslaved_proto_drake", 24083)
 	// Svala Sorrowgrave (Utgarde Pinnacle) — boss_svala.cpp,
 	// AddSC_boss_svala() (loader decl 132 / call 327) — the FIRST group of
 	// the "// Utgarde Keep - Utgarde Pinnacle" block (utgarde_keep ->
@@ -12287,6 +12294,10 @@ func init() {
 	// (no instance boss-state bridge).
 	RegisterLuaBoss("npc_mimiron_flames", 34363)
 	RegisterLuaBoss("npc_mimiron_flames", 34121)
+	// boss_vx_001 (Ulduar, Mimiron VX-001 phase) — ported arms
+	// in lua_scripts/northrend/boss_vx_001.lua: JustSummoned burst-target
+	// leg + SpellHit rapid-burst leg (DoAction/timer/DamageTaken arms stay out).
+	RegisterLuaBoss("boss_vx_001", 33651)
 	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
 	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
 	// questgiver/Talk + 8s monster-faction timer, combat shock/
