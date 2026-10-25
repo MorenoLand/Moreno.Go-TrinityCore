@@ -38,10 +38,12 @@
 --    fired (C++-exact, not IsHeroic-gated). C++-EXACT QUIRK:
 --    the EVENT_SHADOW_POWER arm schedules EVENT_SAW_BLADE
 --    at randtime 25-35s instead of re-arming itself — shadow
---    power fires exactly once per combat and accelerates the
---    saw-blade schedule (a second pending saw-blade event).
---    Modeled via the sawBladeExtra countdown, which fires
---    the same cast+Talk handler.
+--    power fires exactly once per combat. EventMap is a
+--    multimap insert, so that second pending saw-blade event
+--    re-arms itself at 20-30s on firing: two independent saw-
+--    blade streams persist for the rest of the fight. Modeled
+--    via the sawBladeExtra countdown, which fires the same
+--    cast+Talk handler and re-arms itself at 20-30s.
 -- OnDied(4): Talk(SAY_DEATH) (C++-exact); the BossAI
 -- _JustDied arm is instance-blocked, unmodeled.
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
@@ -90,10 +92,9 @@ local function freshState()
     }
 end
 
-local function fireSawBlade(creature, st)
+local function fireSawBlade(creature)
     creature:CastSpell(creature, SPELL_SAW_BLADE)
     creature:Talk(SAY_SAW_BLADES)
-    st.sawBlade = math.random(20000, 30000)
 end
 
 local function bossTick(creature, guid)
@@ -115,18 +116,20 @@ local function bossTick(creature, guid)
     -- non-triggered DoCast(me) self-cast + Talk (C++-exact);
     -- the heroic 39192 variant is never fired by the C++.
     if st.sawBlade <= 1000 then
-        fireSawBlade(creature, st)
+        fireSawBlade(creature)
+        st.sawBlade = math.random(20000, 30000)
     else
         st.sawBlade = st.sawBlade - 1000
     end
 
     -- The shadow-power quirk: C++ re-schedules EVENT_SAW_BLADE
-    -- (a second pending event), not EVENT_SHADOW_POWER — the
-    -- extra countdown fires the same saw-blade handler.
+    -- (a second pending event), not EVENT_SHADOW_POWER — and
+    -- EventMap inserts (multimap), so the extra event re-arms
+    -- itself at 20-30s: a second, persistent saw-blade stream.
     if st.sawBladeExtra then
         if st.sawBladeExtra <= 1000 then
-            fireSawBlade(creature, st)
-            st.sawBladeExtra = nil
+            fireSawBlade(creature)
+            st.sawBladeExtra = math.random(20000, 30000)
         else
             st.sawBladeExtra = st.sawBladeExtra - 1000
         end
