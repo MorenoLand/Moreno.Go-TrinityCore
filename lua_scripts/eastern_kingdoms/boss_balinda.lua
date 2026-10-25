@@ -36,10 +36,10 @@
 -- water elemental when summons.empty()) + JustSummoned
 -- (AttackStart(SelectTarget(Random)) + SetFaction + GUID store) +
 -- SummonedCreatureDespawn + JustDied summons.DespawnAll — creature
--- SummonCreature + SetFaction ARE bridged now, but the arm still stays
+-- SummonCreature + SetFaction ARE bridged now, and EngageWithTarget
+-- (the AttackStart twin) is bridged too — but the arm still stays
 -- out: the summon arrives via spell-cast 45067 (no engine spell-summon
--- data footprint) and JustSummoned's AttackStart leg has no bridge
--- (boss_ai.go) — a SetFaction-only half would leave an idle elemental
+-- data footprint), so JustSummoned never fires in Lua — a SetFaction-only half would leave an idle elemental
 -- C++ never produces (kodo half-pair precedent); the elemental never
 -- enters the world, so its timer chain stays documented-only.
 -- EVENT_CHECK_RESET gate + Talk(SAY_EVADE=1) PORTED 2026-10-24

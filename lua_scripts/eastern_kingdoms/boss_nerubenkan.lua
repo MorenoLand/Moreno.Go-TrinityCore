@@ -27,8 +27,9 @@
 --   0, 0, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 180s) via creature:
 --   SummonCreature (type 1, 180000ms; the stale "no summon bridge,
 --   herod precedent" is retracted); the pUndeadScarab->AI()->
---   AttackStart(victim) leg has no bridge — the scarab idles until the
---   engine aggros it (noxxion adds precedent); 16000ms re-arm.
+--   AttackStart(victim) leg PORTED 2026-10-24 via EngageWithTarget
+--   (player-target funnel; non-player victim no-ops in the bridge,
+--   spawn still happens); 16000ms re-arm.
 -- - OnDied: timer clear modeled; the C++ JustDied leg
 --   `instance->SetData(TYPE_NERUB 3, IN_PROGRESS)` is documented-only
 --   (no instance-script bridge — shadowfang keep precedent). The C++
@@ -112,13 +113,17 @@ end
 -- C++ RaiseUndeadScarab timer (3000ms then 16000ms): DoSpawnCreature
 -- 10876 + AttackStart(victim) — the summon is PORTED via creature:
 -- SummonCreature (type 1 = TIMED_OR_CORPSE_DESPAWN, 180000ms); the
--- AttackStart leg has no bridge — the scarab idles until the engine
--- aggros it (noxxion adds precedent).
+-- AttackStart leg PORTED via EngageWithTarget on the boss's victim
+-- (C++ RaiseUndeadScarab(me->GetVictim()), boss_nerubenkan.cpp:122).
 local NPC_UNDEAD_SCARAB = 10876
 local function onRaiseUndeadScarab(creature, guid)
     local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
-    creature:SummonCreature(NPC_UNDEAD_SCARAB,
+    local victim = creature:GetVictim()
+    local scarab = creature:SummonCreature(NPC_UNDEAD_SCARAB,
         x + math.random(-9, 9), y + math.random(-9, 9), z, o, 1, 180000)
+    if scarab and victim then
+        scarab:EngageWithTarget(victim)
+    end
     schedule(guid, "raise_undead_scarab", 16000, function() onRaiseUndeadScarab(creature, guid) end)
 end
 

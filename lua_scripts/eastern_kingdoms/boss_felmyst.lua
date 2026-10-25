@@ -110,8 +110,9 @@
 --   all bridged now and event 14 fires for the player-caster path
 --   (spells.go:11781), but the arm still stays out: the lethal
 --   DealDamage on the player caster has no bridge (creature:Kill is
---   self-only) and the summoned DEAD's AttackStart(random) has none,
---   so the summon+charm legs alone would be a half-pair.
+--   self-only) and the summoned DEAD's AttackStart(random) — though
+--   EngageWithTarget is now bridged — would still need that lethal
+--   leg, so the summon+charm legs alone would be a half-pair.
 -- - JustSummoned's NPC_DEAD AttackStart/random + 45415 self-cast
 --   arm: shares the AttackStart block above.
 -- - npc_felmyst_vapor (25265): entry only in the header + this

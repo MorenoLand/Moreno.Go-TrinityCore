@@ -31,12 +31,12 @@
 -- (re-arms 25s in PHASE_TWO).
 -- Deviations: no UNIT_STATE_CASTING gate in the C++ UpdateAI (maiden
 -- precedent — timers fire unconditionally). EVENT_MEDIC / EVENT_ADDS
--- summon legs (SummonMedic: DoSpawnCreature(8894) x2;
+-- summon legs PORTED 2026-10-24 (SummonMedic: DoSpawnCreature(8894) x2;
 -- SummonAdd: DoSpawnCreature(8901) x3, both
--- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 120s + AttackStart(victim)) are
--- unmodeled — no positional-spawn bridge (flamelash/azuregos nil-tick
--- schedule convention); both events keep their C++-exact 0s/25s
--- schedule as nil-ticks. The C++ 0s schedule fires the tick directly
+-- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 120s + AttackStart(victim) via
+-- creature:SummonCreature type 1 + EngageWithTarget; offsets are
+-- boss-pos + irand(-14,14)/irand(-9,9) per ScriptedCreature.cpp:288);
+-- both events keep their C++-exact 0s/25s schedule. The C++ 0s schedule fires the tick directly
 -- (CreateLuaEvent rejects delay 0 — the C++ 0s means "next UpdateAI
 -- tick", equivalent here). No Talk lines exist in the C++.
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers (the C++
@@ -110,22 +110,41 @@ local function onCleave(creature, guid)
     end)
 end
 
--- C++ SummonMedic x2 (DoSpawnCreature(8894) + AttackStart(victim)): no
--- positional-spawn bridge, so the event fires its C++-exact one-shot
--- 0s schedule with the spawn leg unmodeled (no re-arm in C++).
-local function onMedic(guid)
-    -- NPC_ANVILRAGE_MEDIC 8894 x2 unmodeled (standing no-summon
-    -- bridge); schedule stays C++-exact.
+-- C++ SummonMedic x2 (DoSpawnCreature(8894) + AttackStart(victim)):
+-- boss-pos + irand(-9,9) offsets, type 1, 120s; AttackStart via
+-- EngageWithTarget (player-target funnel; non-player victim no-ops
+-- in the bridge, spawn still happens — flamelash precedent).
+-- One-shot 0s schedule, no re-arm in C++.
+local function onMedic(creature, guid)
+    local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
+    local victim = creature:GetVictim()
+    for _ = 1, 2 do
+        local medic = creature:SummonCreature(NPC_ANVILRAGE_MEDIC,
+            bx + math.random(-9, 9), by + math.random(-9, 9), bz, 0, 1, 120000)
+        if medic and victim then
+            medic:EngageWithTarget(victim)
+        end
+    end
 end
 
--- C++ SummonAdd x3 (DoSpawnCreature(8901) + AttackStart(victim)): same
--- no-bridge treatment; re-arms 25s in PHASE_TWO (C++-exact).
-local function onAdds(guid)
-    -- NPC_ANVILRAGE_ADD 8901 x3 unmodeled (standing no-summon bridge).
+-- C++ SummonAdd x3 (DoSpawnCreature(8901) + AttackStart(victim)):
+-- boss-pos + irand(-14,14) offsets, type 1, 120s; AttackStart via
+-- EngageWithTarget (same funnel note as onMedic); re-arms 25s in
+-- PHASE_TWO (C++-exact).
+local function onAdds(creature, guid)
+    local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
+    local victim = creature:GetVictim()
+    for _ = 1, 3 do
+        local add = creature:SummonCreature(NPC_ANVILRAGE_ADD,
+            bx + math.random(-14, 14), by + math.random(-14, 14), bz, 0, 1, 120000)
+        if add and victim then
+            add:EngageWithTarget(victim)
+        end
+    end
     local state = angerforgeState[guid]
     if state and state.phaseTwo then
         schedule(guid, "adds", 25000, function()
-            onAdds(guid)
+            onAdds(creature, guid)
         end)
     end
 end
@@ -164,8 +183,8 @@ local function onDamageTaken(_, creature, _, damage)
         -- C++ schedules EVENT_MEDIC and EVENT_ADDS at 0s on the phase
         -- transition: fire both ticks immediately (CreateLuaEvent
         -- rejects delay 0; 0s = next UpdateAI tick in C++).
-        onMedic(guid)
-        onAdds(guid)
+        onMedic(creature, guid)
+        onAdds(creature, guid)
     end
 end
 

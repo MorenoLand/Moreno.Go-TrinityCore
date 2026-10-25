@@ -89,8 +89,9 @@
 --   MovementInform leg), and PHASE_TO_ATTACK's 5s wait ->
 --   SetFaction(FACTION_MONSTER) (bridged) / SetImmuneToPC(false)
 --   (= RemoveFlag(59, 0x100), bridged) / SetReactState(REACT_AGGRESSIVE)
---   (bridged) + AttackStart(player) (no bridge) — the "no faction /
---   immune / react-state bridge" wording was stale, but the arm stays
+--   (bridged) + AttackStart(player) (EngageWithTarget bridged
+--   2026-10-24) — the "no faction / immune / react-state bridge"
+--   wording was stale, but the arm stays
 --   out on other grounds: its only trigger is the unbridged GO-gossip
 --   -> cross-AI EventStart chain, so a one-sided port on any bridged
 --   event would be wrong.

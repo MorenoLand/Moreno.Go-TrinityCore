@@ -18,9 +18,9 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
--- bridges): JustSummoned AttackStart on a random target (no
--- random-target bridge) and the Summons SummonList/DespawnAll
--- tracking. PORTED 2026-10-24: JustSummoned ApplySpellImmune(0,
+-- bridges): the Summons SummonList/DespawnAll tracking only —
+-- JustSummoned AttackStart on a random target PORTED 2026-10-24
+-- (see handler below). PORTED 2026-10-24: JustSummoned ApplySpellImmune(0,
 -- IMMUNITY_DAMAGE, MAGIC, true) via event 19 — the 'no summoned
 -- bearer' claim was STALE (ev19 passes the summoned creature as a
 -- full method object, lua_creature_events.go fireCreatureSummoned;
@@ -147,11 +147,18 @@ local function jandiceBarovReset(event, creature)
 end
 
 -- C++ JustSummoned (boss_jandice_barov.cpp:52-58): illusion
--- AttackStart on a random target (no random-target bridge — stays
--- out) + summoned->ApplySpellImmune(0, IMMUNITY_DAMAGE, MAGIC, true).
+-- AttackStart on a random target + summoned->ApplySpellImmune(0,
+-- IMMUNITY_DAMAGE, MAGIC, true), in C++ order. SelectTarget(Random, 0)
+-- is the threat-list random pick via GetAITargets (gerstahn/kagani
+-- precedent); AttackStart via EngageWithTarget (player-target
+-- funnel; a non-player random pick no-ops in the bridge).
 -- C++ JustSummoned carries no entry gate, so neither does this
 -- handler: Jandice summons only illusions (spell 17773).
 local function jandiceJustSummoned(event, creature, summon)
+    local targets = creature:GetAITargets()
+    if targets and #targets > 0 then
+        summon:EngageWithTarget(targets[math.random(#targets)])
+    end
     summon:ApplySpellImmune(0, IMMUNITY_OP_DAMAGE, SPELL_SCHOOL_MASK_MAGIC, true)
 end
 

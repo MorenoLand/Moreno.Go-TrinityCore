@@ -26,9 +26,11 @@
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention); the DamageTaken latch
 -- fires on the damage hook rather than the script's UpdateAI tick
--- (timing documented). Documented-only (no bridges): JustSummoned
--- AttackStart(victim) on the adds (no summoned-attack-start bridge —
--- herod precedent); spell_kormok_summon_bone_mages 27695 script
+-- (timing documented). Documented-only: JustSummoned
+-- AttackStart(victim) on the adds stays out — not on a bridge gap
+-- (EngageWithTarget is bridged 2026-10-24) but for lack of a bearer:
+-- the adds arrive via SpellScript effects, never via a Lua summon,
+-- so JustSummoned never fires; spell_kormok_summon_bone_mages 27695 script
 -- effect (2x random of the 4 bone-mage summon spells
 -- 27696/27697/27698/27699); spell_kormok_summon_bone_minions 27687
 -- script effect (4x SummonCreature(NPC_BONE_MINION 16119,
