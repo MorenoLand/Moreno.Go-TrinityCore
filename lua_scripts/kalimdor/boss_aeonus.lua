@@ -33,16 +33,17 @@
 --   {10s,15s} -> re-arm {20s,35s}.
 -- - Frenzy: Talk EMOTE_FRENZY (5) + self-cast Enrage 37605 (C++
 --   DoCast(me)), non-triggered, init {30s,45s} -> re-arm {20s,35s}.
+-- Ported (2026-10-24): MoveInLineOfSight's Time Keeper leg — the old
+-- "no nearby-creature enumeration" note is stale (FindNearestCreature
+-- is bridged, lua_creature_events.go:2635, live-only, same map+instance).
+-- Event 7 (onAIUpdate, hydross precedent: fires for every alive motion,
+-- pre-pull included) polls the nearest live Time Keeper within 20 yd;
+-- on a hit Talk SAY_BANISH (2) + keeper:Kill(creature) — the Kill bridge
+-- (killer arg = aeonus) stands in for C++ Unit::DealDamage(me, who,
+-- full health), same visible outcome (keeper dies). The leg is ungated
+-- in C++ (no combat gate), so the poll is ungated too; a keeper dies on
+-- first detection, so the Talk fires once per keeper, never spams.
 -- Unmodeled (documented-only, no bridges):
--- - MoveInLineOfSight's Time Keeper leg: who->GetTypeId() == TYPEID_UNIT
---   (creature, not player) && who->GetEntry() == NPC_TIME_KEEPER
---   (17918, the_black_morass.h:57) && IsWithinDistInMap(who, 20.0f) ->
---   Talk SAY_BANISH (2) + Unit::DealDamage(me, who, who->GetHealth(),
---   nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false)
---   (full-health hit, a one-shot kill of the Time Keeper). The Lua API
---   exposes no nearby-creature enumeration, so there is no
---   MoveInLineOfSight / entry-proximity bridge — SAY_BANISH's only Talk
---   arm is unreachable.
 -- - JustDied's instance legs: instance->SetData(TYPE_RIFT = 2, DONE) +
 --   instance->SetData(TYPE_MEDIVH = 1, DONE) (the "FIXME: later should be
 --   removed" comment is C++-verbatim) — instance-data bridge blocked
@@ -60,6 +61,7 @@
 --   cancel (hyjal.lua convention).
 
 local ENTRY = 17881
+local NPC_TIME_KEEPER = 17918
 
 local SAY_ENTER   = 0
 local SAY_AGGRO   = 1
@@ -160,6 +162,15 @@ local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+local function onAIUpdate(event, creature)
+    local keeper = creature:FindNearestCreature(NPC_TIME_KEEPER, 20)
+    if keeper then
+        creature:Talk(SAY_BANISH)
+        keeper:Kill(creature)
+    end
+end
+
+RegisterCreatureEvent(ENTRY, 7, onAIUpdate)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
