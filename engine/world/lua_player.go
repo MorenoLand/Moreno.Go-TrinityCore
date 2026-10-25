@@ -80,6 +80,26 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetRace"] = luaNoArgs(func() any { return state.Race })
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
+	// GetDisplayId is Unit::GetDisplayId (Unit.h): the UNIT_FIELD_DISPLAYID
+	// read. Go computes the same value the update-values builder broadcasts
+	// (player_state.go): race male/female display by gender, overridden by
+	// the active transform display. Backs the maladaar stolen-soul and
+	// kiljaeden sinister-reflection SetDisplayId arms.
+	methods["GetDisplayId"] = luaNoArgs(func() any {
+		displayID := uint32(0)
+		if s.server != nil && s.server.Data != nil {
+			if race, found, err := s.server.Data.Race(uint32(state.Race)); err == nil && found {
+				displayID = race.MaleDisplayID
+				if state.Gender != 0 {
+					displayID = race.FemaleDisplayID
+				}
+			}
+		}
+		if state.TransformDisplayID != 0 {
+			displayID = state.TransformDisplayID
+		}
+		return displayID
+	})
 	// GetNativeGender is Player::GetNativeGender (Player.h:993): the
 	// PLAYER_BYTES_3 gender byte. Go tracks a single gender
 	// (characters.gender, the same field GetGender reads); no

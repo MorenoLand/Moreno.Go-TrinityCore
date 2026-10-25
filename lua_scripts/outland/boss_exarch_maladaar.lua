@@ -82,9 +82,9 @@
 -- SetDisplayId(soulmodel) + SetFaction(me->GetFaction()) +
 -- ENSURE_AI SetMyClass(soulclass) + AI()->AttackStart(soulholder
 -- target) — PORTED 2026-10-24 (see stolenSoulTick): the summon
--- returns the soul object, so SetMyClass is a soulClass table store
--- and AttackStart is EngageWithTarget; only SetDisplayId(soulmodel)
--- stays out (no player GetDisplayId bridge).
+-- returns the soul object, so SetMyClass is a soulClass table store,
+-- AttackStart is EngageWithTarget, and SetDisplayId(soulmodel) is
+-- PORTED 2026-10-24 via the player:GetDisplayId bridge (lua_player.go).
 -- StolenSoul_Timer summon leg (:256) — PORTED 2026-10-24 in
 -- stolenSoulTick (SummonCreature type 3, 10s + JustSummoned arms).
 -- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) — PORTED
@@ -200,11 +200,12 @@ local function stolenSoulTick(creature, guid)
         -- TIMED_DESPAWN_OUT_OF_COMBAT type 3, 10s) then the
         -- JustSummoned arms — visual self-cast, faction copy,
         -- SetMyClass (stored in soulClass), AttackStart(soulholder).
-        -- SetDisplayId(soulmodel) stays out: no player GetDisplayId
-        -- bridge (kiljaeden precedent).
+        -- SetDisplayId(soulmodel) PORTED 2026-10-24 via the
+        -- player:GetDisplayId bridge (lua_player.go).
         local soul = creature:SummonCreature(ENTRY_STOLEN_SOUL, 0, 0, 0, 0, 3, 10000)
         if soul then
             soul:CastSpell(soul, SPELL_STOLEN_SOUL_VISUAL, false)
+            soul:SetDisplayId(target:GetDisplayId())
             soul:SetFaction(creature:GetFaction())
             soulClass[soul:GetGUID()] = target:GetClass()
             soul:EngageWithTarget(target)

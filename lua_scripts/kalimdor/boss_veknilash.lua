@@ -30,8 +30,9 @@
 --   (150y, entry-unique per map — the veklor-port idiom); the
 --   ohealth<=0 setDeathState(JUST_DIED) + DYNFLAG_LOOTABLE legs stay
 --   out (engine-side death handling, no bridge). The SpellHit
---   SPELL_HEAL_BROTHER 7393 rebalance half stays out (cross-AI
---   GetOtherBoss + SetHealth rebalance math — no bridge).
+--   SPELL_HEAL_BROTHER 7393 rebalance half is PORTED 2026-10-24 in
+--   boss_veklor.lua (onSpellHit, event 14); no veknilash-side
+--   handler is needed (VN casts 7393, never receives it).
 -- - TryHealBrother: PORTED 2026-10-24 (onHealBrother): VN casts
 --   7393 on VEKLOR when within 60y (FindNearestCreature idiom +
 --   IsWithinDist gate); 1s re-arm on a cast, 100ms retry poll when

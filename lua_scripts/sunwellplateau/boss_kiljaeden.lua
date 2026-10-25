@@ -480,15 +480,20 @@ local function fireTimer(creature, st, name)
         -- SelectTarget(Random, 0, 100, playerOnly, -vengeance) =
         -- pickRandomPlayer (vengeance-negative, C++-exact) ->
         -- me->SummonCreature(NPC_SINISTER_REFLECTION 25708, target pos,
-        -- 0, TEMPSUMMON_CORPSE_DESPAWN=4). AttackStart(target) has no
-        -- bridge (shade_of_aran precedent — the reflection idles until
-        -- engine aggro); SetDisplayId(target display) stays out — no
-        -- player GetDisplayId read bridge.
+        -- 0, TEMPSUMMON_CORPSE_DESPAWN=4). AttackStart(target) PORTED
+        -- 2026-10-24 via EngageWithTarget (the aggro funnel; the
+        -- shade_of_aran idles-until-aggro note is retracted) and
+        -- SetDisplayId(target display) PORTED via the
+        -- player:GetDisplayId bridge (lua_player.go).
         for _ = 1, 4 do
             local target = pickRandomPlayer(creature)
             if target then
-                creature:SummonCreature(ENTRY_SINISTER_REFLECTION,
+                local reflection = creature:SummonCreature(ENTRY_SINISTER_REFLECTION,
                     target:GetX(), target:GetY(), target:GetZ(), 0, 4, 0)
+                if reflection then
+                    reflection:SetDisplayId(target:GetDisplayId())
+                    reflection:EngageWithTarget(target)
+                end
             end
         end
         creature:CastSpell(creature, SPELL_SHADOW_SPIKE)
