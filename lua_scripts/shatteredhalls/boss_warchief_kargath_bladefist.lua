@@ -144,9 +144,8 @@ local function cancelKargath(guid)
     kargathSummoned[guid] = nil
 end
 
--- C++ removeAdds (:175-191) for the assassin list: the guard list
--- stays empty in this model (guards are never summoned — header),
--- so only the assassin list is swept.
+-- C++ removeAdds (:175-191) for the assassin list; the guard list
+-- is swept by despawnGuards below (guards ported 2026-10-24).
 local function despawnAssassins(guid)
     local list = kargathAssassins[guid]
     if list then
@@ -271,6 +270,8 @@ local function kargathReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 1, kargathEnterCombat)
+
+RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 2, kargathLeaveCombat)
 
 RegisterCreatureEvent(ENTRY_KARGATH_BLADEFIST, 3, function(_, creature, victim)
     -- C++ `if (victim->GetTypeId() == TYPEID_PLAYER)

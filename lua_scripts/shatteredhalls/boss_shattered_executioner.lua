@@ -31,10 +31,10 @@
 -- KilledUnit override.
 -- Fight shape (C++-exact for all modeled arms): Shattered
 -- Executioner (17301): OnEnterCombat(1) — per-GUID reset to
--- the C++ Initialize() schedule (cleaveTimer = 500) + 1s
--- scheduler pump (a port of UpdateAI — 1s granularity exact
--- for the C++ timer; the !UpdateVictim early return
--- collapses into the pump). Pump: cleave 15284 500ms init
+-- the C++ Initialize() schedule (cleaveTimer = 500) + 500ms
+-- scheduler pump (a port of UpdateAI — 500ms granularity, so
+-- the 500ms-init cleave fires on time; the !UpdateVictim early
+-- return collapses into the pump). Pump: cleave 15284 500ms init
 -- then {5s,7s} — non-triggered DoCastVictim (felmyst
 -- convention: C++ `DoCast(SPELL_CLEAVE)` single-arg casts
 -- on the victim), re-arm {5s,7s} regardless (C++-exact).
@@ -117,11 +117,12 @@ local function bossTick(creature, guid)
     -- Cleave 15284: 500ms init then {5s,7s} — non-triggered
     -- DoCastVictim (felmyst convention; C++-exact), re-arm
     -- {5s,7s} regardless (C++ `urand(5000, 7000)`, inclusive).
-    if st.cleave <= 1000 then
+    -- 500ms pump: the 500ms init fires on the first tick, as C++.
+    if st.cleave <= 500 then
         creature:CastSpell(nil, SPELL_CLEAVE)
         st.cleave = math.random(5000, 7000)
     else
-        st.cleave = st.cleave - 1000
+        st.cleave = st.cleave - 500
     end
 end
 
@@ -131,7 +132,7 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 1, function(_, creature)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)
-    end, 1000, 0)
+    end, 500, 0)
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 2, function(_, creature)
