@@ -36,15 +36,15 @@
 -- BossAI::JustEngagedWith/JustDied/_Reset arms are instance-
 -- blocked, DATA_ZEREKETH = 0 is an instance-side constant,
 -- unbridgeable). Pump: void zone 36119 — target = a random
--- alive player in the instance within 100 yd, excluding the
--- current victim (C++ SelectTarget(Random, 1, 100, true),
--- supremus precedent), nil pick casts nothing, non-triggered
+-- threat-list player within 100 yd after skipping the
+-- top-threat entry (C++ SelectTarget(Random, 1, 100, true),
+-- UnitAI.h:170-197), nil pick casts nothing, non-triggered
 -- DoCast on the target (C++-exact), re-arm {6s,10s} regardless
 -- (C++-exact); shadow nova 36127 — TRIGGERED DoCastVictim
 -- (C++ `DoCastVictim(SPELL_SHADOW_NOVA, true)`, C++-exact),
 -- Talk(SAY_SHADOW_NOVA), re-arm {6s,10s} (C++-exact); seed of
--- corruption 36123 — target = random alive player within 100
--- yd excluding the current victim (same SelectTarget arm),
+-- corruption 36123 — target = same threat-list pick as
+-- void zone (same SelectTarget arm),
 -- nil pick casts nothing, non-triggered DoCast on the target
 -- (C++-exact), re-arm {12s,20s} regardless (C++-exact). The
 -- C++ UNIT_STATE_CASTING early-return gates (before and after
@@ -108,28 +108,25 @@ local function freshState()
     }
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 1, 100, true): a random alive player
--- in the instance within 100 yd, excluding the current victim
--- (supremus precedent), player-only.
+-- C++ SelectTarget(Random, 1, 100, true) (UnitAI.h:170-197):
+-- the threat list in MaxThreat order, the first entry skipped,
+-- then player-only + within-100-yd filtered, then a uniform
+-- random pick (nil when the filtered list is empty, matching
+-- the C++ GetThreatListSize() <= offset shortcut). GetAITargets
+-- is that threat-sorted list (SortedEntries, threat.go:889);
+-- skipping targets[1] is the C++ offset-1 skip (the head is the
+-- current victim in the normal victim-holds-top-threat case).
+-- The 100-yd gate stays a GetDistance stand-in for C++
+-- IsWithinCombatRange (venoxis convention); the alive filter is
+-- kept (a dead pick would fail the C++ cast outright).
 local function randomNonVictimPlayer(creature)
-    local victim = creature:GetVictim()
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if (not victim or p:GetGUID() ~= victim:GetGUID())
-                and creature:GetDistance(p) <= TARGET_RANGE then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetTypeId() == 4 and not t:IsDead()
+                and creature:GetDistance(t) <= TARGET_RANGE then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -144,8 +141,8 @@ local function bossTick(creature, guid)
         return
     end
 
-    -- Void zone 36119: {6s,10s} — target = random alive player
-    -- within 100 yd excluding the current victim, nil pick
+    -- Void zone 36119: {6s,10s} — target = random threat-list
+    -- player within 100 yd after the top-threat skip, nil pick
     -- casts nothing, non-triggered DoCast on the target (C++-
     -- exact), re-arm {6s,10s} regardless (C++-exact).
     if st.voidZone <= 1000 then
@@ -172,9 +169,9 @@ local function bossTick(creature, guid)
         st.shadowNova = st.shadowNova - 1000
     end
 
-    -- Seed of corruption 36123: {12s,20s} — target = random
-    -- alive player within 100 yd excluding the current victim,
-    -- nil pick casts nothing, non-triggered DoCast on the
+    -- Seed of corruption 36123: {12s,20s} — target = same
+    -- threat-list pick as void zone, nil pick casts nothing,
+    -- non-triggered DoCast on the
     -- target (C++-exact), re-arm {12s,20s} regardless (C++-
     -- exact).
     if st.seedOfCorruption <= 1000 then
