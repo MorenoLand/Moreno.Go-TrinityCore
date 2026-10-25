@@ -182,6 +182,7 @@
 
 local ENTRY_FJOLA = 34497
 local ENTRY_EYDIS = 34496
+local NPC_BULLET_CONTROLLER = 34743
 -- NPC_BULLET_CONTROLLER (boss_twin_valkyr.cpp:60) — summoned by Fjola's
 -- JustEngagedWith (:446) at ToCCommonLoc[1] (Center: 563.673/139.571/
 -- 393.837, trial_of_the_crusader.cpp:184-190), TEMPSUMMON_MANUAL_DESPAWN.
@@ -270,16 +271,15 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random,0,200.0f,true,true,OtherEssenceSpellId)
--- pool (:323): alive players in the encounter within 200y carrying
--- the OTHER essence — thorim randomPlayerInRange convention with the
--- HasAura filter (player HasAura bridged — hakkar precedent).
+-- pool (:323): SelectTarget draws the threat list (UnitAI.h), so the
+-- pool is threat-list players alive within 200y carrying the OTHER
+-- essence — not instance players (player HasAura bridged — hakkar
+-- precedent).
 local function randomPlayerWithEssence(creature, auraIds, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and creature:GetDistance(plr) <= maxDist then
+    for _, plr in ipairs(creature:GetAITargets()) do
+        if plr:GetObjectType() == "Player" and not plr:IsDead()
+                and creature:IsWithinDist(plr, maxDist) then
             for _, aura in ipairs(auraIds) do
                 if plr:HasAura(aura) then
                     candidates[#candidates + 1] = plr

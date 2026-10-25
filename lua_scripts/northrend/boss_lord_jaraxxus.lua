@@ -252,6 +252,24 @@ local function randomThreatPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- SelectTarget(Random,1,...) twin: UnitAI.h skips the first entry in
+-- MaxThreat order BEFORE the player/alive filter, so the skip applies to
+-- the raw GetAITargets list, not to the filtered candidates.
+local function randomThreatPlayerSkipFirst(creature)
+    local targets = creature:GetAITargets()
+    local candidates = {}
+    for i = 2, #targets do
+        local unit = targets[i]
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_FEL_FIREBALL: DoCastVictim(Fel Fireball 66532), 6s init,
 -- urand(11s,13s) repeat.
 local function fireballTick(creature, guid)
@@ -290,7 +308,7 @@ end
 -- DoCast(Incinerate Flesh 66237) non-triggered, 14s init,
 -- Repeat(23s) outside the target check (re-arm unconditional).
 local function incinerateFleshTick(creature, guid)
-    local target = randomThreatPlayer(creature)
+    local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:Talk(EMOTE_INCINERATE, target)
         creature:Talk(SAY_INCINERATE)
@@ -306,7 +324,7 @@ end
 -- non-triggered, 20s init, Repeat(30s) outside the target check
 -- (re-arm unconditional).
 local function legionFlameTick(creature, guid)
-    local target = randomThreatPlayer(creature)
+    local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:Talk(EMOTE_LEGION_FLAME, target)
         creature:CastSpell(target, SPELL_LEGION_FLAME)

@@ -81,9 +81,10 @@
 -- NON_ATTACKABLE | NOT_SELECTABLE) PORTED via the RemoveFlag bridge
 -- (engine/world/lua_creature_events.go; the old "no flag bridge —
 -- drakkari_colossus precedent" claim was stale); summons.DoAction(
--- ACTION_SCARAB_SUBMERGE) + SummonCreature(NPC_BURROW) x4 +
--- SummonCreature(NPC_FROST_SPHERE) x6 with GUID latching (summon
--- STRAND + cross-AI DoAction bridges absent).
+-- ACTION_SCARAB_SUBMERGE) stays out (cross-AI DoAction bridge
+-- absent); the engage SummonCreature(NPC_BURROW) x4 +
+-- SummonCreature(NPC_FROST_SPHERE) x6 arms are PORTED in
+-- anubarakEnterCombat (the later GUID-latch respawn leg stays out).
 -- boss_anubarak_trial EVENT_FREEZE_SLASH — DoCastVictim(Freeze
 -- Slash 66012), 15s init, PHASE_MELEE — bridged in isolation
 -- (moroes precedent) but phase-gated behind the unbridged
@@ -285,9 +286,31 @@ local function anubarakEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_anubarak_trial.cpp:273-287):
     -- RemoveFlag(UNIT_FIELD_FLAGS, NON_ATTACKABLE | NOT_SELECTABLE)
-    -- ported via the RemoveFlag bridge; the summon / DoAction legs
-    -- stay out (no summon / cross-AI bridges).
+    -- ported via the RemoveFlag bridge; the burrow x4 (AnubarakLoc[2..5])
+    -- + frost-sphere x6 (SphereSpawn) summons are ported via the
+    -- SummonCreature bridge (their ev19 JustSummoned arms already live
+    -- in anubarakJustSummoned); the scarab DoAction leg stays out
+    -- (cross-AI DoAction bridge absent) and the _sphereGUID latch is
+    -- unneeded (Reset/JustDied walk the grid, not GUIDs).
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
+    for _, pos in ipairs({
+        {694.886353, 102.484665, 142.119614},
+        {694.500671, 185.363968, 142.117905},
+        {731.987244, 83.382469, 142.119614},
+        {740.184509, 193.443390, 142.117584},
+    }) do
+        creature:SummonCreature(NPC_BURROW, pos[1], pos[2], pos[3], 0, 7, 0)
+    end
+    for _, pos in ipairs({
+        {779.8038, 150.6580, 158.1426},
+        {736.0243, 113.4201, 158.0226},
+        {712.5712, 160.9948, 158.4368},
+        {701.4271, 126.4740, 158.0205},
+        {747.9202, 155.0920, 158.0613},
+        {769.6285, 121.1024, 158.0504},
+    }) do
+        creature:SummonCreature(NPC_FROST_SPHERE, pos[1], pos[2], pos[3], 0, 7, 0)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "berserk", 600000, function()
