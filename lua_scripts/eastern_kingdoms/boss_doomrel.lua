@@ -65,13 +65,11 @@
 -- SetImmuneToPC(true) legs are unconditional and PORTED in onReset
 -- below (coren_direbrew precedent); the old "no faction/immune
 -- bridges" claim is retracted.
--- Unmodeled: boss_gloomrel (same C++ file, entry 9037 —
--- C++-verifiable at instance_blackrock_depths.cpp:42) is a pure
--- gossip teaching script: its hello gates need
--- GetQuestRewardStatus(4083) and GetSkillValue(SKILL_MINING >= 230) —
--- no bridges on the Lua surface — and its select arms need
--- instance->DoRespawnGameObject(DATA_GO_CHALICE) — no bridge;
--- documented-only (dustwallow precedent), no lua file.
+-- Gloomrel (same C++ file, entry 9037) is now PORTED in
+-- boss_gloomrel.lua: GetQuestRewardStatus(4083) and player:GetSkillValue
+-- (lua_player.go) are bridged, so the hello gates and the select arms
+-- land; only its select +22 instance->DoRespawnGameObject(DATA_GO_CHALICE)
+-- leg stays out (no instance bridge).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally and the
 -- in-loop casting-state gate is dropped (maiden precedent). The C++

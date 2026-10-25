@@ -318,6 +318,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{false}, nil
 	}
+	// GetSkillValue is Player::GetSkillValue (Player.cpp:6240): the stored
+	// skill value, 0 when the skill is absent (or 0-valued). The C++
+	// temp/perm bonus fold (SKILL_TEMP_BONUS + SKILL_PERM_BONUS) is
+	// unmodeled: Go returns the stored character_skills value, so a gate
+	// at the exact threshold with an active bonus reads low.
+	methods["GetSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if skill == 0 {
+			return []any{uint32(0)}, nil
+		}
+		for _, known := range state.Skills {
+			if uint32(known.Skill) == skill {
+				return []any{uint32(known.Value)}, nil
+			}
+		}
+		return []any{uint32(0)}, nil
+	}
 	itemCount := func(args []any) ([]any, error) {
 		item, err := luaUint32Arg(args, 0)
 		if err != nil {

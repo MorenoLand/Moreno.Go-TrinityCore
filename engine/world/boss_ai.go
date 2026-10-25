@@ -5684,6 +5684,17 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_doomrel.lua.
 	RegisterLuaBoss("boss_doomrel", 9039)
 
+	// boss_gloomrel (Gloomrel, entry 9037 — NPC_GLOOMREL at
+	// instance_blackrock_depths.cpp:42): pure gossip teaching script.
+	// Ported: hello gates (quest 4083 rewarded + mining >= 230 +
+	// no smelt 14891 -> teach option; unrewarded + mining >= 230 ->
+	// tribute option) and select arms (teach-2 menu 2606, learn
+	// smelt 14894, teach-3 menu 2604, tribute close). Unmodeled:
+	// select +22 chalice respawn (instance GUID-data bridge) and
+	// the hello menu title id (GetGossipTextId bridge). Full analysis
+	// in lua_scripts/eastern_kingdoms/boss_gloomrel.lua.
+	RegisterLuaBoss("boss_gloomrel", 9037)
+
 	// boss_general_angerforge / boss_general_angerforgeAI (Blackrock
 	// Depths, Hall of Crafting; ScriptedAI — mightyblow 14099 8s->18s,
 	// hamstring 9080 12s->15s, cleave 20691 16s->9s, all DoCastVictim
