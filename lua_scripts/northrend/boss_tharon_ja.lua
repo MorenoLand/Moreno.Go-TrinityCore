@@ -41,7 +41,7 @@
 -- independently of the unbridged SpellScript bindings, razelikh
 -- precedent; both inert in Go until SpellScripts bridge).
 -- Phase-1 rotation: EVENT_CURSE_OF_LIFE — random player target
--- (SelectTarget(Random,0,100.0f,true) — keleseth random-target idiom)
+-- (SelectTarget(Random,0,100.0f,true) — threat-list player pick via GetAITargets)
 -- -> DoCast(49527), 1s init, {10s,15s} re-arm sitting outside the
 -- target check (C++-exact); EVENT_RAIN_OF_FIRE — random player
 -- target -> DoCast(49518), {14s,18s} init, {14s,18s} re-arm outside
@@ -136,15 +136,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 100.0f, true): random alive player on
--- the same map/instance within 100 yards (keleseth idiom).
-local function randomPlayerInRange(creature, dist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 100.0f, true): random alive threat-list
+-- player within 100 yards (UnitAI.h:162-184; playerOnly=true draws
+-- the threat list, not instance players). Pool corrected 2026-10-25:
+-- was GetPlayersInWorld (instance-wide, distance-checked) — the same
+-- stale-pool class fixed in the Violet Hold strip. Alive filter: C++
+-- SelectTargetList skips offline refs and dead targets are offline
+-- (Creature.cpp:2508-2524); Go SortedEntries returns dead entries too.
+local function randomThreatPlayerInRange(creature, dist)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, dist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance(t) <= dist then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -162,7 +166,7 @@ local decayFleshTick, goingFleshTick, returnFleshTick, goingSkeletalTick
 -- C++ EVENT_CURSE_OF_LIFE: random player target -> DoCast(49527),
 -- re-arm {10s,15s} sits outside the target check (C++-exact).
 local function curseOfLifeTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_LIFE)
     end
@@ -174,7 +178,7 @@ end
 -- C++ EVENT_RAIN_OF_FIRE: random player target -> DoCast(49518),
 -- re-arm {14s,18s} sits outside the target check (C++-exact).
 local function rainOfFireTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_RAIN_OF_FIRE)
     end
@@ -204,7 +208,7 @@ end
 -- C++ EVENT_LIGHTNING_BREATH: random player target -> DoCast(49537),
 -- re-arm {6s,7s} sits outside the target check (C++-exact).
 local function lightningBreathTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_LIGHTNING_BREATH)
     end
@@ -216,7 +220,7 @@ end
 -- C++ EVENT_EYE_BEAM: random player target -> DoCast(49544),
 -- re-arm {4s,6s} sits outside the target check (C++-exact).
 local function eyeBeamTick(creature, guid)
-    local target = randomPlayerInRange(creature, 100)
+    local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_EYE_BEAM)
     end
