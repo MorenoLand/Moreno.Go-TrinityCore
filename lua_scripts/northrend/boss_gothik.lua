@@ -44,9 +44,9 @@
 -- Talk(SAY_DEATH 5) (event 4; the _JustDied bookkeeping + the
 -- DATA_GOTHIK_GATE GO_STATE_ACTIVE leg have no bridge — tharon_ja
 -- precedent). All timers cancelled on 2/4/23 (gargolmar precedent).
--- SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) + EMOTE_GATE_OPENED (8)
--- ride unported legs (phase-two / gate machines) — not ported
--- orphaned (vortex precedent).
+-- SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) are PORTED 2026-10-25
+-- with the phase-two latch; EMOTE_GATE_OPENED (8) rides the unported
+-- gate machine — not ported orphaned (vortex precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_gothik: Reset — SetReactState(REACT_PASSIVE) + instance->
 -- SetData(DATA_GOTHIK_GATE, GO_STATE_ACTIVE) — instance / GO-state
@@ -64,37 +64,33 @@
 -- IsHeroic() is bridged); EVENT_DOORS_UNLOCK — iterates the `summons`
 -- LIST via ObjectAccessor::GetCreature checking IsAlive/IsInCombat
 -- (summon-list/ObjectAccessor bridge blocker, not the SummonCreature
--- bridge); EVENT_PHASE_TWO
--- — SetPhase(PHASE_TWO) + SetReactState(REACT_PASSIVE) +
--- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE 28026) 2-arg
--- (non-triggered) + Talk(
--- SAY_PHASE_TWO 4) + Talk(EMOTE_PHASE_TWO 7) + the EVENT_TELEPORT/
--- EVENT_HARVEST/EVENT_RESUME_ATTACK schedules — stays OUT: no phase
--- bridge (react-state / threat-list ARE bridged — SetReactState,
--- creature:ResetAllThreat — but every arm rides the unported wave/
--- phase machine; the Oct-12 "no DoCastAOE bridge"
--- claim is superseded by the phase-machine verdict);
--- EVENT_TELEPORT — HealthBelowPct(30) gate + SetReactState +
--- ResetThreatList + DoCastAOE(SPELL_TELEPORT_LIVE/SPELL_TELEPORT_DEAD
--- 28026/28025) — stays OUT: no health-pct / react-state / threat
--- bridges;
--- EVENT_HARVEST — DoCastAOE(SPELL_HARVEST_SOUL 28679, triggered),
--- 15s init/repeat — stays OUT: scheduled only in PHASE_TWO via
--- EVENT_PHASE_TWO (:502-506) behind the unbridged wave machine; the
--- phase machine has no bridge (porting from combat start would
--- fabricate phase-one casts — the Oct-12 "no DoCastAOE bridge" claim
--- is superseded by the phase-gating verdict); EVENT_BOLT —
--- DoCastVictim(SPELL_SHADOW_BOLT 29317), 2s repeat — moroes-ready in
--- isolation but its only scheduling legs are EVENT_RESUME_ATTACK from
--- the unbridged EVENT_PHASE_TWO / EVENT_TELEPORT machine (porting it
--- from combat start would deviate from C++ — phase-one Gothik casts
--- no shadow bolts) — documented-only; EVENT_RESUME_ATTACK —
--- SetReactState(REACT_AGGRESSIVE) — bridged, but rides the unported
--- phase machine; DoAction(
+-- bridge); EVENT_PHASE_TWO — PORTED 2026-10-25 as a timer-driven
+-- latch (the flip is scheduled unconditionally at engage + 4m30s,
+-- the ONLY phase flip in the file — heigan dancing-latch precedent):
+-- SetPhase twin + teleport 20s / harvest 15s / resume 2s schedules +
+-- Talk(SAY_PHASE_TWO 4) + Talk(EMOTE_PHASE_TWO 7) +
+-- SetReactState(REACT_PASSIVE) + ResetAllThreat + DoCastAOE
+-- TELEPORT_LIVE (non-triggered self-cast). The wave machine stays out
+-- — it gates only the adds, not these boss arms; the old
+-- phase-machine verdict is superseded for the boss arms (the
+-- Oct-12 "no DoCastAOE bridge" claim was already superseded).
+-- EVENT_TELEPORT — PORTED 2026-10-25: HealthBelowPct(30) floor-form
+-- gate + AttackStop + StopMoving + SetReactState(REACT_PASSIVE) +
+-- ResetAllThreat + alternating DEAD/LIVE DoCastAOE + BOLT cancel +
+-- resume 2s + 20s repeat inside the gate (arm dies below 30%,
+-- C++-exact); CastStop has no bridge (engine-wide grep) and stays out.
+-- EVENT_HARVEST — PORTED 2026-10-25: DoCastAOE(HARVEST_SOUL 28679,
+-- triggered), 15s init/repeat, gated on the phase-two latch (no
+-- phase-one casts — the old verdict's fabrication concern is met by
+-- the latch, not by leaving the arm out); EVENT_BOLT — PORTED
+-- 2026-10-25: DoCastVictim(SHADOW_BOLT 29317), 2s repeat, scheduled
+-- only from EVENT_RESUME_ATTACK; EVENT_RESUME_ATTACK — PORTED
+-- 2026-10-25: SetReactState(REACT_AGGRESSIVE) + BOLT at 0s; DoAction(
 -- ACTION_MINION_EVADE) + OpenGate — instance SetData + summon-list
 -- iteration + cross-AI DoAction — no instance / summon / cross-AI
--- bridges; DamageTaken — damage = 0 while not in PHASE_TWO — no
--- phase bridge; EnterEvadeMode — NearTeleportTo(home) — no motion
+-- bridges; DamageTaken — PORTED 2026-10-25 via ev9 numeric-return
+-- (damage = 0 while the phase-two latch is unset; tesla/halazzi
+-- precedent); EnterEvadeMode — NearTeleportTo(home) — no motion
 -- bridge; the UpdateAI living/dead-side check (RectangleBoundary
 -- livingSide/deadSide) + FindEligibleTarget player scan — no side /
 -- visibility / threat bridges.
@@ -153,8 +149,21 @@ local SAY_INTRO_3 = 2
 local SAY_INTRO_4 = 3
 local SAY_DEATH = 5
 local SAY_KILL = 6
+local SAY_PHASE_TWO = 4
+local EMOTE_PHASE_TWO = 7
+
+local SPELL_TELEPORT_DEAD = 28025
+local SPELL_TELEPORT_LIVE = 28026
+local SPELL_HARVEST_SOUL = 28679
+local SPELL_SHADOW_BOLT = 29317
+
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
 
 local timers = {}
+
+local phaseTwo = {}
+local lastTeleportDead = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -163,6 +172,16 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+    phaseTwo[guid] = nil
+    lastTeleportDead[guid] = nil
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
     end
 end
 
@@ -178,10 +197,96 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EVENT_BOLT: DoCastVictim(SHADOW_BOLT 29317), 2s repeat,
+-- scheduled only from EVENT_RESUME_ATTACK (phase-two machine).
+local function boltTick(creature, guid)
+    creature:CastSpell(nil, SPELL_SHADOW_BOLT)
+    schedule(guid, "bolt", 2000, function()
+        boltTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RESUME_ATTACK: SetReactState(REACT_AGGRESSIVE) +
+-- EVENT_BOLT at 0s (direct call = 0s-schedule twin, sapphiron
+-- check-resists precedent).
+local function resumeTick(creature, guid)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    boltTick(creature, guid)
+end
+
+-- C++ EVENT_HARVEST: DoCastAOE(HARVEST_SOUL 28679, triggered),
+-- 15s init/repeat.
+local function harvestTick(creature, guid)
+    creature:CastSpell(creature, SPELL_HARVEST_SOUL, true)
+    schedule(guid, "harvest", 15000, function()
+        harvestTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TELEPORT: 20s repeat, only while NOT HealthBelowPct(30)
+-- (health < floor(max*30/100), Unit.h:872 + CalculatePct trunc; the
+-- Repeat sits inside the gate, so the arm dies below 30%): CastStop
+-- has no bridge (engine-wide grep) and stays out; AttackStop +
+-- StopMoving + SetReactState(REACT_PASSIVE) + ResetAllThreat +
+-- DoCastAOE alternating DEAD/LIVE (first cast DEAD,
+-- _lastTeleportDead starts false) + cancel BOLT + resume at 2s.
+local function teleportTick(creature, guid)
+    if creature:GetHealth() < math.floor(creature:GetMaxHealth() * 30 / 100) then
+        return
+    end
+    creature:AttackStop()
+    creature:StopMoving()
+    creature:SetReactState(REACT_PASSIVE)
+    creature:ResetAllThreat()
+    if lastTeleportDead[guid] then
+        creature:CastSpell(creature, SPELL_TELEPORT_LIVE)
+        lastTeleportDead[guid] = false
+    else
+        creature:CastSpell(creature, SPELL_TELEPORT_DEAD)
+        lastTeleportDead[guid] = true
+    end
+    cancelKey(guid, "bolt")
+    schedule(guid, "resume", 2000, function()
+        resumeTick(creature, guid)
+    end)
+    schedule(guid, "teleport", 20000, function()
+        teleportTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_PHASE_TWO (engage + 4m30s, the ONLY phase flip in the
+-- file — JustEngagedWith schedules it unconditionally, so a
+-- timer-driven latch is C++-exact, heigan dancing-latch precedent):
+-- SetPhase twin + teleport 20s / harvest 15s / resume 2s + Talks +
+-- SetReactState(REACT_PASSIVE) + ResetAllThreat + DoCastAOE
+-- TELEPORT_LIVE (non-triggered self-cast). The wave machine (summon
+-- tables, gate state, side checks) stays out — it gates only the
+-- adds, not these boss arms.
+local function phaseTwoTick(creature, guid)
+    phaseTwo[guid] = true
+    lastTeleportDead[guid] = false
+    schedule(guid, "teleport", 20000, function()
+        teleportTick(creature, guid)
+    end)
+    schedule(guid, "harvest", 15000, function()
+        harvestTick(creature, guid)
+    end)
+    schedule(guid, "resume", 2000, function()
+        resumeTick(creature, guid)
+    end)
+    creature:Talk(SAY_PHASE_TWO)
+    creature:Talk(EMOTE_PHASE_TWO)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:ResetAllThreat()
+    creature:CastSpell(creature, SPELL_TELEPORT_LIVE)
+end
+
 -- C++ JustEngagedWith: Talk(SAY_INTRO_1) + schedules EVENT_INTRO_2
--- (4s), EVENT_INTRO_3 (9s), EVENT_INTRO_4 (14s). The EVENT_SUMMON /
--- EVENT_DOORS_UNLOCK / EVENT_PHASE_TWO scheduling legs are unbridged
--- (summon / phase bridges absent) — documented, not wired.
+-- (4s), EVENT_INTRO_3 (9s), EVENT_INTRO_4 (14s), EVENT_SUMMON (25s),
+-- EVENT_DOORS_UNLOCK (3m25s), EVENT_PHASE_TWO (4m30s). The
+-- EVENT_SUMMON / EVENT_DOORS_UNLOCK legs stay out (wave tables ride
+-- DB spawn-ID trigger lookups + summon-list iteration, no bridges);
+-- EVENT_PHASE_TWO is ported above as a timer-driven latch.
 local function gothikEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_gothik.cpp:416: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_INTRO_1)
@@ -195,6 +300,9 @@ local function gothikEnterCombat(event, creature, target)
     end)
     schedule(guid, "intro4", 14000, function()
         creature:Talk(SAY_INTRO_4)
+    end)
+    schedule(guid, "phaseTwo", 270000, function()
+        phaseTwoTick(creature, guid)
     end)
 end
 
@@ -237,3 +345,15 @@ local function gothikTriggerDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_GOTHIK_TRIGGER, 9, gothikTriggerDamageTaken)
+
+-- C++ boss_gothik::DamageTaken (boss_gothik.cpp:390-394): damage = 0
+-- while not in PHASE_TWO. Event 9's second return rewrites damage
+-- (fireCreatureDamageTaken; tesla/halazzi precedent); no return once
+-- phase two has flipped leaves damage untouched.
+local function gothikDamageTaken(event, creature, attacker, damage)
+    if not phaseTwo[creature:GetGUID()] then
+        return false, 0
+    end
+end
+
+RegisterCreatureEvent(ENTRY_GOTHIK, 9, gothikDamageTaken)

@@ -26,9 +26,10 @@
 -- 2/4/23 (timers table keyed by GUID, nightbane precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_heigan: JustEngagedWith Talk(SAY_AGGRO 0) + the four event
--- seeds (event 1; BossAI::JustEngagedWith instance-bookkeeping leg and
--- the eruption-tile GO enumeration have no bridge — tharon_ja
--- precedent; EVENT_ERUPT's 15s seed is GO-based, stays out);
+-- seeds (event 1; BossAI::JustEngagedWith DoZoneInCombat is PORTED;
+-- its instance-bookkeeping leg and the eruption-tile GO enumeration
+-- have no bridge — tharon_ja precedent; EVENT_ERUPT's 15s seed is
+-- GO-based, stays out);
 -- KilledUnit Talk(SAY_SLAY 1) (event 3 —
 -- C++-GATED: the Talk fires only when victim->GetTypeId()==
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType() ==
@@ -180,6 +181,10 @@ onDance = function(creature, guid)
 end
 
 local function heiganEnterCombat(event, creature, target)
+    -- C++ BossAI::JustEngagedWith (ScriptedCreature.cpp:542) zones
+    -- the map into combat before the Talk + schedules below; the
+    -- instance SetBossState / CheckRequiredBosses legs stay out.
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

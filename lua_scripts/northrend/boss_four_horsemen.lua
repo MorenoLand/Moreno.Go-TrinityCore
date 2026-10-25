@@ -149,11 +149,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ SelectTarget dist gate is IsWithinCombatRange (Unit.cpp:
+-- 583-598: 3D dist < nominal + both combat reaches; player reach is
+-- DEFAULT_PLAYER_COMBAT_REACH 1.5, ObjectDefines.h:40 — player
+-- scale is 1.0 in practice, so the constant is C++-exact here).
+local PLAYER_COMBAT_REACH = 1.5
+
 local function randomPlayerInRange(creature, maxDist)
     local candidates = {}
+    local bound = maxDist + creature:GetCombatReach() + PLAYER_COMBAT_REACH
     for _, target in ipairs(creature:GetAITargets()) do
         if target:GetObjectType() == "Player"
-                and creature:GetDistance(target) <= maxDist then
+                and not target:IsDead()
+                and creature:GetDistance(target) < bound then
             candidates[#candidates + 1] = target
         end
     end
@@ -166,10 +174,17 @@ end
 local function nearestInRange(creature, maxDist, playerOnly)
     local best = nil
     local bestDist = nil
+    local casterReach = creature:GetCombatReach()
     for _, target in ipairs(creature:GetAITargets()) do
-        if (not playerOnly or target:GetObjectType() == "Player") then
+        if not target:IsDead()
+                and (not playerOnly or target:GetObjectType() == "Player") then
+            local targetReach = PLAYER_COMBAT_REACH
+            if target:GetObjectType() ~= "Player" then
+                targetReach = target:GetCombatReach()
+            end
             local d = creature:GetDistance(target)
-            if d <= maxDist and (bestDist == nil or d < bestDist) then
+            if d < maxDist + casterReach + targetReach
+                    and (bestDist == nil or d < bestDist) then
                 best = target
                 bestDist = d
             end

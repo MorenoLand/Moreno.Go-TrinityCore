@@ -133,14 +133,25 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 0, 45.0f) leg: alive units on the threat
--- list (C++ playerOnly default = false), within 45yd — the
--- GetAITargets pool (the omen precedent's jaraxxus idiom sans player
--- filter, plus the 45yd filter; the old "no random-target
--- SelectTarget bridge (cairne/kazzak precedent)" claim was stale).
+-- list (C++ playerOnly default = false), within IsWithinCombatRange
+-- (Unit.cpp:583-598: 3D dist < nominal + both combat reaches; player
+-- reach is DEFAULT_PLAYER_COMBAT_REACH 1.5, ObjectDefines.h:40) —
+-- the GetAITargets pool (the omen precedent's jaraxxus idiom sans
+-- player filter, plus the reach-adjusted 45yd filter; the old "no
+-- random-target SelectTarget bridge (cairne/kazzak precedent)" claim
+-- was stale).
+local PLAYER_COMBAT_REACH = 1.5
+
 local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
+    local casterReach = creature:GetCombatReach()
     for _, unit in ipairs(creature:GetAITargets()) do
-        if not unit:IsDead() and creature:GetDistance(unit) <= maxDist then
+        local targetReach = PLAYER_COMBAT_REACH
+        if unit:GetObjectType() ~= "Player" then
+            targetReach = unit:GetCombatReach()
+        end
+        if not unit:IsDead()
+                and creature:GetDistance(unit) < maxDist + casterReach + targetReach then
             candidates[#candidates + 1] = unit
         end
     end
@@ -247,6 +258,9 @@ local function razyviousDied(event, creature, killer)
 end
 
 local function razyviousReset(event, creature)
+    -- C++ Reset (boss_razuvious.cpp:168-171): SetCombatMovement(false)
+    -- + _Reset bookkeeping (tharon_ja precedent for the latter).
+    creature:SetCombatMovement(false)
     cancelTimers(creature:GetGUID())
 end
 

@@ -131,15 +131,15 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local GO_CONS_NOX_TESLA_FEUGEN = 181477
 
--- C++ SelectTarget(SelectTargetMethod::Random): random alive player
--- from the threat list (gerstahn randomPlayerTarget precedent —
--- GetAITargets is the bridged threat list; C++ takes any unit, the
--- in-tree idiom narrows to players, documented). maxDist <= 0 =
--- no distance limit.
-local function randomPlayerTarget(creature, maxDist)
+-- C++ SelectTarget(SelectTargetMethod::Random): random alive unit
+-- from the threat list (playerOnly defaults false — the old
+-- gerstahn player-narrowing idiom deviated here, corrected
+-- 2026-10-25: the shock arm's only caller is this helper).
+-- maxDist <= 0 = no distance limit.
+local function randomThreatTarget(creature, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:GetObjectType() == "Player" and t:IsAlive() then
+        if t:IsAlive() then
             if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
                 candidates[#candidates + 1] = t
             end
@@ -305,8 +305,10 @@ local function feugenDamageTaken(event, creature, attacker, damage)
         return false, 0
     end
     feugenFeign[guid] = true
-    -- C++ DamageTaken feign arm (boss_thaddius.cpp:851): refreshBeam =
-    -- true — "force beam refresh as we just removed auras".
+    -- C++ DamageTaken feign arm (boss_thaddius.cpp:835,851):
+    -- isOverloading = false + refreshBeam = true — "force beam
+    -- refresh as we just removed auras".
+    feugenOverload[guid] = false
     feugenRefreshBeam[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
     creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
@@ -347,7 +349,7 @@ local function feugenSpellHit(event, creature, caster, spellId)
             caster:Talk(EMOTE_TESLA_LINK_BREAKS)
             creature:RemoveAura(SPELL_STALAGG_CHAIN_VISUAL)
         end
-        local target = randomPlayerTarget(creature, 0)
+        local target = randomThreatTarget(creature, 0)
         if target then
             caster:CastSpell(target, SPELL_TESLA_SHOCK, true)
         end
