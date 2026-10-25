@@ -19,7 +19,10 @@
 -- EVENT_FIERY_BURST: victim-cast FIERYBURST 13900, 5s init -> 6s;
 -- DamageTaken: HealthBelowPctDamaged(50, damage) one-shot phase-two
 -- latch (int64(health)-damage < floor(maxHealth*50/100)) ->
--- schedules EVENT_WARSTOMP at 0s in PHASE_TWO;
+-- schedules EVENT_WARSTOMP at 0s in PHASE_TWO (lethal-hit guard: the
+-- 0s event executes on the next UpdateAI tick, which a dead creature
+-- never runs, so the cast fires only when postDamage > 0; the latch
+-- itself still sets, as in C++);
 -- EVENT_WARSTOMP: victim-cast WARSTOMP 24375, 0s init -> 8s.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally (maiden
@@ -106,12 +109,18 @@ local function onDamageTaken(_, creature, _, damage)
     if maxHealth == 0 then
         return
     end
-    if creature:GetHealth() - damage < math.floor(maxHealth * 50 / 100) then
+    local postDamage = creature:GetHealth() - damage
+    if postDamage < math.floor(maxHealth * 50 / 100) then
         state.phaseTwo = true
-        -- C++ ScheduleEvent(EVENT_WARSTOMP, 0s) fires on the next tick:
-        -- CreateLuaEvent rejects delay 0, so fire the tick directly
+        -- C++ ScheduleEvent(EVENT_WARSTOMP, 0s) fires on the next
+        -- UpdateAI tick, and a creature killed by this blow never runs
+        -- UpdateAI again — so on a lethal hit the latch sets but the
+        -- cast never fires (angerforge precedent). CreateLuaEvent
+        -- rejects delay 0, so a surviving hit fires the tick directly
         -- (it re-arms at 8s itself).
-        onWarstomp(creature, guid)
+        if postDamage > 0 then
+            onWarstomp(creature, guid)
+        end
     end
 end
 
