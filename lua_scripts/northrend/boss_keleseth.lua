@@ -46,8 +46,8 @@
 -- the Talk fires unconditionally in C++ (:146-147, before the !who
 -- early return at :149-150) and the guard AttackStart leg
 -- (NPC_RUNEMAGE 23960 / NPC_STRATEGIST 23956 grid search 60.0f, LOS,
--- AttackStart, :153-160) has no bridges — the auriaya engage-port
--- precedent. The Reset init schedules (:137-139) are taken over by the
+-- AttackStart, :153-160) PORTED in kelesethEnterCombat
+-- (GetCreaturesInGrid + IsWithinLOS + EngageWithTarget bridges). The Reset init schedules (:137-139) are taken over by the
 -- event-1 handler (the xt002 precedent: C++ schedules on Reset, Go
 -- schedules on combat start, same inits).
 -- EVENT_SHADOWBOLT (id 1; init 2-3s :137, arm :203-205):
@@ -119,6 +119,8 @@
 
 local ENTRY_KELESETH = 23953
 local ENTRY_SKELETON = 23970 -- NPC_SKELETON (boss_keleseth.cpp:47)
+local ENTRY_RUNEMAGE = 23960 -- NPC_RUNEMAGE (boss_keleseth.cpp:49)
+local ENTRY_STRATEGIST = 23956 -- NPC_STRATEGIST (boss_keleseth.cpp:50)
 
 local SAY_START_COMBAT = 1
 local SAY_SUMMON_SKELETONS = 2 -- KelsethEncounter (boss_keleseth.cpp:53)
@@ -331,6 +333,20 @@ end
 
 local function kelesethEnterCombat(event, creature, target)
     creature:Talk(SAY_START_COMBAT)
+    -- C++ JustEngagedWith (:149-160): !who early return, then alive +
+    -- LOS guards (runemage, then strategist, 60.0f) AttackStart(who).
+    if target then
+        for _, guard in ipairs(creature:GetCreaturesInGrid(ENTRY_RUNEMAGE, 60)) do
+            if guard:IsAlive() and guard:IsWithinLOS(creature) then
+                guard:EngageWithTarget(target)
+            end
+        end
+        for _, guard in ipairs(creature:GetCreaturesInGrid(ENTRY_STRATEGIST, 60)) do
+            if guard:IsAlive() and guard:IsWithinLOS(creature) then
+                guard:EngageWithTarget(target)
+            end
+        end
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shadowbolt", {2000, 3000}, function()

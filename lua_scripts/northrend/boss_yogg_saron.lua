@@ -598,6 +598,9 @@ local ENTRY_OBSERVATION_RING_KEEPER_FREYA = 33241
 local ENTRY_OBSERVATION_RING_KEEPER_THORIM = 33242
 local ENTRY_OBSERVATION_RING_KEEPER_MIMIRON = 33244
 local ENTRY_KEEPER_FREYA = 33410
+local ENTRY_SANITY_WELL = 33991 -- NPC_SANITY_WELL (ulduar.h:225)
+local SPELL_SANITY_WELL = 64169 -- boss_yogg_saron.cpp:218
+local SPELL_SANITY_WELL_VISUAL = 63288 -- boss_yogg_saron.cpp:217
 local ENTRY_KEEPER_HODIR = 33411
 local ENTRY_KEEPER_MIMIRON = 33412
 local ENTRY_KEEPER_THORIM = 33413
@@ -763,8 +766,8 @@ end
 
 -- C++ npc_yogg_saron_keeperAI::Reset (:1605-1612): DoCast(
 -- SPELL_KEEPER_ACTIVE 62647) (1-arg self, non-triggered, ungated)
--- — event 23. The _events Reset/SetPhase and the Freya
--- sanity-well GetCreatureList cleanup ride unbridged machines; the
+-- — event 23. The _events Reset/SetPhase legs stay out; the Freya
+-- sanity-well GetCreatureList cleanup PORTED in yoggKeeperReset below; the
 -- SetReactState(REACT_PASSIVE) leg (ungated, :1607) IS ported below
 -- (react-state bridge retraction; RemoveAllAuras ported 2026-10-19,
 -- passive ported this run).
@@ -778,6 +781,14 @@ local function yoggKeeperReset(event, creature)
     -- (boss_yogg_saron.cpp:1610). Alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_KEEPER_ACTIVE)
+    end
+    -- C++ Reset (:1615-1620), Freya only, ungated: strip both sanity
+    -- well auras from every sanity well within 200.0f.
+    if creature:GetEntry() == ENTRY_KEEPER_FREYA then
+        for _, well in ipairs(creature:GetCreaturesInGrid(ENTRY_SANITY_WELL, 200)) do
+            well:RemoveAura(SPELL_SANITY_WELL)
+            well:RemoveAura(SPELL_SANITY_WELL_VISUAL)
+        end
     end
 end
 

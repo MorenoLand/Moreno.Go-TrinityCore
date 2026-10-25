@@ -69,8 +69,9 @@
 -- Reset() _Reset() / JustDied() _JustDied() / DoAction(
 -- ACTION_SWITCH_PHASE)'s phase reset are internal BossAI/event
 -- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); Reset's crystal Respawn + CrystalGUID.Clear() gate on
--- the creature-list bridge (below). DoAction(ACTION_SWITCH_PHASE) is
+-- precedent); Reset's crystal Respawn PORTED in onCombatEnd
+-- (GetCreaturesInGrid bridge); CrystalGUID.Clear() is vacuous in the
+-- Lua model (drain legs re-search the nearest crystal each time). DoAction(ACTION_SWITCH_PHASE) is
 -- only reachable from npc_fel_crystal's JustDied via the instance
 -- bridge — no caller exists on the Lua surface.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
@@ -100,8 +101,8 @@
 -- - EVENT_DRAIN_MANA now ported (below, heroic-only): SelectTarget(
 --   Random, 0, 45.0f) -> DoCast(46153) non-triggered, 10s loop;
 --   stale "no SelectTarget / difficulty bridge" claims retracted.
--- - JustDied's ShatterRemainingCrystals: GetCreatureListWithEntryInGrid
---   + KillSelf — no creature-list bridge.
+-- - JustDied's ShatterRemainingCrystals PORTED in onDied
+--   (GetCreaturesInGrid + Kill() self-kill twin).
 -- - npc_fel_crystal (the file's second CreatureScript class): its only
 --   arm is JustDied -> instance->GetCreature(DATA_SELIN_FIREHEART)->
 --   AI()->DoAction(ACTION_SWITCH_PHASE) — the instance bridge is
@@ -115,6 +116,7 @@ local SPELL_DRAIN_LIFE = 44294
 local SPELL_DRAIN_MANA = 46153
 
 local ENTRY_SELIN_FIREHEART = 24723
+local ENTRY_FEL_CRYSTAL = 24722 -- NPC_FEL_CRYSTAL (magisters_terrace.h:61)
 
 local timers = {}
 local drainScheduled = {}
@@ -212,6 +214,11 @@ local function onCombatEnd(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     drainScheduled[guid] = nil
+    -- C++ Reset (:81-84): every fel crystal within 250.0f respawns
+    -- (live crystals are a Respawn no-op, matching force-respawn).
+    for _, crystal in ipairs(creature:GetCreaturesInGrid(ENTRY_FEL_CRYSTAL, 250)) do
+        crystal:Respawn()
+    end
 end
 
 local function onTargetDied(_, creature, victim)
@@ -223,6 +230,11 @@ end
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:163-169) via ShatterRemainingCrystals (:125-131):
+    -- every fel crystal within 250.0f kills itself.
+    for _, crystal in ipairs(creature:GetCreaturesInGrid(ENTRY_FEL_CRYSTAL, 250)) do
+        crystal:Kill()
+    end
 end
 
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 1, onEnterCombat)
