@@ -39,8 +39,9 @@
 -- 2026-10-20 (C++ arm order — first at the switch) and ResetThreatList
 -- is PORTED 2026-10-17; SummonBeams is PORTED 2026-10-24
 -- (summonBeams, C++ order after ResetThreatList); the 4x
--- DoSpawnCreature(ENTRY_PURE_SPAWN 22035) and SetMeleeDamageSchool
--- (frost) arms have no bridges (below); the ApplySpellImmune
+-- DoSpawnCreature(ENTRY_PURE_SPAWN 22035) arm is PORTED 2026-10-25
+-- (spawnAdds, C++ order after SummonBeams) and SetMeleeDamageSchool
+-- (frost) stays out (no bridge); the ApplySpellImmune
 -- school arms are ported
 -- (below). Clean form: MarkOfHydross 15s then 15s —
 -- DoCastVictim of 38215/38216/38217/38218/38231/40584 by stack
@@ -55,8 +56,9 @@
 -- switch) and ResetThreatList is PORTED 2026-10-17;
 -- DeSummonBeams is PORTED 2026-10-24 (despawnBeams, C++ order
 -- after ResetThreatList); the 4x DoSpawnCreature(ENTRY_TAINTED_
--- SPAWN 22036) and SetMeleeDamageSchool(nature) arms stay out
--- (no bridges);
+-- SPAWN 22036) arm is PORTED 2026-10-25 (spawnAdds, C++ order after
+-- DeSummonBeams) and SetMeleeDamageSchool(nature) stays out
+-- (no bridge);
 -- the ApplySpellImmune school arms are PORTED at the switch
 -- points (below). Enrage (both
 -- forms): 27680 10min then 60s, non-triggered self-cast
@@ -67,8 +69,8 @@
 -- (the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state, despawn the
 -- stored beam pair (C++ Reset :137 DeSummonBeams, PORTED
--- 2026-10-24; Summons.DespawnAll stays summon-blocked — beams are
--- NOT in Summons, JustSummoned only tracks the elemental spawns);
+-- 2026-10-24; the adds despawn via despawnAdds, PORTED 2026-10-25
+-- — beams are NOT in Summons);
 -- the instance SetData(NOT_STARTED) and SetMeleeDamageSchool have
 -- no bridges; the ApplySpellImmune Reset/tick arms are PORTED
 -- 2026-10-20 (creature:ApplySpellImmune bridge,
@@ -84,17 +86,16 @@
 -- gated 2026-10-25 to pre-pull/post-evade only, so the corrupt-switch
 -- despawn sticks as in C++ where the beam flag is consumed once);
 -- the 4x pure/tainted spawn DoSpawnCreature arms and
--- Summons.DespawnAll stay unmodeled;
+-- Summons.DespawnAll are PORTED 2026-10-25 (spawnAdds/despawnAdds);
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
--- arms are summon-blocked; ResetThreatList on both form switches
+-- arms are PORTED 2026-10-25 (hydrossJustSummoned, event 19); ResetThreatList on both form switches
 -- PORTED 2026-10-17 (creature:ResetAllThreat, bridged
 -- lua_objects.go:389, C++ arm order after Talk); the
 -- MODEL_CORRUPT/MODEL_CLEAN SetDisplayId swaps are PORTED
 -- 2026-10-20 (handler-surface creature:SetDisplayId bridge,
 -- lua_creature_events.go — C++ arm order, first at both switches
 -- and at Reset); no school bridge — SetMeleeDamageSchool
--- unmodeled, and the JustSummoned elemental ApplySpellImmune arms
--- stay summon-blocked; the Reset + both form-switch ApplySpellImmune
+-- unmodeled; the Reset + both form-switch ApplySpellImmune
 -- frost/nature arms are PORTED 2026-10-20 (the karazhan mana-feeder
 -- convention); no instance-script model —
 -- boss admission via the luaBossAI shim (DATA_HYDROSSTHEUNSTABLE
@@ -117,6 +118,20 @@ local SAY_CORRUPT_DEATH = 6
 
 local ENTRY_HYDROSS = 21216
 
+local ENTRY_PURE_SPAWN = 22035 -- boss_hydross_the_unstable.cpp:66
+local ENTRY_TAINTED_SPAWN = 22036 -- boss_hydross_the_unstable.cpp:67
+local SPELL_ELEMENTAL_SPAWNIN = 25035 -- boss_hydross_the_unstable.cpp:63
+
+-- C++ DoSpawnCreature offsets (boss_hydross_the_unstable.cpp:83-90):
+-- DoSpawnCreature spawns at the summoner position + offsets
+-- (ScriptedCreature.cpp:286-289), z +3, angle 0, type 4.
+local SPAWN_OFFSETS = {
+    {6.934003, -11.255012},
+    {-6.934003, 11.255012},
+    {-12.577011, -4.72702},
+    {12.577011, 4.72702},
+}
+
 -- UNIT_FIELD_FLAGS (UpdateFields.h:117: OBJECT_END+0x35 = 59);
 -- UNIT_FLAG_NOT_SELECTABLE (SharedDefines.h); SetFlag bridge live.
 local UNIT_FIELD_FLAGS = 59
@@ -132,6 +147,7 @@ local SWITCH_RADIUS = 18
 local pumpTimers = {}
 local hydrossState = {}
 local hydrossBeams = {}
+local hydrossAdds = {}
 
 -- C++ SummonBeams (boss_hydross_the_unstable.cpp:149-167): per beam
 -- SummonCreature(BEAM_DUMMY 21934, type 4 CORPSE_DESPAWN) + beamer
@@ -170,6 +186,42 @@ local function despawnBeams(guid)
         end
     end
     hydrossBeams[guid] = nil
+end
+
+-- C++ form-switch spawn arms (boss_hydross_the_unstable.cpp:303-306
+-- clean, :384-387 corrupt): 4x DoSpawnCreature at the boss position
+-- + SPAWN_OFFSETS, z +3, angle 0, TEMPSUMMON_CORPSE_DESPAWN (4),
+-- despawn 0. Stored per boss GUID (beams precedent) so the
+-- Summons.DespawnAll arms on Reset/JustDied have a bearer; the
+-- JustSummoned immunity + spawnin legs ride the ev19 handler below
+-- (the Lua SummonCreature funnel fires event 19 on the summoner,
+-- lua_creature_events.go SummonCreature comment). No DoZoneInCombat:
+-- C++ spawns the adds with no engage call (their AI is the default
+-- creature AI — no script exists for 22035/22036 anywhere in the
+-- C++ tree — and Go melee/aggro is engine-driven).
+local function spawnAdds(creature, guid, entry)
+    local adds = {}
+    local hx, hy, hz = creature:GetX(), creature:GetY(), creature:GetZ()
+    for _, off in ipairs(SPAWN_OFFSETS) do
+        local add = creature:SummonCreature(entry,
+            hx + off[1], hy + off[2], hz + 3, 0, 4, 0)
+        if add then
+            adds[#adds + 1] = add
+        end
+    end
+    hydrossAdds[guid] = adds
+end
+
+-- C++ Summons.DespawnAll (Reset :144, JustDied :210): the adds only
+-- (beams are not in Summons — they have their own despawnBeams).
+local function despawnAdds(guid)
+    local adds = hydrossAdds[guid]
+    if adds then
+        for _, add in ipairs(adds) do
+            add:Despawn()
+        end
+    end
+    hydrossAdds[guid] = nil
 end
 
 -- Alive players sharing the creature's map+instance (teron
@@ -269,14 +321,15 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch back to clean form inside the radius.
-        -- The beam-summon / add-spawn / melee-school arms stay out
-        -- (no bridges); the SetDisplayId(MODEL_CLEAN 20162) arm is
+        -- The melee-school arm stays out (no bridge); the
+        -- SetDisplayId(MODEL_CLEAN 20162) arm is
         -- PORTED 2026-10-20 (C++ arm order — first); the school
         -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
         -- (creature:ResetAllThreat, bridged lua_objects.go:389, C++
-        -- arm order after Talk).
+        -- arm order after Talk). The 4x pure-spawn arm is PORTED
+        -- 2026-10-25 (spawnAdds, C++ order after SummonBeams).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -289,6 +342,7 @@ local function hydrossTick(creature, guid)
                 creature:Talk(SAY_SWITCH_TO_CLEAN)
                 creature:ResetAllThreat()
                 summonBeams(creature, guid)
+                spawnAdds(creature, guid, ENTRY_PURE_SPAWN)
                 -- C++ :304-305: clean form is frost-school immune,
                 -- nature explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 16, true)
@@ -320,14 +374,15 @@ local function hydrossTick(creature, guid)
         end
 
         -- PosCheck: switch to corrupted form outside the radius.
-        -- The beam-despawn / add-spawn / melee-school arms stay out
-        -- (no bridges); the SetDisplayId(MODEL_CORRUPT 20609) arm is
+        -- The melee-school arm stays out (no bridge); the
+        -- SetDisplayId(MODEL_CORRUPT 20609) arm is
         -- PORTED 2026-10-20 (C++ arm order — first); the school
         -- immunity arms ride
         -- the creature:ApplySpellImmune bridge (C++ arm order after
         -- SetMeleeDamageSchool). ResetThreatList PORTED 2026-10-17
         -- (creature:ResetAllThreat, bridged lua_objects.go:389, C++
-        -- arm order after Talk).
+        -- arm order after Talk). The 4x tainted-spawn arm is PORTED
+        -- 2026-10-25 (spawnAdds, C++ order after DeSummonBeams).
         st.posCheck = st.posCheck - 1000
         if st.posCheck <= 0 then
             local dx = creature:GetX() - HYDROSS_X
@@ -340,6 +395,7 @@ local function hydrossTick(creature, guid)
                 creature:Talk(SAY_SWITCH_TO_CORRUPT)
                 creature:ResetAllThreat()
                 despawnBeams(guid)
+                spawnAdds(creature, guid, ENTRY_TAINTED_SPAWN)
                 -- C++ :388-389: corrupted form is nature-school immune,
                 -- frost explicitly not (IMMUNITY_SCHOOL).
                 creature:ApplySpellImmune(0, 2, 8, true)
@@ -402,6 +458,7 @@ end
 
 local function hydrossLeaveCombat(event, creature)
     despawnBeams(creature:GetGUID())
+    despawnAdds(creature:GetGUID())
     resetState(creature:GetGUID())
     -- C++ Reset() :143 runs on evade: restore the clean model.
     creature:SetDisplayId(20162)
@@ -426,11 +483,13 @@ local function hydrossDied(event, creature, killer)
     else
         creature:Talk(SAY_CLEAN_DEATH)
     end
+    despawnAdds(creature:GetGUID())
     resetState(creature:GetGUID())
 end
 
 local function hydrossReset(event, creature)
     despawnBeams(creature:GetGUID())
+    despawnAdds(creature:GetGUID())
     resetState(creature:GetGUID())
     -- C++ Reset() :140-141: clean-form school immunities (frost-school
     -- immune, nature explicitly not) — the creature:ApplySpellImmune
@@ -442,7 +501,26 @@ local function hydrossReset(event, creature)
     creature:SetDisplayId(20162)
 end
 
+-- C++ JustSummoned (boss_hydross_the_unstable.cpp:196-206): the
+-- elemental spawn gets its school immunity + the triggered
+-- ELEMENTAL_SPAWNIN cast, then joins Summons (the table above
+-- already tracks it via spawnAdds). Entry-gated: the beam dummies
+-- summoned through the same funnel (21934) fall through untouched.
+-- PORTED 2026-10-25 (the Lua SummonCreature funnel fires event 19
+-- on the summoner, lua_creature_events.go SummonCreature comment).
+local function hydrossJustSummoned(event, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_PURE_SPAWN then
+        summoned:ApplySpellImmune(0, 2, 16, true)
+        summoned:CastSpell(summoned, SPELL_ELEMENTAL_SPAWNIN, true)
+    elseif entry == ENTRY_TAINTED_SPAWN then
+        summoned:ApplySpellImmune(0, 2, 8, true)
+        summoned:CastSpell(summoned, SPELL_ELEMENTAL_SPAWNIN, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HYDROSS, 1, hydrossEnterCombat)
+RegisterCreatureEvent(ENTRY_HYDROSS, 19, hydrossJustSummoned)
 RegisterCreatureEvent(ENTRY_HYDROSS, 7, hydrossAIUpdate)
 RegisterCreatureEvent(ENTRY_HYDROSS, 2, hydrossLeaveCombat)
 RegisterCreatureEvent(ENTRY_HYDROSS, 3, hydrossTargetDied)

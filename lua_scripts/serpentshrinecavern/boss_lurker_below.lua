@@ -82,15 +82,17 @@
 -- evade bridge — timers fire unconditionally (jeklik
 -- convention). The MoveInLineOfSight aggro machine has no LOS
 -- hook (hydross convention) — the fight starts on pull.
--- OnDied(4): cleanup (the SetData DONE/IN_PROGRESS and
--- Summons.DespawnAll arms are instance/summon blocked).
+-- OnDied(4): cleanup + despawnLurkerAdds (the SetData
+-- DONE/IN_PROGRESS arms are instance blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the Reset arms — SetSwim + SetDisableGravity (both
 -- PORTED via their creature bridges, lurkerReset),
--- the SPELL_SUBMERGE self-cast, SetVisible(false), the NOT_
--- SELECTABLE flag + ImmuneToPC arms, Summons.DespawnAll and
--- the SetData NOT_STARTED arms — are movement/display/flag/
--- instance/summon blocked).
+-- the SPELL_SUBMERGE self-cast, SetVisible(false) and
+-- the SetData NOT_STARTED arms — are movement/display/
+-- instance blocked; the NOT_SELECTABLE flag + ImmuneToPC arms
+-- stay out by pull-convention (the flag bridge exists, but
+-- nothing in the modeled fight clears them); Summons.DespawnAll
+-- is PORTED 2026-10-25 (despawnLurkerAdds)).
 -- npc_coilfang_ambusher (21865): OnEnterCombat(1): per-GUID
 -- reset (multishot 10000 / shootbow 4000, C++ Initialize()) +
 -- 1s pump (a port of UpdateAI — 1s granularity exact; the C++
@@ -168,6 +170,7 @@ local MELEE_RANGE_STANDIN = 5
 
 local lurkerTimers = {}
 local lurkerState = {}
+local lurkerAdds = {}
 local ambusherTimers = {}
 local ambusherState = {}
 
@@ -182,6 +185,20 @@ end
 local function resetLurker(guid)
     cancelPump(lurkerTimers, guid)
     lurkerState[guid] = nil
+end
+
+-- C++ Summons.DespawnAll (Reset :151, JustDied :160): the 9
+-- submerged-phase adds only (the boss itself is not in Summons).
+-- Stored per boss GUID at spawn time (hydrossAdds precedent);
+-- without this, an evade/wipe stranded the adds in the world.
+local function despawnLurkerAdds(guid)
+    local adds = lurkerAdds[guid]
+    if adds then
+        for _, add in ipairs(adds) do
+            add:Despawn()
+        end
+    end
+    lurkerAdds[guid] = nil
 end
 
 local function resetAmbusher(guid)
@@ -373,7 +390,8 @@ local function lurkerTick(creature, guid)
         -- Submerged arm: phase 60s -> emerge: interrupt, remove
         -- auras, triggered self-cast 20568 (C++-exact), spout=3s
         -- (C++ "directly cast Spout after emerging!"), phase
-        -- back to 120s (the 9x summon arm is summon-blocked;
+        -- back to 120s (the 9x summon arm is PORTED 2026-10-24,
+        -- tracked in lurkerAdds for the DespawnAll arm;
         -- the submerged/emerge flag arms are ported — header). The
         -- evade/zone-combat
         -- arms have no evade bridge — timers fire
@@ -402,16 +420,22 @@ local function lurkerTick(creature, guid)
                 creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
                 -- C++ :376-379: 9x summon at AddPos, i < 6
                 -- ambusher else guardian, TEMPSUMMON_CORPSE_DESPAWN
-                -- (bridge type 4); Summons.Summon tracking has no
-                -- bridge (DespawnAll stays out, header).
+                -- (bridge type 4); tracked in lurkerAdds so the
+                -- Reset/JustDied DespawnAll arm has a bearer
+                -- (PORTED 2026-10-25).
+                local adds = {}
                 for i = 1, 9 do
                     local pos = ADD_POS[i]
                     local entry = ENTRY_AMBUSHER
                     if i > 6 then
                         entry = ENTRY_GUARDIAN
                     end
-                    creature:SummonCreature(entry, pos[1], pos[2], pos[3], 0, 4)
+                    local add = creature:SummonCreature(entry, pos[1], pos[2], pos[3], 0, 4)
+                    if add then
+                        adds[#adds + 1] = add
+                    end
                 end
+                lurkerAdds[guid] = adds
             end
         end
     end
@@ -430,15 +454,17 @@ local function lurkerEnterCombat(event, creature)
 end
 
 local function lurkerLeaveCombat(event, creature)
+    despawnLurkerAdds(creature:GetGUID())
     resetLurker(creature:GetGUID())
 end
 
 local function lurkerDied(event, creature, killer)
+    despawnLurkerAdds(creature:GetGUID())
     resetLurker(creature:GetGUID())
 end
 
 local function lurkerReset(event, creature)
-    resetLurker(creature:GetGUID())
+    despawnLurkerAdds(creature:GetGUID())
     -- C++ boss_the_lurker_below::Reset (boss_lurker_below.cpp:147-156):
     -- me->SetSwim(true) -> me->SetDisableGravity(true) (:150), both
     -- ported via their creature bridges, in C++ arm order ->
