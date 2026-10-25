@@ -32,12 +32,22 @@
 --   out (engine-side death handling, no bridge). The SpellHit
 --   SPELL_HEAL_BROTHER 7393 rebalance half stays out (cross-AI
 --   GetOtherBoss + SetHealth rebalance math — no bridge).
--- - TryHealBrother: VN casts 7393 on VEKLOR when within 60y —
---   cross-boss, no bridge.
+-- - TryHealBrother: PORTED 2026-10-24 (onHealBrother): VN casts
+--   7393 on VEKLOR when within 60y (FindNearestCreature idiom +
+--   IsWithinDist gate); 1s re-arm on a cast, 100ms retry poll when
+--   out of range (C++ Heal_Timer stays 0 off-range).
 -- - TeleportToMyBrother + SetAfterTeleport + TryActivateAfterTTelep:
---   position swap + stun/interrupt/ResetThreatList + twin visual
---   cast 26638 + post-teleport threat arm — no position/SelectTarget/
---   InterruptNonMeleeSpells/ResetThreatList/AttackStart bridges.
+--   PORTED 2026-10-24 (onTeleport): 30s pump, position swap via
+--   GetX/GetY/GetZ/GetO + Teleport on both twins, SetAfterTeleport
+--   per twin (InterruptNonMeleeSpells + AttackStop + ResetAllThreat
+--   + visual 26638), 800 cast on the next tick, nearest-player
+--   engage + AddThreat(10000) at 2s. Stays out: the UNIT_STATE_STUNNED
+--   legs (no stun bridge — SetRooted is a different state), the 2s
+--   other-arm suppression (Lua timer chains keep running through the
+--   window), SelectNearestTarget pet picks (player pool only), and
+--   veklor's post-teleport ArcaneBurst 5s re-arm (cross-file timer
+--   tables are unreachable from this file). Veklor's own 30s pump is
+--   the C++ early-return no-op (timer reset only) and needs no arm.
 -- - HandleBugs / CastSpellOnBug (SPELL_MUTATE_BUG 802): PORTED
 --   2026-10-24 (onBugsTick, veklor twin idiom): dead-bug Respawn
 --   half (Respawn + FACTION_CREATURE + RemoveAllAuras) + abuse
@@ -76,6 +86,9 @@ local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_UPPERCUT = 26007
 local SPELL_BERSERK = 26662
 local SPELL_MUTATE_BUG = 802
+local SPELL_TWIN_TELEPORT_VISUAL = 26638
+local SPELL_TWIN_TELEPORT = 800
+local SPELL_HEAL_BROTHER = 7393
 local FACTION_MONSTER = 14
 local ABUSE_BUG_RANGE = 20
 
@@ -216,6 +229,96 @@ local function onBugsTick(creature, guid)
     end)
 end
 
+-- C++ boss_twinemperorsAI::TryHealBrother (boss_twinemperors.cpp:193-207):
+-- VN only (IAmVeklor early-out); Heal_Timer = 0 means the first
+-- UpdateAI tick already tries: other twin within 60y -> DoCast(7393),
+-- Heal_Timer = 1000; out of range the timer stays 0 and retries every
+-- tick (100ms poll here; the in-range cadence is 1s, C++-exact).
+local function onHealBrother(creature, guid)
+    local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
+    local delay = 100
+    if other ~= nil and creature:IsWithinDist(other, 60) then
+        creature:CastSpell(other, SPELL_HEAL_BROTHER)
+        delay = 1000
+    end
+    schedule(guid, "healbrother", delay, function()
+        onHealBrother(creature, guid)
+    end)
+end
+
+-- C++ Creature::SelectNearestTarget(100) (Creature.cpp:2362): nearest
+-- hostile unit within 100y, threat-list independent. Lua pool is
+-- players only (pets not in GetPlayersInWorld) — documented
+-- approximation; the engage + AddThreat(10000) order is C++-exact.
+local function nearestAlivePlayer(creature, maxDist)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local nearest, nearestDist = nil, nil
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:IsDead() then
+            local d = creature:GetDistance(p)
+            if d <= maxDist and (nearestDist == nil or d < nearestDist) then
+                nearest, nearestDist = p, d
+            end
+        end
+    end
+    return nearest
+end
+
+-- C++ boss_twinemperorsAI::SetAfterTeleport (boss_twinemperors.cpp:241-250)
+-- per twin, in C++ order: InterruptNonMeleeSpells (no-op twin under
+-- the fire-and-forget cast axiom), DoStopAttack (AttackStop),
+-- ResetThreatList (ResetAllThreat — values to zero, entries kept),
+-- DoCast visual 26638. The UNIT_STATE_STUNNED legs have no bridge.
+local function afterTeleportFor(twin)
+    twin:InterruptNonMeleeSpells()
+    twin:AttackStop()
+    twin:ResetAllThreat()
+    twin:CastSpell(twin, SPELL_TWIN_TELEPORT_VISUAL)
+end
+
+-- C++ TryActivateAfterTTelep engage half (boss_twinemperors.cpp:267-272):
+-- nearest target within 100y -> AttackStart + AddThreat(10000).
+local function teleportEngage(twin)
+    local target = nearestAlivePlayer(twin, 100)
+    if target ~= nil then
+        twin:EngageWithTarget(target)
+        twin:AddThreat(target, 10000)
+    end
+end
+
+-- C++ boss_twinemperorsAI::TeleportToMyBrother (boss_twinemperors.cpp:215-239)
+-- + TryActivateAfterTTelep (:252-295): only veknilash initiates (the
+-- veklor side returns early after the timer reset); both twins swap
+-- positions (UpdatePosition twin = Teleport), both get SetAfterTeleport,
+-- both cast 800 on the next tick, both engage at 2s. Teleport_Timer =
+-- 30000 reset on fire, so the next swap lands 30s after this one
+-- (the 2s window's timer decrements are already inside that 30s).
+-- A missing other twin is the C++ no-other-boss case: timer reset
+-- only, no swap.
+local function onTeleport(creature, guid)
+    local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
+    if other ~= nil then
+        local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+        local ox, oy, oz, oo = other:GetX(), other:GetY(), other:GetZ(), other:GetO()
+        creature:Teleport(ox, oy, oz, oo)
+        other:Teleport(x, y, z, o)
+        afterTeleportFor(creature)
+        afterTeleportFor(other)
+        schedule(guid, "teleport800", 100, function()
+            creature:CastSpell(creature, SPELL_TWIN_TELEPORT)
+            other:CastSpell(other, SPELL_TWIN_TELEPORT)
+        end)
+        schedule(guid, "teleportengage", 2000, function()
+            teleportEngage(creature)
+            teleportEngage(other)
+        end)
+    end
+    schedule(guid, "teleport", 30000, function()
+        onTeleport(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -236,6 +339,14 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "bugs", 2000, function()
         onBugsTick(creature, guid)
+    end)
+    -- C++ Initialize: Heal_Timer = 0 (first tick) and Teleport_Timer =
+    -- 30000 (boss_twinemperors.cpp:79/82).
+    schedule(guid, "healbrother", 1, function()
+        onHealBrother(creature, guid)
+    end)
+    schedule(guid, "teleport", 30000, function()
+        onTeleport(creature, guid)
     end)
     -- C++ boss_twinemperors.cpp:165: JustEngagedWith pulls the other
     -- twin into the fight when it is not yet in combat

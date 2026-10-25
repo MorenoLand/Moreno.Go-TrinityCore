@@ -31,16 +31,22 @@
 -- Unmodeled (documented-only, no bridges):
 -- - TwinReset / BossAI ctor leg DATA_TWIN_EMPERORS: instance
 --   bridge, standing.
--- - Shared health (DamageTaken %mirroring via GetOtherBoss +
---   SpellHit SPELL_HEAL_BROTHER 7393 rebalance): cross-boss via
---   instance->GetCreature(DATA_VEKNILASH) — no instance bridge.
---   VN never casts TryHealBrother anyway (IAmVeklor early-out),
---   but the twin heal/rebalance machinery is cross-AI.
+-- - Shared health: DamageTaken %mirroring PORTED (onDamageTaken,
+--   FindNearestCreature idiom); the SpellHit SPELL_HEAL_BROTHER 7393
+--   rebalance half is PORTED 2026-10-24 (onSpellHit, event 14):
+--   larger-max twin gains 30000*mult-30000 HP, capped at max.
+--   VN never casts TryHealBrother (IAmVeklor early-out), so no
+--   veknilash-side SpellHit handler is needed — only veklor is ever
+--   hit by 7393.
 -- - TeleportToMyBrother + SetAfterTeleport + TryActivateAfterTTelep:
---   position swap + stun/interrupt/ResetThreatList + twin visual
---   cast 26638/800 + post-teleport ArcaneBurst 5s re-arm —
---   no position/SelectTarget/InterruptNonMeleeSpells/
---   ResetThreatList/AttackStart bridges.
+--   PORTED 2026-10-24 in boss_veknilash.lua (onTeleport): veklor's
+--   own pump is the C++ early-return no-op (timer reset only), so
+--   this file carries no teleport pump; the swap, both twins'
+--   SetAfterTeleport halves (visual 26638, 800 cast, 2s engage +
+--   AddThreat 10000) run on the veklor handle from veknilash's arm.
+--   Stays out: the UNIT_STATE_STUNNED legs, the 2s other-arm
+--   suppression, SelectNearestTarget pet picks, and the post-teleport
+--   ArcaneBurst 5s re-arm (cross-file timer tables unreachable).
 -- - Arcane Burst 568: PORTED (the old "no range bridge" claim was
 --   stale — GetDistance / IsWithinDist are bridged, blizzard-arm
 --   precedent): nearest alive player within NOMINAL_MELEE_RANGE
@@ -89,6 +95,7 @@ local SPELL_BERSERK = 26662
 local SPELL_ARCANEBURST = 568
 
 local SPELL_EXPLODEBUG = 804
+local SPELL_HEAL_BROTHER = 7393
 local FACTION_MONSTER = 14
 local FACTION_CREATURE = 7 -- SharedDefines.h:224
 local ENTRY_BUG_1 = 15316
@@ -362,9 +369,45 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ boss_twinemperorsAI::SpellHit (boss_twinemperors.cpp:176-201):
+-- fires on the twin HIT by 7393 (only veklor is ever hit — VN casts
+-- it, VL never does); caster == me returns early. The heal spell's
+-- own effect resolves engine-side; this arm adds the rebalance:
+-- mult = larger max / smaller max (inverted when my max is smaller),
+-- largerAmount = (uint32)(30000*mult - 30000), added to the
+-- larger-max twin's health, capped at its max (equal maxima -> the
+-- else leg adds 0 to the other twin, a no-op).
+local function onSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_HEAL_BROTHER then
+        return
+    end
+    if caster ~= nil and caster:GetGUID() == creature:GetGUID() then
+        return
+    end
+    local other = creature:FindNearestCreature(ENTRY_VEKNILASH, 150.0)
+    if other == nil then
+        return
+    end
+    local mytotal, histotal = creature:GetMaxHealth(), other:GetMaxHealth()
+    if mytotal == 0 or histotal == 0 then
+        return
+    end
+    local mult = mytotal / histotal
+    if mult < 1 then
+        mult = 1 / mult
+    end
+    local largerAmount = math.floor(30000 * mult - 30000)
+    if mytotal > histotal then
+        creature:SetHealth(math.min(mytotal, creature:GetHealth() + largerAmount))
+    else
+        other:SetHealth(math.min(histotal, other:GetHealth() + largerAmount))
+    end
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onKilledUnit)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 14, onSpellHit)
