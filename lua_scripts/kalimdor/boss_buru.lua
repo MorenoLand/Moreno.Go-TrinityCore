@@ -30,20 +30,13 @@
 --   C++ — kurinnaxx sand-trap triggered-flag convention),
 --   RemoveAura(THORNS), phase = PHASE_TRANSFORM.
 -- - OnTargetDied (event 3, C++ KilledUnit): player victim ->
---   ChaseNewVictim's bridgeable legs — if phase EGG, RemoveAura
---   FULL_SPEED + GATHERING_SPEED and reschedule both (9s / 60s).
---   The SelectTarget/AttackStart/Talk legs have no Lua bridge; the
---   ResetThreatList leg's ResetAllThreat twin IS bridged
---   (lua_creature_events.go, lua_objects.go) but the
---   ChaseNewVictim switch stays unported on the unbridged legs —
---   documented below.
+--   ChaseNewVictim in full, C++ order, if phase EGG: RemoveAura
+--   FULL_SPEED + GATHERING_SPEED and reschedule both (9s / 60s),
+--   then random alive player from GetAITargets (azuregos idiom) ->
+--   ResetAllThreat -> EngageWithTarget (AttackStart twin) ->
+--   Talk(EMOTE_TARGET 0, victim). No switch when the pool is empty
+--   (C++ SelectTarget nullptr leg).
 -- Unmodeled (documented-only, no bridges):
--- - ChaseNewVictim's target switch (SelectTarget Random +
---   ResetThreatList + AttackStart + Talk): ResetThreatList's
---   ResetAllThreat twin IS bridged and whisper-target Talk(id, target)
---   is bridged (tyrannus precedent) — the switch stays out on
---   AttackStart alone (no bridge, keleseth precedent); a threat
---   reset without the attack-start would not switch victims.
 -- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
 --   buru retargeting via instance GetGuidData(DATA_BURU);
 --   JustDied's ManageRespawn via dynamic_cast to boss_buruAI):
@@ -188,8 +181,10 @@ local function onReset(event, creature)
     buruState[guid] = { phase = PHASE_EGG }
 end
 
--- C++ KilledUnit: player victim -> ChaseNewVictim's bridgeable legs
--- (aura strip + speed-timer rearm; target switch has no bridge).
+-- C++ KilledUnit: player victim -> ChaseNewVictim in full (C++
+-- boss_buru.cpp:113-127 order): aura strip + speed-timer rearm,
+-- then random alive player from GetAITargets -> ResetAllThreat ->
+-- EngageWithTarget -> Talk(EMOTE_TARGET 0, victim).
 local function onTargetDied(event, creature, victim)
     if victim == nil or victim:GetObjectType() ~= "Player" then
         return
@@ -202,6 +197,19 @@ local function onTargetDied(event, creature, victim)
     creature:RemoveAura(SPELL_FULL_SPEED)
     creature:RemoveAura(SPELL_GATHERING_SPEED)
     armSpeedTimers(creature, guid)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return
+    end
+    local target = candidates[math.random(#candidates)]
+    creature:ResetAllThreat()
+    creature:EngageWithTarget(target)
+    creature:Talk(0, target)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)

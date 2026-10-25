@@ -79,10 +79,11 @@ end
 -- 20% chance to cast SPELL_POLYMORPH_ALLY on a random fellow darkfallen
 -- within 10.0f (ICCOrbControllerMinionSearch: alive, no-waypoint, the 5
 -- darkfallen entries — the HasUnitState(CASTING) leg is vacuous in Go,
--- fire-and-forget creature casts; the waypoint check has no bridge, DB
--- trash never paths), then 1s later a random emote from
+-- fire-and-forget creature casts; the waypoint check has no bridge on
+-- the event-handler surface (the session surface has GetWaypointPath;
+-- DB trash never paths), then 1s later a random emote from
 -- DarkFallensEmotes. IsDoingEmotes is true unless the creature has a
--- waypoint path (no bridge; always true in Lua).
+-- waypoint path (no handler-surface bridge; always true in Lua).
 local function emoteTick(creature, guid)
     if not emoteActive[guid] then
         return
