@@ -262,13 +262,22 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 9, function(_, creature, attacker)
     end
 end)
 
--- C++ Reset equivalent for the latch (the ctor / DATA_KAELTHAS
--- bookkeeping has no instance bridge) + C++ boss_kaelthasAI::Reset
--- (boss_kaelthas.cpp:458): RemoveFlag NOT_SELECTABLE, unconditional
--- (the DoAction PREPARE_ADVISORS / emotestate / gravity / scale legs
--- stay out with their unbridged machines).
+-- C++ boss_kaelthasAI::Reset (boss_kaelthas.cpp:454-464) in C++ order:
+-- RemoveFlag NOT_SELECTABLE (:458) + EmoteState NONE (:459) +
+-- SetDisableGravity(false) (:460) + SetTarget empty (:461) +
+-- SetObjectScale(1.0) (:462); the DoAction PREPARE_ADVISORS leg and
+-- BossAI::Reset bookkeeping stay out (no DoAction / instance bridges).
+-- The scale/gravity/emote writes are native-value idempotent at spawn
+-- (ev23 fires ahead of spawn too); the SIZE_INCREASE ladder (:827-847)
+-- stays out -- it fires from MovementInform POINT_TRANSITION_CENTER_
+-- ASCENDING (:601-610), no movement bridge. Latch clear is Lua
+-- bookkeeping, not a C++ arm.
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:EmoteState(0)
+    creature:SetDisableGravity(false)
+    creature:SetTarget()
+    creature:SetScale(1.0)
     kaelPreEncounter[creature:GetGUID()] = nil
 end)
 
