@@ -2803,6 +2803,35 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.nearestGameObjectByEntry(ctx, mapID, instanceID, x, y, z, entry, dist32)}, nil
 	}
+	// GetGameObjectsInGrid(entry, dist) is
+	// WorldObject::GetGameObjectListWithEntryInGrid (Object.cpp:3220):
+	// every gameobject of entry within dist yards (2D metric, no
+	// reach additions) in the same map+instance, as a Lua array of
+	// gameobject objects (GUID-sorted for determinism). DB-spawn
+	// model only (see gameObjectsInGridByEntry). Backs the kalecgos
+	// portal-despawn and marli egg-respawn arms.
+	methods["GetGameObjectsInGrid"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if dist32 < 0 {
+			return []any{[]any{}}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		x, y := motion.X, motion.Y
+		s.motionMu.Unlock()
+		out := make([]any, 0)
+		for _, goObj := range s.gameObjectsInGridByEntry(ctx, mapID, instanceID, x, y, entry, dist32) {
+			out = append(out, goObj)
+		}
+		return []any{out}, nil
+	}
 	// GetCreaturesInGrid(entry, dist) is
 	// WorldObject::GetCreatureListWithEntryInGrid: every creature of entry
 	// within dist yards (2D, both combat reaches added — the C++

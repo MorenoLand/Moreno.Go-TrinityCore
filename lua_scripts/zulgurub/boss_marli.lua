@@ -6,10 +6,11 @@
 -- Priestess Mar'li (C++ ScriptName "boss_marli" per AddSC_boss_marli);
 -- 15041 Spawn of Mar'li (C++ ScriptName "npc_spawn_of_marli",
 -- NPC_SPIDER). The spider eggs (gameobject 179985, C++ ScriptName
--- "gob_spider_egg") are NOT registered — their only arms (egg
--- Respawn/UpdateObjectVisibility in Mar'li's Reset, and the
--- JustSummoned forward to Mar'li's AI) have no gameobject-summon
--- bridge.
+-- "gob_spider_egg") are NOT registered — the gob_spider_egg
+-- JustSummoned forward to Mar'li's AI has no gameobject-summon
+-- bridge, but Mar'li's Reset egg Respawn scan IS ported (marliReset,
+-- GetGameObjectsInGrid 250yd; the UpdateObjectVisibility(true) leg
+-- has no bridge).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++.
@@ -51,9 +52,9 @@
 -- GetZulGurubAI bookkeeping, and the DATA_MARLI encounter-state arms
 -- skipped); no summon model — the HATCH_EGGS 24083 AoE and the
 -- HATCH_SPIDER_EGG 24082 casts spawn nothing (only their re-arm cycles
--- are modeled); no gameobject bridge — the Reset egg
--- Respawn/UpdateObjectVisibility scan and the gob_spider_egg
--- JustSummoned->Mar'li AI forward have no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
+-- are modeled); the Reset egg Respawn scan is PORTED (marliReset,
+-- alive-gated vancleef idiom) and the gob_spider_egg
+-- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is approximated with the current victim; no
 -- stat-modifier bridge — the DamageIncrease/Decrease ApplyStatPctModifier
 -- hack (including the Reset PHASE_THREE rollback) is skipped; no
@@ -65,6 +66,7 @@
 
 local ENTRY_MARLI = 14510
 local ENTRY_SPAWN = 15041
+local GO_SPIDER_EGG = 179985
 
 local SPELL_CHARGE = 22911
 local SPELL_ASPECT_OF_MARLI = 24686
@@ -338,13 +340,29 @@ local function marliWipe(event, creature)
     state[guid] = nil
 end
 
+-- C++ Reset's spider-egg scan (boss_marli.cpp:91-99): every spider
+-- egg within the default 250yd grid scan is Respawn()d (+
+-- UpdateObjectVisibility(true), which has no bridge — the Respawn
+-- unhide is the modeled state change). Alive-gated (vancleef
+-- precedent): C++ Reset runs at spawn and on evade (CreatureAI::
+-- _EnterEvadeMode ends with Reset()), never on death — while Go's
+-- 23 also fires on death (fireCreatureDied, Eluna parity).
+local function marliReset(event, creature)
+    marliWipe(event, creature)
+    if creature:IsAlive() then
+        for _, egg in ipairs(creature:GetGameObjectsInGrid(GO_SPIDER_EGG, 250)) do
+            egg:Respawn()
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MARLI, 1, marliEnterCombat)
 RegisterCreatureEvent(ENTRY_MARLI, 2, marliWipe)
 RegisterCreatureEvent(ENTRY_MARLI, 4, function(event, creature, killer)
     creature:Talk(SAY_DEATH)
     marliWipe(event, creature)
 end)
-RegisterCreatureEvent(ENTRY_MARLI, 23, marliWipe)
+RegisterCreatureEvent(ENTRY_MARLI, 23, marliReset)
 
 -- Spawn of Mar'li (npc_spawn_of_marli, C++ ScriptName for 15041):
 -- non-triggered self-cast 24312 (level up) every 3s while in combat

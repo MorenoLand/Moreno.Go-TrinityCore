@@ -1607,6 +1607,45 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 	return srv.luaGameObjectObject(nearest)
 }
 
+// gameObjectsInGridByEntry is the list twin of nearestGameObjectByEntry
+// for the creature surface's GetGameObjectsInGrid:
+// WorldObject::GetGameObjectListWithEntryInGrid (Object.cpp:3220, default
+// range 250.0f): every gameobject of entry within range using the 2D
+// metric (AllGameObjectsWithEntryInRange, GridNotifiers.h:1437-1454:
+// IsWithinDist(go, range, false) — no combat-reach additions, unlike
+// the creature list). DB-spawn model only, instance-hidden skipped,
+// GUID-sorted for determinism (the C++ grid-visit order is unspecified).
+func (srv *Server) gameObjectsInGridByEntry(ctx context.Context, mapID, instanceID uint32, x, y float32, entry uint32, distance float32) []*scripting.Object {
+	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var matches []luaGameObjectState
+	for rows.Next() {
+		var candidate luaGameObjectState
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
+			continue
+		}
+		candidate.Map = mapID
+		candidate.InstanceID = instanceID
+		candidate.GoState, candidate.LootState = 1, 1
+		candidate.GUID = gameObjectGUID(candidate.LowGUID, candidate.Entry)
+		if srv.isGameObjectHiddenInInstance(candidate.Map, candidate.InstanceID, candidate.GUID) {
+			continue
+		}
+		if currentDistance := float32(math.Hypot(float64(candidate.X-x), float64(candidate.Y-y))); currentDistance <= distance {
+			matches = append(matches, candidate)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].GUID < matches[j].GUID })
+	out := make([]*scripting.Object, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, srv.luaGameObjectObject(m))
+	}
+	return out
+}
+
 func (s *Server) isGameObjectHidden(guid uint64) bool {
 	s.objectsMu.RLock()
 	_, hidden := s.hiddenGameObjects[guid]

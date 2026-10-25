@@ -70,9 +70,12 @@
 -- SPELL_SPECTRAL_REALM_AURA 46021, true, true — the
 -- includePets/includeControlled legs have no pet/controlled
 -- iteration bridge),
--- spectral-realm, summons.DespawnAll, DespawnPortals, the sathrovarr
+-- spectral-realm, summons.DespawnAll, the sathrovarr
 -- _DespawnAtEvade relay and the outro-phase early return) have no
--- bridges — modeled as timer/state cleanup only.
+-- bridges — modeled as timer/state cleanup only. DespawnPortals IS
+-- ported on ev2 (kalecgosLeaveCombat, GetGameObjectsInGrid 250yd +
+-- Despawn twin of C++ Delete()); the POINT_OUTRO_2 call stays out
+-- with the outro machine.
 -- Kalecgos human (24891). OnReset: say-phase = 1, arm revitalize
 -- 45027 5s then 5s (non-triggered self-cast — C++ DoCast default is
 -- triggered=false, vaelastrasz convention) and heroic strike 45026
@@ -155,6 +158,7 @@
 local ENTRY_KALECGOS = 24850
 local ENTRY_KALECGOS_HUMAN = 24891
 local ENTRY_SATHROVARR = 24892
+local GO_SPECTRAL_RIFT = 187055
 
 local SAY_EVIL_AGGRO = 0
 local SAY_EVIL_SLAY = 1
@@ -340,6 +344,14 @@ end
 
 local function kalecgosLeaveCombat(event, creature)
     kalecgosResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode's DespawnPortals (boss_kalecgos.cpp:172-186):
+    -- every spectral-rift GO within the default 250yd grid scan is
+    -- Delete()d; Lua Despawn is the hide-in-instance twin (the
+    -- MovementInform POINT_OUTRO_2 DespawnPortals stays out — the
+    -- outro MovePoint machine is unported).
+    for _, portal in ipairs(creature:GetGameObjectsInGrid(GO_SPECTRAL_RIFT, 250)) do
+        portal:Despawn()
+    end
 end
 
 local function kalecgosDied(event, creature, killer)
