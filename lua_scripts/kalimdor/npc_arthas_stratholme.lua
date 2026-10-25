@@ -40,10 +40,10 @@
 --     re-arm urand(7,14)s. The C++ "still casting -> _exorcismCooldown =
 --     0 (retry next tick)" leg has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (the aeonus
 --     casting-gate case) — the pump retries next tick anyway, which
---     matches. The no-range-cap SelectTarget resolves to an unbounded
---     random alive player (nefarian randomAlivePlayer convention, deja);
---     nil target -> no cast, retry next pump (C++ leaves the cooldown
---     unset, retrying next tick).
+--     matches. The no-range-cap SelectTarget(Random, 0) draws the
+--     threat list (UnitAI.h:172-174), any unit, offset 0, no distance
+--     filter (Oct-25 CoS strip idiom); nil target -> no cast, retry
+--     next pump (C++ leaves the cooldown unset, retrying next tick).
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates on
 --   who->GetEntry() == NPC_RISEN_ZOMBIE (27737) before Talk
 --   LINE_SLAY_ZOMBIE (39), with who as the talk target.
@@ -103,14 +103,15 @@ local function cancelPump(guid)
     end
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function randomAlivePlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- Threat-list pool (Oct-25 CoS strip idiom): C++ SelectTarget draws
+-- the threat list (UnitAI.h); dist 0 means no range filter, and
+-- playerOnly defaults false, so any alive threat unit qualifies.
+local function randomThreatUnit(creature)
+    local targets = creature:GetAITargets()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -136,7 +137,7 @@ local function startCombatPump(creature, guid)
         end
         exorcism = exorcism - 1
         if exorcism <= 0 then
-            local target = randomAlivePlayer(creature)
+            local target = randomThreatUnit(creature)
             if target then
                 creature:CastSpell(target, SPELL_EXORCISM)
                 exorcism = math.random(7, 14)

@@ -27,7 +27,8 @@
 --   its C++ ScheduleEvent cooldown (7s / 5s); the BossAI::JustEngagedWith
 --   instance leg is blocked (standing).
 -- - Corrupting Blight 60588 on SelectTarget(Random, 0, 60.0f, true) ->
---   random alive player within 60m (nefarian convention), non-triggered
+--   random alive threat-list player within 60m, offset 0 (no skip;
+--   UnitAI.h:172-174, Oct-25 CoS strip idiom), non-triggered
 --   (C++ DoCast), init 7s -> repeat 15s; C++ reschedules the event even
 --   when SelectTarget finds nothing, so the Lua re-arm is unconditional
 --   too (nil target -> no cast).
@@ -106,14 +107,15 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: random alive player in the instance within maxDist.
-local function randomPlayerInRange(creature, maxDist)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- Threat-list pool (Oct-25 CoS strip idiom, meathook precedent):
+-- C++ SelectTarget draws the threat list (UnitAI.h), offset 0 here.
+local function randomThreatPlayer(creature, maxDist)
+    local targets = creature:GetAITargets()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist then
-            found[#found + 1] = p
+    for _, t in ipairs(targets) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -126,7 +128,7 @@ end
 -- true), 60588), non-triggered, init 7s -> repeat 15s (re-arm
 -- unconditional in C++, even on empty target).
 local function onCorruptingBlight(creature, guid)
-    local target = randomPlayerInRange(creature, 60)
+    local target = randomThreatPlayer(creature, 60)
     if target then
         creature:CastSpell(target, SPELL_CORRUPTING_BLIGHT)
     end

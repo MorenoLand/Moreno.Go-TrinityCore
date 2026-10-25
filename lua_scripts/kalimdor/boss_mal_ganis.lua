@@ -32,20 +32,23 @@
 --   kazrogal/illidan precedent), init 5s -> repeat 6s.
 -- - Mind Blast (EVENT_MIND_BLAST): SelectTarget(Random, 1, 100.0f,
 --   true, -GetSpellIdForDifficulty(SPELL_SLEEP, me)) -> random alive
---   player within 100m excluding the victim (azgalor position-1
---   convention — no threat-list bridge) AND not carrying the Sleep
---   aura (the negative spell-id exception filter; resolves to 52721,
---   no heroic difficulty leg on this spell) — HasAura precedent in
---   blackfathom_deeps.lua; DoCast(target, 52722) non-triggered, else
---   DoCastVictim; init {6s,8s} -> repeat {8s,12s} unconditional (C++
---   Repeat is outside the if/else, nil target -> victim cast).
+--   threat-list player within 100m, skipping the MaxThreat head
+--   (offset-before-filter, UnitAI.h:172-174; Oct-25 CoS strip idiom).
+--   CORRECTION of the old header: the 5th C++ arg is NOT an aura
+--   filter — SelectTarget's signature (UnitAI.h:170) is (method,
+--   offset, dist, playerOnly, withTank, aura), so -52721 lands in the
+--   withTank bool (nonzero -> true, tank included) and aura defaults
+--   to 0: C++ applies NO sleep-aura filter here. DoCast(target,
+--   52722) non-triggered, else DoCastVictim; init {6s,8s} -> repeat
+--   {8s,12s} unconditional (C++ Repeat is outside the if/else, nil
+--   target -> victim cast).
 -- - Vampiric Touch (EVENT_VAMPIRIC_TOUCH): DoCastSelf(52723),
 --   non-triggered, init 4s -> repeat 30s.
--- - Sleep (EVENT_SLEEP): SelectTarget(Random, 1, 100.0f) — C++ has no
---   player-only filter, but the Lua API enumerates players only (no
---   nearby-unit enumeration bridge), so this is approximated by
---   random alive player within 100m excluding the victim; DoCast
---   (target, 52721) non-triggered, else DoCastVictim; init {17s,21s}
+-- - Sleep (EVENT_SLEEP): SelectTarget(Random, 1, 100.0f) — defaults
+--   playerOnly=false, withTank=true, aura=0 (UnitAI.h:170), so the
+--   pool is the threat list, any unit, skipping the MaxThreat head
+--   (offset-before-filter), alive, within 100m; DoCast (target,
+--   52721) non-triggered, else DoCastVictim; init {17s,21s}
 --   -> repeat {10s,15s} unconditional (nil target -> victim cast).
 --   C++ Talks NOTHING here — SAY_SLEEP (5) is never Talked in the
 --   file (same class as SAY_KILL (3)); both unused.
@@ -157,21 +160,40 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- nefarian convention: random alive player in the instance within
--- maxDist; excludeVictim approximates C++ position 1 ("never on
--- tank") where no threat-list bridge exists (azgalor Doom precedent);
--- excludeAura models C++'s negative spell-id exception filter
--- (units not affected by that aura — here Sleep 52721).
-local function randomPlayerInRange(creature, maxDist, excludeVictim, excludeAura)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
+-- Threat-list pools (Oct-25 CoS strip idiom, meathook precedent):
+-- C++ SelectTarget draws the threat list (UnitAI.h), the offset
+-- skipping the first MaxThreat entries BEFORE the filters.
+local function randomThreatPlayer(creature, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        start = 2
+    end
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and not (excludeVictim and victim and p == victim)
-                and not (excludeAura and p:HasAura(excludeAura)) then
-            found[#found + 1] = p
+    for i = start, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
+        end
+    end
+    if #found == 0 then
+        return nil
+    end
+    return found[math.random(#found)]
+end
+
+local function randomThreatUnit(creature, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        start = 2
+    end
+    local found = {}
+    for i = start, #targets do
+        local t = targets[i]
+        if not t:IsDead() and creature:GetDistance(t) <= maxDist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -190,11 +212,13 @@ local function onCarrionSwarm(creature, guid)
 end
 
 -- C++ EVENT_MIND_BLAST: DoCast(SelectTarget(Random, 1, 100.0f, true,
--- -sleep), 52722) non-triggered else DoCastVictim(52722); init
--- {6s,8s} -> repeat {8s,12s} unconditional (C++ Repeat sits outside
--- the if/else; nil target -> victim cast).
+-- -sleep-as-withTank), 52722) non-triggered else DoCastVictim(52722);
+-- the -sleep arg is the withTank bool (UnitAI.h:170), NOT an aura
+-- filter, so no sleep-aura exclusion applies; init {6s,8s} -> repeat
+-- {8s,12s} unconditional (C++ Repeat sits outside the if/else; nil
+-- target -> victim cast).
 local function onMindBlast(creature, guid)
-    local target = randomPlayerInRange(creature, 100, true, SPELL_SLEEP)
+    local target = randomThreatPlayer(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_MIND_BLAST)
     else
@@ -235,10 +259,11 @@ local function malganisDamageTaken(event, creature, attacker, damage)
 end
 
 -- C++ EVENT_SLEEP: DoCast(SelectTarget(Random, 1, 100.0f), 52721)
--- non-triggered else DoCastVictim(52721); init {17s,21s} ->
+-- non-triggered else DoCastVictim(52721); threat-list any-unit pool,
+-- skip-first (playerOnly defaults false); init {17s,21s} ->
 -- repeat {10s,15s} unconditional (nil target -> victim cast).
 local function onSleep(creature, guid)
-    local target = randomPlayerInRange(creature, 100, true)
+    local target = randomThreatUnit(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_SLEEP)
     else
@@ -271,6 +296,12 @@ end
 local function startHealthYellPump(creature, guid)
     local hadYell30, hadYell15 = false, false
     pumps[guid] = CreateLuaEvent(function()
+        -- C++ UpdateAI returns before the yells when _defeated, so a
+        -- one-shot from above 30% to lethal Talks nothing; the pump
+        -- goes silent on the DamageTaken latch instead of firing late.
+        if defeated[guid] then
+            return
+        end
         if not hadYell30 and healthBelowPct(creature, 30) then
             creature:Talk(SAY_30HEALTH)
             hadYell30 = true
