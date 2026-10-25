@@ -9131,6 +9131,30 @@ func init() {
 	// lua_scripts/northrend/npc_toc_druid.lua.
 	RegisterLuaBoss("npc_toc_druid", 34469)
 	RegisterLuaBoss("npc_toc_druid", 34459)
+	// npc_toc_shaman: Faction Champions restoration-shaman champion script,
+	// entries 34470 (Alliance) / 34444 (Horde) — npc_toc_shamanAI :
+	// boss_faction_championsAI : BossAI, same chain as the druid above;
+	// fight logic in lua_scripts/northrend/npc_toc_shaman.lua.
+	RegisterLuaBoss("npc_toc_shaman", 34470)
+	RegisterLuaBoss("npc_toc_shaman", 34444)
+	// npc_toc_priest: Faction Champions discipline-priest champion script,
+	// entries 34466 (Alliance) / 34447 (Horde) — npc_toc_priestAI :
+	// boss_faction_championsAI : BossAI; fight logic in
+	// lua_scripts/northrend/npc_toc_priest.lua.
+	RegisterLuaBoss("npc_toc_priest", 34466)
+	RegisterLuaBoss("npc_toc_priest", 34447)
+	// npc_toc_warlock: Faction Champions warlock champion script,
+	// entries 34474 (Alliance) / 34450 (Horde) — npc_toc_warlockAI :
+	// boss_faction_championsAI : BossAI; fight logic in
+	// lua_scripts/northrend/npc_toc_warlock.lua.
+	RegisterLuaBoss("npc_toc_warlock", 34474)
+	RegisterLuaBoss("npc_toc_warlock", 34450)
+	// npc_toc_enh_shaman: Faction Champions enhancement-shaman champion script,
+	// entries 34463 (Alliance) / 34455 (Horde) — npc_toc_enh_shamanAI :
+	// boss_faction_championsAI : BossAI; fight logic in
+	// lua_scripts/northrend/npc_toc_enh_shaman.lua.
+	RegisterLuaBoss("npc_toc_enh_shaman", 34463)
+	RegisterLuaBoss("npc_toc_enh_shaman", 34455)
 	// boss_faction_champions: Trial of the Crusader Faction Champions
 	// defensive self-buff EventMap timer arms, entries
 	// trial_of_the_crusader.h:180-208 kalecgos pass. Each champion AI
