@@ -86,22 +86,24 @@
 --   (:140/:150), schedules the resume leg at 5000ms (the
 --   MovementInform -> EVENT_RESUME_ATTACK delay, :171); resume fires
 --   the first phase arm at 5000ms chilling (:235) / 10000ms
---   deep-freeze (:237), phase-gated. The physical jump and its
---   landing legs do not port (see documented-only); only the jump
+--   deep-freeze (:237), phase-gated. The physical jump does not port;
+--   its MovementInform landing legs (blade/mace casts + equipment)
+--   fire in onForgeJump at the collapsed landing point; only the jump
 --   flight time is collapsed (landing assumed at forge-jump fire).
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 36494):
 -- MovementInform (:155-172) — the EFFECT_MOTION_TYPE / POINT_FORGE (0)
 --   landing of the unbridged MoveJump (:79-80 forge positions, 25.0f
---   speed, 15.0f height): PHASE_TWO DoCast(me, SPELL_FORGE_BLADE 68774)
---   + SetEquipmentSlots(false, EQUIP_ID_SWORD 49345) (:160-164);
+--   speed, 15.0f height) is PORTED in onForgeJump at the collapsed
+--   landing point (see the forge-jump collapse deviation): PHASE_TWO
+--   DoCast(me, SPELL_FORGE_BLADE 68774) + sword 49345 (:160-164);
 --   PHASE_THREE RemoveAurasDueToSpell(SPELL_FORGE_BLADE_HELPER) +
---   DoCast(me, SPELL_FORGE_MACE 68785) + SetEquipmentSlots(false,
---   EQUIP_ID_MACE 49344) (:165-170). Firing these on a bare timer
---   would fabricate a landing that never happens — the casts ride the
---   no-movement bridge out, the equipment changes ride the
---   no-equipment bridge. (FORGE_BLADE_HELPER is RAID_MODE(68774,
---   70334): the 10-man removal target is the same 68774 that was cast.)
+--   DoCast(me, SPELL_FORGE_MACE 68785) + mace 49344 (:165-170).
+--   (FORGE_BLADE_HELPER is RAID_MODE(68774, 70334); the shared
+--   Difficulty enum maps dungeon normal 0 -> 68774 and heroic 1 ->
+--   70334, so IsHeroic selects it exactly. The old "no-equipment
+--   bridge" claim is stale: SetEquipmentSlots is bridged with
+--   0xFFFFFFFF = untouched.)
 -- Reset (:99-105) — SetEquipmentSlots(true) (:103) is the template-default
 --   form (creature_equip_template default set); the Go bridge only takes
 --   explicit IDs, so the form has no expressible mapping — and the arm is
@@ -149,7 +151,9 @@
 -- Forge-jump collapse: EVENT_FORGE_JUMP (:226-232) is AttackStop +
 --   MoveJump in C++; with no movement bridge the jump flight time is
 --   collapsed (landing assumed at forge-jump fire) while every timer
---   value stays C++-exact (1500 / 5000 / 5000 / 10000ms).
+--   value stays C++-exact (1500 / 5000 / 5000 / 10000ms). The
+--   MovementInform landing legs fire at the same collapsed point, in
+--   C++ order, so the 5s landing -> resume gap is preserved.
 -- Double-flip corner: two phase flips inside 1.5s would queue two
 --   FORGE_JUMP events in C++; the replace-per-key timer convention
 --   (bronjahm) collapses them to one chain.
@@ -182,6 +186,12 @@ local SPELL_THROW_SARONITE = 68788
 local SPELL_THUNDERING_STOMP = 68771
 local SPELL_CHILLING_WAVE = 68778
 local SPELL_DEEP_FREEZE = 70381
+local SPELL_FORGE_BLADE = 68774
+local SPELL_FORGE_MACE = 68785
+local SPELL_FORGE_BLADE_HELPER = 68774
+local SPELL_FORGE_BLADE_HELPER_HEROIC = 70334
+local EQUIP_ID_SWORD = 49345
+local EQUIP_ID_MACE = 49344
 
 local PHASE_ONE = 1
 local PHASE_TWO = 2
@@ -293,10 +303,10 @@ local function onDeepFreeze(creature, guid)
 end
 
 -- C++ :226-232 EVENT_FORGE_JUMP is AttackStop + MoveJump (no movement
--- bridge): the physical jump and its MovementInform landing legs do not
--- port (see header); the C++-exact 5000ms MovementInform ->
--- EVENT_RESUME_ATTACK delay (:171) is preserved, with the landing
--- assumed at forge-jump fire.
+-- bridge): the physical jump does not port, but its MovementInform
+-- POINT_FORGE landing legs (:160-170) fire below at the collapsed
+-- landing point (forge-jump fire); the C++-exact 5000ms MovementInform ->
+-- EVENT_RESUME_ATTACK delay (:171) is preserved.
 -- Forward declaration: onForgeJump's resume closure references
 -- onResumeAttack before its local def below; without this the
 -- closure would bind a nil global (festergut/moam nil-call class).
@@ -311,6 +321,24 @@ local function onForgeJump(creature, guid)
     -- 5s resume models the jump landing, AttackStart re-arm rides
     -- the engine per the EVENT_RESUME_ATTACK note below).
     creature:AttackStop()
+    -- C++ :160-170 MovementInform POINT_FORGE landing legs in C++ order:
+    -- PHASE_TWO DoCast(FORGE_BLADE) + sword; PHASE_THREE
+    -- RemoveAuras(helper) + DoCast(FORGE_MACE) + mace. The helper is
+    -- RAID_MODE(68774, 70334): dungeon difficulty 0 = 10MAN_NORMAL
+    -- and 1 = 25MAN_NORMAL (shared Difficulty enum), so IsHeroic
+    -- selects it exactly; 0xFFFFFFFF leaves a slot untouched.
+    if st.phase == PHASE_TWO then
+        creature:CastSpell(creature, SPELL_FORGE_BLADE)
+        creature:SetEquipmentSlots(EQUIP_ID_SWORD, 0xFFFFFFFF, 0xFFFFFFFF)
+    elseif st.phase == PHASE_THREE then
+        if creature:IsHeroic() then
+            creature:RemoveAura(SPELL_FORGE_BLADE_HELPER_HEROIC)
+        else
+            creature:RemoveAura(SPELL_FORGE_BLADE_HELPER)
+        end
+        creature:CastSpell(creature, SPELL_FORGE_MACE)
+        creature:SetEquipmentSlots(EQUIP_ID_MACE, 0xFFFFFFFF, 0xFFFFFFFF)
+    end
     schedule(guid, "resume", 5000, function() onResumeAttack(creature, guid) end)
 end
 

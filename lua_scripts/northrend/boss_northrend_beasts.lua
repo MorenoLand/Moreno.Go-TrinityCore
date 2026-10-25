@@ -200,7 +200,8 @@
 -- DATA_ICEHOWL): the whole charge machine — ScheduleTasks events are
 -- PHASE_COMBAT-gated (no phase bridge); EVENT_MASSIVE_CRASH —
 -- SetReactState(REACT_PASSIVE) + AttackStop + SetPhase(PHASE_CHARGE)
--- + MoveJump (no react / phase / motion bridges); MovementInform
+-- + MoveJump (react/attack-stop bridged; phase + motion unbridged);
+--   MovementInform
 -- POINT_MIDDLE -> DoCastSelf(SPELL_MASSIVE_CRASH 66683) +
 -- ScheduleEvent(EVENT_SELECT_CHARGE_TARGET, 4s) (no MovementInform
 -- hook); EVENT_SELECT_CHARGE_TARGET — SelectTarget(Random,0,0.0f,true)
