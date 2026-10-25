@@ -66,8 +66,8 @@
 -- threat target has mana: non-triggered DoCast(random mana
 -- target, SPELL_MANA_BURN 13321) (C++-exact — the C++ picks
 -- a random mana-holder from the threat list; the Lua model
--- picks a random alive player in the instance whose power
--- type is mana, thespia + moroes precedents; nil pick casts
+-- picks a random alive threat-list unit with mana > 0
+-- (player GetPower / creature GetPowerType gate); nil pick casts
 -- nothing, C++-exact), re-arm 8000+rand()%10000 regardless
 -- (C++-exact); empty list: re-arm 3500 (C++-exact).
 -- Melee is engine-driven in Go (creature combat tick), like
@@ -130,29 +130,25 @@ local function fullReset(guid)
     hunterState[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++: random mana-holder from the threat list. Lua model: a
--- random alive player in the instance with current mana > 0 —
--- C++ zone_netherstorm.cpp:425 checks GetPower(POWER_MANA) truthy
--- (current mana, not power type), so the moroes power-type gate was
--- wrong for zero-mana targets. player:GetPower(type) bridged
--- (lua_player.go:96); non-mana classes have Powers[0]==0.
-local function randomManaPlayer(creature)
+-- C++ zone_netherstorm.cpp:423-431: random mana-holder from the
+-- threat list (UnsortedThreatList scan, GetPower(POWER_MANA)
+-- truthy). Players ride player:GetPower(type) (lua_player.go:127,
+-- Powers[0]==0 for non-mana classes); other threat units ride the
+-- generic object fallback (object.go:101-102) gated on
+-- GetPowerType()==POWER_MANA, since the fallback returns the
+-- unit's primary power regardless of type.
+local function randomThreatManaUnit(creature)
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if p:GetPower(POWER_MANA) > 0 then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            if unit:GetObjectType() == "Player" then
+                if unit:GetPower(POWER_MANA) > 0 then
+                    candidates[#candidates + 1] = unit
+                end
+            elseif unit:GetPowerType() == POWER_MANA
+                    and unit:GetPower(POWER_MANA) > 0 then
+                candidates[#candidates + 1] = unit
+            end
         end
     end
     if #candidates == 0 then
@@ -183,7 +179,7 @@ local function combatTick(creature, guid)
     -- mana-holder, re-arm regardless (C++-exact); empty
     -- list: re-arm 3500 (C++-exact).
     if st.manaBurnTimer <= 1000 then
-        local target = randomManaPlayer(creature)
+        local target = randomThreatManaUnit(creature)
         if target then
             creature:CastSpell(target, SPELL_MANA_BURN)
             st.manaBurnTimer = math.random(8000, 18000)

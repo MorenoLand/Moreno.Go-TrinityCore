@@ -27,10 +27,9 @@
 --   intro fires on the respawn path (documented deviation).
 -- * SAY_SURPREME (2) and SAY_RAND (6) are declared in the
 --   C++ Texts enum but never used — no arms.
--- * SelectTarget(Random, 0, 0.0f, playerOnly) is approximated
---   with GetPlayersInWorld filtered by map/instance/alive
---   (maiden convention); 0.0f = no distance filter in C++,
---   so no yard-range gate here.
+-- * SelectTarget(Random, 0, 0.0f, playerOnly) rides the
+--   threat list (GetAITargets, players alive); 0.0f = no
+--   distance filter in C++, so no yard-range gate here.
 -- Fidelity notes (C++-exact):
 -- * All casts are non-triggered DoCast/DoCastVictim (:101,
 --   :127-:158) — plain CastSpell with no triggered flag.
@@ -81,16 +80,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 0.0f, playerOnly): random
--- threat-list player, no distance filter. Approximated with
--- alive players on the same map/instance (maiden convention).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 0.0f, true) (boss_doomlord_kazzak.cpp:143/:153):
+-- random threat-list player alive, no distance filter.
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            candidates[#candidates + 1] = p
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -120,7 +116,7 @@ local function onVoidBolt(creature, guid)
 end
 
 local function onMarkOfKazzak(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_MARK_OF_KAZZAK)
     end
@@ -134,7 +130,7 @@ local function onEnrage(creature, guid)
 end
 
 local function onTwistedReflection(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_TWISTED_REFLECTION)
     end

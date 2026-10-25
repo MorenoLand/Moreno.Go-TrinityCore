@@ -75,13 +75,12 @@
 -- SPELLBREAKER 35871) (C++-exact), re-arm regardless.
 -- Illidari Mind Breaker (22074): focused-bursts arm —
 -- 10s+0-9s init then 10s+0-4s: non-triggered DoCast(random
--- alive player in the instance, SPELL_FOCUSED_BURSTS
--- 38985) (C++-exact — the C++ SelectTarget(Random, 0) is
--- player-gated; the Lua model picks a random alive player
--- in the instance, thespia precedent; nil pick casts
--- nothing and the timer stays expired — C++-exact; the
--- non-player 2000ms re-arm is unreachable in this
--- player-only model), re-arm regardless; psychic-scream
+-- threat-list unit alive, SPELL_FOCUSED_BURSTS
+-- 38985) (C++-exact — SelectTarget(Random, 0) defaults,
+-- playerOnly=false; the player gate lives in the arm:
+-- non-player pick re-arms 2000ms, nil pick leaves the
+-- timer expired — C++-exact), re-arm on player picks;
+-- psychic-scream
 -- arm — 35s+0-3s init then 35s+0-12s: non-triggered
 -- DoCastVictim(SPELL_PSYCHIC_SCREAM 22884) (C++-exact),
 -- re-arm regardless; mind-blast arm — 20s+0-3s init then
@@ -138,28 +137,21 @@ local function fullReset(guid)
     spawnState[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) with defaults (zone_shadowmoon_valley.cpp:1137):
+-- random threat-list unit alive, no player filter; the player
+-- gate lives in the arm below (non-player pick -> 2000ms
+-- re-arm, nil pick -> timer stays expired, next-tick retry).
+local function randomThreatUnit(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0) + player gate: the Lua model
--- picks a random alive player in the instance (thespia
--- precedent); nil pick casts nothing and the timer stays
--- expired (C++-exact).
-local function randomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ UpdateAI in arm order — 1s granularity exact for all
@@ -203,13 +195,18 @@ local function combatTick(creature, guid)
     -- Illidari Mind Breaker: three arms in C++ order.
     if entry == ENTRY_ILLIDARI_MIND_BREAKER then
         -- Focused bursts: non-triggered DoCast on a random
-        -- player; re-arm regardless; nil pick leaves the
-        -- timer expired (C++-exact).
+        -- threat-list unit; player pick casts + re-arms,
+        -- non-player pick re-arms 2000ms, nil pick leaves the
+        -- timer expired (C++-exact, zone_shadowmoon_valley.cpp:1137-1146).
         if st.timer1 <= 1000 then
-            local target = randomPlayer(creature)
+            local target = randomThreatUnit(creature)
             if target then
-                creature:CastSpell(target, SPELL_FOCUSED_BURSTS)
-                st.timer1 = 10000 + math.random(0, 4) * 1000
+                if target:GetObjectType() == "Player" then
+                    creature:CastSpell(target, SPELL_FOCUSED_BURSTS)
+                    st.timer1 = 10000 + math.random(0, 4) * 1000
+                else
+                    st.timer1 = 2000
+                end
             end
         else
             st.timer1 = st.timer1 - 1000

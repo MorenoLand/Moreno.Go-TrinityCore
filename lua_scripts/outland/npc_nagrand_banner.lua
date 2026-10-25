@@ -54,8 +54,8 @@
 -- MISSILES 34447) (C++-exact), re-arm 2400+rand()%1400;
 -- chains-of-ice arm — 3-6s init then 20-25s: TRIGGERED
 -- DoCast(target, SPELL_CHAINS_OF_ICE 22744, true) on a
--- random alive player in the instance (C++
--- SelectTarget(Random, 0), thespia precedent; nil pick
+-- random threat-list unit alive (C++
+-- SelectTarget(Random, 0) defaults, playerOnly=false; nil pick
 -- casts nothing, C++-exact), re-arm 20000+rand()%5000.
 -- The interrupt arm (victim UNIT_STATE_CASTING &&
 -- interrupt_cooldown > 25000 -> non-triggered DoCastVictim
@@ -165,26 +165,20 @@ local function fullReset(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0) with defaults (zone_nagrand.cpp:507):
+-- random threat-list unit alive, no distance filter, no player
+-- filter (UnitAI.h defaults: playerOnly=false).
+local function randomThreatUnit(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): any alive player in the instance
--- (thespia precedent).
-local function randomAlivePlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+    if #candidates == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ UpdateAI in arm order for the spellbinder — 1s
@@ -220,9 +214,9 @@ local function spellbinderTick(creature, guid)
     end
 
     -- Chains of ice arm: 3-6s init then 20-25s, TRIGGERED
-    -- on a random alive player in the instance (C++-exact).
+    -- on a random threat-list unit alive (C++-exact).
     if st.chains <= 1000 then
-        local target = randomAlivePlayer(creature)
+        local target = randomThreatUnit(creature)
         if target then
             creature:CastSpell(target, SPELL_CHAINS_OF_ICE, true)
         end

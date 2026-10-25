@@ -48,8 +48,8 @@
 -- * EVENT_CHAIN SelectTarget(Random, 1, 0.0f, true): position
 --   1 skips the top-threat entry (UnitAI.h:172-174), dist
 --   0.0f = no range limit, playerOnly — modeled as a random
---   alive player on the same map/instance excluding the
---   victim (halion/netherspite victim-exclusion precedent).
+--   threat-list player alive with the first MaxThreat entry
+--   skipped before the filters (sartura precedent).
 -- * KilledUnit's urand(0,4) nonzero skip (cpp:82) — talk only
 --   on roll 0 — modeled exactly.
 
@@ -90,14 +90,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomPlayerNotVictim(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
+-- C++ SelectTarget(Random, 1, 0.0f, true) (boss_doomwalker.cpp:147):
+-- the first MaxThreat entry is skipped BEFORE the filters
+-- (UnitAI.h offset-before-filter) — not a victim exclusion.
+local function randomThreatPlayerSkipFirst(creature)
     local candidates = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and p ~= victim then
-            candidates[#candidates + 1] = p
+    local targets = creature:GetAITargets()
+    for i = 2, #targets do
+        local unit = targets[i]
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -121,7 +123,7 @@ local function onArmor(creature, guid)
 end
 
 local function onChain(creature, guid)
-    local target = randomPlayerNotVictim(creature)
+    local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
     end
