@@ -2,8 +2,8 @@
 -- port of src/server/scripts/Outland/CoilfangReservoir/
 -- TheUnderbog/boss_hungarfen.cpp (npc_underbog_mushroom — the
 -- second AI class AddSC_boss_hungarfen registers; the mushroom
--- is spawned by the boss's summon arm, which has no summon
--- bridge and stays unmodeled — steamrigger mechanic precedent;
+-- is spawned by the boss's summon arm, PORTED in
+-- theunderbog/boss_hungarfen.lua (SummonCreature bridge);
 -- no other creature/GO scripts in this file).
 -- Entry 17990 is the file's own SummonCreature(17990, ...)
 -- constant (verified externally — wowhead npc=17990/underbog-

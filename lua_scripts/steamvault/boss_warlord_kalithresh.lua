@@ -19,8 +19,9 @@
 -- (kill — NO TYPEID gate in C++, C++-exact, morogrim/vashj
 -- precedent), SAY_DEATH=4 (death); SAY_INTRO=0 is defined but
 -- never called in the file (unused enum member, documented
--- only, gruul precedent); the bool CanRage member is never
--- read or written anywhere (unused member, documented only).
+-- only, gruul precedent); the bool CanRage member is
+-- written once in Initialize() and never read (unused member,
+-- documented only).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
 -- (per-GUID scheduler pump); melee is engine-driven in Go

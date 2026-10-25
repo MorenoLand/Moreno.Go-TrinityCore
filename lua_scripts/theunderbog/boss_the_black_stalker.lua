@@ -45,7 +45,11 @@
 -- 10000+rand32()%5000 init then 10000+rand32()%5000 — timer
 -- bookkeeping exact; the IsHeroic()-gated fire arm IS ported
 -- (creature:IsHeroic(), see deliberate deviations below);
--- re-arm regardless (C++-exact). OnDied(4): cleanup (the
+-- re-arm regardless (C++-exact). JustSummoned(19): spore
+-- strider AttackStart relay PORTED (entry-gated 22299, random
+-- non-victim player pick or victim fallback, EngageWithTarget
+-- — skyriss ev19 precedent; Go spell-summon funnel fires ev19
+-- on the caster). OnDied(4): cleanup (the
 -- Striders.DespawnAll arm is summon-bridgeless, steamrigger
 -- precedent). OnLeaveCombat(2)/OnReset(23): cancel the pump,
 -- drop per-GUID state (the _Reset arm is instance-blocked;
@@ -60,12 +64,14 @@
 -- below (GUID->player scan + HasAura gate + SUSPENSION leg;
 -- only the MAGNETIC_PULL 31705 player self-cast leg stays out
 -- — no player self-cast bridge); no
--- home-position bridge — the check_Timer 60-yd evade arm
--- unmodeled (timer bookkeeping exact; the re-arm from 5000
--- to 1000 is C++-exact); no summon/attack-start bridge —
--- the JustSummoned AttackStart relay and the SummonList
--- Striders tracking/DespawnAll arms unmodeled (steamrigger
--- precedent); SPELL_LEVITATION_PULSE 31701 is an unused enum
+-- home-position bridge exists (lua_creature_events.go) but
+-- EnterEvadeMode has no bridge — the check_Timer 60-yd evade
+-- arm unmodeled (timer bookkeeping exact; the re-arm from
+-- 5000 to 1000 is C++-exact); the JustSummoned AttackStart
+-- relay IS ported (above) — only the SummonList Striders
+-- tracking/DespawnAll arms stay out (no creature-by-GUID
+-- bridge; Go spell-duration temp summons cover the death/
+-- reset cleanup partially); SPELL_LEVITATION_PULSE 31701 is an unused enum
 -- member — never referenced in the file (gruul unused-enum
 -- precedent); the ScriptData "Timers may be incorrect"
 -- (SD%Complete: 95) is an upstream caveat, documented, not
@@ -78,6 +84,7 @@ local SPELL_STATIC_CHARGE = 31715
 local SPELL_SUMMON_SPORE_STRIDER = 38755
 
 local ENTRY_BLACK_STALKER = 17882
+local ENTRY_SPORE_STRIDER = 22299
 
 local timers = {}
 local states = {}
@@ -310,4 +317,26 @@ end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 23, function(_, creature)
     resetBoss(creature:GetGUID())
+end)
+
+-- C++ JustSummoned (boss_the_black_stalker.cpp:109-119):
+-- entry-gated spore strider AttackStart relay — random alive
+-- player excluding the victim (quagmirran convention), victim
+-- fallback when the pick is nil (C++-exact); EngageWithTarget
+-- is the AttackStart funnel (skyriss ev19 precedent). The Go
+-- spell-summon funnel fires ev19 on the caster
+-- (boss_ai.go:2083-2085, lua_creature_events.go:166), so the
+-- relay fires exactly when a strider materializes; the
+-- SummonList tracking/DespawnAll arms stay out (below).
+RegisterCreatureEvent(ENTRY_BLACK_STALKER, 19, function(_, creature, summoned)
+    if not summoned or summoned:GetEntry() ~= ENTRY_SPORE_STRIDER then
+        return
+    end
+    local target = pickRandomPlayerExcludingVictim(creature)
+    if not target then
+        target = creature:GetVictim()
+    end
+    if target then
+        summoned:EngageWithTarget(target)
+    end
 end)
