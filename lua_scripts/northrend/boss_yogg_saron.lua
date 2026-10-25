@@ -59,12 +59,12 @@
 -- player-gated AND !IsInEvadeMode-gated Talk(SAY_SARA_KILL 5),
 -- PORTED on event 3 (it was documented-only until the IsInEvadeMode
 -- bridge was re-verified; C++-exact):
--- Sara DamageTaken — lethal (damage >= health) is NOT a
--- death rewrite: damage = health - 1 (survive with 1 hp)
--- and Talk(SAY_SARA_TRANSFORM_1) fires only in PHASE_ONE
--- alongside cross-creature DoAction(ACTION_PHASE_TRANSFORM)
--- — no phase / DoAction bridges; the event-9 bridge
--- cannot model it — bridge-blocked.
+-- Sara DamageTaken — PORTED (saraDamageTaken, event 9): lethal
+-- (damage >= health) is NOT a death rewrite: damage = health - 1
+-- (survive with 1 hp), unconditional in C++; the first-lethal
+-- PHASE_ONE chain (Talk 6 + 4700/9500/14300/14500ms Talks, full heal,
+-- faction, phase-2 transform, barrier) rides the same handler, with
+-- only the cross-creature DoAction legs staying out (see the handler).
 -- Sara SpellHitTarget — Talk(SAY_SARA_FERVOR_HIT /
 -- SAY_SARA_BLESSING_HIT / SAY_SARA_PSYCHOSIS_HIT) gated on
 -- roll_chance_i(30) and !PHASE_TRANSFORM — stays out on trigger-path
@@ -77,28 +77,30 @@
 -- — LATENT). The 4 NPC_DEATH_RAY summons in the same arm stay out
 -- (map GetHeight terrain bridge absent — frost-sphere precedent);
 -- the voice-of-Yogg forward stays out (cross-AI, no bridge).
--- Sara Reset SetReactState(REACT_PASSIVE) (:783-787) stays out: Sara
--- has no event-23 handler (no reset registration) and the rest of the
--- Reset machine (RemoveAllAuras / faction-friendly / phase reset)
--- is unmodeled — the react arm rides the unported handler.
--- Voice JustSummoned summon->REACT_PASSIVE (:660-665, crusher/
--- corruptor tentacles) + StartAttackEvent::Execute owner->REACT_
--- AGGRESSIVE (:430-439, 1s/5s delayed BasicEvent attack kick) stay
--- out: cross-creature arms with no summon-bridge / BasicEvent
--- bridge (GUID-latched summon, random target picked from the
--- summoner's AI).
+-- Sara Reset — PORTED (saraReset, event 23): RemoveAllAuras +
+-- SetReactState(REACT_PASSIVE) + SetFaction(FACTION_FRIENDLY)
+-- (:783-790); only the _events Reset/SetPhase(PHASE_ONE) legs stay
+-- unmodeled (phase machine, no bridge).
+-- Voice JustSummoned — the triggered one-shot legs are PORTED
+-- (voiceJustSummoned, event 19): constrictor Lunge, descend portal
+-- visual, immortal simple teleport (all triggered), Yogg emerge emote.
+-- The crusher/corruptor REACT_PASSIVE (:660-665) + StartAttackEvent
+-- attack kick (:430-439, 1s/5s delayed BasicEvent) stay out: the
+-- passive arm without the AttackStart kick would strand the summons,
+-- and AttackStart has no bridge (DoZoneInCombat seeds whole-map threat,
+-- not C++'s single-target AttackStart).
 -- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on
 -- combat-start timers; all six are phase-gated with unbridged schedule
 -- legs (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a
 -- real bridge; gating is the blocker, gothik precedent).
 -- EVENT_TRANSFORM_1/2/3 (:821-827, Talk 7/8 + full-heal/DoAction arm)
--- — scheduled one-shot 4700/9500/14300ms from boss_saraAI::DamageTaken
--- (:732-734, PHASE_TRANSFORM) on lethal damage with a
--- damage=health-1 rewrite (:719-722), PHASE_ONE gate (:726), and
--- cross-creature voice->AI()->DoAction(ACTION_PHASE_TRANSFORM)
--- (:728-729); TRANSFORM_3 itself carries cross-creature
--- DoAction(ACTION_PHASE_TWO) legs (:831/:833) — no
--- DamageTaken / phase / DoAction bridges.
+-- — PORTED in self-arm form (saraDamageTaken, event 9): the
+-- damage=health-1 rewrite (:719-722), PHASE_ONE first-lethal latch,
+-- and the 4700/9500/14300/14500ms Talk/heal/faction/transform/barrier
+-- legs; only the cross-creature voice->AI()->DoAction(
+-- ACTION_PHASE_TRANSFORM) (:728-729) and TRANSFORM_3's
+-- DoAction(ACTION_PHASE_TWO) legs (:831/:833) stay out (no DoAction
+-- bridge).
 -- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (:993-995, Talk id 0,
 -- one-shot 3s) fires from Reset (:935) on the voice's cross-creature
 -- summon-driven Reset with SetPhase(PHASE_TWO) (:935-945; yogg is
@@ -201,7 +203,9 @@ local SAY_SARA_AGGRO = 2
 local SAY_SARA_KILL = 5
 local SAY_SARA_DEATH_RAY = 10 -- boss_yogg_saron.cpp:49
 local ENTRY_DEATH_ORB = 33882 -- ulduar.h:217
+local ENTRY_DEATH_RAY = 33881 -- ulduar.h:216
 local SPELL_DEATH_RAY_ORIGIN_VISUAL = 63893 -- boss_yogg_saron.cpp:230
+local SPELL_DEATH_RAY_WARNING_VISUAL = 63882 -- boss_yogg_saron.cpp:890
 local SAY_YOGG_SARON_DEATH = 6
 
 local SPELL_SHADOWY_BARRIER_YOGG = 63894
@@ -281,13 +285,17 @@ RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
 -- C++ boss_saraAI::JustSummoned (:870-895): every summon
 -- SetReactState(REACT_PASSIVE); NPC_DEATH_ORB -> Talk + self-cast
--- (non-triggered, C++ :877) in C++ order. LATENT: orbs spawn only
+-- (non-triggered, C++ :877) in C++ order; NPC_DEATH_RAY -> self-cast
+-- SPELL_DEATH_RAY_WARNING_VISUAL (non-triggered, C++ :890). LATENT: orbs spawn only
 -- from the unported SPELL_DEATH_RAY cast (anubrekhan precedent).
 local function saraJustSummoned(_, creature, summoned)
     summoned:SetReactState(0) -- REACT_PASSIVE
     if summoned:GetEntry() == ENTRY_DEATH_ORB then
         creature:Talk(SAY_SARA_DEATH_RAY)
         summoned:CastSpell(summoned, SPELL_DEATH_RAY_ORIGIN_VISUAL)
+    elseif summoned:GetEntry() == ENTRY_DEATH_RAY then
+        -- C++ boss_saraAI::JustSummoned (:889-890): non-triggered self-cast.
+        summoned:CastSpell(summoned, SPELL_DEATH_RAY_WARNING_VISUAL)
     end
 end
 RegisterCreatureEvent(ENTRY_SARA, 19, saraJustSummoned)
@@ -366,19 +374,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(Random) draws the threat list (UnitAI.h), never the
+-- whole instance player pool — GetAITargets is the bridged threat list
+-- (midnight precedent); C++ applies no dead/range filter here (no dist,
+-- no playerOnly arg), so none added.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if #targets == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return targets[math.random(#targets)]
 end
 
 -- C++ npc_guardian_of_yogg_saronAI::EVENT_DARK_VOLLEY:
@@ -404,15 +409,12 @@ end
 -- DoCast(target, RAND(SPELL_BLACK_PLAGUE 64153, SPELL_CURSE_OF_DOOM
 -- 64157, SPELL_APATHY 64156, SPELL_DRAINING_POISON 64152))
 -- (non-triggered), 1ms init, 3s repeat — scheduled in Reset with no phase
--- arg; SelectTarget(Random) carries no C++ range so any alive player on
--- the same map+instance is eligible (:1264, :1284-1288 verified);
--- threat-list-vs-player-pool caveat (the_beast/opera-Julianne
--- precedent): C++ picks from the threat list, the pool is map-wide
--- players. The
--- Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
+-- arg; SelectTarget(Random) draws the threat list (GetAITargets bridge),
+-- not the map-wide player pool (:1264, :1284-1288 verified).
+-- The Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
 -- legs are ported on event 23 (corruptorReset).
 local function corruptorTick(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         local spells = { SPELL_BLACK_PLAGUE, SPELL_CURSE_OF_DOOM, SPELL_APATHY, SPELL_DRAINING_POISON }
         creature:CastSpell(target, spells[math.random(#spells)])
@@ -435,6 +437,8 @@ end
 -- DoCastAOE(SPELL_ERUPT 64144) ride event 23.
 local function corruptorReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_corruptor_tentacleAI ctor (:1257): SetCombatMovement(false).
+    creature:SetCombatMovement(false)
     -- C++ npc_corruptor_tentacleAI::Reset(): DoCast(me, TENTACLE_VOID_ZONE);
     -- DoCastAOE(ERUPT) (boss_yogg_saron.cpp). Alive-gated; cancelTimers
     -- rides the death leg deliberately.
@@ -469,10 +473,11 @@ end
 -- SPELL_TENTACLE_VOID_ZONE 64017), DoCast(me, SPELL_DIMINSH_POWER 64148),
 -- DoCast(me, SPELL_FOCUSED_ANGER 57688), DoCastAOE(SPELL_ERUPT 64144) —
 -- ride event 23 (halion Reset one-shot precedent); the SetCombatMovement
--- (false) ctor arm PORTED 2026-10-22 (creature:SetCombatMovement,
--- lua_creature_events.go — C++ boss_yogg_saron.cpp:452).
+-- (false) ctor arm (:1359) rides the same handler below.
 local function crusherReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_crusher_tentacleAI ctor (:1359): SetCombatMovement(false).
+    creature:SetCombatMovement(false)
     -- C++ npc_crusher_tentacleAI::Reset(): DoCast(me, CRUSH/TENTACLE_VOID_ZONE/
     -- DIMINSH_POWER/FOCUSED_ANGER); DoCastAOE(ERUPT) (boss_yogg_saron.cpp).
     -- Alive-gated; cancelTimers rides the death leg deliberately.
@@ -549,6 +554,89 @@ RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 9, immortalDamageTaken)
 local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())
 end
+
+-- C++ boss_saraAI::DamageTaken (:719-740): lethal damage is NOT a death
+-- rewrite — damage = health - 1 (survive with 1 hp), unconditionally (the
+-- rewrite sits outside the PHASE_ONE gate); in PHASE_ONE only, the
+-- lethal hit also fires Talk(SAY_SARA_TRANSFORM_1 6) and schedules the
+-- one-shot transform chain (:732-735, 4700/9500/14300/14500ms). The
+-- chain's cross-creature legs — voice DoAction(ACTION_PHASE_TRANSFORM)
+-- on the lethal hit, voice/mimiron DoAction(ACTION_PHASE_TWO) and the
+-- SPELL_RIDE_YOGG_SARON_VEHICLE cast on Yogg at TRANSFORM_3/4 — have no
+-- DoAction/cross-creature bridges and stay out; the phase-2 schedule
+-- legs (EVENT_DEATH_RAY/MALADY/PSYCHOSIS/BRAIN_LINK, :842-845) ride the
+-- unported phase machine and stay out. DamageTaken arms fire on lethal
+-- hits, so no postDamage>0 guard (immortal precedent). The latch keeps
+-- the one-shot chain first-lethal-only: C++ re-arms nothing once the
+-- phase has left PHASE_ONE.
+local SAY_SARA_TRANSFORM_1 = 6
+local SAY_SARA_TRANSFORM_2 = 7
+local SAY_SARA_TRANSFORM_3 = 8
+local SAY_SARA_TRANSFORM_4 = 9
+local SPELL_FULL_HEAL = 43978
+local SPELL_PHASE_2_TRANSFORM = 65157
+local SPELL_SHADOWY_BARRIER_SARA = 64775
+local FACTION_FRIENDLY = 35
+local FACTION_MONSTER_2 = 16
+local saraTransformed = {}
+
+local function saraDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    local newDamage = damage
+    if health > 0 and damage >= health then
+        newDamage = health - 1
+        local guid = creature:GetGUID()
+        if not saraTransformed[guid] then
+            saraTransformed[guid] = true
+            creature:Talk(SAY_SARA_TRANSFORM_1)
+            schedule(guid, "saratransform1", 4700, function()
+                if creature:IsAlive() then
+                    creature:Talk(SAY_SARA_TRANSFORM_2)
+                end
+            end)
+            schedule(guid, "saratransform2", 9500, function()
+                if creature:IsAlive() then
+                    creature:Talk(SAY_SARA_TRANSFORM_3)
+                end
+            end)
+            schedule(guid, "saratransform3", 14300, function()
+                if creature:IsAlive() then
+                    creature:Talk(SAY_SARA_TRANSFORM_4)
+                    creature:CastSpell(creature, SPELL_FULL_HEAL)
+                    creature:SetFaction(FACTION_MONSTER_2)
+                end
+            end)
+            schedule(guid, "saratransform4", 14500, function()
+                if creature:IsAlive() then
+                    creature:CastSpell(creature, SPELL_PHASE_2_TRANSFORM)
+                    creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_SARA)
+                end
+            end)
+        end
+    end
+    return false, newDamage
+end
+
+local function saraCancelTransform(event, creature)
+    cancelTimers(creature:GetGUID())
+    saraTransformed[creature:GetGUID()] = nil
+end
+
+-- C++ boss_saraAI::Reset (:783-790): RemoveAllAuras + SetReactState
+-- (REACT_PASSIVE) + SetFaction(FACTION_FRIENDLY), all bridged; the
+-- _events Reset/SetPhase(PHASE_ONE) legs ride the unported phase
+-- machine. Reset also cancels the transform chain (C++ _events.Reset).
+local function saraReset(event, creature)
+    saraCancelTransform(event, creature)
+    creature:RemoveAllAuras()
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:SetFaction(FACTION_FRIENDLY)
+end
+
+RegisterCreatureEvent(ENTRY_SARA, 9, saraDamageTaken)
+RegisterCreatureEvent(ENTRY_SARA, 2, saraCancelTransform)
+RegisterCreatureEvent(ENTRY_SARA, 4, saraCancelTransform)
+RegisterCreatureEvent(ENTRY_SARA, 23, saraReset)
 
 -- C++ npc_guardian_of_yogg_saronAI::JustDied (:1190-1194): non-triggered
 -- DoCastAOE(SPELL_SHADOW_NOVA 62714) + DoCastAOE(SPELL_SHADOW_NOVA_2
@@ -670,14 +758,48 @@ local function voiceEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ boss_voice_of_yogg_saronAI::JustSummoned (:647-675): only the
+-- plain one-shot legs port — constrictor Lunge (triggered, :658),
+-- descend portal visual (triggered, :667), immortal simple teleport
+-- (triggered, :670), Yogg emerge emote (:655), crusher/corruptor
+-- emerge emote (:660-665, passive + attack-kick legs withheld).
+-- The guardian 1s and
+-- crusher/corruptor 5s StartAttackEvent kicks + the crusher/corruptor
+-- REACT_PASSIVE arm (:651-652, :660-665) stay out (AttackStart has no
+-- bridge; passive without the kick would strand the summons).
+local ENTRY_DESCEND_INTO_MADNESS = 34072 -- ulduar.h:226
+local SPELL_LUNGE = 64131
+local SPELL_TELEPORT_PORTAL_VISUAL = 64416
+local SPELL_SIMPLE_TELEPORT = 64195
+local EMOTE_ONESHOT_EMERGE = 449
+local function voiceJustSummoned(event, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_CONSTRICTOR_TENTACLE then
+        summoned:CastSpell(summoned, SPELL_LUNGE, true)
+    elseif entry == ENTRY_DESCEND_INTO_MADNESS then
+        summoned:CastSpell(summoned, SPELL_TELEPORT_PORTAL_VISUAL, true)
+    elseif entry == ENTRY_IMMORTAL_GUARDIAN then
+        summoned:CastSpell(summoned, SPELL_SIMPLE_TELEPORT, true)
+    elseif entry == ENTRY_CRUSHER_TENTACLE or entry == ENTRY_CORRUPTOR_TENTACLE then
+        -- C++ voice JustSummoned (:660-665): emerge emote only — the
+        -- REACT_PASSIVE + StartAttackEvent kick legs stay out (no
+        -- AttackStart bridge; passive without the kick would strand).
+        summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+    elseif entry == ENTRY_YOGG_SARON then
+        summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+    end
+end
+
 -- C++ npc_constrictor_tentacleAI::Reset (:1317-1320): non-triggered
 -- one-shots DoCast(me, SPELL_TENTACLE_VOID_ZONE_2 64384) +
 -- DoCastAOE(SPELL_ERUPT 64144) — self-cast form per the
 -- DoCastAOE≡self-cast convention (boss_ai.go lowering). Event 23
 -- (the halion/corruptor/crusher Reset precedent). The JustSummoned
--- LUNGE leg (triggered, voice-side :663) stays out.
+-- LUNGE leg rides voiceJustSummoned above (triggered, voice-side :658).
 local function constrictorReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_constrictor_tentacleAI ctor (:1314): SetCombatMovement(false).
+    creature:SetCombatMovement(false)
     -- C++ Reset: DoCast(me, TENTACLE_VOID_ZONE_2); DoCastAOE(ERUPT)
     -- (boss_yogg_saron.cpp:1318-1319). Alive-gated.
     if creature:IsAlive() then
@@ -825,6 +947,7 @@ end
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 19, voiceJustSummoned)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 23, constrictorReset)

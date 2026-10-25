@@ -43,17 +43,20 @@
 -- -> Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID 15878)
 -- (ported as creature:PlayMusic — the bridged SMSG_PLAY_MUSIC twin;
 -- the instance->SetBossState(IN_PROGRESS) companion leg has no bridge).
--- The remaining JustEngagedWith legs (the later-pull SetFlag
--- NOT_SELECTABLE, SetImmuneToNPC, summons.DespawnEntry(NPC_AZEROTH),
--- instance->SetData, BossAI::JustEngagedWith passthrough) stay out:
--- the set leg is bridgeable but the boss sits REACT_PASSIVE from
--- Reset through the intro, and C++ itself notes (EVENT_INTRO_TIMER_DONE)
--- that PASSIVE + NOT_SELECTABLE at combat start makes the creature
--- immediately evade — setting it at engage would risk the same evade
--- cancelling the intro timers before the clear tick; only the
--- intro-timer clear is ported (see introdefensive).
--- InterruptNonMeleeSpells(:381) is dropped — StopSpellCast
--- is an explicit no-op for creatures (lua_objects.go:332).
+-- The remaining JustEngagedWith legs (the SetFlag NOT_SELECTABLE /
+-- SetImmuneToNPC set legs, summons.DespawnEntry(NPC_AZEROTH),
+-- instance->SetData, BossAI::JustEngagedWith boss-state / setActive
+-- legs) stay out: the set leg is bridgeable but the boss sits
+-- REACT_PASSIVE from Reset through the intro, and C++ itself notes
+-- (EVENT_INTRO_TIMER_DONE) that PASSIVE + NOT_SELECTABLE at combat
+-- start makes the creature immediately evade — setting it at engage
+-- would risk the same evade cancelling the intro timers before the
+-- clear tick, and the compensating AttackStart leg has no bridge;
+-- only the intro-timer clear is ported (see introdefensive). The
+-- BossAI::JustEngagedWith DoZoneInCombat leg IS ported on later pulls
+-- (algalonTimersStart); first-pull DoZoneInCombat was already ported.
+-- InterruptNonMeleeSpells(:381) is called in code; the handler-surface
+-- twin is a no-op (lua_creature_events.go:885, no in-flight cast state).
 -- (CORRECTION 2026-10-23: the :384 first-pull DoZoneInCombat leg IS
 -- ported below — creature:DoZoneInCombat() is bridged
 -- (engine/world/lua_creature_events.go); the stale "no bridge" claim
@@ -94,17 +97,19 @@
 -- (event 1): 2.5s init + {4s,5s} repeat C++-exact (:732) but the Lua anchor
 -- is EnterCombat where C++ anchors at Reset — anchor deviation noted.
 -- COLLAPSING_STAR (18s+introDelay, :594-599) — Talk 5/6 + SummonCreature x4;
--- BIG_BANG (90s+introDelay, :601-616) — Talk 7/8 + SetPhase(PHASE_BIG_BANG)
--- + constellation DoAction(ACTION_BIG_BANG) + DoCastAOE(64443): unbridged
--- summon leg / phase machine; Talk-only ports would fire with no stars /
--- no phase context — stay out (their cast companions live on other arms).
+-- BIG_BANG (90s+introDelay) — Talk 7/8 + DoCastAOE(64443) PORTED
+-- (bigBangTick, Repeat 90.5s); the SetPhase(PHASE_BIG_BANG) /
+-- constellation DoAction(ACTION_BIG_BANG) / EVENT_RESUME_UPDATING /
+-- no-target ACTION_ASCEND (SpellScript) legs stay out.
 -- Intro machine: Talk 0/1/2 (:529/:541/:546, EVENT_INTRO_1..3) chained under
 -- PHASE_ROLE_PLAY from DoAction(ACTION_START_INTRO) (:328, Brann-summoned
 -- pre-combat) — pre-combat roleplay, porting on combat-start timers would
 -- fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
 -- arm (header correction this run) — pure machinery (SetPhase(NORMAL),
 -- constellation summons) except the SetReactState(REACT_DEFENSIVE) (:566)
--- leg, which IS ported on the introDelay timer in algalonTimersStart;
+-- leg, which IS ported on the introDelay timer in algalonTimersStart,
+-- along with the sheath / flag-clear legs, the triggered
+-- SUPERMASSIVE_FAIL cast, and the 11 constellation summons;
 -- Talk(AGGRO 4) fires in JustEngagedWith
 -- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull
 -- only) — both now ported via the _firstPull latch above.
@@ -138,6 +143,10 @@
 -- spell_algalon_trigger_3_adds SpellScript (:1106-1112); no DoAction /
 -- SpellScript bridges, so the constellation's react flip stays out
 -- (its Arcane Barrage enter-combat timer above is the only modeled arm).
+-- boss DoAction(ACTION_INIT_ALGALON 6, ulduar.h:501 — instance
+-- OnPlayerEnter timed-summon path, instance_ulduar.cpp:245, sets
+-- _firstPull=false) — no DoAction bridge; stays out, so a timed-summon
+-- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
 -- The ten spell scripts (spell_algalon_phase_punch /
@@ -309,9 +318,13 @@ local SPELL_ASCEND_TO_THE_HEAVENS = 64487
 local SPELL_COSMIC_SMASH = 62301
 local SPELL_ARCANE_BARRAGE = 64599
 local SPELL_COLLAPSE = 62018 -- boss_algalon_the_observer.cpp:94
+local SPELL_SUPERMASSIVE_FAIL = 65311 -- boss_algalon_the_observer.cpp:79
+local SPELL_BIG_BANG = 64443 -- boss_algalon_the_observer.cpp:82
 
 local ENTRY_LIVING_CONSTELLATION = 33052
 
+local SAY_ALGALON_BIG_BANG = 7
+local EMOTE_ALGALON_BIG_BANG = 8
 local SAY_ALGALON_ASCEND = 9
 local EMOTE_ALGALON_COSMIC_SMASH = 10
 local SAY_ALGALON_COLLAPSING_STAR = 5
@@ -330,6 +343,22 @@ local COLLAPSING_STAR_POSITIONS = {
 -- Later-pull introDelay (:376); the first-pull 26500ms path is selected
 -- by the _firstPull latch in algalonTimersStart above.
 local INTRO_DELAY = 8000
+
+-- C++ boss_algalon_the_observer.cpp:221-231 (LIVING_CONSTELLATION_COUNT
+-- 11, ConstellationPos literals).
+local CONSTELLATION_POSITIONS = {
+    {1625.208, -267.2771, 446.4296, 5.044002},
+    {1658.279, -262.5490, 441.9073, 4.188790},
+    {1678.677, -276.3280, 427.7531, 3.979351},
+    {1593.389, -299.4325, 432.4636, 6.073746},
+    {1685.613, -300.1219, 443.2366, 3.385939},
+    {1591.706, -263.8201, 441.4153, 5.253441},
+    {1668.317, -324.7676, 457.9394, 3.211406},
+    {1592.242, -325.5323, 446.9508, 0.226893},
+    {1635.821, -363.3442, 424.3459, 1.466077},
+    {1672.188, -357.2484, 436.7337, 2.338741},
+    {1615.800, -348.0065, 442.9586, 1.134464},
+}
 
 -- C++ boss_algalon_the_observerAI::EVENT_QUANTUM_STRIKE:
 -- DoCastVictim(SPELL_QUANTUM_STRIKE 64395) (non-triggered),
@@ -368,6 +397,21 @@ end
 local function ascendTick(creature, guid)
     creature:Talk(SAY_ALGALON_ASCEND)
     creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
+end
+
+-- C++ EVENT_BIG_BANG: Talk(SAY_ALGALON_BIG_BANG 7) +
+-- Talk(EMOTE_ALGALON_BIG_BANG 8) + DoCastAOE(SPELL_BIG_BANG 64443)
+-- (non-triggered), 90s+introDelay init, Repeat(1min+30s+500ms).
+-- The phase-machine legs (SetPhase PHASE_BIG_BANG, constellation
+-- DoAction ACTION_BIG_BANG, EVENT_RESUME_UPDATING 9s+500ms, and the
+-- no-target ACTION_ASCEND via spell_algalon_big_bang) stay out.
+local function bigBangTick(creature, guid)
+    creature:Talk(SAY_ALGALON_BIG_BANG)
+    creature:Talk(EMOTE_ALGALON_BIG_BANG)
+    creature:CastSpell(creature, SPELL_BIG_BANG)
+    schedule(guid, "bigbang", 90500, function()
+        bigBangTick(creature, guid)
+    end)
 end
 
 -- C++ EVENT_SUMMON_COLLAPSING_STAR: Talk(SAY_ALGALON_COLLAPSING_
@@ -437,9 +481,12 @@ local function algalonTimersStart(event, creature)
         end)
     else
         -- C++ JustEngagedWith later-pull leg (:370-376):
-        -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID).
+        -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)
+        -- + BossAI::JustEngagedWith (DoZoneInCombat leg; boss-state /
+        -- setActive legs have no bridge).
         creature:Talk(SAY_ALGALON_AGGRO)
         creature:PlayMusic(ENGAGE_MUSIC_ID)
+        creature:DoZoneInCombat()
         introDelay = INTRO_DELAY
     end
     -- C++ EVENT_INTRO_TIMER_DONE (:560-584): SetPhase(PHASE_NORMAL),
@@ -450,8 +497,11 @@ local function algalonTimersStart(event, creature)
     -- this tick in C++ order (before the react flip); it is safe
     -- without the unported JustEngagedWith set leg (a clear can never
     -- strand combat, unlike a set). SetImmuneToNPC(false) is ported
-    -- in the introdefensive tick below (C++ order); DoCastAOE
-    -- still rides the unported intro machinery. Without
+    -- in the introdefensive tick below (C++ order); the triggered
+    -- DoCastAOE(SUPERMASSIVE_FAIL) and the 11 REACT_PASSIVE
+    -- constellation summons are ported in the same tick. The
+    -- AttackStart workaround and the random-stalker
+    -- ActivateLivingConstellation event stay out. Without
     -- the react flip the boss keeps the algalonReset REACT_PASSIVE
     -- while engaged and the engine's isCreaturePassive gate never
     -- lets it attack.
@@ -460,6 +510,13 @@ local function algalonTimersStart(event, creature)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC) -- EVENT_INTRO_TIMER_DONE :565, C++ order after the NOT_SELECTABLE clear
         creature:SetReactState(1) -- REACT_DEFENSIVE
+        creature:CastSpell(creature, SPELL_SUPERMASSIVE_FAIL, true) -- DoCastAOE triggered, C++ order after the react flip
+        for _, pos in ipairs(CONSTELLATION_POSITIONS) do
+            local summon = creature:SummonCreature(ENTRY_LIVING_CONSTELLATION, pos[1], pos[2], pos[3], pos[4], 6, 0)
+            if summon then
+                summon:SetReactState(0) -- REACT_PASSIVE, as summoned by C++
+            end
+        end
     end)
     schedule(guid, "quantumstrike", 3500 + introDelay, function()
         quantumStrikeTick(creature, guid)
@@ -469,6 +526,9 @@ local function algalonTimersStart(event, creature)
     end)
     schedule(guid, "cosmicsmash", 25000 + introDelay, function()
         cosmicSmashTick(creature, guid)
+    end)
+    schedule(guid, "bigbang", 90000 + introDelay, function()
+        bigBangTick(creature, guid)
     end)
     schedule(guid, "ascend", 360000 + introDelay, function()
         ascendTick(creature, guid)
