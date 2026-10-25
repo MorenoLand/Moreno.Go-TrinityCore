@@ -36,8 +36,11 @@
 -- C++-UNCONDITIONAL: the Talk fires for any victim; only the corpse
 -- scarab cast below is player-gated; no nalorakk gate here);
 -- EVENT_LOCUST — Talk(EMOTE_LOCUST 3) + DoCastSelf(Locust Swarm
--- 28785), init randtime(1m40s,2m), repeat 1m30s (phase_hunter
--- self-cast precedent); EVENT_BERSERK — DoCastSelf(Berserk 27680),
+-- 28785 / 25-man 54021, raid-moded 2026-10-25 — same Spell.cpp:524
+-- auto-resolve evidence as impale; the old unconditional 28785
+-- cast the 10-man spell on 25-man), init randtime(1m40s,2m), repeat
+-- 1m30s (phase_hunter self-cast precedent); EVENT_BERSERK —
+-- DoCastSelf(Berserk 27680),
 -- 10min init, reschedules 10min (jaraxxus berserk precedent; C++
 -- casts triggered — no spell-mod bridge, noted). All timers cancelled
 -- on 2/4/23 (gargolmar precedent). No JustDied Talk in C++.
@@ -59,13 +62,24 @@
 -- SummonCreatureGroup ports, entry-gated so inert otherwise.
 -- SummonedCreatureDies/Despawn:
 -- guardCorpses GUID-set bookkeeping — no consumer bridge;
--- EVENT_IMPALE — SelectTarget(Random,0) -> DoCast(Impale 28783
--- / 25-man 56090), init randtime(10s,20s), repeat randtime(10s,20s),
--- with the anti-chain leg (GetTimeUntilEvent(EVENT_LOCUST) < 5s ->
--- skip) — STAYS OUT: phase-gated behind events.SetPhase(PHASE_NORMAL)
--- (no phase bridge — gothik precedent); the random-target leg itself
--- is bridgeable via randomPlayer (keleseth / thorim / archavon
--- precedent), but the phase gate rules.
+-- EVENT_IMPALE — PORTED 2026-10-25: SelectTarget(Random,0) ->
+-- DoCast(Impale 28783 / 25-man 56090, raid-moded via
+-- creature:Is25ManRaid() — C++ casts auto-resolve difficulty at
+-- Spell::prepare, Spell.cpp:524, and Go has no cast-time difficulty
+-- substitution), init randtime(10s,20s), repeat randtime(10s,20s).
+-- Phase semantics are emulated, not skipped: EventMap::ExecuteEvent
+-- (EventMap.cpp) ERASES a phase-mismatched event whose time expired
+-- instead of deferring it, so an impale expiring during PHASE_SWARM
+-- is DROPPED with no re-arm, and LOCUST_ENDS re-schedules impale
+-- randtime(10s,20s) — the swarmEnd handler below models exactly
+-- that. The anti-chain leg (GetTimeUntilEvent(EVENT_LOCUST) < 5s)
+-- likewise drops without re-arm (the C++ break skips Repeat); it is
+-- modeled with a locustSoon flag set 5s before each locust. The
+-- empty-target leg still re-arms (Repeat sits after the if/else);
+-- only its EnterEvadeMode stays out (no bridge, 2026-10-21).
+-- Single-key-timer delta: a C++ impale still pending past swarm end
+-- would coexist with the LOCUST_ENDS re-schedule (two interleaved
+-- impale timers); the Lua harness replaces it — timing-only delta.
 -- EVENT_SCARABS — random guardCorpses corpse ->
 -- creatureTarget->CastSpell(SUMMON_CORPSE_SCARABS_MOB 28864) +
 -- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
@@ -73,10 +87,11 @@
 -- guardCorpses GUID bookkeeping, no bridges (creature:SummonCreature /
 -- creature:Despawn are live on the boss surface, not cross-AI);
 -- EVENT_LOCUST / EVENT_LOCUST_ENDS phase legs — events.SetPhase(
--- PHASE_SWARM/PHASE_NORMAL) and the PHASE_NORMAL gating of IMPALE /
--- SCARABS — no phase bridge; only the unmodeled arms are phase-gated
--- so the modeled LOCUST timer emulates unhindered (documented); the
--- LOCUST_ENDS re-scheduling of IMPALE/SCARABS has no modeled content;
+-- PHASE_SWARM/PHASE_NORMAL) has no bridge, but its OBSERVABLE
+-- effects on impale are modeled (swarm drop + LOCUST_ENDS impale
+-- re-schedule, see EVENT_IMPALE above); the LOCUST_ENDS re-scheduling
+-- of SCARABS has no modeled content (scarabs stay out with the
+-- guardCorpses machine);
 -- KilledUnit player-gated arm — victim->CastSpell(victim,
 -- SPELL_SUMMON_CORPSE_SCARABS_PLR 29105, me->GetGUID()) — ported to the
 -- event-3 handler below (moroes convention: creature casts on the victim,
@@ -99,10 +114,17 @@ local EMOTE_SPAWN = 1 -- boss_anubrekhan.cpp:37
 local NPC_CRYPT_GUARD = 16573 -- naxxramas.h:104
 
 local SPELL_LOCUST_SWARM = 28785
+local SPELL_LOCUST_SWARM_25 = 54021 -- boss_anubrekhan.cpp:52
+local SPELL_IMPALE = 28783
+local SPELL_IMPALE_25 = 56090 -- boss_anubrekhan.cpp:51
 local SPELL_BERSERK = 27680
 local SPELL_SUMMON_CORPSE_SCARABS_PLR = 29105 -- boss_anubrekhan.cpp:55
 
 local timers = {}
+
+-- Per-GUID phase emulation for impale: swarm = inside a locust
+-- swarm (PHASE_SWARM), soon = a locust fires within 5s (anti-chain).
+local swarmState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -112,6 +134,7 @@ local function cancelTimers(guid)
         end
         timers[guid] = nil
     end
+    swarmState[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -126,15 +149,81 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EVENT_IMPALE (boss_anubrekhan.cpp:184-195): SelectTarget(
+-- Random, 0) -> DoCast(Impale), init randtime(10s,20s), repeat
+-- randtime(10s,20s). Threat-list pick (UnitAI.h:159, threat list;
+-- offline refs skipped at build, alive filter here), any-unit
+-- (playerOnly defaults false), no distance filter. Swarm/soon
+-- drops re-arm nothing (EventMap erase rule / anti-chain break);
+-- empty target still re-arms (Repeat after the if/else).
+local function impaleTick(creature, guid)
+    local st = swarmState[guid]
+    if st and (st.swarm or st.soon) then
+        return
+    end
+    local spell = SPELL_IMPALE
+    if creature:Is25ManRaid() then
+        spell = SPELL_IMPALE_25
+    end
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], spell)
+    end
+    schedule(guid, "impale", math.random(10000, 20000), function()
+        impaleTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_LOCUST_ENDS (boss_anubrekhan.cpp:209-213): phase back
+-- to NORMAL + re-schedule impale randtime(10s,20s) (scarabs leg
+-- stays out with the guardCorpses machine).
+local function swarmEndTick(creature, guid)
+    local st = swarmState[guid]
+    if st then
+        st.swarm = false
+    end
+    schedule(guid, "impale", math.random(10000, 20000), function()
+        impaleTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_LOCUST: Talk(EMOTE_LOCUST 3) + DoCastSelf(Locust Swarm
--- 28785), init randtime(1m40s,2m), repeat 1m30s. (events.SetPhase(
--- PHASE_SWARM/PHASE_NORMAL) and LOCUST_ENDS have no modeled content —
--- the phase gating only affects the unmodeled IMPALE/SCARABS arms.)
+-- 28785 / 25-man 54021), init randtime(1m40s,2m), repeat 1m30s.
+-- LOCUST_ENDS at RAID_MODE(19s, 23s) via the swarmEnd timer.
 local function locustTick(creature, guid)
     creature:Talk(EMOTE_LOCUST)
-    creature:CastSpell(creature, SPELL_LOCUST_SWARM)
+    local spell = SPELL_LOCUST_SWARM
+    if creature:Is25ManRaid() then
+        spell = SPELL_LOCUST_SWARM_25
+    end
+    creature:CastSpell(creature, spell)
+    local st = swarmState[guid]
+    if not st then
+        st = {}
+        swarmState[guid] = st
+    end
+    st.swarm = true
+    st.soon = false
+    local swarmEnd = 19000
+    if creature:Is25ManRaid() then
+        swarmEnd = 23000
+    end
+    schedule(guid, "swarmEnd", swarmEnd, function()
+        swarmEndTick(creature, guid)
+    end)
     schedule(guid, "locust", 90000, function()
         locustTick(creature, guid)
+    end)
+    schedule(guid, "locustSoon", 85000, function()
+        local s2 = swarmState[guid]
+        if s2 then
+            s2.soon = true
+        end
     end)
 end
 
@@ -151,8 +240,19 @@ local function anubrekhanEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    schedule(guid, "locust", math.random(100000, 120000), function()
+    swarmState[guid] = { swarm = false, soon = false }
+    local locustDelay = math.random(100000, 120000)
+    schedule(guid, "locust", locustDelay, function()
         locustTick(creature, guid)
+    end)
+    schedule(guid, "locustSoon", locustDelay - 5000, function()
+        local st = swarmState[guid]
+        if st then
+            st.soon = true
+        end
+    end)
+    schedule(guid, "impale", math.random(10000, 20000), function()
+        impaleTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)

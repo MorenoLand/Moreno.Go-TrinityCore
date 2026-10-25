@@ -140,16 +140,18 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — no distance
--- filter, no playerOnly flag (the anomalus / eadric precedent:
--- GetPlayersInWorld, same map/instance, alive).
+-- filter, no playerOnly flag: it draws the THREAT LIST (UnitAI.h:
+-- "from the threat list", SelectTargetList skips offline refs at
+-- build), not every player in the instance. The old GetPlayersInWorld
+-- pool could pick players never engaged with the boss — fixed
+-- 2026-10-25, same stale-pool class as the eadric / baltharus /
+-- archavon pools. Any-unit (playerOnly defaults false), alive
+-- (dead refs read offline, ThreatManager ShouldBeOffline).
 local function randomPlayer(creature)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
