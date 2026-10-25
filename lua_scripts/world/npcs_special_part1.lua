@@ -203,23 +203,26 @@ RegisterCreatureEvent(POLE_BUNNY_ENTRY, 23, onBunnyReset)
 RegisterCreatureEvent(POLE_BUNNY_ENTRY, 4, onBunnyReset)
 
 -- npc_doctor (C++ :583-772; Gustav Vanhowzen 12939 / Gregory Victor 12920,
--- in-file enum Doctor :534-541) — DOCUMENTED-ONLY (summon-machine).
--- Arms: Reset :646-650; BeginEvent :655-683 (fires from OnQuestAccept :768-772
--- on quests 6624/6622, loads AllianceCoords 7 / HordeCoords 6 positions);
--- PatientDied :686-708 (FailQuest after 5 deaths — bridge live,
--- lua_player.go:410; arm rides the unbridged DoAction relay);
--- PatientSaved :710-746 (AreaExploredOrEventHappens at 15 saved — no
--- bridge); UpdateAI :893-946 (10s summon timer, picks random Coordinates
--- point, summons 12938/12936/12937 or 12923/12924/12925 via
--- me->SummonCreature :922 (bridge live — stale "NO SummonCreature
--- bridge" retracted) — but the machine's heart is the cross-AI write
--- (Patient->AI()->DoctorGUID + Coord, no bridge), the PatientDied /
--- PatientSaved DoAction relay (no bridge), FailQuest (bridged,
--- lua_player.go:410) and AreaExploredOrEventHappens (no bridge) — summon alone spawns
--- patients the machine can never track.
--- UNIT_FLAG_NOT_SELECTABLE / UNIT_FLAG_PLAYER_CONTROLLED manipulation
--- is bridgeable (creature:SetFlag, lua_creature_events.go:1919) — the
--- blockers are the cross-AI legs above, not the flag.
+-- in-file enum Doctor :534-541) -- PORTED below (Lua-state twin of the
+-- summon-machine; the old "DOCUMENTED-ONLY" verdict is retracted).
+-- Ported arms: Reset :646-650 (state clear + RemoveFlag NOT_SELECTABLE,
+-- events 23/4); BeginEvent :655-683 via OnQuestAccept event 31 (quests
+-- 6624/6622; coords copied per entry, SetFlag NOT_SELECTABLE); UpdateAI
+-- :886-946 via event-7 pump (100 ticks = C++ 10s timer; 20-summon cap
+-- resets; empty-coords tick retries without resetting, C++-exact);
+-- PatientSaved :710-746 via patient SpellHit event 14 (15th save:
+-- remaining patients Despawned, AreaExploredOrEventHappens on the
+-- INCOMPLETE quest -- new player bridge this tick, lua_player.go --
+-- then doctor Reset); patient SpellHit :828-871 flags/stand/Talk legs
+-- (NOT_SELECTABLE on, IN_COMBAT off, SetStandState(0), Talk SAY_DOC 0).
+-- Deviations (documented, no bridge): the 15-save mass-death is Despawn,
+-- not setDeathState JUST_DIED (no bridge); SetWalk(false) + MovePoint
+-- run-to legs stay out (no SetWalk/MovePoint bridges); the PatientDied
+-- fail-after-5 path stays out (Lua patients floor at 2-6 HP on the
+-- ported decay arm, never reaching the C++ death arm, so it cannot fire).
+-- The cross-AI DoctorGUID/Coord write is modeled as module tables keyed
+-- by GUID (doctorState + patientDoctor), the timers-table idiom.
+-- Summon args are C++-exact: type 3 TIMED_DESPAWN_OUT_OF_COMBAT, 5000ms.
 
 -- npc_injured_patient (C++ :778-890; entries 12923/12924/12925,
 -- 12936/12937/12938 in-file) — Reset arm PORTED below; rest DOCUMENTED-ONLY.
@@ -300,6 +303,221 @@ end
 
 for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
     RegisterCreatureEvent(patientEntry, 7, injuredPatientDecay)
+end
+
+-- npc_doctor machine -- PORTED (C++ npcs_special.cpp:583-772, :886-946).
+-- State lives in module tables keyed by GUID because Lua has no cross-AI
+-- write: doctorState[doctorGUID] is the doctor AI (playerGUID, coords
+-- pool, count, saved, ticks, patients); patientDoctor[patientGUID] is
+-- the C++ Patient->AI()->DoctorGUID link. The doctor object itself is
+-- kept in state.doctorObj for the 15-save Reset flag clear (opera
+-- live-ref precedent); doctors never despawn mid-event.
+local DOCTOR_ALLIANCE = 12939
+local DOCTOR_HORDE = 12920
+local DOCTOR_ENTRIES = { 12939, 12920 }
+local QUEST_TRIAGE_ALLIANCE = 6624
+local QUEST_TRIAGE_HORDE = 6622
+local QUEST_INCOMPLETE = 3
+local SPELL_TRIAGE_HEAL = 20804
+
+local TRIAGE_ALLIANCE_COORDS = {
+    { -3757.38, -4533.05, 14.16, 3.62 },
+    { -3754.36, -4539.13, 14.16, 5.13 },
+    { -3749.54, -4540.25, 14.28, 3.34 },
+    { -3742.10, -4536.85, 14.28, 3.64 },
+    { -3755.89, -4529.07, 14.05, 0.57 },
+    { -3749.51, -4527.08, 14.07, 5.26 },
+    { -3746.37, -4525.35, 14.16, 5.22 },
+}
+local TRIAGE_HORDE_COORDS = {
+    { -1013.75, -3492.59, 62.62, 4.34 },
+    { -1017.72, -3490.92, 62.62, 4.34 },
+    { -1015.77, -3497.15, 62.82, 4.34 },
+    { -1019.51, -3495.49, 62.82, 4.34 },
+    { -1017.25, -3500.85, 62.98, 4.34 },
+    { -1020.95, -3499.21, 62.98, 4.34 },
+}
+local TRIAGE_ALLIANCE_SOLDIERS = { 12938, 12936, 12937 }
+local TRIAGE_HORDE_SOLDIERS = { 12923, 12924, 12925 }
+
+local TRIAGE_FLAG_NOT_SELECTABLE = 0x02000000
+local TRIAGE_FLAG_IN_COMBAT = 0x00080000
+local TRIAGE_FLAG_PLAYER_CONTROLLED = 0x00000008
+
+local doctorState = {}
+local patientDoctor = {}
+
+local function doctorClearState(doctorGUID)
+    local state = doctorState[doctorGUID]
+    if state then
+        for patientGUID, _ in pairs(state.patients) do
+            patientDoctor[patientGUID] = nil
+        end
+    end
+    doctorState[doctorGUID] = nil
+end
+
+-- C++ Reset :646-650 (Initialize + RemoveFlag NOT_SELECTABLE).
+local function doctorReset(event, creature)
+    doctorClearState(creature:GetGUID())
+    creature:RemoveFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+end
+
+-- Doctor death has no C++ arm; clear the Lua state so a stale table
+-- cannot resurrect the event.
+local function doctorDied(event, creature)
+    doctorClearState(creature:GetGUID())
+end
+
+-- C++ BeginEvent :655-683, fired from OnQuestAccept :768-772.
+local function doctorQuestAccept(event, player, creature, quest)
+    if not quest then
+        return
+    end
+    local questId = quest:GetId()
+    if questId ~= QUEST_TRIAGE_ALLIANCE and questId ~= QUEST_TRIAGE_HORDE then
+        return
+    end
+    local entry = creature:GetEntry()
+    local coords = nil
+    if entry == DOCTOR_ALLIANCE then
+        coords = TRIAGE_ALLIANCE_COORDS
+    elseif entry == DOCTOR_HORDE then
+        coords = TRIAGE_HORDE_COORDS
+    else
+        return
+    end
+    local pool = {}
+    for i, coord in ipairs(coords) do
+        pool[i] = coord
+    end
+    doctorState[creature:GetGUID()] = {
+        doctorObj = creature,
+        playerGUID = player:GetGUID(),
+        coords = pool,
+        count = 0,
+        saved = 0,
+        ticks = 0,
+        patients = {},
+    }
+    creature:SetFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+end
+
+-- C++ UpdateAI :886-946. Event 7 ticks every 100ms, so 100 ticks is the
+-- C++ 10s SummonPatientTimer; the timer reset + count increment happen
+-- even on a failed summon (C++ order), while an empty coords pool
+-- returns without resetting (next tick retries).
+local function doctorAIUpdate(event, creature)
+    local state = doctorState[creature:GetGUID()]
+    if not state then
+        return
+    end
+    if state.count >= 20 then
+        doctorReset(event, creature)
+        return
+    end
+    state.ticks = state.ticks + 1
+    if state.ticks < 100 then
+        return
+    end
+    if #state.coords == 0 then
+        return
+    end
+    local soldiers = TRIAGE_HORDE_SOLDIERS
+    if creature:GetEntry() == DOCTOR_ALLIANCE then
+        soldiers = TRIAGE_ALLIANCE_SOLDIERS
+    end
+    local patientEntry = soldiers[math.random(#soldiers)]
+    local idx = math.random(#state.coords)
+    local coord = state.coords[idx]
+    local patient = creature:SummonCreature(patientEntry, coord[1], coord[2], coord[3], coord[4], 3, 5000)
+    if patient then
+        patient:SetFlag(59, TRIAGE_FLAG_PLAYER_CONTROLLED)
+        local patientGUID = patient:GetGUID()
+        state.patients[patientGUID] = { coord = coord, obj = patient }
+        patientDoctor[patientGUID] = creature:GetGUID()
+        table.remove(state.coords, idx)
+    end
+    state.ticks = 0
+    state.count = state.count + 1
+end
+
+-- C++ PatientSaved :710-746. Returns true when the event completed
+-- (15th save), so the caller skips the SpellHit tail: C++ runs that
+-- tail on a JUST_DIED corpse (a visual no-op), while Lua already
+-- despawned the patient and must not call methods on it.
+local function doctorPatientSaved(state, doctorGUID, patientGUID, player)
+    state.saved = state.saved + 1
+    local record = state.patients[patientGUID]
+    if state.saved == 15 then
+        for guid, rec in pairs(state.patients) do
+            if rec.obj then
+                rec.obj:Despawn()
+            end
+            patientDoctor[guid] = nil
+        end
+        if player:GetQuestStatus(QUEST_TRIAGE_ALLIANCE) == QUEST_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_TRIAGE_ALLIANCE)
+        elseif player:GetQuestStatus(QUEST_TRIAGE_HORDE) == QUEST_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_TRIAGE_HORDE)
+        end
+        local doctorObj = state.doctorObj
+        doctorState[doctorGUID] = nil
+        if doctorObj then
+            doctorObj:RemoveFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+        end
+        return true
+    end
+    if record then
+        table.insert(state.coords, record.coord)
+    end
+    return false
+end
+
+-- C++ npc_injured_patient SpellHit :828-871. The caster->ToPlayer()
+-- gate is the GetQuestStatus-function check (object.go returns nil for
+-- unknown methods, so a creature caster reads nil, not an error).
+-- The flags/stand/Talk tail runs even without a doctor link or quest
+-- match (C++ order); only the 15-save completion skips it (see above).
+-- SetWalk(false) + MovePoint run-to stay out: no bridges.
+local function patientSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_TRIAGE_HEAL then
+        return
+    end
+    if creature:IsDead() then
+        return
+    end
+    if caster == nil or type(caster.GetQuestStatus) ~= "function" then
+        return
+    end
+    local doctorGUID = patientDoctor[creature:GetGUID()]
+    local eventDone = false
+    if doctorGUID then
+        local state = doctorState[doctorGUID]
+        if state and caster:GetGUID() == state.playerGUID then
+            if caster:GetQuestStatus(QUEST_TRIAGE_ALLIANCE) == QUEST_INCOMPLETE or caster:GetQuestStatus(QUEST_TRIAGE_HORDE) == QUEST_INCOMPLETE then
+                eventDone = doctorPatientSaved(state, doctorGUID, creature:GetGUID(), caster)
+            end
+        end
+    end
+    if eventDone then
+        return
+    end
+    creature:SetFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+    creature:RemoveFlag(59, TRIAGE_FLAG_IN_COMBAT)
+    creature:SetStandState(0)
+    creature:Talk(0)
+end
+
+for _, doctorEntry in ipairs(DOCTOR_ENTRIES) do
+    RegisterCreatureEvent(doctorEntry, 31, doctorQuestAccept)
+    RegisterCreatureEvent(doctorEntry, 7, doctorAIUpdate)
+    RegisterCreatureEvent(doctorEntry, 23, doctorReset)
+    RegisterCreatureEvent(doctorEntry, 4, doctorDied)
+end
+
+for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
+    RegisterCreatureEvent(patientEntry, 14, patientSpellHit)
 end
 
 -- npc_garments_of_quests (C++ :962-1123; entries 12429/12423/12427/12430/12428

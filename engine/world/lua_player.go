@@ -704,6 +704,21 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// AreaExploredOrEventHappens mirrors Player::AreaExploredOrEventHappens
+	// (Player.cpp:16503-16527) via the session areaExploredOrEventHappens
+	// twin (quests.go): the explored flip plus the CanCompleteQuest-gated
+	// completion, so a quest whose objectives are not yet done is NOT
+	// completed by this call.
+	methods["AreaExploredOrEventHappens"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			s.areaExploredOrEventHappens(lctx, quest)
+		}
+		return nil, nil
+	}
 	// KilledMonsterCredit runs Player::KilledMonsterCredit
 	// (Player.cpp:16636) via the session grantKillCreditMonster twin
 	// (kill.go): timed achievement, KILL_CREATURE criteria, then the quest
