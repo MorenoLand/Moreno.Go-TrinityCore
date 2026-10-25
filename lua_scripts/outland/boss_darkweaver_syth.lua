@@ -112,14 +112,23 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 0) — playerOnly defaults false (UnitAI.h:170),
--- so the pool is the whole threat list (pets/totems included): plain
--- pick over GetAITargets (the bridged threat list; midnight precedent).
+-- so the pool is the whole threat list (pets/totems included). Dead
+-- victims go offline via ShouldBeOffline / _IsTargetAcceptable
+-- (Creature.cpp:2508, UNIT_STATE_DIED) and SelectTargetList skips
+-- offline refs (UnitAI.h), so the pick filters dead entries; Go's
+-- GetAITargets carries them until the async motion prune.
 local function randomThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- C++ shock arms (:212-231): SelectTarget(Random, 0) →

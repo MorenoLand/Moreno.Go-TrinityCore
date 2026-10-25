@@ -219,14 +219,22 @@ end
 
 -- C++ SelectTarget(Random, 0) with playerOnly=FALSE (UnitAI.h:170):
 -- random over the threat list, pets/totems eligible. Bridged via
--- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
--- the boss_midnight randomTargetAnywhere precedent.
+-- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345).
+-- Dead victims go offline via ShouldBeOffline / _IsTargetAcceptable
+-- (Creature.cpp:2508, UNIT_STATE_DIED) and SelectTargetList skips
+-- offline refs (UnitAI.h), so the pick filters dead entries.
 local function randomThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- ================= Lady Sacrolash (25165) =================

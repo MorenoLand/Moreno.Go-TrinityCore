@@ -147,7 +147,16 @@ local function randomThreatTarget(creature)
     if targets == nil or #targets == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
+        return nil
+    end
+    return alive[math.random(#alive)]
 end
 
 -- C++ Initialize() values (the peon/intro machine is

@@ -100,12 +100,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Threat-list target pools exact (band reach-adjusted, target reach
--- unmodeled): boss_midnight.cpp:154-160,189-215 source charge and
--- intangible-presence picks from GetThreatManager().GetUnsortedThreatList(),
--- never the whole instance map. GetAITargets (lua_creature_events.go:345) is
--- the bridged threat list; GetDistance2d resolves via the generic fallback
--- (engine/scripting/object.go:158). C++ applies no dead filter, so none added.
+-- Threat-list target pools: boss_midnight.cpp:154-160,189-215. The charge
+-- arm iterates GetThreatManager().GetUnsortedThreatList() raw (no offline
+-- skip, dead victims in the 8-25 band stay candidates), so
+-- randomTargetInBand keeps no dead filter. The intangible-presence arm is
+-- SelectTarget(Random, 0) (:112): SelectTargetList skips offline refs
+-- (UnitAI.h) and dead victims go offline via ShouldBeOffline /
+-- _IsTargetAcceptable (Creature.cpp:2508, UNIT_STATE_DIED), so
+-- randomTargetAnywhere filters dead entries. GetAITargets
+-- (lua_creature_events.go:345) is the bridged threat list; GetDistance2d
+-- resolves via the generic fallback (engine/scripting/object.go:158).
 local function randomTargetInBand(creature, minDist, maxDist)
     -- C++ IsWithinDist(me, d, false) compares raw 2D dist against
     -- d + own reach + target reach (Object.cpp _IsWithinDist); Go's
@@ -127,10 +131,16 @@ end
 
 local function randomTargetAnywhere(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- Midnight (16151) ------------------------------------------------------------
