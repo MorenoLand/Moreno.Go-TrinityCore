@@ -17,10 +17,13 @@
 -- class, damage IS subtracted, NOT the golemagg 704fb8e bug
 -- class): NO once-guard in C++ — every damaging hit below 25%
 -- re-fires: non-triggered DoCast(me, frenzy 8269) +
--- Talk(EMOTE_FRENZY 0) + ScheduleEvent(EVENT_FRENZY, 24s),
--- so the frenzy timer re-arms 24s on each sub-25% hit.
--- UpdateAI EVENT_FRENZY: non-triggered self-cast frenzy 8269 +
--- Talk(EMOTE_FRENZY 0), re-arm 24s. Zero Talk lines beyond
+-- Talk(EMOTE_FRENZY 0) + ScheduleEvent(EVENT_FRENZY, 24s).
+-- C++ EventMap is a multimap and ScheduleEvent cancels nothing
+-- (EventMap.h: "An existing event is not canceled"), so every
+-- sub-25% hit grows a permanent parallel 24s frenzy chain —
+-- NOT a single re-armed timer. UpdateAI EVENT_FRENZY:
+-- non-triggered self-cast frenzy 8269 + Talk(EMOTE_FRENZY 0),
+-- re-arm 24s per chain link. Zero Talk lines beyond
 -- EMOTE_FRENZY.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue
 -- gate and the post-event casting check have no UNIT_STATE
@@ -42,6 +45,7 @@ local SPELL_FRENZY = 8269
 local EMOTE_FRENZY = 0
 
 local timers = {}
+local frenzyChains = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -73,15 +77,34 @@ local function onSelfTimer(creature, guid, spell, key, rearm, fn)
     end)
 end
 
--- C++ EVENT_FRENZY: non-triggered self-cast frenzy + Talk(EMOTE_FRENZY);
--- re-arms 24s. Also fired from DamageTaken below 25% (no once-guard,
--- each sub-25% hit re-arms the timer via schedule()).
-local function onFrenzy(creature, guid)
-    creature:CastSpell(creature, SPELL_FRENZY)
-    creature:Talk(EMOTE_FRENZY)
-    schedule(guid, "frenzy", 24000, function()
-        onFrenzy(creature, guid)
-    end)
+-- C++ EVENT_FRENZY chain link: non-triggered self-cast frenzy +
+-- Talk(EMOTE_FRENZY), then the link schedules its own successor
+-- independently. C++ ScheduleEvent never cancels a pending event
+-- (EventMap.h multimap store), so each DamageTaken chain below
+-- keeps its own 24s cadence; a keyed schedule() here would
+-- collapse all chains into one (the RescheduleEvent semantic).
+local function scheduleFrenzyChain(creature, guid)
+    local id
+    id = CreateLuaEvent(function()
+        local chains = frenzyChains[guid]
+        if chains then
+            for i, v in ipairs(chains) do
+                if v == id then
+                    table.remove(chains, i)
+                    break
+                end
+            end
+        end
+        creature:CastSpell(creature, SPELL_FRENZY)
+        creature:Talk(EMOTE_FRENZY)
+        scheduleFrenzyChain(creature, guid)
+    end, 24000)
+    local chains = frenzyChains[guid]
+    if not chains then
+        chains = {}
+        frenzyChains[guid] = chains
+    end
+    chains[#chains + 1] = id
 end
 
 local function onFireShield(creature, guid)
@@ -94,6 +117,13 @@ end
 
 local function vectusResetState(guid)
     cancelTimers(guid)
+    local chains = frenzyChains[guid]
+    if chains then
+        for _, id in ipairs(chains) do
+            RemoveEventById(id)
+        end
+        frenzyChains[guid] = nil
+    end
 end
 
 local function vectusEnterCombat(event, creature, target)
@@ -123,15 +153,17 @@ end
 -- where post-damage health drops strictly below 25%
 -- (HealthBelowPctDamaged(25, damage)). Modeled on the pre-damage
 -- hook (event 9): non-triggered self-cast frenzy + Talk +
--- 24s schedule (schedule() replaces any pending frenzy timer,
--- matching C++ events.ScheduleEvent).
+-- one new independent 24s chain (C++ ScheduleEvent adds to the
+-- multimap; it never replaces the pending frenzy event).
 local function vectusDamageTaken(event, creature, attacker, damage)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
     if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
-        onFrenzy(creature, creature:GetGUID())
+        creature:CastSpell(creature, SPELL_FRENZY)
+        creature:Talk(EMOTE_FRENZY)
+        scheduleFrenzyChain(creature, creature:GetGUID())
     end
 end
 
