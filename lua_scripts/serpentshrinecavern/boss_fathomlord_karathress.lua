@@ -279,16 +279,19 @@ local function karathressTick(creature, guid)
     -- Cyclone: 30-40s — SummonCreature(CREATURE_CYCLONE 22104) at self
     -- position, random orientation 0-4, TEMPSUMMON_TIMED_DESPAWN 15s
     -- (C++ boss_fathomlord_karathress.cpp:656-673, C++ arm order: the
-    -- timer re-arms before the summon). The SetObjectScale(3.0) leg has
-    -- no bridge; the AttackStart leg has no cross-AI bridge. The
-    -- SetFlag(NOT_SELECTABLE) / SetFaction / triggered self-cast
-    -- SPELL_CYCLONE_CYCLONE 29538 legs are bridged — PORTED 2026-10-23.
+    -- timer re-arms before the summon). The AttackStart leg has no
+    -- cross-AI bridge. The SetFlag(NOT_SELECTABLE) / SetFaction /
+    -- triggered self-cast SPELL_CYCLONE_CYCLONE 29538 legs are bridged
+    -- — PORTED 2026-10-23; the SetObjectScale(3.0) leg is PORTED
+    -- 2026-10-25 via the live SetScale bridge (the header's old
+    -- "no bridge" claim on it was stale).
     st.cyclone = st.cyclone - 1000
     if st.cyclone <= 0 then
         local cyclone = creature:SummonCreature(CREATURE_CYCLONE,
             creature:GetX(), creature:GetY(), creature:GetZ(),
             math.random(0, 4), 2, 15000)
         if cyclone then
+            cyclone:SetScale(3.0)
             cyclone:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             cyclone:SetFaction(creature:GetFaction())
             cyclone:CastSpell(cyclone, SPELL_CYCLONE_CYCLONE, true)
