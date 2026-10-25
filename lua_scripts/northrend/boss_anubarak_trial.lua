@@ -203,11 +203,15 @@
 -- GUID-latch/summon-STRAND grounds): SetReactState(REACT_PASSIVE) +
 -- DoCast(Frost Sphere 67539) + SetDisplayId, C++ order; MoveRandom
 -- stays out (no motion-master bridge);
--- DamageTaken + MovementInform(POINT_FALL_GROUND)
--- ground-impact machine (event 9 DamageTaken IS bridged — the old
--- "no DamageTaken hook" claim is stale; no MovementInform hook;
--- no flag / aura / motion bridges — display bridge live
--- 2026-10-20 but the hook machine itself is unported).
+-- DamageTaken cheat-death core PORTED in frostSphereDamageTaken
+-- (ev9, spike precedent): lethal damage zeroed (return false, 0)
+-- + SetFlag(NOT_SELECTABLE), the legs both C++ branches share
+-- (boss_anubarak_trial.cpp:635-665); the permafrost tail stays out:
+-- the ground-vs-air branch needs UpdateGroundPositionZ (no
+-- terrain-height bridge), the air fall needs MoveFall (no bridge),
+-- and the landing MODEL + VISUAL + PERMAFROST + scale-2.0 legs need
+-- a MovementInform hook (none) — the old "no flag bridge" claim is
+-- stale (SetFlag live, lua_creature_events.go:968+).
 -- spell_pursuing_spikes (AuraScript 65920/65922/65923) —
 -- PeriodicTick permafrost-caster check -> Spike Fail 66181 +
 -- DisappearAndDie — no AuraScript binding bridge (razelikh
@@ -435,3 +439,24 @@ RegisterCreatureEvent(ENTRY_SPIKE, 9, spikeDamageTaken)
 RegisterCreatureEvent(ENTRY_SPIKE, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_anubarak_trial.cpp:734: custom UpdateAI never calls DoMeleeAttackIfReady (chase/self-cast machine in C++, never melees)
 end)
+
+-- C++ npc_frost_sphereAI::DamageTaken (boss_anubarak_trial.cpp:635-665):
+-- lethal damage is zeroed in both branches (ground: MoveIdle +
+-- SetFlag(NOT_SELECTABLE) + RemoveAurasDueToSpell(FROST_SPHERE) +
+-- DoCast(PERMAFROST_MODEL 66185) + DoCast(PERMAFROST 66193) +
+-- SetObjectScale(2.0); air: MoveIdle + SetFlag(NOT_SELECTABLE) +
+-- emote + MoveFall(POINT_FALL_GROUND), whose landing arm casts
+-- MODEL + VISUAL 65882 + PERMAFROST + scale 2.0). Only the shared
+-- legs port: damage zero + flag (keleseth skeleton precedent);
+-- MoveIdle / MoveFall / the ground-height branch decision /
+-- the landing hook have no bridges, so the permafrost tail stays
+-- out rather than firing early on an airborne sphere.
+local function frostSphereDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health > 0 and damage >= health then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        return false, 0
+    end
+end
+
+RegisterCreatureEvent(NPC_FROST_SPHERE, 9, frostSphereDamageTaken)
