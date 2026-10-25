@@ -38,17 +38,24 @@
 --   cap, playerOnly false, no dead filter, midnight precedent),
 --   non-triggered, init 30s -> {25s,40s}.
 -- - Grip of the Legion 31972: SelectTargetMethod::Random, 0 with no
---   range cap (unbounded alive player in the instance — nefarian
---   randomAlivePlayer convention); SelectTarget's withTank defaults to
---   true (UnitAI.h:170) so _exception is nullptr and the tank is INCLUDED
---   (C++-exact), non-triggered, init {5s,25s} -> {5s,25s}.
+--   range cap — the pool is the THREAT LIST (UnitAI.h: SelectTarget
+--   draws from the threat list; playerOnly defaults false, withTank
+--   defaults true so _exception is nullptr and the tank is INCLUDED),
+--   any unit type, dead filtered as offline (azgalor idiom); the old
+--   world-player pool (nefarian convention) is retracted — it could pick
+--   never-engaged instance players and missed threat-list creatures.
+--   Non-triggered, init {5s,25s} -> {5s,25s}.
 -- - Finger of Death 31984: init 15s. C++ checks
---   SelectTarget(Random, 0, 5.0f): no target within 5 yards (tank
---   INCLUDED in the pool, withTank=true default) -> cast on
---   SelectTarget(Random, 0) (tank included; a second, independent
---   selection — may be nil, DoCast nil no-op), re-arm 1s;
---   target in melee range -> re-arm 5s (no tank-revictiming leg in the
---   actual code — the class comment's aggro-swap paragraph is aspirational).
+--   SelectTarget(Random, 0, 5.0f): no THREAT-LIST target within 5 yards
+--   (tank INCLUDED, withTank=true default; any unit type,
+--   playerOnly=false) -> cast on SelectTarget(Random, 0) (threat list
+--   again; a second, independent selection — may be nil, DoCast nil
+--   no-op), re-arm 1s; target in melee range -> re-arm 5s (no
+--   tank-revictiming leg in the actual code — the class comment's
+--   aggro-swap paragraph is aspirational). The old world-player melee
+--   check is retracted (same threat-list doctrine as grip); the 5yd
+--   check uses GetDistance as the IsWithinCombatRange approximation
+--   (combat reach unmodeled).
 -- - Hand of Death 35354 (the 10-minute raid wiper): DoCastAOE resolves
 --   to self-cast, non-triggered, init 10min -> 2s (C++-exact).
 -- - Soul charges: C++ KilledUnit casts SPELL_SOUL_CHARGE_RED/YELLOW/GREEN
@@ -69,7 +76,11 @@
 -- - KilledUnit (event 3): Talk SAY_SLAY (4) unconditionally (C++ talks
 --   before the TYPEID gate), then the charge leg above for players
 --   (victim:GetObjectType() == "Player" gate — terestian_illhoof
---   convention).
+--   convention). The unleash schedule fires on EVERY player kill,
+--   including death knights (no class bucket): C++ schedules
+--   EVENT_UNLEASH_SOUL_CHARGE after the switch regardless of bucket
+--   (and ++SoulChargeCount, which is never read, so it stays
+--   unmodeled); only the stack increment is bucket-gated.
 -- - DamageTaken (event 9, wired — pre-damage, aku_mai convention):
 --   HealthBelowPctDamaged(10, damage): if not yet enraged -> Talk
 --   SAY_ENRAGE (5) + enraged flag (C++ MotionMaster Clear + MoveIdle has
@@ -226,62 +237,34 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
--- janalai convention: bounded random alive player.
-local function randomPlayerInRange(creature, maxDist, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victim = creature:GetVictim()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:GetDistance(p) <= maxDist
-                and not (excludeVictim and victim and p == victim) then
-            found[#found + 1] = p
+-- C++ SelectTarget draws from the threat list (UnitAI.h doc comment):
+-- Random, 0 with defaults (dist 0 = no cap, playerOnly false,
+-- withTank true) is a random threat entry of any unit type, tank
+-- included; dead entries are filtered as offline (azgalor idiom).
+local function randomThreatTarget(creature)
+    local pool = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            pool[#pool + 1] = t
         end
     end
-    if #found == 0 then
+    if #pool == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return pool[math.random(#pool)]
 end
 
--- nefarian convention: unbounded random alive player in the instance.
-local function alivePlayersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget(Random, 0, maxDist) existence check: any alive
+-- threat entry within maxDist yards (GetDistance approximates
+-- IsWithinCombatRange; combat reach unmodeled). Only existence
+-- matters here, so the first match is returned, not a random pick.
+local function threatTargetInRange(creature, maxDist)
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() and creature:GetDistance(t) <= maxDist then
+            return t
         end
     end
-    return found
-end
-
--- nefarian convention: unbounded random alive player in the instance.
--- C++ SelectTarget(Random, 0) for the grip and finger-of-death legs is
--- DefaultTargetSelector(me, dist=0, playerOnly=false, withTank=true, 0):
--- withTank defaults to true (UnitAI.h:170), so _exception is nullptr and
--- the tank is INCLUDED; dist=0 means no range cap
--- (UnitAI.h comment: "if 0: ignored"; UnitAI.cpp:254 verified).
--- excludeVictim is a helper parameter only: the grip/finger legs pass
--- false; Air Burst / Doomfire use offset=1 ("not on tank" per the C++
--- comment) and pass true.
-local function randomAlivePlayer(creature, excludeVictim)
-    local players = alivePlayersInInstance(creature)
-    if excludeVictim then
-        local victim = creature:GetVictim()
-        if victim then
-            for i = #players, 1, -1 do
-                if players[i] == victim then
-                    table.remove(players, i)
-                end
-            end
-        end
-    end
-    if #players == 0 then
-        return nil
-    end
-    return players[math.random(#players)]
+    return nil
 end
 
 -- C++ EVENT_FEAR: DoCastAOE(31970), non-triggered, init 42s -> 42s
@@ -318,9 +301,9 @@ end
 -- C++ EVENT_GRIP_OF_THE_LEGION: DoCast(SelectTarget(Random, 0),
 -- 31972), non-triggered, init {5s,25s} -> {5s,25s}. SelectTarget's
 -- withTank defaults to true (UnitAI.h:170), so the tank is INCLUDED —
--- randomAlivePlayer(creature, false) is C++-exact.
+-- randomThreatTarget (threat list, any unit) is C++-exact.
 local function onGrip(creature, guid)
-    local target = randomAlivePlayer(creature, false)
+    local target = randomThreatTarget(creature)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_GRIP_OF_THE_LEGION)
     end
@@ -329,14 +312,15 @@ local function onGrip(creature, guid)
     end)
 end
 
--- C++ EVENT_FINGER_OF_DEATH: no target within 5 yards (tank INCLUDED
--- in the pool — withTank defaults to true, UnitAI.h:170) ->
--- DoCast(SelectTarget(Random, 0), 31984) (tank included again), re-arm
--- 1s; else re-arm 5s. The second selection is independent (may be nil ->
--- DoCast nil no-op), non-triggered, init 15s.
+-- C++ EVENT_FINGER_OF_DEATH: no THREAT-LIST target within 5 yards
+-- (tank INCLUDED in the pool — withTank defaults to true, UnitAI.h:170;
+-- any unit type, playerOnly false) -> DoCast(SelectTarget(Random, 0),
+-- 31984) (threat list again, tank included), re-arm 1s; else re-arm 5s.
+-- The second selection is independent (may be nil -> DoCast nil no-op),
+-- non-triggered, init 15s.
 local function onFingerOfDeath(creature, guid)
-    if not randomPlayerInRange(creature, 5, false) then
-        local target = randomAlivePlayer(creature, false)
+    if not threatTargetInRange(creature, 5) then
+        local target = randomThreatTarget(creature)
         if target and not target:IsDead() then
             creature:CastSpell(target, SPELL_FINGER_OF_DEATH)
         end
@@ -478,15 +462,18 @@ end
 local function onKilledUnit(event, creature, victim)
     creature:Talk(SAY_SLAY)
     if victim and victim:GetObjectType() == "Player" then
+        local guid = creature:GetGUID()
         local color = chargeColor(victim:GetClass())
         if color then
-            local guid = creature:GetGUID()
             local st = bossState(guid)
             st.charges[color] = st.charges[color] + 1
-            schedule(guid, "unleash", math.random(2000, 30000), function()
-                onUnleashSoulCharge(creature, guid)
-            end)
         end
+        -- C++ schedules EVENT_UNLEASH_SOUL_CHARGE after the class
+        -- switch on every player kill, bucket or not (death knights
+        -- gain no stack but still schedule the unleash tick).
+        schedule(guid, "unleash", math.random(2000, 30000), function()
+            onUnleashSoulCharge(creature, guid)
+        end)
     end
 end
 
