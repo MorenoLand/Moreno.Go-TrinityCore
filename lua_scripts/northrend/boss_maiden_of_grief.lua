@@ -141,24 +141,21 @@ end
 -- seed the timer machine here: the C++ EventMap only ticks once
 -- UpdateAI runs with a victim, so engage-seeding is
 -- behavior-identical (the krystallus precedent).
--- random alive player in the instance (anyAlivePlayer / vezax
--- precedent); C++ SelectTarget(Random, 1, 0.0f, true) excludes top
--- threat; the malchezaar randomAlivePlayer idiom emulates the offset-1
--- skip by excluding the current victim's GUID (no threat-list bridge,
--- victim is top threat here); the else-leg DoCastVictim (:127) is the
+-- C++ SelectTarget draws the threat list (UnitAI.h), not the
+-- instance-player pool; offset 1 skips the threat head BEFORE the
+-- player filter (UnitAI.h:214-280, eck/bronjahm precedent) — the old
+-- victim-GUID exclusion was wrong whenever top threat != victim.
+-- skipFirst=true serves PILLAR (offset 1); false serves PARTING
+-- (offset 0, tank eligible). The else-leg DoCastVictim (:127) is the
 -- nil-target fallback.
-local function randomPlayerTarget(creature, excludeVictim)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local victimGuid = nil
-    if excludeVictim then
-        local victim = creature:GetVictim()
-        victimGuid = victim ~= nil and victim:GetGUID() or nil
-    end
+local function randomPlayerTarget(creature, skipFirst)
+    local start = skipFirst and 2 or 1
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and plr:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = plr
+    for i = start, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

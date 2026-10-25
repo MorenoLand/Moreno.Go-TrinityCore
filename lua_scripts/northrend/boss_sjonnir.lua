@@ -157,18 +157,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 100, true) — random alive player within 100.0f
--- (the moragg optic-link precedent; creature:IsWithinDist is bridged —
--- engine/scripting/object.go:167; the cairne/kazzak "absent random-target
--- bridge" claim is STALE).
+-- C++ SelectTarget(Random, 0, 100, true) draws the threat list, not
+-- the instance-player pool (UnitAI.h; C++ skips offline refs, Go
+-- SortedEntries returns dead too — the bronjahm/devourer/nexus
+-- threat-pool fix class); creature:IsWithinDist is bridged
+-- (engine/scripting/object.go:167).
 local function randomPlayerInRange(creature, dist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, dist) then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:IsWithinDist(t, dist) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then

@@ -119,18 +119,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, dist, true) — random alive player on the
--- same map/instance within dist (the eck randomNonTankPlayer / keleseth /
--- thorim / archavon GetPlayersInWorld precedent); offset 0 means the main
--- tank is eligible, so no victim exclusion.
+-- C++ SelectTarget(Random, 0, dist, true) draws the threat list, not
+-- the instance-player pool (UnitAI.h; Go SortedEntries returns dead
+-- entries too, C++ skips offline refs — the bronjahm/devourer/nexus
+-- threat-pool fix class): threat-list players alive within dist;
+-- offset 0 means the main tank is eligible, so no victim exclusion.
 local function randomPlayerInRange(creature, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:GetDistance(plr) <= maxDist then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:IsWithinDist(t, maxDist) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
