@@ -193,9 +193,14 @@ end
 -- pick is 2D (IsWithinDist(me, 15, false)) — the threat-list half
 -- of the pick stays unbridged.
 local function randomPlayerInRange2d(creature, range)
+    -- C++ IsWithinDist(me, range, false) compares raw 2D dist against
+    -- range + own reach + target reach (Object.cpp _IsWithinDist);
+    -- Go's IsWithinDist2d is raw, so compare reach-adjusted dist
+    -- (target reach unmodeled, ~1.5yd band).
+    local reach = creature:GetCombatReach()
     local candidates = {}
     for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist2d(p, range) then
+        if creature:GetDistance2d(p) - reach < range then
             candidates[#candidates + 1] = p
         end
     end

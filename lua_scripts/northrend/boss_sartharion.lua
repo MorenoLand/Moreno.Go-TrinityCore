@@ -68,8 +68,10 @@
 -- flag leg alone cannot run);
 -- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) — no instance bridge.
 -- JustReachedHome — _Reset() bookkeeping — no bridge.
--- AddDrakeLootMode — LOOT_MODE_HARD_MODE_1/2/3 ladder — no
--- loot-mode bridge.
+-- AddDrakeLootMode — LOOT_MODE_HARD_MODE_1/2/3 ladder — AddLootMode
+-- IS bridged (lua_objects.go:981); the ladder stays out on
+-- instance-GUID / cross-creature (drake respawn producer) grounds,
+-- not on the loot-mode bridge.
 -- FetchDragons — instance GUID fetch + IsInCombat / GetVictim
 -- gates + casts + MovePoints + loot modes — no instance /
 -- motion / cast bridges (drake entries verifiable — 30452 /

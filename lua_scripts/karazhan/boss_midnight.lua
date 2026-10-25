@@ -100,15 +100,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++-exact target pools: boss_midnight.cpp:154-160,189-215 source charge and
+-- Threat-list target pools exact (band reach-adjusted, target reach
+-- unmodeled): boss_midnight.cpp:154-160,189-215 source charge and
 -- intangible-presence picks from GetThreatManager().GetUnsortedThreatList(),
 -- never the whole instance map. GetAITargets (lua_creature_events.go:345) is
 -- the bridged threat list; GetDistance2d resolves via the generic fallback
 -- (engine/scripting/object.go:158). C++ applies no dead filter, so none added.
 local function randomTargetInBand(creature, minDist, maxDist)
+    -- C++ IsWithinDist(me, d, false) compares raw 2D dist against
+    -- d + own reach + target reach (Object.cpp _IsWithinDist); Go's
+    -- GetDistance2d is raw, so subtract the creature's own reach
+    -- (target reach has no unit-surface bridge, ~1.5yd band unmodeled).
+    local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        local dist = creature:GetDistance2d(t)
+        local dist = creature:GetDistance2d(t) - reach
         if dist >= minDist and dist < maxDist then
             candidates[#candidates + 1] = t
         end

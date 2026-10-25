@@ -115,7 +115,9 @@
 -- the no-DoAction-bridge queue.
 -- Yogg-Saron SpellHit — Val'anyr loot-mode leg (no Talk) —
 -- PORTED via event 14 (yoggSaronSpellHit below); the Reset
--- ResetLootMode leg (:939) rides the unbridged scheduler.
+-- ResetLootMode leg (:939) rides the unbridged scheduler
+-- (ResetLootMode itself IS bridged, lua_objects.go:1003; the
+-- ladder is blocked on keepers instance-data, not the bridge).
 -- Voice of Yogg-Saron (33280, ulduar.h line 203) —
 -- PORTED: JustEngagedWith DoCast(me, SPELL_SANITY_PERIODIC 63786)
 -- (2-arg self, non-triggered, ungated, :525) + the 15s
@@ -262,8 +264,9 @@ end
 -- SPELL_SHADOWY_BARRIER_YOGG) + DoCast(me, SPELL_KNOCK_AWAY), both
 -- non-triggered and ungated (the urom evocate-reset precedent); the
 -- _events Reset/SetPhase(PHASE_TWO)/ScheduleEvent(EVENT_YELL_BOW_DOWN)
--- and ResetLootMode/loot-mode legs ride unbridged phase/timer/loot
--- machines (the gothik phase-gating precedent).
+-- and phase/timer legs ride unbridged phase/timer machines (the
+-- gothik phase-gating precedent; the loot-mode bridge is live —
+-- keepers instance-data is the blocker, not the bridge).
 local function yoggSaronReset(event, creature)
     -- C++ boss_yogg_saronAI::Reset(): DoCast(me, SHADOWY_BARRIER_YOGG);
     -- DoCast(me, KNOCK_AWAY) (boss_yogg_saron.cpp:931-937). Alive-gated.

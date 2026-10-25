@@ -164,7 +164,9 @@
 -- the Talk choice (SAY_AGGRO 0 vs SAY_AGGRO_WITH_ELDER 1);
 -- CastSpell SPELL_ATTUNED_TO_NATURE 62519 with 150-stack
 -- spell-mod (unbridgeable) — no instance GuidData / aura /
--- threat / loot-mode / spell-mod bridges.
+-- threat / spell-mod bridges (RemoveLootMode IS bridged,
+-- lua_objects.go:993; the arm stays out on instance-GuidData /
+-- cross-creature grounds, not the loot-mode bridge).
 -- Freya timer arms staying out:
 --   EVENT_NATURE_BOMB (:430-433, DoCastAOE 64604 triggered)
 --     — init scheduled only from the EVENT_WAVE arm after

@@ -194,7 +194,11 @@ local function lakeFrogReceiveEmote(_, creature, player, textEmote)
     if frogKissLatched[guid] then
         return
     end
-    if textEmote == TEXT_EMOTE_KISS and creature:IsWithinDist(player, 30)
+    -- C++ IsWithinDistInMap(player, 30) compares raw 3D dist against
+    -- 30 + own reach + target reach (Object.cpp _IsWithinDist); Go's
+    -- IsWithinDist is raw, so compare reach-adjusted dist (target
+    -- reach unmodeled, ~1.5yd band; same-map gate vacuous here).
+    if textEmote == TEXT_EMOTE_KISS and creature:GetDistance(player) - creature:GetCombatReach() < 30
         and player:HasItem(ITEM_WARTS_B_GONE_LIP_BALM, 1) then
         if not player:HasAura(SPELL_WARTSBGONE_LIP_BALM) then
             player:AddAura(SPELL_WARTS)

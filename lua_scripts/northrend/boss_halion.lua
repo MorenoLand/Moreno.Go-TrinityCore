@@ -90,10 +90,12 @@
 -- rides absent bridges" claim was stale; CastSpell is bridged). The
 -- never-die damage cap (damage = health-1 while not PHASE_THREE) rides
 -- the unbridged phase machine and stays out; the UNIT_FLAG_NOT_
--- SELECTABLE / CastStop / controller SetData(PHASE_TWO) legs ride
--- absent bridges (SetFlag IS bridged — field 59/82/79 live — but no
--- CastStop / cross-creature-SetData methods — verified in
--- engine/world/lua_objects.go this run).
+-- SELECTABLE set leg is bridgeable (SetFlag live) but UNPAIRED —
+-- its clear rides the controller/instance phase-three action, so a
+-- set-alone port would leave the boss untargetable through phase 3;
+-- the CastStop / controller SetData(PHASE_TWO) legs ride absent
+-- bridges (no CastStop / cross-creature-SetData methods — verified
+-- in engine/world/lua_objects.go this run).
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
 -- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
@@ -359,10 +361,11 @@ end
 -- Talk(SAY_PHASE_TWO) + the stop of the phase-one timer arms + the
 -- DoCastSelf SPELL_TWILIGHT_PHASING 74808 cast port (non-triggered ->
 -- creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) — the DoCastSelf
--- lowering, same idiom as the BREATH self-casts); the flag / CastStop /
--- controller SetData legs ride absent bridges (SetFlag IS bridged
--- but no CastStop / cross-creature SetData methods — verified in
--- engine/world/lua_objects.go this run).
+-- lowering, same idiom as the BREATH self-casts); the flag set leg is
+-- bridgeable (SetFlag live) but UNPAIRED — its clear rides the
+-- controller/instance phase-three action; the CastStop / controller
+-- SetData legs ride absent bridges (no CastStop / cross-creature
+-- SetData methods — verified in engine/world/lua_objects.go this run).
 local function halionDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     -- C++ :283 reads IsInPhase(PHASE_THREE) before the transition
