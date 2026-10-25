@@ -124,8 +124,8 @@
 -- CastSpell(target, SOUL_CONSUMPTION 74792, TRIGGERED_IGNORE_SET_FACING),
 -- 15s init / 20s re-arm (:421/:537-540) — the stale "no random-target /
 -- target-filter bridges" claim is retracted: the random-target leg rides
--- the thorim randomPlayerInRange convention (netherspite victim-exclusion
--- for the position-1 offset), the aura filter rides plr:HasAura (bridged,
+-- the threat-list skip-first pool (eck precedent, 2026-10-25), the aura
+-- filter rides plr:HasAura (bridged,
 -- engine/world/lua_player.go:203 — hakkar precedent), the triggered flag
 -- rides the arlokk CastSpell(target, id, true) idiom.
 -- Constructor-side legs (boss_twilight_halionAI ctor, :405-421): DUSK_
@@ -381,7 +381,11 @@ local function halionDamageTaken(event, creature, attacker, damage)
         if health > capped then
             postHealth = health - capped
         end
-        if postHealth * 100 < creature:GetMaxHealth() * 75 then
+        -- HealthBelowPctDamaged strict-< floor form (Unit.h:873):
+        -- postDamage < floor(maxHealth * 75 / 100). The old
+        -- cross-multiplied form fired 1 HP early when maxHealth * 75
+        -- mod 100 != 0 (baltharus/anubarak 2026-10-25 precedent).
+        if postHealth < math.floor(creature:GetMaxHealth() * 75 / 100) then
             phaseTwo[guid] = true
             creature:Talk(SAY_PHASE_TWO)
             creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
@@ -473,22 +477,26 @@ end
 -- SPELL_TWILIGHT_REALM 74807) -> CastSpell(target, SPELL_SOUL_CONSUMPTION
 -- 74792, TRIGGERED_IGNORE_SET_FACING), 20s re-arm — re-armed
 -- unconditionally (outside the target-if — sjonnir precedent). The
--- position-1 offset (skips the MaxThreat-ordered first entry, i.e. the
--- tank — UnitAI.h:172-174) rides the netherspite victim-exclusion; the
--- aura filter rides plr:HasAura (player HasAura bridged —
--- engine/world/lua_player.go:203, hakkar precedent); the triggered flag
--- rides the arlokk CastSpell(target, id, true) idiom.
+-- position-1 offset pops the MaxThreat-ordered first entry before
+-- the player/aura filters (UnitAI.h offset-before-filter, eck
+-- precedent); the aura filter rides plr:HasAura (player HasAura
+-- bridged — engine/world/lua_player.go:203, hakkar precedent); the
+-- triggered flag rides the arlokk CastSpell(target, id, true) idiom.
+-- C++ SelectTarget(Random,1,0.0f,true,true,SPELL_TWILIGHT_REALM
+-- 74807): threat list, position-1 offset pops the MaxThreat-ordered
+-- first entry BEFORE the player/aura filters (UnitAI.h
+-- offset-before-filter; eck precedent), then Player + alive +
+-- HasAura(74807). The old GetPlayersInWorld instance pool + victim
+-- exclusion could pick players never engaged with the boss
+-- (2026-10-25 fix, same class as the obsidian/baltharus pools).
 local function randomTwilightPlayer(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim ~= nil and victim:GetGUID() or nil
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    local targets = creature:GetAITargets()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead()
-                and plr:GetGUID() ~= victimGuid
-                and plr:HasAura(SPELL_TWILIGHT_REALM) then
-            candidates[#candidates + 1] = plr
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and t:HasAura(SPELL_TWILIGHT_REALM) then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -596,7 +604,12 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
     -- HealthBelowPctDamaged strict-<, signed, unclamped
     -- (Unit.h:873; the zum_rah precedent) — evaluated on the capped
     -- damage, C++ :469-:475 order.
-    if not wasPhaseThree and (health - capped) * 100 < maxHealth * 50 then
+    -- HealthBelowPctDamaged strict-< floor form (Unit.h:873):
+    -- postDamage < floor(maxHealth * 50 / 100), signed, unclamped
+    -- (the zum_rah precedent) — evaluated on the capped damage,
+    -- C++ :469-:475 order. The old cross-multiplied form fired 1 HP
+    -- early when maxHealth * 50 mod 100 != 0 (baltharus precedent).
+    if not wasPhaseThree and (health - capped) < math.floor(maxHealth * 50 / 100) then
         twilightPhaseThree[guid] = true
         fightPhaseThree = true
         creature:CastSpell(creature, SPELL_TWILIGHT_DIVISION)

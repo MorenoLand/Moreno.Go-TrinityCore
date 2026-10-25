@@ -37,11 +37,12 @@
 -- DoCastVictim(SPELL_SHADOW_BREATH 57570) 2-arg non-triggered,
 -- 20s init / {20s,25s} re-arm (:193 / :392-:396).
 -- EVENT_SHADOW_FISSURE — SelectTarget(Random, 0, 0.0f, true)
--- (playerOnly=true, idiom-exact) -> randomPlayerInRange(creature, 0,
--- 500), nil-guarded pick, DoCast 2-arg non-triggered
+-- (playerOnly=true, threat-list pool) -> randomThreatPlayer(creature),
+-- nil-guarded pick, DoCast 2-arg non-triggered
 -- (SPELL_SHADOW_FISSURE 57579), {15s,20s} unconditional re-arm,
 -- 5s init (:192 / :387-:391; the old "no target-selection / cast
--- bridges" claim was stale).
+-- bridges" claim was stale; the old GetPlayersInWorld pool was
+-- retired 2026-10-25 for the threat-list pool).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious
 -- player-gated variant precedent: victim nil-guard,
@@ -215,22 +216,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0, 0.0f, true) leg: alive players on the
--- same map/instance; playerOnly=true is idiom-exact; 0.0f = unlimited
--- range approximated by a 500yd cap (the thorim / twilight-corrupter
--- randomPlayerInRange idiom; the old "no target-selection bridge"
--- claim was stale).
-local function randomPlayerInRange(creature, minDist, maxDist)
-    local mapId = creature:GetMapId()
-    local instanceId = creature:GetInstanceId()
+-- C++ SelectTarget(Random, 0, 0.0f, true) leg: threat-list players
+-- alive, no distance filter (UnitAI.h: SelectTarget draws the threat
+-- list; dead = offline refs). The old GetPlayersInWorld instance pool
+-- could pick players never engaged with the drake (2026-10-25 fix,
+-- same class as the archavon/nexus/ahnkahet threat-pool fixes).
+local function randomThreatPlayer(creature)
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            local dist = creature:GetDistance(plr)
-            if dist >= minDist and dist <= maxDist then
-                candidates[#candidates + 1] = plr
-            end
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -241,12 +236,12 @@ end
 
 -- C++ EVENT_SHADOW_FISSURE (dummy_dragonAI::ExecuteEvent,
 -- obsidian_sanctum.cpp:387-391): SelectTarget(Random, 0, 0.0f, true)
--- (playerOnly=true, idiom-exact) -> randomPlayerInRange(creature, 0,
--- 500), nil-guarded pick (C++ `if` — skip cast on nil); DoCast 2-arg =
+-- (playerOnly=true, threat-list pool) -> randomThreatPlayer(creature),
+-- nil-guarded pick (C++ `if` — skip cast on nil); DoCast 2-arg =
 -- non-triggered -> CastSpell(target, spell); re-arm {15s,20s}
 -- unconditional (outside the target-if, C++-exact); 5s init (:192).
 local function shadowFissureTick(creature, guid)
-    local target = randomPlayerInRange(creature, 0, 500)
+    local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_FISSURE)
     end
@@ -283,7 +278,7 @@ end
 -- DoZoneInCombat + ScheduleEvent(EVENT_SHADOW_FISSURE,
 -- EVENT_SHADOW_BREATH) — the Talk and both timer legs are bridgeable
 -- (the old "no target-selection bridge" claim for the fissure leg was
--- stale — randomPlayerInRange); the DoZoneInCombat leg is PORTED
+-- stale — randomThreatPlayer); the DoZoneInCombat leg is PORTED
 -- 2026-10-23 (bridge live).
 -- Plus the per-drake engage timers: EVENT_HATCH_EGGS
 -- (tenebron) and EVENT_ACOLYTE_SHADRON (shadron) payloads are

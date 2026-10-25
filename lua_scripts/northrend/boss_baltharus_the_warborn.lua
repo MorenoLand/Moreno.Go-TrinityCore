@@ -120,23 +120,25 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ passes withTank=false on both boss (:207-211) and clone
--- (:304-308) ENERVATING_BRAND picks (UnitAI.h:170: SelectTarget(..., playerOnly,
--- withTank, aura) — the call passes true, false, -SPELL_ENERVATING_BRAND), so
--- the current victim (the tank) is excluded. Random-player pool: alive
--- same-map/instance players in range without the brand aura, excluding the
--- victim (only threat-listed units qualify in practice; the erekem
--- deviation note).
+-- (:304-308) ENERVATING_BRAND picks (SelectTarget(Random, 0, 45.0f,
+-- true, false, -SPELL_ENERVATING_BRAND)): threat-list players within
+-- 45yd without the brand aura, excluding the last victim
+-- (UnitAI.cpp:256: _exception = GetThreatManager().GetLastVictim()).
+-- The old GetPlayersInWorld instance pool could pick players never
+-- engaged with the boss (2026-10-25 fix, same class as the
+-- archavon/nexus/ahnkahet/obsidian threat-pool fixes); victim-GUID
+-- exclusion is the standing approximation of the last-victim
+-- exception (erekem precedent).
 local function randomTargetsNoBrand(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local victim = creature:GetVictim()
     local victimGuid = victim ~= nil and victim:GetGUID() or nil
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range)
-                and not plr:HasAura(SPELL_ENERVATING_BRAND)
-                and plr:GetGUID() ~= victimGuid then
-            candidates[#candidates + 1] = plr
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:IsWithinDist(t, range)
+                and not t:HasAura(SPELL_ENERVATING_BRAND)
+                and t:GetGUID() ~= victimGuid then
+            candidates[#candidates + 1] = t
         end
     end
     return candidates
@@ -264,19 +266,25 @@ local function baltharusDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
+    -- C++ HealthBelowPctDamaged int64 form (Unit.h:873): postDamage <
+    -- CountPctFromMaxHealth(pct) = floor(maxHealth * pct / 100). The old
+    -- cross-multiplied real-number form fired 1 HP early when
+    -- maxHealth * pct mod 100 != 0 (anubarak 2026-10-25 precedent). No
+    -- postDamage > 0 guard: DamageTaken arms fire on lethal hits.
+    local postDamage = creature:GetHealth() - damage
     local fire = false
     if creature:Is25ManRaid() then
         if cloneCount[guid] == 0
-                and (creature:GetHealth() - damage) * 100 < maxHealth * 66 then
+                and postDamage < math.floor(maxHealth * 66 / 100) then
             cloneCount[guid] = 1
             fire = true
         elseif cloneCount[guid] == 1
-                and (creature:GetHealth() - damage) * 100 < maxHealth * 33 then
+                and postDamage < math.floor(maxHealth * 33 / 100) then
             cloneCount[guid] = 2
             fire = true
         end
     elseif cloneCount[guid] == 0
-            and (creature:GetHealth() - damage) * 100 < maxHealth * 50 then
+            and postDamage < math.floor(maxHealth * 50 / 100) then
         cloneCount[guid] = 1
         fire = true
     end
