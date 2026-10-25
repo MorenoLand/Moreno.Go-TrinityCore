@@ -26,16 +26,23 @@
 -- Ported arms (C++ JustEngagedWith + UpdateAI + KilledUnit):
 -- - SAY_AGGRO: Talk(1) on OnEnterCombat.
 -- - EVENT_CURSE: 7s init -> 15s re-arm; DoCast(random target, 7621)
---   with SelectTarget(Random, 1, 30.0f, true). Random-target legs ride
---   the maiden_of_virtue/moroes playersInInstance + IsWithinDist
---   local pattern; the C++ position-1 (skip-top-threat) nuance is not
---   modeled — a uniform random in-range alive player is picked.
+--   with SelectTarget(Random, 1, 30.0f, true). The C++ offset-1 leg is
+--   ported: the threat list's first (top-threat) entry is skipped
+--   before filtering (UnitAI.h:162-170, 176-184), and a threat list
+--   of size <= 1 yields no cast at all (the C++ shortcut) — the pick
+--   is a uniform random over the remaining in-range alive players
+--   from the bridged threat list (GetAITargets, gerstahn/kelris
+--   precedent), not an instance-wide player pool.
 -- - EVENT_TELEPORT: 15s init -> 20s re-arm; self-cast one of the 3
 --   teleport spells with the C++ no-repeat-twice-in-a-row rule: the
 --   C++ arm swaps teleportSpells[0] with teleportSpells[urand(1, 2)],
 --   which guarantees the newly cast spell differs from the last one
 --   cast; the Lua per-guid latch picks uniformly from the two spells
---   that were not cast last, which is the same distribution.
+--   that were not cast last, which is the same distribution. The
+--   initial array is [SPAWN, UPPER, STAIRS], so the FIRST cast can
+--   never be SPAWN — the Lua latch starts at SPAWN for the same
+--   reason, and the latch survives evade (the C++ array is a member,
+--   not reset by Reset) but clears on death (new AI object).
 -- - EVENT_VOID_BOLT: 1s init -> 5s re-arm; DoCastVictim(7588) ->
 --   GetVictim + CastSpell (mr_smite convention).
 -- - EVENT_THUNDERSHOCK: 10s init -> 30s re-arm; non-triggered
@@ -95,23 +102,25 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
+-- C++ SelectTarget(Random, 1, 30.0f, true) (shadowfang_keep.cpp):
+-- the threat list's first entry (top threat, UnitAI.h:176-184) is
+-- skipped BEFORE the playerOnly/range filter, and a list of size
+-- <= 1 yields nil outright (the C++ shortcut); GetAITargets is the
+-- bridged threat list in descending-threat order (threat.go:889),
+-- so index 1 is the skipped entry. Distance via GetDistance2d
+-- (gerstahn/kelris precedent; C++ IsWithinCombatRange is the same
+-- band up to combat reach).
 local function randomTargetInRange(creature, range)
+    local targets = creature:GetAITargets()
+    if #targets <= 1 then
+        return nil
+    end
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:IsWithinDist(p, range) then
-            candidates[#candidates + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and creature:GetDistance2d(t) <= range then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -128,8 +137,14 @@ local function onCurse(creature, guid)
     schedule(guid, "curse", 15000, function() onCurse(creature, guid) end)
 end
 
+-- C++ teleport arm: teleportSpells starts [SPAWN, UPPER, STAIRS] and
+-- each cast swaps [0] with urand(1, 2), so the cast is uniform over
+-- the two spells that are not the last cast, and the first cast is
+-- never SPAWN. The Lua latch starts at SPAWN (nil -> SPAWN) for the
+-- same first-cast distribution; it survives evade (C++ member array,
+-- untouched by Reset) and clears only on death (new AI object).
 local function onTeleport(creature, guid)
-    local last = lastTeleport[guid]
+    local last = lastTeleport[guid] or SPELL_TELE_SPAWN
     local pool = {}
     for i, spell in ipairs(teleportSpells) do
         if spell ~= last then
@@ -176,14 +191,22 @@ local function onEnterCombat(_, creature)
     schedule(guid, "thundershock", 10000, function() onThunderShock(creature, guid) end)
 end
 
+-- Evade (2) and reset (23) cancel timers only: the C++ teleport
+-- array is a member, so the last-cast latch survives evade. Death
+-- (4) clears it: a respawned Arugal gets a fresh AI object, whose
+-- array starts [SPAWN, UPPER, STAIRS] again.
 local function onCombatEnd(_, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function onDied(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     lastTeleport[guid] = nil
 end
 
 local function onReset(_, creature)
-    onCombatEnd(nil, creature)
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ SpellHitTarget: SPELL_ARUGAL_CURSE (7621) lands on a target ->
@@ -200,6 +223,6 @@ end
 RegisterCreatureEvent(ENTRY_ARUGAL, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_ARUGAL, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_ARUGAL, 3, onTargetDied)
-RegisterCreatureEvent(ENTRY_ARUGAL, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_ARUGAL, 4, onDied)
 RegisterCreatureEvent(ENTRY_ARUGAL, 23, onReset)
 RegisterCreatureEvent(ENTRY_ARUGAL, 15, onSpellHitTarget)
