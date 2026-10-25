@@ -69,10 +69,8 @@
 -- spell shield 33054 5s then 30s (C++-exact DoCastVictim; the
 -- InterruptNonMeleeSpells(false) arm ported below;
 -- blast wave 33061 20s then 60s — the C++ threat-list-within-15-
--- yd (2D) pick: the threat-list half has no bridge, the 15-yd
--- 2D half is bridged via IsWithinDist2d, so a random alive
--- player in the instance within 15 yd (2D) is used (teron
--- convention), non-triggered on the pick, the pick passes
+-- yd (2D) pick via GetAITargets (threat-list bridge),
+-- non-triggered on the pick, the pick passes
 -- through on empty (C++ DoCast on nullptr casts — the burn
 -- nil-skip was wrong, removed this run); the
 -- InterruptNonMeleeSpells(false) arm is ported in kroshBlastWave.
@@ -162,20 +160,6 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
 -- C++ SelectTarget(Random, 0) (playerOnly default FALSE, UnitAI.h:170)
 -- — threat-list pick via the bridged, threat-ordered GetAITargets
 -- (lua_creature_events.go:345); no Player filter (the midnight
@@ -189,19 +173,18 @@ local function randomThreatTarget(creature)
     return targets[math.random(#targets)]
 end
 
--- krosh blast wave (boss_high_king_maulgar.cpp:560): the C++ 15-yd
--- pick is 2D (IsWithinDist(me, 15, false)) — the threat-list half
--- of the pick stays unbridged.
-local function randomPlayerInRange2d(creature, range)
-    -- C++ IsWithinDist(me, range, false) compares raw 2D dist against
-    -- range + own reach + target reach (Object.cpp _IsWithinDist);
-    -- Go's IsWithinDist2d is raw, so compare reach-adjusted dist
-    -- (target reach unmodeled, ~1.5yd band).
+-- krosh blast wave (boss_high_king_maulgar.cpp:560): random
+-- threat-list target within 15 yd (2D — IsWithinDist(me, 15,
+-- false)) via GetAITargets, the threat-list bridge (same file's
+-- charge / deathcoil / polymorph precedent). Distance rule kept
+-- from the old player-pool twin: raw 2D dist minus the caster's
+-- combat reach (target reach unmodeled, ~1.5yd band).
+local function randomThreatTargetInRange2d(creature, range)
     local reach = creature:GetCombatReach()
     local candidates = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance2d(p) - reach < range then
-            candidates[#candidates + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if creature:GetDistance2d(t) - reach < range then
+            candidates[#candidates + 1] = t
         end
     end
     if #candidates == 0 then
@@ -648,15 +631,14 @@ end
 
 -- C++ blast wave (boss_high_king_maulgar.cpp:553-570): random
 -- threat-list target within 15 yd (2D — IsWithinDist(me, 15,
--- false) at line 560). The threat-list half has no bridge; the
--- 15-yd 2D half does (IsWithinDist2d), so a random alive player
--- in the instance within 15 yd (2D) is used (teron convention).
+-- false) at line 560) via GetAITargets (the threat-list bridge;
+-- the old instance-player pool was the thaurissan bug class).
 -- C++ casts on the pick even when the list is empty (DoCast on
 -- nullptr is not a UnitAI early-out), so the pick passes through
 -- rather than being nil-skipped. The InterruptNonMeleeSpells(false)
 -- arm is ported below.
 local function kroshBlastWave(creature, guid)
-    local target = randomPlayerInRange2d(creature, 15)
+    local target = randomThreatTargetInRange2d(creature, 15)
     creature:InterruptNonMeleeSpells(false)
     creature:CastSpell(target, SPELL_BLAST_WAVE)
     schedule(guid, "blastwave", 60000, function()

@@ -43,8 +43,8 @@
 -- -> DoCast(pick, 33813)
 -- else DoCastVictim(33813); re-arm 8s. Reverberation — triggered
 -- DoCastVictim(36297, C++-exact); re-arm {15s,25s}. Cave in —
--- DoCast(random alive player, 36240) (C++ SelectTarget(Random, 0),
--- player-only default — teron convention; nil pick skips the cast
+-- DoCast(random threat-list target, 36240) (C++ SelectTarget(Random, 0),
+-- playerOnly defaults FALSE, UnitAI.h:170; nil pick skips the cast
 -- but still runs the static-timer arm, C++-exact); static timer:
 -- if >= 4s, -= 2s (floor 2s); cave-in re-arm = static timer
 -- (C++-exact). Ground slam — on fire: performing=true, timer=10s,
@@ -100,26 +100,16 @@ local ENTRY_GRUUL = 19044
 local pumpTimers = {}
 local gruulState = {}
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function pickRandomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+-- C++ SelectTarget(Random, 0) (playerOnly defaults FALSE, UnitAI.h:170)
+-- draws the threat list, not the instance player pool (thaurissan /
+-- theradras / kelris precedent) — GetAITargets random pick; nil pick
+-- casts nothing but keeps the static-timer arm (C++-exact).
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if not targets or #targets == 0 then
         return nil
     end
-    return players[math.random(#players)]
+    return targets[math.random(#targets)]
 end
 
 local function cancelPump(guid)
@@ -180,9 +170,8 @@ local function gruulTick(creature, guid)
     else
         -- Hurtful Strike: SelectTarget(MaxThreat, 1) = the second
         -- entry of the threat-sorted GetAITargets list (curator
-        -- convention); the IsWithinMeleeRange(victim) gate is
-        -- approximated by a 5-yd GetDistance stand-in (venoxis
-        -- convention).
+        -- convention); the IsWithinMeleeRange(victim) gate uses
+        -- creature:IsWithinMeleeRange (gruul hurtful convention).
         st.hurtful = st.hurtful - 1000
         if st.hurtful <= 0 then
             local targets = creature:GetAITargets()
@@ -204,12 +193,12 @@ local function gruulTick(creature, guid)
             st.reverberation = math.random(15000, 25000)
         end
 
-        -- Cave In: random alive player (C++ SelectTarget(Random, 0),
-        -- player-only default — teron convention); nil pick skips
+        -- Cave In: random threat-list target (C++ SelectTarget(Random, 0),
+        -- playerOnly defaults FALSE, UnitAI.h:170); nil pick skips
         -- the cast but the static-timer arm still runs (C++-exact).
         st.caveIn = st.caveIn - 1000
         if st.caveIn <= 0 then
-            local pick = pickRandomPlayer(creature)
+            local pick = randomThreatTarget(creature)
             if pick then
                 creature:CastSpell(pick, SPELL_CAVE_IN)
             end

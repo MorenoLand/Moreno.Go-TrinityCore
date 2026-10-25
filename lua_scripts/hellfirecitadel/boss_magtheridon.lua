@@ -58,8 +58,8 @@
 -- shake 36455 (kalecgos convention; the react bridge exists —
 -- creature:SetReactState — but the collapse PASSIVE arm stays out:
 -- its AGGRESSIVE restore rides the unported world-trigger machine,
--- so the flip alone would strand the boss passive; the AttackStop
--- arm has no bridge), 6s -> 4s -> start the 20s
+-- so the flip alone would strand the boss passive; AttackStop is
+-- ported in magtheridonDamageTaken below), 6s -> 4s -> start the 20s
 -- (the instance SetData COLLAPSE / COLLAPSE_2 arms and the
 -- world-trigger 36449 cast via instance->GetCreature(DATA_
 -- WORLD_TRIGGER) have no instance/cross-creature bridges; the
@@ -84,8 +84,9 @@
 -- contained timers arm normally: shadow bolt volley 30510 20s
 -- then {15s,20s}, non-triggered DoCastAOE self-cast
 -- (kalecgos convention); fear 30530 {15s,20s} then {25s,40s}
--- on a random alive player in the instance (C++ SelectTarget(
--- Random, 1) — teron convention; nil pick keeps the schedule,
+-- on a random threat-list target skipping the first MaxThreat
+-- entry (C++ SelectTarget(Random, 1), playerOnly defaults FALSE;
+-- nil pick keeps the schedule,
 -- burn convention); abyssal 30511 30s then 60s, non-triggered
 -- DoCastVictim (jeklik convention). The InterruptNonMeleeSpells
 -- arm is PORTED (InterruptNonMeleeSpells(false) first in
@@ -219,26 +220,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- Alive players sharing the creature's map+instance (teron
--- convention).
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
-local function pickRandomPlayer(creature)
-    local players = playersInInstance(creature)
-    if #players == 0 then
+-- C++ SelectTarget(Random, 1) (playerOnly defaults FALSE, UnitAI.h:170;
+-- offset 1 skips the first MaxThreat entry for Random, UnitAI.h:162-163)
+-- — threat-list pick via GetAITargets; threatListSize <= 1 yields nil
+-- (the C++ offset shortcut), and a nil pick keeps the schedule
+-- (the C++ Repeat sits outside the if).
+local function randomThreatTargetSkippingFirst(creature)
+    local targets = creature:GetAITargets()
+    if not targets or #targets <= 1 then
         return nil
     end
-    return players[math.random(#players)]
+    return targets[math.random(2, #targets)]
 end
 
 -- ================= Magtheridon (17257) =================
@@ -416,7 +408,7 @@ local function channelerShadowBolt(creature, guid)
 end
 
 local function channelerFear(creature, guid)
-    local pick = pickRandomPlayer(creature)
+    local pick = randomThreatTargetSkippingFirst(creature)
     if pick then
         creature:CastSpell(pick, SPELL_FEAR)
     end
@@ -454,8 +446,9 @@ end
 -- C++ npc_hellfire_channelerAI::EVENT_CHECK_FRIEND (boss_magtheridon.cpp:395-403,
 -- init 1s, Repeat 1s): if _canCastDarkMending, target =
 -- DoSelectBelowHpPctFriendlyWithEntry(17256, 30.0f, 51, false) -> friendly
--- 17256 within 30yd, alive, in combat, HealthBelowPct(51)
--- (GridNotifiers.h:855-867); non-triggered DoCast(30528), latch false,
+-- 17256 within 30yd, alive, in combat, HealthBelowPct(51) = health <
+-- floor(max*51/100) (Unit.h:872; GridNotifiers.h:855-867);
+-- non-triggered DoCast(30528), latch false,
 -- EVENT_DARK_MENDING {10s,20s} re-enables. C++ pick is grid-visit-last
 -- (unspecified order); Lua takes the first GUID-sorted grid match.
 -- Hostility gate vacuous: entry-filtered 17256 peers share faction
@@ -465,7 +458,9 @@ local function channelerCheckFriend(creature, guid)
     if chanCanMend[guid] then
         local target = nil
         for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_CHANNELER, 30.0)) do
-            if not other:IsDead() and other:IsInCombat() and other:GetHealthPct() < 51 then
+            local omax = other:GetMaxHealth()
+            if not other:IsDead() and other:IsInCombat() and omax > 0
+                    and other:GetHealth() < math.floor(omax * 51 / 100) then
                 target = other
                 break
             end
