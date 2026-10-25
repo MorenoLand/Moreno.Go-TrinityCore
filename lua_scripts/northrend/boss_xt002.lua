@@ -82,11 +82,16 @@
 -- from boss_xt002.cpp; the arm also rides _DespawnAtEvade.
 -- DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge).
 -- GetData(DATA_HARD_MODE 1 / DATA_HEALTH_RECOVERED 2 /
--- DATA_GRAVITY_BOMB_CASUALTY 3 — no GetData bridge; consumers:
--- achievement_heartbreaker / achievement_nerf_engineering /
--- achievement_nerf_gravity_bombs below); SetData
--- (DATA_TRANSFERED_HEALTH health-transfer + ModifyHealth leg;
--- DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge).
+-- DATA_GRAVITY_BOMB_CASUALTY 3 — creature:GetData IS bridged
+-- (ScriptData store, 2026-10-24) but both ends stay out: the
+-- producers are SpellScript/AuraScript (gravity-bomb aura OnPeriodic
+-- :739, gravity-bomb damage OnEffectHitTarget :760) and the consumers
+-- are achievement_heartbreaker / achievement_nerf_engineering /
+-- achievement_nerf_gravity_bombs below (no achievement bridge), so a
+-- Lua-side latch would be dead code (the 2026-10-24 outhouse
+-- precedent); SetData (DATA_TRANSFERED_HEALTH health-transfer +
+-- ModifyHealth leg; DATA_GRAVITY_BOMB_CASUALTY) is bridged on the
+-- same store but unwritable from any Lua-reachable producer.
 -- The heart-exposure phase machine — ExposeHeart
 -- (events.SetPhase(PHASE_HEART) + react-state / AttackStop +
 -- Talk(SAY_HEART_OPENED 1) + EVENT_SUBMERGE scheduling + heart

@@ -1253,6 +1253,17 @@ func scriptImmuneHas(rows map[uint64][]uint32, op, immType uint32) bool {
 // misc-based full-coverage OR with the per-entry CanPierceImmuneAura filter
 // and the attribute gates; the school/damage masks come from the target's
 // live creature auras (m_spellImmune[IMMUNITY_SCHOOL/IMMUNITY_DAMAGE]).
+// creatureImmuneToDamage is the mask overload of Unit::IsImmunedToDamage
+// (Unit.cpp:7800-7816): no incoming spell, so no attribute gates and no
+// pierce filter — the empty-spell twin of creatureImmuneToDamageSpell, whose
+// zero-spell path already evaluates exactly this (canSpellPierceImmuneAura
+// returns false for a zero immune spell, and the attribute gates pass on
+// zero attributes). ScriptedAI gates such as darnavan's SHATTERING_THROW
+// check call this overload, not the spell overload.
+func creatureImmuneToDamage(srv *Server, key creatureAuraKey, schoolMask uint32) bool {
+	return creatureImmuneToDamageSpell(srv, key, wotlk.Spell{}, schoolMask)
+}
+
 func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, schoolMask uint32) bool {
 	if srv == nil || schoolMask == 0 {
 		return false

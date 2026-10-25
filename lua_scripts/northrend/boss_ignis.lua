@@ -55,8 +55,11 @@
 -- Reset / Initialize — _Reset() + vehicle passenger removal +
 -- DoStopTimedAchievement(ACHIEVEMENT_IGNIS_START_EVENT 20951) —
 -- no bridges.
--- GetData(DATA_SHATTERED 29252926) — no GetData bridge
--- (consumer: achievement_ignis_shattered below).
+-- GetData(DATA_SHATTERED 29252926) — creature:GetData IS bridged
+-- (ScriptData store, 2026-10-24) but the leg stays out: the producer
+-- is the DoAction(20) cross-AI relay (no DoAction bridge) and the
+-- sole consumer is achievement_ignis_shattered below (no achievement
+-- bridge), so a Lua-side latch would be dead code.
 -- JustSummoned — NPC_IRON_CONSTRUCT faction/react-state/flag/
 -- immune/root legs + AttackStart/DoZoneInCombat + summons.Summon
 -- — the faction / react-state legs have bridges now (SetFaction +

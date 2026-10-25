@@ -47,13 +47,15 @@
 -- instance->SetBossState(DATA_ANOMALUS, NOT_STARTED) — no instance
 -- bridge.
 -- GetData(DATA_CHAOS_THEORY) — chaosTheory cross-AI data leg consumed
--- only by achievement_chaos_theory's OnCheck — no GetData bridge and
--- no achievement bridge.
+-- only by achievement_chaos_theory's OnCheck — creature:GetData IS
+-- bridged (ScriptData store, 2026-10-24) but there is no achievement
+-- bridge, so the latch stays write-only in Lua (see below).
 -- SummonedCreatureDies — PORTED (event 21): chaosTheory=false when a
 -- dead summon has entry NPC_CHAOTIC_RIFT — new engine fire site in
 -- fireCreatureDied (summoner OwnerGUID link); the chaosTheory latch is
 -- write-only in Lua (its only C++ reader is achievement_chaos_theory's
--- GetData(DATA_CHAOS_THEORY), no achievement/GetData bridges).
+-- GetData(DATA_CHAOS_THEORY); GetData is bridged but no achievement
+-- bridge exists to read it).
 -- UpdateAI — the home-position distance >60.0f EnterEvadeMode hack —
 -- no position / EnterEvadeMode bridges; the SPELL_RIFT_SHIELD 47748
 -- HasAura + uiChaoticRiftGUID ObjectAccessor::GetCreature + Rift->

@@ -122,7 +122,9 @@
 --   the faerlina SpellHit port), but the arm stays out because its
 --   only consumer is GetData -> the achievement leg (the zuramat /
 --   devourer_of_souls precedent).
--- GetData (:187-190) — no GetData bridge (the boss_zuramat precedent).
+-- GetData (:187-190) — creature:GetData IS bridged (ScriptData store,
+-- 2026-10-24); the blocker is the achievement bridge (the boss_zuramat
+-- precedent).
 -- UpdateAI :198/:244 HasUnitState(UNIT_STATE_CASTING) gates — no
 --   unit-state bridge; timers fire unconditionally (the maiden
 --   precedent; creature casts are packet-visual in Go).
@@ -133,7 +135,7 @@
 --   AfterHit immunity restore) — no SpellScript bridge (the
 --   boss_moragg optic-link precedent), stays in the standing queue.
 -- achievement_doesnt_go_to_eleven (:335-353, OnCheck GetData <= 10) —
---   no GetData bridge; joins the unmodeled-achievement queue (the
+--   no achievement bridge; joins the unmodeled-achievement queue (the
 --   cyanigosa / ichoron precedent).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):

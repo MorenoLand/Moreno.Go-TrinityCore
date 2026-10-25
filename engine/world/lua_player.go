@@ -378,6 +378,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, ok := s.auras[spell]
 		return []any{ok}, nil
 	}
+	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
+	// (Unit.cpp:7800-7816) for players: the session isImmuneToDamage twin
+	// (Divine Shield / Ice Block / Blessing of Protection hardcodes plus
+	// the live aura-39/aura-40 misc folds). SPELL_SCHOOL_MASK_NORMAL = 1.
+	methods["IsImmunedToDamage"] = func(_ context.Context, args []any) ([]any, error) {
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.isImmuneToDamage(mask)}, nil
+	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

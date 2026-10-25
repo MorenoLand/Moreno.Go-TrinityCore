@@ -127,7 +127,8 @@
 -- and ACTION_ADD_CHARGE 2 (steelbreaker, SPELL_ELECTRICAL_
 -- CHARGE trigger cast — the spell_assembly_meltdown producer)
 -- — no DoAction bridge (joins the no-DoAction-bridge queue).
--- GetData(DATA_PHASE_3 1) — no GetData bridge; consumer:
+-- GetData(DATA_PHASE_3 1) — creature:GetData IS bridged (ScriptData
+-- store, 2026-10-24) but the sole consumer is achievement-only; consumer:
 -- achievement_assembly_i_choose_you below.
 -- DOCUMENTED-ONLY UpdateAI legs (blockers per arm):
 -- steelbreaker EVENT_STATIC_DISRUPTION

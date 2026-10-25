@@ -110,14 +110,16 @@
 -- creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
 -- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
--- latch feeds only GetData(DATA_THREE_FACED) (:231-236, no GetData bridge)
--- and achievement_three_faced (no achievement bridge), so registering 15
--- would be dead code; does not port.
--- GetData(DATA_THREE_FACED) (:231-236) — no GetData bridge, does not port.
+-- latch feeds only GetData(DATA_THREE_FACED) (:231-236, bridged
+-- ScriptData store, 2026-10-24) and achievement_three_faced (no
+-- achievement bridge), so registering 15 would be dead code; does
+-- not port.
+-- GetData(DATA_THREE_FACED) (:231-236) — bridged but unread (see
+-- above), does not port.
 -- The three spell_devourer_of_souls_mirrored_soul* SpellScript/AuraScript
 -- hooks (:365-473) — no SpellScript / AuraScript bridge (standing
 -- queues), do not port.
--- achievement_three_faced (:475-493) — no GetData bridge, does not port.
+-- achievement_three_faced (:475-493) — no achievement bridge, does not port.
 -- JustDied outro loop (:206-222): 22 outroPositions team-swapped
 -- instance->instance->SummonCreature spawns with MovePoint legs plus
 -- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO 0, :218/220) —

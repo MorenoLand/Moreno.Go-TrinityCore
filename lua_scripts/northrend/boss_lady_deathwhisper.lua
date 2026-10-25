@@ -128,8 +128,11 @@
 --   — all non-triggered (DoCast 1-arg = self per UnitAI.cpp:113). The
 --   CHARGE conditional leg (:899-904) is PORTED via a 1s
 --   charge-poll (darnavanCanCharge latch, 20s re-arm :928); the
---   SHATTERING_THROW leg (:893-898) stays out — its
---   IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) gate has no bridge.
+--   SHATTERING_THROW leg (:893-898) is PORTED in the same poll,
+--   checked BEFORE charge per C++ UpdateAI order (the C++ return
+--   skips charge that tick): victim:IsImmunedToDamage(1) rides the
+--   new bridge (SPELL_SCHOOL_MASK_NORMAL = 1, SharedDefines.h:324),
+--   30s re-arm :895.
 --
 -- DOCUMENTED-ONLY (registrations: 36855 / 37890 / 37949 / 38472 /
 -- 38485):
@@ -197,9 +200,8 @@
 -- Creature::UpdateEntry twin is bridged (lua_creature_events.go), so the
 -- earlier "no SpellHit/UpdateEntry bridge" claims were stale. The
 -- SAY_ANIMATE_DEAD boss Talk is PORTED in both reanimate6 arms; the
--- remaining SpellHit stay-out is the darnavan SHATTERING_THROW conditional leg
--- (:893-898, immunity gate — no bridge); darnavan CHARGE leg PORTED
--- (charge-poll). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
+-- darnavan CHARGE + SHATTERING_THROW legs PORTED (shared 1s poll,
+-- shatter checked first, C++ order). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
 -- but always returns false for creatures (no cast state,
 -- engine/world/lua_objects.go) — the validators always pass, so the
 -- boss scheduler and adherent SetValidator "no bridge" claims above
@@ -288,6 +290,8 @@ local SPELL_INTIMIDATING_SHOUT = 65930
 local SPELL_MORTAL_STRIKE = 65926
 local SPELL_SUNDER_ARMOR = 65936
 local SPELL_CHARGE = 65927 -- :901 DoCastVictim, non-triggered
+local SPELL_SHATTERING_THROW = 65940 -- :893 DoCastVictim, non-triggered
+local SPELL_SCHOOL_MASK_NORMAL = 1 -- SharedDefines.h:324 (1 << SPELL_SCHOOL_NORMAL)
 
 local timers = {}
 
@@ -302,6 +306,10 @@ local deathwhisperPhase = {}
 -- C++ npc_darnavan::_canCharge (Initialize :831, re-armed by
 -- EVENT_DARNAVAN_CHARGE 20s :928); per-GUID latch.
 local darnavanCanCharge = {}
+
+-- C++ npc_darnavan::_canShatter (Initialize :831, re-armed by
+-- EVENT_DARNAVAN_SHATTERING_THROW 30s :930); per-GUID latch.
+local darnavanCanShatter = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -887,14 +895,28 @@ end
 -- auriaya engage-port precedent. The Reset() EventMap (:838-844) is
 -- re-keyed to OnEnterCombat: all four arms non-triggered (DoCast 1-arg
 -- = self per UnitAI.cpp:113).
--- C++ npc_darnavan::UpdateAI :899-904 — CHARGE conditional leg ported:
--- when _canCharge and the victim is outside melee range,
--- DoCastVictim(SPELL_CHARGE 65927) fires and the flag re-arms 20s
+-- C++ npc_darnavan::UpdateAI :893-904 — SHATTERING_THROW checked
+-- BEFORE CHARGE, C++ order (the C++ return after a shatter cast skips
+-- charge that tick): when _canShatter and the victim is immune to
+-- normal damage, DoCastVictim(SPELL_SHATTERING_THROW 65940) fires and
+-- the flag re-arms 30s later (EVENT_DARNAVAN_SHATTERING_THROW :930).
+-- Then the CHARGE leg: when _canCharge and the victim is outside melee
+-- range, DoCastVictim(SPELL_CHARGE 65927) fires and the flag re-arms 20s
 -- later (EVENT_DARNAVAN_CHARGE :928). IsWithinMeleeRange is modeled
--- via creature:GetDistance (the skeram precedent). The _canShatter /
--- SHATTERING_THROW leg (:893-898) stays out — the
--- IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) gate has no bridge.
+-- via creature:GetDistance (the skeram precedent).
 local function onDarnavanChargePoll(creature, guid)
+    if darnavanCanShatter[guid] then
+        local victim = creature:GetVictim()
+        if victim and victim:IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) then
+            creature:CastSpell(nil, SPELL_SHATTERING_THROW)
+            darnavanCanShatter[guid] = false
+            schedule(guid, "shatterrearm", 30000, function()
+                darnavanCanShatter[guid] = true
+            end)
+            schedule(guid, "chargepoll", 1000, function() onDarnavanChargePoll(creature, guid) end)
+            return
+        end
+    end
     if darnavanCanCharge[guid] then
         local victim = creature:GetVictim()
         if victim and creature:GetDistance(victim) > 5.0 then
@@ -937,6 +959,7 @@ local function darnavanJustEngagedWith(event, creature, target)
     schedule(guid, "mortal", {25000, 30000}, function() onDarnavanMortalStrike(creature, guid) end)
     schedule(guid, "sunder", {5000, 8000}, function() onDarnavanSunderArmor(creature, guid) end)
     darnavanCanCharge[guid] = true -- C++ Initialize :831
+    darnavanCanShatter[guid] = true -- C++ Initialize :831
     schedule(guid, "chargepoll", 1000, function() onDarnavanChargePoll(creature, guid) end)
 end
 
@@ -944,12 +967,14 @@ local function darnavanLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     darnavanCanCharge[guid] = nil
+    darnavanCanShatter[guid] = nil
 end
 
 local function darnavanReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     darnavanCanCharge[guid] = nil
+    darnavanCanShatter[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)

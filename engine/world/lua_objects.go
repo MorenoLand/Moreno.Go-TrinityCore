@@ -255,6 +255,18 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.auraMu.Unlock()
 		return []any{found}, nil
 	}
+	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
+	// (Unit.cpp:7800-7816) for creatures: the creatureImmuneToDamage twin
+	// (script-written IMMUNITY_SCHOOL / IMMUNITY_DAMAGE rows plus the live
+	// aura-39/aura-40 misc folds). SPELL_SCHOOL_MASK_NORMAL = 1.
+	methods["IsImmunedToDamage"] = func(_ context.Context, args []any) ([]any, error) {
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := creatureAuraKey{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID}
+		return []any{creatureImmuneToDamage(s.server, key, mask)}, nil
+	}
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

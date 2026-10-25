@@ -47,9 +47,11 @@
 -- SPELL_OUTHOUSE_GROANS 48382 -> counter arm -> DoCast(caster,
 -- SPELL_CAMERA_SHAKE 47533) when counter < 5 / DoCast(me,
 -- SPELL_DUST_FIELD 48329) always (zone_grizzly_hills.cpp:298-323);
--- the gender-gated sound arm (SetData, Type 1) stays out
--- (no SetData bridge; the go_amberpine_outhouse gossip caller is
--- not ported).
+-- the gender-gated sound arm (SetData, Type 1): the bunny-side
+-- Reset SetData(1,0) + gender-gated PlayDirectSound legs ARE ported
+-- in npc_outhouse_bunny.lua (2026-10-24) — the stale "no SetData
+-- bridge" wording is retracted; only the go_amberpine_outhouse
+-- gossip caller (which writes the gender) stays out.
 -- npc_tallhorn_stag — PORTED in lua_scripts/northrend/
 -- zone_grizzly_hills.lua (2026-10-23): the Reset/UpdateAI _phase haunch
 -- arm via the new creature:FindNearestGameObject bridge.
