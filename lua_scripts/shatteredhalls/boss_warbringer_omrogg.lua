@@ -48,7 +48,7 @@
 -- Talk(EMOTE_ENRAGE), non-triggered self-cast (C++ DoCast(me),
 -- C++-exact), re-arm 40000, blastWave = 16000, blastCount = 1
 -- (C++-exact); reset threat 30s init then {25s,40s} —
--- random-player pick + ResetAllThreat + AddThreat(pick, 0.0)
+-- random threat-list pick + ResetAllThreat + AddThreat(pick, 0.0)
 -- PORTED with its DoYellForThreat head-talk (the heads are
 -- summoned at pull and their handles stored, so no GUID
 -- relay is needed), re-arm
@@ -87,7 +87,7 @@
 -- JustDied handler below, and its Reset/JustEngagedWith
 -- overrides are empty (ahune bunny / nethekurse fissure
 -- precedent); the DoYellForThreat head-talk arm is PORTED
--- with its threat legs (random-player pick + ResetAllThreat
+-- with its threat legs (random threat-list pick + ResetAllThreat
 -- + AddThreat(pick, 0.0)); H_SPELL_BURNING_MAUL 36056 is an
 -- unused C++ enum member (the cast is unconditional, C++-
 -- exact); the ScriptData "Heroic enabled. Spell timing
@@ -238,22 +238,16 @@ local function armDelayPump(creature, guid)
     end, 3500, 0)
 end
 
--- Random alive player in this map instance (kaelthas
--- randomPlayer idiom; C++ SelectTarget(Random, 0) equivalent
--- for the threat arms below).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
+-- C++ SelectTarget(Random, 0) draws from the threat list
+-- (UnitAI.h:170, playerOnly defaults false) — GetAITargets is
+-- the bridged threat list (murmur/thaurissan precedent), not
+-- the instance player pool.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if targets == nil or #targets == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return targets[math.random(#targets)]
 end
 
 local function bossTick(creature, guid)
@@ -295,15 +289,15 @@ local function bossTick(creature, guid)
         st.burningMaul = st.burningMaul - 1000
     end
 
-    -- Reset threat: 30s init then {25s,40s} — random alive
-    -- player pick (kaelthas randomPlayer idiom; C++ SelectTarget
-    -- Random, 0) + ResetAllThreat + AddThreat(pick, 0.0) in C++
+    -- Reset threat: 30s init then {25s,40s} — random
+    -- threat-list pick (C++ SelectTarget Random, 0, playerOnly
+    -- defaults false) + ResetAllThreat + AddThreat(pick, 0.0) in C++
     -- order; nil pick leaves the list untouched (C++ gates the
     -- whole block on SelectTarget non-nil); the DoYellForThreat
     -- head-talk is PORTED above (DoYellForThreat leg). Re-arm
     -- regardless (C++-exact).
     if st.resetThreat <= 1000 then
-        local pick = randomPlayer(creature)
+        local pick = randomThreatTarget(creature)
         if pick ~= nil then
             -- C++ DoYellForThreat() before ResetThreatList/AddThreat
             -- (boss_warbringer_omrogg.cpp:379-384): first threat line

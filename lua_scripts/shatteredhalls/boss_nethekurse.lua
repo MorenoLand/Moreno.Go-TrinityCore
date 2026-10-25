@@ -41,13 +41,14 @@
 -- collapses into the pump; IsMainEvent is true at the only
 -- hook this model has).
 -- Pump: phase 1 (health > 20%): shadow fissure 30496: 8s
--- init then {7.5s,15s} — target = random alive player in
--- the instance (C++ SelectTarget(Random, 0), thespia
--- precedent), nil pick casts nothing, non-triggered DoCast
--- on the target (C++-exact), re-arm {7.5s,15s} regardless
--- (C++-exact); death coil 30500: 20s init then {15s,20s} —
--- same targeting (C++-exact), nil pick casts nothing,
--- re-arm {15s,20s} regardless (C++-exact); then the phase
+-- init then {7.5s,15s} — target = random threat-list entry
+-- (C++ SelectTarget(Random, 0), playerOnly defaults false,
+-- UnitAI.h:170; GetAITargets idiom), nil pick casts nothing,
+-- non-triggered DoCast on the target (C++-exact), re-arm
+-- {7.5s,15s} regardless (C++-exact); death coil 30500: 20s
+-- init then {15s,20s} — same targeting (C++-exact), nil pick
+-- casts nothing, re-arm {15s,20s} regardless (C++-exact);
+-- then the phase
 -- check GetHealthPct() <= 20 sets phase (C++ !HealthAbovePct
 -- (20), C++-exact arm order). Phase 2: dark spin 30502 once
 -- (non-triggered DoCastVictim, C++-exact) then shadow cleave
@@ -137,16 +138,16 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
+-- C++ SelectTarget(Random, 0) draws from the threat list
+-- (UnitAI.h:170, playerOnly defaults false) — GetAITargets is
+-- the bridged threat list (murmur/thaurissan precedent), not
+-- the instance player pool.
+local function randomThreatTarget(creature)
+    local targets = creature:GetAITargets()
+    if targets == nil or #targets == 0 then
+        return nil
     end
-    return found
+    return targets[math.random(#targets)]
 end
 
 -- C++ Initialize() values (the peon/intro machine is
@@ -192,16 +193,15 @@ local function bossTick(creature, guid)
         end
     else
         -- Shadow fissure 30496: 8s init then {7.5s,15s} —
-        -- target = random alive player in the instance (C++
-        -- SelectTarget(Random, 0), thespia precedent), nil
-        -- pick casts nothing, non-triggered DoCast on the
+        -- target = random threat-list entry (C++
+        -- SelectTarget(Random, 0), playerOnly defaults false),
+        -- nil pick casts nothing, non-triggered DoCast on the
         -- target (C++-exact), re-arm {7.5s,15s} regardless
         -- (C++-exact).
         if st.shadowFissure <= 1000 then
-            local players = playersInInstance(creature)
-            if #players > 0 then
-                creature:CastSpell(players[math.random(#players)],
-                    SPELL_SHADOW_FISSURE)
+            local target = randomThreatTarget(creature)
+            if target ~= nil then
+                creature:CastSpell(target, SPELL_SHADOW_FISSURE)
             end
             st.shadowFissure = math.random(7500, 15000)
         else
@@ -209,14 +209,13 @@ local function bossTick(creature, guid)
         end
 
         -- Death coil 30500: 20s init then {15s,20s} — same
-        -- targeting (C++-exact), nil pick casts nothing,
-        -- re-arm {15s,20s} regardless (C++-exact).
+        -- threat-list targeting (C++-exact), nil pick casts
+        -- nothing, re-arm {15s,20s} regardless (C++-exact).
         -- (H_SPELL 30741 is an unused C++ enum member.)
         if st.deathCoil <= 1000 then
-            local players = playersInInstance(creature)
-            if #players > 0 then
-                creature:CastSpell(players[math.random(#players)],
-                    SPELL_DEATH_COIL)
+            local target = randomThreatTarget(creature)
+            if target ~= nil then
+                creature:CastSpell(target, SPELL_DEATH_COIL)
             end
             st.deathCoil = math.random(15000, 20000)
         else

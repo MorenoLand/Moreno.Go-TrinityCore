@@ -39,9 +39,11 @@
 -- found alive nearby;
 -- assistance arm PORTED — the Reset() SetNoCallAssistance(true)
 -- arm runs on event 23 (bridge in lua_creature_events.go; the sticky
--- latch holds it across the evade clear); no LoS-aggro bridge — the C++ empty
--- MoveInLineOfSight override (no line-of-sight response)
--- unmodeled, engagement follows engine aggro; no
+-- latch holds it across the evade clear); LoS-aggro arm PORTED —
+-- the C++ empty MoveInLineOfSight override (no line-of-sight
+-- response) is an ev27 veto returning true (cyanigosa precedent;
+-- ev27 fires on Go's aggro-engage branch, so damage-based
+-- engagement is unaffected); no
 -- SpellScript/AuraScript scripts in this file.
 
 local SPELL_HEMORRHAGE = 30478
@@ -113,6 +115,12 @@ end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 2, function(_, creature)
     resetConvert(creature:GetGUID())
+end)
+
+-- C++ MoveInLineOfSight is an empty override: converts never
+-- sight-aggro (cyanigosa precedent).
+RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 27, function(_, creature)
+    return true
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 4, function(_, creature)
