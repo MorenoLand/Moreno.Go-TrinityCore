@@ -31,10 +31,11 @@
 -- exact for all C++ timers here; the !UpdateVictim early
 -- return collapses into the pump, which only runs in combat).
 -- Pump: super shrink ray 31485 20s -> DoCastVictim, re-arm
--- 20000. Saw blade 31486 15s -> target = random alive player
--- excluding the victim (C++ SelectTarget(Random, 1), lurker/
--- curator convention), cast on the pick or on the victim when
--- the pick is nil (C++-exact), re-arm 15000. Electrified net
+-- 20000. Saw blade 31486 15s -> target = threat-list
+-- any-unit with the MaxThreat head skipped first (C++
+-- SelectTarget(Random, 1), salramm offset-before-filter
+-- idiom), cast on the pick or on the victim when the pick is
+-- nil (C++-exact), re-arm 15000. Electrified net
 -- 35107 10s -> DoCastVictim, re-arm 10000. Health thresholds
 -- (once-guarded GetHealthPct() < N, C++ HealthBelowPct): at
 -- 75/50/25 -> Talk(SAY_MECHANICS) + the PORTED SummonMechanichs
@@ -99,29 +100,22 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 1
+-- skips the MaxThreat head BEFORE any filter (offset-before-filter,
+-- salramm idiom); playerOnly defaults false, so any threat-list unit
+-- qualifies (not just players). Dead members are offline refs in C++
+-- (skipped at list build) so they are filtered here. The old
+-- instance-player pool and victim-GUID exclusion are retired
+-- (threat-list precedent, Oct-25 strips). Nil when the threat list
+-- holds at most the head — the caller falls back to the victim
+-- (C++-exact).
+local function pickRandomThreatTargetSkipFirst(creature)
+    local targets = creature:GetAITargets()
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 1): random alive player in the
--- instance excluding the victim (lurker/curator convention).
--- Nil when no other player is present — the caller falls back
--- to the victim (C++-exact).
-local function pickRandomPlayerExcludingVictim(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim and victim:GetGUID() or nil
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if not victimGuid or p:GetGUID() ~= victimGuid then
-            found[#found + 1] = p
+    for i = 2, #targets do
+        local t = targets[i]
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
@@ -175,10 +169,11 @@ local function bossTick(creature, guid)
         st.shrink = st.shrink - 1000
     end
 
-    -- Saw blade 31486: 15s then 15s; random non-victim player
-    -- pick, victim fallback when nil (C++-exact).
+    -- Saw blade 31486: 15s then 15s; threat-list any-unit pick
+    -- with the MaxThreat head skipped first, victim fallback
+    -- when nil (C++-exact).
     if st.sawBlade <= 1000 then
-        local target = pickRandomPlayerExcludingVictim(creature)
+        local target = pickRandomThreatTargetSkipFirst(creature)
         if not target then
             target = creature:GetVictim()
         end

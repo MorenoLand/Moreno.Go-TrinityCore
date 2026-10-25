@@ -39,11 +39,12 @@
 -- (non-triggered self-cast, supremus precedent), re-arm
 -- {20s,25s} (C++-exact); cleave 40504 9s then {18s,34s} —
 -- triggered DoCastVictim (the C++ true arg), re-arm {18s,34s}
--- (C++-exact); uppercut 32055 20s then 22s — target = random
--- alive player within 10 yd excluding the victim (C++
--- SelectTarget(Random, 1, 10.0f, true), thespia distance-gate
--- convention), nil pick casts nothing, re-arm 22000 regardless
--- (C++-exact); poison bolt volley 34780 31s then 24s — DoCast
+-- (C++-exact); uppercut 32055 20s then 22s — target =
+-- threat-list player alive within 10 yd with the MaxThreat
+-- head skipped first (C++ SelectTarget(Random, 1, 10.0f,
+-- true), salramm offset-before-filter idiom), nil pick casts
+-- nothing, re-arm 22000 regardless (C++-exact); poison bolt
+-- volley 34780 31s then 24s — DoCast
 -- (me) non-triggered self-cast, re-arm 24000 (C++-exact). The
 -- UNIT_STATE_CASTING early returns have no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
 -- (mennu/thespia precedent). OnDied(4): cleanup (the _JustDied
@@ -85,36 +86,30 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 1
+-- skips the MaxThreat head BEFORE the player/dist filters
+-- (offset-before-filter, salramm idiom). Dead members are offline refs
+-- in C++ (skipped at list build) so they are filtered here. The old
+-- instance-player pool and victim-GUID exclusion are retired
+-- (threat-list precedent, Oct-25 strips).
+local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
+    local targets = creature:GetAITargets()
+    local start = 1
+    if skipFirst then
+        start = 2
+    end
+    local pool = {}
+    for i = start, #targets do
+        local t = targets[i]
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= maxDist then
+            pool[#pool + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 1, 10.0f, true): random alive player
--- within 10 yd excluding the victim (thespia distance-gate
--- convention). Nil when no other player is in range — the
--- caller skips the cast (C++-exact).
-local function pickRandomPlayerIn10YdExcludingVictim(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = victim and victim:GetGUID() or nil
-    local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if (not victimGuid or p:GetGUID() ~= victimGuid)
-                and creature:GetDistance(p) <= 10.0 then
-            found[#found + 1] = p
-        end
-    end
-    if #found == 0 then
+    if #pool == 0 then
         return nil
     end
-    return found[math.random(#found)]
+    return pool[math.random(#pool)]
 end
 
 -- C++ ScheduleEvent(event, 20s, 25s) picks uniformly in the
@@ -156,12 +151,13 @@ local function bossTick(creature, guid)
         st.cleave = st.cleave - 1000
     end
 
-    -- Uppercut 32055: 20s init then 22s — random alive player
-    -- within 10 yd excluding the victim (thespia precedent),
+    -- Uppercut 32055: 20s init then 22s — threat-list player
+    -- alive within 10 yd with the MaxThreat head skipped first
+    -- (C++ SelectTarget(Random, 1, 10.0f, true), salramm idiom),
     -- nil pick casts nothing, re-arm 22000 regardless
     -- (C++-exact).
     if st.uppercut <= 1000 then
-        local target = pickRandomPlayerIn10YdExcludingVictim(creature)
+        local target = randomThreatPlayerInRange(creature, 10, true)
         if target then
             creature:CastSpell(target, SPELL_UPPERCUT)
         end

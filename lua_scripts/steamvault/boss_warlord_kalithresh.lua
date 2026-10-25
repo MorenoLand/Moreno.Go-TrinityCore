@@ -38,9 +38,9 @@
 -- only runs in combat). Pump: spell reflection 31534 10s then
 -- 15000+rand32()%10000 -> DoCast(me), re-arm (C++-exact).
 -- Impale 39061 7000+rand32()%7000 then 7500+rand32()%5000 ->
--- target = random alive player in the instance (C++
--- SelectTarget(Random, 0), thespia precedent), nil pick casts
--- nothing, re-arm regardless (C++-exact). The rage arm has no
+-- target = threat-list any-unit (C++ SelectTarget(Random, 0),
+-- salramm idiom), nil pick casts nothing, re-arm regardless
+-- (C++-exact). The rage arm has no
 -- bridge — the whole fire arm is FindNearestCreature(17954,
 -- 100.0f)-gated and the fire arm is cross-creature (ENSURE_AI
 -- -> StartRageGen on the distiller); only timer bookkeeping is
@@ -108,23 +108,20 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
+-- takes any entry; playerOnly defaults false, so any threat-list unit
+-- qualifies (not just players), with no distance filter (salramm
+-- idiom). Dead members are offline refs in C++ (skipped at list
+-- build) so they are filtered here. The old instance-player pool is
+-- retired (threat-list precedent, Oct-25 strips). Nil when none
+-- present — the caller casts nothing (C++-exact).
+local function pickRandomThreatTarget(creature)
     local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            found[#found + 1] = t
         end
     end
-    return found
-end
-
--- C++ SelectTarget(Random, 0): random alive player in the
--- instance (thespia precedent); nil when none present — the
--- caller casts nothing (C++-exact).
-local function pickRandomPlayer(creature)
-    local found = playersInInstance(creature)
     if #found == 0 then
         return nil
     end
@@ -170,10 +167,10 @@ local function bossTick(creature, guid)
     end
 
     -- Impale 39061: 7000+rand32()%7000 then 7500+rand32()%5000;
-    -- random alive player pick, nil pick casts nothing, re-arm
+    -- threat-list any-unit pick, nil pick casts nothing, re-arm
     -- regardless (C++-exact).
     if st.impale <= 1000 then
-        local target = pickRandomPlayer(creature)
+        local target = pickRandomThreatTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_IMPALE)
         end

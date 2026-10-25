@@ -29,17 +29,17 @@
 -- 7000 / envelopingWinds 9000) + Talk(SAY_AGGRO) + 1s
 -- scheduler pump (a port of boss_thespiaAI::ExecuteEvent — 1s
 -- granularity is exact for all C++ timers here). Pump:
--- lightning cloud 25033 15s init then {15s,25s} — random alive
--- player in the instance within 30 yd (C++ SelectTarget(Random,
--- 0, 30.0f, true), netherspite distance-gate convention); nil
--- pick casts nothing, timer re-arms (C++-exact); the Heroic
--- second cast is modeled via creature:IsHeroic() (independent
--- random pick, below).
--- Lung burst 31481 7s init then {7s,12s} — random alive player
--- within 40 yd, cast or skip, re-arm (C++-exact). Enveloping
--- winds 31718 9s init then {10s,15s} — random alive player
--- within 35 yd, cast or skip, re-arm (C++-exact); the Heroic
--- second cast is modeled via creature:IsHeroic() (above). OnTargetDied(3): victim:
+-- lightning cloud 25033 15s init then {15s,25s} — threat-list
+-- player alive within 30 yd (C++ SelectTarget(Random, 0,
+-- 30.0f, true), salramm idiom); nil pick casts nothing, timer
+-- re-arms (C++-exact); the Heroic second cast is modeled via
+-- creature:IsHeroic() (independent random pick, below).
+-- Lung burst 31481 7s init then {7s,12s} — threat-list player
+-- alive within 40 yd, cast or skip, re-arm (C++-exact).
+-- Enveloping winds 31718 9s init then {10s,15s} — threat-list
+-- player alive within 35 yd, cast or skip, re-arm (C++-exact);
+-- the Heroic second cast is modeled via creature:IsHeroic()
+-- (above). OnTargetDied(3): victim:
 -- GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact). OnDied(4): Talk(
 -- SAY_DEAD) + cleanup (the _JustDied arm is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
@@ -102,26 +102,18 @@ local function resetElemental(guid)
     cancelPump(elementalTimers, guid)
 end
 
-local function playersInInstance(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local found = {}
-    for _, p in ipairs(GetPlayersInWorld()) do
-        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() then
-            found[#found + 1] = p
-        end
-    end
-    return found
-end
-
--- C++ SelectTarget(Random, 0, dist, true): random alive player
--- in the instance within dist yards. Nil when none is in range
+-- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
+-- takes any entry, then the player/dist filters apply (salramm idiom).
+-- Dead members are offline refs in C++ (skipped at list build) so they
+-- are filtered here. The old instance-player pool is retired
+-- (threat-list precedent, Oct-25 strips). Nil when none is in range
 -- (C++-exact — the caller skips the cast).
 local function pickRandomPlayerInRange(creature, dist)
     local found = {}
-    for _, p in ipairs(playersInInstance(creature)) do
-        if creature:GetDistance(p) <= dist then
-            found[#found + 1] = p
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead()
+                and creature:GetDistance(t) <= dist then
+            found[#found + 1] = t
         end
     end
     if #found == 0 then
