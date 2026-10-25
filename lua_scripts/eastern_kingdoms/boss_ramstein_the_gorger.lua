@@ -40,8 +40,12 @@
 --   triggered -> GetVictim + CastSpell (mr_smite convention).
 -- - JustDied: 30x SummonCreature(NPC_MINDLESS_UNDEAD 11030,
 --   3969.35+irand(-10,10), -3391.87+irand(-10,10), 119.11, 5.91,
---   TEMPSUMMON_TIMED_OR_DEAD_DESPAWN=2, 30min=1800000ms) via
---   creature:SummonCreature (malchezaar type-2 precedent) + the
+--   TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (Go bridge type 0; the C++
+--   enum is 1-based, ObjectDefines.h:59, while the Go bridge is
+--   0-based, lua_creature_events.go:1653 — the old type 2 was Go
+--   TIMED_DESPAWN, whose timer runs unconditionally in combat,
+--   pet_combat.go:595), 30min=1800000ms) via
+--   creature:SummonCreature + the
 --   mob->AI()->AttackStart(SelectNearestTarget(100)) leg PORTED
 --   below (nearest-alive-player twin + EngageWithTarget).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
@@ -139,7 +143,7 @@ local function onJustDied(_, creature)
         local mob = creature:SummonCreature(NPC_MINDLESS_UNDEAD,
             3969.35 + math.random(-10, 10),
             -3391.87 + math.random(-10, 10),
-            119.11, 5.91, 2, 1800000)
+            119.11, 5.91, 0, 1800000)
         if mob and target then
             mob:EngageWithTarget(target)
         end
