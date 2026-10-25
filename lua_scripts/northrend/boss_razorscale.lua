@@ -282,7 +282,8 @@ RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
 -- SetFlag(GO_FLAG_NOT_SELECTABLE), 1s UseDoorOrButton, 10s Delete.
 -- GO OnAdd is event 12 (gameobjects.go:1659, dynamic spawns only) —
 -- latent until the spawner chain ports (same latent-add precedent as
--- the XT-002 life spark). Delete ports as Despawn (the GO hide twin).
+-- the XT-002 life spark). Delete ports as RemoveFromWorld (the GO
+-- destroy twin, lua_objects.go:1407; Despawn only hides).
 local GO_MOLE_MACHINE = 194316 -- ulduar.h:250
 local GO_FLAG_NOT_SELECTABLE = 0x10 -- SharedDefines.h:1641
 local GAMEOBJECT_FLAGS_FIELD = 9 -- gameobjects.go gameObjectFlags
@@ -293,8 +294,42 @@ local function moleMachineAdd(event, go)
         go:UseDoorOrButton()
     end, 1000)
     CreateLuaEvent(function()
-        go:Despawn()
+        go:RemoveFromWorld()
     end, 10000)
 end
 
 RegisterGameObjectEvent(GO_MOLE_MACHINE, 12, moleMachineAdd)
+
+-- C++ npc_expedition_defender::Reset (boss_razorscale.cpp:876-878):
+-- DoCastSelf(SPELL_THREAT 65146), non-triggered. Latent until the
+-- expedition adds arrive, same class as the mole-machine GO leg.
+local ENTRY_EXPEDITION_DEFENDER = 33816 -- ulduar.h:92
+local SPELL_THREAT = 65146
+
+local function expeditionDefenderReset(_, creature)
+    creature:CastSpell(creature, SPELL_THREAT)
+end
+
+RegisterCreatureEvent(ENTRY_EXPEDITION_DEFENDER, 23, expeditionDefenderReset)
+
+-- C++ go_razorscale_harpoon::Reset (boss_razorscale.cpp:1488-1498),
+-- 1s leg only: FindNearestCreature(NPC_RAZORSCALE_CONTROLLER 33233,
+-- 5.0f) -> Talk(EMOTE_HARPOON 0). The broken-harpoon leg stays out:
+-- FindNearestGameObject exists only on the creature surface, not
+-- the GO object. Latent until the commander DoAction chain ports.
+local ENTRY_RAZORSCALE_CONTROLLER = 33233 -- ulduar.h:94
+local EMOTE_HARPOON = 0
+local GO_RAZOR_HARPOONS = {194542, 194541, 194543, 194519} -- ulduar.h:251-254
+
+local function harpoonAdd(_, go)
+    CreateLuaEvent(function()
+        local controller = go:FindNearestCreature(ENTRY_RAZORSCALE_CONTROLLER, 5.0)
+        if controller then
+            controller:Talk(EMOTE_HARPOON, controller)
+        end
+    end, 1000)
+end
+
+for _, entry in ipairs(GO_RAZOR_HARPOONS) do
+    RegisterGameObjectEvent(entry, 12, harpoonAdd)
+end

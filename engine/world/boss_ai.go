@@ -10643,15 +10643,19 @@ func init() {
 	// kept); KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 —
 	// the razuvious player-gated variant precedent); JustDied
 	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough +
-	// RemoveFlag NOT_SELECTABLE leg has no bridge — the sjonnir
+	// RemoveFlag NOT_SELECTABLE leg is bridged (field 59) — the sjonnir
 	// JustDied-Talk precedent; also wipes the enrage timer).
 	// Documented-only: Reset / Initialize / EnterEvadeMode
 	// (DoStopTimedAchievement 21027 — no bridges);
 	// DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge);
 	// GetData(DATA_HARD_MODE / DATA_HEALTH_RECOVERED /
-	// DATA_GRAVITY_BOMB_CASUALTY — no GetData bridge);
+	// DATA_GRAVITY_BOMB_CASUALTY — creature GetData is bridged
+	// as a Lua-side ScriptData store, but producers/consumers are
+	// SpellScript/AuraScript/achievement scripts, so a Lua-side
+	// latch would be dead code);
 	// SetData(DATA_TRANSFERED_HEALTH health-transfer +
-	// DATA_GRAVITY_BOMB_CASUALTY — no SetData bridge); the
+	// DATA_GRAVITY_BOMB_CASUALTY — same store, unwritable
+	// from any Lua-reachable producer); the
 	// heart-exposure phase machine (ExposeHeart: SetPhase
 	// PHASE_HEART + react-state / AttackStop + Talk
 	// SAY_HEART_OPENED 1 + EVENT_SUBMERGE; DisposeHeart:

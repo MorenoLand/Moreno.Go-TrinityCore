@@ -259,8 +259,8 @@ local function xt002TargetDied(event, creature, victim)
 end
 
 -- C++ JustDied (:210-215): _JustDied() passthrough + Talk
--- (SAY_DEATH) + RemoveFlag NOT_SELECTABLE — only the Talk arm is
--- bridgeable; the enrage timer is wiped with it.
+-- (SAY_DEATH) + RemoveFlag NOT_SELECTABLE (field 59, bridged);
+-- the enrage timer is wiped with it.
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())

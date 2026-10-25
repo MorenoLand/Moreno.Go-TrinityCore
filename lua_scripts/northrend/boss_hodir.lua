@@ -259,18 +259,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, idx, range, true) playerOnly=true arms ride the
--- jaraxxus GetPlayersInWorld precedent (0.0f = any-range modeled with
--- 100 — curator precedent). Caveat shared with the keleseth/thorim/
--- beast ports: C++ draws from the threat list (engaged units); the
--- bridge can include nearby unengaged players.
+-- C++ SelectTarget(Random, idx, range, true) playerOnly=true draws the
+-- threat list (UnitAI.h DefaultTargetSelector); the pool is
+-- creature:GetAITargets() filtered to alive players within range
+-- (auriaya swarming precedent) — the old GetPlayersInWorld pool
+-- admitted unengaged players and retired 2026-10-25.
 local function randomPlayerInRange(creature, range)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() and creature:IsWithinDist(plr, range) then
-            candidates[#candidates + 1] = plr
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and creature:IsWithinDist(unit, range) then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then
@@ -279,18 +278,28 @@ local function randomPlayerInRange(creature, range)
     return candidates[math.random(#candidates)]
 end
 
+-- 2-arg RAID_MODE (ScriptedCreature.h:266): the 25-man value for every
+-- difficulty except 10-man normal. Go twin: Is25ManRaid() covers
+-- 25N/25H (difficulty&1), IsHeroic() covers 10H/25H (difficulty>=2).
+local function isRaidMode25(creature)
+    return creature:Is25ManRaid() or creature:IsHeroic()
+end
+
 -- C++ EVENT_ICICLE (id 4; init 2s at line 379, arm at 448-451):
 -- SelectTarget(Random, 0, 100.0f, true) playerOnly=TRUE ->
 -- DoCast(target, SPELL_ICICLE 62234), non-triggered, null-guarded like
 -- the C++ if; re-arm RAID_MODE(5500ms, 3500ms) unconditional — the
--- ScheduleEvent sits outside the target check, so 5500ms (10-man value;
--- the 10-vs-25-man raid-size selector has no bridge).
+-- ScheduleEvent sits outside the target check.
 local function onIcicle(creature, guid)
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_ICICLE)
     end
-    schedule(guid, "icicle", 5500, function() onIcicle(creature, guid) end)
+    local rearm = 5500
+    if isRaidMode25(creature) then
+        rearm = 3500
+    end
+    schedule(guid, "icicle", rearm, function() onIcicle(creature, guid) end)
 end
 
 -- C++ EVENT_FREEZE (lines 444-446): DoCastAOE(SPELL_FREEZE),
@@ -366,24 +375,32 @@ end
 
 -- C++ Reset (lines 359-366): _Reset() (cancelTimers twin) +
 -- SetReactState(REACT_PASSIVE) + the frozen-helper summon loop
--- (boss_hodir.cpp:362-364) — PORTED: FRIENDS_COUNT = 4 (the
--- RAID_MODE 10-man value; the raid-size selector has no bridge)
--- helpers, entries 32897/33325/33328/32893 (ulduar.h), literal
--- SummonPositions, TEMPSUMMON_MANUAL_DESPAWN (Eluna type 7, 0ms),
--- each self-casting SPELL_SUMMON_FLASH_FREEZE_HELPER 61989
--- triggered (the stale "no summon bridge" claim is retracted).
--- Delta: summoned add AIs are unported — the helpers are inert.
-local FROZEN_HELPER_ENTRIES = {32897, 33325, 33328, 32893}
+-- (boss_hodir.cpp:362-364) — PORTED: FRIENDS_COUNT =
+-- RAID_MODE(4, 8) helpers, entries + literal SummonPositions
+-- (boss_hodir.cpp Entry/SummonPositions tables), TEMPSUMMON_MANUAL_
+-- DESPAWN (Eluna type 7, 0ms), each self-casting
+-- SPELL_SUMMON_FLASH_FREEZE_HELPER 61989 triggered (the stale "no
+-- summon bridge" claim is retracted). Delta: summoned add AIs are
+-- unported — the helpers are inert.
+local FROZEN_HELPER_ENTRIES = {32897, 33325, 33328, 32893, 33326, 32901, 32900, 33327}
 local FROZEN_HELPER_POSITIONS = {
     {1983.75, -243.36, 432.767, 1.57},
     {1999.90, -230.49, 432.767, 1.57},
     {2010.06, -243.45, 432.767, 1.57},
     {2021.12, -236.65, 432.767, 1.57},
+    {2028.10, -244.66, 432.767, 1.57},
+    {2014.18, -232.80, 432.767, 1.57},
+    {1992.90, -237.54, 432.767, 1.57},
+    {1976.60, -233.53, 432.767, 1.57},
 }
 local function hodirReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetReactState(REACT_PASSIVE)
-    for i = 1, 4 do
+    local helperCount = 4
+    if isRaidMode25(creature) then
+        helperCount = 8
+    end
+    for i = 1, helperCount do
         local pos = FROZEN_HELPER_POSITIONS[i]
         local helper = creature:SummonCreature(FROZEN_HELPER_ENTRIES[i],
             pos[1], pos[2], pos[3], pos[4], 7, 0)
@@ -492,6 +509,51 @@ end
 
 RegisterCreatureEvent(ENTRY_SNOWPACKED_ICICLE, 23, snowpackedIcicleReset)
 RegisterCreatureEvent(ENTRY_SNOWPACKED_ICICLE, 4, snowpackedIcicleDied)
+
+-- C++ npc_icicleAI (boss_hodir.cpp:558-600): ctor SetDisplayId
+-- (Modelid1) + flags NON_ATTACKABLE|PACIFIED|NOT_SELECTABLE +
+-- rooted + REACT_PASSIVE; Reset re-inits the 2500ms timer; UpdateAI
+-- has no UpdateVictim gate, so an ev23 timer harness is faithful:
+-- entry 33173 (SNOWDRIFT) -> DoCast(me, FALL_SNOWDRIFT 62460) +
+-- DoCast(me, ICICLE_FALL 69428), both non-triggered; entry 33169
+-- -> DoCast(me, ICICLE_FALL 69428) + DoCast(me, FALL_DAMAGE
+-- 62236, true); 10000ms loop. Same summoned-add class as the
+-- snowpacked/toasty ports above.
+local ENTRY_ICICLE = 33169 -- boss_hodir.cpp:100
+local ENTRY_ICICLE_SNOWDRIFT = 33173 -- boss_hodir.cpp:101
+local SPELL_FALL_SNOWDRIFT = 62460 -- boss_hodir.cpp:68
+local SPELL_ICICLE_FALL = 69428 -- boss_hodir.cpp:66
+local SPELL_FALL_DAMAGE = 62236 -- boss_hodir.cpp:67
+
+local function icicleTick(creature, guid)
+    if creature:GetEntry() == ENTRY_ICICLE_SNOWDRIFT then
+        creature:CastSpell(creature, SPELL_FALL_SNOWDRIFT)
+        creature:CastSpell(creature, SPELL_ICICLE_FALL)
+    elseif creature:GetEntry() == ENTRY_ICICLE then
+        creature:CastSpell(creature, SPELL_ICICLE_FALL)
+        creature:CastSpell(creature, SPELL_FALL_DAMAGE, true)
+    end
+    schedule(guid, "icicle", 10000, function() icicleTick(creature, guid) end)
+end
+
+local function icicleReset(_, creature)
+    creature:SetDisplayId(creature:GetTemplateModelId(1))
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
+    creature:SetRooted(true)
+    creature:SetReactState(REACT_PASSIVE)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "icicle", 2500, function() icicleTick(creature, guid) end)
+end
+
+local function icicleDied(_, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_ICICLE, 23, icicleReset)
+RegisterCreatureEvent(ENTRY_ICICLE, 4, icicleDied)
+RegisterCreatureEvent(ENTRY_ICICLE_SNOWDRIFT, 23, icicleReset)
+RegisterCreatureEvent(ENTRY_ICICLE_SNOWDRIFT, 4, icicleDied)
 RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 23, toastyFireReset)
 RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 14, toastyFireSpellHit)
 
