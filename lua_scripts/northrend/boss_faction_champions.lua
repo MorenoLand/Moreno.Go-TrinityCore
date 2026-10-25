@@ -321,8 +321,24 @@ local function championDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_toc_rogue::Reset (boss_faction_champions.cpp:1816-1829):
+-- SetEquipmentSlots(false, 47422, 49982, EQUIP_NO_CHANGE) +
+-- SetPowerType(POWER_ENERGY) + SetFullPower(POWER_ENERGY). The event
+-- schedules ride championEnterCombat; the base Reset's instance/team
+-- legs have no Lua-visible arms. SetPowerType fills the energy max
+-- (100) per Creature::UpdateMaxPower, so SetFullPower is SetPower(3,
+-- max 3) with the live max read (the snapshot fallback goes stale
+-- after a mid-handler type change). The other classes' equipment
+-- Reset legs (paladin/shadow priest/mage/hunter/warrior/dk/retro
+-- paladin) are not ported here; they are the follow-up unit.
 local function championReset(event, creature)
     cancelTimers(creature:GetGUID())
+    local entry = creature:GetEntry()
+    if entry == 34472 or entry == 34454 then
+        creature:SetEquipmentSlots(47422, 49982, 0xFFFFFFFF)
+        creature:SetPowerType(3)
+        creature:SetPower(3, creature:GetMaxPower(3))
+    end
 end
 
 -- C++ boss_faction_championsAI::KilledUnit (boss_faction_champions.cpp

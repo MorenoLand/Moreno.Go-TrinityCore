@@ -931,8 +931,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SetPower is Unit::SetPower (Unit.cpp): writes UNIT_FIELD_POWER1+type,
 	// clamped to the type's max (C++ clamps via std::min against
 	// GetMaxPower), then broadcasts the update field. powerType is validated
-	// 0-4 (POWER_MANA..POWER_HAPPINESS); SetPowerType legs stay out (no
-	// power-type bridge).
+	// 0-4 (POWER_MANA..POWER_HAPPINESS).
 	methods["SetPower"] = func(_ context.Context, args []any) ([]any, error) {
 		powerType, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -954,6 +953,91 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): value})
 		return nil, nil
+	}
+	// SetPowerType is Unit::SetPowerType (Unit.cpp:5523-5569): the early
+	// return on an unchanged type, then the UNIT_FIELD_BYTES_0 power-type
+	// byte, then Creature::UpdateMaxPower (StatSystem.cpp:1030-1041) over
+	// GetCreatePowerValue (Unit.cpp:9679-9701): ENERGY 100, RAGE 1000,
+	// FOCUS/HAPPINESS 0 for a non-pet creature; MANA keeps the banked
+	// spawn mana. The current-power legs follow the C++ switch: RAGE
+	// resets to 0, FOCUS fills to max, ENERGY/MANA keep current. The
+	// group/pet update-flag legs are player/pet-only. No bytes-0
+	// broadcast: creature update fields carry no bytes-0 slot
+	// (SetCombatReach precedent). Backs the setdemand hunt (toc rogue
+	// Reset ENERGY + full).
+	methods["SetPowerType"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType > 4 {
+			return nil, fmt.Errorf("SetPowerType requires a power type 0-4, got %d", powerType)
+		}
+		s.motionMu.Lock()
+		if motion.PowerType == powerType {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.PowerType = powerType
+		updates := map[int]uint32{}
+		switch powerType {
+		case 3: // POWER_ENERGY
+			motion.MaxPowers[powerType] = 100
+			motion.BaseMaxPowers[powerType] = 100
+			updates[unitFieldMaxPower1+int(powerType)] = 100
+		case 1: // POWER_RAGE
+			motion.MaxPowers[powerType] = 1000
+			motion.BaseMaxPowers[powerType] = 1000
+			updates[unitFieldMaxPower1+int(powerType)] = 1000
+			motion.Powers[powerType] = 0
+			updates[unitFieldPower1+int(powerType)] = 0
+		case 2: // POWER_FOCUS
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+			motion.Powers[powerType] = 0
+			updates[unitFieldPower1+int(powerType)] = 0
+		case 4: // POWER_HAPPINESS
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		if len(updates) > 0 {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
+		}
+		return nil, nil
+	}
+	// GetMaxPower reads the live max for the creature's current power
+	// type, or for the given type when passed one (the SetPower type
+	// convention, 0-4). The generic fallback (object.go) reads the
+	// event-time snapshot, so it goes stale after a mid-handler
+	// SetPowerType; this live read lets a port fill a new type to its
+	// max in the same handler (toc rogue SetFullPower). No-arg reads
+	// match the fallback's current-type value on every existing call
+	// site (none changes type mid-handler).
+	methods["GetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		powerType := motion.PowerType
+		if powerType >= uint32(len(motion.MaxPowers)) {
+			powerType = 0
+		}
+		s.motionMu.Unlock()
+		if len(args) > 0 {
+			var err error
+			powerType, err = luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if powerType > 4 {
+				return nil, fmt.Errorf("GetMaxPower requires a power type 0-4, got %d", powerType)
+			}
+		}
+		s.motionMu.Lock()
+		maxPower := motion.MaxPowers[powerType]
+		s.motionMu.Unlock()
+		return []any{maxPower}, nil
 	}
 	// ModifyPower is Unit::ModifyPower (Unit.cpp:7439): the signed delta is
 	// added to the current power, floored at 0, then SetPower clamps to the
