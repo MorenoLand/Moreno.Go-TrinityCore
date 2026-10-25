@@ -25,7 +25,7 @@
 -- (shadowVolley 1000 / burningNova 15000 / corruption 5000 / firenova
 -- false — the C++ JustEngagedWith does not schedule anything; the
 -- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
--- DoStartMovement arm has no movement bridge) + Talk(SAY_WAKE) + 1s
+-- DoStartMovement arm (= MoveChase(victim), ScriptedCreature.cpp:159-163) is subsumed by the engine combat chase) + Talk(SAY_WAKE) + 1s
 -- scheduler pump (a port of UpdateAI — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into the
 -- pump). Pump: the Firenova machine first — while firenova is set
@@ -96,7 +96,7 @@
 -- 37371/40070 are unused C++ enum members (both casts are
 -- unconditional, C++-exact); no
 -- movement bridge — the JustEngagedWith DoStartMovement arm
--- unmodeled; SPELL_VORTEX 37370 is an unused enum member —
+-- is engine-chase-subsumed (see above); SPELL_VORTEX 37370 is an unused enum member —
 -- never referenced in the file (gruul unused-enum precedent).
 
 local SPELL_SHADOW_BOLT_VOLLEY = 28599

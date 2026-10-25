@@ -21,7 +21,7 @@
 -- markOfShadow 5000+rand32()%2000 — the C++ JustEngagedWith's
 -- ChannelerEngaged relay is cross-creature blocked, the
 -- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
--- DoStartMovement arm has no movement bridge) + 1s scheduler
+-- DoStartMovement arm (= MoveChase(victim)) is subsumed by the engine combat chase) + 1s scheduler
 -- pump (a port of UpdateAI — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the
 -- pump). Pump: mark of shadow 30937: 5000+rand32()%2000 init
@@ -53,7 +53,7 @@
 -- arms unmodeled (mennu/thespia precedent); H_SPELL_SHADOW_BOLT
 -- 15472 is an unused C++ enum member (the cast is
 -- unconditional); no movement bridge — the JustEngagedWith
--- DoStartMovement arm unmodeled.
+-- DoStartMovement arm is engine-chase-subsumed (see above).
 
 local SPELL_MARK_OF_SHADOW = 30937
 local SPELL_SHADOW_BOLT = 12739

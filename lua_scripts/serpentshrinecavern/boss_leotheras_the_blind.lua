@@ -35,9 +35,9 @@
 -- since the banish pre-phase and the CheckBanish poll are
 -- instance/summon/cross-creature blocked — below). Pump:
 -- whirlwind-aura arm: while creature:HasAura(SPELL_WHIRLWIND
--- 37640), the 2s target-switch (ResetThreatList + MotionMaster
--- MovePoint to a random target) has no threat/movement bridges —
--- unmodeled, below; needThreatReset arm (fires when the
+-- 37640), the 2s target-switch (ResetThreatList + MovePoint to a
+-- random target) is PORTED in the pump via ResetAllThreat +
+-- Teleport (renataki precedent); needThreatReset arm (fires when the
 -- whirlwind aura lapses or a form switches): demonForm ->
 -- innerDemons=30000, else whirlwind=15000, needThreatReset=false
 -- (the MotionMaster Clear/MoveChase half has no movement bridge —
@@ -168,8 +168,8 @@
 -- final-form demon-copy (21875) spawn is PORTED 2026-10-24
 -- (SummonCreature + DoZoneInCombat; the SetGUID victim-binding and
 -- demon-copy despawn legs stay out); no movement/
--- threat bridge beyond ResetAllThreat/ModifyThreatByPercent — the whirlwind target-switch
--- MovePoint, the NeedThreatReset MoveChase half (its ResetThreatList
+-- threat bridge beyond ResetAllThreat/ModifyThreatByPercent/Teleport
+-- — the NeedThreatReset MoveChase half (its ResetThreatList
 -- half is PORTED below via creature:ResetAllThreat), the chaos-
 -- blast StopMoving arm and the leotheras MoveInLineOfSight
 -- intro/aggro machine unmodeled; the switch-to-demon + Reset
@@ -347,7 +347,8 @@ local function leotherasTick(creature, guid)
     -- NeedThreatReset arm: fires once the whirlwind aura lapses or
     -- a form switches (the ResetThreatList half is PORTED below via
     -- creature:ResetAllThreat; the MotionMaster Clear/MoveChase half
-    -- has no movement bridge — timer bookkeeping otherwise).
+    -- is subsumed by the engine's combat chase — the victim is
+    -- re-acquired by the combat tick after the threat reset).
     if st.needThreatReset and not creature:HasAura(SPELL_WHIRLWIND) then
         if st.demonForm then
             st.innerDemons = 30000
@@ -356,7 +357,7 @@ local function leotherasTick(creature, guid)
         end
         st.needThreatReset = false
         -- C++ NeedThreatReset arm (leotheras :461): ResetThreatList();
-        -- the MoveChase half has no movement bridge.
+        -- the MoveChase half is subsumed by the engine combat chase.
         creature:ResetAllThreat()
     end
 
@@ -376,9 +377,23 @@ local function leotherasTick(creature, guid)
     if not st.demonForm then
         -- Whirlwind: cast once the aura is absent and the timer
         -- fires; while the aura holds, the C++ 2s target-switch
-        -- (ResetThreatList + MovePoint to a random target) is
-        -- threat/movement blocked — unmodeled, header.
-        if not creature:HasAura(SPELL_WHIRLWIND) then
+        -- (ResetThreatList + MovePoint to a random target,
+        -- boss_leotheras_the_blind.cpp:435-447) is PORTED below:
+        -- the timer resets to 2000 even on a nil pick, and the
+        -- MovePoint rides the Teleport bridge (renataki precedent;
+        -- Teleport sets Moving=false, subsuming the Clear leg).
+        if creature:HasAura(SPELL_WHIRLWIND) then
+            if st.whirlwind <= 1000 then
+                local target = pickRandomAlivePlayer(creature)
+                if target then
+                    creature:ResetAllThreat()
+                    creature:Teleport(target:GetX(), target:GetY(), target:GetZ())
+                end
+                st.whirlwind = 2000
+            else
+                st.whirlwind = st.whirlwind - 1000
+            end
+        else
             if st.whirlwind <= 1000 then
                 creature:CastSpell(creature, SPELL_WHIRLWIND)
                 st.whirlwind = 2000

@@ -74,7 +74,9 @@
 -- gap, above); the performing-flag clear now rides event 15
 -- (gruulSpellHitTarget), C++-exact; no movement bridge — the ground-slam
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
--- arms unmodeled; the hurtful-strike MaxThreat
+-- arms unmodeled (MoveIdle is NOT SetCombatMovement: the twin's own
+-- note restricts it to pre-combat calls, so neither mid-combat leg
+-- ports via that flag); the hurtful-strike MaxThreat
 -- pick is GetAITargets()[2] (curator convention) and the
 -- IsWithinMeleeRange gate is creature:IsWithinMeleeRange; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- IsNonMeleeSpellCast queue gate unmodeled, timers fire
