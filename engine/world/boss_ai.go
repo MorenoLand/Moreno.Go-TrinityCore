@@ -6809,7 +6809,7 @@ func init() {
 	// npc_arugal_voidwalker (entry 4627) and boss_archmage_arugal
 	// (entry 4275) ported in lua_scripts/eastern_kingdoms/
 	// npc_arugal_voidwalker.lua + boss_archmage_arugal.lua (Oct-1
-	// 90de428, Eluna self-registering by entry). npc_shadowfang_prisoner
+	// 90de428). npc_shadowfang_prisoner
 	// (NPC_ASH=3850/NPC_ADA=3849, shadowfang_keep.h:39-40) is an EscortAI
 	// waypoint step machine with gossip select/hello: WaypointReached
 	// Talks (wp 0 free / wp 10 open door / wp 12 post-door / wp 13 ADA
@@ -6821,8 +6821,12 @@ func init() {
 	// is an AuraScript (SPELL_AURA_DUMMY, EFFECT_0): CalcPeriodic arms
 	// 30-90s, dummy tick casts aurEff->GetAmount() triggered on target,
 	// UpdatePeriodic recalculates — no SpellScript/AuraScript bridge,
-	// joins the no-SpellScript-bridge queue. No new registrations, no
-	// Lua files.
+	// joins the no-SpellScript-bridge queue. No new Lua files;
+	// arugal slot added 2026-10-25 (below).
+	// boss_archmage_arugal (Shadowfang Keep): BossAI-derived
+	// (shadowfang_keep.cpp:230) — the slot, not Eluna registration, gates
+	// beginInstanceEncounter (worldport_instance.go:376).
+	RegisterLuaBoss("boss_archmage_arugal", 4275)
 	// boss_apothecary_hummel.cpp audit (EK loader decl :125 / call :303
 	// follows instance_shadowfang_keep): 9 scripts. boss_apothecary_hummel
 	// (entry 36296 — no NPC_ constant in C++, DB-side ScriptName binding,
@@ -12088,6 +12092,14 @@ func init() {
 	// 18473 is DB-side (no NPC_ constant in the C++ tree); ScriptName
 	// bindings are DB-side as usual.
 	RegisterLuaBoss("boss_talon_king_ikiss", 18473)
+	// boss_exarch_maladaar + boss_shirrak_the_dead_watcher (Auchenai
+	// Crypts, Outland dungeon pass): both ScriptedAI-derived
+	// (maladaar.cpp:169, shirrak.cpp:63), registered per the outland
+	// dungeon-boss convention (vorpil/syth/murmur precedent); Auchenai
+	// Crypts is not a raid map, so the slot's admission effect stays inert
+	// (beginInstanceEncounter IsRaid gate) and all luaBossAI hooks are no-ops.
+	RegisterLuaBoss("boss_exarch_maladaar", 18373)
+	RegisterLuaBoss("boss_shirrak_the_dead_watcher", 18371)
 	// boss_illidan.lua — ported bridgeable arm: boss_illidan_stormrageAI::KilledUnit
 	// Talk(SAY_ILLIDAN_KILL 1) gated on victim->GetTypeId() == TYPEID_PLAYER —
 	// the razuvious player-gated precedent (event 3). The rest — intro/combat/
