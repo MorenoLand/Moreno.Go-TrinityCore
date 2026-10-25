@@ -28,11 +28,11 @@
 -- 4) + Talk(SAY_ENRAGE 2) + non-triggered self-cast frenzy 8269;
 -- per-GUID Lua state holds the once-guard, cleared on 2/4/23.
 -- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the latch.
--- Deviations from C++: JustDied's 20x SummonCreature(NPC_SCARLET_
--- TRAINEE 6575, timed-or-dead 10min around ScarletTraineePos
--- 1939.18/-431.58/17.09/6.22) and the npc_scarlet_trainee EscortAI
--- (urand 1-6s start timer -> Start(true, true)) are documented-only
--- — no summon or EscortAI bridges (nightbane/npc_barnes precedent).
+-- Deviations from C++: JustDied's 20x trainee summon is PORTED
+-- (herodDied, summon bridge live since 2026-10-22); the
+-- npc_scarlet_trainee EscortAI (urand 1-6s start timer ->
+-- Start(true, true)) stays documented-only — no EscortAI bridge
+-- (nightbane/npc_barnes precedent) — so summoned trainees idle.
 -- The UpdateAI UNIT_STATE_CASTING queue gate has no UNIT_STATE
 -- bridge — timers fire unconditionally (jeklik convention); the
 -- DamageTaken latch fires on the damage hook rather than the
@@ -41,6 +41,11 @@
 -- bridge — boss admission via the luaBossAI shim.
 
 local ENTRY_HEROD = 3975
+local ENTRY_SCARLET_TRAINEE = 6575 -- boss_herod.cpp:42
+local TRAINEE_POS_X = 1939.18 -- boss_herod.cpp:52 ScarletTraineePos
+local TRAINEE_POS_Y = -431.58
+local TRAINEE_POS_Z = 17.09
+local TRAINEE_POS_O = 6.22
 
 local SAY_AGGRO = 0
 local SAY_WHIRLWIND = 1
@@ -125,8 +130,28 @@ local function herodLeaveCombat(event, creature)
     herodResetState(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_herod.cpp:83-93): 20x SummonCreature(NPC_SCARLET_
+-- TRAINEE 6575, GetRandomPoint(ScarletTraineePos, 5yd), TEMPSUMMON_
+-- TIMED_OR_DEAD_DESPAWN, 10min). GetRandomPoint is twinned in-Lua
+-- (Object.cpp:1422: uniform angle, signed radius from two folded
+-- rand_norm draws, anchor z kept — no ground-height model, ossirian
+-- precedent); orientation is the anchor's 6.22 (C++ overrides the
+-- summoner-orientation default). The trainee EscortAI itself stays
+-- documented-only below, so summoned trainees idle in Go.
 local function herodDied(event, creature, killer)
     herodResetState(creature:GetGUID())
+    for _ = 1, 20 do
+        local a = math.random() * 2 * math.pi
+        local r = math.random() + math.random()
+        if r > 1 then
+            r = r - 2
+        end
+        local d = 5.0 * r
+        creature:SummonCreature(ENTRY_SCARLET_TRAINEE,
+            TRAINEE_POS_X + d * math.cos(a),
+            TRAINEE_POS_Y + d * math.sin(a),
+            TRAINEE_POS_Z, TRAINEE_POS_O, 0, 600000)
+    end
 end
 
 local function herodReset(event, creature)
