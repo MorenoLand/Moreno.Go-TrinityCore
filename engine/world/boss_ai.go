@@ -12111,16 +12111,18 @@ func init() {
 	// no-timer / no-cast / no-random-target / no-summon /
 	// no-motion / no-instance bridges — documented-only.
 	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
-	// boss_darkweaver_syth (Shadow Labyrinth, Outland dungeon pass) —
+	// boss_darkweaver_syth (Sethekk Halls, Outland dungeon pass) —
 	// fight logic in lua_scripts/outland/boss_darkweaver_syth.lua: the
-	// event-1 flame-shock / chain-lightning / frost-shock / shadow-bolt
-	// volley timers, the 50%/10% health one-shot latches (event 9), the
-	// Talk arms (SAY_AGGRO 1 event 1, SAY_SLAY 2 event 3 player-gated —
-	// the razuvious precedent, SAY_DEATH event 4). The summon-elemental
-	// / summon-clone machine legs ride no-summon / no-cast bridges —
-	// documented-only. Entry 18968 is DB-side (no NPC_ constant in the
-	// C++ tree — the syth enum in boss_darkweaver_syth.cpp carries
-	// spell/talk IDs only); ScriptName bindings are DB-side as usual.
+	// event-1 flame/arcane/frost/shadow-shock + chain-lightning
+	// volley timers, the 90/50/10% health one-shot summon latches
+	// (event 9), the Talk arms (SAY_AGGRO 1 event 1, SAY_SLAY 2 event 3
+	// player-gated — the razuvious precedent, SAY_DEATH event 4), the
+	// Lakka-free Talk leg (event 4), and the JustSummoned random-target
+	// engage leg (event 19). The summons.Summon bookkeeping leg stays
+	// documented-only (no summon-tracking bridge). Entry 18968 is
+	// DB-side (no NPC_ constant in the C++ tree — the syth enum in
+	// boss_darkweaver_syth.cpp carries spell/talk IDs only);
+	// ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_darkweaver_syth", 18968)
 	// boss_murmur (Shadow Labyrinth, Outland dungeon pass) — fight
 	// logic in lua_scripts/outland/boss_murmur.lua: the 40%-health

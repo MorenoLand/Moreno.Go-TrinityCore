@@ -49,10 +49,20 @@
 -- stale — lua_creature_events.go:2332, live-only per Health==0 skip).
 -- All timers cancelled on 2/4/23 (gargolmar precedent); the 90/50/10
 -- latches reset on 23 (C++ Reset → Initialize).
+-- boss_darkweaver_sythAI::JustSummoned — PORTED below
+-- (sythJustSummoned, event 19): SelectTarget(Random, 0) over the
+-- threat list + summoned:EngageWithTarget (AttackStart twin,
+-- shaffar beacon precedent). No entry gate in C++ (:171-175), so
+-- none here either. The arm fires whenever a summon materializes:
+-- the Go cast path runs EffectSummonType through the shared
+-- summonTempCreature funnel, which fires event 19 on the summoner
+-- (lua_creature_events.go:166) — on the same spell-data basis as
+-- the summon casts themselves. The summons.Summon bookkeeping leg
+-- (despawn on evade/death) stays documented-only: no
+-- summon-tracking bridge.
 -- DOCUMENTED-ONLY (in this header; only entry 18968 registered):
--- boss_darkweaver_sythAI::JustSummoned — summoned->AI()->
--- AttackStart(random target) + summons.Summon — no summoned-actor /
--- no-summon-tracking bridges.
+-- boss_darkweaver_sythAI::JustSummoned — summons.Summon
+-- bookkeeping leg only (see above).
 -- The four elemental adds (19203-19206, SPELL_{FLAME,ARCANE,FROST,
 -- SHADOW}_BUFFET 33526-33529) have NO CreatureScript anywhere in
 -- the C++ tree — nothing to port.
@@ -187,6 +197,20 @@ local function sythReset(event, creature)
     sythState[guid] = {summon90 = false, summon50 = false, summon10 = false}
 end
 
+-- C++ boss_darkweaver_sythAI::JustSummoned (:171-175):
+-- if (Unit* target = SelectTarget(Random, 0))
+-- summoned->AI()->AttackStart(target) — no entry gate, no
+-- player-only restriction (playerOnly defaults FALSE, UnitAI.h:170);
+-- the threat-list pool is randomThreatTarget above (shock precedent).
+-- A nil pick no-ops through the safe-harbor skip (C++ passes the
+-- raw SelectTarget result into AttackStart).
+local function sythJustSummoned(event, creature, summoned)
+    local target = randomThreatTarget(creature)
+    if target then
+        summoned:EngageWithTarget(target)
+    end
+end
+
 -- C++ boss_darkweaver_sythAI::KilledUnit (:165-169):
 -- if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY) — the
 -- razuvious player-gated precedent (event 3).
@@ -244,6 +268,7 @@ local function sythDamageTaken(event, creature, attacker, damage)
     end
 end
 
+RegisterCreatureEvent(ENTRY_DARKWEAVER_SYTH, 19, sythJustSummoned)
 RegisterCreatureEvent(ENTRY_DARKWEAVER_SYTH, 1, sythEnterCombat)
 RegisterCreatureEvent(ENTRY_DARKWEAVER_SYTH, 2, sythLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARKWEAVER_SYTH, 3, sythTargetDied)
