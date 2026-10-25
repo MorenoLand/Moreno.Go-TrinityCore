@@ -176,6 +176,13 @@ type creatureMotion struct {
 	// combat stop (Unit::AttackStop, Unit.cpp:5783 — bridged in
 	// triggerCreatureEvade) and on death (onCreatureKilled).
 	AlreadyCallAssistance bool
+	// NoCallAssistance is the sticky half of Creature::SetNoCallAssistance
+	// (Creature.h:246): a Lua Reset arm that sets the no-call latch must
+	// survive the engine's combat-stop clear in triggerCreatureEvade,
+	// because Go fires Lua event 23 ahead of that clear while C++ AI
+	// Reset runs after CombatStop. The evade clear respects it; a plain
+	// AttackStop still clears the per-engagement latch.
+	NoCallAssistance bool
 	// AssistAt/AssistVictim/Assistants mirror the AssistDelayEvent queued by
 	// Creature::CallAssistance (Creature.h:523-536, Creature.cpp:2402-2425):
 	// after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the gathered assistants
@@ -2197,7 +2204,13 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.TargetGUID = 0
 	// Unit::AttackStop (Unit.cpp:5783): combat stop resets the assistance
 	// flag, and the pending AssistDelayEvent dies with the engagement.
-	motion.AlreadyCallAssistance = false
+	// A Lua Reset arm that set the no-call latch survives: C++ AI Reset
+	// runs after CombatStop, while Go fires Lua event 23 ahead of this
+	// clear, so the sticky latch (motion.NoCallAssistance) holds the
+	// flag across evade exactly as a post-stop Reset would.
+	if !motion.NoCallAssistance {
+		motion.AlreadyCallAssistance = false
+	}
 	motion.AssistAt = time.Time{}
 	motion.AssistVictim = 0
 	motion.Assistants = nil

@@ -6355,8 +6355,9 @@ func init() {
 	// timers keep firing through crossings (documented deviation).
 	// The phase/equip event machine (instance chest DATA_SMITE_CHEST /
 	// GO 144111 via ObjectAccessor, MotionMaster MovePoint, equip-swap
-	// 5191/5196/7230, stand-state, MoveChase) and Reset's equipment/
-	// stand-state/react-state/NoCallAssistance arms are documented-only.
+	// 5191/5196/7230, stand-state, MoveChase) is documented-only;
+	// Reset's equipment/stand-state/react-state/NoCallAssistance arms
+	// are ported (see the Lua file's onSpawn/onReset).
 	// Entry 646 verifiable from the C++ sources: deadmines.h's own
 	// DMCreaturesIds enum names NPC_MR_SMITE = 646.
 	RegisterLuaBoss("boss_mr_smite", 646)

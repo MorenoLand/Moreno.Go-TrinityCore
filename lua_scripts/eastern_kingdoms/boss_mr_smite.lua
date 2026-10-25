@@ -46,7 +46,10 @@
 -- - Reset's SetStandState(UNIT_STAND_STATE_STAND) PORTED via
 --   creature:SetStandState(0) (bridge landed 2026-10-21,
 --   lua_creature_events.go:568; koltira precedent) +
---   SetNoCallAssistance(true) (no bridge). The Reset
+--   SetNoCallAssistance(true) PORTED via
+--   creature:SetNoCallAssistance(true) (bridge in
+--   lua_creature_events.go; the sticky NoCallAssistance latch holds
+--   it across the evade clear). The Reset
 --   SetEquipmentSlots arm IS ported (onSpawn / onReset via the
 --   EQUIP_NO_CHANGE sentinel), as is SetReactState(REACT_AGGRESSIVE).
 -- - The SetReactState(REACT_AGGRESSIVE) restore (phase 4 of the transition
@@ -197,11 +200,12 @@ local function onReset(_, creature)
     cancelTimers(guid)
     initState(guid)
     -- C++ Reset arms (boss_mr_smite.cpp:99-103): equipment (see
-    -- onSpawn) + SetStandState(STAND) + SetReactState(REACT_AGGRESSIVE),
-    -- C++ order.
+    -- onSpawn) + SetStandState(STAND) + SetReactState(REACT_AGGRESSIVE)
+    -- + SetNoCallAssistance(true), C++ order.
     creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
     creature:SetStandState(0)
     creature:SetReactState(REACT_AGGRESSIVE)
+    creature:SetNoCallAssistance(true)
 end
 
 RegisterCreatureEvent(ENTRY_MR_SMITE, 1, onEnterCombat)

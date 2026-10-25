@@ -618,6 +618,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
 		return []any{true}, nil
 	}
+	// SetNoCallAssistance is Creature::SetNoCallAssistance
+	// (Creature.h:246): it writes m_AlreadyCallAssistance directly, so
+	// true means the creature never calls for assistance and false
+	// re-opens the once-per-engagement call. The sticky half
+	// (motion.NoCallAssistance) holds a Reset-ported true across the
+	// engine's evade clear, which runs after Go's Lua event-23 fire
+	// while C++ AI Reset runs after CombatStop.
+	methods["SetNoCallAssistance"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetNoCallAssistance requires a bool, got no args")
+		}
+		noCall, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetNoCallAssistance requires a bool")
+		}
+		s.motionMu.Lock()
+		motion.AlreadyCallAssistance = noCall
+		motion.NoCallAssistance = noCall
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// DoZoneInCombat is CreatureAI::DoZoneInCombat (CreatureAI.cpp:73-103):
 	// on a dungeon map, the handler creature engages every alive,
 	// world-ready, non-GM player on its map/instance with a zero-threat

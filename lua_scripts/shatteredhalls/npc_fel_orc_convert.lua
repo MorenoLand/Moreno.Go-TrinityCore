@@ -37,8 +37,9 @@
 -- in-port equivalent (converts die while the boss is active
 -- in-port), so the death Talk fires whenever the boss is
 -- found alive nearby;
--- no assistance bridge — the Reset() SetNoCallAssistance
--- arm unmodeled; no LoS-aggro bridge — the C++ empty
+-- assistance arm PORTED — the Reset() SetNoCallAssistance(true)
+-- arm runs on event 23 (bridge in lua_creature_events.go; the sticky
+-- latch holds it across the evade clear); no LoS-aggro bridge — the C++ empty
 -- MoveInLineOfSight override (no line-of-sight response)
 -- unmodeled, engagement follows engine aggro; no
 -- SpellScript/AuraScript scripts in this file.
@@ -128,4 +129,6 @@ end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 23, function(_, creature)
     resetConvert(creature:GetGUID())
+    -- C++ Reset (boss_nethekurse.cpp:325): SetNoCallAssistance(true).
+    creature:SetNoCallAssistance(true)
 end)

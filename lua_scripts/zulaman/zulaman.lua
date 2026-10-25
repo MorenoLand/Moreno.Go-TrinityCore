@@ -18,7 +18,8 @@
 -- gong-event machine is MovePath/MovePoint waypoint work (no movement
 -- model); the SetEntry (UpdateEntry bridged) / SetDisplayId /
 -- SetFacingTo / equipment (SetEquipmentSlots bridged) / emote
--- (PerformEmote bridged) arms ride that unported machine, not a
+-- (PerformEmote bridged) / SetByteValue DEAD (SetStandState bridged)
+-- arms ride that unported machine, not a
 -- missing bridge — verdict unchanged. Instance GetGameObject/SetData arms (no instance-script
 -- model), and GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
