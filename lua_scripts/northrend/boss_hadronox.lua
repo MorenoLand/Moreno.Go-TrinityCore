@@ -41,8 +41,9 @@
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
 -- (SetReactState IS bridged — frozen_core precedent,
 -- lua_creature_events.go:524; SetHomePosition IS bridged on the event
--- surface — 796 tick; SetFloatValue has NO Lua bridge — verified
--- absent from lua_creature_events.go/object.go)
+-- surface — 796 tick; the COMBATREACH leg IS ported (hadronoxSpawn,
+-- ev5, SetCombatReach bridge) — only BOUNDINGRADIUS has no creature
+-- motion slot and stays out)
 -- + SetStep(0); SetStep: _lastPlayerCombatState latch, SetReactState(
 -- REACT_PASSIVE), SetHomePosition(hadronoxStep[step]),
 -- MotionMaster Clear + MovePoint — motion-master bridge absent; the
@@ -242,6 +243,20 @@ local function acidCloudTick(creature, guid)
     end)
 end
 
+-- C++ boss_hadronox::InitializeAI (boss_hadronox.cpp:277-284):
+-- BossAI::InitializeAI() -> SetReactState(REACT_AGGRESSIVE) ->
+-- SetFloatValue(BOUNDINGRADIUS, 9.0f) -> SetFloatValue(COMBATREACH,
+-- 9.0f) -> SetStep(0). Only the COMBATREACH leg is separable: it is
+-- passive data (never re-written), so setting it on spawn strands
+-- nothing, unlike the react/step legs that drive the movement
+-- machine. Fires on ev5 (the constructor/spawn idiom, felmyst-trail
+-- precedent) — ev5 runs once per spawn, never on evade, matching
+-- InitializeAI's once-per-AI-creation timing; the BOUNDINGRADIUS leg
+-- stays out (no creature motion slot, SetCombatReach comment).
+local function hadronoxSpawn(event, creature)
+    creature:SetCombatReach(9)
+end
+
 local function hadronoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -306,6 +321,7 @@ local function crusherDied(event, creature, killer)
     crusherFrenzy[creature:GetGUID()] = nil
 end
 
+RegisterCreatureEvent(ENTRY_HADRONOX, 5, hadronoxSpawn)
 RegisterCreatureEvent(ENTRY_HADRONOX, 1, hadronoxEnterCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 2, hadronoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 4, hadronoxDied)

@@ -315,9 +315,13 @@ local function advanceDive(creature, guid)
     elseif step == "summon" then
         -- WE_SUMMON: the two ember summons have no summon
         -- bridge (steamrigger precedent) — only the TRIGGERED
-        -- rebirth cast is bridged (C++-exact). The native-display
-        -- restore (boss_alar.cpp:340, before the rebirth cast) is
-        -- ported via the alarNative capture.
+        -- rebirth cast is bridged (C++-exact). C++ arm order
+        -- (boss_alar.cpp:335-340): ember summons -> SetFloatValue(
+        -- BOUNDINGRADIUS, 10) (no slot, stays out) -> RemoveFlag(
+        -- NOT_SELECTABLE) -> SetDisplayId(native) -> rebirth cast.
+        -- The flag clear pairs with the dive-bomb-arm set above;
+        -- the native-display restore is ported via alarNative.
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         if alarNative[guid] ~= nil then
             creature:SetDisplayId(alarNative[guid])
         end
@@ -452,10 +456,15 @@ local function combatTick(creature, guid)
         -- Dive bomb arm — 40000+rand()%5000: starts the dive
         -- chain, re-arm 40000+rand()%5000 (C++-exact).
         if st.diveBomb <= 1000 then
-            -- C++ boss_alar.cpp:420: me->AttackStop() first in the
-            -- dive-bomb arm (MovePoint / NOT_SELECTABLE / bounding-radius
-            -- legs unbridged; the 5s meteor wait models the ascent).
+            -- C++ boss_alar.cpp:420-425: me->AttackStop() -> MovePoint
+            -- (no movement bridge; the 5s meteor wait models the
+            -- ascent) -> SetFlag(NOT_SELECTABLE) -> SetFloatValue(
+            -- BOUNDINGRADIUS, 50) (no creature motion slot, stays out)
+            -- -> WE_METEOR. The flag leg is bridged (SetFlag(59),
+            -- same file :370 precedent) and pairs with the WE_SUMMON
+            -- clear below.
             creature:AttackStop()
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             st.dive = { step = "meteor", wait = 5000 }
             st.diveBomb = 40000 + math.random(0, 4999)
         else
