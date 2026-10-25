@@ -838,6 +838,21 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		}
 		motions[key] = motion
 		created = true
+		// Creature::CreateFromProto (Creature.cpp:1657): a template
+		// VehicleId creates the vehicle kit at spawn, so the creature
+		// IsVehicle() from birth. The kit lands only on the fresh-motion
+		// branch (never on re-materialization, where it would clobber
+		// seats/passengers or resurrect a deliberately removed kit),
+		// and only when a Vehicle.dbc entry exists — C++
+		// Unit::CreateVehicleKit returns false without one. Covers DB
+		// spawns and temp summons alike: summonTempCreature funnels
+		// through motionFor. The combat-target materialization path
+		// (combat.go) still bypasses this funnel.
+		if st.VehicleID != 0 && s.Data != nil {
+			if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
+				s.createVehicleKit(mapID, instanceID, motion.GUID, st.VehicleID, entry, false)
+			}
+		}
 	}
 	if created {
 		// Creature_SelectLevel analog: a freshly materialized creature gets

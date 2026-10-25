@@ -2543,6 +2543,11 @@ type creatureStats struct {
 	// the motion DisplayID at creation and read by Lua
 	// CreatureMethods::GetDisplayId until a SetDisplayId override lands.
 	Model uint32
+	// VehicleID mirrors creature_template.VehicleId: a nonzero value makes
+	// C++ CreateFromProto (Creature.cpp:1657) call CreateVehicleKit, so
+	// the creature IsVehicle() from spawn (Unit::CreateVehicleKit,
+	// Unit.cpp:12047-12057 returns false without a Vehicle.dbc entry).
+	VehicleID uint32
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -2592,6 +2597,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
 	var healthMod, manaMod, armorMod, damageMod, baseVariance, templateScale float64
 	var modelid1 int64
+	var vehicleID int64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -2612,9 +2618,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.SpellSchoolImmuneMask, 0),
 		COALESCE(ct.BaseVariance, 1.0),
 		COALESCE(ct.scale, 1.0),
-		COALESCE(ct.modelid1, 0)
+		COALESCE(ct.modelid1, 0),
+		COALESCE(ct.VehicleId, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2625,6 +2632,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.CreatureType = uint32(creatureType)
 	stats.Scale = float32(templateScale)
 	stats.Model = uint32(modelid1)
+	stats.VehicleID = uint32(vehicleID)
 
 	if maxlevel < 1 {
 		maxlevel = 1
