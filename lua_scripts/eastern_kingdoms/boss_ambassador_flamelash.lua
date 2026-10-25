@@ -23,10 +23,10 @@
 -- (the 24s/30s schedule stays C++-exact).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel the timers (the
 -- C++ Reset() _events.Reset() has no other observable arms).
--- Deliberate deviations (all await engine bridges): no
--- the Burning Spirit 9178 summon leg of EVENT_SUMMON_SPIRITS is
--- PORTED below (EngageWithTarget bridge, 2026-10-24); no Talk lines
--- exist in the C++.
+-- Deliberate deviations: none for the modeled arms — the Burning
+-- Spirit 9178 summon leg of EVENT_SUMMON_SPIRITS is PORTED below
+-- (EngageWithTarget bridge, 2026-10-24); no Talk lines exist in
+-- the C++.
 
 local SPELL_FIREBLAST = 15573
 local NPC_BURNING_SPIRIT = 9178

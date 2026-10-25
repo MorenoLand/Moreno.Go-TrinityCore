@@ -178,13 +178,20 @@ local function onDamageTaken(_, creature, _, damage)
     end
     -- C++ HealthBelowPctDamaged(20, damage) one-shot latch
     -- (magmus precedent).
-    if creature:GetHealth() - damage < math.floor(maxHealth * 20 / 100) then
+    local postDamage = creature:GetHealth() - damage
+    if postDamage < math.floor(maxHealth * 20 / 100) then
         state.phaseTwo = true
         -- C++ schedules EVENT_MEDIC and EVENT_ADDS at 0s on the phase
         -- transition: fire both ticks immediately (CreateLuaEvent
-        -- rejects delay 0; 0s = next UpdateAI tick in C++).
-        onMedic(creature, guid)
-        onAdds(creature, guid)
+        -- rejects delay 0; 0s = next UpdateAI tick in C++). But a
+        -- lethal hit must NOT fire them: C++ executes 0s events on
+        -- the next UpdateAI tick, and a dead creature never runs
+        -- UpdateAI again, so the summons never happen in C++ (the
+        -- phase latch itself still sets, as in C++).
+        if postDamage > 0 then
+            onMedic(creature, guid)
+            onAdds(creature, guid)
+        end
     end
 end
 

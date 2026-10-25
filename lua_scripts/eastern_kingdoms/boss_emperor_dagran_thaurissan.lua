@@ -18,10 +18,11 @@
 -- EVENT_HANDOFTHAURISSAN: SelectTarget(Random, 0) -> DoCast(target,
 -- SPELL_HANDOFTHAURISSAN 17492) non-triggered, 4s init -> 5s
 -- unconditional re-arm (C++ re-arms outside the target check),
--- ported via the maiden_of_virtue / thorim random-player pool
--- (GetPlayersInWorld, same map/instance, alive; no distance limit —
--- C++ distance 0.0f is unlimited); stale "no SelectTarget bridge"
--- (kazzak / doomwalker) retracted.
+-- ported via the maladaar threat-list pick (GetAITargets; no
+-- distance limit — C++ distance 0.0f is unlimited, and no player
+-- gate: the C++ call passes no playerOnly flag, unlike the
+-- maiden_of_virtue / thorim calls which pass true); stale "no
+-- SelectTarget bridge" (kazzak / doomwalker) retracted.
 -- JustEngagedWith Talk(SAY_AGGRO=0);
 -- KilledUnit victim->GetTypeId() == TYPEID_PLAYER -> Talk(SAY_SLAY=1).
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
@@ -80,26 +81,22 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 0) legs (maiden_of_virtue / thorim precedent):
--- GetPlayersInWorld filtered by map/instance/alive; no distance limit
--- (C++ distance 0.0f = unlimited).
-local function randomPlayer(creature)
-    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
-    local candidates = {}
-    for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
-            candidates[#candidates + 1] = plr
-        end
-    end
-    if #candidates == 0 then
+-- C++ SelectTarget(Random, 0): random over the full threat list
+-- (UnitAI.h; maladaar precedent). No player gate in C++ — the
+-- call passes no playerOnly flag — and no distance limit
+-- (C++ distance 0.0f = unlimited), so the pick is GetAITargets,
+-- not the maiden_of_virtue / thorim player-only pool (those C++
+-- calls pass playerOnly=true).
+local function randomThreatTarget(creature)
+    local pool = creature:GetAITargets()
+    if #pool == 0 then
         return nil
     end
-    return candidates[math.random(#candidates)]
+    return pool[math.random(#pool)]
 end
 
 local function onHandOfThaurissan(creature, guid)
-    local target = randomPlayer(creature)
+    local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HANDOFTHAURISSAN)
     end
