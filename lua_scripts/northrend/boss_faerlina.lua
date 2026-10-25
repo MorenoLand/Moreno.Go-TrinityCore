@@ -27,9 +27,9 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_faerlina: JustEngagedWith Talk(SAY_AGGRO 1) (event 1; the
 -- BossAI::JustEngagedWith instance-bookkeeping leg, summons.
--- DoZoneInCombat, and the EVENT_FIRE / EVENT_FRENZY schedules ride
--- unbridged legs — tharon_ja precedent; the EVENT_POISON schedule
--- seeds the CreateLuaEvent machine below); KilledUnit Talk(SAY_SLAY 2) (event 3 —
+-- DoZoneInCombat rides an unbridged leg — tharon_ja precedent; the
+-- EVENT_POISON / EVENT_FIRE / EVENT_FRENZY schedules seed the
+-- CreateLuaEvent machine below); KilledUnit Talk(SAY_SLAY 2) (event 3 —
 -- C++-GATED: the Talk fires only when victim->GetTypeId()==
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType() ==
 -- "Player" (nalorakk / kelthuzad player-gate precedent)); JustDied
@@ -54,6 +54,14 @@
 -- both IDs are checked (the applied aura is always the
 -- raid-size-appropriate one); init randtime(10s,15s) (:104), repeat
 -- randtime(8s,15s).
+-- EVENT_FRENZY — PORTED (2026-10-25: the "no aura-duration bridge" claim is
+-- RETRACTED — creature:GetDuration is bridged, lua_creature_events.go:582,
+-- tournament-dummy precedent): with GetAura(SPELL_WIDOWS_EMBRACE_HELPER)
+-- active it skips the cast and reschedules at aura duration +1ms
+-- (RAID_MODE 28732/54097 — both IDs checked, the applied aura is always
+-- the raid-size-appropriate one); else DoCastSelf(FRENZY 28798)
+-- non-triggered + Talk(EMOTE_FRENZY 5); init Minutes(1)+randtime(0s,20s)
+-- (:106), repeat same.
 -- SpellHit — PORTED (re-sweep 2026-10-17: the "SpellHit never
 -- fires in the Lua surface (SpellHit ruling)" claim is RETRACTED —
 -- CREATURE_EVENT_ON_HIT_BY_SPELL (event 14) IS live and fires when a
@@ -65,14 +73,6 @@
 -- counter has no bridged consumer (achievement-only) — both
 -- documented with the handler.
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_FRENZY (init Minutes(1)+randtime(0s,20s), repeat same) —
--- DoCastSelf(FRENZY 28798) + Talk(EMOTE_FRENZY 5) is moroes-ready in
--- isolation, but the C++ arm is gated: with GetAura(
--- SPELL_WIDOWS_EMBRACE_HELPER) active it skips the cast and
--- reschedules at aura duration +1ms (RAID_MODE 28732/54097). No
--- aura-duration bridge, so scheduling the cast ungated would fabricate
--- behavior (casting Frenzy through Widow's Embrace) — joins the
--- bridgeable-but-context-blocked queue (gluth deferral-arm precedent);
 -- SummonAdds — SummonCreatureGroup(SUMMON_GROUP_WORSHIPPERS 1) +
 -- 25-man SUMMON_GROUP_FOLLOWERS 2 — no summon bridge + no difficulty
 -- bridge (kelidan precedent); Reset — _Reset() + _frenzyDispels=0 —
@@ -109,7 +109,9 @@ local SPELL_POISON_BOLT_VOLLEY = 28796
 local SPELL_RAIN_OF_FIRE = 28794
 local SPELL_WIDOWS_EMBRACE_10 = 28732
 local SPELL_WIDOWS_EMBRACE_25 = 54097
+local SPELL_FRENZY = 28798
 local EMOTE_WIDOW_EMBRACE = 4
+local EMOTE_FRENZY = 5
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
@@ -185,6 +187,30 @@ local function fireTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI EVENT_FRENZY (boss_faerlina.cpp:173-182):
+-- with GetAura(SPELL_WIDOWS_EMBRACE_HELPER) active, skip the cast
+-- and reschedule at aura duration +1ms; else DoCastSelf(FRENZY
+-- 28798) non-triggered + Talk(EMOTE_FRENZY 5), repeat
+-- Minutes(1)+randtime(0s,20s). Init Minutes(1)+randtime(0s,20s)
+-- (:106). RAID_MODE helper: both IDs checked like the poison arm.
+local function frenzyTick(creature, guid)
+    if creature:HasAura(SPELL_WIDOWS_EMBRACE_10) then
+        schedule(guid, "frenzy", creature:GetDuration(SPELL_WIDOWS_EMBRACE_10) + 1, function()
+            frenzyTick(creature, guid)
+        end)
+    elseif creature:HasAura(SPELL_WIDOWS_EMBRACE_25) then
+        schedule(guid, "frenzy", creature:GetDuration(SPELL_WIDOWS_EMBRACE_25) + 1, function()
+            frenzyTick(creature, guid)
+        end)
+    else
+        creature:CastSpell(creature, SPELL_FRENZY)
+        creature:Talk(EMOTE_FRENZY)
+        schedule(guid, "frenzy", {60000, 80000}, function()
+            frenzyTick(creature, guid)
+        end)
+    end
+end
+
 local function faerlinaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -194,6 +220,9 @@ local function faerlinaEnterCombat(event, creature, target)
     end)
     schedule(guid, "fire", {6000, 18000}, function()
         fireTick(creature, guid)
+    end)
+    schedule(guid, "frenzy", {60000, 80000}, function()
+        frenzyTick(creature, guid)
     end)
 end
 
