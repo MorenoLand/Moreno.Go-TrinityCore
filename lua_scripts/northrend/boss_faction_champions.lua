@@ -172,6 +172,26 @@ local function defensiveCheck(creature, guid, championCfg)
     end
 end
 
+-- C++ boss_faction_championsAI::UpdatePower (:621-624) on EVENT_THREAT
+-- (:721-724, Reset init 5s at :591, then 4s repeats): if the power type
+-- is MANA, ModifyPower(MANA, maxMana / 3) (integer division). The
+-- UpdateThreat leg of the same event stays out (per-ref threat rewrite,
+-- documented above). GetPowerType reads the enter-combat snapshot
+-- (object.go fallback); the type never changes in combat for these
+-- champions (SetPowerType only on rogue Reset), so the snapshot is
+-- exact; GetMaxPower(0) is the live typed read
+-- (lua_creature_events.go:1049) and ModifyPower the live clamped write
+-- (:1074).
+local function powerCheck(creature, guid)
+    if creature:GetPowerType() == 0 then
+        local maxMana = creature:GetMaxPower(0)
+        creature:ModifyPower(0, math.floor(maxMana / 3))
+    end
+    schedule(guid, "threat", 4000, function()
+        powerCheck(creature, guid)
+    end)
+end
+
 -- Victim-gated rotation arms (per-struct Reset initial schedules, C++
 -- case arms): victim arm cfg holds the spell, init range, IsInRange
 -- bounds (minRange nil = plain GetDistance2d < maxRange), and the
@@ -308,6 +328,9 @@ local function championEnterCombat(event, creature, target)
     end
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "threat", 5000, function()
+        powerCheck(creature, guid)
+    end)
     schedule(guid, "def", math.random(championCfg.initMin, championCfg.initMax), function()
         defensiveCheck(creature, guid, championCfg)
     end)
