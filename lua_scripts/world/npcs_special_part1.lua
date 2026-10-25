@@ -108,14 +108,15 @@
 -- doctor->PatientSaved via DoctorGUID link, Talk SAY_DOC 0 — Talk IS bridged;
 -- NOT_SELECTABLE / IN_COMBAT flags, stand-up, SetWalk, MovePoint to
 -- A_RUNTOX/A_RUNTOY/A_RUNTOZ or H_RUNTOX/H_RUNTOY/H_RUNTOZ are not);
--- UpdateAI :873-888 (world-tick HP decay — could approximate with
--- SetHealth(GetHealth()-5) on OnAIUpdate 7, but setDeathState has no bridge
+-- UpdateAI :873-888 first arm PORTED below (world-tick HP decay:
+-- health > 6 -> SetHealth(GetHealth()-5) on OnAIUpdate 7, C++-exact;
+-- the health <= 6 death arm stays out -- setDeathState has no bridge
 -- and the PatientDied -> quest-fail chain rides the unbridged DoAction
 -- relay (FailQuest itself bridged, lua_player.go:410)).
 -- The quest credit/fail legs (FailQuest bridged, lua_player.go:410;
 -- AreaExploredOrEventHappens + DoAction relay unbridged) keep the
--- doctor machine out; the Reset arm below is the self-contained
--- ported fragment.
+-- doctor machine out; the Reset + UpdateAI-decay arms below are the
+-- self-contained ported fragments.
 
 -- npc_injured_patient Reset arm — PORTED (C++ npcs_special.cpp:788-814).
 -- Entries are the literal C++ switch cases (never invented): 12923/12938
@@ -154,6 +155,29 @@ end
 for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
     RegisterCreatureEvent(patientEntry, 5, injuredPatientReset)
     RegisterCreatureEvent(patientEntry, 23, injuredPatientReset)
+end
+
+-- npc_injured_patient UpdateAI decay arm -- PORTED (C++ npcs_special.cpp:873-878, first arm only).
+-- C++ arm order: alive and health > 6 -> ModifyHealth(-5); the health <= 6
+-- death arm (RemoveFlag IN_COMBAT, SetFlag NOT_SELECTABLE, setDeathState
+-- JUST_DIED, dynamic flag 32, doctor PatientDied) stays out -- no
+-- setDeathState bridge, and the PatientDied chain rides the unbridged
+-- DoAction relay -- so patients floor at 2-6 HP instead of dying.
+-- Event 7 fires on the 100ms world tick for every alive motion
+-- (creaturemotion.go), matching the C++ per-tick decay; returns
+-- nothing, so no veto of the engine combat step.
+local function injuredPatientDecay(event, creature)
+    if creature:IsDead() then
+        return
+    end
+    local health = creature:GetHealth()
+    if health > 6 then
+        creature:SetHealth(health - 5)
+    end
+end
+
+for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
+    RegisterCreatureEvent(patientEntry, 7, injuredPatientDecay)
 end
 
 -- npc_garments_of_quests (C++ :962-1123; entries 12429/12423/12427/12430/12428

@@ -78,8 +78,10 @@
 -- type 4 + beamer CastSpell + SetDisplayId + SetFlag; clean-switch
 -- re-summon overwrites the stored pair, orphaning the old beams
 -- exactly as C++ does); the pair lands at pull instead of on the
--- pre-pull first UpdateAI tick (Go has no out-of-combat update
--- hook); the 4x pure/tainted spawn DoSpawnCreature arms and
+-- pre-pull first UpdateAI tick via event 7 (PORTED 2026-10-24:
+-- event 7 fires on the 100ms world tick for every alive motion,
+-- creaturemotion.go, so the latch twin lands pre-pull as in C++);
+-- the 4x pure/tainted spawn DoSpawnCreature arms and
 -- Summons.DespawnAll stay unmodeled;
 -- the JustSummoned elemental-spawnin (25035) + ApplySpellImmune
 -- arms are summon-blocked; ResetThreatList on both form switches
@@ -353,6 +355,22 @@ local function hydrossTick(creature, guid)
     end
 end
 
+-- C++ UpdateAI first-tick beam latch (boss_hydross_the_unstable.cpp:213-217)
+-- PORTED: event 7 fires on the 100ms world tick for every alive motion
+-- (creaturemotion.go), including pre-pull, so the !beam latch twin is
+-- hydrossBeams[guid] == nil. After evade, LeaveCombat/Reset despawn the
+-- pair and nil the slot (C++ Reset :137 DeSummonBeams + Initialize
+-- beam=false), so the next tick re-summons pre-pull exactly as C++.
+-- After death the motion stops ticking, so the standing pair is left
+-- alone (C++ JustDied does not despawn beams). Returns nothing, so no
+-- veto of the engine combat step (dathrohan precedent).
+local function hydrossAIUpdate(event, creature)
+    local guid = creature:GetGUID()
+    if not hydrossBeams[guid] or #hydrossBeams[guid] == 0 then
+        summonBeams(creature, guid)
+    end
+end
+
 local function hydrossEnterCombat(event, creature)
     local guid = creature:GetGUID()
     resetState(guid)
@@ -360,9 +378,9 @@ local function hydrossEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
     -- C++ first-UpdateAI-tick SummonBeams latch (boss_hydross_the_
     -- unstable.cpp:217-221): the beam flag starts false, so the pair
-    -- exists pre-pull in C++. Go has no pre-combat tick hook, so
-    -- the pair lands at pull instead; the latch check mirrors the
-    -- C++ beam flag (no re-summon if a pair already stands).
+    -- exists pre-pull in C++. The event-7 handler above arms the same
+    -- latch pre-pull; this check is a fallback no-op when a pair
+    -- already stands (no re-summon if a pair already stands).
     if not hydrossBeams[guid] or #hydrossBeams[guid] == 0 then
         summonBeams(creature, guid)
     end
@@ -414,6 +432,7 @@ local function hydrossReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_HYDROSS, 1, hydrossEnterCombat)
+RegisterCreatureEvent(ENTRY_HYDROSS, 7, hydrossAIUpdate)
 RegisterCreatureEvent(ENTRY_HYDROSS, 2, hydrossLeaveCombat)
 RegisterCreatureEvent(ENTRY_HYDROSS, 3, hydrossTargetDied)
 RegisterCreatureEvent(ENTRY_HYDROSS, 4, hydrossDied)
