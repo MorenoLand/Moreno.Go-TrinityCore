@@ -31,8 +31,8 @@
 -- :149 / switch :178-181); the arm is ungated (UpdateVictim +
 -- UNIT_STATE_CASTING only) and 33841 has no SpellScript — the old
 -- "no-timer" claim was wrong. (The 6s EVENT_SHADOWBOLT_VOLLEY
--- reschedule inside the unported EVENT_DRAW_SHADOWS leg :203 is
--- unreachable while draw_shadows stays out — documented below.)
+-- reschedule inside EVENT_DRAW_SHADOWS :198 is a multimap add —
+-- see drawShadowsTick.)
 -- boss_grandmaster_vorpilAI::KilledUnit — Talk(SAY_SLAY 3) (line
 -- 131) gated on who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated precedent (event 3).
@@ -161,12 +161,28 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Append-on-key (anzu scheduleOnce precedent): C++ EventMap::ScheduleEvent
+-- is a plain multimap insert (EventMap.cpp) — scheduling a second same-ID
+-- event does NOT cancel the pending one. Arms that C++ schedules twice
+-- (volley 6s from Draw Shadows, traveler 5s below 20%, boom resonance)
+-- must append, or the pending event is lost.
+local appendNonce = 0
+local function scheduleAppend(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    appendNonce = appendNonce + 1
+    per[key .. "#" .. appendNonce] = CreateLuaEvent(fn, delay)
+end
+
 -- C++ EVENT_SHADOWBOLT_VOLLEY: DoCast(me, SHADOWBOLT_VOLLEY 33841)
 -- non-triggered self-cast, randtime(7s,14s) init / randtime(15s,30s)
 -- re-arm.
 local function shadowboltVolleyTick(creature, guid)
     creature:CastSpell(creature, SPELL_SHADOWBOLT_VOLLEY)
-    schedule(guid, "volley", {15000, 30000}, function()
+    scheduleAppend(guid, "volley", {15000, 30000}, function()
         shadowboltVolleyTick(creature, guid)
     end)
 end
@@ -206,26 +222,32 @@ local function banishTick(creature, guid)
 end
 
 -- C++ EVENT_DRAW_SHADOWS (:187-200): every alive non-banished player
--- teleports to VorpilPosition (player:TeleportNear — same-map, combat
--- kept, the TELE_TO_NOT_LEAVE_COMBAT twin); the boss repositions via
--- creature:Teleport (C++ me->UpdatePosition sends no packet, but Go
--- clients only learn the reposition from the MSG_MOVE_TELEPORT
--- broadcast — the draw-shadows visual covers the pop); triggered
--- self-cast SPELL_DRAW_SHADOWS 33563 + non-triggered
--- SPELL_RAIN_OF_FIRE 33617 (H_SPELL_RAIN_OF_FIRE 39363 is a dead
--- constant, no IsHeroic branch exists in this arm);
--- EVENT_SHADOWBOLT_VOLLEY rescheduled at 6s (:198 — overwrites the
--- pending volley, EventMap overwrite semantics); 45s init / 30s cycle.
+-- on the boss's map teleports to VorpilPosition (player:TeleportNear —
+-- same-map, combat kept, the TELE_TO_NOT_LEAVE_COMBAT twin; C++
+-- iterates me->GetMap()->GetPlayers(), so the pool is map-filtered —
+-- GetPlayersInWorld() unfiltered would teleport players in other
+-- maps/instances to these coordinates in their own map); the boss
+-- repositions via creature:Teleport (C++ me->UpdatePosition sends no
+-- packet, but Go clients only learn the reposition from the
+-- MSG_MOVE_TELEPORT broadcast — the draw-shadows visual covers the
+-- pop); triggered self-cast SPELL_DRAW_SHADOWS 33563 +
+-- non-triggered SPELL_RAIN_OF_FIRE 33617 (H_SPELL_RAIN_OF_FIRE 39363
+-- is a dead constant, no IsHeroic branch exists in this arm);
+-- EVENT_SHADOWBOLT_VOLLEY scheduled at 6s (:198 — a multimap ADD,
+-- not an overwrite: the pending volley still fires); 45s init / 30s
+-- cycle.
 local function drawShadowsTick(creature, guid)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
-        if plr:IsAlive() and not plr:HasAura(SPELL_BANISH) then
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
+                and plr:IsAlive() and not plr:HasAura(SPELL_BANISH) then
             plr:TeleportNear(VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O)
         end
     end
     creature:Teleport(VORPIL_X, VORPIL_Y, VORPIL_Z, VORPIL_O)
     creature:CastSpell(creature, SPELL_DRAW_SHADOWS, true)
     creature:CastSpell(creature, SPELL_RAIN_OF_FIRE)
-    schedule(guid, "volley", 6000, function()
+    scheduleAppend(guid, "volley", 6000, function()
         shadowboltVolleyTick(creature, guid)
     end)
     schedule(guid, "shadows", 30000, function()
@@ -242,7 +264,6 @@ end
 -- replacement, the vorpil 10:56 precedent). The traveler's own
 -- follow/sacrifice AI (npc_voidtraveler) has no bridge — the summoned
 -- travelers stand (documented-only in the header).
-local travelerSeq = {}
 local function travelerTick(creature, guid)
     local c = VOID_PORTAL_COORDS[math.random(5)]
     creature:SummonCreature(ENTRY_VOID_TRAVELER, c[1], c[2], c[3], 0, 5, 5000)
@@ -250,12 +271,15 @@ local function travelerTick(creature, guid)
         helpYellSeen[guid] = true
         creature:Talk(SAY_HELP)
     end
-    schedule(guid, "traveler", 10000, function()
+    -- Both re-arms append (multimap): the 10s chain and the extra 5s
+    -- below 20% are independent pending events in C++; replace-on-key
+    -- here would cancel the pending 10s chain whenever a 5s event
+    -- fired, under-spawning travelers below 20%.
+    scheduleAppend(guid, "traveler", 10000, function()
         travelerTick(creature, guid)
     end)
     if creature:GetHealthPct() < 20 then
-        travelerSeq[guid] = (travelerSeq[guid] or 0) + 1
-        schedule(guid, "traveler_rage_" .. travelerSeq[guid], 5000, function()
+        scheduleAppend(guid, "traveler", 5000, function()
             travelerTick(creature, guid)
         end)
     end
@@ -339,18 +363,18 @@ local function vorpilDied(event, creature, killer)
 end
 
 -- C++ boss_grandmaster_vorpilAI::Reset -> Initialize() (:102-105) re-arms
--- _intro = false: after an evade the intro Talk replays. Go fires event 23
--- on evade (before event 2) and on the death path (before event 4), so the
--- wipe lives here with the IsDead guard (overgrind precedent).
+-- _helpYell ONLY: _intro is set false in the constructor (:93-94) and
+-- never touched by Reset, so after an evade the intro Talk does NOT
+-- replay. Go fires event 23 on evade (before event 2) and on the death
+-- path (before event 4), so the IsDead guard (overgrind precedent)
+-- keeps the death path out; the intro latch is cleared on event 4
+-- only (respawn = fresh ctor state).
 local function vorpilReset(event, creature)
     if creature:IsDead() then
         return
     end
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    introSeen[guid] = nil
-    -- C++ Reset -> Initialize() re-arms _helpYell (but not _intro, which
-    -- is ctor-set — the header's Reset note).
     helpYellSeen[guid] = nil
 end
 

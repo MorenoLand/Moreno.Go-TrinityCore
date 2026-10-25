@@ -102,6 +102,20 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Append-on-key (anzu scheduleOnce precedent): C++ EventMap::ScheduleEvent
+-- is a plain multimap insert — sonic boom's 1500ms resonance schedule
+-- ADDS a resonance chain instead of replacing the pending one.
+local appendNonce = 0
+local function scheduleAppend(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    appendNonce = appendNonce + 1
+    per[key .. "#" .. appendNonce] = CreateLuaEvent(fn, delay)
+end
+
 -- C++ SelectTarget(Random, ...) picks from the threat list.
 -- GetAITargets (lua_creature_events.go:345) is the bridged threat
 -- list (midnight precedent); GetDistance2d resolves via the generic
@@ -134,7 +148,7 @@ resonanceTick = function(creature, guid)
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(creature, SPELL_RESONANCE)
-        schedule(guid, "resonance", 5000, function()
+        scheduleAppend(guid, "resonance", 5000, function()
             resonanceTick(creature, guid)
         end)
     end
@@ -149,7 +163,7 @@ local function sonicBoomTick(creature, guid)
     schedule(guid, "sonic_boom", 30000, function()
         sonicBoomTick(creature, guid)
     end)
-    schedule(guid, "resonance", 1500, function()
+    scheduleAppend(guid, "resonance", 1500, function()
         resonanceTick(creature, guid)
     end)
 end
