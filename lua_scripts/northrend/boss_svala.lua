@@ -322,6 +322,10 @@ end
 -- Shared NORMAL-phase entry: SetCombatMovement(true) + the C++-exact
 -- intro-end / SpellHitTarget inits (7s / {10s,20s}). Used at enter
 -- combat (intro-collapse) and on the ritual-strike return.
+-- Post-intro hover form: C++ EVENT_INTRO_RELOCATE_SVALA (:334)
+-- sets SetHover(true) and no leg in boss_svala.cpp ever clears it,
+-- so the NORMAL phase fights hovering; Reset (:155-170) never
+-- touches hover, so the flag persists across evades too.
 local function enterNormalPhase(creature, guid)
     local st = svalaState[guid]
     if not st then
@@ -329,6 +333,7 @@ local function enterNormalPhase(creature, guid)
     end
     st.sacrificed = false
     creature:SetCombatMovement(true)
+    creature:SetHover(true)
     schedule(guid, "sinister", 7000, function()
         onSinisterStrike(creature, guid)
     end)
