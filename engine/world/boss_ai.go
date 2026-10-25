@@ -5272,10 +5272,15 @@ func init() {
 	// lua_scripts/kalimdor/npc_thrall_warchief.lua. The quest-6566
 	// gossip menu chain awaits the gossip bridge; npc_shenthul
 	// (Shattered Salute emote machine), npc_overlord_runthak_orgrimmar
-	// (citizen scene) and npc_thrall_herald_of_war (Wrathgate
-	// cinematic) await the emote / quest / summon / movement /
-	// DoAction bridges — documented only.
+	// (citizen scene) and npc_thrall_herald_of_war's scene machine
+	// (DoAction/MovementInform/MovePath legs) await the emote / quest /
+	// movement / DoAction bridges — documented only; the herald's
+	// Reset once-per-lifetime Kor'kron guard summons are ported in
+	// lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
 	RegisterLuaBoss("npc_thrall_warchief", 4949)
+	// Thrall, Herald of War (Wrathgate cinematic) — Reset guard
+	// summons in lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
+	RegisterLuaBoss("npc_thrall_herald_of_war", 31412)
 	// npc_cairne_bloodhoof (Thunder Bluff zone script): combat
 	// rotation only — berserker charge (16636, 30s init then 25s,
 	// random-target via the GetAITargets alive pool, omen idiom) +
