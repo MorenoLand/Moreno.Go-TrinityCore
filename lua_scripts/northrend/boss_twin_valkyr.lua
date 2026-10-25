@@ -323,16 +323,15 @@ end
 local UNIT_DYNAMIC_FLAGS = 79
 local UNIT_DYNFLAG_LOOTABLE = 0x0001
 
--- Both sisters share this module scope, so the C++ GetSister() liveness
--- check is modeled as a per-pull death count: the first death of a pull
--- takes the sister-alive branch, the second the both-dead branch. Reset
--- on engage — ev23 also fires on the death path (ahead of ev4), so the
--- counter cannot live in reset().
-local sisterDeaths = 0
+-- C++ GetSister() (boss_twin_valkyr.cpp:260-265) resolves the sister
+-- via the instance and branches on its live state, so died() below
+-- resolves the sister via GetCreaturesInGrid (which, unlike
+-- FindNearestCreature, also returns dead creatures) and branches on
+-- sister:IsDead() — no shared death counter (a counter is wrong across
+-- concurrent instances and on double event-4 fires).
 
 local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras, empathySpell)
     return function(event, creature, target)
-        sisterDeaths = 0
         -- C++ boss_fjolaAI::JustEngagedWith (boss_twin_valkyr.cpp:442-448):
         -- SummonCreature(NPC_BULLET_CONTROLLER 34743, ToCCommonLoc[1],
         -- 0.0, TEMPSUMMON_MANUAL_DESPAWN) lands before the
@@ -400,26 +399,29 @@ local function died(event, creature, killer)
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_twin_valkyr.cpp:238-262): Talk(SAY_DEATH), then
     -- the sister-gated lootable legs, in C++ order.
-    sisterDeaths = sisterDeaths + 1
-    if sisterDeaths >= 2 then
+    local sisterEntry = creature:GetEntry() == ENTRY_FJOLA and ENTRY_EYDIS or ENTRY_FJOLA
+    local sister = nil
+    for _, other in ipairs(creature:GetCreaturesInGrid(sisterEntry, 150)) do
+        sister = other
+        break
+    end
+    if sister ~= nil and sister:IsDead() then
         -- Both dead: C++ sets LOOTABLE on me (redundant — Go's lethal
         -- path already set it) and on the sister.
         creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        local sisterEntry = creature:GetEntry() == ENTRY_FJOLA and ENTRY_EYDIS or ENTRY_FJOLA
-        for _, other in ipairs(creature:GetCreaturesInGrid(sisterEntry, 150)) do
-            other:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        end
+        sister:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         -- C++ JustDied :248 — events.Reset() is the cancelTimers(guid)
         -- at the top, summons.DespawnAll() is a no-op,
         -- instance->SetBossState(DATA_TWIN_VALKIRIES, DONE) has no
         -- instance bridge; HandleRemoveAuras() ports via
         -- stripHelperAuras (C++ order kept).
         stripHelperAuras(creature)
-    else
+    elseif sister ~= nil then
         -- Sister still fighting: not lootable (clears the lethal path's
         -- auto-set).
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
+    -- Sister not found: C++ takes neither flag branch (Talk only).
 end
 
 local function reset(event, creature)
@@ -478,22 +480,34 @@ RegisterCreatureEvent(ENTRY_EYDIS, 24, reachHome)
 -- has no bridge (kalecgos pass), so the triggered player self-cast
 -- is modeled as player:AddAura (kodo precedent —
 -- npc_aged_dying_ancient_kodo.lua:71). RAID_MODE
--- 10/25 has no bridge: the remove leg strips all four variants (the
--- file's pool convention); the apply leg uses the 10-man normal
--- variant (65684 dark / 65686 light — index 0), documented
--- approximation. Handler signature (event, player, creature) per the
--- zulaman.lua RegisterCreatureGossipEvent precedent. No
--- forward-decl hazard: the factory returns the closure before
--- registration.
-local function makeEssenceHello(removeAuras, applyAura)
-    return function(_, player, _)
+-- C++ essence OnGossipHello (boss_twin_valkyr.cpp:549-555): remove
+-- the opposite pool, then player->CastSpell(player, apply, true) with
+-- the RAID_MODE-resolved variant (10N/25N/10H/25H = table indices
+-- 1/2/3/4). The remove leg strips all four variants (the file's pool
+-- convention); the apply leg picks the variant from the gossip
+-- creature's IsHeroic()/Is25ManRaid() bridges. Player:CastSpell takes
+-- no triggered flag, so AddAura stays as the application path
+-- (documented approximation for the triggered-cast leg only).
+-- Handler signature (event, player, creature) per the zulaman.lua
+-- RegisterCreatureGossipEvent precedent. No forward-decl hazard: the
+-- factory returns the closure before registration.
+local function makeEssenceHello(removeAuras, applyVariants)
+    return function(_, player, creature)
         for _, aura in ipairs(removeAuras) do
             player:RemoveAura(aura)
         end
-        player:AddAura(applyAura)
+        local idx = 1
+        if creature ~= nil then
+            if creature:IsHeroic() then
+                idx = creature:Is25ManRaid() and 4 or 3
+            elseif creature:Is25ManRaid() then
+                idx = 2
+            end
+        end
+        player:AddAura(applyVariants[idx])
         player:GossipComplete()
     end
 end
 
-RegisterCreatureGossipEvent(34568, 1, makeEssenceHello(DARK_ESSENCE_AURAS, 65686))
-RegisterCreatureGossipEvent(34567, 1, makeEssenceHello(LIGHT_ESSENCE_AURAS, 65684))
+RegisterCreatureGossipEvent(34568, 1, makeEssenceHello(DARK_ESSENCE_AURAS, LIGHT_ESSENCE_AURAS))
+RegisterCreatureGossipEvent(34567, 1, makeEssenceHello(LIGHT_ESSENCE_AURAS, DARK_ESSENCE_AURAS))

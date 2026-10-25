@@ -179,7 +179,7 @@
 -- HealthBelowPct(80) -> the SUBMERGE_EFFECT aura branch (
 -- RemoveAurasDueToSpell + DoCast(me, EMERGE 65982) + DoCast(me,
 -- AWAKENED 66311) + RemoveFlag(NOT_SELECTABLE)) or the
--- !PERMAFROST_HELPER branch (DoCast(me, SUBMERGE_EFFECT 65981) +
+-- !PERMAFROST_HELPER branch (DoCast(me, SUBMERGE_EFFECT 68394) +
 -- SetFlag(NOT_SELECTABLE) + DoCast(me, PERSISTENT_DIRT, true)) —
 -- stays documented-only: instance-gated (_instance->GetBossState(
 -- DATA_ANUBARAK) != IN_PROGRESS -> DisappearAndDie, no instance
@@ -189,12 +189,8 @@
 -- creature:HasAura bridged, lua_objects.go:228) — the old "no
 -- health-pct bridge (doomwalker precedent)" claim was stale
 -- (GetHealthPct, object.go:107); the instance/phase/summon gates block.
--- npc_anubarak_spike (34660) — zero registration (entry
--- verifiable from the Summons enum, but zero bridgeable arms —
--- joins the entry-verifiable-but-bridge-blocked queue): DamageTaken
--- uiDamage = 0 (event 9 IS bridged — the old "no DamageTaken hook
--- (npc_unkor_the_ruthless precedent)" claim is stale; the arm stays
--- out behind the unbridged motion/threat machine); the whole chase
+-- npc_anubarak_spike (34660) — DamageTaken uiDamage = 0 PORTED
+-- (spikeDamageTaken, event 9) and the no-melee ev1 arm PORTED; the whole chase
 -- machine — DoCast(target, Mark
 -- 67574) + SetSpeedRate + threat reset + AddThreat + AttackStart
 -- (no motion / threat bridges); the phase-speed legs (DoCastSelf
@@ -369,8 +365,9 @@ end
 -- the phase gate reduces to the one-shot latch. UpdateAI health arms
 -- are post-damage — the nefarian onDamageTaken form: fire only when
 -- post-damage health is alive (>0) and HealthBelowPct(30) on it
--- (C++ integer form: health < CountPctFromMaxHealth(30) — strict <,
--- Unit.h:872; boundary-exact to 1hp modulo the pct floor).
+-- (C++ integer form: postDamage < floor(maxHealth*30/100) — strict <,
+-- Unit.h:872 + HealthBelowPctDamaged int64 form; the cross-multiplied
+-- real-number form fired 1 HP early when maxHealth*30 mod 100 != 0).
 -- spell_anubarak_leeching_swarm AuraScript periodic life-leech has no
 -- AuraScript bridge — the cast ports, the scripted periodic effect is
 -- a documented deviation (gurtogg bloodboil precedent).
@@ -385,7 +382,7 @@ local function anubarakDamageTaken(event, creature, attacker, damage)
         return
     end
     local postDamage = creature:GetHealth() - damage
-    if postDamage > 0 and postDamage * 100 < maxHealth * 30 then
+    if postDamage > 0 and postDamage < math.floor(maxHealth * 30 / 100) then
         anubarakState[guid] = { reachedPhase3 = true }
         creature:CastSpell(creature, SPELL_LEECHING_SWARM)
         creature:Talk(EMOTE_LEECHING_SWARM)
@@ -418,10 +415,10 @@ end
 -- C++ JustSummoned NPC_BURROW (boss_anubarak_trial.cpp:253-257):
 -- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_CHURNING_GROUND
 -- 66969, non-triggered) + SetDisplayId(Modelid2) in C++ order; the
--- _burrowGUID push is summons bookkeeping with no Lua twin. LATENT:
--- burrows spawn only from the unported EVENT_SUMMON_NERUBIAN spell-summon
--- (anubrekhan latent precedent). The spike case stays out (random-target
--- EngageWithTarget + Talk unbridged).
+-- _burrowGUID push is summons bookkeeping with no Lua twin. The handler
+-- is live via the engage burrow summons (ported in anubarakEnterCombat);
+-- the EVENT_SUMMON_NERUBIAN spell-summon source stays unported. The spike
+-- case is PORTED below (random alive player + EngageWithTarget + Talk).
 local function anubarakJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == NPC_BURROW then
         summoned:SetReactState(0) -- REACT_PASSIVE

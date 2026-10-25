@@ -9289,8 +9289,8 @@ func init() {
 	// machine (no vehicle/SetGUID bridges) + instance DATA_SNOBOLD_COUNT +
 	// EVENT_FIRE_BOMB (random-target — cairne/kazzak precedent);
 	// npc_beasts_combat_stalker (36549) — Reset/DoAction legs (cross-AI
-	// DoAction, no bridge), EVENT_BERSERK 26662 (instance model + no
-	// difficulty bridge — kelidan precedent); boss_dreadscale (34799) /
+	// DoAction, no bridge), EVENT_BERSERK 26662 (instance model; difficulty
+	// IS bridged via IsHeroic — the stay-out is instance/cross-AI, not difficulty); boss_dreadscale (34799) /
 	// boss_acidmaw (35144) — the jormungar submerge/phase machine: submerge
 	// / emerge (motion/flag/react/aura/display bridges absent), EVENT_BITE
 	// DoCastVictim (phase-gated behind the unbridged machine — jedoga

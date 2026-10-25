@@ -65,19 +65,22 @@
 -- boss_gormok: Reset: events.SetPhase(PHASE_EVENT) (no phase bridge —
 -- anubarak_trial precedent) + HandleInitialMovement
 -- MoveAlongSplineChain(POINT_INITIAL_MOVEMENT, SPLINE_INITIAL_MOVEMENT)
--- (no motion bridge); MovementInform SPLINE_CHAIN ->
--- boss_northrend_beastsAI::Reset SetReactState(REACT_PASSIVE) (boss_northrend_beasts.cpp:217)
--- also stays out: SetReactState IS bridged (frozen_core precedent), but the
--- paired re-arm (EVENT_ENGAGE -> SetReactState(REACT_AGGRESSIVE), :358) rides the
--- unbridged MovementInform intro machine — porting PASSIVE alone would leave the
--- boss passive forever (paired-arm rule).
+-- (no motion bridge); Reset SetReactState(REACT_PASSIVE)
+-- (boss_northrend_beasts.cpp:217) also stays out: SetReactState IS bridged
+-- (frozen_core precedent), but the paired re-arm (EVENT_ENGAGE ->
+-- SetReactState(REACT_AGGRESSIVE), :358) rides the unbridged MovementInform
+-- intro machine (MovementInform SPLINE_CHAIN -> EVENT_ENGAGE 7s, :345-348)
+-- — porting PASSIVE alone would leave the boss passive forever (paired-arm rule).
 -- ScheduleEvent(EVENT_ENGAGE, 7s) (no MovementInform hook); EVENT_ENGAGE
 -- — DoUseDoorOrButton(DATA_MAIN_GATE) + SetImmuneToPC(false) +
 -- SetReactState(REACT_AGGRESSIVE) + SummonCreature(
--- NPC_BEASTS_COMBAT_STALKER) + DoZoneInCombat(x2) +
+-- NPC_BEASTS_COMBAT_STALKER) + stalker SetCombatPulseDelay(5) +
+-- DoZoneInCombat(x2) + events.SetPhase(PHASE_COMBAT) +
 -- DoCastSelf(SPELL_TANKING_GORMOK 66415, triggered — SERVERSIDE spell,
 -- "No idea what it does" per the C++ comment) (no door / immune /
--- react / summon-STRAND / zone bridges — the self-cast is
+-- phase / zone bridges and no MovementInform hook — the summon and
+-- react legs ARE bridged in isolation but ride the unbridged intro
+-- machine — the self-cast is
 -- port-pattern-ready in isolation (phase_hunter precedent) but rides
 -- the unbridged intro machine — jedoga over-cast bar); EVENT_THROW —
 -- vehicle-passenger walk (GetVehicleKit()->GetPassenger(i) ->
@@ -173,10 +176,10 @@
 -- same machine: stays out. EVENT_ENGAGE — DoCloseDoorOrButton(DATA_MAIN_GATE)
 -- + SetImmuneToPC(false) + SetPhase(PHASE_MOBILE) +
 -- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (dreadscale, via
--- MovementInform — no hook; no door / immune / phase / react / zone
--- bridges); EVENT_SUMMON_ACIDMAW — SummonCreature(NPC_ACIDMAW) (no
--- summon bridge); JustSummoned summons bookkeeping (no summon
--- bridge); JustDied — instance->SetData(TYPE_NORTHREND_BEASTS,
+-- MovementInform — no hook; no door / immune / phase / zone
+-- bridges); EVENT_SUMMON_ACIDMAW — SummonCreature(NPC_ACIDMAW) (summon
+-- leg bridged; blocked by the submerge/phase machine, not the bridge);
+-- JustSummoned summons bookkeeping (no summon bridge); JustDied — instance->SetData(TYPE_NORTHREND_BEASTS,
 -- SNAKES_DONE / SNAKES_SPECIAL) + DespawnOrUnsummon(x2) +
 -- cross-AI otherWorm DoAction(ACTION_ENRAGE) + cross-AI combatStalker
 -- DoAction(ACTION_JORMUNGARS_DEAD) (stale "no despawn" wording:
@@ -220,9 +223,9 @@
 -- is suspended/rescheduled around the unbridged charge machine —
 -- jedoga over-cast bar; EVENT_WHIRL — DoCastSelf(67345), 15s init,
 -- 16s repeat — same bar; EVENT_ARCTIC_BREATH — SelectTarget(Random,0,0.0f,true) ->
--- DoCast(66688), 20s init / 24s re-arm (:951/:1050-1053) — stays OUT: fires from the unbridged
--- icehowl charge machine (only GORMOK registers handlers in this file; no MovementInform / motion
--- bridges); the random-target leg rides the thorim randomPlayerInRange convention, the machine rules;
+-- DoCast(66688), 20s init / 24s re-arm (:951/:1050-1053) — stays OUT:
+-- PHASE_COMBAT-gated (ScheduleTasks phase arg), suspended across the
+-- unbridged charge phase by the phase switch — jedoga over-cast bar;
 -- stale "no random-target bridge" retracted; DoAction ACTION_ENRAGE
 -- — DoCastSelf(SPELL_FROTHING_RAGE 66759) + Talk(EMOTE_TRAMPLE_ENRAGE
 -- 2) — gated via spell_icehowl_trample CheckTargets -> DoAction (no
@@ -231,7 +234,7 @@
 -- + DelayEvents(15s) — same gate; MovementInform POINT_INITIAL_MOVEMENT
 -- -> EVENT_ENGAGE 3s: DoCloseDoorOrButton + SetImmuneToPC(false) +
 -- SetPhase(PHASE_COMBAT) + SetReactState(AGGRESSIVE) + DoZoneInCombat
--- (no hook; no door / immune / phase / react / zone bridges).
+-- (no hook; no door / immune / phase / zone bridges).
 -- The twelve spell scripts — no SpellScript / AuraScript binding bridge
 -- (razelikh precedent); join the SpellScript/AuraScript queue:
 -- spell_gormok_jump_to_hand (AuraScript 66342): OnRemove (snobold

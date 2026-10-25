@@ -74,6 +74,13 @@ local SPELL_DISENGAGE = 65869 -- boss_faction_champions.cpp:123 (npc_toc_hunter)
 local SPELL_DEATH_GRIP = 66017 -- boss_faction_champions.cpp:156 (npc_toc_dk)
 local SPELL_BLADE_FLURRY = 65956 -- boss_faction_champions.cpp:167 (npc_toc_rogue)
 local SPELL_SHADOWSTEP = 66178 -- boss_faction_champions.cpp:168 (npc_toc_rogue)
+local SPELL_PSYCHIC_SCREAM = 65543 -- boss_faction_champions.cpp:83 (npc_toc_shadow_priest)
+local SPELL_ARCANE_EXPLOSION = 65800 -- boss_faction_champions.cpp:112 (npc_toc_mage)
+local SPELL_BLINK = 65793 -- boss_faction_champions.cpp:113 (npc_toc_mage)
+local SPELL_FROST_NOVA = 65792 -- boss_faction_champions.cpp:115 (npc_toc_mage)
+local SPELL_FAN_OF_KNIVES = 65955 -- boss_faction_champions.cpp:164 (npc_toc_rogue)
+local SPELL_DIVINE_STORM = 66006 -- boss_faction_champions.cpp:181 (npc_toc_retro_paladin)
+local SPELL_INTIMIDATING_SHOUT = 65930 -- boss_faction_champions.cpp:144 (npc_toc_warrior)
 
 -- cfg: pct threshold, spell self-cast id, forbearance flag (optional,
 -- blocks the cast and falls back to the short check like C++),
@@ -326,6 +333,18 @@ local HUNTER_COUNTS = {
 }
 local ROGUE_COUNTS = {
     countCfg(SPELL_BLADE_FLURRY, 10000, 20000, 120000, 120000, 5000, 5000),
+    countCfg(SPELL_FAN_OF_KNIVES, 5000, 10000, 10000, 20000, 10000, 20000),
+}
+local SHADOW_COUNTS = {
+    countCfg(SPELL_PSYCHIC_SCREAM, 10000, 30000, 10000, 25000, 10000, 25000),
+}
+local MAGE_COUNTS = {
+    countCfg(SPELL_ARCANE_EXPLOSION, 5000, 15000, 10000, 30000, 10000, 30000),
+    countCfg(SPELL_BLINK, 15000, 20000, 10000, 30000, 10000, 30000),
+    countCfg(SPELL_FROST_NOVA, 5000, 20000, 25000, 25000, 25000, 25000),
+}
+local RETRO_COUNTS = {
+    countCfg(SPELL_DIVINE_STORM, 10000, 20000, 10000, 20000, 10000, 20000),
 }
 
 local COUNT_ARMS = {
@@ -333,6 +352,12 @@ local COUNT_ARMS = {
     [34448] = HUNTER_COUNTS,
     [34472] = ROGUE_COUNTS,
     [34454] = ROGUE_COUNTS,
+    [34473] = SHADOW_COUNTS,
+    [34441] = SHADOW_COUNTS,
+    [34468] = MAGE_COUNTS,
+    [34449] = MAGE_COUNTS,
+    [34471] = RETRO_COUNTS,
+    [34456] = RETRO_COUNTS,
 }
 
 local function countCheck(creature, guid, arm)
@@ -385,6 +410,16 @@ local function removeCCCheck(creature, guid)
     end
 end
 
+-- C++ npc_toc_warrior EVENT_INTIMIDATING_SHOUT (:1652-1654): unconditional
+-- DoCastAOE (self-cast) 20-25s init, 120s re-arm — NOT count-gated, so it
+-- rides its own tick rather than countCheck.
+local function shoutTick(creature, guid)
+    creature:CastSpell(creature, SPELL_INTIMIDATING_SHOUT)
+    schedule(guid, "shout", 120000, function()
+        shoutTick(creature, guid)
+    end)
+end
+
 local function championEnterCombat(event, creature, target)
     local championCfg = CHAMPIONS[creature:GetEntry()]
     if championCfg == nil then
@@ -432,6 +467,11 @@ local function championEnterCombat(event, creature, target)
     if vArm ~= nil then
         schedule(guid, "victim", math.random(vArm.initMin, vArm.initMax), function()
             victimCheck(creature, guid, vArm)
+        end)
+    end
+    if entry == 34475 or entry == 34453 then
+        schedule(guid, "shout", math.random(20000, 25000), function()
+            shoutTick(creature, guid)
         end)
     end
     local cArms = COUNT_ARMS[creature:GetEntry()]
@@ -511,8 +551,10 @@ end
 -- entering player's team (instance_trial_of_the_crusader.cpp:135-136)
 -- and champions spawn opposite-faction, so an Alliance-entry champion
 -- means Horde players -> Garrosh talks, and a Horde-entry champion
--- means Alliance players -> Varian talks. Nil leader (out of the
--- 150.0 grid) means no relay, matching the C++ live-creature gate.
+-- means Alliance players -> Varian talks. The lookup uses
+-- GetCreaturesInGrid (no Health filter, unlike FindNearestCreature)
+-- at map-wide range to approximate instance->GetCreature, which has
+-- neither a range limit nor an alive gate; nil leader means no relay.
 local ENTRY_VARIAN = 34990 -- trial_of_the_crusader.h:161 NPC_VARIAN
 local ENTRY_GARROSH = 34995 -- trial_of_the_crusader.h:160 NPC_GARROSH
 local SAY_KILLED_PLAYER = 6 -- trial_of_the_crusader.cpp:61/70
@@ -529,9 +571,9 @@ local function championTargetDied(event, creature, victim)
     if ALLIANCE_CHAMPIONS[creature:GetEntry()] then
         leaderEntry = ENTRY_GARROSH
     end
-    local leader = creature:FindNearestCreature(leaderEntry, 150.0)
-    if leader ~= nil then
+    for _, leader in ipairs(creature:GetCreaturesInGrid(leaderEntry, 100000.0)) do
         leader:Talk(SAY_KILLED_PLAYER)
+        break
     end
 end
 
