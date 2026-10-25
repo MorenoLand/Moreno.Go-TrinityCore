@@ -1096,6 +1096,29 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// IsInSameRaidWith is Player::IsInSameRaidWith (Player.cpp:2543):
+	// the same player, or two players in the same non-nil group. The
+	// Go twin is sameRaidGroup (gameobjects.go): Go has no raid/party
+	// distinction, so a shared non-zero groupID is the raid test.
+	// Backs the soulwell gossip gate (go_scripts.cpp:538-564).
+	methods["IsInSameRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		otherGUID, ok := objectUint64Field(obj, "GUID")
+		if !ok || otherGUID == 0 {
+			return []any{false}, nil
+		}
+		if otherGUID == state.GUID {
+			return []any{true}, nil
+		}
+		other := s.server.findSessionByGUID(otherGUID)
+		return []any{sameRaidGroup(s, other)}, nil
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
 	luaWorldObjectSoundMethods(s.server, s, s.playerGUID, methods)

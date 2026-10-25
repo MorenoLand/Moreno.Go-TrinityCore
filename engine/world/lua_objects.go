@@ -41,6 +41,7 @@ type luaCreatureState struct {
 
 type luaGameObjectState struct {
 	GUID        uint64
+	OwnerGUID   uint64
 	LowGUID     uint32
 	Entry       uint32
 	DisplayID   uint32
@@ -1148,6 +1149,26 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// Backs the goober gates in go_scripts.cpp:61-474 (gilded_brazier,
 	// resonite_cask, blood_filled_orb, tablet_of_the_seven).
 	methods["GetGoType"] = luaNoArgs(func() any { return state.Type })
+	// GetOwner is GameObject::GetOwner (Object.h:429, Unit::GetOwner
+	// via UNIT_FIELD_SUMMONEDBY): the owning player object, or nil
+	// when the GO has no owner or the owner session is gone. DB
+	// spawns carry no owner in Go (OwnerGUID 0); only runtime-spawned
+	// GOs populate it (dynamicGameObjects / instanceGameObjects).
+	// Backs the soulwell gossip gate (go_scripts.cpp:538-564).
+	methods["GetOwner"] = func(_ context.Context, _ []any) ([]any, error) {
+		if state.OwnerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if owner := srv.findSessionByGUID(state.OwnerGUID); owner != nil {
+			return []any{owner.luaPlayer()}, nil
+		}
+		return []any{nil}, nil
+	}
+	// AddUse/GetUseCount are GameObject::AddUse/GetUseCount
+	// (GameObject.h:202-204): the soulwell charge counter. Static DB
+	// spawns have no live state object, so AddUse is a no-op for them.
+	methods["AddUse"] = luaNoArgs(func() any { srv.addGameObjectUse(state.GUID); return nil })
+	methods["GetUseCount"] = luaNoArgs(func() any { return srv.gameObjectUseCount(state.GUID) })
 	methods["IsSpawned"] = luaNoArgs(func() any { return !srv.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
 	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })

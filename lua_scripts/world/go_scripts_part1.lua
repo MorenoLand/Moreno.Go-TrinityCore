@@ -21,9 +21,10 @@
 --     player:GossipMenuAddItem / GossipSendMenu / GossipClearMenu / GossipComplete
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
 --   * MISSING bridges that block classes here: player:HasItemCount
---     (use HasItem/GetItemCount),
---     player:IsInSameRaidWith, go:GetOwner, go:CastSpell, go:AddUse
---     (go:SummonCreature bridged 2026-10-24, lua_objects.go).
+--     (use HasItem/GetItemCount), go:CastSpell.
+--     (2026-10-24: player:IsInSameRaidWith bridged in lua_player.go,
+--     go:GetOwner + go:AddUse/GetUseCount bridged in lua_objects.go;
+--     go:SummonCreature bridged 2026-10-24, lua_objects.go.)
 --     Corrected 2026-10-24: player:CastSpell + player:SummonCreature +
 --     player:GetQuestStatus bridged; this tick: go:GetGoType (lua_objects.go)
 --     + player:GetNativeGender (lua_player.go) bridged;
@@ -200,11 +201,17 @@
 --    SPELL_FAILED_TOO_MANY_OF_ITEM; else owner->CastSpell(player, _stoneSpell,
 --    true), and me->AddUse() only if the item was actually created. Returns
 --    false (gossip consumed on failure paths via `return true`).
---    Blockers: go:GetOwner unbridged (DB GO state carries no owner;
---    dynamic OwnerGUID not exposed on the Lua GO surface);
---    player:IsInSameRaidWith unbridged; owner->CastSpell unbridged;
---    go:AddUse unbridged (m_usetimes not modeled in Go);
---    Spell::SendCastResult unbridged. DOCUMENTED-ONLY despite C++-named entries.
+--    Bridged 2026-10-24: go:GetOwner (lua_objects.go, dynamic
+--    OwnerGUID -> owner player object, nil when ownerless/offline),
+--    player:IsInSameRaidWith (lua_player.go, sameRaidGroup twin),
+--    go:AddUse/GetUseCount (lua_objects.go, m_usetimes twin on the
+--    live dynamic/instance GO state), owner->CastSpell rides
+--    player:CastSpell, and the already-has-stone gate rides
+--    player:HasItem. Remaining blockers: Spell::SendCastResult
+--    (no player error-packet bridge) and the _stoneId derivation
+--    (spell EFFECT_0 ItemType has no Lua spell-info read). The
+--    owner-aura variant selection rides owner:HasAura (bridged).
+--    DOCUMENTED-ONLY despite C++-named entries.
 -- ============================================================================
 
 -- ============================================================================

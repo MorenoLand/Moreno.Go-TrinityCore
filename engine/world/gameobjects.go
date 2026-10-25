@@ -106,6 +106,7 @@ type dynamicGameObjectState struct {
 	// and ResetDoorOrButton restores it (GameObject.cpp:1428) — it is NOT the
 	// pre-use state.
 	SpawnState      uint8
+	UseCount        uint32              // m_usetimes twin (GameObject.h:320); AddUse increments, GetUseCount reads
 	RitualOwnerGUID uint64              // summoning-ritual owner for ownerless GOs (m_ritualOwnerGUID twin, GameObject.cpp:1803)
 	RitualUsers     map[uint64]struct{} // summoning-ritual unique participants (m_unique_users twin)
 	CooldownUntilMS int64               // template trap/goober Use-cooldown gate (m_cooldownTime twin, GameObject.cpp:1513)
@@ -1057,6 +1058,46 @@ func sameRaidGroup(a, b *session) bool {
 		return true
 	}
 	return a.groupID != 0 && a.groupID == b.groupID
+}
+
+// addGameObjectUse is GameObject::AddUse (GameObject.h:202): ++m_usetimes
+// on the live dynamic/instance GO state. Static DB spawns have no live
+// state object in Go, so the call is a no-op for them. Backs the
+// soulwell charge leg (go_scripts.cpp:538-564).
+func (srv *Server) addGameObjectUse(guid uint64) {
+	if srv == nil {
+		return
+	}
+	srv.objectsMu.Lock()
+	defer srv.objectsMu.Unlock()
+	if dyn, ok := srv.dynamicGameObjects[guid]; ok && dyn != nil {
+		dyn.UseCount++
+		return
+	}
+	for _, states := range srv.instanceGameObjects {
+		if dyn := states[guid]; dyn != nil {
+			dyn.UseCount++
+			return
+		}
+	}
+}
+
+// gameObjectUseCount is GameObject::GetUseCount (GameObject.h:204).
+func (srv *Server) gameObjectUseCount(guid uint64) uint32 {
+	if srv == nil {
+		return 0
+	}
+	srv.objectsMu.RLock()
+	defer srv.objectsMu.RUnlock()
+	if dyn, ok := srv.dynamicGameObjects[guid]; ok && dyn != nil {
+		return dyn.UseCount
+	}
+	for _, states := range srv.instanceGameObjects {
+		if dyn := states[guid]; dyn != nil {
+			return dyn.UseCount
+		}
+	}
+	return 0
 }
 
 // useSummoningRitual mirrors the GAMEOBJECT_TYPE_SUMMONING_RITUAL arm of
