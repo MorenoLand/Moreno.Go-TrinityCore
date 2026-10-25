@@ -63,6 +63,8 @@ local SPELL_RETALIATION = 65932
 local SPELL_ICEBOUND_FORTITUDE = 66023
 local SPELL_CLOAK = 65961
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42 (JustEngagedWith :646 DoCast(me, ..., true))
+local SPELL_CALL_PET = 67777 -- boss_faction_champions.cpp:130 (hunter JustEngagedWith :1438)
+local SPELL_SEAL_OF_COMMAND = 66004 -- boss_faction_champions.cpp:185 (retro paladin JustEngagedWith :2071)
 local SPELL_WING_CLIP = 66207 -- boss_faction_champions.cpp:128 (npc_toc_hunter)
 local SPELL_FROST_TRAP = 65880 -- boss_faction_champions.cpp:125 (npc_toc_hunter)
 local SPELL_DISENGAGE = 65869 -- boss_faction_champions.cpp:123 (npc_toc_hunter)
@@ -292,6 +294,18 @@ local function championEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true) -- C++ :646
     creature:SetCombatPulseDelay(5) -- C++ :647 (live bridge; 2026-10-23)
     creature:DoZoneInCombat()
+    -- C++ subclass JustEngagedWith overrides, base arms first (C++ order):
+    -- hunter :1437-1438 DoCast(SPELL_CALL_PET) self-cast (pet AI rides
+    -- the unbridged summon strand, warlock felhunter precedent);
+    -- retro paladin :2070-2071 DoCast(SPELL_SEAL_OF_COMMAND) self-cast.
+    -- Census: these two + warlock felhunter (own file) are the ONLY
+    -- subclass JustEngagedWith overrides in boss_faction_champions.cpp.
+    local entry = creature:GetEntry()
+    if entry == 34467 or entry == 34448 then
+        creature:CastSpell(creature, SPELL_CALL_PET)
+    elseif entry == 34471 or entry == 34456 then
+        creature:CastSpell(creature, SPELL_SEAL_OF_COMMAND)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "def", math.random(championCfg.initMin, championCfg.initMax), function()
