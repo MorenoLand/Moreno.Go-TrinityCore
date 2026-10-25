@@ -9123,6 +9123,13 @@ func init() {
 	// documented-only (06:5x audit).
 	RegisterLuaBoss("npc_toc_boomkin", 34460)
 	RegisterLuaBoss("npc_toc_boomkin", 34451)
+	// npc_toc_druid: Faction Champions restoration-druid champion script,
+	// entries 34469 (Alliance) / 34459 (Horde) — npc_toc_druidAI :
+	// boss_faction_championsAI : BossAI, same chain as the registered
+	// boomkin/champion siblings above; fight logic in
+	// lua_scripts/northrend/npc_toc_druid.lua.
+	RegisterLuaBoss("npc_toc_druid", 34469)
+	RegisterLuaBoss("npc_toc_druid", 34459)
 	// boss_faction_champions: Trial of the Crusader Faction Champions
 	// defensive self-buff EventMap timer arms, entries
 	// trial_of_the_crusader.h:180-208 kalecgos pass. Each champion AI
