@@ -112,6 +112,7 @@ type creatureMotion struct {
 	CombatPulseDelaySecs  uint32              // Creature::m_combatPulseDelay (Creature.h:270): Lua CreatureMethods::SetCombatPulseDelay; zero = pulse disabled (the C++ default), delay in seconds
 	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining (ms); the C++ setter writes the raw secs value into this ms timer, so the first pulse fires on the next tick
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
+	ScriptData            map[uint32]uint32   // CreatureAI::SetData store: Lua creature SetData/GetData (lua_creature_events.go); per-type slots, absent = 0; motion lifetime matches the C++ AI object lifetime (a respawned creature gets a fresh AI)
 	ScriptTargetGUID      uint64              // UNIT_FIELD_TARGET script override: Lua CreatureMethods::SetTarget (Creature::SetTarget twin, Creature.cpp:3221) — the visual target GUID above the head; distinct from TargetGUID (the threat-manager combat victim)
 	ScriptTargetKnown     bool                // set when Lua overrides the visual target via SetTarget
 	BaseScale             float32             // creature_template.scale: template base for the scale twin and GetScale, init at motion creation (loadCreatureStats)

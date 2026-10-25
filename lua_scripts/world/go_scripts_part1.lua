@@ -22,8 +22,8 @@
 --     (gossip.go:1372-1475), player:Teleport/TeleportNear, player:HasAura.
 --   * MISSING bridges that block classes here: player:HasItemCount
 --     (use HasItem/GetItemCount),
---     player:IsInSameRaidWith, go:GetOwner, go:CastSpell, go:AddUse,
---     GO-side go:SummonCreature (player/creature surfaces bridged).
+--     player:IsInSameRaidWith, go:GetOwner, go:CastSpell, go:AddUse
+--     (go:SummonCreature bridged 2026-10-24, lua_objects.go).
 --     Corrected 2026-10-24: player:CastSpell + player:SummonCreature +
 --     player:GetQuestStatus bridged; this tick: go:GetGoType (lua_objects.go)
 --     + player:GetNativeGender (lua_player.go) bridged;
@@ -39,8 +39,9 @@
 --     classes below stay blocked on their other gates + registration.)
 --     (2026-10-24: player:GetQuestRewardStatus bridged in lua_player.go;
 --     tele-crystal + violet-stand are now bridge-complete except
---     registration; outhouse select still blocked on AI SetData +
---     go:CastSpell.)
+--     registration; outhouse select sole block go:CastSpell — creature
+--     SetData bridged in lua_creature_events.go and CloseGossipMenuFor
+--     rides player:GossipComplete (gossip.go:1388, SMSG_GOSSIP_COMPLETE).)
 --   * GO entry IDs come from the C++ tree only; classes whose C++ names no GO
 --     entry const are not registered (DB-side binding, unverifiable).
 --
@@ -95,9 +96,10 @@
 --     OUT_OF_COMBAT 30s. If summoned creature not hostile: faction -> rep
 --     spell on player: 1011->39456, 935->39457, 942->39460, 933->39474,
 --     989->39475, 970->39476. Returns false (native use continues).
---    Blockers: no registration (no GO entry const); player:SummonCreature
---    IS bridged since 2026-10-24 (go:UseDoorOrButton IS bridged,
---    but the summon is the script's observable effect). DOCUMENTED-ONLY.
+--    Blockers: no registration (no GO entry const) only;
+--    go:SummonCreature IS bridged since 2026-10-24 (lua_objects.go,
+--    GO-position origin) and go:UseDoorOrButton IS bridged.
+--    DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -106,8 +108,9 @@
 --    Arm: me->UseDoorOrButton(); player->SummonCreature(random of
 --    NpcStasisEntry[] {22825,20888,22827,22826,22828} at GO position,
 --    TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT 30s). Returns false.
---    Blocker: no registration (no GO entry const); player:SummonCreature
---    IS bridged since 2026-10-24. DOCUMENTED-ONLY.
+--    Blocker: no registration (no GO entry const) only;
+--    go:SummonCreature IS bridged since 2026-10-24 (lua_objects.go,
+--    GO-position origin). DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -115,9 +118,9 @@
 --    Enum: NPC_GOGGEROC = 11920. No GO entry const -> no registration.
 --    Arm: if go type == GAMEOBJECT_TYPE_GOOBER,
 --    me->SummonCreature(11920, 0,0,0,0, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT,
---    5min). Returns false. Blockers: GO-side SummonCreature unbridged
---    (player:SummonCreature with 0,0,0,0 spawns at the player close point,
---    not the GO position; go:GetGoType IS bridged 2026-10-24). DOCUMENTED-ONLY.
+--    5min). Returns false. Blockers: no registration (no GO entry const)
+--    only; go:SummonCreature IS bridged 2026-10-24 (lua_objects.go) and
+--    go:GetGoType IS bridged 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================
@@ -227,9 +230,13 @@
 --    are bridged. Blockers: the hello gate needs player:GetQuestStatus
 --    (bridged 2026-10-24 — the gate is portable, but the arm stays unregistered:
 --    no GO entry const);
---    select needs creature AI SetData + go:CastSpell (unbridged);
---    GetClosestCreatureWithEntry rides player:FindNearestCreature and
---    player:GetNativeGender IS bridged 2026-10-24. DOCUMENTED-ONLY.
+--    select needs go:CastSpell only (unbridged — no GO-caster executor:
+--    castCreatureSpellInternal is creatureMotion-coupled, the session
+--    path is player-coupled); creature SetData IS bridged 2026-10-24
+--    (lua_creature_events.go) and CloseGossipMenuFor rides
+--    player:GossipComplete; GetClosestCreatureWithEntry rides
+--    player:FindNearestCreature and player:GetNativeGender IS bridged
+--    2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================
 
 -- ============================================================================

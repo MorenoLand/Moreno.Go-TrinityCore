@@ -1319,6 +1319,58 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.luaMotionCreature(best)}, nil
 	}
+	// SummonCreature is the gameobject-surface twin of the player bridge
+	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
+	// the shared summonTempCreature funnel): same (entry, x, y, z, o,
+	// summonType, despawnTimer-ms) signature, same 0-7 type scheme,
+	// unknown entries return nil. The origin is the GO itself (gameobjects
+	// carry no combat reach, so the 0,0,0,0 close point is the GO position
+	// exactly, not the player close point the player twin computes).
+	// Backs the resonite-cask summon leg (go_scripts.cpp:251-260) and
+	// the ethereum stasis/prison GO-position summons (:218-230, :155-198).
+	methods["SummonCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		summonType := uint32(7)
+		if len(args) > 5 {
+			if summonType, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+			if summonType > 7 {
+				return nil, fmt.Errorf("SummonCreature summonType must be 0-7")
+			}
+		}
+		var despawnMs uint32
+		if len(args) > 6 {
+			if despawnMs, err = luaUint32Arg(args, 6); err != nil {
+				return nil, err
+			}
+		}
+		origin := tempSummonOrigin{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID, X: state.X, Y: state.Y, Z: state.Z, O: state.Orientation, Reach: 0}
+		summoned := srv.summonTempCreature(ctx, origin, entry, x, y, z, o, uint8(summonType), despawnMs)
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		return []any{srv.luaMotionCreature(summoned)}, nil
+	}
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
 		srv.setGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID, true)
 		return nil, nil

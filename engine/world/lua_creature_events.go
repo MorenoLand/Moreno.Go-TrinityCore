@@ -224,6 +224,41 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{inCombat}, nil
 	}
+	// SetData/GetData are the CreatureAI::SetData virtual-dispatch twin
+	// (CreatureAI.h: the per-AI override interprets its own type numbers;
+	// Go handlers are not AI objects, so there is no virtual table to
+	// dispatch through — the store below is the transport and each
+	// handler interprets its own types, e.g. the outhouse bunny reads
+	// type 1 as gender, zone_grizzly_hills.cpp:296). Absent types read
+	// 0, the C++ member default. Backs the go_amberpine_outhouse select
+	// arm (go_scripts.cpp:624) and the bunny gender-sound arm.
+	methods["SetData"] = func(_ context.Context, args []any) ([]any, error) {
+		typ, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		data, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if motion.ScriptData == nil {
+			motion.ScriptData = map[uint32]uint32{}
+		}
+		motion.ScriptData[typ] = data
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	methods["GetData"] = func(_ context.Context, args []any) ([]any, error) {
+		typ, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		data := motion.ScriptData[typ]
+		s.motionMu.Unlock()
+		return []any{data}, nil
+	}
 	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
 	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420), the event-surface
 	// twin of the session bridge (lua_objects.go:477-496); Eluna's arc
