@@ -13,12 +13,17 @@
 --   IMMUNE_TO_PC 0x100) as the SetImmuneToPC(true) twin (opera
 --   precedent: SetImmuneToPC(false) = RemoveFlag(59, 0x100)).
 -- - Gossip select: CloseGossipMenuFor twin (GossipClearMenu +
---   GossipComplete, vaelastrasz precedent) + Dismount +
+--   GossipComplete, vaelastrasz precedent) + StopMoving (C++
+--   OnGossipSelect order: CloseGossipMenuFor -> StopMoving ->
+--   StartFight) + Dismount +
 --   SetFacingToObject twin (math.atan2 facing, the documented
 --   lua_creature_events.go:1745 idiom) + RemoveFlag(GOSSIP) +
 --   2s Talk(SAY_CHALLENGE 0) + 2s immune-off + SetFaction
---   (MONSTER_2) + fireball 20823 victim-cast (1ms, 10s re-arm)
---   + frostnova 11831 self-cast (5s, 20s re-arm).
+--   (MONSTER_2) + EVENT_ATTACK EngageWithTarget (PORTED: the
+--   gossip player GUID is re-found via the GetPlayersInWorld
+--   map/instance scan, blackheart precedent) + fireball 20823
+--   victim-cast (1ms, 10s re-arm) + frostnova 11831 self-cast
+--   (5s, 20s re-arm).
 -- - Defeat (C++ DamageTaken: lethal-or-below-20%): timers reset +
 --   faction restore + RemoveAllAuras + CombatStop(true) +
 --   AttackStop + SetFlag(QUESTGIVER) + SetFlag(IMMUNE_TO_PC) +
@@ -26,10 +31,11 @@
 --   convention: return false, 0). Defeated latch blocks re-fire
 --   (C++ is immune after defeat, so no second trigger exists).
 -- Unmodeled (documented-only, no bridges):
--- - EVENT_ATTACK's EngageWithTarget (no Lua bridge; DoZoneInCombat
---   is dungeon-gated, so it no-ops in Hellfire Peninsula). The
---   cast pumps still run from the gossip chain and land once the
---   player attacks (player-initiated combat supplies the victim).
+-- - EVENT_ATTACK's EngageWithTarget is PORTED above (the old
+--   "no bridge" note was stale — EngageWithTarget is bridged,
+--   lua_creature_events.go, player-session-gated like the
+--   hexlord/twin ports). DoZoneInCombat is dungeon-gated and
+--   stays out (no-op in Hellfire Peninsula).
 -- - EVENT_EVADE IS ported: the defeat branch schedules a 60s
 --   one-shot running the Reset legs (EnterEvadeMode ends in
 --   Reset(), CreatureAI.cpp). The EnterEvadeMode bridge itself
@@ -62,6 +68,7 @@ local UNIT_NPC_FLAG_QUESTGIVER = 2
 local timers = {}
 local factionNorm = {}
 local defeated = {}
+local duelPlayer = {} -- per-GUID _playerGUID (C++ StartFight stores it)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -107,6 +114,7 @@ local function aledisReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     defeated[guid] = nil
+    duelPlayer[guid] = nil
     local norm = factionNorm[guid]
     if norm ~= nil then
         creature:SetFaction(norm)
@@ -119,6 +127,7 @@ end
 local function aledisGossipSelect(event, player, creature, sender, action)
     player:GossipClearMenu()
     player:GossipComplete()
+    creature:StopMoving()
     creature:Dismount()
     local cx, cy = creature:GetX(), creature:GetY()
     local px, py = player:GetX(), player:GetY()
@@ -131,11 +140,27 @@ local function aledisGossipSelect(event, player, creature, sender, action)
     end
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
     local guid = creature:GetGUID()
+    duelPlayer[guid] = player:GetGUID()
     schedule(guid, "talk", 2000, function()
         creature:Talk(SAY_CHALLENGE)
         schedule(guid, "attack", 2000, function()
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
             creature:SetFaction(FACTION_MONSTER_2)
+            -- C++ EVENT_ATTACK: EngageWithTarget(_playerGUID).
+            -- Re-find the duel player (same map+instance scan);
+            -- a logged-out player simply yields no engage, as
+            -- C++ GetPlayer(null) does.
+            local pguid = duelPlayer[guid]
+            if pguid ~= nil then
+                local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+                for _, p in ipairs(GetPlayersInWorld()) do
+                    if p:GetGUID() == pguid and p:GetMapId() == mapId
+                            and p:GetInstanceId() == instanceId then
+                        creature:EngageWithTarget(p)
+                        break
+                    end
+                end
+            end
             schedule(guid, "fireball", 1, function()
                 fireballPump(creature, guid)
             end)

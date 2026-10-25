@@ -66,16 +66,19 @@
 -- yor precedent): the SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered
 -- self-cast + SetFaction(summoner faction, pending-slot idiom) legs are
 -- PORTED 2026-10-23; the UNIT_STATE_ROOT leg ports 2026-10-24 via
--- creature:SetRooted (lua_creature_events.go); SetLevel / AttackStart
--- have no bridges, stay out.
--- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
--- DOCUMENTED-ONLY (in this header; entries 18371 + 18374 registered):
--- via FocusedTargetGUID) — no cast/root/cross-creature bridges
--- (the maladaar JustSummoned-coordination precedent);
--- UpdateAI fiery machine — FieryBlast_Timer 3000+rand(1000) init,
+-- creature:SetRooted (lua_creature_events.go); the AttackStart
+-- (FocusedTargetGUID) leg PORTED this run via EngageWithTarget
+-- (triggerCreatureAggro fires event 1, so the fiery machine below
+-- runs); SetLevel has no bridge, stays out.
+-- npc_focus_fire UpdateAI fiery machine — PORTED this run as a
+-- 18374 event-1 pump: FieryBlast_Timer 3000+rand(1000) init,
 -- DoCast(me, SPELL_FIERY_BLAST 32302) self, then 1000ms; the
 -- fiery1/fiery2 bools cap it at exactly 2 casts (first cast clears
 -- fiery1, second clears fiery2 which gates the machine).
+-- DoMeleeAttackIfReady — no melee bridge (the alar precedent).
+-- DOCUMENTED-ONLY (in this header; entries 18371 + 18374 registered):
+-- SetLevel leg of JustSummoned (no SetLevel bridge in
+-- lua_creature_events.go / object.go / lua_player.go).
 
 local ENTRY_SHIRRAK = 18371 -- DB-side; wowhead-TBC-verified this run
 
@@ -83,10 +86,13 @@ local SPELL_INHIBITMAGIC   = 32264 -- boss_shirrak_the_dead_watcher.cpp:32
 local SPELL_ATTRACTMAGIC   = 32265 -- boss_shirrak_the_dead_watcher.cpp:33
 local SPELL_CARNIVOROUSBITE = 36383 -- boss_shirrak_the_dead_watcher.cpp:34
 local SPELL_FOCUS_FIRE_VISUAL = 42075 -- boss_shirrak_the_dead_watcher.cpp:38
+local SPELL_FIERY_BLAST = 32302 -- boss_shirrak_the_dead_watcher.cpp:36
 local EMOTE_FOCUSED = 0 -- Talk id, boss_shirrak_the_dead_watcher.cpp:36
 local NPC_FOCUS_FIRE = 18374 -- boss_shirrak_the_dead_watcher.cpp:43
 
 local timers = {}
+local focusedTarget = {} -- per-shirrak-GUID FocusedTargetGUID (C++ :105)
+local fieryCount = {} -- per-focus-fire-GUID fiery1/fiery2 cast count
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -154,8 +160,8 @@ end
 -- C++ player-type + IsAlive gates — then SummonCreature(NPC_FOCUS_FIRE
 -- 18374) at the target's position, TEMPSUMMON_TIMED_DESPAWN 5500ms +
 -- Talk(EMOTE_FOCUSED 0, target) (C++ arm order); re-arm
--- 15000 + rand32() % 5000. The FocusedTargetGUID latch feeds only the
--- unbridged AttackStart leg (no cross-AI bridge) — not kept.
+-- 15000 + rand32() % 5000. The pick is stored in focusedTarget so
+-- JustSummoned can AttackStart it (C++ FocusedTargetGUID).
 local function focusfireTick(creature, guid)
     local candidates = {}
     local targets = creature:GetAITargets()
@@ -167,6 +173,7 @@ local function focusfireTick(creature, guid)
     end
     if #candidates > 0 then
         local target = candidates[math.random(#candidates)]
+        focusedTarget[guid] = target:GetGUID()
         creature:SummonCreature(NPC_FOCUS_FIRE, target:GetX(), target:GetY(),
             target:GetZ(), 0, 2, 5500)
         creature:Talk(EMOTE_FOCUSED, target)
@@ -183,14 +190,58 @@ end
 -- handler, so it never fired; fixed 2026-10-24 to the summoner entry +
 -- 3-arg handler. Legs: SPELL_FOCUS_FIRE_VISUAL 42075 non-triggered
 -- self-cast + SetFaction(summoner faction); UNIT_STATE_ROOT ports via
--- creature:SetRooted (2026-10-24); SetLevel / AttackStart(FocusedTargetGUID)
--- have no bridges, stay out.
+-- creature:SetRooted (2026-10-24); AttackStart(FocusedTargetGUID)
+-- PORTED this run via EngageWithTarget on the stored pick (the
+-- focus fire's event-1 fiery pump then runs); SetLevel has no
+-- bridge, stays out.
 local function focusFireSummoned(event, creature, summon)
     if summon and summon:GetEntry() == NPC_FOCUS_FIRE then
         summon:CastSpell(summon, SPELL_FOCUS_FIRE_VISUAL)
         summon:SetFaction(creature:GetFaction())
         summon:SetRooted(true)
+        local tguid = focusedTarget[creature:GetGUID()]
+        if tguid ~= nil then
+            local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+            for _, p in ipairs(GetPlayersInWorld()) do
+                if p:GetGUID() == tguid and p:GetMapId() == mapId
+                        and p:GetInstanceId() == instanceId then
+                    summon:EngageWithTarget(p)
+                    break
+                end
+            end
+        end
     end
+end
+
+-- C++ npc_focus_fireAI::UpdateAI (:197-218): FieryBlast_Timer
+-- 3000+rand(1000) init; victim-gated (the engage above supplies
+-- the victim); self-cast SPELL_FIERY_BLAST 32302, then 1000ms;
+-- exactly 2 casts (fiery1 then fiery2 latch off).
+local function fieryTick(creature, guid)
+    creature:CastSpell(creature, SPELL_FIERY_BLAST)
+    local n = (fieryCount[guid] or 0) + 1
+    fieryCount[guid] = n
+    if n < 2 then
+        schedule(guid, "fiery", 1000, function()
+            fieryTick(creature, guid)
+        end)
+    else
+        fieryCount[guid] = nil
+    end
+end
+
+local function focusFireEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "fiery", 3000 + math.random(0, 999), function()
+        fieryTick(creature, guid)
+    end)
+end
+
+local function focusFireCleanup(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    fieryCount[guid] = nil
 end
 
 local function cancelKeys(guid, keys)
@@ -261,6 +312,10 @@ RegisterCreatureEvent(ENTRY_SHIRRAK, 5, shirrakSpawn)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 23, shirrakReset)
 RegisterCreatureEvent(ENTRY_SHIRRAK, 37, shirrakRemove)
 -- NPC_FOCUS_FIRE 18374 exists only via the FocusFire summon above; its
--- JustSummoned visual/faction setup is ported (the yor precedent) on the
--- summoner's event-19 binding.
+-- JustSummoned visual/faction/root/engage setup is ported (the yor
+-- precedent) on the summoner's event-19 binding, and its fiery
+-- machine runs on its own event-1 binding below.
 RegisterCreatureEvent(ENTRY_SHIRRAK, 19, focusFireSummoned)
+RegisterCreatureEvent(NPC_FOCUS_FIRE, 1, focusFireEnterCombat)
+RegisterCreatureEvent(NPC_FOCUS_FIRE, 2, focusFireCleanup)
+RegisterCreatureEvent(NPC_FOCUS_FIRE, 4, focusFireCleanup)

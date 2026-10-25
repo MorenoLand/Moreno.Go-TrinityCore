@@ -62,8 +62,9 @@
 -- boss_exarch_maladaarAI::MoveInLineOfSight (:192-202) — the
 -- HasTaunted one-shot Talk(SAY_INTRO 0) when a unit is within
 -- 150.0f: PORTED on event 27 (CREATURE_EVENT_ON_MOVE_IN_LOS) with
--- a per-GUID latch (latch cleared on 2/4/23 — C++ Reset()
--- re-latches via Initialize). The handler returns nothing (no
+-- a per-GUID never-cleared latch (HasTaunted is ctor-only in
+-- C++ — Initialize() resets timers/avatar but never touches it,
+-- ossirian precedent). The handler returns nothing (no
 -- veto): the C++ body calls ScriptedAI::MoveInLineOfSight(who)
 -- after the taunt check, so the default aggro engage proceeds
 -- (the inverse of the shaffar depth_charge veto precedent).
@@ -73,7 +74,8 @@
 -- at 150y sight, both C++ gates holding at fire time.
 -- boss_exarch_maladaarAI::Reset — Initialize() re-latch: the Lua
 -- per-GUID timer tables reset on 2/4/23 (the gargolmar
--- precedent); avatarLatched re-latches too.
+-- precedent); avatarLatched re-latches too. HasTaunted does NOT
+-- re-latch (ctor-only) and is never cleared.
 -- DOCUMENTED-ONLY (in this header; only entry 18373 registered):
 -- boss_exarch_maladaarAI::JustSummoned (:204-209, ENTRY_STOLEN_SOUL
 -- 18441) — summoned:CastSpell(summoned, SPELL_STOLEN_SOUL_VISUAL
@@ -157,9 +159,11 @@ local function cancelTimers(guid)
     end
 end
 
+-- Avatar_summoned IS re-latched by C++ Reset()->Initialize(),
+-- so avatarLatched clears here; HasTaunted is ctor-only and is
+-- never cleared (see MoveInLineOfSight note above).
 local function clearState(guid)
     cancelTimers(guid)
-    taunted[guid] = nil
     avatarLatched[guid] = nil
 end
 

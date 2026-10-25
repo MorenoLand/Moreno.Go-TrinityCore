@@ -23,8 +23,8 @@
 -- (line 137; event 1 — the auriaya precedent) + schedules
 -- EVENT_FIREBALL (8s) / EVENT_FROSTBOLT (4s) / EVENT_FROST_NOVA (15s)
 -- (the BossAI::JustEngagedWith legs have no bridge — tharon_ja
--- precedent; EVENT_BEACON stays out — triggered summon cast, see
--- below).
+-- precedent; EVENT_BEACON ported below as a direct-summon
+-- supplement, see below).
 -- EVENT_FIREBALL — DoCastVictim(SPELL_FROSTBOLT 32364) 2-arg
 -- (non-triggered), 8s init, randtime(4500ms, 6s) repeat (the C++
 -- fires SPELL_FROSTBOLT under the EVENT_FIREBALL case — preserved
@@ -41,8 +41,9 @@
 -- 166) — the sjonnir self-Talk precedent (event 4).
 -- boss_nexusprince_shaffarAI::MoveInLineOfSight — the
 -- _hasTaunted one-shot Talk(SAY_INTRO 0) (line 101) — PORTED as
--- shaffarMoveInLOS on event 27 (per-GUID latch, latch cleared on
--- 2/4/23 — C++ Reset() :83 re-latches); returns true to veto the
+-- shaffarMoveInLOS on event 27 (per-GUID never-cleared latch:
+-- _hasTaunted is ctor-only in C++ — Reset() re-summons beacons but
+-- never touches it, ossirian precedent); returns true to veto the
 -- default aggro engage, matching the C++ body which never calls
 -- the base (depth_charge precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 18344 registered):
@@ -74,9 +75,15 @@
 -- (its summons ride the unported apprentice spell-effect summon machine).
 -- boss_nexusprince_shaffarAI::ExecuteEvent:
 -- EVENT_BEACON — urand(0,3)==0-gated Talk(SAY_SUMMON 3) + DoCast(me,
--- SPELL_ETHEREAL_BEACON 32371, triggered), 10s repeat — stays OUT:
--- the cast is a triggered summon whose whole purpose is the beacon
--- summon machine (no-summon bridge — shirrak precedent);
+-- SPELL_ETHEREAL_BEACON 32371, triggered), 10s repeat — PORTED as a
+-- direct-summon supplement: the spell summons NPC_BEACON 18431
+-- (Creatures enum, same entry as the Reset beacons) at the caster,
+-- so the port summons it at shaffar's position (type 5, 2h, as
+-- the Reset beacons); the JustSummoned visual + random-engage
+-- arms fire via event 19 exactly as for Reset beacons. The beacon
+-- AI itself stays unported (next tick: 18431 arcane-bolt /
+-- apprentice + 18430 ping-pong registrations, legs verified
+-- this run; yor entry still DB-side unverified, not guessed);
 -- EVENT_BLINK — interrupt + Clear(MOTION_PRIORITY_NORMAL) +
 -- DoCast(SPELL_BLINK 34605) — stays OUT: the interrupt/motion legs
 -- have no bridge (the blink teleport effect has no lua-bridge model);
@@ -121,6 +128,7 @@ local ENTRY_BEACON = 18431 -- NPC_BEACON (boss_nexusprince_shaffar.cpp:61)
 local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_SLAY  = 2
+local SAY_SUMMON = 3
 local SAY_DEAD  = 4
 
 local SPELL_FROSTBOLT = 32364 -- boss_nexusprince_shaffar.cpp:42
@@ -204,18 +212,35 @@ local function frostNovaTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_BEACON (:158-163): urand(0,3)==0 Talk(SAY_SUMMON 3)
+-- + triggered DoCast(me, SPELL_ETHEREAL_BEACON 32371), 10s repeat.
+-- Ported as a direct summon of NPC_BEACON 18431 at shaffar's
+-- position (type 5, 2h — the Reset-beacon precedent); the spell's
+-- summon target is the caster, and event 19 fires the JustSummoned
+-- visual + engage arms for the new beacon.
+local function beaconTick(creature, guid)
+    if math.random(0, 3) == 0 then
+        creature:Talk(SAY_SUMMON)
+    end
+    creature:SummonCreature(ENTRY_BEACON, creature:GetX(), creature:GetY(),
+        creature:GetZ(), 0, 5, 7200000)
+    schedule(guid, "beacon", 10000, function()
+        beaconTick(creature, guid)
+    end)
+end
+
 -- C++ boss_nexusprince_shaffarAI::JustEngagedWith (:108-117):
 -- Talk(SAY_AGGRO); BossAI::JustEngagedWith(who) — the auriaya
 -- precedent (the BossAI legs have no bridge) — then the four
 -- ScheduleEvent legs: EVENT_BEACON 10s / EVENT_FIREBALL 8s /
--- EVENT_FROSTBOLT 4s / EVENT_FROST_NOVA 15s. BEACON stays out: the
--- arm is a triggered summon cast (DoCast(me, SPELL_ETHEREAL_BEACON
--- 32371, true)) whose whole purpose is the beacon summon machine
--- (no-summon bridge — shirrak precedent).
+-- EVENT_FROSTBOLT 4s / EVENT_FROST_NOVA 15s.
 local function shaffarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    schedule(guid, "beacon", 10000, function()
+        beaconTick(creature, guid)
+    end)
     schedule(guid, "fireball", 8000, function()
         fireballTick(creature, guid)
     end)
@@ -230,13 +255,11 @@ end
 local function shaffarLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    taunted[guid] = nil
 end
 
 local function shaffarReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    taunted[guid] = nil
     -- C++ Reset (boss_nexusprince_shaffar.cpp:86-97): three initial
     -- beacon SummonCreature(NPC_BEACON, home±8, TEMPSUMMON_CORPSE_TIMED_
     -- DESPAWN 2h) legs — summon bridge live 2026-10-22; the beacon AI
@@ -264,13 +287,14 @@ local function shaffarDied(event, creature, killer)
     creature:Talk(SAY_DEAD)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    taunted[guid] = nil
 end
 
 -- C++ boss_nexusprince_shaffarAI::MoveInLineOfSight (:99-105):
 -- the _hasTaunted one-shot Talk(SAY_INTRO 0) when a player is
 -- within 100.0f; the body never calls the base AI, so the boss
--- never engages by sight in C++. Go's event-27 fire site is a
+-- never engages by sight in C++. _hasTaunted is ctor-only (set
+-- false in the ctor, never touched by Reset), so the Lua latch is
+-- never cleared (ossirian precedent). Go's event-27 fire site is a
 -- subset of the C++ trigger (dist <= aggro range < 100, who always
 -- a player), so both gates hold at fire time. Return true to veto
 -- the default engage — the depth_charge precedent — matching C++.
