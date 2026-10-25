@@ -35,23 +35,29 @@
 --   checks the 50% leg in its own if, then 25/33/66 in an else-if chain —
 --   replicated exactly; latches are one-shot per guid (init on 1/5/23).
 -- - Reset's DoCastSelf(SPELL_DUAL_WIELD = 674, true) +
---   DoCastSelf(SPELL_THRASH = 12787, true) -> onReset (23), alive-gated
---   (jindo/magmadar precedent: C++ Reset runs at spawn and on evade,
---   never on death; Go's 23 fires on respawn and evade, matching this
---   boss's C++ Reset path); the triggered flag is exact via CastSpell's
---   third arg (moroes precedent).
+--   DoCastSelf(SPELL_THRASH = 12787, true) -> onSpawn (5), alive-gated;
+--   the triggered flag is exact via CastSpell's third arg (moroes
+--   precedent). C++ Reset runs at spawn ONLY for this boss:
+--   boss_vancleef's EnterEvadeMode override (boss_vancleef.cpp:78-84)
+--   never calls the CreatureAI::EnterEvadeMode Reset() tail
+--   (CreatureAI.cpp:237), so no Reset arms run on evade — the evade
+--   path is despawn-only (summons.DespawnAll + _DespawnAtEvade 30s
+--   respawn, ScriptedCreature.cpp:596), and the casts re-arm on the
+--   respawn Reset.
 -- - Reset's SummonBlackguards() (boss_vancleef.cpp:86-90: DoSummon(
 --   NPC_BLACKGUARD = 636, the two BlackguardPositions, 1min,
---   TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2) -> onReset (23, alive-gated)
---   + onSpawn (5, guarded) via creature:SummonCreature(636, x, y, z,
---   o, 5, 60000) (bridge: lua_creature_events.go:956; type 5 =
---   CORPSE_TIMED_DESPAWN per the bridge's TempSummonType enum). The
---   summons are tracked per boss guid and despawned via
---   creature:Despawn (bridge: lua_creature_events.go:706) on evade
---   (EnterEvadeMode's summons.DespawnAll(), boss_vancleef.cpp:78-84)
---   and on death (BossAI::_JustDied's summons.DespawnAll(),
---   ScriptedCreature.cpp:516) — Go fires 23 ahead of 2/4, so the
---   despawn rides onReset with the re-summon alive-gated. The 1min
+--   TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2) -> onSpawn (5, guarded) via
+--   creature:SummonCreature(636, x, y, z, o, 5, 60000) (bridge:
+--   lua_creature_events.go:956; type 5 = CORPSE_TIMED_DESPAWN per the
+--   bridge's TempSummonType enum). The summons are tracked per boss
+--   guid and despawned via creature:Despawn (bridge:
+--   lua_creature_events.go:706) on evade (EnterEvadeMode's
+--   summons.DespawnAll(), boss_vancleef.cpp:78-84) and on death
+--   (BossAI::_JustDied's summons.DespawnAll(), ScriptedCreature.
+--   cpp:516) — Go fires 23 ahead of 2/4, so the despawn rides onReset
+--   DESPAWN-ONLY: an evade-path re-summon would contradict C++ (the
+--   override skips the base Reset tail, so blackguards stay gone
+--   until the 30s respawn Reset re-summons them). The 1min
 --   idle-despawn of CORPSE_TIMED_DESPAWN is a documented bridge delta
 --   (the spawn timer arms only for the timed family;
 --   lua_creature_events.go:67).
@@ -192,25 +198,26 @@ local function onSpawn(_, creature)
     initState(creature:GetGUID())
     -- C++ Reset runs at spawn (Creature::Respawn -> ai->Reset(),
     -- Creature.cpp:2198); Go fires 23 ahead of 5 on the spawn funnel
-    -- (fireCreatureSpawned), so this guarded call is usually a no-op.
-    summonBlackguards(creature)
-end
-
-local function onReset(_, creature)
-    initState(creature:GetGUID())
-    -- Go fires 23 ahead of 2 (evade) and ahead of 4 (death), so the
-    -- C++ EnterEvadeMode/_JustDied summon-despawn arms ride here; the
-    -- re-summon is alive-gated like the casts below.
-    despawnBlackguards(creature)
-    -- C++ Reset's one-shot triggered self-casts (jindo/magmadar
-    -- precedent): alive-gated, since C++ Reset runs at spawn and on
-    -- evade, never on death — while Go's 23 also fires on death
-    -- (fireCreatureDied, Eluna parity).
+    -- (fireCreatureSpawned, initial + respawn), so the Reset arms
+    -- live HERE, not in onReset: vancleef's EnterEvadeMode override
+    -- (boss_vancleef.cpp:78-84) never calls the CreatureAI::
+    -- EnterEvadeMode Reset() tail, so Reset does NOT run on evade.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
         creature:CastSpell(creature, SPELL_THRASH, true)
         summonBlackguards(creature)
     end
+end
+
+local function onReset(_, creature)
+    initState(creature:GetGUID())
+    -- Despawn-only: Go fires 23 ahead of 2 (evade) and ahead of 4
+    -- (death), so the C++ EnterEvadeMode/_JustDied summon-despawn
+    -- arms ride here — but NOT the Reset casts/summons (see
+    -- onSpawn): vancleef's EnterEvadeMode override skips the base
+    -- Reset tail, so an evade-path re-summon would contradict C++
+    -- (blackguards stay gone until the 30s respawn Reset).
+    despawnBlackguards(creature)
 end
 
 RegisterCreatureEvent(ENTRY_VANCLEEF, 1, onEnterCombat)
