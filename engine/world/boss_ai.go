@@ -9052,9 +9052,11 @@ func init() {
 	// npc_nerubian_burrower (34607) — zero registration (Reset self-casts
 	// + DoZoneInCombat + cross-AI ride the unbridged summon gate;
 	// ACTION_SHADOW_STRIKE random-target; submerge timer behind health-pct
-	// + flag / aura bridges); npc_anubarak_spike (34660) and npc_frost_sphere
-	// (34606) — zero registration, entry-verifiable-but-bridge-blocked
-	// (DamageTaken hook / motion / threat / react / display bridges absent);
+	// + flag / aura bridges); npc_anubarak_spike (34660) — zero registration,
+	// entry-verifiable-but-bridge-blocked (DamageTaken hook / motion / threat
+	// bridges absent); npc_frost_sphere (34606) — Reset legs ported via boss
+	// ev19; DamageTaken / MovementInform ground-impact machine stays out
+	// (no hook / motion bridge);
 	// spell_pursuing_spikes, spell_impale, spell_anubarak_leeching_swarm —
 	// no SpellScript / AuraScript binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_anubarak_trial", 34564)

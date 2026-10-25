@@ -198,11 +198,11 @@
 -- Spike Speed 65920/65922/65923 + Spike Trail 65921, 7s phase
 -- machine) ride the unbridged motion machine; MoveInLineOfSight
 -- frost-sphere latching (no hook + no motion bridges).
--- npc_frost_sphere (34606) — zero registration (joins the
--- entry-verifiable-but-bridge-blocked queue): Reset —
--- SetReactState(REACT_PASSIVE) + DoCast(Frost Sphere 67539) +
--- SetDisplayId + MoveRandom (react/display bridges exist — the
--- blockers are zero registration + the motion-master bridge);
+-- npc_frost_sphere (34606) — Reset legs PORTED in anubarakJustSummoned
+-- (ev19, burrow precedent, LATENT: boss sphere summons stay out on
+-- GUID-latch/summon-STRAND grounds): SetReactState(REACT_PASSIVE) +
+-- DoCast(Frost Sphere 67539) + SetDisplayId, C++ order; MoveRandom
+-- stays out (no motion-master bridge);
 -- DamageTaken + MovementInform(POINT_FALL_GROUND)
 -- ground-impact machine (event 9 DamageTaken IS bridged — the old
 -- "no DamageTaken hook" claim is stale; no MovementInform hook;
@@ -229,6 +229,7 @@ local NPC_FROST_SPHERE = 34606
 local NPC_BURROWER = 34607
 local NPC_BURROW = 34862 -- boss_anubarak_trial.cpp:52
 local SPELL_CHURNING_GROUND = 66969 -- boss_anubarak_trial.cpp:74
+local SPELL_FROST_SPHERE = 67539 -- boss_anubarak_trial.cpp:95
 local FACTION_PREY = 31 -- SharedDefines.h
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -393,6 +394,11 @@ local function anubarakJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == NPC_BURROW then
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:CastSpell(summoned, SPELL_CHURNING_GROUND)
+        summoned:SetDisplayId(summoned:GetTemplateModelId(2))
+    end
+    if summoned:GetEntry() == NPC_FROST_SPHERE then
+        summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:CastSpell(summoned, SPELL_FROST_SPHERE)
         summoned:SetDisplayId(summoned:GetTemplateModelId(2))
     end
 end
