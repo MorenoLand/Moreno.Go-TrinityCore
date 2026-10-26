@@ -46,11 +46,16 @@
 -- (engine/world/lua_creature_events.go:260) — the 2026-10-14 "no
 -- IsHeroic bridge" claim was stale.
 -- boss_rotface SpellHitTarget — Talk(SAY_SLIME_SPRAY 3) rides the
--- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — stays out:
--- the C++ arm Talks once per hit target of the spray AoE, but Go's
--- self-cast path carries only the explicit target, so the ev15
--- target correspondence is unverified (event 15 itself is live —
--- boss_ai.go:1904, grobbulus precedent fires per hit target).
+-- SPELL_SLIME_SPRAY case of the SpellHitTarget switch — PORTED
+-- (rotfaceSpellHitTarget, event 15): the C++ arm Talks once per hit
+-- target of the spray AoE, while Go's self-cast path carries only
+-- the explicit target (boss_ai.go:1181 hitTargets = {targetGUID} +
+-- chain jumps only; area/cone effects are inert there), so the Go
+-- fire carries target=self once per spray cast. The leg is
+-- target-independent (Talk takes no target), so the single yell is
+-- the faithful observable form — the gruul player-gated contrast,
+-- where the target itself was the leg and the arm stayed out.
+-- Event 15 itself is live (boss_ai.go:1904, grobbulus precedent).
 -- boss_rotface JustEngagedWith instance legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
 -- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) (no-DoAction
@@ -131,6 +136,7 @@
 local ENTRY_ROTFACE = 36627
 
 local SAY_AGGRO = 1
+local SAY_SLIME_SPRAY = 3
 local SAY_KILL = 6
 local SAY_DEATH = 8
 
@@ -318,8 +324,18 @@ local function rotfaceJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_rotface SpellHitTarget (:171-174): SPELL_SLIME_SPRAY hit
+-- -> Talk(SAY_SLIME_SPRAY). Fires once per spray cast in Go (the
+-- self-cast hit list is {self}); see the header note above.
+local function rotfaceSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_SLIME_SPRAY then
+        creature:Talk(SAY_SLIME_SPRAY)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ROTFACE, 1, rotfaceJustEngagedWith)
 RegisterCreatureEvent(ENTRY_ROTFACE, 2, rotfaceLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROTFACE, 3, rotfaceKilledUnit)
 RegisterCreatureEvent(ENTRY_ROTFACE, 4, rotfaceJustDied)
+RegisterCreatureEvent(ENTRY_ROTFACE, 15, rotfaceSpellHitTarget)
 RegisterCreatureEvent(ENTRY_ROTFACE, 23, rotfaceReset)

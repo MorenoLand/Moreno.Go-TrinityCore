@@ -135,8 +135,11 @@
 --   damage/fly self-casts on player targets) — event 15 IS live (gruul /
 --   svala precedent; the old "no SpellHitTarget bridge" note was stale),
 --   but the teleport spells need spell-effect dispatch (DBC-gated, Go
---   casts are packet-only), the damage/fly legs need a player self-cast
---   (no player:CastSpell bridge), and the CLEAR_FLIGHT leg is vacuous
+--   casts are packet-only), the damage/fly legs would need player
+--   self-casts whose effects likewise never land (player:CastSpell IS
+--   bridged, lua_player.go:504 — the 2026-10-24 "no bridge" claim
+--   was stale; the blocker is effect dispatch, not the cast call),
+--   and the CLEAR_FLIGHT leg is vacuous
 --   in-port (lifted-player auras never exist) with AoE hit-player
 --   iteration unmodeled (gruul precedent); the arcane-sphere
 --   MoveFollow arms — spheres never spawn (no SPELL_EFFECT_SUMMON
