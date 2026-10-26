@@ -478,6 +478,41 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 				s.fireCreatureKillHook(ctx, attackerSess, motion)
 			}
 		}
+		// Unit::Kill death chain for a creature attacker (Unit.cpp:11320
+		// setDeathState JUST_DIED, :11385-11391 KilledUnit/JustDied):
+		// the session arm above runs the funnel instead, so these legs
+		// are gated on attackerSess == nil like the stamp below, and
+		// the respawn legs mirror the boss_ai no-owner path.
+		if attackerSess == nil {
+			s.auraMu.Lock()
+			var deathAuras []*activeAura
+			for _, aura := range s.activeCreatureAuras[key] {
+				deathAuras = append(deathAuras, aura)
+			}
+			s.auraMu.Unlock()
+			s.grantChannelDeathItems(ctx, deathAuras, m.Level, true, m.TapPlayerGUID, m.TapGroupID)
+			s.clearCreatureAurasOnDeath(key)
+			s.removeThreatVictimFromAllLists(key.Map, key.InstanceID, key.GUID)
+			if attackerMotion != nil {
+				if attackerMotion.OwnerGUID != 0 {
+					s.fireCreatureTargetDied(ctx, attackerMotion, s.luaMotionCreature(m))
+				}
+				s.fireCreatureTargetDied(ctx, attackerMotion, s.luaMotionCreature(m))
+			}
+			s.fireCreatureDiedByCreature(ctx, m, attackerMotion)
+			if m.BossAI != nil {
+				m.BossAI.OnDied(ctx, s, m)
+			}
+			respawnHealth := m.MaxHealth
+			if respawnHealth == 0 {
+				respawnHealth = 1
+			}
+			if key.InstanceID == 0 {
+				s.scheduleCreatureRespawn(ctx, uint32(key.GUID&0x00FFFFFF), respawnHealth, time.Now())
+			} else {
+				s.scheduleInstanceCreatureRespawn(ctx, ct, respawnHealth, time.Now())
+			}
+		}
 		// TempSummon corpse/dead legs: a creature attacker/holder runs
 		// no session funnel, so stamp here; the session arm above
 		// already stamps via the onCreatureKilled tail.

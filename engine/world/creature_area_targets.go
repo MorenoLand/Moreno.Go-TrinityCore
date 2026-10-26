@@ -1776,6 +1776,32 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, victimGUID, liveX, liveY, liveZ)
 		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, victimGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
 		s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, victimGUID)
+		// Unit::Kill's death chain (Unit.cpp:11320 setDeathState
+		// JUST_DIED, :11385-11391 KilledUnit/JustDied): the strip
+		// precedes the hooks, so the taken-proc leg below evaluates
+		// an empty set on lethal arms — matching C++ (DealDamage
+		// calls Kill before ProcSkillsAndAuras) and the pet branch.
+		// The channel-death-item leg rides ahead of the strip, as on
+		// the boss_ai/pet no-funnel paths.
+		s.auraMu.Lock()
+		var deathAuras []*activeAura
+		for _, aura := range s.activeCreatureAuras[victimKey] {
+			deathAuras = append(deathAuras, aura)
+		}
+		s.auraMu.Unlock()
+		s.grantChannelDeathItems(ctx, deathAuras, uint32(victimLevel), true, live.TapPlayerGUID, live.TapGroupID)
+		s.clearCreatureAurasOnDeath(victimKey)
+		s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, victimGUID)
+		// KilledUnit branch arm, plus the pet-arm double dispatch
+		// for a player-owned caster (the session funnel's rule).
+		if motion.OwnerGUID != 0 {
+			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+		}
+		s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+		s.fireCreatureDiedByCreature(ctx, live, motion)
+		if live.BossAI != nil {
+			live.BossAI.OnDied(ctx, s, live)
+		}
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -1789,10 +1815,11 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586): the
 	// victim-side taken proc half, with PROC_FLAG_TAKEN_DAMAGE ORed by
 	// the non-immune damage arm (Spell.cpp:2545); the immune arm bypasses
-	// the OR (Spell.cpp:2540-2546). Runs on lethal and non-lethal
-	// arms alike, like the pet creature branch (the return trip's lethal
-	// skip is self-hit-specific: the caster's own auras are stripped
-	// before DoDamageAndTriggers runs).
+	// the OR (Spell.cpp:2540-2546). On lethal arms the killed branch
+	// above already stripped the victim's auras, so this leg evaluates
+	// an empty set — matching C++ (DealDamage calls Kill before
+	// ProcSkillsAndAuras) and the pet branch; the return trip's lethal
+	// skip is the same strip, self-hit-specific there.
 	// createProcHitMask (Unit.cpp:10227-10246): a fully absorbed,
 	// fully resisted, or fully blocked hit carries no normal/critical
 	// bit, a partial block adds the block bit, and an immune hit
@@ -1876,6 +1903,21 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 				}
 			}
 			s.motionMu.Unlock()
+		}
+	}
+	// Creature::RemoveCorpse schedules the respawn for every death
+	// (boss_ai.go precedent: the owner path gets it from
+	// onCreatureKilled); placed ahead of the dead-leg stamp, so the
+	// respawn legs run before the stamp like on that path.
+	if killed && live != nil {
+		respawnHealth := maxHealth
+		if respawnHealth == 0 {
+			respawnHealth = 1
+		}
+		if live.InstanceID == 0 {
+			s.scheduleCreatureRespawn(ctx, uint32(victimGUID&0x00FFFFFF), respawnHealth, time.Now())
+		} else {
+			s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: victimGUID, Map: motion.Map, InstanceID: live.InstanceID, X: liveX, Y: liveY, Z: liveZ, Health: 0, MaxHealth: maxHealth, Level: victimLevel}, respawnHealth, time.Now())
 		}
 	}
 	// TempSummon corpse/dead legs (TemporarySummon.cpp:66-170): this
@@ -2865,6 +2907,9 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 		if live.ThreatMgr != nil {
 			live.ThreatMgr.ClearThreat()
 		}
+		if live.BossAI == nil {
+			live.BossAI = getBossAIForCreature(live, live.ScriptName)
+		}
 	} else {
 		live.Health -= damage
 	}
@@ -2889,6 +2934,31 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			unitFieldDynamicFlags: unitDynFlagLootable,
 		})
 		s.broadcastThreatClearInInstance(mapID, instanceID, guid)
+		// Unit::Kill death chain for the self-trip, gated on
+		// killCredit == nil like the stamp below: a credited trip
+		// already runs the full chain via the session funnel, and
+		// the strip here is what the lethal taken-proc skip above
+		// assumes (C++ strips the caster's auras in Unit::Kill before
+		// DoDamageAndTriggers runs).
+		if reflector.killCredit == nil {
+			s.auraMu.Lock()
+			var deathAuras []*activeAura
+			for _, aura := range s.activeCreatureAuras[motionKey] {
+				deathAuras = append(deathAuras, aura)
+			}
+			s.auraMu.Unlock()
+			s.grantChannelDeathItems(ctx, deathAuras, motion.Level, true, live.TapPlayerGUID, live.TapGroupID)
+			s.clearCreatureAurasOnDeath(motionKey)
+			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+			if motion.OwnerGUID != 0 {
+				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+			}
+			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+			s.fireCreatureDiedByCreature(ctx, live, motion)
+			if live.BossAI != nil {
+				live.BossAI.OnDied(ctx, s, live)
+			}
+		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})
 		}
@@ -2896,6 +2966,20 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 		// stand-up target is the reflector (alive), and the hook
 		// has no caster-alive gate in C++ (Spell.cpp:2631-2632).
 		standUpReflectorAndFireHook()
+		// Creature::RemoveCorpse schedules the respawn for every death
+		// (boss_ai.go precedent); gated on killCredit == nil like the
+		// stamp — a credited trip already respawns via the funnel.
+		if reflector.killCredit == nil {
+			respawnHealth := live.MaxHealth
+			if respawnHealth == 0 {
+				respawnHealth = 1
+			}
+			if instanceID == 0 {
+				s.scheduleCreatureRespawn(ctx, uint32(guid&0x00FFFFFF), respawnHealth, time.Now())
+			} else {
+				s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Health: 0, MaxHealth: live.MaxHealth, Level: uint8(live.Level)}, respawnHealth, time.Now())
+			}
+		}
 		// TempSummon corpse/dead legs: a creature reflector credits no
 		// player, so no session funnel stamps the caster's own death
 		// (player reflectors already stamp via the killCredit funnel).

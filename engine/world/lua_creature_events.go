@@ -3719,6 +3719,43 @@ func (s *session) fireCreatureDied(ctx context.Context, motion *creatureMotion) 
 	}
 }
 
+// fireCreatureDiedByCreature is the server-side twin of session.fireCreatureDied
+// for creatures killed outside the session funnel (inline creature-spell,
+// damage-shield/split, reflect self-trip kills): C++ (Eluna::JustDied,
+// CreatureHooks.cpp:143-152) fires On_Reset (23) then ON_DIED (4) with
+// (event, creature, killer), and SummonedCreatureDies (21) on the summoner
+// when the victim is a temp summon. The session twin pushes s.luaPlayer()
+// as killer because every funneled killer is player-owned; here the killer
+// is the creature motion, or nil when the attacker motion is gone.
+func (s *Server) fireCreatureDiedByCreature(ctx context.Context, motion, killer *creatureMotion) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	var killerObj *scripting.Object
+	if killer != nil {
+		killerObj = s.luaMotionCreature(killer)
+	}
+	resetArgs := []any{scripting.CreatureEventOnReset, creature}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
+	diedArgs := []any{scripting.CreatureEventOnDied, creature, killerObj}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
+	if motion.OwnerGUID != 0 {
+		if summoner := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.OwnerGUID); summoner != nil {
+			if summonerObj := s.luaMotionCreature(summoner); summonerObj != nil {
+				summonDiedArgs := []any{scripting.CreatureEventOnSummonedCreatureDied, summonerObj, creature, killerObj}
+				_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, summoner.Entry, scripting.CreatureEventOnSummonedCreatureDied, summonDiedArgs...)
+				_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, summoner.GUID, summoner.InstanceID, scripting.CreatureEventOnSummonedCreatureDied, summonDiedArgs...)
+			}
+		}
+	}
+}
+
 // fireCreatureTargetDied dispatches Eluna CREATURE_EVENT_ON_TARGET_DIED (3)
 // when a creature kills another unit. C++ (Eluna::KilledUnit,
 // CreatureHooks.cpp:156-163, reached via ElunaCreatureAI::KilledUnit,
