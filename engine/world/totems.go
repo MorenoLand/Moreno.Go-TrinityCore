@@ -112,6 +112,9 @@ var totemDefinitions = map[uint32]TotemDef{
 	// Stoneclaw Totem
 	5730: {SpellID: 5730, SlotID: TotemSlotEarth, Entry: 3579, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
 
+	// Earth Elemental Totem
+	2062: {SpellID: 2062, SlotID: TotemSlotEarth, Entry: 15353, DurationMs: 120000, PulseType: TotemPulseNone, Radius: 0, PulseSecs: 0},
+
 	// --- Fire Totems (Slot 1) ---
 	// Searing Totem
 	3599:  {SpellID: 3599, SlotID: TotemSlotFire, Entry: 2523, DurationMs: 60000, PulseType: TotemPulseSingleTarget, PulseSpell: 3606, Radius: 20.0, PulseSecs: 2},
@@ -144,6 +147,9 @@ var totemDefinitions = map[uint32]TotemDef{
 	// Fire Elemental Totem
 	2894: {SpellID: 2894, SlotID: TotemSlotFire, Entry: 15439, DurationMs: 120000, PulseType: TotemPulseNone, Radius: 0, PulseSecs: 0},
 
+	// Frost Resistance Totem
+	8181: {SpellID: 8181, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+
 	// --- Water Totems (Slot 2) ---
 	// Healing Stream Totem
 	5394:  {SpellID: 5394, SlotID: TotemSlotWater, Entry: 3572, DurationMs: 300000, PulseType: TotemPulseHeal, PulseSpell: 52042, Radius: 30.0, PulseSecs: 2},
@@ -171,6 +177,9 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Mana Tide Totem
 	16190: {SpellID: 16190, SlotID: TotemSlotWater, Entry: 10467, DurationMs: 12000, PulseType: TotemPulseBuff, BuffSpell: 16178, Radius: 30.0, PulseSecs: 3},
+
+	// Fire Resistance Totem
+	8184: {SpellID: 8184, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
 
 	// --- Air Totems (Slot 3) ---
 	// Windfury Totem
