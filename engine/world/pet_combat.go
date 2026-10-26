@@ -3272,8 +3272,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
-				areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos)
-				areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos)
+				areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
+				areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
 			}
 			if hasFriendlyAreaEffect(spell) {
 				var playerChecks, creatureChecks map[uint64]uint8

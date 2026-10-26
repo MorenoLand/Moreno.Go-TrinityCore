@@ -197,6 +197,7 @@ type friendlyCandidate struct {
 	alliance   bool   // players: same alliance as the caster
 	class      uint8  // players only; 0 = unknown (creatures)
 	isPlayer   bool
+	isGM       bool    // players: IsGameMaster (Object.cpp:3104)
 	ownerGUID  uint64  // creatures: charmer/owner resolution (Unit.cpp:12126)
 	entry      uint32  // creatures: template entry (0 for players)
 	reach      float32 // combat reach: GetDistance(Position) minus this, floored 0
@@ -247,7 +248,7 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		visit(friendlyCandidate{guid: targetSession.playerGUID, mapID: p.Map, instanceID: p.InstanceID,
 			x: p.X, y: p.Y, z: p.Z, unitFlags: p.UnitFlags, health: p.Health,
 			alliance: targetSession.playerAlliance() == s.playerAlliance(), class: p.Class, isPlayer: true,
-			reach: p.CombatReach})
+			isGM: sessionIsGameMaster(targetSession), reach: p.CombatReach})
 	}
 	s.server.sessionsMu.RUnlock()
 	if playersOnly {
@@ -276,11 +277,15 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 
 // friendlyAssistOK mirrors the ally terms of WorldObject::IsValidAssistTarget
 // (Object.cpp:3087) used by TARGET_CHECK_ALLY/PARTY/RAID/RAID_CLASS: alive,
-// not combat-disabled, non-hostile. GM exclusion, visibility and vehicle terms
-// have no Go infra (same noted gap as the area path), and totem units are not
+// not combat-disabled, non-hostile, and never a GM (Object.cpp:3104; the
+// self arm at :3087 precedes it, so the caster itself is exempt).
+// Visibility and vehicle terms have no Go infra, and totem units are not
 // tracked in Go (TARGET_CHECK_* all reject totems in C++).
 func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caster playerPos, allyOf func(faction uint32) bool) bool {
 	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, true) {
+		return false
+	}
+	if c.isPlayer && c.isGM && c.guid != caster.GUID {
 		return false
 	}
 	if c.isPlayer {

@@ -3085,21 +3085,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// destination in the GO packet; C++ SendSpellGo writes
 					// m_targets (Spell.cpp:4338). Resolved the same way
 					// castCreatureSpellInternal does.
-					if dx, dy, dz, ok := s.resolveCreatureSpellDestination(motion, spellInfo, target.GUID); ok {
+					destX, destY, destZ, hasDest := s.resolveCreatureSpellDestination(motion, spellInfo, target.GUID)
+					if hasDest {
 						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
-						spellTarget.Destination = protocol.SpellTargetLocation{X: dx, Y: dy, Z: dz}
+						spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
 					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): a
 					// creature-cast AoE hits every enemy in the area, so the
 					// GO packet's hit list extends past the wire victim.
-					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, target) {
+					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, target, destX, destY, destZ, hasDest) {
 						areaHits = append(areaHits, areaHit)
 						hitTargets = append(hitTargets, areaHit.GUID)
 					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the
 					// area also picks enemy creatures (creatureAIAreaEnemyCreatures),
 					// not just enemy players — their GUIDs join the GO hit list too.
-					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, target) {
+					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, target, destX, destY, destZ, hasDest) {
 						areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
 						hitTargets = append(hitTargets, areaCreatureGUID)
 					}

@@ -277,6 +277,14 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
 			continue
 		}
+		// WorldObject::IsValidAssistTarget (Object.cpp:3104): a GM
+		// player can never be assisted, so GM sessions never join
+		// the area-ally sweep (sessionIsGameMaster twin); the self
+		// arm (Object.cpp:3087) precedes it, so the caster itself
+		// is exempt.
+		if targetSession.playerGUID != s.playerGUID && sessionIsGameMaster(targetSession) {
+			continue
+		}
 		p := targetSession.player
 		accept(targetSession.playerGUID, p.Map, p.InstanceID, p.X, p.Y, p.Z,
 			p.UnitFlags, 0, p.Health,

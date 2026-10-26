@@ -17,7 +17,7 @@ import (
 // spellAreaEnemyTargets rather than refactoring either: both twins are
 // live and behavior-verified, and the creature sweep below is the only
 // new consumer. A later tick may fold the twins onto it.
-func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spell, victim *playerPos) (radius float32, cone, backCone bool, centerX, centerY, centerZ float32) {
+func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spell, destX, destY, destZ float32, hasDest bool) (radius float32, cone, backCone bool, centerX, centerY, centerZ float32) {
 	destinationCenter := false
 	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone
 	// direction is C++-custom-attr driven — CU_CONE_BACK (set in
@@ -83,13 +83,14 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 	}
 	// SelectImplicitAreaTargets (Spell.cpp:1227-1270): CASTER/SRC reference
 	// types center on the caster; DEST reference types center on the
-	// destination. The creature path never resolves a dest packet field, so a
-	// DEST-ref area falls back to the wire target's position — the same
-	// fallback the player twin applies for target-dest on the creature
-	// path.
+	// destination (m_targets.GetDstPos, Spell.cpp:1267). The resolved
+	// destination rides in from the call site (inline GO-packet dest,
+	// pet-path dest); without one CheckDst seeds the dst at the caster
+	// (Spell.cpp:6523), never at the wire victim — the old victim
+	// fallback centered DEST areas on the target instead.
 	centerX, centerY, centerZ = motion.X, motion.Y, motion.Z
-	if destinationCenter {
-		centerX, centerY, centerZ = victim.X, victim.Y, victim.Z
+	if destinationCenter && hasDest {
+		centerX, centerY, centerZ = destX, destY, destZ
 	}
 	return radius, cone, backCone, centerX, centerY, centerZ
 }
@@ -112,7 +113,7 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 // C++ caps the merged player+creature area list (Spell.cpp:1293), so a
 // mixed area can exceed the cap by the overlap — the same approximation
 // the player twin already makes for its own list.
-func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos) []uint64 {
+func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, destX, destY, destZ float32, hasDest bool) []uint64 {
 	if s == nil || motion == nil || victim == nil || !isAreaEnemySpell(spell) {
 		return nil
 	}
@@ -122,7 +123,7 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 	if spellSearchPlayersOnly(spell) {
 		return nil
 	}
-	radius, cone, backCone, centerX, centerY, centerZ := s.creatureAIAreaGeometry(motion, spell, victim)
+	radius, cone, backCone, centerX, centerY, centerZ := s.creatureAIAreaGeometry(motion, spell, destX, destY, destZ, hasDest)
 	if radius <= 0 {
 		return nil
 	}
@@ -203,7 +204,7 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 // full selection and every enemy unit in the area becomes a hit target.
 // Returns the extra player hits (the wire victim is excluded) as positions
 // with sessions attached, in an unspecified order.
-func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos) []*playerPos {
+func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, destX, destY, destZ float32, hasDest bool) []*playerPos {
 	if s == nil || motion == nil || victim == nil || !isAreaEnemySpell(spell) {
 		return nil
 	}
@@ -277,13 +278,12 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	}
 	// SelectImplicitAreaTargets (Spell.cpp:1227-1270): CASTER/SRC reference
 	// types center on the caster; DEST reference types center on the
-	// destination. The inline path never resolves a dest packet field, so a
-	// DEST-ref area falls back to the wire target's position — the same
-	// fallback the dest-family twin applies for target-dest on the creature
-	// path.
+	// destination (m_targets.GetDstPos, Spell.cpp:1267). The resolved
+	// destination rides in from the call site; without one CheckDst seeds
+	// the dst at the caster (Spell.cpp:6523), never at the wire victim.
 	centerX, centerY, centerZ := motion.X, motion.Y, motion.Z
-	if destinationCenter {
-		centerX, centerY, centerZ = victim.X, victim.Y, victim.Z
+	if destinationCenter && hasDest {
+		centerX, centerY, centerZ = destX, destY, destZ
 	}
 	seen := map[uint64]struct{}{victim.GUID: {}}
 	var hits []*playerPos
