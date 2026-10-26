@@ -151,9 +151,10 @@ end
 -- list (lua_creature_events.go); the flame-wreath arm already uses it.
 local function randomPlayer(creature, maxDist)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= maxDist then
+                and creature:GetDistance(p) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = p
         end
     end

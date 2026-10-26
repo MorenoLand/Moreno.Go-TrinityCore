@@ -124,9 +124,10 @@ end
 -- loop below is a C++ map-player loop, not a SelectTarget pool.
 local function randomAlivePlayerInRange(creature, maxDist)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= maxDist then
+                and creature:GetDistance(p) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = p
         end
     end
@@ -365,12 +366,13 @@ local function randomNonTankPlayerInRange(creature, maxDist)
     end
 
     local targets = creature:GetAITargets()
+    local reach = creature:GetCombatReach()
     local candidates = {}
     for i, p in ipairs(targets) do
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= maxDist then
+                and creature:GetDistance(p) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = p
         end
     end
