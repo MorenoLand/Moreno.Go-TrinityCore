@@ -119,8 +119,9 @@
 -- EVENT_CALL_FLAMES (:354-358) — SelectTarget(Random, 0, 100.0f,
 --   playerOnly) -> DoCast(target, SPELL_CALL_FLAMES 48258),
 --   non-triggered, init {10s,20s} / re-arm {10s,20s} unconditional
---   (outside the target-if, C++-exact); the 100yd filter is a plain
---   GetDistance check on the threat-list pool (PORTED 2026-10-25).
+--   (outside the target-if, C++-exact); the 100yd filter is an
+--   IsWithinCombatRange gate (UnitAI.cpp:273 + Unit.cpp:583), twinned
+--   as d - ownReach < range (target reach unbridged, skadi idiom).
 -- UpdateAI :244-252 — the one-shot HealthBelowPct(50) latch ->
 --   SACRIFICING, ported on event 9 with the postDamage > 0 guard
 --   (nefarian-form rule — C++ UpdateAI is post-damage) and strict <
@@ -276,9 +277,10 @@ local svalaState = {}
 -- randomFrostTombTarget precedent).
 local function randomPlayerInRange(creature, range)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player"
-                and not p:IsDead() and creature:GetDistance(p) <= range then
+                and not p:IsDead() and creature:GetDistance(p) - reach < range then
             candidates[#candidates + 1] = p
         end
     end

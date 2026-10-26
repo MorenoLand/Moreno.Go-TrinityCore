@@ -204,11 +204,19 @@ local function randomPlayer(creature, minDist, manaOnly)
         victimGuid = victim:GetGUID()
     end
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for i, unit in ipairs(creature:GetAITargets()) do
+        local dist = creature:GetDistance(unit)
+        local pastMin
+        if manaOnly then
+            pastMin = dist > minDist
+        else
+            pastMin = dist - reach >= minDist
+        end
         if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and not unit:IsDead()
-                and creature:GetDistance(unit) > minDist
+                and pastMin
                 and (not manaOnly or unit:GetPowerType() == POWER_MANA)
                 and (manaOnly or unit:GetObjectType() == "Player") then
             candidates[#candidates + 1] = unit
@@ -258,7 +266,9 @@ local function onManaVoid(creature, guid)
 end
 
 -- C++ :720 EVENT_COLUMN_OF_FROST — SelectTarget(Random, 1, -10.0f, true):
--- random player, min 10 yd, threat head excluded (position=1).
+-- negative dist rejects IsWithinCombatRange(10) (UnitAI.cpp:276-277), so
+-- the pool is raw >= 10 + reaches; twinned d - ownReach >= 10 (the mana
+-- arm keeps the raw GetDistance > 15 predicate, :169, exact).
 local function onColumnOfFrost(creature, guid)
     local target = randomPlayer(creature, 10.0)
     if target then
@@ -284,10 +294,10 @@ end
 
 -- C++ npc_blazing_skeleton::Reset — EVENT_FIREBALL {2s,4s},
 -- EVENT_LEY_WASTE {15s,20s} (:745-749); fireball gated on
--- !IsWithinMeleeRange — 5-yd check (the venoxis precedent).
+-- !IsWithinMeleeRange (C++ :767), bridged (lua_creature_events.go:3144).
 local function onFireball(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) > 5 then
+    if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_FIREBALL)
     end
     schedule(guid, "fireball", {2000, 4000}, function() onFireball(creature, guid) end)

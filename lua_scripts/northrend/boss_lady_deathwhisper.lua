@@ -954,8 +954,9 @@ end
 -- the flag re-arms 30s later (EVENT_DARNAVAN_SHATTERING_THROW :930).
 -- Then the CHARGE leg: when _canCharge and the victim is outside melee
 -- range, DoCastVictim(SPELL_CHARGE 65927) fires and the flag re-arms 20s
--- later (EVENT_DARNAVAN_CHARGE :928). IsWithinMeleeRange is modeled
--- via creature:GetDistance (the skeram precedent).
+-- later (EVENT_DARNAVAN_CHARGE :928). IsWithinMeleeRange is bridged
+-- (lua_creature_events.go:3144); the old raw > 5.0 stand-in dropped
+-- the reach band (Unit.cpp:599-618).
 local function onDarnavanChargePoll(creature, guid)
     if darnavanCanShatter[guid] then
         local victim = creature:GetVictim()
@@ -971,7 +972,7 @@ local function onDarnavanChargePoll(creature, guid)
     end
     if darnavanCanCharge[guid] then
         local victim = creature:GetVictim()
-        if victim and creature:GetDistance(victim) > 5.0 then
+        if victim and not creature:IsWithinMeleeRange(victim) then
             creature:CastSpell(nil, SPELL_CHARGE)
             darnavanCanCharge[guid] = false
             schedule(guid, "chargerearm", 20000, function()
