@@ -91,7 +91,7 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 0
--- takes any entry, position 1 skips the MaxThreat head BEFORE the
+-- takes any entry, position 1 skips the current victim BEFORE the
 -- player/dist filters (offset-before-filter, svalna idiom); dead entries
 -- are offline refs in C++ (skipped at list build) so they are filtered
 -- here. minDist models C++'s negative SelectTarget dist ("at least
@@ -100,15 +100,19 @@ end
 -- exclusion are retired (threat-list precedent, Oct-25 strips).
 local function randomThreatPlayer(creature, minDist, maxDist, skipFirst)
     local targets = creature:GetAITargets()
-    local start = 1
+    local victimGuid = nil
     if skipFirst then
-        start = 2
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
     end
     local found = {}
-    for i = start, #targets do
-        local t = targets[i]
+    for i, t in ipairs(targets) do
         local d = creature:GetDistance(t)
-        if t:GetObjectType() == "Player" and not t:IsDead()
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and d >= minDist
                 and (not maxDist or d <= maxDist) then
             found[#found + 1] = t

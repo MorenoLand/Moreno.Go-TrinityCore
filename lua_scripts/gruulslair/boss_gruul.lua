@@ -36,8 +36,8 @@
 -- "little time to undo the shatter damage" arm), non-triggered
 -- self-cast shatter 33654, performing=false (see deviations — C++
 -- clears this flag in the SpellHitTarget arm). Else: hurtful
--- strike — pick = alive-filtered GetAITargets()[2] (C++
--- SelectTarget(MaxThreat, 1), second-highest threat — curator
+-- strike — pick = first alive non-victim GetAITargets entry (C++
+-- SelectTarget(MaxThreat, 1) — curator
 -- convention, threat-sorted list); if pick exists AND gruul is within
 -- melee range of his victim (creature:IsWithinMeleeRange)
 -- -> DoCast(pick, 33813)
@@ -77,7 +77,7 @@
 -- arms unmodeled (MoveIdle is NOT SetCombatMovement: the twin's own
 -- note restricts it to pre-combat calls, so neither mid-combat leg
 -- ports via that flag); the hurtful-strike MaxThreat
--- pick is GetAITargets()[2] (curator convention) and the
+-- pick is the first alive non-victim GetAITargets entry (curator convention) and the
 -- IsWithinMeleeRange gate is creature:IsWithinMeleeRange; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
 -- IsNonMeleeSpellCast queue gate unmodeled, timers fire
 -- unconditionally (jeklik convention); no SpellScript bridge —
@@ -173,20 +173,32 @@ local function gruulTick(creature, guid)
             -- leg has no movement bridge and stays out.
         end
     else
-        -- Hurtful Strike: SelectTarget(MaxThreat, 1) = the second
-        -- ALIVE entry of the threat-sorted GetAITargets list (offline
-        -- refs skipped before the offset; curator convention); the
+        -- Hurtful Strike: SelectTarget(MaxThreat, 1) = the first
+        -- ALIVE non-victim entry of the threat-sorted GetAITargets
+        -- list (C++ builds the list victim-first, so the offset pop
+        -- removes the victim; offline refs skipped before the offset;
+        -- curator convention); the
         -- IsWithinMeleeRange(victim) gate uses
         -- creature:IsWithinMeleeRange (gruul hurtful convention).
         st.hurtful = st.hurtful - 1000
         if st.hurtful <= 0 then
+            local victimForPick = creature:GetVictim()
+            local victimGuid = nil
+            if victimForPick ~= nil then
+                victimGuid = victimForPick:GetGUID()
+            end
             local alive = {}
             for _, t in ipairs(creature:GetAITargets()) do
-                if not t:IsDead() then
+                if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
                     alive[#alive + 1] = t
                 end
             end
-            local pick = alive[2]
+            local pick = nil
+            if victimGuid ~= nil then
+                pick = alive[1]
+            else
+                pick = alive[2]
+            end
             local victim = creature:GetVictim()
             if pick and victim and creature:IsWithinMeleeRange(victim) then
                 creature:CastSpell(pick, SPELL_HURTFUL_STRIKE)

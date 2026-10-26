@@ -483,18 +483,25 @@ end
 -- bridged — engine/world/lua_player.go:203, hakkar precedent); the
 -- triggered flag rides the arlokk CastSpell(target, id, true) idiom.
 -- C++ SelectTarget(Random,1,0.0f,true,true,SPELL_TWILIGHT_REALM
--- 74807): threat list, position-1 offset pops the MaxThreat-ordered
--- first entry BEFORE the player/aura filters (UnitAI.h
+-- 74807): threat list, position-1 offset pops the current victim
+-- BEFORE the player/aura filters (C++ builds the list victim-first,
+-- UnitAI.h
 -- offset-before-filter; eck precedent), then Player + alive +
 -- HasAura(74807). The old GetPlayersInWorld instance pool + victim
 -- exclusion could pick players never engaged with the boss
 -- (2026-10-25 fix, same class as the obsidian/baltharus pools).
 local function randomTwilightPlayer(creature)
     local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and t:IsAlive()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and t:IsAlive()
                 and t:HasAura(SPELL_TWILIGHT_REALM) then
             candidates[#candidates + 1] = t
         end

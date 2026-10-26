@@ -106,22 +106,38 @@ end
 -- unit excluding the threat head: UnitAI.h SelectTargetList builds the
 -- list skipping OFFLINE refs (dead targets go offline via
 -- ShouldBeOffline -> _IsTargetAcceptable UNIT_STATE_DIED), then pops the
--- first MaxThreat entry (offset), then predicate-filters. Lua twin:
--- alive-filter first, then skip-first, then random pick (the eck
--- offset-before-filter precedent); playerOnly=false default, so
+-- first entry — the current victim (offset), then predicate-filters. Lua twin:
+-- alive-filter first, then victim exclusion, then random pick
+-- (C++ builds the list victim-first, so the offset pop removes the
+-- victim, UnitAI.h; Go's threat-sorted list needs the victim-GUID
+-- exclusion — an index drop diverges when the victim is not top
+-- threat); playerOnly=false default, so
 -- non-players qualify (midnight precedent).
 local function randomNonTankThreatTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() then
+        if t:IsAlive() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             candidates[#candidates + 1] = t
         end
     end
-    -- C++ shortcut: threat list size <= offset ignores ALL elements.
-    if #candidates <= 1 then
+    -- C++ shortcut: threat list size <= offset ignores ALL elements;
+    -- with no victim the offset pop removes the first (top-threat)
+    -- entry, so the nil-victim path still drops candidates[1].
+    if victimGuid == nil then
+        if #candidates <= 1 then
+            return nil
+        end
+        return candidates[1 + math.random(#candidates - 1)]
+    end
+    if #candidates == 0 then
         return nil
     end
-    return candidates[1 + math.random(#candidates - 1)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ EVENT_FROZEN_ORB (:76-82): me->CastSpell(me,

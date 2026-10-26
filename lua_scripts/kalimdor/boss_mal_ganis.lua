@@ -162,17 +162,24 @@ end
 
 -- Threat-list pools (Oct-25 CoS strip idiom, meathook precedent):
 -- C++ SelectTarget draws the threat list (UnitAI.h), the offset
--- skipping the first MaxThreat entries BEFORE the filters.
+-- skipping the current victim BEFORE the filters (C++ builds the
+-- list victim-first, UnitAI.h; Go's list is threat-sorted, so the
+-- victim-GUID exclusion models the pop, nil victim falls back to
+-- dropping the first entry).
 local function randomThreatPlayer(creature, maxDist, skipFirst)
     local targets = creature:GetAITargets()
-    local start = 1
+    local victimGuid = nil
     if skipFirst then
-        start = 2
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
     end
     local found = {}
-    for i = start, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and creature:GetDistance(t) <= maxDist then
             found[#found + 1] = t
         end
@@ -185,14 +192,18 @@ end
 
 local function randomThreatUnit(creature, maxDist, skipFirst)
     local targets = creature:GetAITargets()
-    local start = 1
+    local victimGuid = nil
     if skipFirst then
-        start = 2
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
     end
     local found = {}
-    for i = start, #targets do
-        local t = targets[i]
-        if not t:IsDead() and creature:GetDistance(t) <= maxDist then
+    for i, t in ipairs(targets) do
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not t:IsDead() and creature:GetDistance(t) <= maxDist then
             found[#found + 1] = t
         end
     end

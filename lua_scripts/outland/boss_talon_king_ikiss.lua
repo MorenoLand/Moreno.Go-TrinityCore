@@ -131,16 +131,26 @@ local function polymorphTick(creature, guid)
         target = randomThreatTarget(creature)
     else
         -- C++ SelectTarget(MaxThreat, 1) (playerOnly defaults FALSE per
-        -- UnitAI.h:170): the second ALIVE threat-list entry (offline refs
-        -- skipped before the offset), pets/totems eligible — NOT the
-        -- second-highest-threat player.
+        -- UnitAI.h:170): the first ALIVE non-victim threat-list entry
+        -- (C++ builds the list victim-first, so the offset pop removes
+        -- the victim; offline refs skipped before the offset),
+        -- pets/totems eligible — NOT the second-highest-threat player.
+        local victim = creature:GetVictim()
+        local victimGuid = nil
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
         local alive = {}
         for _, t in ipairs(creature:GetAITargets()) do
-            if not t:IsDead() then
+            if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
                 alive[#alive + 1] = t
             end
         end
-        target = alive[2]
+        if victimGuid ~= nil then
+            target = alive[1]
+        else
+            target = alive[2]
+        end
     end
     if target then
         creature:CastSpell(target, SPELL_POLYMORPH)

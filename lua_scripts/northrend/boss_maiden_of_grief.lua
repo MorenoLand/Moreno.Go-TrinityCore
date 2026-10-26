@@ -142,19 +142,28 @@ end
 -- UpdateAI runs with a victim, so engage-seeding is
 -- behavior-identical (the krystallus precedent).
 -- C++ SelectTarget draws the threat list (UnitAI.h), not the
--- instance-player pool; offset 1 skips the threat head BEFORE the
--- player filter (UnitAI.h:214-280, eck/bronjahm precedent) — the old
--- victim-GUID exclusion was wrong whenever top threat != victim.
+-- instance-player pool; offset 1 pops the current victim BEFORE the
+-- player filter (UnitAI.h builds the list victim-first, then the
+-- sorted threat list; Go's list is threat-sorted, so the victim-GUID
+-- exclusion models the pop — an index drop diverges whenever the
+-- victim is not top threat).
 -- skipFirst=true serves PILLAR (offset 1); false serves PARTING
 -- (offset 0, tank eligible). The else-leg DoCastVictim (:127) is the
 -- nil-target fallback.
 local function randomPlayerTarget(creature, skipFirst)
-    local start = skipFirst and 2 or 1
     local targets = creature:GetAITargets()
+    local victimGuid = nil
+    if skipFirst then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
+    end
     local candidates = {}
-    for i = start, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead() then
+    for i, t in ipairs(targets) do
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead() then
             candidates[#candidates + 1] = t
         end
     end

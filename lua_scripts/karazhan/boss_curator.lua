@@ -27,8 +27,8 @@
 -- deterministic drain clock (10 summons, ~100s) — no Lua-side model. ApplySpellImmune(arcane damage)
 -- from Reset is bridged (creature:ApplySpellImmune, lua_creature_events.go)
 -- and ported at onReset below; InterruptNonMeleeSpells(false) before
--- Evocation is bridged (no-op twin, lua_creature_events.go) and ported in onAstralFlare below. Hateful Bolt's SelectTarget(MaxThreat, 1) — second-highest threat,
--- i.e. a non-tank — is PORTED via the alive-filtered GetAITargets()[2] (threat-ordered,
+-- Evocation is bridged (no-op twin, lua_creature_events.go) and ported in onAstralFlare below. Hateful Bolt's SelectTarget(MaxThreat, 1) — highest-threat non-victim
+-- — is PORTED via the alive-filtered, victim-excluded GetAITargets list (threat-ordered,
 -- lua_creature_events.go; the stale "no threat model" note is retracted).
 
 local ENTRY = 15691
@@ -84,21 +84,34 @@ local function cancelKey(guid, key)
 end
 
 -- C++ EVENT_HATEFUL_BOLT: SelectTarget(MaxThreat, 1), all defaults (no
--- range cap, playerOnly false, withTank true) — the second entry of the
--- threat-ordered GetAITargets list; nil when fewer than 2 entries (C++
--- returns nullptr when the threat list size <= offset). C++ SelectTargetList
--- skips offline refs BEFORE the offset (UnitAI.h; ThreatManager
--- ShouldBeOffline via UNIT_STATE_DIED, Creature.cpp) — the Go list
--- carries dead entries, so filter alive first, then take [2] (midnight
--- dead-filter precedent).
+-- range cap, playerOnly false, withTank true) — the first surviving entry of the
+-- threat-ordered GetAITargets list. C++ SelectTargetList builds the
+-- list victim-first (UnitAI.h), so the offset-1 pop removes the victim
+-- and MaxThreat returns the first surviving entry: the highest-threat
+-- non-victim (second-highest only when the victim is top threat).
+-- Offline refs are skipped BEFORE the offset — the Go list carries
+-- dead entries, so filter alive + exclude the victim first, then take
+-- [1]; with no victim the pop removes the first entry, so take [2].
+-- Nil when the surviving list is empty (C++ returns nullptr when the
+-- threat list size <= offset).
 local function onHatefulBolt(creature, guid)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local alive = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() then
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             alive[#alive + 1] = t
         end
     end
-    local target = alive[2]
+    local target = nil
+    if victimGuid ~= nil then
+        target = alive[1]
+    else
+        target = alive[2]
+    end
     if target then
         creature:CastSpell(target, SPELL_HATEFUL_BOLT)
     end
