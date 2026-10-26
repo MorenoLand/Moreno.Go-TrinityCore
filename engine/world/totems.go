@@ -37,32 +37,34 @@ const (
 )
 
 type TotemDef struct {
-	SpellID    uint32
-	SlotID     uint8
-	Entry      uint32
-	DurationMs uint32
-	PulseType  TotemPulseType
-	BuffSpell  uint32
-	PulseSpell uint32
-	Radius     float32
-	PulseSecs  int
+	SpellID     uint32
+	SlotID      uint8
+	Entry       uint32
+	DurationMs  uint32
+	PulseType   TotemPulseType
+	BuffSpell   uint32
+	DebuffSpell uint32
+	PulseSpell  uint32
+	Radius      float32
+	PulseSecs   int
 }
 
 type activeTotem struct {
-	mu         sync.Mutex
-	SlotID     uint8
-	SpellID    uint32
-	TotemGUID  uint64
-	Entry      uint32
-	OwnerGUID  uint64
-	Map        uint32
-	InstanceID uint32
-	X, Y, Z    float32
-	DurationMs uint32
-	BuffSpell  uint32
-	CreatedAt  time.Time
-	StopChan   chan struct{}
-	Stopped    bool
+	mu          sync.Mutex
+	SlotID      uint8
+	SpellID     uint32
+	TotemGUID   uint64
+	Entry       uint32
+	OwnerGUID   uint64
+	Map         uint32
+	InstanceID  uint32
+	X, Y, Z     float32
+	DurationMs  uint32
+	BuffSpell   uint32
+	DebuffSpell uint32
+	CreatedAt   time.Time
+	StopChan    chan struct{}
+	Stopped     bool
 	// LastPingVictim is the sentry-totem ping arm's acquisition memory
 	// (TotemAI::AttackStart, TotemAI.cpp:84-96): the ping fires once per
 	// newly acquired hostile, so the GUID is remembered until the totem
@@ -168,10 +170,10 @@ var totemDefinitions = map[uint32]TotemDef{
 	// Totem of Wrath (Fire slot per glyph script m_SummonSlot[1];
 	// aura radius 40 per the aura pages; aura IDs cross-checked against
 	// bot_shaman_ai.cpp commented ranks 57658/57660/57662/57663)
-	30706: {SpellID: 30706, SlotID: TotemSlotFire, Entry: 17539, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57658, Radius: 40.0, PulseSecs: 2},
-	57720: {SpellID: 57720, SlotID: TotemSlotFire, Entry: 30652, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57660, Radius: 40.0, PulseSecs: 2},
-	57721: {SpellID: 57721, SlotID: TotemSlotFire, Entry: 30653, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57662, Radius: 40.0, PulseSecs: 2},
-	57722: {SpellID: 57722, SlotID: TotemSlotFire, Entry: 30654, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57663, Radius: 40.0, PulseSecs: 2},
+	30706: {SpellID: 30706, SlotID: TotemSlotFire, Entry: 17539, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57658, DebuffSpell: 30708, Radius: 40.0, PulseSecs: 2},
+	57720: {SpellID: 57720, SlotID: TotemSlotFire, Entry: 30652, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57660, DebuffSpell: 30708, Radius: 40.0, PulseSecs: 2},
+	57721: {SpellID: 57721, SlotID: TotemSlotFire, Entry: 30653, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57662, DebuffSpell: 30708, Radius: 40.0, PulseSecs: 2},
+	57722: {SpellID: 57722, SlotID: TotemSlotFire, Entry: 30654, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57663, DebuffSpell: 30708, Radius: 40.0, PulseSecs: 2},
 
 	// --- Water Totems (Slot 2) ---
 	// Healing Stream Totem
@@ -271,6 +273,53 @@ func (s *Server) totemCreatureTargets(totem *activeTotem, radius float64) []*cre
 	}
 	s.motionMu.Unlock()
 	return targets
+}
+
+// applyTotemEnemyDebuff registers one Totem of Wrath enemy-debuff record
+// on a hostile creature motion, caster-keyed to the totem: the record feeds
+// creatureAuraModifierSum for SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
+// (197) once the DBC row resolves, mirroring the pet-aura insertion shape
+// (same-spell replacement, both aura maps). No expiry timer: the pulse
+// re-applies it and destroyTotemGUID sweeps it, matching the area-aura
+// lifetime (it lives while the totem lives).
+func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, spellID uint32, ownerLevel uint8) {
+	if s == nil || s.server == nil || totem == nil || m == nil || spellID == 0 {
+		return
+	}
+	key := creatureAuraKeyForMotion(m)
+	if key.GUID == 0 {
+		return
+	}
+	s.server.auraMu.Lock()
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[key] == nil {
+		s.server.activeCreatureAuras[key] = make(map[uint32]*activeAura)
+	}
+	if s.server.creatureAuras == nil {
+		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
+	}
+	if s.server.creatureAuras[key] == nil {
+		s.server.creatureAuras[key] = make(map[uint32]struct{})
+	}
+	slot := uint8(len(s.server.activeCreatureAuras[key]))
+	if previous := s.server.activeCreatureAuras[key][spellID]; previous != nil {
+		previous.Stopped = true
+		if previous.Timer != nil {
+			previous.Timer.Stop()
+		}
+		if previous.TickTimer != nil {
+			previous.TickTimer.Stop()
+		}
+		s.server.unregisterSingleCastAura(previous)
+		slot = previous.Slot
+	}
+	aura := &activeAura{SpellID: spellID, AuraType: spellAuraModAttackerSpellAndWeaponCritChance, EffectMask: 1, CasterGUID: totem.TotemGUID, TargetGUID: m.GUID, TargetKey: key, Amount: 3, CasterLevel: ownerLevel, StoredCasterLevel: ownerLevel, DurationMs: totem.DurationMs, RemainingMs: totem.DurationMs, Positive: false, StackCount: 1, Slot: slot}
+	aura.Amounts[0] = 3
+	s.server.activeCreatureAuras[key][spellID] = aura
+	s.server.creatureAuras[key][spellID] = struct{}{}
+	s.server.auraMu.Unlock()
 }
 
 // totemDisplayForRace bridges the race-dependent display arm of
@@ -398,20 +447,21 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	}
 
 	totem := &activeTotem{
-		SlotID:     slot,
-		SpellID:    def.SpellID,
-		TotemGUID:  totemGUID,
-		Entry:      def.Entry,
-		OwnerGUID:  s.playerGUID,
-		Map:        s.player.Map,
-		InstanceID: s.player.InstanceID,
-		X:          totemX,
-		Y:          totemY,
-		Z:          totemZ,
-		DurationMs: def.DurationMs,
-		BuffSpell:  def.BuffSpell,
-		CreatedAt:  time.Now(),
-		StopChan:   make(chan struct{}),
+		SlotID:      slot,
+		SpellID:     def.SpellID,
+		TotemGUID:   totemGUID,
+		Entry:       def.Entry,
+		OwnerGUID:   s.playerGUID,
+		Map:         s.player.Map,
+		InstanceID:  s.player.InstanceID,
+		X:           totemX,
+		Y:           totemY,
+		Z:           totemZ,
+		DurationMs:  def.DurationMs,
+		BuffSpell:   def.BuffSpell,
+		DebuffSpell: def.DebuffSpell,
+		CreatedAt:   time.Now(),
+		StopChan:    make(chan struct{}),
 	}
 
 	if s.server != nil {
@@ -744,6 +794,26 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 					}
 				}
 				s.server.sessionsMu.RUnlock()
+			}
+		}
+		// Totem of Wrath enemy leg: Totem::InitSummon casts the totem's
+		// second template spell on itself (Totem.cpp:118-120), and spell
+		// 30708 is the WotLK enemy debuff (chance to be critically hit
+		// +3%, 40yd). The C++ area-aura model applies it to enemies in
+		// radius while the totem lives, so each pulse re-applies it to
+		// hostiles in radius (covering enemies that enter later), and
+		// destroyTotemGUID sweeps it when the totem dies.
+		if def.DebuffSpell > 0 && s.server != nil {
+			var ownerLevel uint8
+			if s.player != nil {
+				ownerLevel = s.player.Level
+			}
+			owner := totemOwnerPos(s)
+			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+				if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+					continue
+				}
+				s.applyTotemEnemyDebuff(totem, m, def.DebuffSpell, ownerLevel)
 			}
 		}
 
@@ -1532,6 +1602,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 
 	var totemGUID uint64
 	var buffSpell uint32
+	var debuffSpell uint32
 	var creatingSpellID uint32
 	var totemEntry uint32
 	var mapID, instanceID uint32
@@ -1550,6 +1621,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 				}
 				totemGUID = totem.TotemGUID
 				buffSpell = totem.BuffSpell
+				debuffSpell = totem.DebuffSpell
 				creatingSpellID = totem.SpellID
 				totemEntry = totem.Entry
 				mapID, instanceID = totem.Map, totem.InstanceID
@@ -1601,6 +1673,25 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 			}
 		}
 		s.server.sessionsMu.RUnlock()
+	}
+
+	// The enemy-debuff leg leaves with the totem: area-aura applications
+	// drop when the caster aura dies, so every creature record cast by
+	// this totem's debuff spell is removed here, keyed on caster GUID
+	// plus spell. Removal runs outside auraMu since removeCreatureAura
+	// takes it itself.
+	if debuffSpell > 0 && totemGUID != 0 && s.server != nil {
+		s.server.auraMu.Lock()
+		var deadKeys []creatureAuraKey
+		for key, auras := range s.server.activeCreatureAuras {
+			if aura, ok := auras[debuffSpell]; ok && aura != nil && aura.CasterGUID == totemGUID {
+				deadKeys = append(deadKeys, key)
+			}
+		}
+		s.server.auraMu.Unlock()
+		for _, key := range deadKeys {
+			s.server.removeCreatureAura(key, debuffSpell)
+		}
 	}
 
 	// Totem::UnSummon (Totem.cpp:150-152): every totem unsummon — expiry,
