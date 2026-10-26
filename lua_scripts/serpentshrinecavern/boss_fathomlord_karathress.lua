@@ -200,9 +200,16 @@ local function randomThreatTargetSkipFirst(creature)
     end
     local targets = creature:GetAITargets()
     local out = {}
-    for i, unit in ipairs(targets) do
-        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, unit in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = unit:GetGUID() == victimGuid
+        elseif not unit:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and not unit:IsDead() then
             out[#out + 1] = unit
         end

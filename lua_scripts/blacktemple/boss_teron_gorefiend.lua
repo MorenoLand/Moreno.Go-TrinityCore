@@ -163,9 +163,16 @@ local function randomShadowDeathTarget(creature)
 
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i, p in ipairs(targets) do
-        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, p in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = p:GetGUID() == victimGuid
+        elseif not p:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 100 -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
                 and not p:HasAura(SPELL_SPIRITUAL_VENGEANCE) then

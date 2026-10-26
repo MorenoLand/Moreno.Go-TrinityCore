@@ -245,9 +245,16 @@ local function randomChargeTarget(creature)
     end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i, t in ipairs(targets) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and not t:IsDead()
                 and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 100 then
             candidates[#candidates + 1] = t

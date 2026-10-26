@@ -1440,9 +1440,16 @@ local function romuloLunge(creature, guid)
     end
     local targets = creature:GetAITargets()
     local reach = creature:GetCombatReach()
-    for i, unit in ipairs(targets) do
-        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, unit in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = unit:GetGUID() == victimGuid
+        elseif not unit:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - reach - 1.5 < 100 then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             pool[#pool + 1] = unit

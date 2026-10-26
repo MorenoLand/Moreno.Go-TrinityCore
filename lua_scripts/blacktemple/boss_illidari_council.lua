@@ -263,14 +263,21 @@ local function hammerJusticeTarget(creature)
     local candidates = {}
     local targets = creature:GetAITargets()
     local reach = creature:GetCombatReach()
-    for i, u in ipairs(targets) do
+    local aliveSeen = 0
+    for _, u in ipairs(targets) do
         local d = creature:GetDistance(u)
         local targetReach = 1.5
         if u:GetObjectType() ~= "Player" then
             targetReach = u:GetCombatReach()
         end
-        if ((victimGuid ~= nil and u:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+        local skip = false
+        if victimGuid ~= nil then
+            skip = u:GetGUID() == victimGuid
+        elseif not u:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and not u:IsDead() and d - reach - targetReach >= 10 and d - reach - targetReach < 40 then -- HammerTargetSelector IsInRange band (Object.cpp:1329; reach-exact: own + target reaches)
             candidates[#candidates + 1] = u
         end

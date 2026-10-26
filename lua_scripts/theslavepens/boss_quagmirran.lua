@@ -104,9 +104,18 @@ local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
         end
     end
     local pool = {}
-    for i, t in ipairs(targets) do
-        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if skipFirst then
+            if victimGuid ~= nil then
+                skip = t:GetGUID() == victimGuid
+            elseif not t:IsDead() then
+                aliveSeen = aliveSeen + 1
+                skip = aliveSeen == 1
+            end
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and not t:IsDead()
                 and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             pool[#pool + 1] = t

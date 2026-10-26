@@ -126,9 +126,16 @@ local function randomNonVictimPlayer(creature)
 
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i, t in ipairs(targets) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetTypeId() == 4 and not t:IsDead()
                 and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < TARGET_RANGE then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
