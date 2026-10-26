@@ -2313,10 +2313,12 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 // (the Go creature path's resolved dest, else the caster's position). Like
 // the Transmitted/InstaKill legs above, C++ executes effects in effect-index
 // order; this path groups by effect instead (documented approximation).
-// Only the default WILD/ALLY/UNK leg (SpellEffects.cpp:2319-2341) is
-// bridged: the SummonGuardian (pet/guardian/minion titles, Flags&512),
-// charm (PUPPET), vehicle, totem/lightwell, and minipet arms have no Go
-// model — the multi-summon property-ID list (SpellEffects.cpp:2225-2242)
+// Only the default WILD/ALLY/UNK leg (SpellEffects.cpp:2319-2341) and the
+// TOTEM arm (SpellEffects.cpp:2319-2342, Map::SummonCreature Totem
+// creation, Object.cpp:1890-2003) are bridged: the SummonGuardian
+// (pet/guardian/minion titles, Flags&512), charm (PUPPET), vehicle,
+// lightwell, and minipet arms have no Go model — the multi-summon
+// property-ID list (SpellEffects.cpp:2225-2242)
 // keys on the effect's damage value, which this path does not model, so
 // numSummons is always 1 (documented delta). The timed/dead summon-type
 // choice (SpellEffects.cpp:2322) uses the bridge's 0-based scheme; the
@@ -2366,11 +2368,13 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		switch props.Title {
 		case summonTitlePet, summonTitleGuardian, summonTitleMinion, summonTitleGuardian2:
 			continue // SummonGuardian arms (SpellEffects.cpp:2255-2259)
-		case summonTitleTotem, summonTitleLightwell, summonTitleMinipet, summonTitleVehicle, summonTitleVehicle2:
-			continue // totem/lightwell/minipet/vehicle arms unmodeled
+		case summonTitleLightwell, summonTitleMinipet, summonTitleVehicle, summonTitleVehicle2:
+			continue // lightwell/minipet/vehicle arms unmodeled
 		}
-		// Default leg (SpellEffects.cpp:2319-2341): timed when the spell
-		// duration is positive, dead-despawn otherwise.
+		// Default/TOTEM leg: timed when the spell duration is positive,
+		// dead-despawn otherwise (SpellEffects.cpp:2319-2341; the Totem's
+		// m_duration expiry is the timed twin — a duration-0 Totem
+		// unsummons on its first C++ Update, unmodeled here).
 		summonType := uint8(tempSummonDeadDespawn)
 		var despawnMs uint32
 		if duration > 0 {
@@ -2385,11 +2389,20 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		if summoned == nil {
 			continue
 		}
-		if props.Control == summonCategoryAlly {
+		// Minion::InitStats (TemporarySummon.cpp:341-360) stamps the Totem's
+		// creator and faction from its owner unconditionally, so the TOTEM
+		// arm takes the ALLY faction stamp whatever the properties Control
+		// is; the GUID register makes the summon visible to the
+		// isTotemGUID gates. TotemAI pulses, the Mana Tide (16190) health
+		// arm, and the effect-damage health arm have no model on this path.
+		if props.Control == summonCategoryAlly || props.Title == summonTitleTotem {
 			s.motionMu.Lock()
 			summoned.OwnerGUID = m.GUID
 			summoned.Faction = m.Faction
 			s.motionMu.Unlock()
+		}
+		if props.Title == summonTitleTotem {
+			s.registerCreatureTotemGUID(summoned.GUID)
 		}
 		log := protocol.NewBuffer(32)
 		log.WritePackedGUID(m.GUID)

@@ -645,6 +645,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	}
 	delete(s.motionMapLocked(mapID, instanceID), guid)
 	s.motionMu.Unlock()
+	s.unregisterCreatureTotemGUID(guid)
 	s.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid})
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)

@@ -515,7 +515,7 @@ const (
 	summonTitlePet       = 1  // SUMMON_TYPE_PET — SummonGuardian arm, no pet model
 	summonTitleGuardian  = 2  // SUMMON_TYPE_GUARDIAN — SummonGuardian arm
 	summonTitleMinion    = 3  // SUMMON_TYPE_MINION — SummonGuardian arm
-	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM — totem arm, no totem model on this path
+	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM — totem arm (creature path models it; session path uses summonTotem)
 	summonTitleMinipet   = 5  // SUMMON_TYPE_MINIPET — no minipet model
 	summonTitleGuardian2 = 6  // SUMMON_TYPE_GUARDIAN2 — SummonGuardian arm
 	summonTitleVehicle   = 9  // SUMMON_TYPE_VEHICLE — no vehicle model

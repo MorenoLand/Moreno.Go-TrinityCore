@@ -1266,6 +1266,16 @@ func (s *Store) SummonProperties(id uint32) (SummonProperties, bool, error) {
 	if props.Flags, err = record.Uint32(5); err != nil {
 		return SummonProperties{}, false, err
 	}
+	// SpellMgr::LoadSpellInfoCorrections (SpellMgr.cpp:5011-5014) patches
+	// these rows at load: 121 and 647 summon Totems (shaman totems, spell
+	// 52893) and 628 (Hungry Plaguehound) is a PET summon, whatever the
+	// DBC rows carry.
+	if props.ID == 121 || props.ID == 647 {
+		props.Title = 4 // SUMMON_TYPE_TOTEM
+	}
+	if props.ID == 628 {
+		props.Control = 2 // SUMMON_CATEGORY_PET
+	}
 	return props, true, nil
 }
 

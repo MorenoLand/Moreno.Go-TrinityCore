@@ -1208,7 +1208,37 @@ func (srv *Server) isTotemGUID(guid uint64) bool {
 			}
 		}
 	}
+	if _, ok := srv.creatureTotemGUIDs[guid]; ok {
+		return true
+	}
 	return false
+}
+
+// registerCreatureTotemGUID records a creature-cast TOTEM-arm summon so
+// the isTotemGUID gates cover it; unregistered on timed expiry
+// (expireTempSummonGuardian). Guarded by totemMu, the totem lifecycle
+// mutex (threat.go lock-order note: totemMu before motionMu).
+func (srv *Server) registerCreatureTotemGUID(guid uint64) {
+	if srv == nil || guid == 0 {
+		return
+	}
+	srv.totemMu.Lock()
+	defer srv.totemMu.Unlock()
+	if srv.creatureTotemGUIDs == nil {
+		srv.creatureTotemGUIDs = make(map[uint64]struct{})
+	}
+	srv.creatureTotemGUIDs[guid] = struct{}{}
+}
+
+// unregisterCreatureTotemGUID drops a creature-cast totem from the gate
+// set; a no-op for GUIDs never registered.
+func (srv *Server) unregisterCreatureTotemGUID(guid uint64) {
+	if srv == nil || guid == 0 {
+		return
+	}
+	srv.totemMu.Lock()
+	defer srv.totemMu.Unlock()
+	delete(srv.creatureTotemGUIDs, guid)
 }
 
 // totemOwnerSessionGUID returns the owner player GUID of a live totem, for
