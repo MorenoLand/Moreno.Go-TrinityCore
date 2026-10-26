@@ -15650,6 +15650,24 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 	}
 
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split legs run
+	// INSIDE CalcAbsorbResist, ahead of the log — damageInfo.AbsorbDamage
+	// folds each split into absorb, so the log carries post-split damage
+	// with split-inclusive absorb. Previously the split ran after the log
+	// (both branches below), overstating logged damage and understating
+	// absorb whenever a split aura was present. The share leg stays
+	// where it is: it lives in DealDamage (Unit.cpp:766-788), after the
+	// log send. Skipped on instakill kills (the NODAMAGE guard, Unit.cpp:742).
+	if damage > 0 && !instantKill {
+		preSplit := damage
+		if isPlayerVictim {
+			damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
+		} else {
+			damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
+		}
+		absorbed += preSplit - damage
+	}
+
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
@@ -15765,14 +15783,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// matching C++ sending SMSG_SPELLNONMELEEDAMAGELOG before DealDamage
 			// (Spell.cpp:2542).
 			damage = playerSess.negateGodModeDamage(damage)
-			// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage
-			// auras (81/153) redirect part of the damage to the aura's
-			// caster, ahead of the 300 share leg. Both legs sit inside
-			// Unit::DealDamage's damagetype != NODAMAGE guard (Unit.cpp:742),
-			// so an instakill kill (NODAMAGE) applies neither.
-			if damage > 0 && !instantKill {
-				damage = s.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
-			}
+			// The split leg now runs ahead of the log (CalcAbsorbResist
+			// tail above); only the share leg remains here, inside
+			// DealDamage, skipped on instakill kills (the NODAMAGE
+			// guard, Unit.cpp:742).
 			// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 			if damage > 0 && !instantKill {
 				s.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, s.playerGUID, damage, uint32(schoolMask))
@@ -15867,13 +15881,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		}
 	}
 
-	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
-	// redirect part of the damage to the aura's caster, ahead of the 300
-	// share leg. Both legs are skipped on an instakill kill (the NODAMAGE
-	// guard, Unit.cpp:742).
-	if damage > 0 && !instantKill {
-		damage = s.server.splitDamageToCaster(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))
-	}
+	// The split leg now runs ahead of the log (CalcAbsorbResist tail
+	// above); only the share leg remains here, skipped on instakill
+	// kills (the NODAMAGE guard, Unit.cpp:742).
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if damage > 0 && !instantKill {
 		s.splitShareDamagePct(ctx, target.GUID, false, creatureAuraKeyForTarget(target), s.playerGUID, damage, uint32(schoolMask))

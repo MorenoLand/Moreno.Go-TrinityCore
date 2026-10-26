@@ -821,6 +821,120 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if s == nil || motion == nil || reflector == nil || damage == 0 {
 		return
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2560): the
+	// return trip is a full direct-damage hit on the caster itself — the
+	// attacker (m_originalCaster) and the victim (the retargeted
+	// _spellHitTarget, Spell.cpp:2350) are both the motion, so the
+	// CalculateSpellDamageTaken pipeline runs on the motion's own
+	// legs, in the pet-path creature-victim order (pet_combat.go):
+	// taken multiplier, armor, block, resilience, AutoBalance, then
+	// the CalcAbsorbResist tail (resist, absorb). The old code dealt
+	// the raw base damage with zero absorbed/resisted in the log.
+	motionKey := creatureAuraKeyForMotion(motion)
+	stats := s.loadCreatureStats(ctx, motion.Entry)
+	// DoDamageAndTriggers' first arm (Spell.cpp:2538-2546): a
+	// damage-immune victim takes nothing and sends no log. The
+	// spell-immune trips never reach here — a non-NONE ReflectResult
+	// already nulled them in the verdict — so this only catches the
+	// mixed-effect damage-immune edge. An immune trip still runs the
+	// proc loop below, like C++'s trigger block on the zeroed hit.
+	damageImmune := creatureImmuneToDamageSpell(s, motionKey, spell, uint32(schoolMask))
+	var absorbed, resisted, blocked uint32
+	if !damageImmune {
+		if spell.ID != 0 {
+			damage = creatureSpellDamageBonusTaken(s, damage, spell, uint32(schoolMask), motionKey, nil, 1.0)
+		}
+		isHybrid := schoolMask&spellSchoolMaskNormal != 0 && schoolMask&0x7E != 0
+		if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 && !isHybrid &&
+			(spell.ID == 0 || spell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			armor := s.creatureIgnoreTargetResistArmorForSpell(motionKey, s.liveCreatureArmor(motionKey, motion, float64(stats.Armor)), spell, spell.ID != 0)
+			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), damage)
+		}
+		if damage > 0 && spell.ID != 0 {
+			// Position.cpp:122-124: a unit is always in its own arc,
+			// so the self-attacker sits in front by definition; the
+			// helper's arc test cannot express identity, hence the
+			// one-yard facing offset on the attacker position.
+			victimTarget := combatTarget{
+				GUID:        motion.GUID,
+				Map:         motion.Map,
+				InstanceID:  motion.InstanceID,
+				X:           motion.X,
+				Y:           motion.Y,
+				Orientation: motion.Orientation,
+				Level:       uint8(motion.Level),
+			}
+			attackerX := motion.X + float32(math.Cos(float64(motion.Orientation)))
+			attackerY := motion.Y + float32(math.Sin(float64(motion.Orientation)))
+			if b, ok := s.spellTakenBlockAmountFrom(victimTarget, false, nil, spell, damage, uint8(maxUint32(motion.Level, 1)), attackerX, attackerY); ok {
+				blocked = b
+				damage -= b
+			}
+		}
+		if damage > 0 {
+			resilCR := uint8(CombatRatingCritTakenSpell)
+			if spell.ID != 0 && spell.DefenseType != spellDamageClassMagic {
+				if spellWeaponAttackType(spell) == protocol.RangedAttack {
+					resilCR = CombatRatingCritTakenRanged
+				} else {
+					resilCR = CombatRatingCritTakenMelee
+				}
+			}
+			if s.creatureVictimTakesResilience(motion) && s.creatureCasterCanApplyResilience(motion) {
+				if ownerSess := s.ownerPlayerSessionOfMotion(motion); ownerSess != nil {
+					ownerSess.applyResilienceToDamage(true, &damage, false, resilCR)
+				}
+			}
+		}
+		damage = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, damage)
+		preResistDmg := damage
+		if damage > 0 && schoolMask > 1 {
+			mask123 := uint32(schoolMask)
+			if mask123&0x7E != 0 {
+				mask123 &^= 1
+			}
+			var targetResistMod int32
+			for _, amount := range s.creatureAuraTypeAmountsByMiscMask(motionKey, spellAuraModTargetResistance, mask123) {
+				targetResistMod += amount
+			}
+			hybridArmorReduced := uint32(0)
+			if isHybrid {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(motionKey, s.liveCreatureArmor(motionKey, motion, float64(stats.Armor)), spell, spell.ID != 0)
+				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), damage)
+			}
+			resistances := s.petFoldedResistances(motionKey, stats.Resistances)
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), true, false, 0, spellResistInput{
+				ignoreResistances:  spell.ID != 0 && spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             spell.ID != 0 && spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybrid,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    targetResistMod,
+			})
+		}
+		if damage > 0 {
+			bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(motionKey, uint32(schoolMask), spell.ID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = s.applyCreatureAbsorptionShields(motionKey, pool, schoolMask)
+			damage += bypass
+		}
+		// CalcAbsorbResist's split legs are vacuous here: the split
+		// helper early-returns when victim == attacker, and both are
+		// the motion. The 300 share leg is not: it runs on the
+		// post-absorb damage via the reflector's session as the
+		// vehicle (victimIsPlayer=false, so no session fields are
+		// read), mirroring the inline direct-hit order (share ahead
+		// of the health mutation).
+		if damage > 0 && reflector.Sess != nil {
+			reflector.Sess.splitShareDamagePct(ctx, motion.GUID, false, motionKey, motion.GUID, damage, uint32(schoolMask))
+		}
+	} else {
+		damage = 0
+	}
 	s.motionMu.Lock()
 	live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID)
 	if live == nil || live.Health == 0 {
@@ -849,11 +963,13 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if killed {
 		overkill = damage - healthBefore
 	}
-	logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask)
-	if reflector.Sess != nil {
-		_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+	if !damageImmune {
+		logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask, absorbed, resisted, 0, blocked)
+		if reflector.Sess != nil {
+			_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+		}
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, reflector.Sess)
 	}
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, reflector.Sess)
 	if killed {
 		s.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{
@@ -866,7 +982,9 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 		}
 		return
 	}
-	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: newHealth})
+	if !damageImmune {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: newHealth})
+	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586): the
 	// return trip's _spellHitTarget is the caster itself (Spell.cpp:2350),
 	// so Unit::ProcSkillsAndAuras(caster, caster, procAttacker, procVictim,
