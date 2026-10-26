@@ -34,6 +34,7 @@ const (
 	playerFlagPVPTimer           uint32 = 0x00040000
 	playerFlagTaxiBenchmark      uint32 = 0x00020000 // PLAYER_FLAGS_TAXI_BENCHMARK (Player.h:350)
 	playerFlagContestedPVP       uint32 = 0x00000100
+	playerFlagUber               uint32 = 0x00080000 // PLAYER_FLAGS_UBER (Player.h:352)
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
 	characterCustomizeFaction    uint32 = 0x00010000

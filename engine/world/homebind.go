@@ -40,6 +40,22 @@ func sessionIsGameMaster(s *session) bool {
 	return (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0
 }
 
+// sessionIsUber mirrors the caster-side PLAYER_FLAGS_UBER arm of
+// WorldObject::IsValidAttackTarget (Object.cpp:2977): a player attacker
+// carrying UBER cannot attack anything. No server code sets UBER (the
+// CMSG_GM_UBERINVIS handler is Handle_NULL and SetGameMaster sets GM,
+// not UBER), so the bit can only arrive via a stale characters row —
+// but Go loads PlayerFlags from that row and neither codebase clears
+// UBER at login, so the arm is live for such rows. It fires only in
+// IsValidAttackTarget, never in IsValidAssistTarget, so it gates
+// TARGET_CHECK_ENEMY selections only, never assist-family ones.
+func sessionIsUber(s *session) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	return s.player.PlayerFlags&playerFlagUber != 0
+}
+
 // sendRaidGroupOnly mirrors the two SMSG_RAID_GROUP_ONLY forms in
 // UpdateHomebindTime: (remainingMs, 1) shows the countdown reminder,
 // (0, 0) hides it.

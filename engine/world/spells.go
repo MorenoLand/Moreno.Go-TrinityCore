@@ -1150,6 +1150,12 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	if s == nil || s.player == nil || s.server == nil || !isAreaEnemySpell(spell) || s.server.Data == nil {
 		return nil
 	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:2977): a UBER-flagged
+	// player attacker cannot attack, so the TARGET_CHECK_ENEMY sweep
+	// selects nothing.
+	if sessionIsUber(s) {
+		return nil
+	}
 	radius := float32(0)
 	cone := false
 	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone

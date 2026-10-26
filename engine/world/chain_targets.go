@@ -240,6 +240,13 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // conditions, DEFAULT/PASSENGER apply no faction filter. Range uses the C++
 // cylinder test (IsWithinDist2d + |dz| <= range).
 func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
+	// WorldObject::IsValidAttackTarget (Object.cpp:2977): a UBER-flagged
+	// player attacker cannot attack, so an ENEMY chain selects no jump
+	// targets. Assist-family chains route through IsValidAssistTarget,
+	// which carries no UBER arm, and are untouched.
+	if checkType == targetCheckEnemy && sessionIsUber(s) {
+		return nil
+	}
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})

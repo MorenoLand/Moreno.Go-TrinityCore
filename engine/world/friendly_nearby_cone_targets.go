@@ -101,6 +101,12 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0, false
 	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:2977): a UBER-flagged
+	// player attacker cannot attack, so the TARGET_CHECK_ENEMY search
+	// selects nothing and the cast fails (Spell.cpp:1111).
+	if sessionIsUber(s) {
+		return 0, false
+	}
 	rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex)
 	if err != nil || !ok || rangeEntry.MaxHostile <= 0 {
 		return 0, false
