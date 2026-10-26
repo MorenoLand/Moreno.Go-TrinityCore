@@ -4415,6 +4415,77 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 	})
 }
 
+// firePetSpellMissNodmgProcs fires the no-damage proc arm for a missed
+// pet-cast direct hit: the launch loop's twin (spells.go) for the pet
+// path, which returned before every proc site on hitInfo 0x01. C++
+// DoProcessTargetContainer runs DoDamageAndTriggers once per TargetInfo
+// including misses (Spell.cpp:3561-3571); a missed target's m_damage stays
+// 0, so it lands on the no-damage arm (Spell.cpp:2560-2575) with
+// createProcHitMask on the fresh damageInfo carrying the miss kind
+// (Unit.cpp:10179-10247). The done side fires on the pet caster's own
+// auras with the done-side positivity fallback; the taken side fires on
+// the victim -- the session helper for player victims, the creature twin
+// for creature/pet/vehicle victims resolved through the motion map. The
+// explicit-effects carve-out mirrors the launch loop (CanExecuteTriggersOnHit
+// needs a non-zero effect mask, Spell.cpp:8164-8174; a pet miss kind is
+// never IMMUNE, so no IMMUNE carve-out applies), and a player victim inside
+// its own proc evaluation fires nothing on either side (the launch loop's
+// procDeep gate). Return trips never reach this arm: the miss roll is gated
+// on target != caster, so missKind stays NONE there.
+func (s *session) firePetSpellMissNodmgProcs(ctx context.Context, caster *creatureMotion, target combatTarget, spellID uint32, miss uint8, triggered bool) {
+	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || miss == protocol.SpellMissNone {
+		return
+	}
+	if target.GUID == caster.GUID {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	if spellHasHealEffect(spell) {
+		return
+	}
+	hasExplicitEffects := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 && eff.Aura == 0 {
+			continue
+		}
+		hasExplicitEffects = true
+		break
+	}
+	if !hasExplicitEffects {
+		return
+	}
+	if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.procDeep > 0 {
+		return
+	}
+	spellCopy := spell
+	if typeMask := spellNoDmgHealProcTypeMask(spell, spellDamageNoDmgPositive(spell)); typeMask != procFlagNone {
+		schoolMask := spell.SchoolMask
+		if schoolMask == 0 {
+			schoolMask = 1
+		}
+		s.server.fireCreatureAuraProcLoop(ctx, caster, target.GUID, procEventInfo{
+			typeMask:       typeMask,
+			schoolMask:     uint32(schoolMask),
+			spellTypeMask:  procSpellTypeNoDmgHeal,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        spellNoDmgMissProcHitMask(miss, false, false),
+			triggered:      triggered,
+			eventSpell:     &spellCopy,
+			actorGUID:      caster.GUID,
+		})
+	}
+	if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+		victim.procSpellDamageNoDmgTakenAuraTriggers(ctx, caster.GUID, spellID, miss, false, triggered, false, 0)
+	} else if high := uint16(target.GUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.fireCreatureMissNodmgTakenProcs(ctx, motion, caster.GUID, spellCopy, miss, triggered, 0)
+		}
+	}
+}
+
 // countDoTsByCaster mirrors Unit::GetDoTsByCaster (Unit.cpp:4808-4832): the
 // number of SPELL_AURA_PERIODIC_DAMAGE (3) /
 // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (89) aura effects applied to the victim
@@ -4684,6 +4755,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// on the pet path too.
 	blocked := uint32(0)
 	fullBlock := false
+	missKind := protocol.SpellMissNone
 	if target.GUID != caster.GUID {
 		// WorldObject::MagicSpellHitResult (Object.cpp:2555): the caster's
 		// m_modSpellHitChance arm runs for any unit caster — the pet's live
@@ -4712,6 +4784,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 		miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit)
 		if miss != protocol.SpellMissNone {
+			missKind = miss
 			damage = 0
 			hitInfo = 0x01
 		} else if petSpellKnown {
@@ -4719,12 +4792,14 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm runs for pet-cast
 			// spells too (pet debuff spells carry aura effects).
 			if s.spellDebuffResisted(ctx, petSpell, targetGUID, s.server.findSessionByGUID(target.GUID)) {
+				missKind = protocol.SpellMissResist
 				damage = 0
 				hitInfo = 0x01
 			} else if s.spellDeflectedByVictim(ctx, targetGUID, s.server.findSessionByGUID(target.GUID), caster.X, caster.Y) {
 				// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604):
 				// the SPELL_AURA_DEFLECT_SPELLS (287) arm runs for
 				// pet-cast spells too (any unit caster).
+				missKind = protocol.SpellMissDeflect
 				damage = 0
 				hitInfo = 0x01
 			}
@@ -5098,6 +5173,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// ahead of the god return and the strips — the player arm fires it
 		// like the creature arm below.
 		if hitInfo&0x01 != 0 {
+			s.firePetSpellMissNodmgProcs(ctx, caster, target, spellID, missKind, triggered)
 			return
 		}
 		if isPlayerVictim {
