@@ -1501,6 +1501,35 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				return
 			}
 		}
+		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a
+		// creature caster: TARGET_UNIT_NEARBY_ENTRY (38) /
+		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) replace the wire hit list
+		// with the single nearest entry-matched target — the explicit
+		// target is not in C++'s target list unless another effect adds
+		// it (SelectExplicitTargets only redirects, Spell.cpp:729-757) —
+		// and a miss fails the cast (Spell.cpp:1111), silent here like
+		// the 46 destFailed arm above. The pick also becomes the chain
+		// anchor below (SelectImplicitNearbyTargets ends with
+		// SelectImplicitChainTargets on the picked target, Spell.cpp:1173).
+		// A spell carrying both 38 and 40 takes the 38 leg only, the
+		// session twin's precedence; the GO leg for dual spells is a
+		// residual. The packet's explicit target (spellTarget) stays the
+		// wire target, mirroring C++ m_targets.
+		if isEntryNearbySpell(spellInfo) {
+			if nearby, ok := s.creatureEntryNearbyTarget(ctx, m, spellInfo); ok {
+				hitTargets = []uint64{nearby}
+				targetGUID = nearby
+			} else {
+				return
+			}
+		} else if isGONearbyEntrySpell(spellInfo) {
+			if nearby, ok := s.creatureEntryNearbyGOTarget(ctx, m, spellInfo); ok {
+				hitTargets = []uint64{nearby}
+				targetGUID = nearby
+			} else {
+				return
+			}
+		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
 		// SelectTargets removal leg (Spell.cpp:807-830) for a creature

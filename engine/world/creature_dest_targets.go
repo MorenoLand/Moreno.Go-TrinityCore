@@ -333,3 +333,205 @@ func (s *Server) creatureEntryNearbyDestPosition(ctx context.Context, m *creatur
 	}
 	return bestX, bestY, bestZ, true
 }
+
+// creatureEntryNearbyTarget ports the UNIT half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
+// TARGET_UNIT_NEARBY_ENTRY (38) for a creature caster, mirroring the
+// session twin spellEntryNearbyTarget: the single nearest unit within
+// GetMaxRange(IsPositive()) passing SpellInfo::CheckTarget and the FIRST
+// 38 effect's implicit-target conditions (Spell.cpp:885-900 merge model,
+// as for the session twin; later effects with different lists select
+// separately in C++, a multi-target residual Go's single-target list
+// cannot carry). The faction switch in WorldObjectSpellTargetCheck
+// (Spell.cpp:8316) has no TARGET_CHECK_ENTRY case, so only the CheckTarget
+// terms apply: alive unless the spell allows dead targets
+// (SpellInfo.cpp:1715), not combat-disabled. There is no focus fallback
+// for UNIT (the Spell.cpp:1065 emergency case covers GOBJ and DEST only).
+// Candidates are player sessions, creature motions (the caster motion
+// itself included — C++ visits the caster's own grid cell, as in the 46
+// twin) and static DB creature spawns without motions. Distance is
+// GetDistance (Object.cpp:1175): 3D distance minus the candidate's combat
+// reach, floored at 0 — static spawns carry no reach term. The pick then
+// takes the session twin's CheckEffectTarget LOS gate
+// (implicitUnitTargetLOSPassesForMotion, Spell.cpp:2098/7395): a
+// LOS-blocked pick fails instead of rescanning, the session precedent.
+// No match returns false and the caller fails the cast with
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+func (s *Server) creatureEntryNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
+	if s == nil || m == nil {
+		return 0, false
+	}
+	maxRange := s.creatureEntryNearbyObjectRange(m, spell)
+	if maxRange <= 0 {
+		return 0, false
+	}
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, firstEntryImplicitEffectMask(spell, implicitTargetNearbyEntry))
+	allowPlayers, allowCreatures := implicitTargetEntryMask(condRows)
+	// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842): the UNIT base mask
+	// narrows to PLAYER|CORPSE under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so creature candidates drop out
+	// (corpses have no Go model).
+	if spellSearchPlayersOnly(spell) {
+		allowCreatures = false
+	}
+	allowDead := spellAllowsDeadTarget(spell)
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	var bestX, bestY, bestZ float32
+	consider := func(guid uint64, x, y, z, reach float32) {
+		dist := float64(distance3D(x, y, z, m.X, m.Y, m.Z)) - float64(reach)
+		if dist < 0 {
+			dist = 0
+		}
+		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8388): strict
+		// less-than, shrinking to the nearest match.
+		if dist < bestDist {
+			bestDist, bestGUID, bestX, bestY, bestZ = dist, guid, x, y, z
+		}
+	}
+	if allowPlayers {
+		s.sessionsMu.RLock()
+		for targetSession := range s.sessions {
+			if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+				continue
+			}
+			p := targetSession.player
+			if p.Map != m.Map || p.InstanceID != m.InstanceID {
+				continue
+			}
+			if p.Health == 0 && !allowDead {
+				continue
+			}
+			if spellTargetUnitBlocked(spell, p.UnitFlags, 0, false) {
+				continue
+			}
+			if !implicitEntryConditionsMet(condRows, true, 0, 0) {
+				continue
+			}
+			consider(targetSession.playerGUID, p.X, p.Y, p.Z, p.CombatReach)
+		}
+		s.sessionsMu.RUnlock()
+	}
+	if allowCreatures {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		candidates := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				candidates = append(candidates, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range candidates {
+			if cand.Map != m.Map || cand.InstanceID != m.InstanceID {
+				continue
+			}
+			if cand.Health == 0 && !allowDead {
+				continue
+			}
+			if spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
+				continue
+			}
+			if !implicitEntryConditionsMet(condRows, false, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
+				continue
+			}
+			consider(cand.GUID, cand.X, cand.Y, cand.Z, cand.CombatReach)
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-maxRange, float64(m.X)+maxRange, float64(m.Y)-maxRange, float64(m.Y)+maxRange)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if uint32(rowMap) != m.Map {
+						continue
+					}
+					if health <= 0 && !allowDead {
+						continue
+					}
+					if spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), false) {
+						continue
+					}
+					if !implicitEntryConditionsMet(condRows, false, uint32(entry), uint32(low)) {
+						continue
+					}
+					consider(guid, float32(x), float32(y), float32(z), 0)
+				}
+			}
+		}
+	}
+	if bestGUID == 0 {
+		return 0, false
+	}
+	if !s.implicitUnitTargetLOSPassesForMotion(spell, m, bestGUID, bestX, bestY, bestZ) {
+		return 0, false
+	}
+	return bestGUID, true
+}
+
+// creatureEntryNearbyGOTarget ports the GOBJ half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
+// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) for a creature caster, mirroring the
+// session twin spellEntryNearbyGOTarget: the single nearest gameobject
+// within GetMaxRange(IsPositive()) passing the FIRST 40 effect's
+// implicit-target conditions (Spell.cpp:885-900 merge model).
+// SpellInfo::CheckTarget is always valid for gameobjects
+// (SpellInfo.cpp:1707), so only range and the entry conditions gate the
+// search. The emergency fallback (Spell.cpp:1065): with no conditions and
+// RequiresSpellFocus set, the focus object is the target. No match
+// returns false and the caller fails the cast with
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+func (s *Server) creatureEntryNearbyGOTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
+	if s == nil || m == nil {
+		return 0, false
+	}
+	maxRange := s.creatureEntryNearbyObjectRange(m, spell)
+	if maxRange <= 0 {
+		return 0, false
+	}
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, firstEntryImplicitEffectMask(spell, implicitTargetGONearbyEntry))
+	if len(condRows) == 0 && spell.RequiresSpellFocus != 0 {
+		// Spell.cpp:1071: focus object or cast failure.
+		if guid, _, _, _, ok := s.motionSpellFocusObject(ctx, m, spell); ok {
+			return guid, true
+		}
+		return 0, false
+	}
+	_, _, allowGO := implicitTargetEntryObjectMask(condRows, false, false, true)
+	if !allowGO {
+		return 0, false
+	}
+	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
+	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
+	if spellSearchPlayersOnly(spell) {
+		return 0, false
+	}
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, m.X, m.Y, float32(maxRange), func(g nearbyGameObject) {
+		if !implicitEntryGOConditionsMet(condRows, g.entry, g.spawnLow) {
+			return
+		}
+		dist := float64(distance3D(g.x, g.y, g.z, m.X, m.Y, m.Z))
+		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8388): strict
+		// less-than, shrinking to the nearest match.
+		if dist < bestDist {
+			bestDist, bestGUID = dist, g.guid
+		}
+	})
+	if bestGUID == 0 {
+		return 0, false
+	}
+	return bestGUID, true
+}

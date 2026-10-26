@@ -100,20 +100,21 @@ func (s *Server) spellFocusTemplateDataAt(ctx context.Context, entry uint32) (ui
 	return uint32(focusID), float32(dist), true
 }
 
-// motionSpellFocusPosition mirrors Spell::SearchSpellFocus (Spell.cpp:1987)
+// motionSpellFocusObject mirrors Spell::SearchSpellFocus (Spell.cpp:1987)
 // anchored at a creature motion's position, returning the focus object's
-// position: the TARGET_DEST_NEARBY_ENTRY emergency fallback (Spell.cpp:1085)
-// for a creature caster with no implicit-target conditions, and the
-// position form of motionSpellFocusFound below. A focus object counts only
-// when it is a spawned spell-focus GO whose template focus id matches the
-// spell's RequiresSpellFocus and the caster is within the template range
-// (GameObjectFocusCheck, GridNotifiers.h:663). Runtime dynamic spawns come
-// first, then static rows, mirroring the player path's spellFocusObject.
+// GUID and position: the TARGET_GAMEOBJECT_NEARBY_ENTRY emergency fallback
+// (Spell.cpp:1065-1071) for a creature caster with no implicit-target
+// conditions, and the GUID form behind motionSpellFocusPosition below.
+// A focus object counts only when it is a spawned spell-focus GO whose
+// template focus id matches the spell's RequiresSpellFocus and the caster
+// is within the template range (GameObjectFocusCheck,
+// GridNotifiers.h:663). Runtime dynamic spawns come first, then static
+// rows, mirroring the player path's spellFocusObject.
 // isSpawned() == !Hidden for the Go runtime spawns. Runs for triggered
 // casts too (no C++ triggered exemption).
-func (s *Server) motionSpellFocusPosition(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (float32, float32, float32, bool) {
+func (s *Server) motionSpellFocusObject(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, float32, float32, float32, bool) {
 	if s == nil || m == nil || spell.RequiresSpellFocus == 0 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	visibility := float64(s.Config.VisibilityDistanceContinents)
 	if visibility <= 0 {
@@ -128,11 +129,11 @@ func (s *Server) motionSpellFocusPosition(ctx context.Context, m *creatureMotion
 			continue
 		}
 		if distance3D(m.X, m.Y, m.Z, dyn.X, dyn.Y, dyn.Z) <= float64(dist) {
-			return dyn.X, dyn.Y, dyn.Z, true
+			return dyn.GUID, dyn.X, dyn.Y, dyn.Z, true
 		}
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	goArgs := make([]any, 0, 4)
 	eventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
@@ -147,7 +148,7 @@ func (s *Server) motionSpellFocusPosition(ctx context.Context, m *creatureMotion
 	args := append([]any{m.Map, float64(m.X) - visibility, float64(m.X) + visibility, float64(m.Y) - visibility, float64(m.Y) + visibility}, goArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -164,10 +165,18 @@ func (s *Server) motionSpellFocusPosition(ctx context.Context, m *creatureMotion
 			continue
 		}
 		if distance3D(m.X, m.Y, m.Z, float32(x), float32(y), float32(z)) <= dist {
-			return float32(x), float32(y), float32(z), true
+			return rawGUID, float32(x), float32(y), float32(z), true
 		}
 	}
-	return 0, 0, 0, false
+	return 0, 0, 0, 0, false
+}
+
+// motionSpellFocusPosition is the position form of
+// motionSpellFocusObject, kept for the TARGET_DEST_NEARBY_ENTRY
+// emergency fallback (Spell.cpp:1085) and motionSpellFocusFound below.
+func (s *Server) motionSpellFocusPosition(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (float32, float32, float32, bool) {
+	_, x, y, z, ok := s.motionSpellFocusObject(ctx, m, spell)
+	return x, y, z, ok
 }
 
 // motionSpellFocusFound is the pet CheckCast spell-focus arm
