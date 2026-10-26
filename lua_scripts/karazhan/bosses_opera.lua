@@ -195,10 +195,16 @@ end
 -- the boss_midnight randomTargetAnywhere precedent.
 local function randomThreatTarget(creature)
     local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(targets) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 local function randomPlayerInRange(creature, maxDist)
@@ -231,8 +237,9 @@ local SPELL_SCREAM = 31013
 local function dorotheeWaterbolt(creature, guid)
     -- C++ SelectTarget(Random, 0) (:216): playerOnly=FALSE (UnitAI.h:170)
     -- — the pool is the threat list (pets/totems eligible), not the map;
-    -- no range cap, no alive filter (SelectTarget applies no alive
-    -- check). Lowered over the threat-ordered GetAITargets list
+    -- no range cap; C++ SelectTargetList skips offline refs before
+    -- the pick (UnitAI.h), so dead entries are filtered. Lowered over
+    -- the threat-ordered GetAITargets list
     -- (lua_creature_events.go:345 — the midnight precedent).
     local target = randomThreatTarget(creature)
     if target then
@@ -1082,7 +1089,8 @@ end
 
 local function julianneAttraction(creature, guid)
     -- C++: DoCast(SelectTarget(SelectTargetMethod::Random, 0) (:1469),
-    -- SPELL_POWERFUL_ATTRACTION) — no 100yd limit, no alive filter,
+    -- SPELL_POWERFUL_ATTRACTION) — no 100yd limit; C++
+    -- SelectTargetList skips offline refs before the pick (UnitAI.h),
     -- unlike Blinding Passion (Random, 0, 100, true); playerOnly=FALSE
     -- (UnitAI.h:170) so the pool is the threat list (pets/totems
     -- eligible), lowered via GetAITargets (lua_creature_events.go:345 —
