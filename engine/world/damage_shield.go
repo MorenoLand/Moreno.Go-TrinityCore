@@ -198,7 +198,7 @@ func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker dama
 			if at, ok := casterSess.getCombatTarget(ctx, attacker.guid()); ok {
 				target = at
 			}
-			if bonus := casterSess.spellDamageDoneFlat(ctx, dmgSpell, attacker.guid(), target, sh.effIndex, false); bonus != 0 {
+			if bonus := casterSess.spellDamageDoneFlat(ctx, dmgSpell, attacker.guid(), target, sh.effIndex, false, 1); bonus != 0 {
 				if v := int32(damage) + bonus; v > 0 {
 					damage = uint32(v)
 				} else {

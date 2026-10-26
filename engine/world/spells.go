@@ -11582,7 +11582,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if baseAmount < 0 || !s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
 						continue
 					}
-					amount := s.spellDamageBonusDone(effCtx, drainSpell, drainKnown, uint32(baseAmount), effectTarget, effectIndex, false)
+					amount := s.spellDamageBonusDone(effCtx, drainSpell, drainKnown, uint32(baseAmount), effectTarget, effectIndex, false, 1)
 					if drainKnown && s.server != nil {
 						if victimSess := s.server.findSessionByGUID(effectTarget); victimSess != nil && victimSess.player != nil {
 							amount = spellDamageBonusTaken(amount, drainSpell, drainSchool, victimSess, s, 1.0)
@@ -13340,13 +13340,16 @@ func (s *session) spellBaseDamageBonusDone(schoolMask uint32) int32 {
 // (Unit.cpp:6612-6728): the spell-power advertised benefit (scaled by the done
 // coefficient) plus the flat OVERRIDE_CLASS_SCRIPTS scripted arms,
 // MOD_FLAT_SPELL_DAMAGE_VERSUS and the attack-power bonus arms.
-func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, effIndex int, isDot bool) int32 {
+func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, effIndex int, isDot bool, stack uint32) int32 {
+	if stack == 0 {
+		stack = 1
+	}
 	advertised := s.spellBaseDamageBonusDone(spell.SchoolMask)
 	advertised += s.victimDamageTakenFlat(spell, targetGUID, target)
 	flat := int32(0)
 	if advertised != 0 {
 		// C++ int32(DoneAdvertisedBenefit * coeff * factorMod) truncates (Unit.cpp:6727).
-		flat += int32(float64(advertised) * s.spellDoneCoefficient(spell, effIndex, isDot))
+		flat += int32(float64(advertised) * s.spellDoneCoefficient(spell, effIndex, isDot) * float64(stack))
 	}
 	// Done scripted mod (Unit.cpp:6613-6643): flat OVERRIDE_CLASS_SCRIPTS arms.
 	for _, ae := range s.overrideClassScriptAuras(spell) {
@@ -13367,7 +13370,7 @@ func (s *session) spellDamageDoneFlat(ctx context.Context, spell wotlk.Spell, ta
 	// ap_bonus/ap_dot_bonus coefficient scales the caster's total attack power
 	// (plus the victim's melee/ranged attack-power-attacker-bonus auras) by
 	// the Impurity-adjusted ApCoeffMod.
-	flat += s.spellDamageApFlat(ctx, spell, targetGUID, target, isDot)
+	flat += s.spellDamageApFlat(ctx, spell, targetGUID, target, isDot, stack)
 	// Unit::MeleeDamageBonusDone flat half (Unit.cpp:8003-8034): weapon-damage
 	// spells take the melee flat arms — MOD_DAMAGE_DONE_CREATURE and the
 	// attack-power-attacker-bonus leg — on top of the shared fold. (The
@@ -13425,9 +13428,13 @@ func (s *session) impurityApCoeffMod(spell wotlk.Spell) float64 {
 // Unit::SpellDamageBonusDone (Unit.cpp:6686-6716): with a spell_bonus_data row,
 // the ap_bonus/ap_dot_bonus coefficient scales the APbonus — the victim's
 // melee/ranged attack-power-attacker-bonus auras plus the caster's total
-// attack power — by the Impurity-adjusted ApCoeffMod. Stack defaults to 1
-// like C++'s default argument.
-func (s *session) spellDamageApFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, isDot bool) int32 {
+// attack power — by the Impurity-adjusted ApCoeffMod, times the stack
+// (Unit.cpp:6702-6703: ap_dot_bonus * stack; zero stack means 1, like
+// C++'s default argument).
+func (s *session) spellDamageApFlat(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget, isDot bool, stack uint32) int32 {
+	if stack == 0 {
+		stack = 1
+	}
 	bonus, ok := s.spellBonusRow(spell.ID)
 	if !ok {
 		return 0
@@ -13446,7 +13453,7 @@ func (s *session) spellDamageApFlat(ctx context.Context, spell wotlk.Spell, targ
 	}
 	ap := float64(s.swingVictimAuraSum(targetGUID, target, victimBonusAura, 0, false))
 	ap += float64(s.totalAttackPowerValue(ranged))
-	return int32(coeff * s.impurityApCoeffMod(spell) * ap)
+	return int32(coeff * float64(stack) * s.impurityApCoeffMod(spell) * ap)
 }
 
 // spellDamagePctDone mirrors Unit::SpellDamagePctDone (Unit.cpp:6738-7050): the
@@ -13669,7 +13676,7 @@ func (s *session) classScriptAuraByMisc(spell wotlk.Spell, misc int32) (classScr
 // SPELLMOD_DOT spellmod applies to the total (Unit.cpp:6730-6733). Spells with
 // SPELL_ATTR3_NO_DONE_BONUS skip the whole leg (Unit.cpp:6603-6604). isDot selects
 // the DOT coefficient/spellmod like C++'s DamageEffectType.
-func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, spellKnown bool, damage uint32, targetGUID uint64, effIndex int, isDot bool) uint32 {
+func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, spellKnown bool, damage uint32, targetGUID uint64, effIndex int, isDot bool, stack uint32) uint32 {
 	if !spellKnown || spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
 		return damage
 	}
@@ -13688,7 +13695,7 @@ func (s *session) spellDamageBonusDone(ctx context.Context, spell wotlk.Spell, s
 		}
 		return uint32(tmp)
 	}
-	flat := s.spellDamageDoneFlat(ctx, spell, targetGUID, target, effIndex, isDot)
+	flat := s.spellDamageDoneFlat(ctx, spell, targetGUID, target, effIndex, isDot, stack)
 	pct := s.spellDamagePctDone(ctx, spell, targetGUID, target)
 	tmp := float64(int32(damage)+flat) * pct
 	if tmp < 0 {
@@ -14164,7 +14171,7 @@ func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID ui
 	// benefit, the percent-done multiplier (Unit::SpellDamagePctDone,
 	// Unit.cpp:6738-7050) and the SPELLMOD_DAMAGE/SPELLMOD_DOT spellmod on the
 	// final total.
-	damage = s.spellDamageBonusDone(ctx, spell, spellKnown, damage, targetGUID, effIndex, false)
+	damage = s.spellDamageBonusDone(ctx, spell, spellKnown, damage, targetGUID, effIndex, false, 1)
 
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
 	schoolMask := uint8(1)
@@ -27520,7 +27527,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// DoTs baked it at apply (CalculateAmount :506-518) and skip it.
 		// Aura 89 takes the percent conversion instead (no done leg).
 		if aura.PersistentAreaAura && aura.AuraType == 3 && tickKnown && tickCaster != nil {
-			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true)
+			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true, periodicTickStack(aura))
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
 		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
@@ -27640,6 +27647,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// at the END of the tick pipeline — the earlier Go order resisted
 		// before the taken leg.
 		resisted := uint32(0)
+		preResistDmg := dmg
 		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
@@ -27673,8 +27681,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			absorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(preResistDmg, ts.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		targetHealth := ts.player.Health
@@ -28091,7 +28106,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SpellDamageBonusDone per tick for DYNOBJ_AURA_TYPE auras, like
 		// the damage tick; unit-aura leeches baked it at apply.
 		if aura.PersistentAreaAura && tickKnown && tickCaster != nil {
-			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true)
+			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true, periodicTickStack(aura))
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
 		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
@@ -28189,6 +28204,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.applyResilienceToDamage(aura.ApplyResilience, &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		resisted := uint32(0)
+		preResistDmg := dmg
 		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
@@ -28222,8 +28238,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			absorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(preResistDmg, ts.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		targetHealth := ts.player.Health
@@ -28551,6 +28574,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), burnCaster.player.Level, ts.player.Level, dmg)
 		}
 		burnResisted := uint32(0)
+		burnPreResistDmg := dmg
 		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
 			pen := uint32(0)
 			if burnCaster.player != nil {
@@ -28584,8 +28608,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, ts.server.tickCasterAbsorbIgnorePctForSpell(burnCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			burnAbsorbed, dmg = ts.applyAbsorptionShields(dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(burnPreResistDmg, ts.server.tickCasterAbsorbIgnorePctForSpell(burnCaster, aura.CasterGUID, ts.player.Map, ts.player.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			burnAbsorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		burnTargetHealth := ts.player.Health
@@ -29310,7 +29341,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// it (an unresolved caster carries no live bonuses to re-run).
 		if aura.PersistentAreaAura && aura.AuraType == 3 && tickKnown && s.server != nil {
 			if doneCaster := s.server.findSessionByGUID(aura.CasterGUID); doneCaster != nil {
-				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true)
+				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true, periodicTickStack(aura))
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
@@ -29447,6 +29478,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// END of the tick pipeline — the earlier Go order resisted before
 		// the taken leg and never absorbed on creature ticks.
 		resisted := uint32(0)
+		preResistDmg := dmg
 		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
@@ -29491,8 +29523,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(preResistDmg, s.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		targetHealth := target.Health
@@ -30041,7 +30080,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// it (an unresolved caster carries no live bonuses to re-run).
 		if aura.PersistentAreaAura && tickKnown && s.server != nil {
 			if doneCaster := s.server.findSessionByGUID(aura.CasterGUID); doneCaster != nil {
-				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true)
+				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true, periodicTickStack(aura))
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
@@ -30141,6 +30180,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		resisted := uint32(0)
+		preResistDmg := dmg
 		if aura.SchoolMask > 1 && attLevel > 0 {
 			pen := uint32(0)
 			if tickCaster != nil && tickCaster.player != nil {
@@ -30185,8 +30225,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(preResistDmg, s.server.tickCasterAbsorbIgnorePctForSpell(tickCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		targetHealth := target.Health
@@ -30577,6 +30624,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		burnResisted := uint32(0)
+		burnPreResistDmg := dmg
 		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
 			pen := uint32(0)
 			if burnCaster.player != nil {
@@ -30618,8 +30666,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the caster's
 			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL (245,
 			// affecting the tick's spell) pct of damage bypasses absorbs.
-			bypass := absorbIgnoreBypass(dmg, s.server.tickCasterAbsorbIgnorePctForSpell(burnCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
-			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, dmg-bypass, uint8(aura.SchoolMask))
+			// C++ takes that pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975).
+			bypass := absorbIgnoreBypass(burnPreResistDmg, s.server.tickCasterAbsorbIgnorePctForSpell(burnCaster, aura.CasterGUID, key.Map, key.InstanceID, uint32(aura.SchoolMask), aura.SpellID))
+			pool := dmg
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
 		burnTargetHealth := target.Health
