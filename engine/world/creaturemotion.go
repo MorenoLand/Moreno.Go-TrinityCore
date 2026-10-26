@@ -1064,7 +1064,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith pre-arm
 		// (CombatAI.cpp:76-88, 139-162): AICOND_COMBAT template spells get
 		// their first event scheduled here, inside the motion lock.
-		if enteredCombat {
+		// VehicleAI is not a CombatAI subclass and has no JustEngagedWith
+		// spell arm, so a damage-engaged vehicle gets no pre-arm.
+		if enteredCombat && !s.isVehicleAI(motion) {
 			if motion.AIName == "CasterAI" {
 				// motionMu is held here: no creature-motion lookup for
 				// target positions (see resolveAISpellTargetGUID).
@@ -1097,7 +1099,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 		s.fireCreatureLuaEvent(ctx, fireMotion, scripting.CreatureEventOnEnterCombat, target)
 	}
-	if enteredCombat && fireMotion != nil {
+	if enteredCombat && fireMotion != nil && !s.isVehicleAI(fireMotion) {
 		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith
 		// (CombatAI.cpp:76-88, 139-162): AICOND_AGGRO template spells are
 		// cast once at the engage victim, non-triggered; the AICOND_COMBAT
@@ -2846,7 +2848,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// The tick is the only C++ path that re-gates the whole list, so it
 	// catches current-victim threat decay, taunt-aura expiry, and fixate
 	// changes the eager AddThreat gate never revisits.
-	if motion.InCombat && motion.ThreatMgr != nil {
+	// VehicleAI::UpdateAI (CombatAI.cpp:278-293) never calls UpdateVictim, so
+	// a vehicle in combat keeps whatever victim damage set and never
+	// re-selects one or broadcasts ATTACK_START from the threat tick.
+	if motion.InCombat && motion.ThreatMgr != nil && !s.isVehicleAI(motion) {
 		inMeleeOf := func(victimGUID uint64) bool {
 			for i := range players {
 				if players[i].GUID != victimGUID || players[i].Sess == nil || players[i].Sess.player == nil {
@@ -3118,6 +3123,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// term here: DoSpellAttackIfReady gates on the max range only,
 		// and the min-band victim effect rides the CanAIAttack arm below.
 		if motion.AIName == "TurretAI" && dueOK && len(motion.Spells) > 0 && spellID != motion.Spells[0] {
+			dueOK = false
+		}
+		// VehicleAI::UpdateAI (CombatAI.cpp:278-293) never calls
+		// DoSpellAttackIfReady, so a vehicle with a due template event
+		// (armed by a damage engage) must not cast here; the event
+		// stays due with no re-arm, like the ArcherAI/TurretAI arms.
+		if s.isVehicleAI(motion) && dueOK {
 			dueOK = false
 		}
 		if dueOK && dueTargetGUID == 0 {
@@ -3861,7 +3873,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.Moving = false
 				return
 			}
-			if motion.AIName != "TurretAI" {
+			// VehicleAI::AttackStart is an empty override (CombatAI.h:104),
+			// so a vehicle never pursues: it stands like a turret.
+			if motion.AIName != "TurretAI" && !s.isVehicleAI(motion) {
 				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
 				// UNIT_STATE_NOT_MOVE (root | stun | died | distracted, Unit.h:256)
 				// pauses the chase. Died rides the tick's Health gate and
@@ -3934,8 +3948,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// voice-of-yogg, rimefang, julianne, krosh, flame-leviathan,
 		// kalecgos-kj): Lua CreatureMethods::SetMeleeAttack declares the
 		// C++ omission of the DoMeleeAttackIfReady arm, suppressing the
-		// engine-driven swing with real effect.
-		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" || motion.NoMeleeAttack {
+		// engine-driven swing with real effect. VehicleAI::UpdateAI never
+		// calls DoMeleeAttackIfReady (CombatAI.cpp:278-293), so a vehicle
+		// never swings either.
+		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" || motion.NoMeleeAttack || s.isVehicleAI(motion) {
 			return
 		}
 		motion.Moving = false
@@ -4548,7 +4564,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// outside the spell[0] max range or inside _minimumRange never
 		// acquires. The max half is already inside aggroDist above; the
 		// helper re-checks the full band with the victim's real reach.
-		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		// VehicleAI::MoveInLineOfSight is an empty override (CombatAI.h:103),
+		// so a vehicle never sight-engages; the stealth-alert arm above is
+		// untouched because TriggerAlert rides the AI-agnostic relocation
+		// worker (GridNotifiers.cpp:139), not MoveInLineOfSight.
+		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -5005,16 +5025,24 @@ func (s *Server) archerSpellBand(motion *creatureMotion) (minRange, maxRange flo
 // isVehicleAI reports whether the motion runs VehicleAI (CombatAI.cpp:268):
 // an explicit AIName match, or — mirroring VehicleAI::Permissible
 // (CombatAI.cpp:344-350, PERMIT_BASE_SPECIAL for IsVehicle creatures) — an
-// unnamed, unscripted creature carrying a vehicle kit. An explicit AIName or
-// a Lua script wins over the selector, as in CreatureAISelector.cpp.
+// unnamed, unscripted creature carrying a vehicle kit. A template ScriptName
+// wins over the AIName: CreatureAISelector::SelectAI checks the scripted AI
+// first (CreatureAISelector.cpp:90-94) and only then falls through to the
+// AIName factory branch, so a scripted creature never runs VehicleAI even
+// when its template also names it. Go entry-keyed Lua bindings without a
+// template ScriptName are the residual gap: they supplement the generic tick
+// rather than replacing it, so such an entry still counts as VehicleAI here.
 func (s *Server) isVehicleAI(motion *creatureMotion) bool {
 	if motion == nil {
+		return false
+	}
+	if motion.ScriptName != "" {
 		return false
 	}
 	if motion.AIName == "VehicleAI" {
 		return true
 	}
-	if motion.AIName != "" || motion.ScriptName != "" {
+	if motion.AIName != "" {
 		return false
 	}
 	return s != nil && s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil
