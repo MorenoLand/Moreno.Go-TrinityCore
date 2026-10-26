@@ -279,6 +279,34 @@ func (s *Server) totemCreatureTargets(totem *activeTotem, radius float64) []*cre
 	return targets
 }
 
+// totemWithinAreaRange is the WorldObjectSpellAreaTargetCheck cylinder
+// (Spell.cpp:8409-8420): 2D distance within the radius AND |dz| within
+// the radius — not a 3D sphere. The in-tree area twins
+// (creature_area_targets.go) use this same plain-cylinder form.
+func totemWithinAreaRange(x1, y1, z1, x2, y2, z2 float32, radius float64) bool {
+	return distance2D(x1, y1, x2, y2) <= radius && math.Abs(float64(z1-z2)) <= radius
+}
+
+// totemAreaCreatureTargets is totemCreatureTargets with the area-aura
+// cylinder test instead of the 3D sphere: area-aura legs (ToW debuff,
+// AoE damage, slow) select through WorldObjectSpellAreaTargetCheck,
+// while the SingleTarget search and the sentry aggro scan keep the
+// sphere/aggro-distance tests of their own C++ paths.
+func (s *Server) totemAreaCreatureTargets(totem *activeTotem, radius float64) []*creatureMotion {
+	if s == nil || totem == nil {
+		return nil
+	}
+	s.motionMu.Lock()
+	targets := make([]*creatureMotion, 0)
+	for _, motion := range s.motionMapLocked(totem.Map, totem.InstanceID) {
+		if motion != nil && motion.GUID != totem.TotemGUID && motion.Map == totem.Map && motion.InstanceID == totem.InstanceID && motion.Health > 0 && totemWithinAreaRange(motion.X, motion.Y, motion.Z, totem.X, totem.Y, totem.Z, radius) {
+			targets = append(targets, motion)
+		}
+	}
+	s.motionMu.Unlock()
+	return targets
+}
+
 // applyTotemEnemyDebuff registers one Totem of Wrath enemy-debuff record
 // on a hostile creature motion, caster-keyed to the totem: the record feeds
 // creatureAuraModifierSum for SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE
@@ -612,7 +640,7 @@ func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID
 		if m == nil {
 			continue
 		}
-		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius || !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
+		if !totemWithinAreaRange(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z, radius) || !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 			s.server.removeCreatureAura(key, spellID)
 		}
 	}
@@ -647,7 +675,7 @@ func (s *session) sweepTotemSessionAuraOutOfRange(totem *activeTotem, spellID ui
 			continue
 		}
 		if other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
-			distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) > radius ||
+			!totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, radius) ||
 			ownerPhase&other.currentPlayerPhaseMask() == 0 ||
 			(extraDrop != nil && extraDrop(other)) {
 			doomed = append(doomed, other)
@@ -1174,7 +1202,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// owner who walks out of range loses it to the sweep below
 			// instead of being re-applied unconditionally each pulse.
 			if s.player.Map == totem.Map && s.player.InstanceID == totem.InstanceID &&
-				distance3D(s.player.X, s.player.Y, s.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
+				totemWithinAreaRange(s.player.X, s.player.Y, s.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) {
 				s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
 			}
 			// Apply to nearby party members
@@ -1182,7 +1210,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
-						if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
+						if totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
 							other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
 						}
 					}
@@ -1204,7 +1232,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			}
 			owner := totemOwnerPos(s)
 			ownerPhase := s.currentPlayerPhaseMask()
-			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+			for _, m := range s.server.totemAreaCreatureTargets(totem, float64(def.Radius)) {
 				if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 					continue
 				}
@@ -1223,7 +1251,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
-						distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+						totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) &&
 						ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 						s.totemEnemySessionHostile(other) {
 						other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel)
@@ -1259,10 +1287,16 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		// legs differs from C++.
 		s.totemHealPulseTick(ctx, def, totem, s)
 		if s.server != nil && s.groupID != 0 {
+			// Area-aura phase gate (CheckTarget -> CanSeeOrDetect ->
+			// CanNeverSee, Object.cpp:1659-1662), as the ToW legs: the
+			// owner's own tick needs none (the totem's phase tracks
+			// the owner's), but cross-phase group members are not
+			// area-aura targets.
+			ownerPhase := s.currentPlayerPhaseMask()
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
-					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
+					if totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
 						s.totemHealPulseTick(ctx, def, totem, other)
 					}
 				}
@@ -1279,12 +1313,36 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// The aura's damage effect targets enemies only, mirrored by
 			// the hostile filter below.
 			owner := totemOwnerPos(s)
+			ownerPhase := s.currentPlayerPhaseMask()
 			dmg := uint32(75)
-			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-				if !s.server.totemEnemyCreatureValid(m, owner) {
+			for _, m := range s.server.totemAreaCreatureTargets(totem, float64(def.Radius)) {
+				if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 					continue
 				}
 				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0)
+			}
+			// Enemy-player leg: the same area aura reaches hostile
+			// sessions in radius (Cell::VisitAllObjects visits players
+			// too); executeSpellDamage resolves sessions via
+			// combatTargetByGUID, as the SingleTarget session leg does.
+			// Victim GUIDs are collected under the read lock and damaged
+			// after it releases: the damage path can take session locks
+			// downstream, so it must not run under sessionsMu.RLock.
+			if s.server != nil {
+				var sessionVictims []uint64
+				s.server.sessionsMu.RLock()
+				for other := range s.server.sessions {
+					if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
+						totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) &&
+						ownerPhase&other.currentPlayerPhaseMask() != 0 &&
+						s.totemEnemySessionHostile(other) {
+						sessionVictims = append(sessionVictims, other.playerGUID)
+					}
+				}
+				s.server.sessionsMu.RUnlock()
+				for _, guid := range sessionVictims {
+					s.executeSpellDamage(ctx, guid, def.PulseSpell, dmg, 0)
+				}
 			}
 		}
 
@@ -1409,7 +1467,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			s.server.sessionsMu.RLock()
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
-					if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
+					if totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) {
 						s.totemDispelPulse(ctx, def, totem, other)
 					}
 				}
@@ -1634,7 +1692,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 			continue
 		}
 		amount := eff.CalcValueForLevel(slowSpell, uint32(totemMotion.Level))
-		for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
+		for _, m := range s.server.totemAreaCreatureTargets(totem, float64(def.Radius)) {
 			if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 				continue
 			}
@@ -1650,7 +1708,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		s.server.sessionsMu.RLock()
 		for other := range s.server.sessions {
 			if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
-				distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+				totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) &&
 				ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 				s.totemEnemySessionHostile(other) {
 				other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level))
