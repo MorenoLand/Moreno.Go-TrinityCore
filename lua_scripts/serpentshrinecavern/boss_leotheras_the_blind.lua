@@ -476,8 +476,8 @@ local function leotherasTick(creature, guid)
         -- stands in for GetLastVictim), cap 5 before the alive
         -- filter (dead entries consume cap slots, no backfill); per
         -- player: SummonCreature(INNER_DEMON 21857, px+10, py+10,
-        -- pz, o=0, type 3, 5000ms) + DoZoneInCombat (the AttackStart
-        -- substitute — opera/broggok precedent) + player AddAura
+        -- pz, o=0, type 3, 5000ms) + EngageWithTarget(player) (the
+        -- AttackStart leg, PORTED 2026-10-26) + player AddAura
         -- (INSIDIOUS_WHISPER 37676). The SetGUID(INNER_DEMON_VICTIM)
         -- binding stays out (no cross-creature GUID bridge), so the
         -- demon's victim-only damage immunity stays unmodeled.
@@ -500,7 +500,13 @@ local function leotherasTick(creature, guid)
                         target:GetX() + 10, target:GetY() + 10,
                         target:GetZ(), 0, 3, 5000)
                     if demon then
-                        demon:DoZoneInCombat()
+                        -- C++ boss_leotheras_the_blind.cpp:543-548:
+                        -- AttackStart(this picked player); the
+                        -- SetGUID victim-binding stays out (no
+                        -- cross-creature AI SetGUID bridge). The
+                        -- target is a player, so the session-only
+                        -- EngageWithTarget funnel applies.
+                        demon:EngageWithTarget(target)
                     end
                     target:AddAura(SPELL_INSIDIOUS_WHISPER)
                 end
@@ -531,15 +537,22 @@ local function leotherasTick(creature, guid)
     -- C++ boss_leotheras_the_blind.cpp:580-599 order: CastConsumingMadness
     -- (demon-cast, no demons in this model — out) + DespawnDemon (out) +
     -- DoSpawnCreature(DEMON_FORM 21875, at the boss position, type 3,
-    -- 6000ms) + AttackStart(victim) -> SummonCreature + DoZoneInCombat
-    -- (the AttackStart substitute — inner-demon precedent), then the
+    -- 6000ms) + AttackStart(victim) -> SummonCreature +
+    -- EngageWithTarget(victim) (PORTED 2026-10-26), then the
     -- final-form flag, Talk, SetDisplayId.
     if not st.isFinalForm and healthBelowPct(creature, 15) then
         local copy = creature:SummonCreature(ENTRY_DEMON_FORM,
             creature:GetX(), creature:GetY(), creature:GetZ(),
             creature:GetO(), 3, 6000)
         if copy then
-            copy:DoZoneInCombat()
+            -- C++ boss_leotheras_the_blind.cpp:590-594: AttackStart
+            -- (boss victim) when a victim exists; DoZoneInCombat
+            -- would engage every player instead of singling out
+            -- the victim.
+            local victim = creature:GetVictim()
+            if victim ~= nil then
+                copy:EngageWithTarget(victim)
+            end
         end
         st.isFinalForm = true
         st.demonForm = false

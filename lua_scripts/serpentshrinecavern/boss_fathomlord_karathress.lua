@@ -220,6 +220,24 @@ local function randomThreatTargetSkipFirst(creature)
     return out[math.random(#out)]
 end
 
+-- C++ SelectTarget(Random, 0) with no offset and no playerOnly
+-- filter: uniform over the alive threat list, victim included
+-- (the sharkkis-pet and caribdis-cyclone AttackStart picks; the
+-- SkipFirst helper above is the offset-1 form, not this one).
+local function randomThreatTargetAny(creature)
+    local targets = creature:GetAITargets()
+    local alive = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            alive[#alive + 1] = unit
+        end
+    end
+    if #alive == 0 then
+        return nil
+    end
+    return alive[math.random(#alive)]
+end
+
 local function cancelPump(guid)
     local id = pumpTimers[guid]
     if id then
@@ -281,8 +299,9 @@ local function karathressTick(creature, guid)
     -- Cyclone: 30-40s — SummonCreature(CREATURE_CYCLONE 22104) at self
     -- position, random orientation 0-4, TEMPSUMMON_TIMED_DESPAWN 15s
     -- (C++ boss_fathomlord_karathress.cpp:656-673, C++ arm order: the
-    -- timer re-arms before the summon). The AttackStart leg has no
-    -- cross-AI bridge. The SetFlag(NOT_SELECTABLE) / SetFaction /
+    -- timer re-arms before the summon). The AttackStart(random
+    -- target) leg is PORTED 2026-10-26 (EngageWithTarget bridge).
+    -- The SetFlag(NOT_SELECTABLE) / SetFaction /
     -- triggered self-cast SPELL_CYCLONE_CYCLONE 29538 legs are bridged
     -- — PORTED 2026-10-23; the SetObjectScale(3.0) leg is PORTED
     -- 2026-10-25 via the live SetScale bridge (the header's old
@@ -297,6 +316,13 @@ local function karathressTick(creature, guid)
             cyclone:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             cyclone:SetFaction(creature:GetFaction())
             cyclone:CastSpell(cyclone, SPELL_CYCLONE_CYCLONE, true)
+            -- C++ Cyclone_Timer (boss_fathomlord_karathress.cpp:658-673):
+            -- AttackStart(random target) after the cast; nil pick
+            -- engages nothing (C++-exact: the if (target) gate).
+            local cycloneTarget = randomThreatTargetAny(creature)
+            if cycloneTarget ~= nil then
+                cyclone:EngageWithTarget(cycloneTarget)
+            end
         end
         st.cyclone = 30000 + math.random(0, 9999)
     end
@@ -392,9 +418,9 @@ local function sharkkisTick(creature, guid)
     -- Pet: one-shot 10s (C++ boss_fathomlord_karathress.cpp:412-435,
     -- Pet_Timer 10000 + pet latch; urand(0,1) picks lurker 22119 /
     -- sporebat 22120, spawned at sharkkis's position, type 3,
-    -- 15000ms) + DoZoneInCombat (the AttackStart(random target)
-    -- substitute — leotheras inner-demon precedent; the random-target
-    -- pick itself stays out). The SummonedPet GUID binding stays out,
+    -- 15000ms) + EngageWithTarget(pick) (the AttackStart(random
+    -- target) leg, PORTED 2026-10-26; the summon itself is gated
+    -- on the pick, C++-exact). The SummonedPet GUID binding stays out,
     -- so the beast-within pet-enrage (19574) and Reset KillSelf legs
     -- stay out. 1s pump granularity, as elsewhere in this file.
     -- C++ Pet_Timer uses STRICT < (boss_fathomlord_karathress.cpp:412),
@@ -408,11 +434,18 @@ local function sharkkisTick(creature, guid)
             if math.random(2) == 2 then
                 petId = ENTRY_FATHOM_SPOREBAT
             end
-            local pet = creature:SummonCreature(petId,
-                creature:GetX(), creature:GetY(), creature:GetZ(),
-                creature:GetO(), 3, 15000)
-            if pet then
-                pet:DoZoneInCombat()
+            -- C++ Pet_Timer (boss_fathomlord_karathress.cpp:412-435):
+            -- pick first (SelectTarget Random,0), summon only on a
+            -- pick, then AttackStart(pick); DoZoneInCombat would
+            -- engage every player instead of the picked target.
+            local petTarget = randomThreatTargetAny(creature)
+            if petTarget ~= nil then
+                local pet = creature:SummonCreature(petId,
+                    creature:GetX(), creature:GetY(), creature:GetZ(),
+                    creature:GetO(), 3, 15000)
+                if pet then
+                    pet:EngageWithTarget(petTarget)
+                end
             end
         else
             st.pet = st.pet - 1000

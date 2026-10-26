@@ -429,12 +429,12 @@ local function startPhaseThree(creature, guid)
     end
     -- C++ UpdateAI phase-2 arm: InfernalTimer = 15000, ClearWeapons /
     -- RemoveAurasDueToSpell(thrash) (both bridged, ported below),
-    -- Talk(SAY_AXE_TOSS2), two axe summons with 10M threat — the axes
-    -- stay unspawned: they have no C++ AI script, and their attack legs
-    -- (AttackStart on the picked target, AddThreat who-redirect) have
-    -- no bridge (AddThreat is self-threat only), so a summoned axe
-    -- would idle at the boss's feet; the AxesTargetSwitchTimer
-    -- re-threating is skipped entirely.
+    -- Talk(SAY_AXE_TOSS2), two axe summons (17650, boss position, o=0,
+    -- type 3, 1000ms) with SetFlag(NOT_SELECTABLE) + SetFaction +
+    -- AttackStart on one shared random player target within 100
+    -- (SelectTarget Random,0,100,true); the 10M cross-creature
+    -- AddThreat leg stays out (AddThreat is self-threat only) and the
+    -- AxesTargetSwitchTimer re-threating is skipped entirely.
     st.phase = PHASE_THREE
     -- C++ ClearWeapons: SetEquipmentSlots(false, EQUIP_UNEQUIP,
     -- EQUIP_UNEQUIP, EQUIP_NO_CHANGE) = (0, 0, 0xFFFFFFFF); the
@@ -442,6 +442,18 @@ local function startPhaseThree(creature, guid)
     creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
     creature:RemoveAura(SPELL_THRASH_AURA)
     creature:Talk(SAY_AXE_TOSS2)
+    local axeTarget = randomThreatPlayer(creature, false, 100)
+    for _ = 1, 2 do
+        local axe = creature:SummonCreature(17650,
+            creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 1000)
+        if axe then
+            axe:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            axe:SetFaction(creature:GetFaction())
+            if axeTarget ~= nil then
+                axe:EngageWithTarget(axeTarget)
+            end
+        end
+    end
     cancelOne(guid, "sunder")
     cancelOne(guid, "cleave")
     cancelOne(guid, "swpain")

@@ -129,6 +129,15 @@ local UNIT_STAND_STATE_SIT_HIGH_CHAIR = 6
 local FACTION_FRIENDLY = 35
 local FACTION_DRAGONFLIGHT_BLACK = 103
 
+-- C++ boss_nefarian.cpp:100-106 (drakonid entries) + :151-155
+-- (DrakeSpawnLoc) + :164 (Entry[5] order).
+local NPC_CHROMATIC_DRAKANOID = 14302
+local DRAKONID_ENTRIES = { 14263, 14261, 14264, 14262, 14265 }
+local DRAKE_SPAWN_LOC = {
+    { -7591.151855, -1204.051880, 476.800476, 3.0 },
+    { -7514.598633, -1150.448853, 476.796570, 3.0 },
+}
+
 -- Nefarian
 local SAY_RANDOM = 0
 local SAY_RAISE_SKELETONS = 1
@@ -261,25 +270,51 @@ local function onNefariusFear(creature, guid)
     end)
 end
 
--- C++ EVENT_SPAWN_ADD: two drakonids per wave — the wave machine is
--- unported (SummonCreature IS bridged) — only
--- the counting/re-arm cycle is kept; at 42 the C++ summons Nefarian
--- and drops Nefarius out of the fight, so cancel the timers.
+-- C++ EVENT_SPAWN_ADD (boss_nefarian.cpp:340-364): two drakonids
+-- per wave — entry urand(0,2)==0 -> chromatic, else Entry[urand(0,4)],
+-- SummonCreature at DrakeSpawnLoc[i], SetFaction(BLACK),
+-- AttackStart(Nefarius's victim); the victim gate is UpdateVictim
+-- (:303: the event does not run victimless, so a victimless tick
+-- re-arms without spawning). At 42 the C++ summons Nefarian
+-- (unported — no Nefarian spawn leg here) and drops Nefarius out
+-- of the fight, so cancel the timers.
 local function onNefariusSpawnAdd(creature, guid)
     local st = nefariusState[guid]
     if not st then
         return
     end
-    st.spawnedAdds = st.spawnedAdds + 2
-    if st.spawnedAdds >= 42 then
-        -- C++ EVENT_SPAWN_ADD (boss_nefarian.cpp:344-364): at 42 the
-        -- C++ summons Nefarian (unported — the wave/summon machine never
-        -- fires, see deviations), cancels the events and drops Nefarius
-        -- out of the fight via me->SetVisible(false) (creature:SetVisible
-        -- bridge, Unit::SetVisible Unit.cpp:8656).
-        creature:SetVisible(false)
-        cancelTimers(guid)
+    local victim = creature:GetVictim()
+    if victim == nil then
+        schedule(guid, "spawn_add", 4000, function()
+            onNefariusSpawnAdd(creature, guid)
+        end)
         return
+    end
+    for i = 1, 2 do
+        local entry
+        if math.random(0, 2) == 0 then
+            entry = NPC_CHROMATIC_DRAKANOID
+        else
+            entry = DRAKONID_ENTRIES[math.random(1, 5)]
+        end
+        local loc = DRAKE_SPAWN_LOC[i]
+        local dragon = creature:SummonCreature(entry,
+            loc[1], loc[2], loc[3], loc[4])
+        if dragon then
+            dragon:SetFaction(FACTION_DRAGONFLIGHT_BLACK)
+            dragon:EngageWithTarget(victim)
+        end
+        st.spawnedAdds = st.spawnedAdds + 1
+        if st.spawnedAdds >= 42 then
+            -- C++ :355-364: summon Nefarian (unported), cancel the
+            -- events and drop Nefarius out of the fight via
+            -- me->SetVisible(false) (creature:SetVisible bridge,
+            -- Unit::SetVisible Unit.cpp:8656); the second dragon of
+            -- the wave never spawns once the cap is hit mid-loop.
+            creature:SetVisible(false)
+            cancelTimers(guid)
+            return
+        end
     end
     schedule(guid, "spawn_add", 4000, function()
         onNefariusSpawnAdd(creature, guid)

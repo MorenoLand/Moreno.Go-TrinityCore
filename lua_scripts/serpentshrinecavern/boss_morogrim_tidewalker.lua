@@ -157,6 +157,24 @@ end
 
 -- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
 -- (ironaya convention) — GetHealthPct() < 25 fires up to 1 HP early.
+-- C++ SelectTarget(Random, 0) with no offset and no playerOnly
+-- filter: uniform over the alive threat list, victim included
+-- (the earthquake lurker AttackStart picks, one fresh pick per
+-- cord — a shared pick would be wrong).
+local function randomThreatTargetAny(creature)
+    local targets = creature:GetAITargets()
+    local alive = {}
+    for _, unit in ipairs(targets) do
+        if not unit:IsDead() then
+            alive[#alive + 1] = unit
+        end
+    end
+    if #alive == 0 then
+        return nil
+    end
+    return alive[math.random(#alive)]
+end
+
 local function healthBelowPct(creature, pct)
     local max = creature:GetMaxHealth()
     if max == 0 then
@@ -188,12 +206,11 @@ local function morogrimTick(creature, guid)
     -- Earthquake 40s init: first fire -> DoCastVictim, arm the
     -- second stage in 10s; second fire -> Talk + 10x murloc
     -- summon + Talk(EMOTE), re-arm 40-45s (C++ boss_morogrim_
-    -- tidewalker.cpp:195-207: per cord SummonCreature(TIDEWALKER_
-    -- LURKER 21920, type 3, 10000ms) + AttackStart(random target);
-    -- the per-lurker target assignment rides DoZoneInCombat here
-    -- (the AttackStart substitute — lurkers carry no custom AI, so
-    -- engine combat carries them; the C++ per-summon target-exists
-    -- gate is vacuously true in combat).
+    -- tidewalker.cpp:195-207: per cord, a fresh SelectTarget
+    -- (Random,0) pick gates the SummonCreature(TIDEWALKER_
+    -- LURKER 21920, type 3, 10000ms) + AttackStart(pick); one
+    -- shared pick would be wrong, and DoZoneInCombat would
+    -- engage every player instead of the picked target).
     if st.earthquake <= 1000 then
         if not st.earthquakeArm then
             creature:CastSpell(nil, SPELL_EARTHQUAKE)
@@ -202,10 +219,13 @@ local function morogrimTick(creature, guid)
         else
             creature:Talk(SAY_SUMMON)
             for _, cord in ipairs(MURLOC_CORDS) do
-                local lurker = creature:SummonCreature(ENTRY_TIDEWALKER_LURKER,
-                    cord[1], cord[2], cord[3], cord[4], 3, 10000)
-                if lurker then
-                    lurker:DoZoneInCombat()
+                local pick = randomThreatTargetAny(creature)
+                if pick ~= nil then
+                    local lurker = creature:SummonCreature(ENTRY_TIDEWALKER_LURKER,
+                        cord[1], cord[2], cord[3], cord[4], 3, 10000)
+                    if lurker then
+                        lurker:EngageWithTarget(pick)
+                    end
                 end
             end
             creature:Talk(EMOTE_EARTHQUAKE)

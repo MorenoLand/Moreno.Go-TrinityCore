@@ -122,13 +122,11 @@
 -- arg — approximated). The 15s KillSelf arm is PORTED in
 -- shadowImageEnterCombat (creature:Kill(), C++ KillTimer 15000);
 -- the old "no kill bridge" claim was stale. The
--- sacrolash-side DoSpawnCreature summon (plain SummonCreature offset
--- wrapper — the summon bridge is live) stays out on the paired
--- AddThreat(target, 1000000.0f, temp) + AttackStart(target) legs
--- (:281-282, unbridged cross-creature combat relay; the image's sole
--- role is attacking the picked target) — images arrive only via
--- DB-side spawns — registered anyway for its own verifiable AI
--- arms (felmyst-trail convention).
+-- sacrolash-side DoSpawnCreature summon: the AttackStart(target) leg
+-- is PORTED 2026-10-26 (sacrolashShadowImage, EngageWithTarget
+-- bridge); the paired AddThreat(target, 1000000.0f, temp) leg stays
+-- out (AddThreat is self-threat only). DB-spawned images keep their
+-- own enter handler (felmyst-trail convention).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_EREDAR_TWINS book-
@@ -295,6 +293,30 @@ end
 
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
+-- C++ ShadowimageTimer (boss_eredar_twins.cpp:272-287): 20s
+-- init/repeat — 3x fresh random threat target each (SelectTarget
+-- Random,0, playerOnly=FALSE) + DoSpawnCreature(NPC_SHADOW_IMAGE
+-- 25214, boss position, TEMPSUMMON_CORPSE_DESPAWN 10s) +
+-- AttackStart(target) when both exist; the 1M cross-creature
+-- AddThreat leg stays out (AddThreat is self-threat only). The
+-- summoned images run their own enter handler (DB-spawned
+-- images share it); EngageWithTarget no-ops on non-player picks
+-- (session-only funnel, lua_creature_events.go:498-513).
+local function sacrolashShadowImage(creature, guid)
+    for _ = 1, 3 do
+        local target = randomThreatTarget(creature)
+        local image = creature:SummonCreature(25214,
+            creature:GetX(), creature:GetY(), creature:GetZ(),
+            creature:GetO(), 4, 10000)
+        if image ~= nil and target ~= nil then
+            image:EngageWithTarget(target)
+        end
+    end
+    schedule(guid, "shadowimage", 20000, function()
+        sacrolashShadowImage(creature, guid)
+    end)
+end
+
 local function sacrolashEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_eredar_twins.cpp:136 (JustEngagedWith arm 1; bridge live 2026-10-23)
     -- C++ JustEngagedWith (:140-144): sister Alythess (25166; instance
@@ -321,6 +343,9 @@ local function sacrolashEnterCombat(event, creature, target)
     end)
     schedule(guid, "confoundingblow", 25000, function()
         sacrolashConfoundingBlow(creature, guid)
+    end)
+    schedule(guid, "shadowimage", 20000, function()
+        sacrolashShadowImage(creature, guid)
     end)
     schedule(guid, "enrage", 360000, function()
         sacrolashEnrage(creature, guid)
