@@ -16694,8 +16694,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// targets, Spell.cpp:1173/1575). The jumps join the SMSG_SPELL_GO hit list
 	// and the initial-threat target set like C++'s m_UniqueTargetInfo; the
 	// per-effect jump caps and falloff thread through the effect loop below.
-	// A missed jump takes no miss entry on this path (no arrival-time miss
-	// model for triggered casts).
+	// A missed jump rolls like any target below (jumps join hitTargets,
+	// hence triggeredRollTargets) and rides the GO miss trailer.
 	chainJumpGUIDs := []uint64{}
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)

@@ -3163,23 +3163,37 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				packetHits = append(packetHits, guid)
 			}
-			for guid := range evadedSet {
-				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
-			}
 			for _, trip := range creatureReflectTrips {
-				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.guid, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
 				// ProcReflectDelayed (Spell.cpp:2181) for a creature reflector:
 				// the charge arm runs on the same timer (the taken-side proc
 				// loop has no creature event-list model here).
 				s.armCastCreatureReflectProcDelayed(ctx, motion, trip.guid, inlineSpell)
 			}
 			for _, trip := range reflectTrips {
-				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victim.GUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
 				// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
 				// arrival the reflector's taken-side auras proc with
 				// PROC_HIT_REFLECT — armed here, ahead of the GO send,
 				// matching the C++ AddUnitTarget position.
 				s.armInlineReflectProcDelayed(motion, trip.victim, inlineSpell)
+			}
+			// Spell::UpdateSpellCastDataTargets (Spell.cpp:4486-4508) walks
+			// m_UniqueTargetInfo in target order, so miss entries ride hit
+			// order — not map iteration order, which is random per cast.
+			reflectStatus := make(map[uint64]uint8, len(creatureReflectTrips)+len(reflectTrips))
+			for _, trip := range creatureReflectTrips {
+				reflectStatus[trip.guid] = trip.status
+			}
+			for _, trip := range reflectTrips {
+				reflectStatus[trip.victim.GUID] = trip.status
+			}
+			for _, guid := range hitTargets {
+				if evadedSet[guid] {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
+					continue
+				}
+				if status, ok := reflectStatus[guid]; ok {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
+				}
 			}
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
 			if target.Sess != nil {

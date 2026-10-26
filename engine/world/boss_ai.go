@@ -1671,20 +1671,19 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		var missStatus []protocol.SpellMissStatus
 		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
 			packetHits = make([]uint64, 0, len(hitTargets))
+			// Spell::UpdateSpellCastDataTargets (Spell.cpp:4486-4508) walks
+			// m_UniqueTargetInfo in target order, so miss entries ride hit
+			// order — not map iteration order, which is random per cast.
 			for _, guid := range hitTargets {
-				if _, ok := reflectedTargets[guid]; ok {
+				if status, ok := reflectedTargets[guid]; ok {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
 					continue
 				}
 				if evadedTargets[guid] {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
 					continue
 				}
 				packetHits = append(packetHits, guid)
-			}
-			for guid, status := range reflectedTargets {
-				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
-			}
-			for guid := range evadedTargets {
-				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
 			}
 		}
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
