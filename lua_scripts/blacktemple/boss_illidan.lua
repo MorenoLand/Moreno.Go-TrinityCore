@@ -63,12 +63,14 @@
 -- 26s then 30s, non-triggered on a random threat-list player
 -- alive (C++ SelectTarget(Random, 0, 0.0f, true)) /
 -- taunt Talk(SAY_ILLIDAN_TAUNT) 30s then {30s,60s}. The 10s evade
--- check has no boundary bridge — skipped; the music controller
--- arms ride instance->GetGameObject(DATA_ILLIDAN_MUSIC_CONTROLLER)
--- (no instance-script bridge — the bridge gap is the controller
--- fetch, not the sound: WorldObject::PlayDirectMusic = SMSG_PLAY_
--- MUSIC, which gameobject:PlayMusic sends); SetCanDualWield has no
--- bridge.
+-- check has no boundary bridge — skipped; the music controller arms
+-- JustEngagedWith 11725 + defeated-text 11728 PORT via
+-- creature:PlayMusic (same SMSG_PLAY_MUSIC opcode; source GUID is
+-- the creature, not the GO — the only difference, and the
+-- controller fetch is unnecessary since the sound needs no GO);
+-- the warglaive-point 11727 + resume-combat 11729 + akama-door
+-- 11717 arms stay out (their hosts ride unmodeled movement /
+-- finalize / door chains); SetCanDualWield has no bridge.
 -- OnDamageTaken(9, pre-damage hook): lethal from anyone but self
 -- (C++-exact guard) -> damage rewritten to health-1; if !_dead:
 -- _isDemon -> cancel all timers, non-triggered self-cast demon
@@ -318,6 +320,8 @@ local SAY_ILLIDAN_SHADOW_PRISON = 11
 local SAY_ILLIDAN_CONFRONT_MAIEV = 12
 local SAY_ILLIDAN_FRENZY = 13
 local SAY_ILLIDAN_DEFEATED = 14
+local SOUND_SUMMIT_WALK_3 = 11725 -- boss_illidan.cpp:85
+local SOUND_ARRIVAL_WALK_HERO_1 = 11728 -- boss_illidan.cpp:88
 
 -- Maiev talk lines (modeled arms only).
 local SAY_MAIEV_TAUNT = 0
@@ -884,6 +888,10 @@ local function illidanEnterCombat(event, creature)
     local guid = creature:GetGUID()
     illidanState[guid] = { phase = PHASE_1, dead = false,
                            isDemon = false, pillarIndex = 0 }
+    -- C++ JustEngagedWith (:495-496): musicController->PlayDirectMusic
+    -- (SUMMIT_WALK_3 11725) — ported as creature:PlayMusic (same
+    -- opcode; no GO fetch needed).
+    creature:PlayMusic(SOUND_SUMMIT_WALK_3)
     schedule(guid, "berserk", 25 * 60 * 1000, function()
         onBerserk(creature, guid)
     end)
@@ -935,6 +943,9 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
                 schedule(guid, "defeatedText", 4000, function()
                     creature:Talk(SAY_ILLIDAN_DEFEATED)
+                    -- C++ EVENT_DEFEATED_TEXT (:1015-1016): Talk +
+                    -- PlayDirectMusic(ARRIVAL_WALK_HERO_1 11728).
+                    creature:PlayMusic(SOUND_ARRIVAL_WALK_HERO_1)
                     schedule(guid, "quietSuicide", 18000, function()
                         creature:CastSpell(creature,
                             SPELL_QUIET_SUICIDE, true)

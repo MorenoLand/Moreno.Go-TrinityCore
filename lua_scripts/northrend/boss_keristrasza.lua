@@ -67,24 +67,34 @@
 -- bridges are live — the Oct-12 "no flag bridge" wording was stale);
 -- Initialize() rides the enraged-latch reset, _intenseColdList.clear()
 -- has no achievement bridge, and RemovePrison(CheckContainmentSpheres())
--- + _Reset() stay out (instance / GO-state gates — the
--- containment-sphere prison machine is documented-only; see
--- containment_sphere below).
+-- as a Reset gate evaluation stays out (the freeing direction now
+-- ports via the gossip handler below; re-evaluation on Reset is
+-- equivalent to a no-op in-instance because clicked spheres never
+-- deactivate, and the spawn-time prison state itself is DB/spawn-data
+-- territory); _Reset() stays out (instance bookkeeping).
 -- (the Oct-12 "no timer-event / random-target / cast bridge" and
 -- "no IsHeroic bridge" claims were wrong, retracted — the heroic
 -- crystallize leg is ported above.)
 -- SetGUID(DATA_INTENSE_COLD) — _intenseColdList push, consumed only by
 -- achievement_intense_cold's OnCheck — no SetGUID / GetData bridge and
 -- no achievement bridge.
--- containment_sphere — GameObjectScript: OnGossipHello — keristrasza
--- via instance->GetGuidData(DATA_KERISTRASZA) -> alive: SetFlag(GAME_
--- OBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE) + SetGoState(GO_STATE_ACTIVE)
--- + cross-AI CheckContainmentSpheres(true) (instance GetGuidData
--- ANOMALUS/ORMOROK/TELESTRAS_CONTAINMENT_SPHERE -> ObjectAccessor::
--- GetGameObject + GO_STATE_ACTIVE gate) -> RemovePrison(true)
--- (SetImmuneToPC(false) + RemoveFlag(NON_ATTACKABLE) +
--- RemoveAurasDueToSpell(FROZEN_PRISON 47854)) — joins the instance-
--- model-blocked gossip queue.
+-- containment_sphere — GameObjectScript: OnGossipHello — PORTED
+-- (RegisterGameObjectGossipEvent, kirtonos-brazier precedent): boss
+-- alive gate via go:FindNearestCreature(26723, 1000) (C++
+-- instance->GetGuidData(DATA_KERISTRASZA) twin — entry unique per
+-- instance, same-map+instance scoping; FindNearestCreature skips
+-- dead entries, so a non-nil result IS the alive gate). The
+-- SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE) + SetGoState
+-- (GO_STATE_ACTIVE) legs are kept verbatim but are currently no-ops
+-- for static spawns — Go materializes live GO state only for dynamic
+-- spawns (engine/world/gameobjects.go), so the gate cannot read GO
+-- states back: FindNearestGameObject returns DB defaults (state 1)
+-- and event 10 never fires for static GOs. The gate is therefore an
+-- instanceID-keyed Lua latch (player:GetInstanceId, one entry per
+-- sphere) instead of the C++ ObjectAccessor GetGoState read; on all
+-- three -> RemovePrison(true) (RemoveFlag(59, IMMUNE_TO_PC 0x100)
+-- per the mandokir 0x300 precedent + RemoveFlag(59,
+-- NON_ATTACKABLE 0x2) + RemoveAura(FROZEN_PRISON 47854)).
 -- spell_intense_cold — AuraScript HandlePeriodicTick (EFFECT_1
 -- SPELL_AURA_PERIODIC_DAMAGE): stack < 2 early-return; caster AI ->
 -- SetGUID(target GUID, DATA_INTENSE_COLD) (caster should be the boss
@@ -109,6 +119,16 @@ local SPELL_CRYSTAL_CHAINS = 50997 -- boss_keristrasza.cpp:34
 local SPELL_ENRAGE = 8599 -- boss_keristrasza.cpp:35
 local SPELL_CRYSTALFIRE_BREATH = 48096 -- boss_keristrasza.cpp:36
 local SPELL_CRYSTALLIZE = 48179 -- boss_keristrasza.cpp:37
+local SPELL_FROZEN_PRISON = 47854 -- boss_keristrasza.cpp:32
+local GO_ANOMALUS_CONTAINMENT_SPHERE = 188527 -- nexus.h:63
+local GO_ORMOROKS_CONTAINMENT_SPHERE = 188528 -- nexus.h:64
+local GO_TELESTRAS_CONTAINMENT_SPHERE = 188526 -- nexus.h:65
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_STATE_ACTIVE = 0
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- UnitDefines.h:125
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
 
 local timers = {}
 local keristraszaEnraged = {}
@@ -284,9 +304,50 @@ local function keristraszaTargetDied(event, creature, victim)
     end
 end
 
+-- C++ containment_sphere::OnGossipHello (boss_keristrasza.cpp:236-248)
+-- + CheckContainmentSpheres(true) (:118-135) + RemovePrison(true)
+-- (:138-145): the whole body sits inside the boss-alive gate; the
+-- per-sphere legs are SetFlag NOT_SELECTABLE + SetGoState ACTIVE, and
+-- the gate frees the boss only once all three spheres read ACTIVE.
+-- C++ returns true (handled) == Lua true (brazier polarity — a Lua
+-- false would let the native use arms proceed).
+local containmentSpheresClicked = {}
+
+local function unprisonKeristrasza(boss)
+    boss:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    boss:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    boss:RemoveAura(SPELL_FROZEN_PRISON)
+end
+
+local function onContainmentSphereGossip(_, player, go)
+    local boss = go:FindNearestCreature(ENTRY_KERISTRASZA, 1000)
+    if not boss then
+        return true
+    end
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    go:SetGoState(GO_STATE_ACTIVE)
+    local instanceID = player:GetInstanceId()
+    local clicked = containmentSpheresClicked[instanceID]
+    if not clicked then
+        clicked = {}
+        containmentSpheresClicked[instanceID] = clicked
+    end
+    clicked[go:GetEntry()] = true
+    if clicked[GO_ANOMALUS_CONTAINMENT_SPHERE]
+            and clicked[GO_ORMOROKS_CONTAINMENT_SPHERE]
+            and clicked[GO_TELESTRAS_CONTAINMENT_SPHERE] then
+        unprisonKeristrasza(boss)
+    end
+    return true
+end
+
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 1, keristraszaEnterCombat)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 2, keristraszaLeaveCombat)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 3, keristraszaTargetDied)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 4, keristraszaDied)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 9, keristraszaDamageTaken)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 23, keristraszaReset)
+
+RegisterGameObjectGossipEvent(GO_ANOMALUS_CONTAINMENT_SPHERE, 1, onContainmentSphereGossip)
+RegisterGameObjectGossipEvent(GO_ORMOROKS_CONTAINMENT_SPHERE, 1, onContainmentSphereGossip)
+RegisterGameObjectGossipEvent(GO_TELESTRAS_CONTAINMENT_SPHERE, 1, onContainmentSphereGossip)

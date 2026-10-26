@@ -39,14 +39,13 @@
 -- (independent CreateLuaEvent timers); the UpdateAI vanish-evade check
 -- stays out (EnterEvadeMode has no Lua bridge, 2026-10-21).
 -- Unmodeled (documented, not wired):
--- Reset CheckSpheres()/RemovePrison()/SummonCreatureGroup legs (sphere
--- data DATA_SPHERE_1/2, prison flags, UNIT_FLAG_NOT_SELECTABLE removal,
--- NPC_JEDOGA_CONTROLLER despawn, SPELL_HOVER_FALL 60425, MoveLand, GO
--- platform DATA_PRINCE_TALDARAM_PLATFORM handling, Talk(SAY_WARNING 1))
--- — instance-script model absent (standing blocker) — documented-only.
+-- Reset — CheckSpheres() evaluation PORTED on event 23 (shared helper
+-- with the gossip path; true re-fires RemovePrison exactly as C++
+-- does); the SummonCreatureGroup(CONTROLLERS) leg on false stays out
+-- (no SummonCreatureGroup bridge).
 -- The ctor's SetDisableGravity(true) ports on ev5 (taldaramSpawn);
--- the RemovePrison SetDisableGravity(false) (:286) rides the same
--- unported platform/GO machine and stays out.
+-- the RemovePrison SetDisableGravity(false) (:286) ports with
+-- removePrison below; only MoveLand and the platform GO leg stay out.
 -- npc_prince_taldaram_flame_sphere (30106 / 31686 / 31687 — entries
 -- verifiable from the file enums, kalecgos pass) — ENTRY-VERIFIABLE BUT
 -- BRIDGE-BLOCKED, zero registration: Reset DoCastSelf triggered (Flame
@@ -61,12 +60,19 @@
 -- "no despawn bridge (terestian precedent)" claim is stale) — registering
 -- the two cosmetic casts alone would still leave the creature motionless
 -- (the motion-master blocker stands), failing the faithful-port bar.
--- go_prince_taldaram_sphere (193093 / 193094 Ancient Nerubian Device,
--- OnGossipHello: SetFlag NOT_SELECTABLE + SetGoState ACTIVE +
--- instance SetData(DATA_SPHERE_1/2) + boss Talk(SAY_1 0) +
--- CheckSpheres()) — no GameObjectAI binding bridge on the Lua surface
--- (go_crystal_prison precedent) plus the payload requires the absent
--- instance SetData model — documented-only.
+-- go_prince_taldaram_sphere (193093 / 193094 Ancient Nerubian Device)
+-- — PORTED (RegisterGameObjectGossipEvent, kirtonos-brazier
+-- precedent): boss-alive gate via go:FindNearestCreature(29308, 100)
+-- (same room); SetFlag NOT_SELECTABLE + SetGoState ACTIVE legs kept
+-- verbatim (no-ops for static spawns — see keristrasza sphere note);
+-- instance SetData(DATA_SPHERE_1/2, IN_PROGRESS) twin is boss
+-- ScriptData via creature:SetData/GetData (per-creature store, not
+-- the instance script — only Lua reads it, so the substitution is
+-- complete within the port; the Go instance script's SpheresState
+-- save/load + OnGameObjectCreate re-apply are not fed); boss
+-- Talk(SAY_1 0) + CheckSpheres() -> RemovePrison() PORTED except
+-- MoveLand (no bridge) and the platform HandleGameObject(true) leg
+-- (static-GO state write, no-op) — both documented in removePrison.
 -- spell_prince_taldaram_conjure_flame_sphere (55931: self-cast
 -- 55895 + heroic 59511/59512) and
 -- spell_prince_taldaram_flame_sphere_summon (55895/59511/59512:
@@ -78,6 +84,8 @@
 
 local ENTRY_PRINCE_TALDARAM = 29308
 
+local SAY_1 = 0 -- boss_prince_taldaram.cpp:67
+local SAY_WARNING = 1 -- boss_prince_taldaram.cpp:68
 local SAY_AGGRO = 2
 local SAY_SLAY  = 3
 local SAY_DEATH = 4
@@ -89,6 +97,20 @@ local SPELL_CONJURE_FLAME_SPHERE = 55931
 local SPELL_VANISH               = 55964
 local SPELL_SHADOWSTEP           = 55966
 local SPELL_EMBRACE_OF_THE_VAMPYR = 55959
+local SPELL_BEAM_VISUAL = 60342 -- boss_prince_taldaram.cpp:50
+local SPELL_HOVER_FALL = 60425 -- boss_prince_taldaram.cpp:51
+local DATA_SPHERE_1 = 5 -- ahnkahet.h:38
+local DATA_SPHERE_2 = 6 -- ahnkahet.h:39
+local DATA_GROUND_POSITION_Z = 11.30809 -- boss_prince_taldaram.cpp:63
+local GO_SPHERE_1 = 193093 -- ahnkahet.h:77
+local GO_SPHERE_2 = 193094 -- ahnkahet.h:78
+local GO_PRINCE_TALDARAM_PLATFORM = 193564 -- ahnkahet.h:76
+local NPC_JEDOGA_CONTROLLER = 30181 -- ahnkahet.h:59
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_STATE_ACTIVE = 0
 
 local timers = {}
 
@@ -232,10 +254,16 @@ local function taldaramDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+local checkSpheres
+
 local function taldaramReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearEmbrace(guid)
+    -- C++ Reset (:101-112): CheckSpheres() side effect (RemovePrison
+    -- when both spheres set) ports via the shared helper below; the
+    -- SummonCreatureGroup(CONTROLLERS) leg on false has no bridge.
+    checkSpheres(creature)
 end
 
 -- C++ DamageTaken embrace latch: accumulate while the embrace target
@@ -267,6 +295,65 @@ local function taldaramSpawn(event, creature)
     creature:SetDisableGravity(true)
 end
 
+-- C++ boss_prince_taldaramAI::RemovePrison (:279-292) + CheckSpheres
+-- (:261-269): both sphere data set -> free the boss. Leg-by-leg:
+-- RemoveFlag NOT_SELECTABLE + RemoveAura(BEAM_VISUAL 60342) +
+-- SetHomePosition(x, y, 11.30809, o) + DoCast(HOVER_FALL 60425) +
+-- SetDisableGravity(false) + Talk(SAY_WARNING 1) all bridged;
+-- summons.DespawnEntry(JEDOGA_CONTROLLER 30181) via
+-- GetCreaturesInGrid + Despawn (anubarak mass-despawn precedent —
+-- grid scope instead of summon-list scope; controllers exist only
+-- as this boss's summons in the fight); MoveLand has no bridge
+-- (the boss keeps its hover height — SetDisableGravity(false) is
+-- still applied); platform HandleGameObject(true) = GO_STATE_ACTIVE
+-- via FindNearestGameObject(193564, 100) + SetGoState (static-GO
+-- state write, currently a no-op — kept verbatim for faithfulness).
+local function removePrison(boss)
+    boss:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    for _, controller in ipairs(boss:GetCreaturesInGrid(NPC_JEDOGA_CONTROLLER, 100)) do
+        controller:Despawn()
+    end
+    boss:RemoveAura(SPELL_BEAM_VISUAL)
+    boss:SetHomePosition(boss:GetX(), boss:GetY(), DATA_GROUND_POSITION_Z, boss:GetO())
+    boss:CastSpell(boss, SPELL_HOVER_FALL)
+    boss:SetDisableGravity(false)
+    boss:Talk(SAY_WARNING)
+    local platform = boss:FindNearestGameObject(GO_PRINCE_TALDARAM_PLATFORM, 100)
+    if platform then
+        platform:SetGoState(GO_STATE_ACTIVE)
+    end
+end
+
+checkSpheres = function(boss)
+    if boss:GetData(DATA_SPHERE_1) == 0 or boss:GetData(DATA_SPHERE_2) == 0 then
+        return false
+    end
+    removePrison(boss)
+    return true
+end
+
+-- C++ go_prince_taldaram_sphere::OnGossipHello (:411-433): the whole
+-- body sits inside the boss-alive gate (FindNearestCreature nil =
+-- dead-or-absent, same gate as keristrasza); entry selects
+-- DATA_SPHERE_1 (193093) vs DATA_SPHERE_2 (193094); Talk(SAY_1 0)
+-- fires for both; C++ returns true (handled) == Lua true.
+local function onTaldaramSphereGossip(_, _, go)
+    local boss = go:FindNearestCreature(ENTRY_PRINCE_TALDARAM, 100)
+    if not boss then
+        return true
+    end
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    go:SetGoState(GO_STATE_ACTIVE)
+    if go:GetEntry() == GO_SPHERE_1 then
+        boss:SetData(DATA_SPHERE_1, 1)
+    elseif go:GetEntry() == GO_SPHERE_2 then
+        boss:SetData(DATA_SPHERE_2, 1)
+    end
+    boss:Talk(SAY_1)
+    checkSpheres(boss)
+    return true
+end
+
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 2, taldaramLeaveCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 3, taldaramTargetDied)
@@ -274,3 +361,6 @@ RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 4, taldaramDied)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 9, taldaramDamageTaken)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 5, taldaramSpawn)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 23, taldaramReset)
+
+RegisterGameObjectGossipEvent(GO_SPHERE_1, 1, onTaldaramSphereGossip)
+RegisterGameObjectGossipEvent(GO_SPHERE_2, 1, onTaldaramSphereGossip)
