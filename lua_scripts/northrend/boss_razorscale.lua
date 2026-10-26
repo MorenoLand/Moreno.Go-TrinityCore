@@ -183,12 +183,12 @@
 -- GameObjectScripts — no registrations; no creature-event
 -- handlers fire for GOs. The harpoon Reset arm is PORTED below via
 -- GO OnAdd (event 12, dynamic spawns — gameobjects.go:1700); the
--- broken-harpoon RemoveFromWorld leg stays out (FindNearestGameObject
--- exists only on the creature surface, not the GO object), and the
--- OnGossipHello arm (:1504-1523, controller HasUnitState(CASTING)
--- gate + controller CastSpell) stays out on the unbridged cast-state
--- gate (IsCasting is constant-false — Go casts are fire-and-forget,
--- so the gate cannot be evaluated).
+-- broken-harpoon RemoveFromWorld leg PORTED below (a4a20ffd; the GO
+-- FindNearestGameObject bridge lives at lua_objects.go:1361), and the
+-- OnGossipHello arm (:1516-1530) PORTED below: SetFlag +
+-- controller:IsCasting() gate (constant-false twin, caststate axiom;
+-- double-click race unmodeled, halazzi precedent) + controller
+-- CastSpell(nil, entry spell, true).
 -- spell_razorscale_flame_breath (63317/64021),
 -- spell_razorscale_summon_iron_dwarves (63968/63970/63969),
 -- spell_razorscale_fuse_armor (64821), spell_razorscale_firebolt
@@ -335,4 +335,40 @@ end
 
 for _, entry in ipairs(GO_RAZOR_HARPOONS) do
     RegisterGameObjectEvent(entry, 12, harpoonAdd)
+end
+
+-- C++ go_razorscale_harpoon::OnGossipHello (boss_razorscale.cpp:1516-1530):
+-- SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE) unconditional, then
+-- controller = FindNearestCreature(NPC_RAZORSCALE_CONTROLLER, 5.0f);
+-- if the controller is casting, return true (no cast); else controller->
+-- CastSpell(nullptr, SelectRightSpell(), true), spell by harpoon entry
+-- (boss_razorscale.cpp:73-76, ulduar.h:251-254). The casting gate ports
+-- as controller:IsCasting() (lua_creature_events.go:881, constant-false
+-- twin under the caststate axiom); CastSpell(nil, ...) = victim-cast,
+-- a no-op when the trigger controller holds no victim in Go's motion
+-- state. The SetFlag write is the live anti-reclick effect.
+local HARPOON_SHOT_BY_ENTRY = {
+    [194542] = 63658, -- GO_RAZOR_HARPOON_1 -> SPELL_HARPOON_SHOT_1
+    [194541] = 63657, -- GO_RAZOR_HARPOON_2 -> SPELL_HARPOON_SHOT_2
+    [194543] = 63659, -- GO_RAZOR_HARPOON_3 -> SPELL_HARPOON_SHOT_3
+    [194519] = 63524, -- GO_RAZOR_HARPOON_4 -> SPELL_HARPOON_SHOT_4
+}
+
+local function onHarpoonGossip(_, _, go)
+    go:SetFlag(GAMEOBJECT_FLAGS_FIELD, GO_FLAG_NOT_SELECTABLE)
+    local controller = go:FindNearestCreature(ENTRY_RAZORSCALE_CONTROLLER, 5.0)
+    if controller then
+        if controller:IsCasting() then
+            return true
+        end
+        local spellId = HARPOON_SHOT_BY_ENTRY[go:GetEntry()]
+        if spellId then
+            controller:CastSpell(nil, spellId, true)
+        end
+    end
+    return true
+end
+
+for _, entry in ipairs(GO_RAZOR_HARPOONS) do
+    RegisterGameObjectGossipEvent(entry, 1, onHarpoonGossip)
 end
