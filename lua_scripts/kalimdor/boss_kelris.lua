@@ -80,9 +80,10 @@ end
 -- the boss (bystanders in the instance).
 local function randomPlayerInRange(creature, maxDist)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive() then
-            if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
+            if maxDist <= 0 or creature:GetDistance(t) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
                 candidates[#candidates + 1] = t
             end
         end

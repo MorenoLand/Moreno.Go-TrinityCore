@@ -31,7 +31,7 @@
 -- (the bridged threat list; midnight precedent — C++ iterates the
 -- threat list, never the instance map), playerOnly=true honored by
 -- the "Player" filter (illidan victim:GetObjectType() convention),
--- 80.0f band via GetDistance2d.
+-- 80.0f/20.0f bands via IsWithinCombatRange (UnitAI.cpp:273, Unit.cpp:583).
 -- EVENT_RESONANCE — if victim NOT within melee range: DoCast(me,
 -- SPELL_RESONANCE 33657) 2-arg (non-triggered), 5s re-arm; if the
 -- victim IS in melee range the event is CONSUMED with no re-arm
@@ -123,9 +123,10 @@ end
 -- fallback (engine/scripting/object.go:158).
 local function randomThreatTarget(creature, maxDist, playersOnly)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, t in ipairs(creature:GetAITargets()) do
         if not t:IsDead() and ((not playersOnly) or t:GetObjectType() == "Player") then
-            if maxDist <= 0 or creature:GetDistance2d(t) <= maxDist then
+            if maxDist <= 0 or creature:GetDistance(t) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
                 candidates[#candidates + 1] = t
             end
         end

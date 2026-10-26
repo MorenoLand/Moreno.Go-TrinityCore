@@ -170,7 +170,7 @@ local function midnightEnterCombat(event, creature, target)
 end
 
 -- C++ boss_attumenAI::SpellHit(SPELL_MOUNT) 1s proximity poll
--- (boss_midnight.cpp): if within 5yd 2d of midnight, DoCastAOE
+-- (boss_midnight.cpp): if within 5yd 2d + Attumen's reach of midnight, DoCastAOE
 -- (SPELL_SUMMON_ATTUMEN_MOUNTED) + both SetVisible(false); else re-follow
 -- + repeat. Driven here from midnight's 25% arm because Go self-casts hit
 -- only the caster (no AoE fan-out), so SpellHit delivery to Attumen is
@@ -182,7 +182,7 @@ end
 -- LeaveCombat/Reset.
 local function onMountPoll(creature, guid)
     local attumen = creature:FindNearestCreature(ENTRY_ATTUMEN, 200)
-    if attumen ~= nil and creature:GetDistance2d(attumen) <= 5.0 then
+    if attumen ~= nil and creature:GetDistance2d(attumen) - attumen:GetCombatReach() < 5.0 then -- IsWithinDist2d adds Attumen's reach (Object.cpp:1228)
         local mounted = creature:SummonCreature(ENTRY_ATTUMEN_MOUNTED,
             attumen:GetX(), attumen:GetY(), attumen:GetZ(), 0)
         if mounted ~= nil then

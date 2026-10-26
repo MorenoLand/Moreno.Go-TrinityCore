@@ -105,9 +105,9 @@ end
 -- C++ SelectTarget(Random, 1, 30.0f, true) (shadowfang_keep.cpp):
 -- UnitAI.h builds the list victim-first, so offset 1 removes the
 -- victim, not the threat head; a list of size <= 1 yields nil
--- outright (the C++ shortcut). Distance via GetDistance2d
--- (gerstahn/kelris precedent; C++ IsWithinCombatRange is the same
--- band up to combat reach).
+-- outright (the C++ shortcut). Distance via IsWithinCombatRange (UnitAI.cpp:273, Unit.cpp:583):
+-- 3D center < dist + own reach + target reach; target reach
+-- unbridged, so the twin subtracts own reach only.
 local function randomTargetInRange(creature, range)
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -119,11 +119,12 @@ local function randomTargetInRange(creature, range)
         return nil
     end
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for i, t in ipairs(targets) do
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance2d(t) <= range then
+                and creature:GetDistance(t) - reach < range then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = t
         end
     end
