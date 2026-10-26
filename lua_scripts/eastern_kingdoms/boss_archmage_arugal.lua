@@ -121,9 +121,16 @@ local function randomTargetInRange(creature, range)
     end
     local candidates = {}
     local reach = creature:GetCombatReach()
-    for i, t in ipairs(targets) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:GetDistance(t) - reach - 1.5 < range then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
             candidates[#candidates + 1] = t

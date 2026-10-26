@@ -122,9 +122,16 @@ local function randomSpringTarget(creature, maxDist)
     end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i, plr in ipairs(targets) do
-        if ((victimGuid ~= nil and plr:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, plr in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = plr:GetGUID() == victimGuid
+        elseif not plr:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and plr:GetObjectType() == "Player" and not plr:IsDead()
                 and creature:GetDistance(plr) - creature:GetCombatReach() - 1.5 < maxDist then
             candidates[#candidates + 1] = plr

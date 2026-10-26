@@ -387,9 +387,18 @@ local function randomPlayerTarget(creature, maxDist, skipFirst)
         end
     end
     local candidates = {}
-    for i, t in ipairs(targets) do
-        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if skipFirst then
+            if victimGuid ~= nil then
+                skip = t:GetGUID() == victimGuid
+            elseif not t:IsDead() then
+                aliveSeen = aliveSeen + 1
+                skip = aliveSeen == 1
+            end
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and not t:IsDead()
                 and (not maxDist or creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist) then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
@@ -416,9 +425,16 @@ local function randomNonHeadPlayerTarget(creature, excludeAura)
     local victim = creature:GetVictim()
     local victimGuid = victim and victim:GetGUID() or nil
     local candidates = {}
-    for i, t in ipairs(targets) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and not t:IsDead()
                 and (excludeAura == nil or not t:HasAura(excludeAura)) then
             candidates[#candidates + 1] = t

@@ -56,9 +56,16 @@ local function selectDeathPlagueTarget(creature)
         victimGuid = victim:GetGUID()
     end
     local candidates = {}
-    for i, unit in ipairs(creature:GetAITargets()) do
-        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, unit in ipairs(creature:GetAITargets()) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = unit:GetGUID() == victimGuid
+        elseif not unit:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 <= 100.0
                 and not unit:HasAura(SPELL_DEATH_PLAGUE_AURA)

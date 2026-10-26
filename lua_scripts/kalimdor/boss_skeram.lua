@@ -141,9 +141,16 @@ local function onTrueFulfillment(creature, guid)
         victimGuid = victim:GetGUID()
     end
     local cands = {}
-    for i, p in ipairs(creature:GetAITargets()) do
-        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, p in ipairs(creature:GetAITargets()) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = p:GetGUID() == victimGuid
+        elseif not p:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 45.0 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
             cands[#cands + 1] = p

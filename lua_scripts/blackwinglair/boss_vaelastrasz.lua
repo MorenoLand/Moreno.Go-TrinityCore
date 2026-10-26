@@ -190,9 +190,16 @@ local function onBurningAdrenalineCaster(creature, guid)
         victimGuid = victim:GetGUID()
     end
     local candidates = {}
-    for i, t in ipairs(creature:GetAITargets()) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i ~= 1))
+    local aliveSeen = 0
+    for _, t in ipairs(creature:GetAITargets()) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and t:IsAlive()
                 and t:GetPowerType() == POWER_MANA
                 and not t:HasAura(SPELL_BURNINGADRENALINE) then

@@ -98,9 +98,16 @@ local function randomThreatPlayerSkippingFirstInRange(creature, maxDist)
         victimGuid = victim:GetGUID()
     end
     local players = {}
-    for i, t in ipairs(creature:GetAITargets()) do
-        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i ~= 1))
+    local aliveSeen = 0
+    for _, t in ipairs(creature:GetAITargets()) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             players[#players + 1] = t
