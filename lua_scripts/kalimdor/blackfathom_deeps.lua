@@ -18,7 +18,9 @@
 -- DATA_AKU_MAI DONE); the ScriptName->entry tie is name-inferential
 -- (altar = ALTAR_OF_THE_DEEPS), documented per the hexlord-adds precedent.
 -- go_blackfathom_fire's four braziers (GO_FIRE_OF_AKU_MAI_1..4 =
--- 21118-21121) stay unregistered (see below).
+-- 21118-21121) PORTED below: SetGoState(ACTIVE) + SetFlag(
+-- NOT_SELECTABLE), C++-exact; the instance DATA_FIRE leg stays out
+-- (no instance-data bridge), gundrak-altar precedent.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven in
 -- Go (creature combat tick), like C++ DoMeleeAttackIfReady. There is no
@@ -52,12 +54,12 @@
 --   engine-driven melee.
 -- - GetBlackfathomDeepsAI -> GetInstanceAI leg: instance-script model
 --   blocked (standing).
--- - go_blackfathom_fire (GO 21118-21121): OnGossipHello's core arm is
---   instance->SetData(DATA_FIRE, GetData(DATA_FIRE) + 1), which drives the
---   instance's summon waves — instance model blocked; registering a gossip
---   hook whose SetGoState/NOT_SELECTABLE arms are purely cosmetic would be
---   a firesworn stub (go_keystone_chamber / go_altar_of_archaedas
---   precedent) — DOCUMENTED, not registered.
+-- - go_blackfathom_fire (GO 21118-21121): PORTED below — the earlier
+--   "firesworn stub" stay-out is superseded by the gundrak-altar
+--   precedent (identical shape: live GO state writes ported, instance
+--   SetData leg out). instance->SetData(DATA_FIRE, GetData(DATA_FIRE)
+--   + 1), which drives the instance's summon waves, stays out:
+--   instance model blocked (standing).
 -- - npc_morridune (entry 6729, blackfathom_deeps.h:59): PORTED below —
 --   Reset's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) twin on
 --   spawn (event 5) keeps the select arm gated exactly like C++ (the
@@ -188,6 +190,27 @@ local function onAltarGossip(_, player)
 end
 
 RegisterGameObjectGossipEvent(ENTRY_ALTAR_OF_THE_DEEPS, 1, onAltarGossip)
+
+-- C++ go_blackfathom_fire::OnGossipHello (blackfathom_deeps.cpp:73-82):
+-- SetGoState(GO_STATE_ACTIVE) + SetFlag(GAMEOBJECT_FLAGS,
+-- GO_FLAG_NOT_SELECTABLE), unconditional; C++ returns true (handled)
+-- == Lua true. The instance DATA_FIRE increment leg stays out (no
+-- instance-data bridge); the GO state writes are live per-instance
+-- state (gundrak-altar precedent), not cosmetic.
+local GO_FIRES_OF_AKU_MAI = {21118, 21119, 21120, 21121} -- blackfathom_deeps.h:65-68
+local GAMEOBJECT_FLAGS_FIELD = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_STATE_ACTIVE = 0
+
+local function onFireGossip(_, _, go)
+    go:SetGoState(GO_STATE_ACTIVE)
+    go:SetFlag(GAMEOBJECT_FLAGS_FIELD, GO_FLAG_NOT_SELECTABLE)
+    return true
+end
+
+for _, entry in ipairs(GO_FIRES_OF_AKU_MAI) do
+    RegisterGameObjectGossipEvent(entry, 1, onFireGossip)
+end
 
 -- npc_morridune (entry 6729, blackfathom_deeps.h:59; blackfathom_deeps.cpp:196-232).
 local ENTRY_MORRIDUNE = 6729

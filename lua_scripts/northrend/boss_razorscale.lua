@@ -310,18 +310,25 @@ RegisterCreatureEvent(ENTRY_EXPEDITION_DEFENDER, 23, expeditionDefenderReset)
 
 -- C++ go_razorscale_harpoon::Reset (boss_razorscale.cpp:1488-1498),
 -- 1s leg only: FindNearestCreature(NPC_RAZORSCALE_CONTROLLER 33233,
--- 5.0f) -> Talk(EMOTE_HARPOON 0). The broken-harpoon leg stays out:
--- FindNearestGameObject exists only on the creature surface, not
--- the GO object. Latent until the commander DoAction chain ports.
+-- 5.0f) -> Talk(EMOTE_HARPOON 0) + FindNearestGameObject(
+-- GO_RAZOR_BROKEN_HARPOON 194565, 5.0f) -> RemoveFromWorld. The
+-- earlier "no GO FindNearestGameObject" stay-out was stale: the
+-- bridge lives on the GO surface (lua_objects.go:1361), same as
+-- the magmus GO-anchor precedent.
 local ENTRY_RAZORSCALE_CONTROLLER = 33233 -- ulduar.h:94
 local EMOTE_HARPOON = 0
 local GO_RAZOR_HARPOONS = {194542, 194541, 194543, 194519} -- ulduar.h:251-254
+local GO_RAZOR_BROKEN_HARPOON = 194565 -- ulduar.h:255
 
 local function harpoonAdd(_, go)
     CreateLuaEvent(function()
         local controller = go:FindNearestCreature(ENTRY_RAZORSCALE_CONTROLLER, 5.0)
         if controller then
             controller:Talk(EMOTE_HARPOON, controller)
+        end
+        local broken = go:FindNearestGameObject(GO_RAZOR_BROKEN_HARPOON, 5.0)
+        if broken then
+            broken:RemoveFromWorld()
         end
     end, 1000)
 end
