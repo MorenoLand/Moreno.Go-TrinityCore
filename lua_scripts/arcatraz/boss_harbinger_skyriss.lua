@@ -250,18 +250,21 @@ local function introTick(creature, guid)
     end
 end
 
--- C++ SelectTarget(Random, 1): the first MaxThreat entry is
--- skipped BEFORE filters (UnitAI.h), then any threat-list unit
--- alive, no range cap (playerOnly defaults false) — nil when none
--- qualify. The old victim-GUID exclusion was wrong when the victim
--- is not the threat head, and the old instance-player pool admitted
--- players with no threat.
+-- C++ SelectTarget(Random, 1): UnitAI.h builds the list victim-first,
+-- so offset 1 removes the victim, not the threat head; then any
+-- threat-list unit alive, no range cap (playerOnly defaults false).
 local function randomThreatPastHead(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local unit = targets[i]
-        if not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

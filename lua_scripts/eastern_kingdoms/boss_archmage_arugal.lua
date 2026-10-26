@@ -103,22 +103,26 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1, 30.0f, true) (shadowfang_keep.cpp):
--- the threat list's first entry (top threat, UnitAI.h:176-184) is
--- skipped BEFORE the playerOnly/range filter, and a list of size
--- <= 1 yields nil outright (the C++ shortcut); GetAITargets is the
--- bridged threat list in descending-threat order (threat.go:889),
--- so index 1 is the skipped entry. Distance via GetDistance2d
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head; a list of size <= 1 yields nil
+-- outright (the C++ shortcut). Distance via GetDistance2d
 -- (gerstahn/kelris precedent; C++ IsWithinCombatRange is the same
 -- band up to combat reach).
 local function randomTargetInRange(creature, range)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     if #targets <= 1 then
         return nil
     end
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and t:IsAlive()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:GetDistance2d(t) <= range then
             candidates[#candidates + 1] = t
         end

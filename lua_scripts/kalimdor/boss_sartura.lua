@@ -122,15 +122,21 @@ startWhirlwind = function(creature, guid)
     end)
 end
 
--- C++ SelectTarget(Random, 1, 100.0f, true) pool: threat-list players
--- alive within 100 yd, with the first MaxThreat entry skipped BEFORE
--- the filters (UnitAI.h offset-before-filter) — not a victim exclusion.
+-- C++ SelectTarget(Random, 1, 100.0f, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
+-- then threat-list players alive within 100 yd.
 local function randomThreatPlayer100SkipFirst(creature)
     local players = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local p = targets[i]
-        if p:GetObjectType() == "Player" and not p:IsDead()
+    for i, p in ipairs(targets) do
+        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= 100 then
             players[#players + 1] = p
         end

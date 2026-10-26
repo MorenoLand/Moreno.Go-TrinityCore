@@ -130,16 +130,22 @@ local function fullReset(guid)
     combatStates[guid] = nil
 end
 
--- C++ SelectTarget(Random, 1, 0.0f, true): the first MaxThreat
--- entry is skipped BEFORE filters (UnitAI.h), then threat-list
--- players alive, no range cap. The C++ skips the sacrifice arm
+-- C++ SelectTarget(Random, 1, 0.0f, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
+-- then threat-list players alive, no range cap.
 -- when it picks no target.
 local function randomThreatPlayerPastHead(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

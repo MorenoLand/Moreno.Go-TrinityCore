@@ -231,20 +231,22 @@ local function randomThreatUnit(creature)
     return pool[math.random(#pool)]
 end
 
--- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random,
--- 1): the first MaxThreat entry is skipped BEFORE the filters
--- (UnitAI.h:163-174, offset-before-filter — not a victim-GUID
--- exclusion, which differs when the victim is not the threat
--- head); playerOnly and maxDist filter like
--- DefaultTargetSelector; dead members are offline in C++
--- (skipped at list build) so they are filtered here.
--- playerOnly=false leaves pets/totems eligible.
+-- C++ SelectTarget(Random, 1, 100, true) / SelectTarget(Random, 1):
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head; then the playerOnly/maxDist filters
+-- (DefaultTargetSelector) and the dead-offline filter apply.
 local function randomThreatTarget(creature, playerOnly, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local pool = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if not t:IsDead()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not t:IsDead()
                 and (not playerOnly or t:GetObjectType() == "Player")
                 and (not maxDist or creature:GetDistance(t) <= maxDist) then
             pool[#pool + 1] = t

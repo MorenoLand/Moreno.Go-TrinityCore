@@ -91,14 +91,20 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1, 0.0f, true) (boss_doomwalker.cpp:147):
--- the first MaxThreat entry is skipped BEFORE the filters
--- (UnitAI.h offset-before-filter) — not a victim exclusion.
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head; then player + alive.
 local function randomThreatPlayerSkipFirst(creature)
     local candidates = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

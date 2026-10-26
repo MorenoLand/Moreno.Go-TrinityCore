@@ -198,17 +198,21 @@ local function randomThreatTarget(creature, maxDist, playersOnly, hasAuraExclude
     return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(Random, 1, dist, true): the offset-1 skip runs
--- BEFORE the player/dist filters in MaxThreat order (UnitAI.h) —
--- skip GetAITargets()[1], then filter Player + alive + dist (eck
--- precedent, 2026-10-25; the old victim-GUID exclusion was wrong
--- when top threat != victim).
+-- C++ SelectTarget(Random, 1, dist, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
+-- then Player + alive + dist filters (eck precedent).
 local function randomNonVictimTarget(creature, maxDist)
     local candidates = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:IsAlive() and t:GetObjectType() == "Player"
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:IsAlive() and t:GetObjectType() == "Player"
                 and (maxDist <= 0 or creature:GetDistance(t) <= maxDist) then
             candidates[#candidates + 1] = t
         end

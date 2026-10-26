@@ -110,20 +110,22 @@ local function berserkTick(creature, guid)
     end
 end
 
--- C++ SelectTarget(Random, 1, 35.0f, true) — UnitAI.h:214-280:
--- the threat list in MaxThreat order (current victim first) drops
--- its first entry BEFORE the predicate filter, then player-only +
--- within-35y units are the pool (withTank defaults true, so the tank
--- is not excluded by rule — only MaxThreat #1 is skipped). The
--- GetPlayersInWorld pool + victim-GUID exclusion this replaces could
--- pick instance players with no threat entry, which C++ never does
--- (the 2026-10-25 Utgarde/Gruul threat-pool fix class).
+-- C++ SelectTarget(Random, 1, 35.0f, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
+-- then player-only + within-35y units (withTank defaults true, so
+-- the tank is not excluded by rule — only the victim is skipped).
 local function randomSpringTarget(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local plr = targets[i]
-        if plr:GetObjectType() == "Player" and not plr:IsDead()
+    for i, plr in ipairs(targets) do
+        if ((victimGuid ~= nil and plr:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and plr:GetObjectType() == "Player" and not plr:IsDead()
                 and creature:GetDistance(plr) <= maxDist then
             candidates[#candidates + 1] = plr
         end

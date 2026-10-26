@@ -233,16 +233,22 @@ local function randomThreatUnit(creature)
     return pool[math.random(#pool)]
 end
 
--- C++ SelectTarget(Random, 1, 100, true): the first MaxThreat
--- entry is skipped BEFORE the filters (UnitAI.h:163-174),
+-- C++ SelectTarget(Random, 1, 100, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
 -- then player + alive + within 100 yd (GetDistance approx
 -- for IsWithinCombatRange, zereketh precedent).
 local function randomChargeTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and creature:GetDistance(t) <= 100 then
             candidates[#candidates + 1] = t
         end
