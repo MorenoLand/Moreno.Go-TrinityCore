@@ -1829,10 +1829,18 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		} else if ignoreResist > 100 {
 			ignoreResist = 100
 		}
+		preResistDmg := damage
 		resist, damage = calcMagicSpellResistance(damage, schoolMask, s.player.Resistances, s.player.Level, s.player.Level, false, false, ignoreResist, spellResistInput{targetResistMod: s.casterTargetResistMod(uint32(schoolMask))}, s.player.SpellPenetration)
 		if damage > 0 {
-			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(uint32(schoolMask)))
-			absorbed, remaining := s.applyAbsorptionShields(damage-bypass, schoolMask)
+			// C++ takes the bypass pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975); the pool is the post-resist damage less the bypass, floored at zero (ModifyDamage clamp, Unit.cpp:194-196).
+			bypass := absorbIgnoreBypass(preResistDmg, s.absorbIgnorePct(uint32(schoolMask)))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, remaining := s.applyAbsorptionShields(pool, schoolMask)
 			absorb = absorbed
 			damage = remaining + bypass
 		}

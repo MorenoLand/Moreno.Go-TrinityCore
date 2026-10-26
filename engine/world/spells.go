@@ -15388,52 +15388,6 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 	}
 
-	if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
-		chaosBolt := false
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
-			}
-		}
-		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-		// the live resistance fold (22/101/143) lands on every creature
-		// victim's resistances.
-		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
-		// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
-		// armor figure is evaluated on the post-crit damage, like the
-		// C++ leg inside DealDamage; it runs even for FIXED_DAMAGE and
-		// CU_IGNORE_ARMOR spells, which skip the taken-block armor arm.
-		hybridArmorReduced := uint32(0)
-		if isHybridSpell && s.player != nil {
-			armor := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-				armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
-			}
-			if armor < 0 {
-				armor = 0
-			}
-			if armor > 0 {
-				armor = s.ignoreTargetResistArmor(armor, dmgSpell)
-				hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
-			} else {
-				hybridArmorReduced = damage
-			}
-		}
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
-			ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
-			binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
-			hybrid:             isHybridSpell,
-			hybridArmorReduced: hybridArmorReduced,
-			targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
-		}, s.player.SpellPenetration)
-		if resisted > 0 && damage == 0 {
-			// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
-			// captured here, before immunity/absorption/taken
-			// multipliers can zero the damage for other reasons.
-			fullyResisted = true
-		}
-	}
-
 	if instantKill {
 		damage, hitInfo, resisted, absorbed = target.Health, 0, 0, 0
 	}
@@ -15510,12 +15464,66 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 				playerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 			}
+			preResistDmg := damage
+			if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+				chaosBolt := false
+				if s.server != nil && s.server.Data != nil {
+					if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+						chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
+					}
+				}
+				// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
+				// the live resistance fold (22/101/143) lands on every creature
+				// victim's resistances.
+				resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
+				// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+				// armor figure is evaluated on the CalcAbsorbResist entry damage
+				// (post-taken/block/resilience here), like the C++ leg inside
+				// DealDamage; it runs even for FIXED_DAMAGE and CU_IGNORE_ARMOR
+				// spells, which skip the taken-block armor arm.
+				hybridArmorReduced := uint32(0)
+				if isHybridSpell && s.player != nil {
+					armor := float64(target.Armor)
+					if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+						armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+					}
+					if armor < 0 {
+						armor = 0
+					}
+					if armor > 0 {
+						armor = s.ignoreTargetResistArmor(armor, dmgSpell)
+						hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+					} else {
+						hybridArmorReduced = damage
+					}
+				}
+				resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
+					ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+					binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+					hybrid:             isHybridSpell,
+					hybridArmorReduced: hybridArmorReduced,
+					targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
+				}, s.player.SpellPenetration)
+				if resisted > 0 && damage == 0 {
+					// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
+					// resist runs last in the taken chain (CalculateSpellDamageTaken
+					// tail, Unit.cpp:1121-1130), so a zero post-resist damage with
+					// resisted>0 is a full resist, not a taken/block zero.
+					fullyResisted = true
+				}
+			}
 			if !instantKill && damage > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
 				// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
 				// (245, affecting this spell) pct of damage bypasses absorbs.
-				bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
-				absorbed, damage = playerSess.applyAbsorptionShields(damage-bypass, schoolMask)
+				bypass := absorbIgnoreBypass(preResistDmg, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
+				pool := damage
+				if bypass > pool {
+					pool = 0
+				} else {
+					pool -= bypass
+				}
+				absorbed, damage = playerSess.applyAbsorptionShields(pool, schoolMask)
 				damage += bypass
 			}
 		}
@@ -15578,12 +15586,68 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 			}
 		}
-		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
-		// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
-		// (245, affecting this spell) pct of damage bypasses absorbs.
-		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
-		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
-		damage += bypass
+		preResistDmg := damage
+		if !instantKill && schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+			chaosBolt := false
+			if s.server != nil && s.server.Data != nil {
+				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+					chaosBolt = sp.SpellFamilyName == spellFamilyWarlock && sp.SpellIconID == 3178
+				}
+			}
+			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
+			// the live resistance fold (22/101/143) lands on every creature
+			// victim's resistances.
+			resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
+			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+			// armor figure is evaluated on the CalcAbsorbResist entry damage
+			// (post-taken/block/resilience here), like the C++ leg inside
+			// DealDamage; it runs even for FIXED_DAMAGE and CU_IGNORE_ARMOR
+			// spells, which skip the taken-block armor arm.
+			hybridArmorReduced := uint32(0)
+			if isHybridSpell && s.player != nil {
+				armor := float64(target.Armor)
+				if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+					armor = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+				}
+				if armor < 0 {
+					armor = 0
+				}
+				if armor > 0 {
+					armor = s.ignoreTargetResistArmor(armor, dmgSpell)
+					hybridArmorReduced = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage, s.getArmorPenPct(ctx, spellWeaponAttackType(dmgSpell)))
+				} else {
+					hybridArmorReduced = damage
+				}
+			}
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, s.player.Level, target.Level, !isPlayerVictim, chaosBolt, s.casterIgnoreResistPct(spellID, uint32(schoolMask)), spellResistInput{
+				ignoreResistances:  spellKnown && dmgSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             spellKnown && dmgSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridSpell,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    s.casterTargetResistMod(uint32(schoolMask)),
+			}, s.player.SpellPenetration)
+			if resisted > 0 && damage == 0 {
+				// PROC_HIT_FULL_RESIST (createProcHitMask, Unit.cpp:10179):
+				// resist runs last in the taken chain (CalculateSpellDamageTaken
+				// tail, Unit.cpp:1121-1130), so a zero post-resist damage with
+				// resisted>0 is a full resist, not a taken/block zero.
+				fullyResisted = true
+			}
+		}
+		if damage > 0 {
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
+			// MOD_TARGET_ABSORB_SCHOOL (194) / MOD_TARGET_ABILITY_ABSORB_SCHOOL
+			// (245, affecting this spell) pct of damage bypasses absorbs. C++ takes the pct on the pre-resist entry damage (:1853) and re-adds it after the absorb loops (:1975); the pool is the post-resist damage less the bypass, floored at zero (ModifyDamage clamp, Unit.cpp:194-196).
+			bypass := absorbIgnoreBypass(preResistDmg, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), pool, schoolMask)
+			damage += bypass
+		}
 	}
 
 	overkill := uint32(0)

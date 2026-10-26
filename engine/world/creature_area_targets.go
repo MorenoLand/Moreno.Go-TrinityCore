@@ -339,6 +339,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// SPELL_AURA_MOD_TARGET_RESISTANCE (123) misc-mask sum lands on the
 		// template resistance (Unit.cpp:1791-1792); the spell-derived
 		// ATTR4/binary/hybrid arms ride the spellResistInput.
+		preResistDmg := damage
 		if damage > 0 && schoolMask > 1 {
 			mask123 := uint32(schoolMask)
 			if mask123&0x7E != 0 {
@@ -368,8 +369,15 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		// misc-masked pct, 245 ability pct affecting the cast spell) of the
 		// damage bypasses the victim's shields.
 		if damage > 0 {
-			bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(motion), uint32(schoolMask), spellID))
-			absorbed, damage = p.Sess.applyAbsorptionShields(damage-bypass, schoolMask)
+			// C++ takes the bypass pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975); the pool is the post-resist damage less the bypass, floored at zero (ModifyDamage clamp, Unit.cpp:194-196). Nothing sits between resist and absorb here, so preResistDmg is the CalcAbsorbResist entry damage.
+			bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(motion), uint32(schoolMask), spellID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = p.Sess.applyAbsorptionShields(pool, schoolMask)
 			damage += bypass
 		}
 	}

@@ -4653,23 +4653,6 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
-	if damage > 0 && schoolMask > 1 {
-		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
-		// the live 22 flat amounts fold into a pet victim's resistances.
-		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
-		// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
-		// armor figure is evaluated on the post-crit damage, like the C++
-		// leg inside DealDamage.
-		if petResistInput.hybrid {
-			armorValue := float64(target.Armor)
-			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
-				armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
-			}
-			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, petSpell, petSpellKnown)
-			petResistInput.hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
-		}
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0, petResistInput, petPenetration)
-	}
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:1079-1080): the
 	// MELEE/RANGED-DmgClass arm reduces by the melee/ranged taken
 	// rating, not the spell one.
@@ -4692,14 +4675,6 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if casterCanResil {
 				victim.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 			}
-			if damage > 0 {
-				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194
-				// misc-masked pct, 245 ability pct affecting the cast
-				// spell) of the damage bypasses the victim's shields.
-				bypass := absorbIgnoreBypass(damage, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
-				absorbed, damage = victim.applyAbsorptionShields(damage-bypass, schoolMask)
-				damage += bypass
-			}
 		}
 	} else if targetMotion := s.findCreatureMotion(target.GUID); targetMotion != nil && s.server.creatureVictimTakesResilience(targetMotion) {
 		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
@@ -4711,13 +4686,51 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 		}
 	}
+	preResistDmg := damage
+	if damage > 0 && schoolMask > 1 {
+		// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
+		// the live 22 flat amounts fold into a pet victim's resistances.
+		resistances := s.server.petFoldedResistances(creatureAuraKeyForTarget(target), target.Resistances)
+		// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
+		// armor figure is evaluated on the CalcAbsorbResist entry damage
+		// (post-resilience here), like the C++ leg inside DealDamage.
+		if petResistInput.hybrid {
+			armorValue := float64(target.Armor)
+			if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); tm != nil {
+				armorValue = s.server.liveCreatureArmor(creatureAuraKeyForTarget(target), tm, float64(target.Armor))
+			}
+			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, petSpell, petSpellKnown)
+			petResistInput.hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
+		}
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0, petResistInput, petPenetration)
+	}
+	if isPlayerVictim {
+		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && damage > 0 {
+			// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): max(194 misc-masked pct, 245 ability pct affecting the cast spell) of the damage bypasses the victim's shields. C++ takes the pct on the pre-resist entry damage (:1853) and re-adds it after the absorb loops (:1975); the pool is the post-resist damage less the bypass, floored at zero (ModifyDamage clamp, Unit.cpp:194-196).
+			bypass := absorbIgnoreBypass(preResistDmg, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = victim.applyAbsorptionShields(pool, schoolMask)
+			damage += bypass
+		}
+	}
 	if !isPlayerVictim && damage > 0 {
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): shield absorbs on a
 		// creature victim soak pet spell damage, matching the player
 		// funnel's creature arm (spells.go:15360); the attacker's 194/245
 		// bypass pct folds the pet's creature aura key.
-		bypass := absorbIgnoreBypass(damage, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
-		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, schoolMask)
+		bypass := absorbIgnoreBypass(preResistDmg, s.server.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(caster), uint32(schoolMask), spellID))
+		pool := damage
+		if bypass > pool {
+			pool = 0
+		} else {
+			pool -= bypass
+		}
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), pool, schoolMask)
 		damage += bypass
 	}
 	overkill := uint32(0)
