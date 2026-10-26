@@ -4520,14 +4520,101 @@ func (s *Server) standPetReflectReflectorUp(caster *creatureMotion, reflectorGUI
 // executePetSpellDamage deals one pet-cast spell hit. reflectorGUID is the
 // reflecting victim's GUID on a reflect return trip (the damage target is
 // the pet itself), or 0 on a direct hit.
+// executePetSpellZeroDamageTail runs the Spell::TargetInfo::DoDamageAndTriggers
+// tail for a pet-spell hit whose entry damage is zero (Spell.cpp:2560-2575
+// !hasHealing && !hasDamage branch): C++ takes that branch when m_damage is
+// zero on entry — a damage-effect spell whose computed damage folded to zero
+// — and still runs NODAMAGE procs, the stand-up arm, the SpellHitTarget
+// hook and the per-hit trigger consumer. The old entry guard returned
+// silently, so such a hit ran none of them, unlike both the !hasDamage
+// return-trip branch in executePetSpellWithOptions and the fully-mitigated
+// arm inside executePetSpellDamage (whose pre-mitigation m_damage > 0 keeps
+// the DAMAGE proc type and the TAKEN_DAMAGE flag — both dropped here, since
+// entry-zero has neither). No damage log (C++ logs only in the hasDamage
+// branch), no health/threat/tap/strip legs (no DealDamage call on this
+// branch), no leech (zero basis). Evaded victims never reach here: the
+// call sites skip them via resolveReflectTarget, and the miss roll inside
+// this function is a damage>0 arm, so no miss model applies on entry zero.
+// The done-side proc leg is skipped for ordinary direct hits, matching the
+// standing model (no done-side model for ordinary hits); the self-hit
+// return trip fires the combined done+taken loop below, like the !hasDamage
+// return-trip branch.
+func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *creatureMotion, target combatTarget, spellID uint32, schoolMask uint8, triggered bool, reflectorGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || caster == nil {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	spellCopy := spell
+	if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && victim.procDeep == 0 {
+			victim.procAuraTriggerLoop(ctx, caster.GUID, procEventInfo{
+				typeMask:       spellDamageTakenProcTypeMask(spellCopy),
+				schoolMask:     uint32(schoolMask),
+				spellTypeMask:  procSpellTypeNoDmgHeal,
+				spellPhaseMask: procSpellPhaseHit,
+				hitMask:        procHitNormal,
+				triggered:      triggered,
+				eventSpell:     &spellCopy,
+				actorGUID:      caster.GUID,
+				damage:         0,
+			})
+		} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
+			typeMask := spellDamageTakenProcTypeMask(spellCopy)
+			if target.GUID == caster.GUID {
+				typeMask = spellDamageProcTypeMask(spellCopy) | typeMask
+			}
+			if typeMask != 0 {
+				s.server.fireCreatureAuraProcLoop(ctx, targetMotion, caster.GUID, procEventInfo{
+					typeMask:       typeMask,
+					schoolMask:     uint32(schoolMask),
+					spellTypeMask:  procSpellTypeNoDmgHeal,
+					spellPhaseMask: procSpellPhaseHit,
+					hitMask:        procHitNormal,
+					triggered:      triggered,
+					eventSpell:     &spellCopy,
+					actorGUID:      caster.GUID,
+					damage:         0,
+				})
+			}
+		}
+	}
+	if reflectorGUID != 0 {
+		s.server.standPetReflectReflectorUp(caster, reflectorGUID, spellCopy)
+	} else if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+		if victim.player.StandState != 0 && (!spellIsPositive(spellCopy) || spellHasEffect(spellCopy, spellEffectDispel)) {
+			victim.player.StandState = 0
+			victim.sendPlayerUpdate()
+		}
+	} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
+		if (!spellIsPositive(spellCopy) || spellHasEffect(spellCopy, spellEffectDispel)) && !s.server.creatureFriendlyToTarget(caster, target.GUID) {
+			s.server.standCreatureMotionUp(targetMotion)
+		}
+	}
+	if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+		s.server.fireCreatureHitTriggers(ctx, caster, spellCopy, spellID, []uint64{target.GUID})
+	} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
+		s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
+		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+		s.server.fireCreatureHitTriggers(ctx, caster, spellCopy, spellID, []uint64{target.GUID})
+	}
+}
+
 func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64) {
-	if s == nil || s.server == nil || caster == nil || damage == 0 {
+	if s == nil || s.server == nil || caster == nil {
 		return
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	// Ghost leg mirrors WorldObject::IsValidAttackTarget's "can't attack dead"
 	// (Object.cpp:2935-2937): ghosts carry Health=1 in Go.
 	if !ok || target.Health == 0 || s.ghostAttackTargetBlocked(targetGUID) {
+		return
+	}
+	if damage == 0 {
+		s.executePetSpellZeroDamageTail(ctx, caster, target, spellID, schoolMask, triggered, reflectorGUID)
 		return
 	}
 	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
