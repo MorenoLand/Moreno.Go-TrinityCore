@@ -322,6 +322,70 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 	s.server.auraMu.Unlock()
 }
 
+// sweepTotemCreatureDebuffOutOfRange is the creature half of the
+// Aura::UpdateTargetMap drop (SpellAuras.cpp:643-673): the C++ area-aura
+// refresh rebuilds the target list each interval and removes every
+// application whose target is no longer in it, and the Go 2s pulse is
+// that refresh. Records are caster-keyed, so a second live totem's
+// debuff on the same creature survives; a motion that is gone entirely
+// is left alone, since the despawn path clears its auras itself.
+func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID uint32, radius float64) {
+	if s == nil || s.server == nil || totem == nil || spellID == 0 {
+		return
+	}
+	s.server.auraMu.Lock()
+	var stale []creatureAuraKey
+	for key, auras := range s.server.activeCreatureAuras {
+		if aura, ok := auras[spellID]; ok && aura != nil && aura.CasterGUID == totem.TotemGUID {
+			stale = append(stale, key)
+		}
+	}
+	s.server.auraMu.Unlock()
+	for _, key := range stale {
+		m := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+		if m == nil {
+			continue
+		}
+		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius {
+			s.server.removeCreatureAura(key, spellID)
+		}
+	}
+}
+
+// sweepTotemSessionAuraOutOfRange is the session half of the same
+// UpdateTargetMap drop: a session aura cast by this totem (buff or
+// debuff spell) drops once the session leaves the totem's map or walks
+// beyond its radius. Caster-keyed like the destroy sweep, so a second
+// live totem's aura survives; the destroy sweep still covers totem
+// death with no radius gate.
+func (s *session) sweepTotemSessionAuraOutOfRange(totem *activeTotem, spellID uint32, radius float64) {
+	if s == nil || s.server == nil || totem == nil || spellID == 0 {
+		return
+	}
+	s.server.sessionsMu.RLock()
+	var doomed []*session
+	for other := range s.server.sessions {
+		if other == nil || other.player == nil {
+			continue
+		}
+		other.castMu.Lock()
+		aura := other.activeAuras[spellID]
+		hit := aura != nil && !aura.Stopped && aura.CasterGUID == totem.TotemGUID
+		other.castMu.Unlock()
+		if !hit {
+			continue
+		}
+		if other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
+			distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) > radius {
+			doomed = append(doomed, other)
+		}
+	}
+	s.server.sessionsMu.RUnlock()
+	for _, other := range doomed {
+		other.removeAura(spellID)
+	}
+}
+
 // totemEnemySessionHostile is the session half of the TARGET_CHECK_ENEMY
 // verdict for the Totem of Wrath enemy leg (Spell.cpp:8316, Object.cpp:2977):
 // the enemy sweep's player leg keys hostility on team, not on the
@@ -807,7 +871,15 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			if s.player != nil {
 				ownerLevel = s.player.Level
 			}
-			s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
+			// The OWNER arm of FillTargetMap checks IsWithinDistInMap
+			// (SpellAuras.cpp FillTargetMap), so the owner's own buff is
+			// radius-gated like every other area-aura application: an
+			// owner who walks out of range loses it to the sweep below
+			// instead of being re-applied unconditionally each pulse.
+			if s.player.Map == totem.Map && s.player.InstanceID == totem.InstanceID &&
+				distance3D(s.player.X, s.player.Y, s.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
+				s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
+			}
 			// Apply to nearby party members
 			if s.server != nil && s.groupID != 0 {
 				s.server.sessionsMu.RLock()
@@ -860,6 +932,18 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				}
 				s.server.sessionsMu.RUnlock()
 			}
+		}
+		// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds
+		// the area target list, so applications whose target left the
+		// radius drop here instead of lingering until the totem dies.
+		// The sweeps run after the apply arms above, which only touch
+		// in-radius targets, so apply and sweep never fight.
+		if def.DebuffSpell > 0 {
+			s.sweepTotemCreatureDebuffOutOfRange(totem, def.DebuffSpell, float64(def.Radius))
+			s.sweepTotemSessionAuraOutOfRange(totem, def.DebuffSpell, float64(def.Radius))
+		}
+		if def.BuffSpell > 0 {
+			s.sweepTotemSessionAuraOutOfRange(totem, def.BuffSpell, float64(def.Radius))
 		}
 
 	case TotemPulseHeal:
