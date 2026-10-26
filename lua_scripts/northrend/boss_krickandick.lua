@@ -320,19 +320,21 @@ local function randomPlayer(creature)
 end
 
 -- C++ SelectTarget(Random, 1, 0.0f, true) (:244-245): offset 1 pops the
--- first MaxThreat-ordered entry BEFORE the player filter (UnitAI.h
--- SelectTarget template, :214-280 — skip precedes player/dist filter),
--- then random among the rest; threat-ordered GetAITargets[2..] is the
--- eck precedent (the old exclude-victim-by-GUID form was wrong when
--- the top threat entry is not the current victim). A threat list of
--- size <= 1 casts nothing (C++ returns nil when the list is at most
--- the offset).
+-- current victim (UnitAI.h non-distance list is victim-first, then
+-- the sorted remainder minus victim), not the threat-sorted head:
+-- exclude by victim GUID, then random alive player among the rest.
 local function randomNonVictimPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and t:IsAlive() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and t:IsAlive() then
             candidates[#candidates + 1] = t
         end
     end

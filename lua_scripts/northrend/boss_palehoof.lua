@@ -232,14 +232,22 @@ local function randomPlayerTarget(creature, maxDist)
     return candidates[math.random(#candidates)]
 end
 
--- C++ SelectTarget(Random, 1): offset 1 skips the first MaxThreat
--- entry (UnitAI.h:172-174); the rest of the threat list is the pool.
+-- C++ SelectTarget(Random, 1) (:478): offset 1 pops the current victim
+-- (UnitAI.h non-distance list is victim-first), not the threat-sorted
+-- head: exclude by victim GUID; the rest of the threat list is the pool.
 local function randomThreatTargetSkippingFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        if not targets[i]:IsDead() then
-            candidates[#candidates + 1] = targets[i]
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
         end
     end
     if #candidates == 0 then

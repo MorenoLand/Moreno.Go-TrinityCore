@@ -252,15 +252,22 @@ local function randomThreatPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- SelectTarget(Random,1,...) twin: UnitAI.h skips the first entry in
--- MaxThreat order BEFORE the player/alive filter, so the skip applies to
--- the raw GetAITargets list, not to the filtered candidates.
+-- SelectTarget(Random,1,...) twin (:217/:234): UnitAI.h pops the
+-- current victim (non-distance list is victim-first), not the
+-- threat-sorted head: exclude by victim GUID, then the player/alive
+-- filter over the rest.
 local function randomThreatPlayerSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

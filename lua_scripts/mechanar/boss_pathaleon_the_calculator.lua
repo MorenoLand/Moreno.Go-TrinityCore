@@ -142,11 +142,17 @@ local function randomThreatTarget(creature)
 end
 
 local function randomThreatTargetPastHead(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local unit = targets[i]
-        if not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

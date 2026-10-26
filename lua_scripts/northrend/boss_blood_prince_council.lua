@@ -288,19 +288,25 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1, 0.0f, true) (boss_blood_prince_council.cpp:819
--- kinetic bomb, :835 shock vortex): offset 1 skips the MaxThreat head BEFORE
--- the playerOnly/alive filters (UnitAI.h offset-before-filter; the head is
--- the current victim by list construction), then random alive threat player,
+-- kinetic bomb, :835 shock vortex): offset 1 pops the current victim
+-- (UnitAI.h non-distance list is victim-first), not the threat-sorted
+-- head: exclude by victim GUID, then random alive threat player,
 -- no distance gate. The old map-player minus-victim pool is retired.
 local function randomNonTankPlayerAnywhere(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     if #targets <= 1 then
         return nil
     end
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead() then
             candidates[#candidates + 1] = t
         end
     end

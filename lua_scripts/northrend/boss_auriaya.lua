@@ -171,18 +171,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ SelectTarget(Random, 1, 0.0f, true) leg (UnitAI.h): skip the
--- first entry in MaxThreat order (the current victim heads the
--- list) BEFORE the player/alive filter, then random over the
--- remaining threat-list players alive (baltharus
--- randomThreatPlayerSkipFirst precedent; offline refs are skipped
+-- C++ SelectTarget(Random, 1, 0.0f, true) leg (:256, UnitAI.h): offset 1
+-- pops the current victim (non-distance list is victim-first), not
+-- the threat-sorted head: exclude by victim GUID, then random over
+-- the remaining threat-list players alive (offline refs are skipped
 -- at build in C++, dead = offline here).
 local function randomThreatPlayerSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end

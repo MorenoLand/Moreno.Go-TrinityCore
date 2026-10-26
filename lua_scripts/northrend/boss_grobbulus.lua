@@ -103,10 +103,16 @@ end
 
 local function injectTick(creature, guid)
     local candidates = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player"
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player"
                 and not unit:IsDead()
                 and not unit:HasAura(SPELL_MUTATING_INJECTION) then
             candidates[#candidates + 1] = unit

@@ -173,20 +173,26 @@ end
 local infection = {}
 
 -- C++ EVENT_SLIME_SPRAY (:200-208): SelectTarget(Random, 1, 0.0f,
--- playerOnly) — offset 1 skips the first MaxThreat-ordered entry
--- (UnitAI.h:162-174) — then DoSummon(NPC_OOZE_SPRAY_STALKER,
--- *target, 8s, TEMPSUMMON_TIMED_DESPAWN), Talk(EMOTE_SLIME_SPRAY),
+-- playerOnly) — offset 1 pops the current victim (UnitAI.h
+-- non-distance list is victim-first), not the threat-sorted head —
+-- then DoSummon(NPC_OOZE_SPRAY_STALKER, *target, 8s,
+-- TEMPSUMMON_TIMED_DESPAWN), Talk(EMOTE_SLIME_SPRAY),
 -- DoCastSelf(SPELL_SLIME_SPRAY) non-triggered; re-arm 20s
 -- unconditional (the ScheduleEvent sits outside the target-pick
--- if). Pool via GetAITargets (threat-sorted, SortedEntries) with
--- the head skipped, Player + alive filter (grobbulus/festergut
--- precedents); summonType 2 = TIMED_DESPAWN, 8000ms.
+-- if). Pool via GetAITargets with the victim excluded by GUID,
+-- Player + alive filter; summonType 2 = TIMED_DESPAWN, 8000ms.
 local function onSlimeSpray(creature, guid)
     local pool = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local unit = targets[i]
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+    for i, unit in ipairs(targets) do
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             pool[#pool + 1] = unit
         end
     end

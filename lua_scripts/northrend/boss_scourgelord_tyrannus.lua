@@ -202,19 +202,23 @@ local function initState(guid)
     cancelTimers(guid)
 end
 
--- C++ SelectTarget(SelectTargetMethod::Random, 1, 0.0f, true) — the
--- offset-1 skip pops the first MaxThreat-ordered entry BEFORE the
--- player filter (UnitAI.h:214-280), then a random alive player from
--- the rest: threat-ordered GetAITargets[2..] (eck precedent; dead
--- targets are offline refs, Go SortedEntries returns them too, so
--- IsAlive filters). Fixed 2026-10-25 from the GetPlayersInWorld
--- pool, which could pick threat-less players and ignored the skip.
+-- C++ SelectTarget(SelectTargetMethod::Random, 1, 0.0f, true) (:255/:271) —
+-- offset 1 pops the current victim (UnitAI.h non-distance list is
+-- victim-first), not the threat-sorted head: exclude by victim GUID,
+-- then a random alive player from the rest (dead targets are offline
+-- refs, Go SortedEntries returns them too, so IsAlive filters).
 local function randomPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and t:IsAlive() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and t:IsAlive() then
             candidates[#candidates + 1] = t
         end
     end

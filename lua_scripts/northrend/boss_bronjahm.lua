@@ -157,15 +157,21 @@ local function initState(guid)
     phase2[guid] = nil
 end
 
--- C++ :187 SelectTarget(Random, 1, 0.0f, true) — position=1 skips the
--- threat head BEFORE the player filter (UnitAI.h:214-280, eck
--- precedent): drop GetAITargets()[1], then keep alive players.
+-- C++ :187 SelectTarget(Random, 1, 0.0f, true) — offset 1 pops the
+-- current victim (UnitAI.h non-distance list is victim-first), not
+-- the threat-sorted head: exclude by victim GUID, then keep alive players.
 local function randomPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead() then
             candidates[#candidates + 1] = t
         end
     end
