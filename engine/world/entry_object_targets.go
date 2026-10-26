@@ -88,6 +88,26 @@ func entryImplicitEffectMask(spell wotlk.Spell, target uint32) uint32 {
 	return effectMask
 }
 
+// firstEntryImplicitEffectMask returns the single-effect mask of the
+// lowest-index effect carrying the given implicit target on either slot.
+// Spell::SelectEffectImplicitTargets (Spell.cpp:885-900) merges later
+// effects into the first selection only when TargetA, TargetB, the
+// condition list pointer and the radius all match, so the first
+// selection always runs on the first effect's list; loading the union
+// over all effects would merge distinct ElseGroup rows into one AND
+// group and fail casts whose effects match different entries.
+func firstEntryImplicitEffectMask(spell wotlk.Spell, target uint32) uint32 {
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == target || eff.ImplicitTargetB == target {
+			return 1 << uint(i)
+		}
+	}
+	return 0
+}
+
 // implicitTargetEntryObjectMask mirrors GetSearcherTypeMask (Spell.cpp:1809)
 // narrowed by Condition::GetSearcherTypeMaskForConditionList
 // (ConditionMgr.cpp:843) for CONDITION_OBJECT_ENTRY_GUID rows: the base mask
@@ -246,7 +266,10 @@ func (s *session) scanNearbyGameObjects(ctx context.Context, radius float32, vis
 // spellEntryNearbyGOTarget ports the GOBJ half of
 // Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
 // TARGET_GAMEOBJECT_NEARBY_ENTRY (40): the single nearest gameobject within
-// GetMaxRange(IsPositive()) passing the spell's implicit-target conditions.
+// GetMaxRange(IsPositive()) passing the FIRST 40 effect's implicit-target
+// conditions (Spell.cpp:885-900 merge model, as for 38; later effects
+// with different lists select separately in C++, a multi-target
+// residual Go's single-target list cannot carry).
 // SpellInfo::CheckTarget is always valid for gameobjects (SpellInfo.cpp:1707:
 // "other types of objects - always valid"), so only range and the entry
 // conditions gate the search. The emergency fallback (Spell.cpp:1065): with
@@ -261,7 +284,7 @@ func (s *session) spellEntryNearbyGOTarget(ctx context.Context, spell wotlk.Spel
 	if maxRange <= 0 {
 		return 0, false
 	}
-	condRows := s.loadImplicitTargetConditions(ctx, spellID, entryImplicitEffectMask(spell, implicitTargetGONearbyEntry))
+	condRows := s.loadImplicitTargetConditions(ctx, spellID, firstEntryImplicitEffectMask(spell, implicitTargetGONearbyEntry))
 	if len(condRows) == 0 && spell.RequiresSpellFocus != 0 {
 		// Spell.cpp:1071: focus object or cast failure; the handleCastSpell
 		// focus gate already guarantees the object exists here.

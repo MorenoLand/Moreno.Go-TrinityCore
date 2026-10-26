@@ -53,8 +53,10 @@ func isEntryAreaSpell(spell wotlk.Spell) bool {
 // WorldObjectSpellTargetCheck::operator() (Spell.cpp:8316). TARGET_CHECK_ENTRY
 // has no faction case in the switch, so only the CheckTarget terms apply:
 // alive (unless the spell allows dead targets, SpellInfo.cpp:1715) and not
-// combat-disabled — plus the spell's ImplicitTargetConditions evaluated
-// with the shared entry-condition loader. Every match is kept (no
+// combat-disabled — plus each 7/8 effect's own ImplicitTargetConditions:
+// C++ selects per merged group and unions the lists, so a candidate is
+// kept when ANY effect's list matches it (never the union mask, whose
+// merged ElseGroup rows would AND across effects). Every match is kept (no
 // nearest-shrink, unlike 38); the MaxTargets cap mirrors the area path
 // (Spell.cpp:1293: MOD_MAX_AFFECTED_TARGETS aura modifier +
 // RandomResize). An empty area list adds no targets and never fails the
@@ -63,7 +65,7 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 	if s == nil || s.player == nil || s.server == nil || !isEntryAreaSpell(spell) || s.server.Data == nil {
 		return nil
 	}
-	var effectMask uint32
+	var effectIndices []int
 	radius := float64(0)
 	destCentered := false
 	for i, eff := range spell.Effects {
@@ -83,7 +85,7 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		if !matched {
 			continue
 		}
-		effectMask |= 1 << uint(i)
+		effectIndices = append(effectIndices, i)
 		r := float64(0)
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
 			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
@@ -117,8 +119,15 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 			}
 		}
 	}
-	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
-	allowPlayers, allowCreatures := implicitTargetEntryMask(condRows)
+	effectCondSets := make([][]conditionRow, 0, len(effectIndices))
+	allowPlayers, allowCreatures := false, false
+	for _, i := range effectIndices {
+		rows := s.loadImplicitTargetConditions(ctx, spellID, 1<<uint(i))
+		effectCondSets = append(effectCondSets, rows)
+		p, c := implicitTargetEntryMask(rows)
+		allowPlayers = allowPlayers || p
+		allowCreatures = allowCreatures || c
+	}
 	allowDead := spellAllowsDeadTarget(spell)
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
@@ -152,7 +161,14 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		if !c.isPlayer {
 			spawnLow = uint32(c.guid & 0xFFFFFF)
 		}
-		if !implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow) {
+		matched := false
+		for _, rows := range effectCondSets {
+			if implicitEntryConditionsMet(rows, c.isPlayer, c.entry, spawnLow) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return
 		}
 		if _, ok := seen[c.guid]; ok {

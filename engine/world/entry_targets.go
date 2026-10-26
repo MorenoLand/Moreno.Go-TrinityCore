@@ -117,8 +117,11 @@ func implicitEntryConditionsMet(rows []conditionRow, isPlayer bool, entry, spawn
 // spellEntryNearbyTarget ports Spell::SelectImplicitNearbyTargets
 // (Spell.cpp:1036) + Spell::SearchNearbyTarget (Spell.cpp:1869) for
 // TARGET_UNIT_NEARBY_ENTRY (38): the single nearest unit within
-// GetMaxRange(IsPositive()) passing SpellInfo::CheckTarget and the spell's
-// implicit-target conditions. The faction switch in
+// GetMaxRange(IsPositive()) passing SpellInfo::CheckTarget and the FIRST
+// 38 effect's implicit-target conditions (Spell.cpp:885-900: merged
+// effects share one condition list, so the first selection carries it;
+// later effects with different lists select separately in C++, a
+// multi-target residual Go's single-target list cannot carry). The faction switch in
 // WorldObjectSpellTargetCheck (Spell.cpp:8316) has no TARGET_CHECK_ENTRY
 // case, so only the CheckTarget terms apply: alive (unless the spell allows
 // dead targets, SpellInfo.cpp:1715), not combat-disabled. No match returns
@@ -148,16 +151,7 @@ func (s *session) spellEntryNearbyTarget(ctx context.Context, spell wotlk.Spell,
 	if maxRange <= 0 {
 		return 0, false
 	}
-	var effectMask uint32
-	for i, eff := range spell.Effects {
-		if eff.Effect == 0 {
-			continue
-		}
-		if eff.ImplicitTargetA == implicitTargetNearbyEntry || eff.ImplicitTargetB == implicitTargetNearbyEntry {
-			effectMask |= 1 << uint(i)
-		}
-	}
-	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
+	condRows := s.loadImplicitTargetConditions(ctx, spellID, firstEntryImplicitEffectMask(spell, implicitTargetNearbyEntry))
 	allowPlayers, allowCreatures := implicitTargetEntryMask(condRows)
 	allowDead := spellAllowsDeadTarget(spell)
 	bestGUID := uint64(0)
