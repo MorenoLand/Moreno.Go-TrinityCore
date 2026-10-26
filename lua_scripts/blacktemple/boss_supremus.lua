@@ -163,7 +163,7 @@ local function chargeTarget(creature)
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= 100 then
+                and creature:GetDistance(p) - creature:GetCombatReach() < 100 then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = p
         end
     end

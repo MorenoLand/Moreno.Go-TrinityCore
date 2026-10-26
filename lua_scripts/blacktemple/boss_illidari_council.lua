@@ -616,7 +616,7 @@ local function zerevorArcaneExplosion(creature, guid)
     if st.canUseArcaneExplosion then
         local near = {}
         for _, u in ipairs(creature:GetAITargets()) do
-            if not u:IsDead() and creature:GetDistance(u) <= 10 then
+            if not u:IsDead() and creature:GetDistance(u) - creature:GetCombatReach() < 10 then -- IsWithinCombatRange gate (Unit.cpp:583)
                 near[#near + 1] = u
             end
         end

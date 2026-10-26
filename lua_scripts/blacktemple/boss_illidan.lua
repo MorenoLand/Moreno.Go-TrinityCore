@@ -421,7 +421,7 @@ local function randomTargetIn150(creature)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= 150 then
+                and creature:GetDistance(p) - creature:GetCombatReach() < 150 then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = p
         end
     end
@@ -1254,11 +1254,11 @@ local function onShadowStrike(creature, guid)
 end
 
 -- C++ EVENT_THROW_DAGGER: victim beyond melee range ->
--- non-triggered DoCastVictim, repeat 5s; else repeat 1s (melee
--- range approximated at 5 yd — documented).
+-- non-triggered DoCastVictim, repeat 5s; else repeat 1s
+-- (IsWithinMeleeRange bridged, lua_creature_events.go:3144).
 local function onThrowDagger(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) > 5 then
+    if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_THROW_DAGGER, false)
         schedule(guid, "throwDagger", 5000, function()
             onThrowDagger(creature, guid)

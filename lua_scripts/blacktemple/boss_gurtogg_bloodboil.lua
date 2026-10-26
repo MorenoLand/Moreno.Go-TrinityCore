@@ -191,7 +191,7 @@ local function randomTargetWithinReach(creature)
     local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() and creature:GetDistance(t) <= reach then
+        if not t:IsDead() and creature:GetDistance(t) - reach < reach then -- IsWithinCombatRange gate, dist param = own reach (Unit.cpp:583; target-reach band unbridged)
             candidates[#candidates + 1] = t
         end
     end
