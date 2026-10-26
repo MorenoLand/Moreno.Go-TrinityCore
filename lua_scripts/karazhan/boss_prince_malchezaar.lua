@@ -131,7 +131,10 @@ end
 -- list victim-first, so the offset pop removes the victim; Go's
 -- threat-sorted list needs the victim-GUID exclusion, since an
 -- index drop diverges when fixate/taunt puts the victim below top
--- threat).
+-- threat). With no victim the pop removes the first entry of the
+-- offline-filtered list (UnitAI.h skips IsOffline refs before the
+-- pop), so the fallback skips the first ALIVE entry, not raw index
+-- 1 — a dead head entry must not consume the skip.
 local function randomThreatPlayer(creature, skipFirst, maxDist)
     local targets = creature:GetAITargets()
     local victimGuid = nil
@@ -143,9 +146,18 @@ local function randomThreatPlayer(creature, skipFirst, maxDist)
     end
     local reach = creature:GetCombatReach()
     local out = {}
-    for i, unit in ipairs(targets) do
-        if (not skipFirst or (victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, unit in ipairs(targets) do
+        local skip = false
+        if skipFirst then
+            if victimGuid ~= nil then
+                skip = unit:GetGUID() == victimGuid
+            elseif not unit:IsDead() then
+                aliveSeen = aliveSeen + 1
+                skip = aliveSeen == 1
+            end
+        end
+        if not skip
                 and unit:GetObjectType() == "Player"
                 and not unit:IsDead() and creature:GetDistance(unit) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             out[#out + 1] = unit

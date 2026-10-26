@@ -357,7 +357,9 @@ end
 -- C++ SelectTarget(Random, 1, dist, true): UnitAI.h builds the list
 -- victim-first, so offset 1 removes the victim, not the threat head;
 -- Go's threat-sorted list needs the victim-GUID exclusion
--- (nil victim falls back to skipping index 1).
+-- (nil victim falls back to skipping the first ALIVE entry: C++
+-- skips IsOffline refs before the pop, so a dead head entry must
+-- not consume the skip).
 local function randomNonTankPlayerInRange(creature, maxDist)
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -368,9 +370,16 @@ local function randomNonTankPlayerInRange(creature, maxDist)
     local targets = creature:GetAITargets()
     local reach = creature:GetCombatReach()
     local candidates = {}
-    for i, p in ipairs(targets) do
-        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
-                or (victimGuid == nil and i > 1))
+    local aliveSeen = 0
+    for _, p in ipairs(targets) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = p:GetGUID() == victimGuid
+        elseif not p:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip
                 and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = p
