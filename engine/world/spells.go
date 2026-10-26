@@ -32762,6 +32762,7 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 	// New spec glyphs (Player.cpp:26406-26417): the glyph's spell lands on
 	// the player, mirrored by the login-time glyph aura application.
 	s.loadGlyphAuras(s.player)
+	s.sendLoadedAuras()
 
 	// 6. Send talents info update
 	_ = s.sendTalentsInfo(false)
