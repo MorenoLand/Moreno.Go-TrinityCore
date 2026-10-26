@@ -30,7 +30,9 @@
 --    bridge-complete but UNPORTED: their trigger IDs live only in the DB
 --    areatrigger_scripts rows (ObjectMgr.cpp:6653), not in the C++ file —
 --    dispatching on a guessed ID would invent an identifier (gelihast
---    precedent). at_nats_landing (:261-293) stays out on AttackStart;
+--    precedent). at_nats_landing (:261-293) stays out on its trigger ID
+--    only; its AttackStart leg now has the EngageWithTarget twin
+--    (2026-10-26, grandmother/sartura precedent);
 --    at_area_52_entrance PORTED below (was in this class).
 -- 3. no creature-motion bridges (SetWalk/MovePath/AddUnitState):
 --    at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)

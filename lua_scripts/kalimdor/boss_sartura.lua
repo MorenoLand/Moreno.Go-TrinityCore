@@ -41,8 +41,12 @@
 --   s.whirlwind == false, so no cancel is needed at whirlwind end.
 -- - at_aq_battleguard_sartura (AreaTriggerScript 4052):
 --   GetInstanceScript + GetCreature(DATA_SARTURA) + AttackStart —
---   no at/InstanceScript bridge (document-only, like the ruins
---   instance).
+--   PORTED 2026-10-26 via RegisterServerEvent(24): the trigger ID is
+--   the C++ file's own comment, the server event fires for every
+--   valid in-radius trigger (areatrigger.go:64), and the instance
+--   lookup is substituted by the room-scale FindNearestCreature
+--   idiom (500y, skadi/eregos precedent); C++ has no gates, so the
+--   handler adds none.
 -- - npc_sartura_royal_guard: Whirlwind 26038 self-cast (30s init
 --   -> 25-40s, 15s whirlwind mode) and its KnockBack arm — no
 --   creature entry constant anywhere in the C++ tree (only the
@@ -284,3 +288,18 @@ RegisterCreatureEvent(ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- at_aq_battleguard_sartura (boss_sartura.cpp:319-333): trigger 4052
+-- engages Sartura on the triggering player (C++ order: instance
+-- GetCreature(DATA_SARTURA), then AttackStart(player); no gates).
+local function onAreaTrigger(event, player, triggerID)
+    if triggerID ~= 4052 then
+        return
+    end
+    local sartura = player:FindNearestCreature(ENTRY, 500)
+    if sartura then
+        sartura:EngageWithTarget(player)
+    end
+end
+
+RegisterServerEvent(24, onAreaTrigger)

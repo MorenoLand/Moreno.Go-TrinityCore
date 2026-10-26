@@ -74,8 +74,9 @@
 --    player->SummonCreature(17716, 8106.11, -7542.06, 151.775, 3.02598,
 --    TEMPSUMMON_DEAD_DESPAWN, 1min) then AttackStart(player). Returns true
 --    (handled; native use suppressed).
---    Blockers: no registration; AttackStart(player) on the summoned
---    creature unbridged (go:GetGoType IS bridged 2026-10-24).
+--    Blockers: no registration only; AttackStart(player) on the summoned
+--    creature now has the EngageWithTarget twin (2026-10-26, grandmother
+--    precedent) and go:GetGoType IS bridged 2026-10-24.
 --    player:GetQuestStatus IS bridged since 2026-10-24 and
 --    player:SummonCreature IS bridged since 2026-10-24. DOCUMENTED-ONLY.
 -- ============================================================================

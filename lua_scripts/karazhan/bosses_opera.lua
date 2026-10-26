@@ -934,9 +934,9 @@ RegisterCreatureEvent(ENTRY_WOLF, 24, wolfReachHome)
 -- (majordomo precedent). C++ arm order: CloseGossipMenuFor, summon the
 -- Big Bad Wolf (17521) at my position,
 -- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (0), 2h = 7200000ms, then
--- self-despawn. C++ pBigBadWolf->AI()->AttackStart(player) has no
--- bridge — the boss_bigbadwolf AI above is registered, so the wolf
--- fights once engaged (documented gap). C++ returns false (AI/native
+-- self-despawn. C++ pBigBadWolf->AI()->AttackStart(player) is PORTED
+-- below via EngageWithTarget (the boss_bigbadwolf AI above is
+-- registered, so the wolf fights once engaged). C++ returns false (AI/native
 -- select arms proceed — they do nothing here).
 local function grandmotherGossipSelect(event, player, creature, sender, action)
     if sender ~= 0 then
@@ -944,8 +944,11 @@ local function grandmotherGossipSelect(event, player, creature, sender, action)
     end
     player:GossipClearMenu()
     player:GossipComplete()
-    creature:SummonCreature(ENTRY_WOLF, creature:GetX(), creature:GetY(),
+    local wolf = creature:SummonCreature(ENTRY_WOLF, creature:GetX(), creature:GetY(),
         creature:GetZ(), creature:GetO(), 0, 7200000)
+    if wolf then
+        wolf:EngageWithTarget(player)
+    end
     creature:Despawn()
     return false
 end
