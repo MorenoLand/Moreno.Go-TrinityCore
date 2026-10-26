@@ -130,9 +130,11 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 	s.motionMu.Lock()
 	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
 	candidates := make([]*creatureMotion, 0, len(motionMap))
+	motionGUIDs := make(map[uint64]struct{}, len(motionMap))
 	for _, cand := range motionMap {
 		if cand != nil {
 			candidates = append(candidates, cand)
+			motionGUIDs[cand.GUID] = struct{}{}
 		}
 	}
 	s.motionMu.Unlock()
@@ -184,6 +186,65 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 		}
 		seen[cand.GUID] = struct{}{}
 		hits = append(hits, cand.GUID)
+	}
+	// Static DB spawns have no motion, so the motion-map sweep above
+	// misses them: the ally twin's WorldStore sweep runs here too —
+	// same bounding-box query, same gates (map, alive, totem, flag arm,
+	// hostile faction, cylinder), plus the cone arc and cone LOS when
+	// this is a cone area (the ally twin has no cone leg), skipping
+	// GUIDs that already have a motion. Static rows carry no instance
+	// data, so like the ally leg they join every instance of the map.
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var x, y, z float64
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+					continue
+				}
+				guid := creatureWorldGUID(uint32(low), uint32(entry))
+				if _, hasMotion := motionGUIDs[guid]; hasMotion {
+					continue
+				}
+				if _, dup := seen[guid]; dup {
+					continue
+				}
+				if uint32(mapID) != motion.Map || health <= 0 {
+					continue
+				}
+				if s.isTotemGUID(guid) || spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), false) {
+					continue
+				}
+				if !s.factionTemplatesHostile(motion.Faction, uint32(faction)) {
+					continue
+				}
+				fx, fy, fz := float32(x), float32(y), float32(z)
+				dx, dy := float64(fx-centerX), float64(fy-centerY)
+				if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(fz-centerZ)) > float64(radius) {
+					continue
+				}
+				if cone {
+					if backCone {
+						if hasInArc(motion.Orientation, motion.X, motion.Y, fx, fy, 2*math.Pi-math.Pi/2) {
+							continue
+						}
+					} else if !hasInArc(motion.Orientation, motion.X, motion.Y, fx, fy, math.Pi/2) {
+						continue
+					}
+					if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+						!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, fx, fy, fz) {
+						continue
+					}
+				} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+					!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, fx, fy, fz) {
+					continue
+				}
+				seen[guid] = struct{}{}
+				hits = append(hits, guid)
+			}
+		}
 	}
 	// Spell.cpp:1293: MaxAffectedTargets caps the area list, then
 	// Trinity::Containers::RandomResize keeps that many chosen uniformly at
@@ -290,6 +351,13 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
+			continue
+		}
+		// WorldObject::IsValidAttackTarget (Object.cpp:2946): a GM
+		// player can never be attacked, so GM sessions never join
+		// the area-enemy sweep (sessionIsGameMaster twin, same arm as
+		// the area-ally sweep's assist exclusion).
+		if sessionIsGameMaster(targetSession) {
 			continue
 		}
 		if targetSession.player.Map != motion.Map || targetSession.player.InstanceID != motion.InstanceID {

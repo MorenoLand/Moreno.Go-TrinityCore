@@ -245,7 +245,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -268,6 +268,25 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		case targetCheckEnemy, targetCheckAlly, targetCheckParty, targetCheckRaid:
 			if s.server.isTotemGUID(guid) {
 				return
+			}
+		}
+		// WorldObject::IsValidAttackTarget (Object.cpp:2946) and
+		// IsValidAssistTarget (Object.cpp:3103) both refuse GM players,
+		// so the ENEMY/ALLY/PARTY/RAID check types (Spell.cpp:8336-8374)
+		// never select one; DEFAULT/ENTRY/PASSENGER route through no
+		// IsValid* call and keep them. The assist self arm precedes the
+		// GM arm (Object.cpp:3095-3103), so the caster themself stays a
+		// candidate on ALLY/PARTY/RAID; the attack self arm only fires
+		// with no spell (Object.cpp:2937-2940), so a GM caster is out
+		// even on ENEMY.
+		if isPlayer && isGM {
+			switch checkType {
+			case targetCheckEnemy:
+				return
+			case targetCheckAlly, targetCheckParty, targetCheckRaid:
+				if guid != s.playerGUID {
+					return
+				}
 			}
 		}
 		cand := friendlyCandidate{guid: guid, isPlayer: isPlayer, ownerGUID: ownerGUID, entry: entry, faction: faction}
@@ -344,14 +363,14 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if motionOwner == 0 {
 			motionOwner = motion.CharmOwnerGUID
 		}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, 0, 0, 0, 0, targetSession.player.CombatReach)
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.server.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -366,7 +385,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}
@@ -509,7 +528,7 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster bool, isPlayer bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -532,6 +551,20 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 		case targetCheckEnemy, targetCheckAlly, targetCheckParty, targetCheckRaid:
 			if s.isTotemGUID(guid) {
 				return
+			}
+		}
+		// Same GM arm as the session twin (Object.cpp:2946 attack,
+		// Object.cpp:3103 assist): the creature caster is never a player
+		// GUID, so the caster-self exemption on ALLY/PARTY/RAID can
+		// never fire here, but the shape is kept uniform.
+		if isPlayer && isGM {
+			switch checkType {
+			case targetCheckEnemy:
+				return
+			case targetCheckAlly, targetCheckParty, targetCheckRaid:
+				if guid != m.GUID {
+					return
+				}
 			}
 		}
 		cand := friendlyCandidate{guid: guid, isPlayer: isPlayer, ownerGUID: ownerGUID, entry: entry, faction: faction}
@@ -608,7 +641,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			motionOwner = motion.CharmOwnerGUID
 		}
 		hostile := s.creatureFactionHostileTo(m.Faction, motion.Faction)
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, !hostile, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, !hostile, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
@@ -616,7 +649,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), s.isFriendlyFaction(m.Faction, candidate), true, 0, 0, 0, 0, targetSession.player.CombatReach)
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), s.isFriendlyFaction(m.Faction, candidate), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -632,7 +665,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.loadCreatureStats(ctx, uint32(entry))
 						hostile := s.creatureFactionHostileTo(m.Faction, uint32(faction))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, !hostile, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, !hostile, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}
