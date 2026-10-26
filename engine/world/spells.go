@@ -25211,7 +25211,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				}
 			}
 			if !firstMerge {
-				refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				// ChangeAmount re-credit: the merge recalculates the
+				// amounts, so the old skill bonus leaves first.
+				targetSess.refreshSkillBonusForAuraAmountChange(existing, func() {
+					refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				})
 				targetSess.castMu.Unlock()
 				return
 			}
@@ -25268,7 +25272,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if carry := s.rollingPeriodicCarryOver(existing, spell, eff, casterGUID); carry != 0 {
 				mergeAmount = uint32(int32(amount) + carry)
 			}
-			refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
+			targetSess.refreshSkillBonusForAuraAmountChange(existing, func() {
+				refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
+			})
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()

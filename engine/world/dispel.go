@@ -975,7 +975,11 @@ func (ts *session) dispelPlayerAuraCharge(spellID uint32) bool {
 			// survives while stacks remain; no timer refresh on decrement.
 			oldCount := uint32(aura.StackCount)
 			aura.StackCount--
-			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+			// SetStackAmount re-credit: the surviving stack loss
+			// rescales the amounts, so the skill bonus follows.
+			ts.refreshSkillBonusForAuraAmountChange(aura, func() {
+				rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+			})
 			advanceAuraDuration(aura, time.Now())
 		}
 	}
@@ -1707,12 +1711,17 @@ func (s *session) carryStealVictimEffects(spellID uint32, victimFx *victimEffect
 	if aura == nil || aura.Stopped {
 		return
 	}
-	aura.EffectMask = victimFx.effectMask
-	aura.Amounts = victimFx.amounts
-	aura.BaseAmounts = victimFx.baseAmounts
-	aura.RecalculateMask = victimFx.recalculateMask
-	aura.CritChance = victimFx.critChance
-	aura.ApplyResilience = victimFx.applyResilience
+	// The fresh-steal apply credited the synthetic single-effect
+	// amounts; the victim-live carry replaces them, so the skill
+	// bonus follows the ChangeAmount -old/+new dance.
+	s.refreshSkillBonusForAuraAmountChange(aura, func() {
+		aura.EffectMask = victimFx.effectMask
+		aura.Amounts = victimFx.amounts
+		aura.BaseAmounts = victimFx.baseAmounts
+		aura.RecalculateMask = victimFx.recalculateMask
+		aura.CritChance = victimFx.critChance
+		aura.ApplyResilience = victimFx.applyResilience
+	})
 }
 
 // reregisterStolenSpellMods mirrors the AuraEffect::CalculateSpellMod half
@@ -1949,24 +1958,26 @@ func (s *session) recalculateStolenAuraAmounts(spellID uint32, stSpell wotlk.Spe
 			primaryIdx = i
 		}
 	}
-	for i, eff := range stSpell.Effects {
-		if victimFx.effectMask&(1<<uint(i)) == 0 || victimFx.recalculateMask&(1<<uint(i)) == 0 {
-			continue
+	s.refreshSkillBonusForAuraAmountChange(aura, func() {
+		for i, eff := range stSpell.Effects {
+			if victimFx.effectMask&(1<<uint(i)) == 0 || victimFx.recalculateMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			recomputed := eff.CalcValueForBase(stSpell, victimFx.baseAmounts[i], casterLevel)
+			// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-507): the
+			// done-bonus leg runs for periodic damage/leech/heal only, using
+			// Go's established spellpower simplification (auraEffectParams)
+			// with the recomputed period above.
+			if spellPower > 0 && periodMs > 0 &&
+				(eff.Aura == spellAuraPeriodicDamage || eff.Aura == spellAuraPeriodicLeech || eff.Aura == spellAuraPeriodicHeal) {
+				recomputed += int32(math.Round(float64(spellPower) * (float64(periodMs) / 15000.0)))
+			}
+			aura.Amounts[i] = recomputed
+			if i == primaryIdx {
+				aura.Amount = uint32(recomputed)
+			}
 		}
-		recomputed := eff.CalcValueForBase(stSpell, victimFx.baseAmounts[i], casterLevel)
-		// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-507): the
-		// done-bonus leg runs for periodic damage/leech/heal only, using
-		// Go's established spellpower simplification (auraEffectParams)
-		// with the recomputed period above.
-		if spellPower > 0 && periodMs > 0 &&
-			(eff.Aura == spellAuraPeriodicDamage || eff.Aura == spellAuraPeriodicLeech || eff.Aura == spellAuraPeriodicHeal) {
-			recomputed += int32(math.Round(float64(spellPower) * (float64(periodMs) / 15000.0)))
-		}
-		aura.Amounts[i] = recomputed
-		if i == primaryIdx {
-			aura.Amount = uint32(recomputed)
-		}
-	}
+	})
 	s.castMu.Unlock()
 }
 
@@ -2078,7 +2089,9 @@ func (s *session) mergeStolenAura(spellID uint32, stSpell wotlk.Spell, spellKnow
 		// SetStackAmount recalc (SpellAuras.cpp:1008) on the increase: the
 		// stolen stack must scale the amounts up, or a later decrement
 		// would divide amounts that were never multiplied.
-		rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
+		s.refreshSkillBonusForAuraAmountChange(existing, func() {
+			rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
+		})
 		// The ModStackAmount refresh flag is unconditional on increase
 		// (SpellAuras.cpp:1042): RefreshTimers and the charge reset run
 		// even when the stack clamps at the max — SetCharges(

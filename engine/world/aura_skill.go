@@ -73,6 +73,26 @@ func (s *session) applySkillBonusArms(aura *activeAura, sign int32) {
 	}
 }
 
+// refreshSkillBonusForAuraAmountChange mirrors AuraEffect::ChangeAmount's
+// (SpellAuraEffects.cpp:662-690) two-phase HandleAuraModSkill dance on a
+// live aura whose amounts change without a remove/re-apply: the old amounts
+// leave first (apply=false, -points), then the new amounts land
+// (apply=true, +points). Callers run it around the single mutation that
+// rewrites the aura's amounts; the pre-mutation mask/amounts feed the -1
+// leg and the post-mutation mask/amounts feed the +1 leg, so a mask
+// widening (steal carry) or a rescale (stack change) both converge. The
+// legs are no-ops for non-skill effects and for skills not yet learned
+// (applySkillBonusArms' own gates), so no pre-check is needed here.
+func (s *session) refreshSkillBonusForAuraAmountChange(aura *activeAura, mutate func()) {
+	if s == nil || aura == nil {
+		mutate()
+		return
+	}
+	s.applySkillBonusArms(aura, -1)
+	mutate()
+	s.applySkillBonusArms(aura, 1)
+}
+
 // reapplySkillBonusAuras mirrors the SetSkill add arm (Player.cpp:6195-6210):
 // the bonus word starts at 0 and every live SPELL_AURA_MOD_SKILL (30) /
 // SPELL_AURA_MOD_SKILL_TALENT (98) effect for this skill re-applies once.
