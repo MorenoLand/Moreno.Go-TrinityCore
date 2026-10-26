@@ -79,9 +79,11 @@
 -- go_scourge_enclosure (GameObjectAI) — the OnGossipHello arm
 -- (UseDoorOrButton + quest-12916 INCOMPLETE gate -> FindNearest
 -- Creature(29928, 20yd) -> KilledMonsterCredit + dummy CastSpell
--- (dummy, 55529) + DespawnOrUnsummon(4s)) sits behind the GO /
--- quest / world-search / kill-credit / despawn bridges —
--- documented-only. 12916/29928/55529 verifiable.
+-- (dummy, 55529) + DespawnOrUnsummon(4s)): GO gossip, GO
+-- FindNearestCreature, quest-status, kill-credit and cast bridges all
+-- live now — verdict stands on REGISTRATION ONLY (no C++ GO entry
+-- const; Despawn delay leg also unmodeled, Go Despawn is immediate).
+-- 12916/29928/55529 verifiable.
 -- npc_alchemist_finklestein — the facing/emote loop (EVENT_TURN_TO
 -- _POT 15-26s SetFacingTo(6.230825) + EMOTE_STATE_USE_STANDING
 -- _NO_SHEATHE 133 -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
@@ -103,8 +105,9 @@
 -- ...), Talk whisper arm); the 100ms timer rides the per-GUID
 -- schedule table with cancel on 2/4/23.
 -- go_finklesteins_cauldron (GameObjectAI) — OnGossipHello:
--- player->CastSpell(player, SPELL_POT_CHECK 51046) behind the
--- GO / player-self-cast bridges — documented-only.
+-- player->CastSpell(player, SPELL_POT_CHECK 51046): player self-cast
+-- IS bridged now — verdict stands on REGISTRATION ONLY (no C++ GO
+-- entry const).
 -- spell_random_ingredient_aura — AuraScript periodic (51015->
 -- 51134 / 51154->51105 / 51157->51107 self-casts): no
 -- AuraScript bridge (blasted_lands / gordunni precedents) —

@@ -71,8 +71,9 @@
 --   cross-creature cast bridge) + the 12-entry soul-prison
 --   gameobject ResetDoorOrButton ring (no gameobject bridges);
 --   PHASE_TO_EQUIP's EventStart trigger chain (fires only from
---   go_acherus_soul_prison's OnGossipHello via the anchor — no
---   gameobject-gossip bridge; razorgore precedent) with its
+--   go_acherus_soul_prison's OnGossipHello via the anchor (GO gossip
+--   bridge IS live now, chromaggus precedent — arm stays out on the
+--   cross-AI GetGUID/EventStart chain) with its
 --   SetStandState(UNIT_STAND_STATE_STAND) (stand-state bridge exists
 --   since 2026-10-21, but the arm stays out — its only trigger is the
 --   unbridged GO-gossip -> cross-AI EventStart chain, so a one-sided
