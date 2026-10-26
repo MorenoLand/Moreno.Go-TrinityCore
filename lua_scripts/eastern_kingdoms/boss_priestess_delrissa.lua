@@ -147,9 +147,10 @@
 --   IsWithinMeleeRange bridge; lowmention triage's "Lua absent"
 --   verdict was stale — both files already carried the arms).
 --   Garaxxas freezing-trap 44136 (one-trap-at-a-time GO check),
---   sliver pet 24552 (summon); Zelfan recombobulate 44274 (lackey-
---   GUID-list + polymorph check); all common-AI instance/threat/
---   GUID-list arms. npc_high_explosive_sheep is commented out in C++
+--   sliver pet 24552 (summon); Zelfan recombobulate 44274 PORTED
+--   in boss_zelfan.lua (pool-scan + IsPolymorphed bridge); all
+--   common-AI instance/threat/GUID-list arms stay out.
+--   npc_high_explosive_sheep is commented out in C++
 --   — nothing to port.
 -- - Apoko (shaman): totem roulette RAND(27621/44257/15786) self-cast,
 --   war-stomp 46026 self-cast, frost-shock 21401 victim, lesser-
@@ -157,8 +158,8 @@
 --   SelectTarget bridge.
 -- - Zelfan (engineer): goblin-dragon-gun 44272 / rocket-launch 44137 /
 --   fel-iron-bomb 46024 victim loops + high-explosive-sheep 44276
---   self-cast (bridgeable later); recombobulate 44274 — lackey GUID
---   list + IsPolymorphed bridges.
+--   self-cast (bridgeable later); recombobulate 44274 PORTED in
+--   boss_zelfan.lua.
 local SAY_AGGRO = 0
 local SAY_DEATH = 10
 

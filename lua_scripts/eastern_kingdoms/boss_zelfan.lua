@@ -60,10 +60,10 @@
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Recombobulate machine (4000ms init -> 2000ms loop: rings over
---   m_auiLackeyGUIDs via ObjectAccessor and casts 44274 on the
---   first polymorphed lackey — no GUID-list / IsPolymorphed
---   bridges).
+-- - Recombobulate machine PORTED below (onRecombobulate): the GUID-list
+--   ring is the delrissa.lua pool-scan idiom (FindNearestCreature
+--   per pool entry, live-only) and the polymorph check is the new
+--   creature:IsPolymorphed bridge (lua_creature_events.go).
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -82,6 +82,14 @@ local SPELL_ROCKET_LAUNCH = 44137
 local SPELL_HIGH_EXPLOSIVE_SHEEP = 44276
 local SPELL_FEL_IRON_BOMB = 46024
 local SPELL_HEALING_POTION = 15503
+local SPELL_RECOMBOBULATE = 44274
+
+-- Delrissa lackey pool in C++ m_auiAddEntries order
+-- (boss_priestess_delrissa.cpp:97-106; delrissa.lua LACKEY_ENTRIES).
+-- Zelfan rings the ACTIVE lackeys only; a pool entry with no live
+-- creature in range reads as absent, the delrissa.lua live-check idiom.
+local LACKEY_ENTRIES = { 24557, 24558, 24554, 24561, 24559, 24555, 24553, 24556 }
+local LACKEY_FIND_RANGE = 100.0
 
 local ENTRY_ZELFAN = 24556
 
@@ -143,6 +151,24 @@ local function onHighExplosiveSheep(creature, guid)
     schedule(guid, "sheep", 65000, function() onHighExplosiveSheep(creature, guid) end)
 end
 
+-- C++ boss_zelfanAI::UpdateAI (boss_priestess_delrissa.cpp:1288-1304):
+-- Recombobulate_Timer 4000ms init -> 2000ms loop; ring the lackey
+-- GUIDs in list order, cast 44274 on the first polymorphed lackey,
+-- break. The UpdateAI UpdateVictim gate is the file's victim
+-- nil-guard; the loop re-arms unconditionally like C++.
+local function onRecombobulate(creature, guid)
+    if creature:GetVictim() then
+        for _, entry in ipairs(LACKEY_ENTRIES) do
+            local lackey = creature:FindNearestCreature(entry, LACKEY_FIND_RANGE)
+            if lackey and lackey:IsPolymorphed() then
+                creature:CastSpell(lackey, SPELL_RECOMBOBULATE)
+                break
+            end
+        end
+    end
+    schedule(guid, "recombobulate", 2000, function() onRecombobulate(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -151,6 +177,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "rocketlaunch", 7000, function() onRocketLaunch(creature, guid) end)
     schedule(guid, "felironbomb", 15000, function() onFelIronBomb(creature, guid) end)
     schedule(guid, "sheep", 10000, function() onHighExplosiveSheep(creature, guid) end)
+    schedule(guid, "recombobulate", 4000, function() onRecombobulate(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

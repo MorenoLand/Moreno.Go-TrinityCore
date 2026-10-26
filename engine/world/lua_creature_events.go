@@ -529,6 +529,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.auraMu.Unlock()
 		return []any{found}, nil
 	}
+	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
+	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
+	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{s.creatureIsPolymorphed(motion)}, nil
+	}
 	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
 	// (Unit.cpp:7800-7816) for creatures: the creatureImmuneToDamage twin
 	// (script-written IMMUNITY_SCHOOL / IMMUNITY_DAMAGE rows plus the live
