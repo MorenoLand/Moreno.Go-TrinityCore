@@ -29,7 +29,7 @@
 -- C++-exact), SAY_DEATH = 6 (death — fired from the C++
 -- JustDied, C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 19 OnJustSummoned, 23 OnReset.
 -- Timers via CreateLuaEvent (per-GUID scheduler pumps);
 -- melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady. C++ DoCast default is triggered=
@@ -64,11 +64,16 @@
 -- SummonCreature calls (boss_commander_sarannis.cpp:164-179),
 -- replicated below in C++ order (mender Pos[0], reservist
 -- Pos[1]/Pos[2], heroic reservist Pos[3]; TEMPSUMMON_CORPSE_
--- DESPAWN = bridge type 4, mandokir precedent). The bloodwarders
--- have no custom AI in C++ — they engage via default LOS aggro,
--- which the Go engine aggro scan replicates — so unlike the
--- AttackStart-gated morogrim trolls this summon needs no relay.
--- The C++ JustSummoned override is BossAI bookkeeping only.
+-- DESPAWN = bridge type 4, mandokir precedent). The C++
+-- JustSummoned override is BossAI::JustSummoned
+-- (ScriptedCreature.cpp:559-563): summons.Summon bookkeeping
+-- (zero consumers in this file, moot in Lua) + DoZoneInCombat
+-- on the summon when engaged — the reinforcements do NOT
+-- rely on LOS aggro. Go summons are NOT auto-aggroed
+-- (lua_creature_events.go:65), so the zone-in leg is PORTED
+-- via the ev19 handler below (curator precedent:
+-- summon:DoZoneInCombat()); without it the mender would
+-- stand idle and never heal.
 -- OnTargetDied(3): Talk(SAY_KILL) unconditionally (no player
 -- gate, C++-exact). OnDied(4): Talk(SAY_DEATH) + cleanup
 -- (the _JustDied arm is instance-blocked). OnLeave
@@ -85,8 +90,9 @@
 -- SARANNIS = 0 bookkeeping in Reset/JustEngagedWith/
 -- JustDied skipped); the SPELL_SUMMON_REINFORCEMENTS dummy
 -- spell's four SummonCreature calls are PORTED in the
--- OnDamageTaken latch above (the C++ JustSummoned override is
--- BossAI bookkeeping only); no SpellScript bridge — spell_commander_
+-- OnDamageTaken latch above (the summons.Summon list leg is
+-- moot — zero consumers in this file; the DoZoneInCombat leg
+-- is PORTED via ev19 below); no SpellScript bridge — spell_commander_
 -- sarannis_summon_reinforcements (HandleCast dummy-effect
 -- summons, heroic fourth summon at position [3]) documented
 -- only, not bridged; no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UpdateAI
@@ -235,6 +241,18 @@ RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacke
         if creature:IsHeroic() then
             creature:SummonCreature(NPC_SUMMONED_BLOODWARDER_RESERVIST, pos[4][1], pos[4][2], pos[4][3], pos[4][4], 4)
         end
+    end
+end)
+
+-- C++ BossAI::JustSummoned (ScriptedCreature.cpp:559-563):
+-- summons.Summon (moot — zero consumers) + DoZoneInCombat on
+-- the summon when engaged. Go summons are NOT auto-aggroed
+-- (lua_creature_events.go:65); without this relay the
+-- reinforcements — the mender above all — would stand idle.
+-- The IsInCombat gate is the C++ IsEngaged() gate.
+RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 19, function(_, creature, summoned)
+    if creature:IsInCombat() then
+        summoned:DoZoneInCombat()
     end
 end)
 
