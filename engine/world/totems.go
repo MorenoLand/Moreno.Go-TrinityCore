@@ -80,6 +80,10 @@ type activeTotem struct {
 	// (WorldObject::GetMagicHitRedirectTarget, Object.cpp:3188-3217):
 	// one redirect per totem, mirroring the C++ DropCharge.
 	MagnetUsed bool
+	// ExpansionMaxLevel is the GetMaxLevelForExpansion value for the
+	// totem's creature_template expansion row, resolved at summon (0 =
+	// unresolved, read as 80 by the sentry ping).
+	ExpansionMaxLevel int32
 }
 
 var totemDefinitions = map[uint32]TotemDef{
@@ -584,6 +588,11 @@ func (s *session) totemSessionInvisibilityReciprocalOK(other *session) bool {
 // is left alone, since the despawn path clears its auras itself. The
 // rebuild also drops targets failing CanBeAppliedOn, which in the Go
 // model is the totemEnemyCreatureValid verdict (same call as the apply arm).
+// Phase is part of the rebuild too: FillTargetMap's CheckTarget arm fails
+// cross-phase targets (SpellInfo::CheckTarget -> CanSeeOrDetect ->
+// CanNeverSee, Object.cpp:1659-1662), and the totem's phase tracks the
+// owner's (Unit::SetPhaseMask summon-slot propagation), so the owner
+// mask is the caster-phase proxy here as in the apply arms.
 func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID uint32, radius float64) {
 	if s == nil || s.server == nil || totem == nil || spellID == 0 {
 		return
@@ -597,12 +606,13 @@ func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID
 	}
 	s.server.auraMu.Unlock()
 	owner := totemOwnerPos(s)
+	ownerPhase := s.currentPlayerPhaseMask()
 	for _, key := range stale {
 		m := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
 		if m == nil {
 			continue
 		}
-		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius || !s.server.totemEnemyCreatureValid(m, owner) {
+		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius || !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 			s.server.removeCreatureAura(key, spellID)
 		}
 	}
@@ -616,10 +626,13 @@ func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID
 // death with no radius gate. The caller adds the CanBeAppliedOn leg
 // via extraDrop: the debuff drops when the session is no longer
 // hostile, the buff when it is no longer in the owner's group.
+// Phase-out drops here too (FillTargetMap CheckTarget arm, same
+// CanNeverSee chain as the creature sweep).
 func (s *session) sweepTotemSessionAuraOutOfRange(totem *activeTotem, spellID uint32, radius float64, extraDrop func(other *session) bool) {
 	if s == nil || s.server == nil || totem == nil || spellID == 0 {
 		return
 	}
+	ownerPhase := s.currentPlayerPhaseMask()
 	s.server.sessionsMu.RLock()
 	var doomed []*session
 	for other := range s.server.sessions {
@@ -635,6 +648,7 @@ func (s *session) sweepTotemSessionAuraOutOfRange(totem *activeTotem, spellID ui
 		}
 		if other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
 			distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) > radius ||
+			ownerPhase&other.currentPlayerPhaseMask() == 0 ||
 			(extraDrop != nil && extraDrop(other)) {
 			doomed = append(doomed, other)
 		}
@@ -810,6 +824,23 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		DebuffSpell: def.DebuffSpell,
 		CreatedAt:   time.Now(),
 		StopChan:    make(chan struct{}),
+	}
+
+	// The sentry ping's expansion-max-level arm reads the totem's
+	// creature_template expansion row (SharedDefines.h:58: 0 -> 60,
+	// 1 -> 70, 2/unknown -> 80); unresolved stays 0, read as 80.
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var expansion int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT expansion FROM creature_template WHERE entry = ?", def.Entry).Scan(&expansion); err == nil {
+			switch expansion {
+			case 0:
+				totem.ExpansionMaxLevel = 60
+			case 1:
+				totem.ExpansionMaxLevel = 70
+			default:
+				totem.ExpansionMaxLevel = 80
+			}
+		}
 	}
 
 	if s.server != nil {
@@ -1130,6 +1161,13 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			if s.player != nil {
 				ownerLevel = s.player.Level
 			}
+			// Area-aura phase gates: FillTargetMap's CheckTarget arm fails
+			// cross-phase targets (SpellInfo::CheckTarget -> CanSeeOrDetect
+			// -> CanNeverSee, Object.cpp:1659-1662); the totem's phase
+			// tracks the owner's (Unit::SetPhaseMask summon-slot
+			// propagation), so the owner mask is the caster-phase proxy.
+			// Stealth is NOT gated here: implicit area targets ignore it.
+			ownerPhase := s.currentPlayerPhaseMask()
 			// The OWNER arm of FillTargetMap checks IsWithinDistInMap
 			// (SpellAuras.cpp FillTargetMap), so the owner's own buff is
 			// radius-gated like every other area-aura application: an
@@ -1144,7 +1182,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
-						if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) {
+						if distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
 							other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
 						}
 					}
@@ -1165,8 +1203,9 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				ownerLevel = s.player.Level
 			}
 			owner := totemOwnerPos(s)
+			ownerPhase := s.currentPlayerPhaseMask()
 			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-				if !s.server.totemEnemyCreatureValid(m, owner) {
+				if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 					continue
 				}
 				s.applyTotemEnemyDebuff(totem, m, def.DebuffSpell, ownerLevel)
@@ -1185,6 +1224,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				for other := range s.server.sessions {
 					if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 						distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+						ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 						s.totemEnemySessionHostile(other) {
 						other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel)
 					}
@@ -1571,6 +1611,10 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		return
 	}
 	owner := totemOwnerPos(s)
+	// Same area-aura phase gate as the ToW legs (CheckTarget ->
+	// CanSeeOrDetect -> CanNeverSee); the totem's phase tracks the
+	// owner's, so the owner mask is the caster-phase proxy.
+	ownerPhase := s.currentPlayerPhaseMask()
 	intervalMs := def.PulseSecs * 1000
 	if intervalMs <= 0 {
 		intervalMs = 2000
@@ -1591,7 +1635,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		}
 		amount := eff.CalcValueForLevel(slowSpell, uint32(totemMotion.Level))
 		for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-			if !s.server.totemEnemyCreatureValid(m, owner) {
+			if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 				continue
 			}
 			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, slowDurationMs, uint32(amount))
@@ -1607,6 +1651,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		for other := range s.server.sessions {
 			if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 				distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+				ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 				s.totemEnemySessionHostile(other) {
 				other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level))
 			}
@@ -1638,21 +1683,25 @@ func totemOwnerPos(s *session) playerPos {
 // GUID and X/Y. The sentry totem is REACT_AGGRESSIVE (Totem::Summon,
 // Totem.cpp:103-104), so acquisition runs the standard
 // Creature::GetAttackDistance radius (Creature.cpp:2015-2058: 20yd at equal
-// level, +/-1yd per level difference, detect-range aura terms, then the
+// level, +/-1yd per level difference, detect-range aura terms, the
+// expansion-max-level overwrite, then the
 // RATE_CREATURE_AGGRO-scaled clamp, then the rate multiplier) with the
 // totem at the owner's level (Totem::Summon sets level from the owner,
 // Totem.cpp:99); the rate comes from config (World.cpp:580,
 // Rate.Creature.Aggro, default 1.0). CanStartAttack's bridged subset
-// rides along: the non-flyer Z arm (Creature.cpp:1974, 3yd +
-// combatDistance), the gray-aggro config, line of sight, and the
-// CanSeeOrDetect stealth/invisibility legs for player victims via the
-// owner seer (Object.cpp:1660-1675: a totem's detection uses its
-// charmer/owner), and the CanSeeOrDetect phase arm (CanNeverSee,
-// Object.cpp:1659-1662) for both legs. Residual: the
-// expansion-max-level arm (unreachable for owner-level totems per
-// the prior tick) and the +m_CombatDistance add-on to the
-// CanStartAttack radius. The totem's combat reach stands in at
-// the 1.5yd default.
+// rides along: the non-flyer Z arm (Creature.cpp:1974,
+// CREATURE_Z_ATTACK_RANGE 3yd + m_CombatDistance, with GetDistanceZ
+// subtracting both combat reaches, Object.cpp:1139), the gray-aggro
+// config, line of sight, and the CanSeeOrDetect stealth/invisibility
+// legs for player victims via the owner seer (Object.cpp:1660-1675: a
+// totem's detection uses its charmer/owner), and the CanSeeOrDetect
+// phase arm (CanNeverSee, Object.cpp:1659-1662) for both legs.
+// m_CombatDistance is 0 for a totem: only the ArcherAI/TurretAI ctors
+// set it (CombatAI.cpp:195/241), so the CanStartAttack radius needs no
+// +term and the Z arm is 3yd + both reaches. The expansion-max-level
+// arm (Creature.cpp:2042-2044) is modeled from the totem's template
+// expansion row resolved at summon (unresolved reads as 80, so the arm
+// stays inert without DB data).
 // The ping fires once per newly acquired hostile (the AttackStart-per-
 // acquisition analog), so the victim GUID is remembered until the totem
 // sees no hostile again. The creature leg is the totemEnemyCreatureValid
@@ -1672,13 +1721,28 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 	owner := totemOwnerPos(s)
 	ownerPhase := s.currentPlayerPhaseMask()
 	aggroRate := s.server.Config.RateCreatureAggro
+	totemReach := 1.5
+	observerDetect := float64(0)
+	if totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID); totemMotion != nil {
+		if totemMotion.CombatReach > 0 {
+			totemReach = float64(totemMotion.CombatReach)
+		}
+		observerDetect = float64(s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(totemMotion), spellAuraModDetectRange))
+	}
+	expansionMaxLevel := totem.ExpansionMaxLevel
+	if expansionMaxLevel <= 0 {
+		expansionMaxLevel = 80
+	}
 	aggroDist := func(victimLevel int32, detectBonus float64) float64 {
 		if aggroRate == 0 {
 			return 0
 		}
-		d := 20.0 - 1.5 + float64(int32(s.player.Level)-victimLevel)
+		d := 20.0 - totemReach + float64(int32(s.player.Level)-victimLevel)
 		if int32(s.player.Level)+5 <= 80 {
 			d += detectBonus
+		}
+		if int32(s.player.Level) > expansionMaxLevel {
+			d = 20.0 - totemReach + float64(expansionMaxLevel-victimLevel)
 		}
 		if d > 45.0*aggroRate {
 			d = 45.0 * aggroRate
@@ -1686,14 +1750,6 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 			d = 5.0 * aggroRate
 		}
 		return d * aggroRate
-	}
-	combatReach := 1.5
-	observerDetect := float64(0)
-	if totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID); totemMotion != nil {
-		if totemMotion.CombatReach > 0 {
-			combatReach = float64(totemMotion.CombatReach)
-		}
-		observerDetect = float64(s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(totemMotion), spellAuraModDetectRange))
 	}
 	var nearestGUID uint64
 	minDist := float64(math.MaxFloat64)
@@ -1709,7 +1765,11 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 		if d > aggroDist(int32(m.Level), detectBonus) || d >= minDist {
 			continue
 		}
-		if math.Abs(float64(totem.Z)-float64(m.Z)) > 3.0+combatReach {
+		victimReach := 1.5
+		if m.CombatReach > 0 {
+			victimReach = float64(m.CombatReach)
+		}
+		if math.Abs(float64(totem.Z)-float64(m.Z)) > 3.0+totemReach+victimReach {
 			continue
 		}
 		if noGrayAggroBlocked(uint32(m.Level), uint32(s.player.Level), s.server.Config.NoGrayAggroAbove, s.server.Config.NoGrayAggroBelow) {
@@ -1734,7 +1794,11 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 		if d > aggroDist(int32(other.player.Level), detectBonus) || d >= minDist {
 			continue
 		}
-		if math.Abs(float64(totem.Z)-float64(other.player.Z)) > 3.0+combatReach {
+		victimReach := 1.5
+		if other.player.CombatReach > 0 {
+			victimReach = float64(other.player.CombatReach)
+		}
+		if math.Abs(float64(totem.Z)-float64(other.player.Z)) > 3.0+totemReach+victimReach {
 			continue
 		}
 		if noGrayAggroBlocked(uint32(other.player.Level), uint32(s.player.Level), s.server.Config.NoGrayAggroAbove, s.server.Config.NoGrayAggroBelow) {
