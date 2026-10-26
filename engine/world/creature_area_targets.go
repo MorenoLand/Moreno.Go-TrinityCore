@@ -1304,8 +1304,23 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 	})
 }
 
-// applyInlineReflectReturnTrip runs the reflect return trip for the inline AI
-// victim-spell path (Spell::PreprocessTarget, Spell.cpp:2350, and
+// inlineReflectReflector carries the reflector-side legs of an inline
+// reflect return trip: the stand-up target is the reflector, the damage log
+// goes to the reflector's viewers, and a player reflector takes kill credit.
+// A creature reflector stands via standCreatureMotionUp, its log fans out via
+// broadcastToInstance (it has no session to write to, like the creature-victim
+// twin), and it takes no kill credit (the creature-victim twin credits
+// nobody either); the share leg runs through shareVehicle, which reads no
+// session fields when victimIsPlayer is false.
+type inlineReflectReflector struct {
+	standUp      func()
+	deliverLog   func(payload []byte)
+	killCredit   func(ctx context.Context, target combatTarget)
+	shareVehicle *session
+}
+
+// applyInlineReflectReturnTripCore runs the reflect return trip for the inline
+// AI victim-spell path (Spell::PreprocessTarget, Spell.cpp:2350, and
 // DoEffectOnLaunchTarget, Spell.cpp:7740-7743): with ReflectResult == NONE the
 // reflected spell's effects land on the caster motion instead of the reflector.
 // C++ deals the caster's own spell back through Unit::DealDamage; the Go twin
@@ -1317,8 +1332,8 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 // reuses the same value. Deviation: C++ delivers the return trip 1.5x TimeDelay
 // after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
 // the pet-path bridge.
-func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage uint32, schoolMask uint8) {
-	if s == nil || motion == nil || reflector == nil {
+func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, damage uint32, schoolMask uint8, reflector inlineReflectReflector) {
+	if s == nil || motion == nil {
 		return
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617,
@@ -1336,11 +1351,8 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	// a non-null _spellHitTarget gate them) — so the closure runs
 	// on the lethal, immune and zero-damage paths too.
 	standUpReflectorAndFireHook := func() {
-		if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
-			if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
-				reflector.Sess.player.StandState = 0
-				reflector.Sess.sendPlayerUpdate()
-			}
+		if reflector.standUp != nil {
+			reflector.standUp()
 		}
 		if spell.ID != 0 {
 			s.fireCreatureSpellHitTarget(ctx, motion, motion.GUID, spell.ID)
@@ -1501,12 +1513,12 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 		// CalcAbsorbResist's split legs are vacuous here: the split
 		// helper early-returns when victim == attacker, and both are
 		// the motion. The 300 share leg is not: it runs on the
-		// post-absorb damage via the reflector's session as the
-		// vehicle (victimIsPlayer=false, so no session fields are
+		// post-absorb damage via the reflector's share vehicle
+		// (victimIsPlayer=false, so no session fields are
 		// read), mirroring the inline direct-hit order (share ahead
 		// of the health mutation).
-		if damage > 0 && reflector.Sess != nil {
-			reflector.Sess.splitShareDamagePct(ctx, motion.GUID, false, motionKey, motion.GUID, damage, uint32(schoolMask))
+		if damage > 0 && reflector.shareVehicle != nil {
+			reflector.shareVehicle.splitShareDamagePct(ctx, motion.GUID, false, motionKey, motion.GUID, damage, uint32(schoolMask))
 		}
 	} else {
 		damage = 0
@@ -1594,10 +1606,9 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	}
 	if !damageImmune {
 		logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask, absorbed, resisted, 0, blocked)
-		if reflector.Sess != nil {
-			_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+		if reflector.deliverLog != nil {
+			reflector.deliverLog(logPacket)
 		}
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, reflector.Sess)
 	}
 	if killed {
 		s.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
@@ -1606,8 +1617,8 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 			unitFieldDynamicFlags: unitDynFlagLootable,
 		})
 		s.broadcastThreatClearInInstance(mapID, instanceID, guid)
-		if reflector.Sess != nil {
-			reflector.Sess.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
+		if reflector.killCredit != nil {
+			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})
 		}
 		// Lethal trips still run the stand-up and hook legs: the
 		// stand-up target is the reflector (alive), and the hook
@@ -1671,6 +1682,76 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if spell.ID != 0 {
 		s.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
 	}
+}
+
+// applyInlineReflectReturnTrip runs the reflect return trip for a player
+// reflector on the inline AI victim-spell path: the stand-up arm fires on
+// TargetInfo::unit — the reflector, not _spellHitTarget (the caster) — so a
+// non-positive (or dispel-effect) reflected hit stands the reflector up; the
+// friendly gate rides the path (the tick only casts hostile AI spells at its
+// attack victim), as on the direct hit. The log goes to the reflector's
+// session and fans out nearby; a lethal trip credits the reflector's session.
+func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage uint32, schoolMask uint8) {
+	if s == nil || motion == nil || reflector == nil {
+		return
+	}
+	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, schoolMask, inlineReflectReflector{
+		standUp: func() {
+			if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+				if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
+					reflector.Sess.player.StandState = 0
+					reflector.Sess.sendPlayerUpdate()
+				}
+			}
+		},
+		deliverLog: func(payload []byte) {
+			if reflector.Sess != nil {
+				_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, true)
+			}
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, reflector.Sess)
+		},
+		killCredit: func(ctx context.Context, target combatTarget) {
+			if reflector.Sess != nil {
+				reflector.Sess.onCreatureKilled(ctx, target, nil)
+			}
+		},
+		shareVehicle: reflector.Sess,
+	})
+}
+
+// applyInlineCreatureReflectReturnTrip runs the reflect return trip for a
+// creature reflector on the inline AI victim-spell path — the area-selected
+// enemy creature whose reflect roll succeeded (serverCastCreatureReflectVerdict).
+// It shares the player trip's core, so the reflected spell's effect-1 instakill,
+// zero-damage NODAMAGE tail, damage pipeline, lethal stand-up/hook, proc loop
+// and trigger consumer all land on the caster motion exactly as for a player
+// reflector; only the reflector-side legs differ. The stand-up arm mirrors the
+// creature-victim twin (non-positive or dispel-effect, not friendly to the
+// caster, resolved at fire time so a despawned reflector simply stands
+// nothing up); the log fans out via broadcastToInstance; no kill credit (a
+// creature reflector credits no player); the share leg runs through the wire
+// victim's session as vehicle, like the creature-victim twin.
+func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell, damage uint32, schoolMask uint8, vehicle *session) {
+	if s == nil || motion == nil || reflectorGUID == 0 {
+		return
+	}
+	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, schoolMask, inlineReflectReflector{
+		standUp: func() {
+			if spell.ID == 0 || (spellIsPositive(spell) && !spellHasEffect(spell, spellEffectDispel)) {
+				return
+			}
+			if s.creatureFriendlyToTarget(motion, reflectorGUID) {
+				return
+			}
+			if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); tm != nil {
+				s.standCreatureMotionUp(tm)
+			}
+		},
+		deliverLog: func(payload []byte) {
+			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, nil)
+		},
+		shareVehicle: vehicle,
+	})
 }
 
 // armInlineReflectProcDelayed mirrors the ProcReflectDelayed arm (Spell.cpp:2181)

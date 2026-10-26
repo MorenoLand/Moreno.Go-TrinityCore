@@ -3138,7 +3138,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// reflect via creatureCheckSpellReflection, evade ahead of the roll
 				// (Object.cpp:2637-2639) for evading creatures. Reflected creatures
 				// take no per-hit legs below (same as reflected players); their
-				// return trip on the motion is a separate leg (see NEXT).
+				// return trip on the motion runs below via
+				// applyInlineCreatureReflectReturnTrip.
 				for _, guid := range areaCreatureHits {
 					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
 						continue
@@ -3246,7 +3247,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// resolves creature GUIDs via creatureInstaKillVictim); reflected
 				// and evaded creatures are excluded like reflected players — a
 				// reflected creature's instakill lands on the motion only via
-				// the return trip, which is not built yet (see NEXT).
+				// the return trip below.
 				creatureAliveBefore := map[uint64]bool{}
 				for _, guid := range areaCreatureHits {
 					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
@@ -3303,9 +3304,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, inlineSpell, damage, schoolMask)
 			}
-			// Creature reflect trips have no return trip yet: applyInlineReflectReturnTrip
-			// is player-reflector-specific (session stand-up/log/kill-credit). Their GO
-			// REFLECT miss above is correct; the motion-side landing is NEXT.
+			// Creature reflect trips land on the motion through the same
+			// core (applyInlineCreatureReflectReturnTrip): a non-NONE
+			// status already nulled the trip in the verdict, like the
+			// player trips above. The wire victim's session serves as
+			// the share leg's vehicle, like the creature-victim twin.
+			for _, trip := range creatureReflectTrips {
+				if trip.status != protocol.SpellMissNone {
+					continue
+				}
+				s.applyInlineCreatureReflectReturnTrip(ctx, motion, trip.guid, inlineSpell, damage, schoolMask, target.Sess)
+			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges
