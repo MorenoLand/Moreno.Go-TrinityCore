@@ -233,7 +233,7 @@ local function pickRandomThreatPlayerInRange(creature, maxDist)
     local found = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetTypeId() == 4 and not unit:IsDead()
-                and creature:GetDistance(unit) - creature:GetCombatReach() < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5)
             found[#found + 1] = unit
         end
     end
@@ -635,7 +635,11 @@ local function elementalTick(creature, guid)
     -- (2026-10-25 audit D4; the old teron player-only pick is retired).
     if st.poisonBolt <= 1000 then
         local pick = pickRandomThreatTarget(creature)
-        if pick and creature:GetDistance(pick) - creature:GetCombatReach() < POISON_BOLT_RANGE then -- IsWithinDistInMap twin (Object.cpp:1238)
+        local pickReach = 1.5
+        if pick and pick:GetObjectType() ~= "Player" then
+            pickReach = pick:GetCombatReach()
+        end
+        if pick and creature:GetDistance(pick) - creature:GetCombatReach() - pickReach < POISON_BOLT_RANGE then -- IsWithinDistInMap twin (Object.cpp:1238; player reach 1.5)
             creature:CastSpell(pick, SPELL_POISON_BOLT)
         end
         st.poisonBolt = 5000 + math.random(0, 4999)

@@ -147,7 +147,7 @@ local function randomMeleePlayer(creature)
     local candidates = {}
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead()
-                and creature:GetDistance(plr) - creature:GetCombatReach() < 5.0 then -- IsWithinDist twin (Object.cpp:1233)
+                and creature:GetDistance(plr) - creature:GetCombatReach() - 1.5 < 5.0 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
             candidates[#candidates + 1] = plr
         end
     end
@@ -240,7 +240,7 @@ end
 local function onHealBrother(creature, guid)
     local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
     local delay = 100
-    if other ~= nil and creature:GetDistance(other) - creature:GetCombatReach() < 60 then -- IsWithinDist twin (Object.cpp:1233)
+    if other ~= nil and creature:GetDistance(other) - creature:GetCombatReach() - other:GetCombatReach() < 60 then -- IsWithinDist twin (Object.cpp:1233; brother reach)
         creature:CastSpell(other, SPELL_HEAL_BROTHER)
         delay = 1000
     end
@@ -261,7 +261,7 @@ local function nearestAlivePlayer(creature, maxDist)
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
                 and not p:IsDead() then
             local d = creature:GetDistance(p)
-            if d - reach < maxDist and (nearestDist == nil or d < nearestDist) then
+            if d - reach - 1.5 < maxDist and (nearestDist == nil or d < nearestDist) then
                 nearest, nearestDist = p, d
             end
         end

@@ -616,7 +616,11 @@ end
 
 kroshFireballPoll = function(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 30 then -- IsWithinDist twin (Object.cpp:1233)
+    local victimReach = 1.5
+    if victim and victim:GetObjectType() ~= "Player" then
+        victimReach = victim:GetCombatReach()
+    end
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 30 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
         kroshFireball(creature, guid)
     else
         schedule(guid, "fireballpoll", 500, function()

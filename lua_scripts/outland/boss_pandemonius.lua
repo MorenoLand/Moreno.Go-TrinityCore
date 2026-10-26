@@ -100,7 +100,7 @@ local function randomPlayerIn100(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - creature:GetCombatReach() < 100.0 then -- IsWithinDistInMap twin (Object.cpp:1238)
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 100.0 then -- IsWithinDistInMap twin (Object.cpp:1238; player reach 1.5)
             candidates[#candidates + 1] = t
         end
     end

@@ -271,7 +271,7 @@ local function onMergePoll(creature, guid)
         return
     end
     local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
-    if lynx and creature:GetDistance(lynx) - creature:GetCombatReach() < 6.0 then -- IsWithinDistInMap twin (Object.cpp:1238)
+    if lynx and creature:GetDistance(lynx) - creature:GetCombatReach() - lynx:GetCombatReach() < 6.0 then -- IsWithinDistInMap twin (Object.cpp:1238; lynx reach)
         onMergeComplete(creature, guid)
         return
     end

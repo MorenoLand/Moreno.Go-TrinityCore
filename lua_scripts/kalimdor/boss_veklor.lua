@@ -196,7 +196,11 @@ end
 -- on both arms.
 local function onShadowBolt(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 45 then -- IsWithinDist twin (Object.cpp:1233)
+    local victimReach = 1.5
+    if victim and victim:GetObjectType() ~= "Player" then
+        victimReach = victim:GetCombatReach()
+    end
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 45 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
         creature:CastSpell(victim, SPELL_SHADOWBOLT)
     end
     schedule(guid, "sb", 2000, function()
@@ -213,7 +217,7 @@ local function onBlizzard(creature, guid)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - creature:GetCombatReach() < 45 then -- IsWithinDist twin (Object.cpp:1233)
+                and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 45 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
             candidates[#candidates + 1] = p
         end
     end
@@ -248,7 +252,7 @@ local function onArcaneBurst(creature, guid)
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead() then
             local d = creature:GetDistance(p)
-            if d - reach < 5.0 and (nearestDist == nil or d < nearestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < 5.0 + both reaches; target reach band documented
+            if d - reach - 1.5 < 5.0 and (nearestDist == nil or d < nearestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < 5.0 + both reaches; player reach 1.5
                 nearest, nearestDist = p, d
             end
         end

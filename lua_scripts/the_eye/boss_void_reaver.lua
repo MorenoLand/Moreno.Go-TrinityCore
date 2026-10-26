@@ -116,7 +116,7 @@ local function pickArcaneOrbTarget(creature)
     local found = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance2d(unit) - creature:GetCombatReach() >= ARCANE_ORB_MIN_DIST then -- negated IsWithinDist 2D twin (Object.cpp:1233)
+                and creature:GetDistance2d(unit) - creature:GetCombatReach() - 1.5 >= ARCANE_ORB_MIN_DIST then -- negated IsWithinDist 2D twin (Object.cpp:1233; player reach 1.5)
             found[#found + 1] = unit
         end
     end

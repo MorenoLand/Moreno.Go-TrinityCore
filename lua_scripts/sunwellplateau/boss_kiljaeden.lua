@@ -327,7 +327,7 @@ local function threatPlayersInRange(creature)
     local out = {}
     for _, unit in ipairs(targets) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - creature:GetCombatReach() < 100 then -- IsWithinDist twin (Object.cpp:1233)
+                and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 < 100 then -- IsWithinDist twin (Object.cpp:1233; player reach 1.5)
             out[#out + 1] = unit
         end
     end
@@ -777,7 +777,11 @@ local function fiendProximity(creature, guid)
     end
     if st.armed then
         local victim = creature:GetVictim()
-        if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 3 then -- IsWithinDistInMap twin (Object.cpp:1238)
+        local victimReach = 1.5
+        if victim and victim:GetObjectType() ~= "Player" then
+            victimReach = victim:GetCombatReach()
+        end
+        if victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 3 then -- IsWithinDistInMap twin (Object.cpp:1238; player reach 1.5)
             creature:CastSpell(nil, SPELL_FELFIRE_FISSION)
             st.armed = false
             creature:Kill()
