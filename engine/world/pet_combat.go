@@ -3304,6 +3304,75 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		hitTargets = append(hitTargets, areaHit.GUID)
 	}
 	hitTargets = append(hitTargets, areaAllyCreatureHits...)
+	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a pet
+	// caster, the pet twin of the castCreatureSpellInternal arm
+	// (boss_ai.go): TARGET_UNIT_NEARBY_ENTRY (38) /
+	// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) replace the wire hit list
+	// with the single nearest entry-matched target, and a miss fails
+	// the cast (Spell.cpp:1111) — return true, the pet path's
+	// silent-fizzle convention like the destFailed arm above. The
+	// packet's explicit target (target) stays the wire target,
+	// mirroring C++ m_targets. A spell carrying both 38 and 40 takes
+	// the 38 leg only, the session twin's precedence. Area hits from
+	// other effects stay: C++ runs each effect's selection
+	// independently (Spell.cpp:761-900), so the nearby pick replaces
+	// only the wire slot, and the pick drops out of the area lists
+	// so no leg hits it twice. The pick retargets the wire legs
+	// (targetGUID); a 40 pick retargets them too — unit legs resolve
+	// via getCombatTarget and safely skip a GO guid
+	// (executePetSpellDamage no-ops on unresolvable GUIDs), so no
+	// unit leg lands on the gameobject.
+	if isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) {
+		var nearby uint64
+		var ok bool
+		if isEntryNearbySpell(spell) {
+			nearby, ok = s.server.creatureEntryNearbyTarget(ctx, motion, spell)
+		} else {
+			nearby, ok = s.server.creatureEntryNearbyGOTarget(ctx, motion, spell)
+		}
+		if !ok {
+			return true
+		}
+		targetGUID = nearby
+		keptAreaHits := make([]*playerPos, 0, len(areaHits))
+		for _, areaHit := range areaHits {
+			if areaHit != nil && areaHit.GUID != nearby {
+				keptAreaHits = append(keptAreaHits, areaHit)
+			}
+		}
+		areaHits = keptAreaHits
+		keptAreaCreatureHits := make([]uint64, 0, len(areaCreatureHits))
+		for _, areaCreatureGUID := range areaCreatureHits {
+			if areaCreatureGUID != nearby {
+				keptAreaCreatureHits = append(keptAreaCreatureHits, areaCreatureGUID)
+			}
+		}
+		areaCreatureHits = keptAreaCreatureHits
+		keptAreaAllyHits := make([]*playerPos, 0, len(areaAllyHits))
+		for _, areaHit := range areaAllyHits {
+			if areaHit != nil && areaHit.GUID != nearby {
+				keptAreaAllyHits = append(keptAreaAllyHits, areaHit)
+			}
+		}
+		areaAllyHits = keptAreaAllyHits
+		keptAreaAllyCreatureHits := make([]uint64, 0, len(areaAllyCreatureHits))
+		for _, areaCreatureGUID := range areaAllyCreatureHits {
+			if areaCreatureGUID != nearby {
+				keptAreaAllyCreatureHits = append(keptAreaAllyCreatureHits, areaCreatureGUID)
+			}
+		}
+		areaAllyCreatureHits = keptAreaAllyCreatureHits
+		delete(areaAllyChecks, nearby)
+		hitTargets = []uint64{nearby}
+		for _, areaHit := range areaHits {
+			hitTargets = append(hitTargets, areaHit.GUID)
+		}
+		hitTargets = append(hitTargets, areaCreatureHits...)
+		for _, areaHit := range areaAllyHits {
+			hitTargets = append(hitTargets, areaHit.GUID)
+		}
+		hitTargets = append(hitTargets, areaAllyCreatureHits...)
+	}
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
