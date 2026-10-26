@@ -169,29 +169,31 @@ type nearbyGameObject struct {
 	x, y, z  float32
 }
 
-// scanNearbyGameObjectsAt visits runtime and static gameobjects in the given
-// map/instance within the x/y box of radius around (x, y), skipping hidden
-// ones — the Go equivalent of the gameobject container scan in SearchTargets
-// (Spell.cpp:1844) for TARGET_OBJECT_TYPE_GOBJ (GetSearcherTypeMask,
-// Spell.cpp:1809), parameterized by search origin so non-player origins
-// (e.g. condition targets) can use the same container semantics.
-func (s *session) scanNearbyGameObjectsAt(ctx context.Context, mapID, instanceID uint32, x, y, radius float32, visit func(nearbyGameObject)) {
-	if s == nil || s.server == nil {
+// scanNearbyGameObjectsAtServer is the Server-level form of
+// scanNearbyGameObjectsAt: it visits runtime and static gameobjects in the
+// given map/instance within the x/y box of radius around (x, y), skipping
+// hidden ones — the Go equivalent of the gameobject container scan in
+// SearchTargets (Spell.cpp:1844) for TARGET_OBJECT_TYPE_GOBJ
+// (GetSearcherTypeMask, Spell.cpp:1809), parameterized by search origin so
+// non-player origins (e.g. condition targets, creature casters) can use the
+// same container semantics.
+func (s *Server) scanNearbyGameObjectsAtServer(ctx context.Context, mapID, instanceID uint32, x, y, radius float32, visit func(nearbyGameObject)) {
+	if s == nil {
 		return
 	}
 	seen := make(map[uint64]struct{})
-	for _, dyn := range s.server.gameObjectStatesInInstance(mapID, instanceID) {
+	for _, dyn := range s.gameObjectStatesInInstance(mapID, instanceID) {
 		if dyn.Hidden {
 			continue
 		}
 		seen[dyn.GUID] = struct{}{}
 		visit(nearbyGameObject{guid: dyn.GUID, entry: dyn.Entry, spawnLow: dyn.LowGUID, x: dyn.X, y: dyn.Y, z: dyn.Z})
 	}
-	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
 	goArgs := make([]any, 0, 4)
-	eventClause := gameEventSpawnClause("geg.eventEntry", s.server.activeEventList(ctx), &goArgs)
+	eventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
 	query := `SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z
 		FROM gameobject AS g
 		LEFT JOIN game_event_gameobject AS geg ON geg.guid = g.guid
@@ -201,7 +203,7 @@ func (s *session) scanNearbyGameObjectsAt(ctx context.Context, mapID, instanceID
 		AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
 		AND ` + eventClause
 	args := append([]any{mapID, float64(x - radius), float64(x + radius), float64(y - radius), float64(y + radius)}, goArgs...)
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, args...)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return
 	}
@@ -216,11 +218,21 @@ func (s *session) scanNearbyGameObjectsAt(ctx context.Context, mapID, instanceID
 		if _, dup := seen[guid]; dup {
 			continue
 		}
-		if s.server.isGameObjectHiddenInInstance(mapID, instanceID, guid) {
+		if s.isGameObjectHiddenInInstance(mapID, instanceID, guid) {
 			continue
 		}
 		visit(nearbyGameObject{guid: guid, entry: uint32(entry), spawnLow: uint32(low), x: float32(x), y: float32(y), z: float32(z)})
 	}
+}
+
+// scanNearbyGameObjectsAt is the session-rooted form of
+// scanNearbyGameObjectsAtServer; the session loader delegates here so the
+// query stays single-sourced.
+func (s *session) scanNearbyGameObjectsAt(ctx context.Context, mapID, instanceID uint32, x, y, radius float32, visit func(nearbyGameObject)) {
+	if s == nil || s.server == nil {
+		return
+	}
+	s.server.scanNearbyGameObjectsAtServer(ctx, mapID, instanceID, x, y, radius, visit)
 }
 
 // scanNearbyGameObjects is the caster-centered form of scanNearbyGameObjectsAt.

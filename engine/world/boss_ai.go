@@ -1293,7 +1293,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// DisableMgr::SPELL_DISABLE_LOS has no Go model (no DisableMgr).
 		// C++ relative order: inside the unit-target block, after the
 		// behind/facing arms, ahead of CheckRange (5496).
-		destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(m, spellInfo, targetGUID)
+		destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(ctx, m, spellInfo, targetGUID)
 		if targetGUID != 0 && targetGUID != m.GUID &&
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
@@ -1491,7 +1491,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			// 724-757 redirect precedes the 900-975 dest arms). The
 			// dest-LOS gate above keeps the pre-redirect resolution — C++
 			// evaluates that arm at CheckCast time, before the redirect.
-			destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(m, spellInfo, targetGUID)
+			destX, destY, destZ, hasDest = s.resolveCreatureSpellDestination(ctx, m, spellInfo, targetGUID)
 		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the

@@ -3089,7 +3089,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::SelectSpellTargets (Spell.cpp:3410) runs ahead of CheckCast in
 	// C++'s Spell::prepare, so the dest-family resolution lands before the
 	// LOS gates here; the same values feed the GO packet write below.
-	dx, dy, dz, hasDest := s.server.resolveCreatureSpellDestination(motion, spell, targetGUID)
+	dx, dy, dz, hasDest := s.server.resolveCreatureSpellDestination(ctx, motion, spell, targetGUID)
 	if targetGUID != 0 && targetGUID != motion.GUID &&
 		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
@@ -3250,7 +3250,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if redirectGUID, ok := s.server.creatureGroundingTotemRedirect(ctx, motion, spell, targetGUID); ok {
 		targetGUID = redirectGUID
 		target.UnitGUID = redirectGUID
-		dx, dy, dz, hasDest = s.server.resolveCreatureSpellDestination(motion, spell, targetGUID)
+		dx, dy, dz, hasDest = s.server.resolveCreatureSpellDestination(ctx, motion, spell, targetGUID)
 	}
 	remainingPower, hasRemainingPower, ok := s.takePetSpellPower(motion, spell, castCount, triggered)
 	if !ok {

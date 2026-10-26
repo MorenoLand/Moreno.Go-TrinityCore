@@ -1,6 +1,8 @@
 package world
 
 import (
+	"context"
+
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
@@ -18,7 +20,8 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 		if isCasterDestTarget(eff.ImplicitTargetA) || isCasterDestTarget(eff.ImplicitTargetB) ||
 			isTargetDestTarget(eff.ImplicitTargetA) || isTargetDestTarget(eff.ImplicitTargetB) ||
 			isDestDestTarget(eff.ImplicitTargetA) || isDestDestTarget(eff.ImplicitTargetB) ||
-			eff.ImplicitTargetA == implicitTargetDestTraj || eff.ImplicitTargetB == implicitTargetDestTraj {
+			eff.ImplicitTargetA == implicitTargetDestTraj || eff.ImplicitTargetB == implicitTargetDestTraj ||
+			eff.ImplicitTargetA == implicitTargetDestNearbyEntry || eff.ImplicitTargetB == implicitTargetDestNearbyEntry {
 			return true
 		}
 	}
@@ -46,10 +49,14 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // and creature AI casts never set a trajectory (Unit::CastSpell builds
 // default targets); TARGET_DEST_CASTER_FISHING (39, player bobber model);
 // the 76/106 channel destinations (motions hold channel duration but no
-// channel target); TARGET_DEST_NEARBY_ENTRY (46, needs a motion-anchored
-// entry-object candidate scan — the session twin's scan is
-// session-anchored).
-func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool) {
+// channel target).
+//
+// TARGET_DEST_NEARBY_ENTRY (46) resolves through
+// creatureEntryNearbyDestPosition below: a no-match keeps the running
+// destination (C++ fails the cast, Spell.cpp:1111) because this resolver
+// carries no fail channel — the same fallback the target-dest arms use
+// without a resolvable unit target.
+func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool) {
 	if s == nil || m == nil {
 		return 0, 0, 0, false
 	}
@@ -83,6 +90,15 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 			hasUnitTarget = true
 		}
 	}
+	// TARGET_DEST_NEARBY_ENTRY (46) resolves once up front: the scan's
+	// condition rows are effect-mask-unioned (the session twin's
+	// approximation), so every 46 arm in the loop takes the same nearest
+	// position and later effects still overwrite earlier ones.
+	var nearbyX, nearbyY, nearbyZ float32
+	nearbyFound := false
+	if isDestNearbyEntrySpell(spell) {
+		nearbyX, nearbyY, nearbyZ, nearbyFound = s.creatureEntryNearbyDestPosition(ctx, m, spell)
+	}
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -103,6 +119,10 @@ func (s *Server) resolveCreatureSpellDestination(m *creatureMotion, spell wotlk.
 			case isDestDestTarget(targetType):
 				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, modRadius); changed {
 					x, y, z = nx, ny, nz
+				}
+			case targetType == implicitTargetDestNearbyEntry:
+				if nearbyFound {
+					x, y, z = nearbyX, nearbyY, nearbyZ
 				}
 			}
 		}
@@ -129,4 +149,173 @@ func (s *Server) creatureDestTargetOrientation(m *creatureMotion, targetGUID uin
 		}
 	}
 	return 0
+}
+
+// creatureEntryNearbyObjectRange mirrors the TARGET_CHECK_ENTRY arm of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1052) for a creature caster:
+// range = GetMaxRange(IsPositive()), folded through SPELLMOD_RANGE via the
+// mod-owner session (SpellInfo.cpp:3060-3072, Object.cpp:2246-2268) — the
+// pet/totem owner's session, nil for wild casters (the creature-area
+// geometry precedent).
+func (s *Server) creatureEntryNearbyObjectRange(m *creatureMotion, spell wotlk.Spell) float64 {
+	if s == nil || s.Data == nil || m == nil {
+		return 0
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok {
+		return 0
+	}
+	maxRange := spellDBCMaxRange(spellIsPositive(spell), rangeEntry)
+	if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+		maxRange = modOwner.applySpellModFloat(spell, spellModRange, maxRange)
+	}
+	return maxRange
+}
+
+// creatureEntryNearbyDestPosition ports the DEST half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
+// TARGET_DEST_NEARBY_ENTRY (46) for a creature caster, mirroring the session
+// twin spellEntryNearbyDestPosition: the destination becomes the position of
+// the nearest world object within GetMaxRange(IsPositive()) passing
+// SpellInfo::CheckTarget and the spell's implicit-target conditions.
+// Candidates are player sessions, creature motions (the caster motion
+// itself included — C++ visits the caster's own grid cell, and the session
+// twin likewise includes the casting session), static DB creature spawns
+// without motions (joining every instance of the map, the area-sweep
+// precedent), and gameobjects (runtime + static rows). The ENTRY faction
+// switch has no case (Spell.cpp:8316), so only the CheckTarget terms gate
+// units: alive unless the spell allows dead targets (SpellInfo.cpp:1715),
+// not combat-disabled (spellTargetUnitBlocked, assist=false like the
+// session twin); corpses have no Go model and never match. With no
+// conditions and RequiresSpellFocus set, the focus object's position is
+// used (Spell.cpp:1085). No match returns false.
+func (s *Server) creatureEntryNearbyDestPosition(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (float32, float32, float32, bool) {
+	if s == nil || m == nil {
+		return 0, 0, 0, false
+	}
+	maxRange := s.creatureEntryNearbyObjectRange(m, spell)
+	if maxRange <= 0 {
+		return 0, 0, 0, false
+	}
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, entryImplicitEffectMask(spell, implicitTargetDestNearbyEntry))
+	if len(condRows) == 0 && spell.RequiresSpellFocus != 0 {
+		if x, y, z, ok := s.motionSpellFocusPosition(ctx, m, spell); ok {
+			return x, y, z, true
+		}
+		return 0, 0, 0, false
+	}
+	allowPlayers, allowCreatures, allowGO := implicitTargetEntryObjectMask(condRows, true, true, true)
+	// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842): the DEST base mask
+	// narrows to PLAYER|CORPSE under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so creature and gameobject candidates
+	// drop out (corpses have no Go model).
+	if spellSearchPlayersOnly(spell) {
+		allowCreatures, allowGO = false, false
+	}
+	allowDead := spellAllowsDeadTarget(spell)
+	bestX, bestY, bestZ := float32(0), float32(0), float32(0)
+	bestDist := maxRange
+	found := false
+	consider := func(x, y, z float32) {
+		dist := distance3D(x, y, z, m.X, m.Y, m.Z)
+		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8388): strict
+		// less-than, shrinking to the nearest match.
+		if dist < bestDist {
+			bestDist, bestX, bestY, bestZ = dist, x, y, z
+			found = true
+		}
+	}
+	if allowPlayers || allowCreatures {
+		s.sessionsMu.RLock()
+		for targetSession := range s.sessions {
+			if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+				continue
+			}
+			p := targetSession.player
+			if p.Map != m.Map || p.InstanceID != m.InstanceID || !allowPlayers {
+				continue
+			}
+			if p.Health == 0 && !allowDead {
+				continue
+			}
+			if spellTargetUnitBlocked(spell, p.UnitFlags, 0, false) {
+				continue
+			}
+			if !implicitEntryConditionsMet(condRows, true, 0, 0) {
+				continue
+			}
+			consider(p.X, p.Y, p.Z)
+		}
+		s.sessionsMu.RUnlock()
+	}
+	if allowCreatures {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		candidates := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				candidates = append(candidates, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range candidates {
+			if cand.Map != m.Map || cand.InstanceID != m.InstanceID {
+				continue
+			}
+			if cand.Health == 0 && !allowDead {
+				continue
+			}
+			if spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
+				continue
+			}
+			if !implicitEntryConditionsMet(condRows, false, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
+				continue
+			}
+			consider(cand.X, cand.Y, cand.Z)
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-maxRange, float64(m.X)+maxRange, float64(m.Y)-maxRange, float64(m.Y)+maxRange)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if uint32(rowMap) != m.Map {
+						continue
+					}
+					if health <= 0 && !allowDead {
+						continue
+					}
+					if spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), false) {
+						continue
+					}
+					if !implicitEntryConditionsMet(condRows, false, uint32(entry), uint32(low)) {
+						continue
+					}
+					consider(float32(x), float32(y), float32(z))
+				}
+			}
+		}
+	}
+	if allowGO {
+		s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, m.X, m.Y, float32(maxRange), func(g nearbyGameObject) {
+			if !implicitEntryGOConditionsMet(condRows, g.entry, g.spawnLow) {
+				return
+			}
+			consider(g.x, g.y, g.z)
+		})
+	}
+	if !found {
+		return 0, 0, 0, false
+	}
+	return bestX, bestY, bestZ, true
 }
