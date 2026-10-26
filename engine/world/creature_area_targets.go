@@ -1415,7 +1415,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// _spellHitTarget, Spell.cpp:2350) are both the motion, so the
 	// CalculateSpellDamageTaken pipeline runs on the motion's own
 	// legs, in the pet-path creature-victim order (pet_combat.go):
-	// taken multiplier, armor, block, resilience, AutoBalance, then
+	// taken multiplier, armor, crit, block, resilience, AutoBalance, then
 	// the CalcAbsorbResist tail (resist, absorb). The old code dealt
 	// the raw base damage with zero absorbed/resisted in the log.
 	motionKey := creatureAuraKeyForMotion(motion)
@@ -1428,6 +1428,8 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// proc loop below, like C++'s trigger block on the zeroed hit.
 	damageImmune := creatureImmuneToDamageSpell(s, motionKey, spell, uint32(schoolMask))
 	var absorbed, resisted, blocked uint32
+	isCrit := false
+	hitInfo := uint32(0)
 	if !damageImmune {
 		if spell.ID != 0 {
 			damage = creatureSpellDamageBonusTaken(s, damage, spell, uint32(schoolMask), motionKey, nil, 1.0)
@@ -1437,6 +1439,34 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			(spell.ID == 0 || spell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			armor := s.creatureIgnoreTargetResistArmorForSpell(motionKey, s.liveCreatureArmor(motionKey, motion, float64(stats.Armor)), spell, spell.ID != 0)
 			damage = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), damage)
+		}
+		// Unit::SpellCritChanceDone (Unit.cpp:7167-7212) / DoEffectOnLaunchTarget
+		// (Spell.cpp:7782-7790): the return trip rolls crit fresh per TargetInfo,
+		// unit == m_originalCaster == the motion, so a wild motion rolls none
+		// and only a non-null GetSpellModOwner (a player-owned motion) rolls,
+		// mirroring the creature-victim twin. Sits post-armor, pre-block,
+		// like the DmgClass switch (Unit.cpp:1023-1040).
+		if damage > 0 && spell.ID != 0 {
+			if owner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); owner != nil {
+				chance := s.creatureSpellCritChanceDone(motionKey, motion.FlagsExtra&0x20000 != 0, schoolMask, spell, true)
+				if owner.player != nil {
+					chance = float64(owner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
+				chance = s.creatureSpellCritChanceTaken(chance, nil, motionKey, false, motion.GUID, motion.Level, uint32(maxUint32(motion.Level, 1)), schoolMask, spell, s.creatureCasterCanApplyResilience(motion))
+				isCrit = chance > 0 && rand.Float64() < chance
+				if isCrit {
+					var mask uint32
+					if reflector.shareVehicle != nil {
+						mask, _ = reflector.shareVehicle.targetCreatureTypeMask(ctx, motion.GUID)
+					}
+					if spell.DefenseType == spellDamageClassMagic {
+						damage = s.creatureSpellCriticalDamageBonus(motionKey, uint32(schoolMask), damage, mask, spell, owner)
+					} else {
+						damage = s.creatureSpellWeaponCritDamageBonus(motionKey, motionKey, nil, false, uint32(schoolMask), damage, spell, mask, owner)
+					}
+					hitInfo = 0x02
+				}
+			}
 		}
 		if damage > 0 && spell.ID != 0 {
 			// Position.cpp:122-124: a unit is always in its own arc,
@@ -1470,7 +1500,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			}
 			if s.creatureVictimTakesResilience(motion) && s.creatureCasterCanApplyResilience(motion) {
 				if ownerSess := s.ownerPlayerSessionOfMotion(motion); ownerSess != nil {
-					ownerSess.applyResilienceToDamage(true, &damage, false, resilCR)
+					ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
 				}
 			}
 		}
@@ -1605,7 +1635,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 		overkill = damage - healthBefore
 	}
 	if !damageImmune {
-		logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask, absorbed, resisted, 0, blocked)
+		logPacket := buildSpellNonMeleeDamageLog(guid, guid, spell.ID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 		if reflector.deliverLog != nil {
 			reflector.deliverLog(logPacket)
 		}
@@ -1650,6 +1680,10 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// runs, so the event evaluates an empty set (net no-op); the
 	// KILL/KILLED/DEATH legs (Unit.cpp:11283-11290) are a standing gap —
 	// no creature death path in Go fires them.
+	procHitMask := procHitNormal
+	if isCrit {
+		procHitMask = procHitCritical
+	}
 	if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 		typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
 		if typeMask != 0 {
@@ -1659,7 +1693,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 				schoolMask:     uint32(schoolMask),
 				spellTypeMask:  procSpellTypeDamage,
 				spellPhaseMask: procSpellPhaseHit,
-				hitMask:        procHitNormal,
+				hitMask:        procHitMask,
 				triggered:      false,
 				eventSpell:     &spellCopy,
 				actorGUID:      guid,

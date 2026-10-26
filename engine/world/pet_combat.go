@@ -4787,8 +4787,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// rule). The crit bonus sits in the CalculateSpellDamageTaken DmgClass
 	// switch (Unit.cpp:1023-1040), post-armor, pre-resilience — so the roll
 	// and bonus land here, ahead of the resist leg and the resilience arm.
+	// DoEffectOnLaunchTarget rolls crit per TargetInfo with no self-target
+	// exclusion (Spell.cpp:7782-7790), so a reflect return trip (target ==
+	// caster) rolls like any other hit.
 	isCrit := false
-	if damage > 0 && target.GUID != caster.GUID && s.server != nil && s.server.Data != nil {
+	if damage > 0 && s.server != nil && s.server.Data != nil {
 		if critSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
 			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, schoolMask, critSpell, true)
 			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7790): the taken
@@ -5497,6 +5500,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// DoDamageAndTriggers runs, so a lethal return trip evaluates an empty
 	// set (net no-op).
 	if targetMotion.Health != 0 && target.GUID == caster.GUID {
+		returnTripHitMask := procHitNormal
+		if isCrit {
+			returnTripHitMask = procHitCritical
+		}
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 			typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
 			if typeMask != 0 {
@@ -5506,7 +5513,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					schoolMask:     uint32(schoolMask),
 					spellTypeMask:  procSpellTypeDamage,
 					spellPhaseMask: procSpellPhaseHit,
-					hitMask:        procHitNormal,
+					hitMask:        returnTripHitMask,
 					triggered:      triggered,
 					eventSpell:     &spellCopy,
 					actorGUID:      caster.GUID,
