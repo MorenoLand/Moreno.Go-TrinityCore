@@ -94,11 +94,10 @@
 -- arms on combat-start timers would fabricate casts):
 -- EVENT_MELEE_CHECK (cpp:258-261) — PORTED as meleeCheckTick:
 -- DoCast(SPELL_PETRIFY_BREATH 62030) gated on
--- !me->IsWithinMeleeRange(me->GetVictim()); the gate rides the
--- weegli melee-range twin (IsWithinDist with the C++ GetMeleeRange
--- formula, engine/world/combat.go: max(reach + victimReach + 4/3,
--- 5.0); player victims use the 1.5 engine-default reach since the
--- player surface has no GetCombatReach). DoCast resolves to a
+-- !me->IsWithinMeleeRange(me->GetVictim()); the gate rides
+-- creature:IsWithinMeleeRange (bridged; Unit.cpp:599-618 twin incl.
+-- the IsInMap leg), replacing the hand-rolled IsWithinDist twin.
+-- DoCast resolves to a
 -- victim cast via AISpellInfo (UnitAI.cpp FillAISpellInfo:
 -- TARGET_UNIT_TARGET_ENEMY -> AITARGET_VICTIM), so the Lua
 -- victim-cast (nil target) matches. 6s init, 1s re-arm.
@@ -243,23 +242,14 @@ end
 
 -- C++ EVENT_MELEE_CHECK: 6s init from JustEngagedWith (cpp:124),
 -- 1s re-arm (cpp:261); fires DoCast(SPELL_PETRIFY_BREATH) only
--- when the victim is outside melee range. The C++ casting-state
+-- when the victim is outside melee range, gated on
+-- creature:IsWithinMeleeRange (bridged). The C++ casting-state
 -- early-return has no bridge (maiden deviation, as with the other
 -- timers in this file).
 local function meleeCheckTick(creature, guid)
     local victim = creature:GetVictim()
-    if victim then
-        local victimReach = 1.5
-        if victim:GetObjectType() ~= "Player" then
-            victimReach = victim:GetCombatReach()
-        end
-        local meleeRange = creature:GetCombatReach() + victimReach + 4.0 / 3.0
-        if meleeRange < 5.0 then
-            meleeRange = 5.0
-        end
-        if not creature:IsWithinDist(victim, meleeRange) then
-            creature:CastSpell(nil, SPELL_PETRIFY_BREATH)
-        end
+    if victim and not creature:IsWithinMeleeRange(victim) then
+        creature:CastSpell(nil, SPELL_PETRIFY_BREATH)
     end
     schedule(guid, "meleecheck", 1000, function()
         meleeCheckTick(creature, guid)

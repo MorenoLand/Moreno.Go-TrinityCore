@@ -70,11 +70,11 @@
 -- Reset() Initialize() / boss_priestess_lackey_commonAI::Reset() /
 -- ::UpdateAI() are internal machinery covered by the cancel/re-arm on
 -- combat events (halycon precedent).
+-- Blink machine PORTED (onBlink): the PvE-combat-refs loop rides
+--   threatTargets (GetAITargets + alive filter, salaris idiom) and
+--   the gate rides creature:IsWithinMeleeRange (bridged 2026-10-24);
+--   8000ms init -> 8000ms loop, non-triggered self-cast 14514.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - Blink machine (GetCombatManager().GetPvECombatRefs() loop:
---   anybody IsWithinMeleeRange -> DoCast(me, SPELL_BLINK 14514),
---   8000ms init -> 8000ms loop) — re-keyed: timer bridges, but the
---   combat-manager / melee-range legs have no bridge, stays out.
 -- - Common-AI JustEngagedWith: the lackey AddThreat(who, 0.0f, pAdd)
 --   ring over m_auiLackeyGUIDs via ObjectAccessor (no GUID-list
 --   bridge) and the Delrissa threat add via instance->GetCreature
@@ -95,6 +95,7 @@ local SPELL_ICE_BLOCK = 27619
 local SPELL_HEALING_POTION = 15503
 local SPELL_POLYMORPH = 13323
 local SPELL_BLIZZARD = 44178
+local SPELL_BLINK = 14514
 
 local ENTRY_YAZZAI = 24561
 
@@ -180,6 +181,20 @@ local function onIceLance(creature, guid)
     schedule(guid, "icelance", 12000, function() onIceLance(creature, guid) end)
 end
 
+local function onBlink(creature, guid)
+    local inMeleeRange = false
+    for _, unit in ipairs(threatTargets(creature)) do
+        if creature:IsWithinMeleeRange(unit) then
+            inMeleeRange = true
+            break
+        end
+    end
+    if inMeleeRange then
+        creature:CastSpell(creature, SPELL_BLINK)
+    end
+    schedule(guid, "blink", 8000, function() onBlink(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -190,6 +205,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "icelance", 12000, function() onIceLance(creature, guid) end)
     schedule(guid, "polymorph", 1000, function() onPolymorph(creature, guid) end)
     schedule(guid, "blizzard", 8000, function() onBlizzard(creature, guid) end)
+    schedule(guid, "blink", 8000, function() onBlink(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
