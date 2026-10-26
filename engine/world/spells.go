@@ -27756,6 +27756,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			absorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToPlayer, after this log was sent.
+		if !ts.godCheatActive() && dmg > 0 {
+			preSplit := dmg
+			dmg = ts.server.splitDamageToCaster(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+			absorbed += preSplit - dmg
+		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
 		if dmg >= targetHealth && targetHealth > 0 {
@@ -28313,6 +28323,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			absorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToPlayer, after this log was sent.
+		if !ts.godCheatActive() && dmg > 0 {
+			preSplit := dmg
+			dmg = ts.server.splitDamageToCaster(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+			absorbed += preSplit - dmg
+		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
 		if dmg >= targetHealth && targetHealth > 0 {
@@ -28683,6 +28703,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			burnAbsorbed, dmg = ts.applyAbsorptionShields(pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToPlayer, after this log was sent.
+		if !ts.godCheatActive() && dmg > 0 {
+			preSplit := dmg
+			dmg = ts.server.splitDamageToCaster(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+			burnAbsorbed += preSplit - dmg
+		}
 		burnTargetHealth := ts.player.Health
 		burnOverkill := uint32(0)
 		if dmg >= burnTargetHealth && burnTargetHealth > 0 {
@@ -28778,12 +28808,8 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 	// rather than a damage==0 gate because absorbed-to-zero damage still runs
 	// the legs in C++ (absorbed hits strip TAKE_DAMAGE-interrupt auras).
 	godNegated := ts.godCheatActive()
-	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
-	// redirect part of the tick damage to the aura's caster, ahead of the
-	// 300 share leg.
-	if !godNegated && dmg > 0 {
-		dmg = ts.server.splitDamageToCaster(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
-	}
+	// The CalcAbsorbResist split leg runs in the tick paths before the
+	// periodic log is built; only the 300 share leg remains here.
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if !godNegated && dmg > 0 {
 		ts.splitShareDamagePct(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
@@ -29598,6 +29624,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToCreature, after this log was sent.
+		if dmg > 0 {
+			preSplit := dmg
+			dmg = s.server.splitDamageToCaster(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+			absorbed += preSplit - dmg
+		}
 		targetHealth := target.Health
 		overkill := uint32(0)
 		if dmg >= targetHealth && targetHealth > 0 {
@@ -30300,6 +30336,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			absorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToCreature, after this log was sent.
+		if dmg > 0 {
+			preSplit := dmg
+			dmg = s.server.splitDamageToCaster(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+			absorbed += preSplit - dmg
+		}
 		targetHealth := target.Health
 		overkill := uint32(0)
 		if dmg >= targetHealth && targetHealth > 0 {
@@ -30741,6 +30787,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			burnAbsorbed, dmg = s.server.applyCreatureAbsorptionShields(key, pool, uint8(aura.SchoolMask))
 			dmg += bypass
 		}
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): the split-damage
+		// legs run inside CalcAbsorbResist, after the absorb loops, so
+		// the split amount counts as absorbed in the periodic log and
+		// the logged damage is post-split. The split used to run inside
+		// applyPeriodicTickDamageToCreature, after this log was sent.
+		if dmg > 0 {
+			preSplit := dmg
+			dmg = s.server.splitDamageToCaster(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
+			burnAbsorbed += preSplit - dmg
+		}
 		burnTargetHealth := target.Health
 		burnOverkill := uint32(0)
 		if dmg >= burnTargetHealth && burnTargetHealth > 0 {
@@ -31056,12 +31112,8 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 // periodic tick on a creature target, shared by the damage (3/89) and leech (53)
 // tick paths. Returns the damage actually dealt and whether the target survived.
 func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, targetHealth uint32, target combatTarget, key creatureAuraKey, aura *activeAura) (uint32, bool) {
-	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras (81/153)
-	// redirect part of the tick damage to the aura's caster, ahead of the
-	// 300 share leg.
-	if dmg > 0 {
-		dmg = s.server.splitDamageToCaster(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)
-	}
+	// The CalcAbsorbResist split leg runs in the tick paths before the
+	// periodic log is built; only the 300 share leg remains here.
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if dmg > 0 {
 		s.splitShareDamagePct(ctx, key.GUID, false, key, aura.CasterGUID, dmg, aura.SchoolMask)

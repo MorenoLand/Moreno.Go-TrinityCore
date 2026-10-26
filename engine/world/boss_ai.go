@@ -2836,11 +2836,16 @@ func (s *Server) fireCreaturePeriodicPowerBurnTickProcs(ctx context.Context, vic
 // AuraEffect::HandleProcTriggerDamageAuraProc (SpellAuraEffects.cpp:5738-5762)
 // for a creature caster: the effect's own amount as direct spell damage of
 // the aura spell's school on the proc target — no hit roll, no crit roll.
-// C++ goes SpellDamageBonusDone -> CalculateSpellDamageTaken -> damage mods
-// -> non-melee damage log -> DealSpellDamage. The done-bonus arm
-// (SpellDamageBonusDone) has no creature-side model (no spell-power or
-// spell mods on wild creatures), so the pipeline starts at the taken leg,
-// mirroring the creature spell-damage victim block (creaturemotion.go).
+// C++ goes SpellDamageBonusDone -> SpellDamageBonusTaken ->
+// CalculateSpellDamageTaken -> DealDamageMods -> non-melee damage log ->
+// DealSpellDamage. The done-bonus arm (SpellDamageBonusDone) has no
+// creature-side model (no spell-power or spell mods on wild creatures), so
+// the pipeline starts at the taken leg, mirroring the inline creature
+// spell-damage victim block (creature_area_targets.go): taken fold, armor,
+// block, resilience, AutoBalance, then the CalcAbsorbResist tail (resist,
+// then absorb with the pre-resist bypass base). DealDamageMods is the
+// dead/in-flight/evading zeroing arm — the dead leg is the Health == 0
+// return above and player victims carry no in-flight/evade model here.
 func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creatureMotion, aura *activeAura, auraSpell wotlk.Spell, effIndex int, victimGUID uint64) {
 	if s == nil || m == nil || aura == nil || victimGUID == 0 {
 		return
@@ -2862,15 +2867,118 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 	}
 	damage := basePoint
 	absorbed := uint32(0)
-	// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no damage.
-	if vs.godCheatActive() {
-		damage = 0
-	} else if damage > 0 {
-		absorbed, damage = vs.applyAbsorptionShields(damage, uint8(schoolMask))
+	resisted := uint32(0)
+	blocked := uint32(0)
+	hitInfo := uint32(0)
+	// AuraEffect::HandleProcTriggerDamageAuraProc (SpellAuraEffects.cpp:5745-5749):
+	// an isolated or damage-immune proc target takes nothing — C++ sends
+	// SendTickImmune and returns before any damage leg.
+	if vs.playerIsIsolated() || vs.isImmuneToDamageSpell(auraSpell, schoolMask) {
+		immunePkt := protocol.BuildSpellDamageImmune(m.GUID, victimGUID, auraSpell.ID)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		return
 	}
+	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1130): the taken fold
+	// runs unconditionally; the armor/block/resilience arms run only
+	// without SPELL_ATTR4_FIXED_DAMAGE (the whole DmgClass switch is
+	// inside that gate). No crit roll on this path: C++ builds a fresh
+	// SpellNonMeleeDamage with crit unset and the handler never rolls one.
+	fixedDamage := auraSpell.AttributesEx4&spellAttr4FixedDamage != 0
+	if damage > 0 {
+		damage = spellDamageBonusTaken(damage, auraSpell, schoolMask, vs, nil, 1.0)
+		isHybridSpell := auraSpell.SchoolMask&spellSchoolMaskNormal != 0 && auraSpell.SchoolMask&0x7E != 0
+		if !fixedDamage {
+			if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 &&
+				!isHybridSpell && auraSpell.Attributes&spellAttr0CUIgnoreArmor == 0 {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), auraSpell, true)
+				damage = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
+			}
+			if damage > 0 {
+				victimTarget := combatTarget{
+					GUID:        victimGUID,
+					X:           vs.player.X,
+					Y:           vs.player.Y,
+					Orientation: vs.player.Orientation,
+					Level:       vs.player.Level,
+					Armor:       vs.player.Armor,
+				}
+				if b, ok := s.spellTakenBlockAmountFrom(victimTarget, true, vs, auraSpell, damage, uint8(maxUint32(m.Level, 1)), m.X, m.Y); ok {
+					blocked = b
+					damage -= b
+				}
+			}
+			if damage > 0 && s.creatureCasterCanApplyResilience(m) {
+				resilCR := uint8(CombatRatingCritTakenSpell)
+				if auraSpell.DefenseType != spellDamageClassMagic {
+					if spellWeaponAttackType(auraSpell) == protocol.RangedAttack {
+						resilCR = CombatRatingCritTakenRanged
+					} else {
+						resilCR = CombatRatingCritTakenMelee
+					}
+				}
+				vs.applyResilienceToDamage(true, &damage, false, resilCR)
+			}
+		}
+		damage = s.autoBalanceModifyDealDamage(m, vs, damage)
+		preResistDmg := damage
+		if damage > 0 && schoolMask > 1 {
+			mask123 := uint32(schoolMask)
+			if mask123&0x7E != 0 {
+				mask123 &^= 1
+			}
+			var targetResistMod int32
+			for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, mask123) {
+				targetResistMod += amount
+			}
+			hybridArmorReduced := uint32(0)
+			if isHybridSpell {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), auraSpell, true)
+				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
+			}
+			resisted, damage = calcMagicSpellResistance(damage, uint8(schoolMask), vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, 0, spellResistInput{
+				ignoreResistances:  auraSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             auraSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybridSpell,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    targetResistMod,
+			})
+			if resisted > 0 {
+				if damage == 0 {
+					hitInfo |= protocol.HitInfoFullResist
+				} else {
+					hitInfo |= protocol.HitInfoPartialResist
+				}
+			}
+		}
+		if damage > 0 {
+			// C++ takes the bypass pct on the pre-resist damage (Unit.cpp:1853) and re-adds it after the absorb loops (:1975); the pool is the post-resist damage less the bypass, floored at zero (ModifyDamage clamp, Unit.cpp:194-196). Nothing sits between resist and absorb here, so preResistDmg is the CalcAbsorbResist entry damage.
+			bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(m), schoolMask, auraSpell.ID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = vs.applyAbsorptionShields(pool, uint8(schoolMask))
+			damage += bypass
+			if absorbed > 0 {
+				if damage-bypass == 0 {
+					hitInfo |= protocol.HitInfoFullAbsorb
+				} else {
+					hitInfo |= protocol.HitInfoPartialAbsorb
+				}
+			}
+		}
+	}
+	// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no damage.
+	// The pipeline above still runs so the log carries the real
+	// resisted/absorbed figures (C++ sends the log before DealDamage, and
+	// the inline creature-spell path logs the same way); only the
+	// health/split legs below are gated on the cheat.
+	godNegated := vs.godCheatActive()
 	overkill := uint32(0)
 	now := time.Now()
-	if !vs.godCheatActive() && damage > 0 {
+	if !godNegated && damage > 0 {
 		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras
 		// (81/153) redirect part of the damage to the aura's caster, ahead
 		// of the 300 share leg.
@@ -2909,7 +3017,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 			vs.player.UnitFlags |= unitFlagInCombat
 		}
 	}
-	logPkt := buildSpellNonMeleeDamageLog(victimGUID, m.GUID, auraSpell.ID, damage, overkill, uint8(schoolMask))
+	logPkt := buildSpellNonMeleeDamageLog(victimGUID, m.GUID, auraSpell.ID, damage, overkill, uint8(schoolMask), absorbed, resisted, hitInfo, blocked)
 	_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
 	vs.sendPlayerUpdate()
