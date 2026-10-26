@@ -1352,6 +1352,26 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.luaMotionCreature(best)}, nil
 	}
+	// FindNearestGameObject(entry, dist) is the gameobject-surface twin of
+	// the creature bridge (WorldObject::FindNearestGameObject, Object.cpp):
+	// the nearest gameobject of entry within dist yards (3D metric) in the
+	// same map+instance; nil when none. DB spawns plus runtime GOs (see
+	// nearestGameObjectByEntry). Backs the shadowforge-brazier golem-door
+	// arm (blackrock_depths.cpp:51-69).
+	methods["FindNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if dist32 < 0 {
+			return []any{nil}, nil
+		}
+		return []any{srv.nearestGameObjectByEntry(ctx, state.Map, state.InstanceID, state.X, state.Y, state.Z, entry, dist32)}, nil
+	}
 	// SummonCreature is the gameobject-surface twin of the player bridge
 	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
 	// the shared summonTempCreature funnel): same (entry, x, y, z, o,

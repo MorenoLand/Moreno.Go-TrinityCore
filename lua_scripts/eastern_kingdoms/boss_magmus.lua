@@ -32,8 +32,8 @@
 -- Unmodeled: JustEngagedWith instance->SetData(TYPE_IRON_HALL,
 -- IN_PROGRESS) — no instance-script bridge on the Lua surface
 -- (instance_blackrock_depths.cpp stays blocked on the instance-script
--- model). Unmodeled: JustDied instance->HandleGameObject(DATA_THRONE_DOOR)
--- + instance->SetData(TYPE_IRON_HALL, DONE) — same instance bridge gap.
+-- model). Unmodeled: JustDied instance->SetData(TYPE_IRON_HALL, DONE) — no
+-- instance-data bridge (the throne-door leg IS ported in onJustDied below).
 -- Not ported (same file): npc_ironhand_guardian — its UpdateAI is gated
 -- entirely on _instance->GetData(TYPE_IRON_HALL) == NOT_STARTED
 -- (instance arm, no bridge) and fires DoCastAOE(SPELL_GOUTOFFLAME=15529)
@@ -47,6 +47,10 @@ local SPELL_WARSTOMP = 24375
 
 local ENTRY_MAGMUS = 9938
 local GO_THRONE_ROOM = 170575 -- instance_blackrock_depths.cpp:70, GO_THRONE_ROOM
+local GO_SF_BRAZIER_N = 174745 -- instance_blackrock_depths.cpp:66, GO_SF_N (Shadowforge Brazier North)
+local GO_SF_BRAZIER_S = 174744 -- instance_blackrock_depths.cpp:67, GO_SF_S (Shadowforge Brazier South)
+local GO_GOLEM_DOOR_N = 170573 -- instance_blackrock_depths.cpp:68, GO_GOLEM_ROOM_N (Magmus door North)
+local GO_GOLEM_DOOR_S = 170574 -- instance_blackrock_depths.cpp:69, GO_GOLEM_ROOM_S (Magmus door South)
 
 local magmusState = {}
 local timers = {}
@@ -148,6 +152,34 @@ local function onReset(_, creature)
     cancelTimers(guid)
     initState(guid)
 end
+
+-- C++ go_shadowforge_brazier::OnGossipHello (blackrock_depths.cpp:51-69):
+-- toggles instance TYPE_LYCEUM (no instance-data bridge, stays out) and
+-- opens the linked golem door: N brazier -> N door, S brazier -> S door
+-- (instance HandleGameObject(guid, true) = GO_STATE_ACTIVE 0,
+-- InstanceScript.cpp:484). C++ pairs by instance GUID; the Go regs are
+-- per-entry, so the pairing is by the used brazier's entry and the door
+-- is found by the new GO-surface FindNearestGameObject (100y precedent,
+-- same as the throne-door leg above). C++ returns false, so Lua returns
+-- false: native use proceeds (gameobject_hooks.go Eluna polarity).
+-- Same static-GO conditionality as the throne-door leg: SetGoState lands
+-- only where the door's live state materialized.
+local function onShadowforgeBrazierGossip(_, _, go)
+    local doorEntry = nil
+    if go:GetEntry() == GO_SF_BRAZIER_N then
+        doorEntry = GO_GOLEM_DOOR_N
+    elseif go:GetEntry() == GO_SF_BRAZIER_S then
+        doorEntry = GO_GOLEM_DOOR_S
+    end
+    if doorEntry then
+        local door = go:FindNearestGameObject(doorEntry, 100.0)
+        if door then door:SetGoState(0) end
+    end
+    return false
+end
+
+RegisterGameObjectGossipEvent(GO_SF_BRAZIER_N, 1, onShadowforgeBrazierGossip)
+RegisterGameObjectGossipEvent(GO_SF_BRAZIER_S, 1, onShadowforgeBrazierGossip)
 
 RegisterCreatureEvent(ENTRY_MAGMUS, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_MAGMUS, 1, onEnterCombat)
