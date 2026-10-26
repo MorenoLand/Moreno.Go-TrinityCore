@@ -212,7 +212,7 @@ local function randomPlayerInRange(creature, maxDist)
     local reach = creature:GetCombatReach()
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(unit) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = unit
         end
     end
@@ -1444,7 +1444,7 @@ local function romuloLunge(creature, guid)
         if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - reach < 100 then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(unit) - reach - 1.5 < 100 then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             pool[#pool + 1] = unit
         end
     end

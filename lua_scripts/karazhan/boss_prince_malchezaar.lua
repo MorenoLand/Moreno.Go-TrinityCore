@@ -147,7 +147,7 @@ local function randomThreatPlayer(creature, skipFirst, maxDist)
         if (not skipFirst or (victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and unit:GetObjectType() == "Player"
-                and not unit:IsDead() and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and not unit:IsDead() and creature:GetDistance(unit) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             out[#out + 1] = unit
         end
     end

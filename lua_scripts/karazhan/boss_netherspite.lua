@@ -127,7 +127,7 @@ local function randomAlivePlayerInRange(creature, maxDist)
     local reach = creature:GetCombatReach()
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(p) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = p
         end
     end
@@ -372,7 +372,7 @@ local function randomNonTankPlayerInRange(creature, maxDist)
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(p) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = p
         end
     end
