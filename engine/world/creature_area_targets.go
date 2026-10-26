@@ -1317,9 +1317,10 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 }
 
 // serverCreatureSpellMissVerdict rolls the MAGIC leg of
-// WorldObject::SpellHitResult (Object.cpp:2617-2663) for a creature caster:
-// the DmgClass dispatch (NONE/MELEE/RANGED take no table here — the melee
-// table is a separate unit), the IGNORE_HIT_RESULT, self-cast and
+// WorldObject::SpellHitResult (Object.cpp:2617-2663) for a creature caster,
+// dispatching MELEE/RANGED spells to serverCreatureMeleeMissVerdict (the
+// Unit::MeleeSpellHitResult twin, Unit.cpp:2478-2619); NONE takes no table.
+// The shared early-outs below are the IGNORE_HIT_RESULT, self-cast and
 // positive-vs-non-hostile early-outs, then the MagicSpellHitResult table
 // (Object.cpp:2534-2604): the level-diff base with the caster's aura-55
 // sum (pet-verdict precedent) plus the player-victim 186/160/rating legs,
@@ -1334,6 +1335,9 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) uint8 {
 	if s == nil || m == nil || targetGUID == 0 {
 		return protocol.SpellMissNone
+	}
+	if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
+		return s.serverCreatureMeleeMissVerdict(ctx, m, spell, targetGUID)
 	}
 	if spell.DefenseType != spellDamageClassMagic {
 		return protocol.SpellMissNone
@@ -1423,6 +1427,351 @@ func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creature
 		return protocol.SpellMissDeflect
 	}
 	return protocol.SpellMissNone
+}
+
+// serverCreatureMeleeMissVerdict rolls the MELEE/RANGED leg of
+// WorldObject::SpellHitResult for a creature caster: Unit::MeleeSpellHitResult
+// (Unit.cpp:2478-2619) with the session twin's construction
+// (meleeSpellHitResult, spells.go) re-based on the creature motion —
+// attacker level/position and creature aura sums instead of the session
+// player's. Single roll MISS > (RESIST unbridged) > DEFLECT (ranged) /
+// DODGE > PARRY > BLOCK (melee), in C++ order. Deltas vs C++: the mechanic
+// resist roll has no Go model; GetSpellModOwner is nil for a creature
+// caster, so no SPELLMOD_RESIST_MISS_CHANCE fold; m_modMelee/RangedHitChance
+// has no creature model; GetUnitMissChance's player-defense and
+// creature-defense arms have no model (session twin precedent); the ranged
+// deflect leg uses the single cumulative roll, where the session ranged
+// helper rolls separately. Callers run it after the immune/evade/reflect
+// verdicts, matching C++ order inside SpellHitResult.
+func (s *Server) serverCreatureMeleeMissVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) uint8 {
+	if s == nil || m == nil || targetGUID == 0 {
+		return protocol.SpellMissNone
+	}
+	if spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return protocol.SpellMissNone
+	}
+	if targetGUID == m.GUID {
+		return protocol.SpellMissNone
+	}
+	if spellIsPositive(spell) && s.creatureFriendlyToTarget(m, targetGUID) {
+		return protocol.SpellMissNone
+	}
+	ranged := spell.DefenseType == spellDamageClassRanged
+	var victimLevel uint8
+	isPlayerVictim := false
+	var victimSess *session
+	var victimMotion *creatureMotion
+	var victimX, victimY float32
+	var victimOrientation float32
+	var victimKey creatureAuraKey
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		isPlayerVictim = true
+		victimSess = ts
+		victimLevel = ts.player.Level
+		victimX, victimY = ts.player.X, ts.player.Y
+		victimOrientation = ts.player.Orientation
+	} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		victimMotion = tm
+		victimLevel = uint8(maxUint32(tm.Level, 1))
+		victimX, victimY = tm.X, tm.Y
+		victimOrientation = tm.Orientation
+		victimKey = creatureAuraKeyForMotion(tm)
+	} else {
+		return protocol.SpellMissNone
+	}
+	if victimLevel == 0 {
+		victimLevel = 1
+	}
+	casterLevel := uint8(maxUint32(m.Level, 1))
+	leveldif := int32(victimLevel) - int32(casterLevel)
+	skillDiff := leveldif * 5
+	casterKey := creatureAuraKeyForMotion(m)
+	var missChance int32
+	if isPlayerVictim {
+		missChance = 500
+		if skillDiff > 0 {
+			missChance += skillDiff * 4
+		} else {
+			missChance += skillDiff * 2
+		}
+	} else {
+		missChance = 500
+		if skillDiff > 10 {
+			missChance += 100 + (skillDiff-10)*40
+		} else {
+			missChance += skillDiff * 10
+		}
+		if victimLevel < 10 {
+			missChance = int32(float64(missChance) * (float64(victimLevel) / 10.0))
+		}
+	}
+	missChance -= s.creatureAuraTypeSum(casterKey, spellAuraModHitChance) * 100
+	if isPlayerVictim && victimSess != nil {
+		if ranged {
+			missChance -= victimSess.totalAuraModifier(spellAuraModAttackerRangedHitChance) * 100
+		} else {
+			missChance -= victimSess.totalAuraModifier(spellAuraModAttackerMeleeHitChance) * 100
+		}
+	} else if !isPlayerVictim {
+		if ranged {
+			missChance -= s.creatureAuraTypeSum(victimKey, spellAuraModAttackerRangedHitChance) * 100
+		} else {
+			missChance -= s.creatureAuraTypeSum(victimKey, spellAuraModAttackerMeleeHitChance) * 100
+		}
+	}
+	if missChance < 0 {
+		missChance = 0
+	}
+	roll := rand.Intn(10000)
+	tmp := missChance
+	if roll < int(tmp) {
+		return protocol.SpellMissMiss
+	}
+	if spell.Attributes&spellAttr0ImpossibleDodgeParryBlock != 0 {
+		return protocol.SpellMissNone
+	}
+	canDodge := true
+	canParry := true
+	canBlock := spell.AttributesEx3&spellAttr3BlockableSpell != 0
+	controlled := false
+	noAvoid := false
+	if isPlayerVictim && victimSess != nil {
+		controlled = victimIsControlled(s, true, victimSess, combatTarget{})
+		noAvoid = victimSess.genericCastInProgress() || controlled
+	} else if victimMotion != nil {
+		victimTarget := combatTarget{GUID: victimMotion.GUID, Map: victimMotion.Map, InstanceID: victimMotion.InstanceID, X: victimMotion.X, Y: victimMotion.Y, Orientation: victimMotion.Orientation}
+		controlled = victimIsControlled(s, false, nil, victimTarget)
+		noAvoid = time.Now().Before(victimMotion.CastingUntil) || controlled
+	}
+	if noAvoid {
+		canDodge = false
+		canParry = false
+		canBlock = false
+	}
+	var victimDodgeBonusBP, victimParryBonusBP, victimBlockBonusBP int32
+	if !isPlayerVictim && victimMotion != nil {
+		if s.isTotemGUID(targetGUID) {
+			canDodge = false
+			canParry = false
+			canBlock = false
+		} else {
+			victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
+			if victimMotion.FlagsExtra&0x00000004 == 0 {
+				victimParryBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+			} else {
+				canParry = false
+			}
+			if victimMotion.FlagsExtra&0x00000010 == 0 {
+				victimBlockBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+			} else {
+				canBlock = false
+			}
+		}
+	}
+	if ranged {
+		canParry = false
+		canDodge = false
+		if !controlled {
+			inFront := false
+			if isPlayerVictim && victimSess != nil {
+				inFront = victimSess.hasAuraType(spellAuraIgnoreHitDirection) || hasInArc(victimOrientation, victimX, victimY, m.X, m.Y, math.Pi)
+			} else if victimMotion != nil {
+				inFront = hasInArc(victimOrientation, victimX, victimY, m.X, m.Y, math.Pi)
+				if !inFront {
+					s.auraMu.Lock()
+					for _, aura := range s.activeCreatureAuras[victimKey] {
+						if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+							inFront = true
+							break
+						}
+					}
+					s.auraMu.Unlock()
+				}
+			}
+			if inFront {
+				var deflectBP int32
+				if isPlayerVictim && victimSess != nil {
+					deflectBP = victimSess.totalAuraModifier(spellAuraDeflectSpells) * 100
+				} else if victimMotion != nil {
+					deflectBP = s.creatureAuraTypeSum(victimKey, spellAuraDeflectSpells) * 100
+				}
+				tmp += deflectBP
+				if roll < int(tmp) {
+					return protocol.SpellMissDeflect
+				}
+			}
+		}
+		return protocol.SpellMissNone
+	}
+	attackerInFront := hasInArc(victimOrientation, victimX, victimY, m.X, m.Y, math.Pi)
+	if !attackerInFront {
+		ignoreHitDirection := false
+		if isPlayerVictim && victimSess != nil {
+			ignoreHitDirection = victimSess.hasAuraType(spellAuraIgnoreHitDirection)
+		} else if victimMotion != nil {
+			s.auraMu.Lock()
+			for _, aura := range s.activeCreatureAuras[victimKey] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					ignoreHitDirection = true
+					break
+				}
+			}
+			s.auraMu.Unlock()
+		}
+		if !ignoreHitDirection {
+			canParry = false
+			canBlock = false
+			if isPlayerVictim {
+				canDodge = false
+			}
+		} else if s.getSpellCustomAttr(spell.ID)&SpellCustomAttrReqCasterBehindTarget != 0 {
+			canParry = false
+		}
+	}
+	s.applyCreatureIgnoreCombatResultAuras(casterKey, spell, &canDodge, &canParry, &canBlock)
+	expertiseBP := s.creatureExpertiseReductionBP(casterKey)
+	if canDodge && (isPlayerVictim || victimLevel >= 10) {
+		var dodgeChance int32
+		if isPlayerVictim && victimSess != nil && victimSess.player != nil {
+			dodgeChance = int32(math.Round(float64(victimSess.player.DodgePercentage)*100)) + leveldif*20
+		} else {
+			dodgeChance = 500 + victimDodgeBonusBP + leveldif*50
+		}
+		dodgeChance -= expertiseBP
+		dodgeChance += s.creatureDodgeReductionBP(casterKey) + s.creatureEnemyDodgeBP(casterKey)
+		if dodgeChance < 0 {
+			dodgeChance = 0
+		}
+		tmp += dodgeChance
+		if roll < int(tmp) {
+			return protocol.SpellMissDodge
+		}
+	}
+	if canParry && (isPlayerVictim || victimLevel >= 10) {
+		var parryChance int32
+		if isPlayerVictim && victimSess != nil && victimSess.player != nil {
+			parryChance = int32(math.Round(float64(victimSess.player.ParryPercentage)*100)) + leveldif*20
+		} else if skillDiff <= 10 {
+			parryChance = 500 + victimParryBonusBP + skillDiff*10
+		} else {
+			parryChance = 500 + victimParryBonusBP + 100 + (skillDiff-10)*160
+		}
+		parryChance -= expertiseBP
+		if parryChance < 0 {
+			parryChance = 0
+		}
+		tmp += parryChance
+		if roll < int(tmp) {
+			return protocol.SpellMissParry
+		}
+	}
+	if canBlock {
+		var blockChance int32
+		if isPlayerVictim && victimSess != nil && victimSess.player != nil && victimSess.player.CanBlock && victimSess.player.Block > 0 {
+			blockChance = int32(math.Round(float64(victimSess.player.BlockPercentage)*100)) + skillDiff*4
+		} else if !isPlayerVictim {
+			blockChance = 500 + victimBlockBonusBP + skillDiff*10
+		}
+		tmp += blockChance
+		if roll < int(tmp) {
+			return protocol.SpellMissBlock
+		}
+	}
+	return protocol.SpellMissNone
+}
+
+// applyCreatureIgnoreCombatResultAuras is the creature-attacker twin of
+// session.applyIgnoreCombatResultAuras (Unit.cpp:2555-2576): the caster
+// motion's SPELL_AURA_IGNORE_COMBAT_RESULT (202) effects whose spell
+// affects this melee spell force the matching combat result off.
+func (s *Server) applyCreatureIgnoreCombatResultAuras(casterKey creatureAuraKey, spell wotlk.Spell, canDodge, canParry, canBlock *bool) {
+	if s == nil || casterKey.GUID == 0 || s.Data == nil {
+		return
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[casterKey] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			if aura.AuraType == spellAuraIgnoreCombatResult {
+				switch aura.MiscValue {
+				case meleeHitDodge:
+					*canDodge = false
+				case meleeHitBlock:
+					*canBlock = false
+				case meleeHitParry:
+					*canParry = false
+				}
+			}
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraIgnoreCombatResult || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				continue
+			}
+			switch effect.MiscValue {
+			case meleeHitDodge:
+				*canDodge = false
+			case meleeHitBlock:
+				*canBlock = false
+			case meleeHitParry:
+				*canParry = false
+			}
+		}
+	}
+}
+
+// serverCreatureFullyEffectImmuneVerdict reports whether every effect of
+// the spell is per-effect immune on the target, so the GO packet upgrades
+// the otherwise-hitting target to SPELL_MISS_IMMUNE2 (Spell::AddUnitTarget
+// strip, Spell.cpp:2108-2112; UpdateSpellCastDataTargets, Spell.cpp:4491-4492
+// — the session path's spellTargetFullyEffectImmune /
+// creatureTargetFullyEffectImmune arms, re-based on the creature caster).
+// The nil-caster delta is shared with the session arms' convention: the
+// 267 aura-apply-school arm treats a hostile creature caster's positive
+// effects as non-immune, where C++ (live caster, Unit.cpp:7987) immunizes
+// them; every other arm is caster-independent.
+func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		anyEffect := false
+		for i := range spell.Effects {
+			if spell.Effects[i].Effect == 0 {
+				continue
+			}
+			anyEffect = true
+			if !ts.isImmunedToSpellEffect(spell, i, nil) {
+				return false
+			}
+		}
+		return anyEffect
+	}
+	tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(tm)
+	stats := s.loadCreatureStats(ctx, tm.Entry)
+	friendly := s.creatureFriendlyToTarget(m, targetGUID)
+	anyEffect := false
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect == 0 {
+			continue
+		}
+		anyEffect = true
+		if !creatureImmuneToSpellEffect(s, key, spell, i, stats, s.isTotemGUID(targetGUID), nil, friendly) {
+			return false
+		}
+	}
+	return anyEffect
 }
 
 // armCastCreatureReflectProcDelayed mirrors the ProcReflectDelayed arm

@@ -3140,6 +3140,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						reflectTrips = append(reflectTrips, inlineReflectTrip{victim: p, status: status})
 					} else if miss := s.serverCreatureSpellMissVerdict(ctx, motion, inlineSpell, p.GUID); miss != protocol.SpellMissNone {
 						missSet[p.GUID] = miss
+					} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, motion, inlineSpell, p.GUID) {
+						missSet[p.GUID] = protocol.SpellMissImmune2
 					}
 				}
 				// Creature victims roll the generic verdict (serverCastCreatureReflectVerdict):
@@ -3168,6 +3170,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if !reflected {
 						if miss := s.serverCreatureSpellMissVerdict(ctx, motion, inlineSpell, guid); miss != protocol.SpellMissNone {
 							missSet[guid] = miss
+						} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, motion, inlineSpell, guid) {
+							missSet[guid] = protocol.SpellMissImmune2
 						}
 					}
 				}

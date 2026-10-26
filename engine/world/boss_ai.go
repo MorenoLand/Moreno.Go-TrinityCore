@@ -1580,17 +1580,25 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					reflectedTargets[guid] = status
 					s.armCastCreatureReflectProcDelayed(ctx, m, guid, spellInfo)
 				}
-				// MAGIC table leg (SpellHitResult order: immune, evade,
+				// DmgClass table leg (SpellHitResult order: immune, evade,
 				// reflect, then the DmgClass table): a target that
 				// survived the verdicts above rolls the creature-caster
 				// miss table; a miss joins the GO miss list and skips
 				// every per-hit leg below like immune/evaded targets.
+				// A target that survives the table but is immune to
+				// every effect reports IMMUNE2 instead of a hit
+				// (Spell.cpp:2108-2112, 4491-4492).
 				if !reflected {
 					if miss := s.serverCreatureSpellMissVerdict(ctx, m, spellInfo, guid); miss != protocol.SpellMissNone {
 						if missTargets == nil {
 							missTargets = map[uint64]uint8{}
 						}
 						missTargets[guid] = miss
+					} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, m, spellInfo, guid) {
+						if missTargets == nil {
+							missTargets = map[uint64]uint8{}
+						}
+						missTargets[guid] = protocol.SpellMissImmune2
 					}
 				}
 			}
