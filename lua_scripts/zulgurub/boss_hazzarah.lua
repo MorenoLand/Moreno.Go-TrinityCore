@@ -15,8 +15,8 @@
 -- (triggered DoCastVictim, C++-exact) / illusions at {10s,18s} then
 -- {15s,25s}: 3x nightmare illusion 15163, each summoned at its own
 -- freshly-picked random alive player's live position (C++ re-selects per
--- illusion; PORTED 2026-10-23; AttackStart has no bridge, documented gap
--- below). The re-arms are unconditional (nil-victim ticks
+-- illusion; PORTED 2026-10-23) + illusion:EngageWithTarget on that
+-- pick (AttackStart twin, PORTED 2026-10-26). The re-arms are unconditional (nil-victim ticks
 -- cast nothing but keep the schedule, jeklik convention). Reset cancels
 -- timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
@@ -24,9 +24,7 @@
 -- timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the illusion AttackStart leg has no bridge (jeklik:258
--- convention — the summoned illusions idle until the engine engages
--- them); no Talk lines exist in the C++ AI.
+-- skipped); no Talk lines exist in the C++ AI.
 
 local ENTRY_HAZZARAH = 15083
 local ENTRY_NIGHTMARE_ILLUSION = 15163
@@ -86,9 +84,9 @@ end
 -- summons at that target's live position,
 -- TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN (bridge type 1), 30s, o = the
 -- target's orientation (C++ target->GetPosition()). The
--- illusion->AI()->AttackStart(target) leg has no bridge (the batrider
--- AI convention — jeklik:258), so the illusions idle until the engine
--- engages them (documented gap). Re-arm {15s,25s}, unconditional
+-- illusion->AI()->AttackStart(target) leg is PORTED 2026-10-26 via
+-- illusion:EngageWithTarget(target) (jeklik:258 / fankriss
+-- precedent). Re-arm {15s,25s}, unconditional
 -- (nil-target ticks summon nothing but keep the schedule, jeklik
 -- convention). PORTED 2026-10-23 (position-leg axis).
 -- C++ EVENT_ILLUSIONS (boss_hazzarah.cpp:90): SelectTarget(Random, 0,
@@ -113,8 +111,11 @@ local function onIllusions(creature, guid)
     for _ = 1, 3 do
         local target = randomThreatPlayer(creature)
         if target then
-            creature:SummonCreature(ENTRY_NIGHTMARE_ILLUSION, target:GetX(),
+            local illusion = creature:SummonCreature(ENTRY_NIGHTMARE_ILLUSION, target:GetX(),
                 target:GetY(), target:GetZ(), target:GetO(), 1, 30000)
+            if illusion then
+                illusion:EngageWithTarget(target)
+            end
         end
     end
     schedule(guid, "illusions", math.random(15000, 25000), function()

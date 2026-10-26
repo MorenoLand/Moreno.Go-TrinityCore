@@ -30,9 +30,8 @@
 -- player alive within 100 yd (DoTeleportPlayer to TeleportLoc via
 -- Player:TeleportNear; the -100% threat wipe is PORTED 2026-10-24
 -- (ModifyThreatByPercent, victim-gated, C++ order) and the 10
--- sacrificed-troll 14826 summons are skipped — the summon leg is bridged
--- but their AttackStart leg is not, and a summon-only half would leave
--- idle trolls C++ never produces).
+-- sacrificed-troll 14826 summons + their AttackStart legs are PORTED
+-- 2026-10-26 (Formation coords, troll:EngageWithTarget).
 -- Ward 14987: the C++ AI ticks its heal timer even out of combat
 -- (2s first, then every 3s: DoCast(GetCreature(DATA_JINDO), 24311));
 -- with no instance-script bridge the Jin'do lookup is approximated by
@@ -54,16 +53,17 @@
 -- Spell.dbc ships in-tree), and when they do, Jin'do's event-19 twin
 -- arms their loops; the ward constructor's REACT_PASSIVE arm and its
 -- AttackStart no-op have no bridge; the teleport -100% threat wipe is PORTED 2026-10-24 and
--- the troll formation coordinates are not used (the trolls' AttackStart leg has no bridge — a summon-only half would
--- leave idle trolls C++ never produces); the hex -80% and
--- teleport -100% ModifyThreatByPercent arms are PORTED 2026-10-24; summoned
--- creatures get no Reset/Spawn fire, so the ward's always-on UpdateAI
+-- (the troll summons + AttackStart legs are PORTED 2026-10-26, see
+-- onTeleport); the hex -80% and
+-- teleport -100% ModifyThreatByPercent arms are PORTED 2026-10-24;
+-- summoned creatures get no Reset/Spawn fire, so the ward's always-on UpdateAI
 -- heal loop and the shade's Reset invisibility are armed from Jin'do's
 -- event-19 summon twin instead of the combat-lifecycle events.
 
 local ENTRY_JINDO = 11380
 local ENTRY_SHADE = 14986
 local ENTRY_WARD = 14987
+local ENTRY_SACRIFICED_TROLL = 14826
 
 local SPELL_BRAIN_WASH_TOTEM = 24262
 local SPELL_HEALING_WARD = 24309
@@ -167,17 +167,39 @@ end
 
 -- C++ EVENT_TELEPORT: random threat-list 100-yd player -> DoTeleportPlayer to
 -- TeleportLoc (boss_jindo.cpp), then the -100% threat wipe (PORTED 2026-10-24:
--- victim-gated, target cut, C++ order) and the 10 sacrificed-troll summons
--- (skipped — AttackStart leg has no bridge).
+-- victim-gated, target cut, C++ order) and the sacrificed-troll summons
+-- (PORTED 2026-10-26: the C++ comment says 9 but the loop runs 10
+-- times — the loop governs — each troll summoned at its Formation
+-- coord, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 3),
+-- 15s, + troll:EngageWithTarget(target), jeklik/fankriss precedent).
 -- Re-arm {15s,23s} unconditional; nil-target tick teleports nothing.
 local TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O =
     -11583.7783, -1249.4278, 77.5471, 4.745
+local FORMATION = {
+    { -11582.2998, -1247.8599, 77.6298, 0.0 },
+    { -11585.0996, -1248.7600, 77.6298, 0.0 },
+    { -11586.5996, -1250.7199, 77.6298, 0.0 },
+    { -11586.4003, -1253.9200, 77.6298, 0.0 },
+    { -11584.2001, -1252.2099, 77.6298, 0.0 },
+    { -11582.5000, -1250.3199, 77.6298, 0.0 },
+    { -11583.2001, -1254.8299, 77.6298, 0.0 },
+    { -11581.5000, -1252.5400, 77.6298, 0.0 },
+    { -11580.2001, -1250.5999, 77.6298, 0.0 },
+    { -11580.5996, -1254.7900, 77.6298, 0.0 },
+}
 local function onTeleport(creature, guid)
     local target = randomThreatPlayer100(creature)
     if target then
         target:TeleportNear(TELEPORT_X, TELEPORT_Y, TELEPORT_Z, TELEPORT_O)
         if creature:GetThreat(creature:GetVictim()) ~= 0 then
             creature:ModifyThreatByPercent(target, -100)
+        end
+        for _, spot in ipairs(FORMATION) do
+            local troll = creature:SummonCreature(ENTRY_SACRIFICED_TROLL,
+                spot[1], spot[2], spot[3], spot[4], 3, 15000)
+            if troll then
+                troll:EngageWithTarget(target)
+            end
         end
     end
     schedule(guid, "teleport", math.random(15000, 23000), function()

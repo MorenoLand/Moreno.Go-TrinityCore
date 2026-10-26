@@ -38,9 +38,8 @@
 --    21062, boss pos, o=0, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3,
 --    25s) legs are PORTED 2026-10-24 (creature:SummonCreature bridge
 --    live — entry/coords/type/duration all C++-verifiable); the
---    Wraith->AI()->AttackStart(target) relay has no bridge
---    (keleseth precedent) — the wraiths engage via the engine's own
---    aggro (moroes precedent). Talk(SAY_SUMMON) fires unconditionally
+--    Wraith->AI()->AttackStart(target) relay is PORTED 2026-10-26 via
+--    wraith:EngageWithTarget(target). Talk(SAY_SUMMON) fires unconditionally
 --    after the loop (C++-exact). The summon spell IDs 35285-35288
 --    are "Not scripted" in the C++ (no SpellScript) and are never
 --    cast by the AI anyway.
@@ -193,15 +192,20 @@ local function bossTick(creature, guid)
     -- NPC_NETHER_WRAITH 21062, boss pos, o=0,
     -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3, 25s) — C++ arm order
     -- (boss_pathaleon_the_calculator.cpp:124-133: loop, then Talk);
-    -- the Wraith->AI()->AttackStart(target) relay has no bridge
-    -- (keleseth precedent) — the wraiths engage via the engine's own
-    -- aggro (moroes precedent); Talk(SAY_SUMMON) fires unconditionally
+    -- the Wraith->AI()->AttackStart(target) relay is PORTED 2026-10-26
+    -- via wraith:EngageWithTarget(target) (jeklik/fankriss precedent;
+    -- a non-player pick no-ops in the funnel, lua_creature_events.go:498);
+    -- Talk(SAY_SUMMON) fires unconditionally
     -- after the loop (C++-exact); re-arm randtime 30-45s.
     if st.summon <= 1000 then
         for _ = 1, 3 do
-            if randomThreatTarget(creature) then
-                creature:SummonCreature(ENTRY_NETHER_WRAITH,
+            local target = randomThreatTarget(creature)
+            if target then
+                local wraith = creature:SummonCreature(ENTRY_NETHER_WRAITH,
                     creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 25000)
+                if wraith then
+                    wraith:EngageWithTarget(target)
+                end
             end
         end
         creature:Talk(SAY_SUMMON)

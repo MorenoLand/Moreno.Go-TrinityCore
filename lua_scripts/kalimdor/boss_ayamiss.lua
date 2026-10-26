@@ -18,10 +18,11 @@
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule STINGER_SPRAY (20-30s), POISON_STINGER (5s),
 --   PARALYZE (15s), SUMMON_SWARMER (5s -> 5s, boss_ayamiss.cpp:220-226).
---   SWARMER_ATTACK stays out — its cross-AI AttackStart relay on the
---   summoned swarmers (boss_ayamiss.cpp:211-218) has no bridge, so Go
---   swarmers idle (SummonCreature is NOT auto-aggroed per the bridge;
---   herod-trainee precedent).
+--   SWARMER_ATTACK (1min -> 1min, boss_ayamiss.cpp:211-218) PORTED
+--   2026-10-26: the summoned swarmers (tracked in state at summon
+--   time, the brann-voice precedent) each get a fresh random
+--   threat-list pick + swarmer:EngageWithTarget (jeklik/fankriss
+--   precedent); the list clears after each fire, C++-exact.
 -- - EVENT_STINGER_SPRAY: self-cast 25749, reschedule 15-20s.
 -- - EVENT_POISON_STINGER: DoCastVictim 25748 (jeklik GetVictim +
 --   CastSpell convention), reschedule 2-3s; cancelled at ground
@@ -55,11 +56,10 @@
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
 -- - SummonCreature: SWARMER leg PORTED (below); the larva's paired
---   JustSummoned leg is a MovePoint to AltarPos (no motion bridge)
---   and the SWARMER_ATTACK relay stays out (stale "no bridge"
---   retracted for the summon leg itself).
--- - EVENT_SWARMER_ATTACK's cross-AI AttackStart on swarmers: no
---   bridge (zero SelectTarget/AttackStart usage in lua_scripts).
+--   JustSummoned leg is a MovePoint to AltarPos (no motion bridge).
+-- - EVENT_SWARMER_ATTACK PORTED 2026-10-26 (see onSwarmerAttack);
+--   the old "no bridge" claims are retracted — EngageWithTarget is
+--   the AttackStart twin (lua_creature_events.go:498).
 -- - npc_hive_zara_larva: MovementInform/AttackStart/MoveInLineOfSight
 --   all gated on instance GetBossState(DATA_AYAMISS) — no bridge.
 -- - instance->SetGuidData(DATA_PARALYZED, ...) — no bridge.
@@ -182,8 +182,9 @@ end
 -- Object.cpp:1422 signed folded radius, anchor z kept); o = 0 falls
 -- back to the summoner's orientation (C++ GetRandomPoint returns the
 -- summoner's orientation); type 7 = MANUAL_DESPAWN, the C++ default
--- for me->SummonCreature(entry, pos). The SWARMER_ATTACK relay stays
--- out (no AttackStart bridge), so summoned swarmers idle.
+-- for me->SummonCreature(entry, pos). The summoned swarmer is kept in
+-- state (below) for the SWARMER_ATTACK relay; C++ tracks the same
+-- list via JustSummoned (_swarmers, boss_ayamiss.cpp:103-108).
 local function onSummonSwarmer(creature, guid)
     local a = math.random() * 2 * math.pi
     local r = math.random() + math.random()
@@ -191,12 +192,51 @@ local function onSummonSwarmer(creature, guid)
         r = r - 2
     end
     local d = 80.0 * r
-    creature:SummonCreature(ENTRY_SWARMER,
+    local swarmer = creature:SummonCreature(ENTRY_SWARMER,
         SWARMER_POS_X + d * math.cos(a),
         SWARMER_POS_Y + d * math.sin(a),
         SWARMER_POS_Z, 0, 7)
+    if swarmer then
+        local state = ayamissState[guid]
+        if state then
+            if not state.swarmers then
+                state.swarmers = {}
+            end
+            state.swarmers[#state.swarmers + 1] = swarmer
+        end
+    end
     schedule(guid, "swarmer", 5000, function()
         onSummonSwarmer(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SWARMER_ATTACK (boss_ayamiss.cpp:211-218): for each
+-- tracked swarmer, a fresh SelectTarget(Random) pick (any threat-list
+-- unit alive, no playerOnly, no range cap) + AttackStart, then the
+-- list clears and the event re-arms at 1min unconditionally. The
+-- pool is built once per fire (the C++ re-pick cannot change the
+-- pool mid-loop); a dead swarmer is skipped (its C++ AttackStart is
+-- a no-op); a non-player pick no-ops in the EngageWithTarget funnel
+-- (lua_creature_events.go:498, player-session only), noted per port.
+local function onSwarmerAttack(creature, guid)
+    local state = ayamissState[guid]
+    local swarmers = state and state.swarmers or {}
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    for _, swarmer in ipairs(swarmers) do
+        if not swarmer:IsDead() and #candidates > 0 then
+            swarmer:EngageWithTarget(candidates[math.random(#candidates)])
+        end
+    end
+    if state then
+        state.swarmers = {}
+    end
+    schedule(guid, "swarmerAttack", 60000, function()
+        onSwarmerAttack(creature, guid)
     end)
 end
 
@@ -283,6 +323,9 @@ local function onEnterCombat(event, creature, target)
     end)
     schedule(guid, "swarmer", 5000, function()
         onSummonSwarmer(creature, guid)
+    end)
+    schedule(guid, "swarmerAttack", 60000, function()
+        onSwarmerAttack(creature, guid)
     end)
     -- C++ JustEngagedWith (boss_ayamiss.cpp:140-152): schedules (above),
     -- SetCanFly(true) (:150), me->SetDisableGravity(true) (:151),

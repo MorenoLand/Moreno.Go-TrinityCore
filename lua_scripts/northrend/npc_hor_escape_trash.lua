@@ -63,10 +63,10 @@
 -- HoRStartMovementEvent (:2151-2167) — the 5s delayed
 --   SetReactState(REACT_AGGRESSIVE) flip IS ported (wakes table, NOT
 --   cancelled on ev2/ev23 — the C++ event is a BasicEvent, not an
---   EventMap event, so it survives evade/reset); the AttackStart
---   leg stays out (no AttackStart bridge on the creature event
---   surface — the :2091 comment is about SetCombatMovement, and no
---   Lua file calls :AttackStart(). The flip must ride with the
+--   EventMap event, so it survives evade/reset) and the AttackStart
+--   leg is PORTED 2026-10-26 via creature:EngageWithTarget on a
+--   fresh random alive threat-list player pick (no range cap, C++
+--   dist 0.0f; nil pick engages nothing). The flip must ride with the
 --   passive arm: without it the creature would stay passive forever.
 -- npc_escape_event_trash::IsSummonedBy (:2183-2193) — DoZoneInCombat
 --   (bridged lua_creature_events.go:734) ported on ev5 for all three,
@@ -166,11 +166,24 @@ local function maxThreatPlayerInRange(creature, dist)
 end
 
 -- Shared spawn tail: 5s aggressive flip (HoRStartMovementEvent) plus
--- the base-class DoZoneInCombat arm, in C++ order.
+-- the AttackStart leg (random alive threat-list player, no range cap)
+-- plus the base-class DoZoneInCombat arm, in C++ order (flip, then
+-- AttackStart, per halls_of_reflection.cpp:2159-2165; DoZoneInCombat
+-- runs at spawn, before the wake).
 local function spawnTail(creature, guid)
     wakes[guid] = CreateLuaEvent(function()
         wakes[guid] = nil
         creature:SetReactState(REACT_AGGRESSIVE)
+        -- C++ dist 0.0f = no range cap: any alive threat-list player.
+        local candidates = {}
+        for _, t in ipairs(creature:GetAITargets()) do
+            if t:GetObjectType() == "Player" and not t:IsDead() then
+                candidates[#candidates + 1] = t
+            end
+        end
+        if #candidates > 0 then
+            creature:EngageWithTarget(candidates[math.random(#candidates)])
+        end
     end, 5000)
     creature:DoZoneInCombat()
 end
