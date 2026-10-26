@@ -104,10 +104,8 @@ func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal b
 				if !chainSelectionEligibleTarget(winTarget) {
 					winTarget = eff.ImplicitTargetB
 				}
+				isChainHeal = winTarget == spellImplicitTargetChainHealAlly
 			}
-		}
-		if eff.ImplicitTargetA == spellImplicitTargetChainHealAlly || eff.ImplicitTargetB == spellImplicitTargetChainHealAlly {
-			isChainHeal = true
 		}
 	}
 	return jumps, isChainHeal, chainCheckType(winTarget), effectMask
@@ -170,7 +168,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 	}
 	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
 	scope := s.friendlyRefererScope(s.playerGUID)
-	candidates := s.chainCandidates(ctx, spell, primary, searchRadius, isChainHeal, primaryTargetGUID, checkType, condRows, scope)
+	candidates := s.chainCandidates(ctx, spell, primary, searchRadius, primaryTargetGUID, checkType, condRows, scope)
 	if !isBouncingFar {
 		// Spell.cpp:1931-1940: non-bouncing chains only jump in front of the caster
 		kept := candidates[:0]
@@ -241,7 +239,7 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // IsInRaidWith, Unit.cpp:12126/12155), ENTRY runs only the effect's entry
 // conditions, DEFAULT/PASSENGER apply no faction filter. Range uses the C++
 // cylinder test (IsWithinDist2d + |dz| <= range).
-func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
+func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
@@ -259,7 +257,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if mapID != primary.Map || instanceID != primary.InstanceID || health == 0 {
 			return
 		}
-		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, isChainHeal) {
+		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
 			return
 		}
 		// Spell.cpp:8333/8344/8354/8365: only the ENEMY/ALLY/PARTY/RAID
@@ -326,7 +324,8 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-primary.Z)) > float64(radius) {
+		reachRadius := float64(radius) + float64(reach)
+		if dx*dx+dy*dy >= reachRadius*reachRadius || math.Abs(float64(z-primary.Z)) > float64(radius) {
 			return
 		}
 		if _, ok := seen[guid]; ok {
@@ -455,7 +454,7 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 	}
 	condRows := s.loadImplicitTargetConditionRows(ctx, spellID, effectMask)
 	scope := s.motionChainRefererScope(m, m.GUID)
-	candidates := s.chainCandidatesForMotion(ctx, m, spell, primary, searchRadius, isChainHeal, primaryTargetGUID, checkType, condRows, scope)
+	candidates := s.chainCandidatesForMotion(ctx, m, spell, primary, searchRadius, primaryTargetGUID, checkType, condRows, scope)
 	if !isBouncingFar {
 		// Spell.cpp:1931-1940: non-bouncing chains only jump in front of the caster
 		kept := candidates[:0]
@@ -525,7 +524,7 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // (isFriendlyFaction); creature candidates resolve through the
 // faction-template reaction (creatureFactionHostileTo). PARTY/RAID ride the
 // motion-rooted referer scope.
-func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, isChainHeal bool, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
+func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
@@ -542,7 +541,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 		if mapID != primary.Map || instanceID != primary.InstanceID || health == 0 {
 			return
 		}
-		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, isChainHeal) {
+		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
 			return
 		}
 		// Spell.cpp:8333/8344/8354/8365: only the ENEMY/ALLY/PARTY/RAID
@@ -604,7 +603,8 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			return
 		}
 		dx, dy := float64(x-primary.X), float64(y-primary.Y)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-primary.Z)) > float64(radius) {
+		reachRadius := float64(radius) + float64(reach)
+		if dx*dx+dy*dy >= reachRadius*reachRadius || math.Abs(float64(z-primary.Z)) > float64(radius) {
 			return
 		}
 		if _, ok := seen[guid]; ok {
