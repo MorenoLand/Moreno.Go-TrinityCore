@@ -821,6 +821,31 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if s == nil || motion == nil || reflector == nil {
 		return
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617,
+	// 2639-2650) on the return trip: the stand-up arm fires on
+	// TargetInfo::unit — the reflector, not _spellHitTarget (the
+	// caster) — so a non-positive (or dispel-effect) reflected hit
+	// stands the reflector up; the friendly gate rides the path
+	// (the tick only casts hostile AI spells at its attack
+	// victim), as on the direct hit. The caster-side SpellHitTarget
+	// Eluna hook fires with _spellHitTarget, the motion itself
+	// (Spell.cpp:2631-2632), which fireCreatureSpellHitTarget
+	// resolves through findCreatureMotion. Neither leg gates on
+	// damage or on the caster surviving — C++ runs both after
+	// DealDamage unconditionally (only MissCondition != EVADE and
+	// a non-null _spellHitTarget gate them) — so the closure runs
+	// on the lethal, immune and zero-damage paths too.
+	standUpReflectorAndFireHook := func() {
+		if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+			if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
+				reflector.Sess.player.StandState = 0
+				reflector.Sess.sendPlayerUpdate()
+			}
+		}
+		if spell.ID != 0 {
+			s.fireCreatureSpellHitTarget(ctx, motion, motion.GUID, spell.ID)
+		}
+	}
 	// Spell::EffectInstaKill (SpellEffects.cpp:274-296) on the return
 	// trip: the reflected spell's effects land on the caster
 	// (PreprocessTarget, Spell.cpp:2350; DoProcessTargetContainer runs
@@ -838,6 +863,38 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 			return
 		}
 	} else if damage == 0 {
+		// A zero-damage return trip still runs the full
+		// DoDamageAndTriggers tail: C++ takes the !hasDamage &&
+		// !hasHealing branch (Spell.cpp:2565-2575) and fires
+		// NODAMAGE procs (PROC_SPELL_TYPE_NO_DMG_HEAL, no
+		// PROC_FLAG_TAKEN_DAMAGE — the taken-damage flag is ORed
+		// only by the damage arm), then the stand-up and hook legs
+		// (neither gates on damage), then the trigger consumer.
+		// Only the damage pipeline itself is skipped. This is the
+		// reflected-non-damage-spell path: creatureSpellDamage
+		// returns 0 for spells with no damage effect, so a
+		// reflected debuff lands here, not in the pipeline.
+		if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+			typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
+			if typeMask != 0 {
+				spellCopy := spell
+				s.fireCreatureAuraProcLoop(ctx, motion, motion.GUID, procEventInfo{
+					typeMask:       typeMask,
+					schoolMask:     uint32(schoolMask),
+					spellTypeMask:  procSpellTypeNoDmgHeal,
+					spellPhaseMask: procSpellPhaseHit,
+					hitMask:        procHitNormal,
+					triggered:      false,
+					eventSpell:     &spellCopy,
+					actorGUID:      motion.GUID,
+					damage:         0,
+				})
+			}
+		}
+		standUpReflectorAndFireHook()
+		if spell.ID != 0 {
+			s.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
+		}
 		return
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2560): the
@@ -954,6 +1011,59 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	} else {
 		damage = 0
 	}
+	// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) on the
+	// return trip: the leech effect runs in the effect dispatch
+	// (DoTargetSpellHit), ahead of DoDamageAndTriggers, so the
+	// caster heals for the damage it is about to take — before the
+	// health mutation below, not after it as a tail. That order is
+	// observable here because caster == victim: a leech heal can
+	// keep a would-be-lethal trip non-lethal, and the MaxHealth cap
+	// applies to the pre-damage health. The basis mirrors the
+	// direct hit: the post-pipeline damage actually lost (overkill
+	// excluded, post-absorb), so an immune trip (damage zeroed
+	// above) heals nothing. Folds match the direct-hit leech block
+	// (CalcValueMultiplier, Done pct, Taken bonus, HealAbsorb,
+	// AutoBalance, DealHeal AI hooks).
+	if spell.ID != 0 && spellHasEffect(spell, spellEffectHealthLeech) && damage > 0 {
+		leechIdx := -1
+		for i := range spell.Effects {
+			if spell.Effects[i].Effect == spellEffectHealthLeech {
+				leechIdx = i
+				break
+			}
+		}
+		leechDealt := damage
+		if leechDealt > motion.Health {
+			leechDealt = motion.Health
+		}
+		if leechDealt > 0 {
+			modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+			multiplier := calcValueMultiplier(spell, leechIdx, modOwner)
+			if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
+				heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, creatureAuraKeyForMotion(motion), spell))
+				if modOwner != nil {
+					if sm := modOwner.applySpellMod(spell, uint8(spellModDamage), int32(heal)); sm > 0 {
+						heal = uint32(sm)
+					} else {
+						heal = 0
+					}
+				}
+				heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(motion), motion.GUID, spell, true, heal, false)
+				leechHeal := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(motion), uint32(schoolMask), heal)
+				scaledHeal := heal - leechHeal
+				scaledHeal = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, scaledHeal)
+				fireDealHealAIHooks(ctx, s, motion, motion, motion.GUID, motion.GUID, &scaledHeal)
+				s.motionMu.Lock()
+				if live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID); live != nil && live.Health > 0 {
+					live.Health += scaledHeal
+					if live.MaxHealth > 0 && live.Health > live.MaxHealth {
+						live.Health = live.MaxHealth
+					}
+				}
+				s.motionMu.Unlock()
+			}
+		}
+	}
 	s.motionMu.Lock()
 	live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID)
 	if live == nil || live.Health == 0 {
@@ -999,6 +1109,10 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 		if reflector.Sess != nil {
 			reflector.Sess.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
 		}
+		// Lethal trips still run the stand-up and hook legs: the
+		// stand-up target is the reflector (alive), and the hook
+		// has no caster-alive gate in C++ (Spell.cpp:2631-2632).
+		standUpReflectorAndFireHook()
 		return
 	}
 	if !damageImmune {
@@ -1042,6 +1156,10 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 			})
 		}
 	}
+	// C++ order (Spell.cpp:2609 precedes 2639 precedes 2652): the
+	// stand-up and hook legs run between the proc loop above and
+	// the trigger consumer below.
+	standUpReflectorAndFireHook()
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2652): the
 	// return trip's _spellHitTarget is the caster itself (Spell.cpp:2350),
 	// so the per-hit trigger consumer runs on the motion, like the
