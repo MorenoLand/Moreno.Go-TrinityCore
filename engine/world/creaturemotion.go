@@ -3071,6 +3071,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
 			var areaHits []*playerPos
+			var areaCreatureHits []uint64
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
 			var inlineSpell wotlk.Spell
 			inlineSpellKnown := false
@@ -3095,6 +3096,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						areaHits = append(areaHits, areaHit)
 						hitTargets = append(hitTargets, areaHit.GUID)
 					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the
+					// area also picks enemy creatures (creatureAIAreaEnemyCreatures),
+					// not just enemy players — their GUIDs join the GO hit list too.
+					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, target) {
+						areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
+						hitTargets = append(hitTargets, areaCreatureGUID)
+					}
 				}
 			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
@@ -3105,11 +3113,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// precedes 4338). Each reflected target produces its own return
 			// trip; reflected targets take no per-hit legs below.
 			reflectedSet := map[uint64]bool{}
+			evadedSet := map[uint64]bool{}
 			type inlineReflectTrip struct {
 				victim *playerPos
 				status uint8
 			}
 			var reflectTrips []inlineReflectTrip
+			type inlineCreatureReflectTrip struct {
+				guid   uint64
+				status uint8
+			}
+			var creatureReflectTrips []inlineCreatureReflectTrip
 			if inlineSpellKnown {
 				for _, p := range append([]*playerPos{target}, areaHits...) {
 					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] {
@@ -3120,14 +3134,43 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						reflectTrips = append(reflectTrips, inlineReflectTrip{victim: p, status: status})
 					}
 				}
+				// Creature victims roll the generic verdict (serverCastCreatureReflectVerdict):
+				// reflect via creatureCheckSpellReflection, evade ahead of the roll
+				// (Object.cpp:2637-2639) for evading creatures. Reflected creatures
+				// take no per-hit legs below (same as reflected players); their
+				// return trip on the motion is a separate leg (see NEXT).
+				for _, guid := range areaCreatureHits {
+					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
+						continue
+					}
+					reflected, evaded, status := s.serverCastCreatureReflectVerdict(ctx, motion, inlineSpell, guid)
+					if evaded {
+						evadedSet[guid] = true
+						continue
+					}
+					if reflected {
+						reflectedSet[guid] = true
+						creatureReflectTrips = append(creatureReflectTrips, inlineCreatureReflectTrip{guid: guid, status: status})
+					}
+				}
 			}
 			var missStatus []protocol.SpellMissStatus
 			packetHits := make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
-				if reflectedSet[guid] {
+				if reflectedSet[guid] || evadedSet[guid] {
 					continue
 				}
 				packetHits = append(packetHits, guid)
+			}
+			for guid := range evadedSet {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
+			}
+			for _, trip := range creatureReflectTrips {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.guid, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
+				// ProcReflectDelayed (Spell.cpp:2181) for a creature reflector:
+				// the charge arm runs on the same timer (the taken-side proc
+				// loop has no creature event-list model here).
+				s.armCastCreatureReflectProcDelayed(ctx, motion, trip.guid, inlineSpell)
 			}
 			for _, trip := range reflectTrips {
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victim.GUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
@@ -3199,6 +3242,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						aliveBefore[p.GUID] = true
 					}
 				}
+				// Area-selected creatures take the twin too (creatureEffectInstaKill
+				// resolves creature GUIDs via creatureInstaKillVictim); reflected
+				// and evaded creatures are excluded like reflected players — a
+				// reflected creature's instakill lands on the motion only via
+				// the return trip, which is not built yet (see NEXT).
+				creatureAliveBefore := map[uint64]bool{}
+				for _, guid := range areaCreatureHits {
+					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
+						continue
+					}
+					instaTargets = append(instaTargets, guid)
+					if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); tm != nil && tm.Health > 0 {
+						creatureAliveBefore[guid] = true
+					}
+				}
 				if len(instaTargets) > 0 {
 					s.creatureEffectInstaKill(ctx, motion, spellID, instaTargets, nil, nil)
 					for _, p := range append([]*playerPos{target}, areaHits...) {
@@ -3207,6 +3265,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						}
 						if p.Sess != nil && p.Sess.player != nil && p.Sess.player.Health == 0 {
 							instaKilled[p.GUID] = true
+						}
+					}
+					for guid := range creatureAliveBefore {
+						if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); tm == nil || tm.Health == 0 {
+							instaKilled[guid] = true
 						}
 					}
 				}
@@ -3220,6 +3283,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
 			}
+			// Area-selected creatures take their own damage leg (the new
+			// creature-victim twin in creature_area_targets.go); reflected,
+			// evaded and instakilled creatures skip it like players.
+			for _, areaCreatureGUID := range areaCreatureHits {
+				if areaCreatureGUID == 0 || reflectedSet[areaCreatureGUID] || evadedSet[areaCreatureGUID] || instaKilled[areaCreatureGUID] {
+					continue
+				}
+				s.applyInlineCreatureSpellHitCreature(ctx, motion, areaCreatureGUID, spellID, damage, schoolMask, target.Sess)
+			}
 			// Reflect return trips (Spell.cpp:2350, 7740-7743): with
 			// ReflectResult == NONE the reflected spell's effects land on the
 			// caster motion. A non-NONE status already nulled the trip in the
@@ -3231,6 +3303,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, inlineSpell, damage, schoolMask)
 			}
+			// Creature reflect trips have no return trip yet: applyInlineReflectReturnTrip
+			// is player-reflector-specific (session stand-up/log/kill-credit). Their GO
+			// REFLECT miss above is correct; the motion-side landing is NEXT.
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges

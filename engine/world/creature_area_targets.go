@@ -822,6 +822,321 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	}
 }
 
+// applyInlineCreatureSpellHitCreature is the creature-victim twin of
+// applyInlineCreatureSpellHit for the inline AI victim-spell path: the
+// area-selected enemy creatures from creatureAIAreaEnemyCreatures take
+// their own per-hit legs (Spell.cpp:1227 selects every enemy unit, not
+// just players). The pipeline mirrors the return-trip pipeline in
+// applyInlineReflectReturnTrip (the creature-victim order: taken, armor,
+// block, resilience, AutoBalance, resist, absorb) plus the pet-path
+// creature-victim legs (split, share, DamageTaken hooks, rage, strips,
+// taken procs, stand-up, OnHitBySpell/SpellHitTarget hooks, triggers,
+// leech heal). Differences from the player twin are structural, not
+// C++-driven: the damage log fans out via broadcastToInstance (a creature
+// victim has no session to write to), the tap leg is skipped (a wild
+// attacker taps nothing, Unit.cpp:872-876), and the threat/engage legs
+// are skipped (the pet branch's threat amount is session-driven and does
+// not transfer to a wild caster). The share leg runs through the wire
+// victim's session as vehicle when one exists — splitShareDamagePct reads
+// no session fields when victimIsPlayer is false (the return-trip
+// precedent uses the reflector session the same way) — and the crit-mask
+// lookup uses the same vehicle. A damage-immune victim takes nothing and
+// sends no log (DoDamageAndTriggers' first arm, Spell.cpp:2538) but still
+// runs the proc/stand-up/hook/trigger tail, like the return trip.
+func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion *creatureMotion, victimGUID uint64, spellID, damage uint32, schoolMask uint8, vehicle *session) {
+	if s == nil || motion == nil || victimGUID == 0 || victimGUID == motion.GUID {
+		return
+	}
+	victim := s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID)
+	if victim == nil || victim.Health == 0 {
+		return
+	}
+	victimKey := creatureAuraKeyForMotion(victim)
+	casterKey := creatureAuraKeyForMotion(motion)
+	victimHealth := victim.Health
+	victimLevel := uint8(maxUint32(victim.Level, 1))
+	attackerLevel := uint8(maxUint32(motion.Level, 1))
+	stats := s.loadCreatureStats(ctx, victim.Entry)
+	var inlineSpell wotlk.Spell
+	inlineSpellKnown := false
+	if s.Data != nil {
+		if sp, found, err := s.Data.Spell(spellID); err == nil && found {
+			inlineSpell, inlineSpellKnown = sp, true
+		}
+	}
+	var absorbed, resisted, blocked uint32
+	isCrit := false
+	hitInfo := uint32(0)
+	damageImmune := false
+	if inlineSpellKnown {
+		damageImmune = creatureImmuneToDamageSpell(s, victimKey, inlineSpell, uint32(schoolMask))
+	}
+	if !damageImmune {
+		if damage > 0 && inlineSpellKnown {
+			damage = creatureSpellDamageBonusTaken(s, damage, inlineSpell, uint32(schoolMask), victimKey, nil, 1.0)
+		}
+		isHybrid := schoolMask&spellSchoolMaskNormal != 0 && schoolMask&0x7E != 0
+		if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 && !isHybrid &&
+			(!inlineSpellKnown || inlineSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			armor := s.creatureIgnoreTargetResistArmorForSpell(casterKey, s.liveCreatureArmor(victimKey, victim, float64(stats.Armor)), inlineSpell, inlineSpellKnown)
+			damage = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
+		}
+		// Unit::SpellCritChanceDone (Unit.cpp:7167-7212): wild mobs roll no
+		// crits; only a caster with a non-null GetSpellModOwner (a
+		// player-owned motion) rolls, mirroring the player twin's arm.
+		if damage > 0 && inlineSpellKnown {
+			if owner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); owner != nil {
+				chance := s.creatureSpellCritChanceDone(casterKey, motion.FlagsExtra&0x20000 != 0, schoolMask, inlineSpell, true)
+				if owner.player != nil {
+					chance = float64(owner.applySpellMod(inlineSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
+				chance = s.creatureSpellCritChanceTaken(chance, nil, victimKey, false, motion.GUID, motion.Level, uint32(victimLevel), schoolMask, inlineSpell, s.creatureCasterCanApplyResilience(motion))
+				isCrit = chance > 0 && rand.Float64() < chance
+				if isCrit {
+					var mask uint32
+					if vehicle != nil {
+						mask, _ = vehicle.targetCreatureTypeMask(ctx, victimGUID)
+					}
+					if inlineSpell.DefenseType == spellDamageClassMagic {
+						damage = s.creatureSpellCriticalDamageBonus(casterKey, uint32(schoolMask), damage, mask, inlineSpell, owner)
+					} else {
+						damage = s.creatureSpellWeaponCritDamageBonus(casterKey, victimKey, nil, false, uint32(schoolMask), damage, inlineSpell, mask, owner)
+					}
+					hitInfo = 0x02
+				}
+			}
+		}
+		if damage > 0 && inlineSpellKnown {
+			victimTarget := combatTarget{
+				GUID:        victimGUID,
+				Map:         motion.Map,
+				InstanceID:  motion.InstanceID,
+				X:           victim.X,
+				Y:           victim.Y,
+				Orientation: victim.Orientation,
+				Level:       victimLevel,
+			}
+			if b, ok := s.spellTakenBlockAmountFrom(victimTarget, false, nil, inlineSpell, damage, attackerLevel, motion.X, motion.Y); ok {
+				blocked = b
+				damage -= b
+			}
+		}
+		if damage > 0 {
+			resilCR := uint8(CombatRatingCritTakenSpell)
+			if inlineSpellKnown && inlineSpell.DefenseType != spellDamageClassMagic {
+				if spellWeaponAttackType(inlineSpell) == protocol.RangedAttack {
+					resilCR = CombatRatingCritTakenRanged
+				} else {
+					resilCR = CombatRatingCritTakenMelee
+				}
+			}
+			if s.creatureVictimTakesResilience(victim) && s.creatureCasterCanApplyResilience(motion) {
+				if ownerSess := s.ownerPlayerSessionOfMotion(victim); ownerSess != nil {
+					ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+				}
+			}
+		}
+		damage = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, damage)
+		preResistDmg := damage
+		if damage > 0 && schoolMask > 1 {
+			mask123 := uint32(schoolMask)
+			if mask123&0x7E != 0 {
+				mask123 &^= 1
+			}
+			var targetResistMod int32
+			for _, amount := range s.creatureAuraTypeAmountsByMiscMask(casterKey, spellAuraModTargetResistance, mask123) {
+				targetResistMod += amount
+			}
+			hybridArmorReduced := uint32(0)
+			if isHybrid {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(casterKey, s.liveCreatureArmor(victimKey, victim, float64(stats.Armor)), inlineSpell, inlineSpellKnown)
+				hybridArmorReduced = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
+			}
+			resistances := s.petFoldedResistances(victimKey, stats.Resistances)
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, 0, spellResistInput{
+				ignoreResistances:  inlineSpellKnown && inlineSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             inlineSpellKnown && inlineSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybrid,
+				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    targetResistMod,
+			})
+		}
+		if damage > 0 {
+			bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(casterKey, uint32(schoolMask), spellID))
+			pool := damage
+			if bypass > pool {
+				pool = 0
+			} else {
+				pool -= bypass
+			}
+			absorbed, damage = s.applyCreatureAbsorptionShields(victimKey, pool, schoolMask)
+			damage += bypass
+		}
+	} else {
+		damage = 0
+	}
+	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060) split legs, then the
+	// Unit::DealDamage 300 share leg (Unit.cpp:766-788) — the same order
+	// as the player twin.
+	if damage > 0 {
+		damage = s.splitDamageToCaster(ctx, victimGUID, false, victimKey, motion.GUID, damage, uint32(schoolMask))
+	}
+	if damage > 0 && vehicle != nil {
+		vehicle.splitShareDamagePct(ctx, victimGUID, false, victimKey, motion.GUID, damage, uint32(schoolMask))
+	}
+	// The log carries the post-split, pre-hook damage (C++ sends it before
+	// DealDamage, Spell.cpp:2542); the hooks below may still adjust the
+	// damage the proc event and strips see, like the pet branch.
+	logDamage := damage
+	// Spell::EffectHealthLeech basis (SpellEffects.cpp:1539-1540): the
+	// damage actually lost — overkill excluded, post-absorb — captured
+	// before the health mutation below.
+	leechDealt := uint32(0)
+	if !damageImmune {
+		leechDealt = damage
+		if leechDealt > victimHealth {
+			leechDealt = victimHealth
+		}
+	}
+	overkill := uint32(0)
+	var killed bool
+	var newHealth, maxHealth uint32
+	var liveX, liveY, liveZ float32
+	var liveFlags uint32
+	var rageNext uint32
+	var rageChanged bool
+	var live *creatureMotion
+	s.motionMu.Lock()
+	if m := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID); m != nil && m.Health > 0 {
+		live = m
+		if live.BossAI == nil {
+			live.BossAI = getBossAIForCreature(live, live.ScriptName)
+		}
+		fireDealDamageAIHooks(ctx, s, live, motion, motion.GUID, victimGUID, &damage)
+		maxHealth = live.MaxHealth
+		if damage >= live.Health {
+			overkill = damage - live.Health
+			live.Health = 0
+			live.DynamicFlags |= unitDynFlagLootable
+			live.InCombat = false
+			live.TargetGUID = 0
+			live.Moving = false
+			if live.ThreatMgr != nil {
+				live.ThreatMgr.ClearThreat()
+			}
+			killed = true
+		} else {
+			live.Health -= damage
+			if next, changed := s.addCreatureRageLocked(live, live.Level, damage+absorbed); changed {
+				rageNext, rageChanged = next, true
+			}
+		}
+		newHealth = live.Health
+		liveX, liveY, liveZ = live.X, live.Y, live.Z
+		liveFlags = live.DynamicFlags
+	}
+	s.motionMu.Unlock()
+	if live == nil {
+		return
+	}
+	// The inline twins log after the mutation; an immune hit sends no log
+	// (Spell.cpp:2538 first arm).
+	if !damageImmune {
+		logPkt := buildSpellNonMeleeDamageLog(victimGUID, motion.GUID, spellID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
+		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+	}
+	if killed {
+		// Unit::DealDamage (Unit.cpp:738-748 + :882-889): the TAKE_DAMAGE
+		// strip fires before the lethal check, like the pet branch.
+		s.procCreatureLethalDamageAuras(victimKey, spellID, damage, maxHealth)
+		s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, victimGUID, liveX, liveY, liveZ)
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, victimGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
+		s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, victimGUID)
+	} else {
+		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
+		if rageChanged {
+			healthUpdate[unitFieldPower1+powerRage] = rageNext
+		}
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, victimGUID, healthUpdate)
+		// Unit::DealDamage (Unit.cpp:743-748 + 897-898): the TAKE_DAMAGE
+		// and DIRECT_DAMAGE strips, like the pet branch.
+		s.procCreatureDirectDamageAuras(victimKey, spellID, damage, maxHealth)
+	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586): the
+	// victim-side taken proc half, with PROC_FLAG_TAKEN_DAMAGE ORed by
+	// the damage arm (Spell.cpp:2545). Runs on lethal and non-lethal
+	// arms alike, like the pet creature branch (the return trip's lethal
+	// skip is self-hit-specific: the caster's own auras are stripped
+	// before DoDamageAndTriggers runs).
+	if inlineSpellKnown && inlineSpell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+		if typeMask := spellDamageTakenProcTypeMask(inlineSpell) | procFlagTakenDamage; typeMask != 0 {
+			spellCopy := inlineSpell
+			s.fireCreatureAuraProcLoop(ctx, live, motion.GUID, procEventInfo{
+				typeMask:       typeMask,
+				schoolMask:     uint32(schoolMask),
+				spellTypeMask:  procSpellTypeDamage,
+				spellPhaseMask: procSpellPhaseHit,
+				hitMask:        procHitNormal,
+				triggered:      false,
+				eventSpell:     &spellCopy,
+				actorGUID:      motion.GUID,
+				damage:         damage,
+			})
+		}
+	}
+	// Spell::TargetInfo::DoDamageAndTriggers AI legs (Spell.cpp:2609-2650)
+	// in C++ order: stand-up, the victim-creature SpellHit hook
+	// (2629-2638, the _spellHitTarget->ToCreature() gate), the
+	// caster-side SpellHitTarget hook, then the per-hit trigger consumer
+	// (Spell.cpp:2652).
+	if inlineSpellKnown {
+		if (!spellIsPositive(inlineSpell) || spellHasEffect(inlineSpell, spellEffectDispel)) && !s.creatureFriendlyToTarget(motion, victimGUID) {
+			s.standCreatureMotionUp(live)
+		}
+		s.fireCreatureLuaEvent(ctx, live, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(motion), spellID)
+		s.fireCreatureSpellHitTarget(ctx, motion, victimGUID, spellID)
+		s.fireCreatureHitTriggers(ctx, motion, inlineSpell, spellID, []uint64{victimGUID})
+	}
+	// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for the
+	// creature caster, at the cast-completion position like the player
+	// twin: the caster heals for the damage actually lost, through the
+	// Done/Taken folds, HealAbsorb, AutoBalance and the DealHeal hooks.
+	if inlineSpellKnown && spellHasEffect(inlineSpell, spellEffectHealthLeech) && leechDealt > 0 {
+		leechIdx := -1
+		for i := range inlineSpell.Effects {
+			if inlineSpell.Effects[i].Effect == spellEffectHealthLeech {
+				leechIdx = i
+				break
+			}
+		}
+		modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+		multiplier := calcValueMultiplier(inlineSpell, leechIdx, modOwner)
+		if heal := effectValueMultiplied(leechDealt, multiplier); heal > 0 {
+			heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, casterKey, inlineSpell))
+			if modOwner != nil {
+				if sm := modOwner.applySpellMod(inlineSpell, uint8(spellModDamage), int32(heal)); sm > 0 {
+					heal = uint32(sm)
+				} else {
+					heal = 0
+				}
+			}
+			heal = creatureHealingTakenBonus(s, casterKey, motion.GUID, inlineSpell, true, heal, false)
+			leechHeal := s.creatureApplyHealAbsorb(casterKey, uint32(schoolMask), heal)
+			scaledHeal := heal - leechHeal
+			scaledHeal = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, scaledHeal)
+			fireDealHealAIHooks(ctx, s, motion, motion, motion.GUID, motion.GUID, &scaledHeal)
+			s.motionMu.Lock()
+			if liveCaster := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID); liveCaster != nil && liveCaster.Health > 0 {
+				liveCaster.Health += scaledHeal
+				if liveCaster.MaxHealth > 0 && liveCaster.Health > liveCaster.MaxHealth {
+					liveCaster.Health = liveCaster.MaxHealth
+				}
+			}
+			s.motionMu.Unlock()
+		}
+	}
+}
+
 // serverInlineReflectVerdict mirrors the AddUnitTarget reflect arm
 // (Spell.cpp:2152, 2173-2188; WorldObject::SpellHitResult, Object.cpp:2617-2666)
 // for the inline AI victim-spell path (creaturemotion.go). The victim is always
