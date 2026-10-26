@@ -147,7 +147,7 @@ end
 
 -- C++ EVENT_HOLY_NOVA: phase one; counts the top-10 threat targets
 -- (SelectTarget(MaxThreat, i), i = 0..9) within melee range — ported
--- via the threat-ordered GetAITargets list, first 10 entries; the 5-yd
+-- via the victim-first threat-ordered GetAITargets list, first 10 entries; the 5-yd
 -- gate is creature:IsWithinMeleeRange; C++ SelectTargetList skips
 -- offline refs (UnitAI.h), so dead entries are filtered before the
 -- top-10 slice (the midnight precedent is a raw loop, not
@@ -161,6 +161,21 @@ local function onHolyNova(creature, guid)
     for _, t in ipairs(creature:GetAITargets()) do
         if not t:IsDead() then
             alive[#alive + 1] = t
+        end
+    end
+    -- C++ SelectTargetList (sorted branch, UnitAI.h) pushes the current
+    -- victim first, then the rest in threat order, and the i = 0..9
+    -- offsets slice that victim-first list: pure threat order diverges
+    -- when the victim sits below the top 10, so move it to the front.
+    local holyVictim = creature:GetVictim()
+    if holyVictim then
+        local holyVictimGuid = holyVictim:GetGUID()
+        for i, t in ipairs(alive) do
+            if t:GetGUID() == holyVictimGuid then
+                table.remove(alive, i)
+                table.insert(alive, 1, t)
+                break
+            end
         end
     end
     for i = 1, math.min(10, #alive) do
