@@ -37277,6 +37277,7 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		}
 		s.server.motionMu.Lock()
 		alive := motion.Health > 0
+		victimHealth := motion.Health
 		resistances := motion.Resistances
 		level := motion.Level
 		victimArmor := motion.Armor
@@ -37312,7 +37313,12 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 		// attacker's absorb-ignore pct (194/245) bypasses shields, then
 		// the victim's school-absorb and mana-shield (97) shields soak the
 		// rest — C++ sends the computed absorb in the damage log even
-		// though no damage lands.
+		// though no damage lands. The split legs (1977-2060) run after
+		// the shields on the remaining damage and fold into absorb, so
+		// the log carries post-split damage with split-inclusive absorb;
+		// the 300 share leg stays out — it lives in DealDamage
+		// (Unit.cpp:766-788), which EffectEnvironmentalDMG never calls
+		// for unit targets.
 		var absorbed uint32
 		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePctForSpell(uint32(schoolMask), spellID))
 		var soakable uint32
@@ -37320,7 +37326,22 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 			soakable = damage - resisted - bypass
 		}
 		absorbed, _ = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForMotion(motion), soakable, schoolMask)
-		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, damage, 0, schoolMask, absorbed, resisted, 0)
+		remaining := damage
+		if resisted+absorbed < remaining {
+			remaining -= resisted + absorbed
+		} else {
+			remaining = 0
+		}
+		if remaining > 0 {
+			preSplit := remaining
+			remaining = s.server.splitDamageToCaster(ctx, effectTarget, false, creatureAuraKeyForMotion(motion), s.playerGUID, remaining, uint32(schoolMask))
+			absorbed += preSplit - remaining
+		}
+		overkill := uint32(0)
+		if remaining > victimHealth {
+			overkill = remaining - victimHealth
+		}
+		logPkt := buildSpellNonMeleeDamageLog(effectTarget, s.playerGUID, spellID, remaining, overkill, schoolMask, absorbed, resisted, 0)
 		// SpellEffects.cpp:318: unitCaster->SendSpellNonMeleeDamageLog rides
 		// SendMessageToSet — the caster's visibility set, not the whole
 		// instance.

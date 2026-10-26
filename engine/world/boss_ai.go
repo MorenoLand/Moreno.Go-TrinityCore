@@ -1846,7 +1846,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
 			unreflectedHits = make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
-				if _, ok := reflectedTargets[guid]; ok {
+				// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2652):
+				// DoTriggersOnSpellHit runs on _spellHitTarget, which a
+				// landed reflect retargets to the caster (Spell.cpp:2350)
+				// — so a reflected hit fires the trigger consumer on the
+				// caster, once per reflected TargetInfo, like the ev14/ev15
+				// legs above. A bounced return trip nulls _spellHitTarget
+				// and fires nothing; evades fire nothing either.
+				if status, ok := reflectedTargets[guid]; ok {
+					if status == protocol.SpellMissNone {
+						unreflectedHits = append(unreflectedHits, m.GUID)
+					}
 					continue
 				}
 				if evadedTargets[guid] {
@@ -2019,8 +2029,18 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 		if guid == 0 || evaded[guid] {
 			continue
 		}
-		if _, isReflected := reflected[guid]; isReflected {
-			continue
+		// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2349-2350):
+		// a landed reflect (ReflectResult == SPELL_MISS_NONE) retargets
+		// the HIT_TARGET effects to the caster itself, so a reflected
+		// insta-kill kills the caster; a bounced return trip (IMMUNE)
+		// nulls _spellHitTarget and runs nothing. This matches the
+		// ev14/ev15 retarget in castCreatureSpellInternal — only the
+		// damage funnel stays out (no-damage model delta).
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
 		}
 		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
 			if vs.player.Health == 0 || vs.isDeadOrGhost() || vs.godCheatActive() {
