@@ -1282,7 +1282,7 @@ func (s *session) totemDispelPulse(ctx context.Context, def TotemDef, totem *act
 // totem's spell is a passive enemy area aura (Totem.cpp:115-117); there is no
 // TotemAI cast, and the old Go arm had no TotemPulseSlow case at all, so
 // Earthbind pulses did nothing. The Go pulse model re-applies the slow aura
-// to hostile creatures in radius each tick through the creature-aura path
+// to hostile creatures and enemy players in radius each tick
 // with the totem's motion as caster (applyPetAura carries the no-stack
 // purge, the aura-update wire, and the duration timer). The duration bridges
 // two pulses so the slow neither flickers between ticks nor lingers long
@@ -1311,12 +1311,36 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		}
 		amount := eff.CalcValueForLevel(slowSpell, uint32(totemMotion.Level))
 		for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-			if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+			if !s.server.totemEnemyCreatureValid(m, owner) {
 				continue
 			}
 			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, uint32(intervalMs*2), uint32(amount))
 		}
 	}
+	// Enemy-player leg: the same area aura reaches hostile sessions in
+	// radius (Cell::VisitAllObjects visits players too), with no group
+	// term. The 2-pulse duration mirrors the creature leg, so the
+	// session slow neither flickers between ticks nor lingers long
+	// after the totem dies; the pulse re-applies, refreshing the timer.
+	if s.server != nil {
+		s.server.sessionsMu.RLock()
+		for other := range s.server.sessions {
+			if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
+				distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+				s.totemEnemySessionHostile(other) {
+				other.applyAuraFromCaster(def.PulseSpell, uint32(intervalMs*2), totem.TotemGUID, uint8(totemMotion.Level))
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+	}
+	// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds
+	// the area target list, so applications whose target left the
+	// radius or stopped being a valid enemy drop here instead of
+	// lingering until the 2-pulse timer runs out.
+	s.sweepTotemCreatureDebuffOutOfRange(totem, def.PulseSpell, float64(def.Radius))
+	s.sweepTotemSessionAuraOutOfRange(totem, def.PulseSpell, float64(def.Radius), func(other *session) bool {
+		return !s.totemEnemySessionHostile(other)
+	})
 }
 
 // totemOwnerPos builds the owner-side playerPos for totem pulse faction
