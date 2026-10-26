@@ -87,10 +87,11 @@
 -- CastLavaStrikeOnTarget — Cell::VisitAllObjects fire-cyclone
 -- search (NPC_FIRE_CYCLONE 30648) + random-cyclone CastSpell
 -- (SPELL_LAVA_STRIKE 57571) on target (GetCreaturesInGrid IS
--- bridged — lua_creature_events.go:1204 — but the arm stays out:
--- NPC_FIRE_CYCLONE has no script summon site and SPELL_EFFECT_SUMMON
--- has no Go case, so the cyclones never materialize; EVENT_LAVA_STRIKE
--- rides the unported nine-event machine).
+-- bridged — lua_creature_events.go:1204 — and the arm is PORTED in
+-- lavaStrikeTick below (NPC_FIRE_CYCLONE has no C++ summon site, so
+-- cyclones arrive via DB/spell data; the C++ empty-pool guard makes
+-- the port a no-op when none is present; SPELL_EFFECT_SUMMON now has
+-- a Go case, boss_ai.go creatureEffectSummonType).
 -- UpdateAI — the nine-event machine's remaining legs:
 -- EVENT_HARD_ENRAGE SPELL_PYROBUFFET 56916 triggered (dead arm —
 -- declared but never scheduled; porting would fabricate casts);
@@ -98,13 +99,12 @@
 -- (event 2, unconditional 30s/30s — the Talk precedes the summon
 -- wave branch, so no summon bridge is needed); the NPC_FLAME_
 -- TSUNAMI 30616 wave summons + MovePoints stay out (no summon /
--- motion bridges); EVENT_LAVA_STRIKE
--- random-target lava strike + urand SAY_SARTHARION_SPECIAL 7;
+-- motion bridges); EVENT_LAVA_STRIKE — PORTED (lavaStrikeTick,
+-- including the 10%-health soft-enrage cadence shift via the
+-- GetHealthPct sticky latch);
 -- EVENT_CALL_* dragon calls) + the 35%-health SPELL_BERSERK 61632
 -- leg (Talk SAY_SARTHARION_BERSERK 1) gated on the three drake
--- boss states + the 10%-health soft-enrage lava-strike cadence
--- shift — no timer-event / summon / target-search / instance /
--- health bridges.
+-- boss states — no timer-event / summon / instance bridges.
 -- Whisper arms (WHISPER_LAVA_CHURN 9) — ported below (event 2;
 -- the 30s init Talk + unconditional 30s re-arm are bridgeable,
 -- summon waves stay out).
@@ -114,15 +114,20 @@ local ENTRY_SARTHARION = 28860
 local SAY_SARTHARION_AGGRO  = 0
 local SAY_SARTHARION_BREATH = 2
 local SAY_SARTHARION_DEATH  = 6
+local SAY_SARTHARION_SPECIAL = 7
 local SAY_SARTHARION_SLAY   = 8
 local WHISPER_LAVA_CHURN    = 9
 
 local SPELL_CLEAVE       = 56909
 local SPELL_FLAME_BREATH = 56908
 local SPELL_TAIL_LASH    = 56910
+local SPELL_LAVA_STRIKE  = 57571
+local NPC_FIRE_CYCLONE   = 30648
 local SPELL_TWILIGHT_REVENGE = 60639
 
 local timers = {}
+
+local softEnraged = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -132,6 +137,7 @@ local function cancelTimers(guid)
         end
         timers[guid] = nil
     end
+    softEnraged[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -175,6 +181,44 @@ local function tailSweepTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_LAVA_STRIKE: SelectTarget(Random, 0) -> CastLavaStrikeOnTarget:
+-- random NPC_FIRE_CYCLONE 30648 within 200y casts SPELL_LAVA_STRIKE 57571
+-- (triggered) on the target; urand(0,5)==0 -> Talk(SAY_SARTHARION_SPECIAL 7).
+-- 5s init; re-arm {5s,20s}, or {1400ms,2s} once soft-enraged (sticky
+-- HealthBelowPct(10) latch, boss_sartharion.cpp:503-505). Empty cyclone
+-- pool returns early (C++-exact guard); the re-arm is unconditional
+-- (nil target still re-arms, C++ :465-475).
+local function lavaStrikeTick(creature, guid)
+    if creature:GetHealthPct() <= 10 then
+        softEnraged[guid] = true
+    end
+    local targets = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            targets[#targets + 1] = t
+        end
+    end
+    if #targets > 0 then
+        local target = targets[math.random(#targets)]
+        local cyclones = creature:GetCreaturesInGrid(NPC_FIRE_CYCLONE, 200.0)
+        if #cyclones > 0 then
+            cyclones[math.random(#cyclones)]:CastSpell(target, SPELL_LAVA_STRIKE, true)
+            if math.random(0, 5) == 0 then
+                creature:Talk(SAY_SARTHARION_SPECIAL)
+            end
+        end
+    end
+    if softEnraged[guid] then
+        schedule(guid, "lavastrike", {1400, 2000}, function()
+            lavaStrikeTick(creature, guid)
+        end)
+    else
+        schedule(guid, "lavastrike", {5000, 20000}, function()
+            lavaStrikeTick(creature, guid)
+        end)
+    end
+end
+
 -- C++ EVENT_FLAME_TSUNAMI: Talk(WHISPER_LAVA_CHURN 9) (unconditional),
 -- 30s init, unconditional 30s re-arm. The summon-wave legs stay out
 -- (no summon / motion bridges); only the Talk is ported.
@@ -191,7 +235,7 @@ end
 -- "no bridge" claim was stale; bridge live at
 -- engine/world/lua_creature_events.go:426) + FetchDragons (drake power-aura casts, loot
 -- modes, drake init MovePoints, non-attackable flags) +
--- ScheduleEvent x9 — the Talk and the three timer casts are
+-- ScheduleEvent x9 — the Talk and the timer casts are
 -- bridgeable; the rest are machine legs with no bridges.
 -- C++ DrakeRespawn :237/:257/:277 tenebron/shadron/vesperon->AI()->SetData(DATA_CAN_LOOT, 0):
 -- cross-AI write into the unported drake AIs (obsidian_sanctum.cpp dummy_dragonAI, :326 _canLoot gate).
@@ -212,6 +256,9 @@ local function sartharionEnterCombat(event, creature, target)
     end)
     schedule(guid, "lavachurn", 30000, function()
         lavaChurnTick(creature, guid)
+    end)
+    schedule(guid, "lavastrike", 5000, function()
+        lavaStrikeTick(creature, guid)
     end)
 end
 

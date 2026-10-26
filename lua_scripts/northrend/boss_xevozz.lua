@@ -50,8 +50,12 @@
 -- re-arm. Random-player pool corrected 2026-10-25: threat-list
 -- players within 45 yd (see randomThreatPlayerInRange); the old
 -- instance-wide pool was the same bug class as moragg/erekem.
--- DOCUMENTED DEVIATIONS: none on the ported arms — both timers carry
--- C++-exact timing and targeting. The UpdateAI
+-- ScheduleTasks ethereal-sphere summon — Talk(SAY_REPEAT_SUMMON 5) +
+-- random {54102, 54137, 54138} DoCast(me) + heroic 2.5s second pick;
+-- 5s init / {45s,47s} repeat — PORTED (summonTick); the 33-35s
+-- DoAction leg and the sphere AI stay out (see below).
+-- DOCUMENTED DEVIATIONS: none on the ported arms — all ported timers
+-- carry C++-exact timing and targeting. The UpdateAI
 -- DoMeleeAttackIfReady() leg has no bridge — melee is unmodeled.
 -- DOCUMENTED-ONLY (in this header; entry 29266 is the sole
 -- registration):
@@ -63,25 +67,20 @@
 -- spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 +
 -- spells.go:11765) — but the arm stays out: the only in-instance
 -- source of these IDs is the unregistered npc_ethereal_sphere's
--- 3.0f-proximity DoCastAOE (boss_xevozz.cpp:227-241), and entry
--- 29271 can never exist in Go (Xevozz's sphere summon leg is
--- unbridged), so ev14 can never fire with 54160/59474.
+-- 3.0f-proximity DoCastAOE (boss_xevozz.cpp:227-241), and that
+-- proximity cast itself is unported, so ev14 can never fire
+-- with 54160/59474 even once the ported summon casts spawn spheres.
 -- The ScheduleTasks ethereal-sphere summon leg (Talk(SAY_REPEAT_
 -- SUMMON 5), 5s init / 45-47s Repeat, random summon-spell pick from
 -- {54102, 54137, 54138} via DoCast(me, ...), heroic 2.5s delayed
--- second cast, 33-35s delayed summons.DoAction(ACTION_SUMMON)) stays
--- out: the DoCast(me, summonSpell) legs are summon legs (the summoned
--- sphere entry 29271 carries the unbridged npc_ethereal_sphere AI —
--- its ARCANE_POWER proximity machine and SAY_ETHEREAL_SPHERE_SUMMON
--- DoAction Talk leg have no bridges; the Reset POWER_BALL_VISUAL /
--- POWER_BALL_DAMAGE_TRIGGER self-casts are bridgeable in isolation
--- (CastSpell(creature, spell)) but the sphere is unreachable — Xevozz's
--- summon leg above is unbridged, so 29271 can never exist in Go), the
--- 33-35s delayed summons.DoAction(ACTION_SUMMON) is a DoAction leg,
--- the second cast is IsHeroic()-gated (creature:IsHeroic() is bridged,
--- lua_creature_events.go:282, but it rides the same unbridged summon
--- leg), and the Talk rides the same leg — the emalon EVENT_OVERCHARGE
--- precedent (whole event out when its legs are unbridged). The JustSummoned MoveFollow leg
+-- second cast) is PORTED in summonTick below — the casts are ordinary
+-- creature casts and the Go cast path implements SPELL_EFFECT_SUMMON
+-- (boss_ai.go creatureEffectSummonType), so the old "whole event out"
+-- (emalon EVENT_OVERCHARGE precedent) over-blocked. Still out: the
+-- 33-35s delayed summons.DoAction(ACTION_SUMMON) leg (no DoAction
+-- bridge) and the summoned sphere's own AI (npc_ethereal_sphere
+-- ARCANE_POWER proximity machine / SAY_ETHEREAL_SPHERE_SUMMON DoAction
+-- Talk leg, unregistered). The JustSummoned MoveFollow leg
 -- joins the no-MovementInform bridge queue; the JustReachedHome
 -- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) leg joins the
 -- no-instance-SetData bridge queue.
@@ -93,11 +92,14 @@
 local ENTRY_XEVOZZ = 29266
 
 local SAY_AGGRO = 0
+local SAY_REPEAT_SUMMON = 5
 local SAY_SLAY = 1
 local SAY_DEATH = 2
 
 local SPELL_ARCANE_BARRAGE_VOLLEY = 54202
 local SPELL_ARCANE_BUFFET = 54226
+
+local SPHERE_SUMMON_SPELLS = { 54102, 54137, 54138 }
 
 local timers = {}
 
@@ -170,8 +172,32 @@ local function buffetTick(creature, guid)
     end)
 end
 
+-- C++ ScheduleTasks ethereal-sphere summon: Talk(SAY_REPEAT_SUMMON 5) +
+-- random pick from {54102, 54137, 54138} -> DoCast(me, spell)
+-- (non-triggered); heroic: second pick from the remaining two after
+-- 2500ms. 5s init / Repeat {45s,47s}. The 33-35s delayed
+-- summons.DoAction(ACTION_SUMMON) leg stays out (no DoAction bridge),
+-- as does the summoned sphere's own AI (npc_ethereal_sphere
+-- ARCANE_POWER proximity machine, unregistered).
+local function summonTick(creature, guid)
+    creature:Talk(SAY_REPEAT_SUMMON)
+    local pool = { SPHERE_SUMMON_SPELLS[1], SPHERE_SUMMON_SPELLS[2], SPHERE_SUMMON_SPELLS[3] }
+    local i = math.random(#pool)
+    creature:CastSpell(creature, pool[i])
+    table.remove(pool, i)
+    if creature:IsHeroic() then
+        local second = pool[math.random(#pool)]
+        schedule(guid, "summonHeroic", 2500, function()
+            creature:CastSpell(creature, second)
+        end)
+    end
+    schedule(guid, "summon", {45000, 47000}, function()
+        summonTick(creature, guid)
+    end)
+end
+
 -- C++ boss_xevozzAI::JustEngagedWith: Talk(SAY_AGGRO) — unconditional
--- (the auriaya engage-port precedent); the two ScheduleTasks timers
+-- (the auriaya engage-port precedent); the ScheduleTasks timers
 -- seed their combat timers below; the BossAI::JustEngagedWith
 -- passthrough leg has no bridge.
 local function xevozzEnterCombat(event, creature, target)
@@ -183,6 +209,9 @@ local function xevozzEnterCombat(event, creature, target)
     end)
     schedule(guid, "buffet", {10000, 11000}, function()
         buffetTick(creature, guid)
+    end)
+    schedule(guid, "summon", 5000, function()
+        summonTick(creature, guid)
     end)
 end
 
