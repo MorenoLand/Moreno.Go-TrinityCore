@@ -58,8 +58,9 @@
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is the Random,1 skip-first
 -- threat entry (offset-before-filter, UnitAI.h:173-174); no
--- stat-modifier bridge — the DamageIncrease/Decrease ApplyStatPctModifier
--- hack (including the Reset PHASE_THREE rollback) is skipped; no
+-- the DamageIncrease/Decrease ApplyStatPctModifier hack (including
+-- the Reset PHASE_THREE rollback) is PORTED (ApplyDamagePctModifier,
+-- 2026-10-26); no
 -- movement model — the charge AttackStart arm is skipped (cast lands,
 -- the boss keeps its current victim); the summoned-spider
 -- JustSummoned AttackStart-random arm has no bearer (nothing ever
@@ -283,6 +284,9 @@ onTransform = function(creature, guid)
     end
     creature:Talk(SAY_TRANSFORM)
     creature:CastSpell(creature, SPELL_SPIDER_FORM)
+    -- C++ EVENT_TRANSFORM (boss_marli.cpp:171): spider form +35%
+    -- weapon damage via ApplyStatPctModifier (TOTAL_PCT).
+    creature:ApplyDamagePctModifier(35)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ENVOLWINGWEB)
@@ -303,14 +307,18 @@ onTransform = function(creature, guid)
 end
 
 -- C++ EVENT_TRANSFORM_BACK: RemoveAura(24084); the damage-decrease
--- stat hack has no bridge; phase -> 2; re-arm aspect 12s, transform
--- 45s + {35s,60s}, poison volley 15s, hatch egg {12s,17s}.
+-- stat hack is PORTED below (inverse of +35%); phase -> 2; re-arm
+-- aspect 12s, transform 45s + {35s,60s}, poison volley 15s, hatch
+-- egg {12s,17s}.
 onTransformBack = function(creature, guid)
     local st = marliState(guid)
     if st.phase ~= PHASE_THREE then
         return
     end
     creature:RemoveAura(SPELL_SPIDER_FORM)
+    -- C++ EVENT_TRANSFORM_BACK (boss_marli.cpp:208): the rollback is
+    -- the inverse of +35% (100/1.35-100), restoring the group to 1.0.
+    creature:ApplyDamagePctModifier(100 / 1.35 - 100)
     cancelTimer(guid, "charge")
     st.phase = PHASE_TWO
     schedule(guid, "aspect", 12000, function()
@@ -364,8 +372,15 @@ end
 -- _EnterEvadeMode ends with Reset()), never on death — while Go's
 -- 23 also fires on death (fireCreatureDied, Eluna parity).
 local function marliReset(event, creature)
+    -- C++ Reset (boss_marli.cpp:92): the PHASE_THREE damage rollback
+    -- runs before the egg scan; the alive gate restores C++
+    -- Reset-never-runs-on-death (Go fires 23 before 4 on death).
+    local wasPhaseThree = marliState(creature:GetGUID()).phase == PHASE_THREE
     marliWipe(event, creature)
     if creature:IsAlive() then
+        if wasPhaseThree then
+            creature:ApplyDamagePctModifier(100 / 1.35 - 100)
+        end
         for _, egg in ipairs(creature:GetGameObjectsInGrid(GO_SPIDER_EGG, 250)) do
             egg:Respawn()
         end

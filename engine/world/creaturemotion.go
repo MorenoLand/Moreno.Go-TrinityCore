@@ -105,6 +105,7 @@ type creatureMotion struct {
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / krosh / flame-leviathan / kalecgos-kj cast-only like C++ (julianne excluded: she swings via boss_julianneAI::UpdateAI); zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
+	DamageMainhandPct     float64             // m_auraPctModifiersGroup[UNIT_MOD_DAMAGE_MAINHAND][TOTAL_PCT] live value (Unit.cpp:9237 ApplyStatPctModifier): Lua CreatureMethods::ApplyDamagePctModifier multiplies it by (1+pct/100); the engine-driven swing below scales the rolled weapon-damage base by it ahead of the flat/pct aura folds. Zero value = unset (the C++ group starts at 1.0); spell damage is untouched (the C++ mod covers weapon damage only)
 	RegenHealthDisabled   bool                // inverted Creature::_regenerateHealthLock (Creature.h:520): Lua CreatureMethods::SetRegenerateHealth; zero value = regen enabled (the C++ default), honored by the regen tick
 	GravityDisabled       bool                // MOVEMENTFLAG_DISABLE_GRAVITY live value: Lua CreatureMethods::SetDisableGravity (Creature::SetDisableGravity twin, Creature.cpp:3027); zero value = gravity enabled (the C++ default), broadcast leg only
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
@@ -3339,6 +3340,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					maxDmg = minDmg + 1
 				}
 				damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+			}
+			// Unit::ApplyStatPctModifier (Unit.cpp:9237-9255) with
+			// UNIT_MOD_DAMAGE_MAINHAND / TOTAL_PCT: AddPct scales the
+			// weapon-damage base itself (UpdateUnitMod recomputes the
+			// min/max), so the script multiplier lands on the rolled
+			// base ahead of the flat-13 / pct-79 aura folds below —
+			// the arlokk/marli/thekal phase-transform damage hacks.
+			if pct := motion.DamageMainhandPct; pct != 0 && pct != 1.0 {
+				damage = uint32(float64(damage) * pct)
 			}
 			// AuraEffect::HandleModDamageDone (SpellAuraEffects.cpp): the flat
 			// NORMAL-school 13 arm runs on every target type via

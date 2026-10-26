@@ -35,9 +35,8 @@
 -- aura, clears the immune flags (RemoveFlag bridge) and is healed to
 -- full. Phase change: root (SetRooted bridge), drop feign death, full
 -- health, self-cast 24171 -> 1s -> Talk(TALK_TIGER_PHASE=0) -> 1s ->
--- self-cast 24169 (tiger form; the immune-flag removal and
--- ResetThreatList are ported, the +40% damage stat modifier has no
--- bridge; the unroot arm is ported via SetRooted)
+-- self-cast 24169 (tiger form; the immune-flag removal,
+-- ResetThreatList, +40% damage modifier and unroot arm are ported)
 -- and arm force punch 24189 4s then {16s,21s} on the victim (triggered
 -- DoCastVictim, C++-exact) / charge 24193 — C++ schedules
 -- EVENT_SPELL_CHARGE (8) at 12s but the switch case reads EVENT_CHARGE
@@ -79,9 +78,9 @@
 -- damage while feign-dead is still zeroed in the ev9 handler;
 -- RemoveAllAuras is bridged (creature:RemoveAllAuras) and ported in the
 -- fake-death arm; the feign-death aura alone is removed at
--- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); no stat-modifier bridge — the +40% tiger
--- damage hack and the Reset -damage hack are skipped (marli/arlokk
--- convention); the EVENT_CHANGE_PHASE_3 ResetThreatList arm is PORTED
+-- resurrect/phase change/reset per C++ (RemoveAurasDueToSpell); the +40% tiger
+-- damage hack and the Reset -damage hack are PORTED (ApplyDamagePctModifier,
+-- 2026-10-26); the EVENT_CHANGE_PHASE_3 ResetThreatList arm is PORTED
 -- 2026-10-19 (c:ResetAllThreat, bridged lua_objects.go); the gouge
 -- ModifyThreatByPercent gouge arm is PORTED 2026-10-24; no movement
 -- model — the charge
@@ -307,11 +306,14 @@ local function onChangePhase3(e, thekalGuid)
         c:CastSpell(c, SPELL_TIGER_FORM)
         -- C++ EVENT_CHANGE_PHASE_3: RemoveFlag(IMMUNE_TO_PC|IMMUNE_TO_NPC)
         -- between the tiger-form cast and ResetThreatList
-        -- (boss_thekal.cpp:309); the stat-modifier leg stays
-        -- unbridged as documented; SetControlled(false, ROOT)
+        -- (boss_thekal.cpp:309); the stat-modifier leg is PORTED below
+        -- (boss_thekal.cpp:310); SetControlled(false, ROOT)
         -- (boss_thekal.cpp:312) releases the phase-1 root via
         -- creature:SetRooted (lua_creature_events.go).
         c:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
+        -- C++ EVENT_CHANGE_PHASE_3 (boss_thekal.cpp:310): tiger form
+        -- +40% weapon damage via ApplyStatPctModifier (TOTAL_PCT).
+        c:ApplyDamagePctModifier(40)
         c:ResetAllThreat()
         c:SetRooted(false)
     end
@@ -517,11 +519,17 @@ local function thekalDied(event, creature, killer)
 end
 
 local function thekalReset(event, creature)
-    -- C++ Reset's phase-two damage-decrease modifier has no stat-modifier
-    -- bridge; the SetControlled(false, UNIT_STATE_ROOT) root clear ports
-    -- (boss_thekal.cpp:132, lua_creature_events.go SetRooted).
+    -- C++ Reset (boss_thekal.cpp:131): the phase-two damage rollback
+    -- runs first, then SetControlled(false, UNIT_STATE_ROOT)
+    -- (boss_thekal.cpp:132, SetRooted). The alive gate restores C++
+    -- Reset-never-runs-on-death (Go fires 23 before 4 on death).
+    local e = encounterState(creature)
+    local wasPhaseTwo = e.phase == PHASE_TWO
     creature:SetRooted(false)
-    thekalResetEncounter(encounterState(creature), creature)
+    thekalResetEncounter(e, creature)
+    if wasPhaseTwo and creature:IsAlive() then
+        creature:ApplyDamagePctModifier(100 / 1.4 - 100)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_THEKAL, 1, thekalEnterCombat)

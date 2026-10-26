@@ -58,8 +58,8 @@
 -- the Reset dagger restore + EVENT_TRANSFORM unequip +
 -- EVENT_TRANSFORM_BACK re-equip arms; flag
 -- arms PORTED (see onTransform / onVanish2); the REACT_PASSIVE arm is PORTED
--- (creature:SetReactState, 2026-10-20); no stat-modifier
--- bridge — the C++ damage +/-35% hack skipped; no movement model —
+-- (creature:SetReactState, 2026-10-20); the C++ damage +/-35% hack
+-- is PORTED (ApplyDamagePctModifier, 2026-10-26); no movement model —
 -- the Reset MovePoint, vanish MovePoint, and AttackStart arms skipped;
 -- Talk(id, target) is bridged (the whisperTarget arm, engine/world/
 -- creature_text.go:62 — C++-exact; non-whisper rows ignore the
@@ -253,6 +253,9 @@ local function onVanish2(creature, guid)
         -- phase-one timers (shadow word pain / gouge / transform).
         cancelKeys(timers, guid, { "swp", "gouge", "transform" })
         st2.panther = true
+        -- C++ EVENT_VISIBLE (boss_arlokk.cpp:273): panther form +35%
+        -- weapon damage via ApplyStatPctModifier (TOTAL_PCT).
+        creature:ApplyDamagePctModifier(35)
         creature:RemoveAura(SPELL_SUPER_INVIS)
         creature:RemoveAura(SPELL_VANISH)
         schedule(timers, guid, "ravage", math.random(10000, 14000),
@@ -322,7 +325,7 @@ onRavage = function(creature, guid)
 end
 
 -- C++ transform back: RemoveAura(24190), vanish visual; the weapon
--- damage-reset arm has no bridge (stat modifier), equipment PORTED below.
+-- damage-reset arm is PORTED below (inverse of +35%).
 -- Troll timers are re-
 -- armed fresh; the panther timers are dropped.
 onTransformBack = function(creature, guid)
@@ -336,6 +339,9 @@ onTransformBack = function(creature, guid)
     -- re-armed fresh below.
     cancelKeys(timers, guid, { "ravage", "transformback" })
     creature:RemoveAura(SPELL_PANTHER_TRANSFORM)
+    -- C++ EVENT_TRANSFORM_BACK (boss_arlokk.cpp:291): the rollback is
+    -- the inverse of +35% (100/1.35-100), restoring the group to 1.0.
+    creature:ApplyDamagePctModifier(100 / 1.35 - 100)
     creature:CastSpell(creature, SPELL_VANISH_VISUAL)
     -- C++ boss_arlokk.cpp:283-284: UNIT_VIRTUAL_ITEM_SLOT_ID + 0/1 =
     -- WEAPON_DAGGER — re-equip for troll form (bridged via
@@ -392,11 +398,17 @@ local function arlokkDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
--- C++ Reset (boss_arlokk.cpp:115-116): UNIT_VIRTUAL_ITEM_SLOT_ID + 0/1 =
--- WEAPON_DAGGER — the unconditional restore (SetWalk/MovePoint legs stay
--- out: no movement bridge; IsInPhase(PHASE_TWO) stat hack stays out).
+-- C++ Reset (boss_arlokk.cpp:112-116): IsInPhase(PHASE_TWO) damage
+-- rollback first, then UNIT_VIRTUAL_ITEM_SLOT_ID + 0/1 = WEAPON_DAGGER
+-- (SetWalk/MovePoint legs stay out: no movement bridge). The alive
+-- gate restores C++ Reset-never-runs-on-death: Go fires 23 before 4
+-- on death, so an ungated rollback would leak into the next life.
 local function arlokkReset(event, creature)
+    local wasPanther = arlokkState(creature:GetGUID()).panther
     arlokkResetState(creature:GetGUID())
+    if wasPanther and creature:IsAlive() then
+        creature:ApplyDamagePctModifier(100 / 1.35 - 100)
+    end
     creature:SetEquipmentSlots(WEAPON_DAGGER, WEAPON_DAGGER, 0xFFFFFFFF)
 end
 

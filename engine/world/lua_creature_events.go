@@ -2163,6 +2163,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// ApplyDamagePctModifier is Unit::ApplyStatPctModifier
+	// (Unit.cpp:9237-9255) for UNIT_MOD_DAMAGE_MAINHAND / TOTAL_PCT:
+	// AddPct multiplies m_auraPctModifiersGroup[mod][TOTAL_PCT] by
+	// (1+pct/100), and UpdateUnitMod recomputes the weapon-damage
+	// base from it. The Zul'Gurub phase-transform hacks ride it:
+	// arlokk/marli +35 on transform, thekal +40, each rolled back
+	// on transform-back / phase-gated Reset by the inverse
+	// (100/(1+pct/100)-100), which restores the group to 1.0.
+	// The swing path scales the rolled base by the live group;
+	// spell damage is untouched (the C++ mod covers weapon damage
+	// only). A zero group means unset and starts at 1.0.
+	methods["ApplyDamagePctModifier"] = func(_ context.Context, args []any) ([]any, error) {
+		pct, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		group := motion.DamageMainhandPct
+		if group == 0 {
+			group = 1.0
+		}
+		motion.DamageMainhandPct = group * (1.0 + float64(pct)/100.0)
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetDisplayId is Unit::SetDisplayId (Unit.cpp:10601):
 	// SetUInt32Value(UNIT_FIELD_DISPLAYID, modelId), plus the
 	// Creature::SetDisplayId (Creature.cpp:3210-3218) bounding-radius /
