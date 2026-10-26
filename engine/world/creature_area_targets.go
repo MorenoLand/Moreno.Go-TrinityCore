@@ -1878,6 +1878,14 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 			s.motionMu.Unlock()
 		}
 	}
+	// TempSummon corpse/dead legs (TemporarySummon.cpp:66-170): this
+	// creature-caster path runs no session death funnel, so a slain
+	// temp summon would otherwise keep its first-observation stamp
+	// as the only timer start (types 1/4 lingering to the prune).
+	// Placed last, mirroring the onCreatureKilled tail stamp.
+	if killed && live != nil {
+		s.checkDeadTempSummon(ctx, live, time.Now())
+	}
 }
 
 // serverInlineReflectVerdict mirrors the AddUnitTarget reflect arm
@@ -2888,6 +2896,13 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 		// stand-up target is the reflector (alive), and the hook
 		// has no caster-alive gate in C++ (Spell.cpp:2631-2632).
 		standUpReflectorAndFireHook()
+		// TempSummon corpse/dead legs: a creature reflector credits no
+		// player, so no session funnel stamps the caster's own death
+		// (player reflectors already stamp via the killCredit funnel).
+		// Placed last, after the stand-up/hook legs.
+		if reflector.killCredit == nil {
+			s.checkDeadTempSummon(ctx, motion, time.Now())
+		}
 		return
 	}
 	if !damageImmune {

@@ -2559,6 +2559,10 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	} else {
 		s.scheduleInstanceCreatureRespawn(ctx, killedTarget, uint32(math.Max(float64(tm.MaxHealth), 1)), time.Now())
 	}
+	// TempSummon corpse/dead legs: the no-owner path runs no session
+	// funnel (the owner path stamps via the onCreatureKilled tail
+	// above), so stamp here, placed last after the respawn legs.
+	s.checkDeadTempSummon(ctx, tm, time.Now())
 }
 
 // prepareCreatureHitTriggerSpells mirrors Spell::PrepareTriggersExecutedOnHit

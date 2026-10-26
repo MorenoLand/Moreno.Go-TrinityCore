@@ -478,6 +478,12 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 				s.fireCreatureKillHook(ctx, attackerSess, motion)
 			}
 		}
+		// TempSummon corpse/dead legs: a creature attacker/holder runs
+		// no session funnel, so stamp here; the session arm above
+		// already stamps via the onCreatureKilled tail.
+		if attackerSess == nil {
+			s.checkDeadTempSummon(ctx, m, time.Now())
+		}
 		return
 	}
 	newHealth := m.Health - damage

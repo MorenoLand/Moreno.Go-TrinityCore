@@ -1734,6 +1734,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				if victim.BossAI != nil {
 					victim.BossAI.OnDied(ctx, s, victim)
 				}
+				// TempSummon corpse/dead legs: the owner-session funnel
+				// is skipped on this path, so stamp here, placed last
+				// after the event-3/hook legs (the taken-side proc leg
+				// below no-ops on the stripped/removed motion).
+				s.checkDeadTempSummon(ctx, victim, time.Now())
 			}
 		}
 		// Unit::DealMeleeDamage's victim leg (Unit.cpp:1194-1195): a pet's
