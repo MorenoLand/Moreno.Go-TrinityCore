@@ -2514,6 +2514,78 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		}
 		rows.Close()
 	}
+	s.stepSummonedVehicleMotions(ctx, players, distance, now)
+}
+
+// stepSummonedVehicleMotions steps summoned vehicles the DB-row sweep can
+// never reach: summonTempCreature funnels through motionFor with a dynamic
+// low GUID (>= 2000000, totems.go nextDynamicCreatureLowGUID), so no creature
+// row matches and stepCreatureMotion never runs for them — their VehicleAI
+// condition/dismiss arms never fire and only the 10-minute TTL prune removes
+// them. The pass mirrors the sweep's range gate (the same per-player X/Y box
+// on the player's map/instance, deduplicated across players) and runs only
+// the step head sequence — TempSummon expiry, then stepVehicleAI — never the
+// full step: a summoned motion carries its summoner's OwnerGUID, and the full
+// step diverts OwnerGUID != 0 motions into updatePetMotion (follow-owner and
+// aggressive-pet AI), which is wrong for a vehicle. Non-vehicle summons stay
+// unstepped (a later extension of this pass). Stepped motions stamp Refreshed
+// so the prune does not delete an in-range summoned vehicle mid-use; an
+// out-of-range summon still prunes after 10 minutes, as before.
+func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playerPos, distance float64, now time.Time) {
+	if s == nil || len(players) == 0 {
+		return
+	}
+	seen := make(map[*creatureMotion]struct{})
+	var candidates []*creatureMotion
+	s.motionMu.Lock()
+	for _, p := range players {
+		for _, motion := range s.motionMapLocked(p.Map, p.InstanceID) {
+			if motion == nil || !motion.IsTempSummon || motion.TransportGUID != 0 {
+				continue
+			}
+			if _, dup := seen[motion]; dup {
+				continue
+			}
+			if motion.Map != p.Map || motion.InstanceID != p.InstanceID {
+				continue
+			}
+			if math.Abs(float64(motion.X-p.X)) > distance || math.Abs(float64(motion.Y-p.Y)) > distance {
+				continue
+			}
+			seen[motion] = struct{}{}
+			candidates = append(candidates, motion)
+		}
+	}
+	s.motionMu.Unlock()
+	var vehicles []*creatureMotion
+	for _, motion := range candidates {
+		if motion.Health == 0 || !s.isVehicleAI(motion) {
+			continue
+		}
+		vehicles = append(vehicles, motion)
+	}
+	if len(vehicles) == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	var live []*creatureMotion
+	for _, motion := range vehicles {
+		if s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID) != motion {
+			continue
+		}
+		motion.Refreshed = now
+		live = append(live, motion)
+	}
+	s.motionMu.Unlock()
+	for _, motion := range live {
+		if motion.Health == 0 {
+			continue
+		}
+		if s.checkTempSummonExpiry(ctx, motion, now) {
+			continue
+		}
+		s.stepVehicleAI(ctx, motion, now)
+	}
 }
 
 // stepCreatureMotion advances one creature: handles combat pursuit/attacks,
