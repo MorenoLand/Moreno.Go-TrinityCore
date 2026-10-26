@@ -56,8 +56,8 @@ func backArcTarget(args []any) (x, y float32, guid uint64, ok bool) {
 // TemporarySummon.cpp:168-244): spawns a temporary creature of the given
 // entry at (x, y, z, o) on the summoner's map/instance. summonType is the
 // bridge's 0-based TempSummonType scheme (0 TIMED_OR_DEAD_DESPAWN ... 7
-// MANUAL_DESPAWN); despawnMs arms the timer only for the timed family
-// (0-3). The all-zero x/y/z close-point and o==0 orientation fallbacks,
+// MANUAL_DESPAWN); despawnMs arms the timer for the timed family (0-3)
+// and stamps the corpse timer's duration for CORPSE_TIMED_DESPAWN (5). The all-zero x/y/z close-point and o==0 orientation fallbacks,
 // the instance create-block broadcast, and the
 // CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) fire on the summoner
 // (Eluna::JustSummoned, CreatureHooks.cpp:165-171) all live here. Unknown
@@ -134,13 +134,16 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	summoned.IsTempSummon = true
 	summoned.TempSummonType = summonType
 	// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
-	// the summon type: only the timed family (0/1/2/3) arms the timer
-	// at spawn. The corpse/dead family (4/5/6) starts its timer at
-	// death — unmodeled here (documented delta) — and MANUAL (7) has
-	// no timer.
-	if despawnMs > 0 && summonType <= 3 {
+	// the summon duration for every type: the timed family (0/1/2/3)
+	// arms the timer at spawn, CORPSE_TIMED_DESPAWN (5) carries the
+	// duration for the corpse timer checkDeadTempSummon starts at
+	// death, and CORPSE_DESPAWN (4) / DEAD_DESPAWN (6) / MANUAL (7)
+	// carry no live timer.
+	if despawnMs > 0 {
 		summoned.TempSummonLifetime = time.Duration(despawnMs) * time.Millisecond
-		summoned.TempSummonExpiresAt = time.Now().Add(summoned.TempSummonLifetime)
+		if summonType <= 3 {
+			summoned.TempSummonExpiresAt = time.Now().Add(summoned.TempSummonLifetime)
+		}
 	}
 	stats := s.loadCreatureStats(ctx, entry)
 	spawn := creatureSpawn{

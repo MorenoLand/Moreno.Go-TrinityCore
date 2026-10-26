@@ -309,10 +309,11 @@ type creatureMotion struct {
 	// 0 TIMED_OR_DEAD_DESPAWN, 1 TIMED_OR_CORPSE_DESPAWN, 2 TIMED_DESPAWN,
 	// 3 TIMED_DESPAWN_OUT_OF_COMBAT, 4 CORPSE_DESPAWN, 5 CORPSE_TIMED_DESPAWN,
 	// 6 DEAD_DESPAWN, 7 MANUAL_DESPAWN (the C++ default when unspecified).
-	// The Go tick honors the timer for types 0/1/2/3 only; the corpse/dead
-	// legs (4/5/6) are documented deltas — the body leaves on the normal
-	// corpse sweep instead of the C++ corpse-timed despawn. Zero value is
-	// never a live state: the summon bridge always stamps the type.
+	// The live tick honors the timer for types 0/1/2/3; dead summons run
+	// checkDeadTempSummon: types 1/4 unsummon at corpse, type 5 runs its
+	// duration from death, types 0/6 leave the corpse to the TTL prune
+	// (the Go DEAD-state twin). Zero value is never a live state: the
+	// summon bridge always stamps the type.
 	TempSummonType uint8
 	IsTempSummon   bool
 	// IsTempSummon is the Unit::IsSummon twin (Unit.h:837 — the
@@ -2559,7 +2560,8 @@ func (s *Server) summonedMotionsInRange(players []playerPos, distance float64) [
 // stepSummonedVehicleMotions steps summoned vehicles the DB-row sweep can
 // never reach — their VehicleAI condition/dismiss arms never fire and only
 // the 10-minute TTL prune removes them. It runs only the step head
-// sequence — TempSummon expiry, then stepVehicleAI — never the full step:
+// sequence — TempSummon expiry (live) or the corpse/dead legs (dead),
+// then stepVehicleAI — never the full step:
 // a summoned motion carries its summoner's OwnerGUID, and the full step
 // diverts OwnerGUID != 0 motions into updatePetMotion (follow-owner and
 // aggressive-pet AI), which is wrong for a vehicle. Stepped motions stamp
@@ -2572,7 +2574,11 @@ func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playe
 	}
 	var vehicles []*creatureMotion
 	for _, motion := range s.summonedMotionsInRange(players, distance) {
-		if motion.Health == 0 || !s.isVehicleAI(motion) {
+		if !s.isVehicleAI(motion) {
+			continue
+		}
+		if motion.Health == 0 {
+			s.checkDeadTempSummon(ctx, motion, now)
 			continue
 		}
 		vehicles = append(vehicles, motion)
@@ -2604,8 +2610,8 @@ func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playe
 // stepSummonedNonVehicleMotions steps summoned non-vehicles through the
 // generic creature step in summon mode (TemporarySummon.cpp:66:
 // TempSummon::Update runs Creature::Update, then the timer arms — the
-// step's own expiry head covers the timed family, types 0-3, and the
-// corpse/dead legs stay the documented deltas they are on the DB path).
+// step's own expiry head covers the timed family, types 0-3, and dead
+// summons run the corpse/dead legs via checkDeadTempSummon above).
 // What the step delivers per leg, with no summon-specific gate in any of
 // them: regen + combat pulse, the 1s threat re-selection, combat pursuit
 // with leash/evade home (Home is the summon point, motionFor), the
@@ -2627,7 +2633,11 @@ func (s *Server) stepSummonedNonVehicleMotions(ctx context.Context, players []pl
 	}
 	var summons []*creatureMotion
 	for _, motion := range s.summonedMotionsInRange(players, distance) {
-		if motion.Health == 0 || s.isVehicleAI(motion) {
+		if s.isVehicleAI(motion) {
+			continue
+		}
+		if motion.Health == 0 {
+			s.checkDeadTempSummon(ctx, motion, now)
 			continue
 		}
 		summons = append(summons, motion)
@@ -2903,9 +2913,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 	// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
 	// script-summon bridge stamps the timer only for the timed family
-	// (0/1/2/3) — the corpse/dead legs (4/5/6) start their timer at death
-	// (documented delta) and MANUAL (7) carries no timer. A fired timer
-	// ends the motion's tick. motionMu is not held on this path.
+	// (0/1/2/3) — the corpse/dead legs run in checkDeadTempSummon via
+	// the summoned passes (dead motions never reach this head) and
+	// MANUAL (7) carries no timer. A fired timer ends the motion's
+	// tick. motionMu is not held on this path.
 	if motion.TempSummonLifetime > 0 && motion.TempSummonType <= 3 {
 		if s.checkTempSummonExpiry(ctx, motion, now) {
 			return
@@ -2984,7 +2995,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// not pets (UNIT_MASK_SUMMON, not UNIT_MASK_PET), so the summoned
 	// step skips this diversion: a summoned guardian must not follow its
 	// summoner or run aggressive-pet acquisition like a hunter pet.
-	if motion.OwnerGUID != 0 && !summoned {
+	// Exception: a CHARMED summon — Unit::UpdateCharmAI (Unit.cpp:9857)
+	// replaces a charmed creature's AI with PetAI (PossessedAI only for
+	// possessed/vehicle), so it rides the diversion and follows its
+	// charmer (charm overwrites OwnerGUID with the charmer, banking the
+	// summoner in CharmOwnerGUID) instead of running guardian AI. The
+	// Charmed && OwnerGUID == 0 gate above never fires — charm always
+	// sets OwnerGUID — so it is not the charm gate; this diversion is.
+	if motion.OwnerGUID != 0 && (!summoned || motion.Charmed) {
 		s.updatePetMotion(ctx, motion, players, now)
 		return
 	}

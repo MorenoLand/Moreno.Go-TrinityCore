@@ -596,14 +596,19 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 // / TIMED_DESPAWN_OUT_OF_COMBAT (3) arms freeze the timer while the
 // summon is in combat: m_timer is reset to m_lifetime on every Update
 // tick in combat (TemporarySummon.cpp:91-106, 133-168), so the expiry
-// only runs once the summon leaves combat. The corpse/dead legs
-// (4/5/6) never reach this function — the script-summon bridge only
-// stamps the timer for the timed family, and the spell-summon path only
-// produces type 2.
+// only runs once the summon leaves combat. The corpse/dead legs (4/5/6)
+// never run a live timer here: types 1/4 unsummon at corpse and type 5
+// runs its timer only while dead (checkDeadTempSummon below), while the
+// spell-summon path only produces type 2.
 // Returns true when the timer fired and the guardian was unsummoned — the
 // caller must stop driving the motion.
 func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMotion, now time.Time) bool {
 	if s == nil || motion == nil || motion.TempSummonLifetime <= 0 {
+		return false
+	}
+	// The corpse/dead legs (4/5/6) and MANUAL (7) carry no live timer:
+	// type 5's lifetime stamp (summon bridge) must not arm this check.
+	if motion.TempSummonType > 3 {
 		return false
 	}
 	switch motion.TempSummonType {
@@ -623,6 +628,57 @@ func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMoti
 	}
 	s.expireTempSummonGuardian(ctx, motion)
 	return true
+}
+
+// checkDeadTempSummon runs the TempSummon::Update corpse/dead arms
+// (TemporarySummon.cpp:66-170) for a dead temp summon — Go has no
+// DEAD-vs-CORPSE split, so Health 0 is the corpse state and the
+// 10-minute TTL prune is the corpse-removal (DEAD-state) twin:
+//   - TIMED_OR_CORPSE (1) and CORPSE_DESPAWN (4) unsummon at corpse,
+//     so a dead summon of either type vanishes at once instead of
+//     leaving a lootable corpse until the prune.
+//   - CORPSE_TIMED_DESPAWN (5) runs its InitStats duration while dead:
+//     the first dead observation stamps TempSummonExpiresAt (the Go
+//     death proxy — the passes only see in-range summons, so an
+//     out-of-range corpse starts its timer late by that interval),
+//     and a later observation past it unsummons; a zero lifetime
+//     unsummons at once, matching m_timer 0 <= diff on the first
+//     CORPSE tick.
+//   - TIMED_OR_DEAD (0), TIMED_DESPAWN (2), TIMED_DESPAWN_OUT_OF_COMBAT
+//     (3), DEAD_DESPAWN (6) and MANUAL (7) leave the corpse to the
+//     prune (C++ unsummons them only at DEAD state or UnSummon).
+//
+// Dead motions never stamp Refreshed here, so the prune still removes
+// the types left behind. Returns true when the summon was unsummoned.
+func (s *Server) checkDeadTempSummon(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if s == nil || motion == nil || !motion.IsTempSummon || motion.Health != 0 {
+		return false
+	}
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID) == motion
+	s.motionMu.Unlock()
+	if !live {
+		return false
+	}
+	switch motion.TempSummonType {
+	case 1, 4:
+		s.expireTempSummonGuardian(ctx, motion)
+		return true
+	case 5:
+		if motion.TempSummonLifetime <= 0 {
+			s.expireTempSummonGuardian(ctx, motion)
+			return true
+		}
+		if motion.TempSummonExpiresAt.IsZero() {
+			motion.TempSummonExpiresAt = now.Add(motion.TempSummonLifetime)
+			return false
+		}
+		if !now.Before(motion.TempSummonExpiresAt) {
+			s.expireTempSummonGuardian(ctx, motion)
+			return true
+		}
+	}
+	return false
 }
 
 // expireTempSummonGuardian is the TempSummon::UnSummon twin
