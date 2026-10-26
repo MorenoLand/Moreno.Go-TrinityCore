@@ -181,13 +181,12 @@ end
 -- RescheduleEvent(EVENT_EARTH_SHOCK, 2s) every tick while
 -- IsWithinMeleeRange(GetVictim()), so the cast only fires ~2s
 -- after the victim leaves melee range. Emulated with
--- creature:GetDistance(victim) (the old "no range bridge" header
--- note was stale — used by moroes/midnight/netherspite/etc.):
+-- creature:IsWithinMeleeRange(victim) (bridged, lua_creature_events.go:3144):
 -- in-melee ticks skip the cast and re-arm the 2s per-key timer,
 -- exactly what the C++ re-arm does.
 local function onEarthShock(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) > 5.0 then
+    if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_EARTH_SHOCK)
     end
     schedule(guid, "earthshock", 2000, function()

@@ -108,7 +108,7 @@ local function onManaStorm(creature, guid)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) <= 60 then
+                and creature:GetDistance(unit) - creature:GetCombatReach() < 60 then
             candidates[#candidates + 1] = unit
         end
     end

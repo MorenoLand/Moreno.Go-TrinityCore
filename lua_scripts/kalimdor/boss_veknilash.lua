@@ -256,11 +256,12 @@ end
 local function nearestAlivePlayer(creature, maxDist)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local nearest, nearestDist = nil, nil
+    local reach = creature:GetCombatReach()
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
                 and not p:IsDead() then
             local d = creature:GetDistance(p)
-            if d <= maxDist and (nearestDist == nil or d < nearestDist) then
+            if d - reach < maxDist and (nearestDist == nil or d < nearestDist) then
                 nearest, nearestDist = p, d
             end
         end
