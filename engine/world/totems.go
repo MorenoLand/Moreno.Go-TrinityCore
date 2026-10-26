@@ -333,7 +333,13 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 // sanctuary arms need a player on one side, and visibility has no Go
 // motion model. Dead motions fail here too, which the sweep inherits:
 // C++ UpdateTargetMap drops dead targets (30708 allows no dead targets).
-func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) bool {
+// totemCreatureTargetable is the isTargetableForAttack half of the
+// creature verdict: the IsTotem reject, the untargetable/unattackable
+// flag set, the immune-to-NPC leg, and the dead gate. It carries no
+// hostility term, so the SingleTarget search can pair it with the
+// GridNotifiers.h:1072 IsInCombatWith alternative instead of hostility
+// alone; totemEnemyCreatureValid below is targetable + hostile.
+func (s *Server) totemCreatureTargetable(m *creatureMotion) bool {
 	if s == nil || m == nil || m.Health == 0 {
 		return false
 	}
@@ -346,7 +352,37 @@ func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) boo
 	if m.UnitFlags&unitFlagImmuneToNPC != 0 {
 		return false
 	}
+	return true
+}
+
+func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) bool {
+	if !s.totemCreatureTargetable(m) {
+		return false
+	}
 	return s.isHostileFaction(m.Faction, owner)
+}
+
+// totemCreatureInCombatWithOwner is the IsInCombatWith(u) alternative
+// of the GridNotifiers.h:1072 search check, with funit the totem's
+// owner (TotemAI.cpp:71 GetCharmerOrOwnerOrSelf): the motion is in
+// combat and the owner is its current victim or holds a threat entry.
+// A non-hostile creature fighting the owner is therefore searchable,
+// where the hostility-only verdict never selected it.
+func (s *session) totemCreatureInCombatWithOwner(m *creatureMotion) bool {
+	if s == nil || m == nil || !m.InCombat {
+		return false
+	}
+	if m.TargetGUID == s.playerGUID {
+		return true
+	}
+	if m.ThreatMgr != nil {
+		for _, e := range m.ThreatMgr.SortedEntries() {
+			if e.VictimGUID == s.playerGUID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // totemCreatureHiddenFromOwner is the GM-visibility arm of
@@ -357,10 +393,160 @@ func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) boo
 // 0, and visible to one whose detect is nonzero — the same seesHidden
 // convention as the nearby-creature update filter (creatures.go:106).
 // Stealth/invisibility auras on creature victims are NOT covered here:
-// no creature-target CanDetect helper exists (the sentry residual),
-// so a stealthed creature motion still reads as visible.
+// they ride totemCanDetectCreature in the SingleTarget legs; the
+// sentry ping still uses only this GM arm for creature victims.
 func (s *session) totemCreatureHiddenFromOwner(m *creatureMotion) bool {
 	return m != nil && m.ScriptHidden && (s == nil || s.gmVisibilityDetect == 0)
+}
+
+// totemCreatureAuraMiscSums folds one aura type's live amounts on a
+// creature motion per DBC effect MiscValue, the creature twin of the
+// session aura fold: the DBC row gates it, so with no row the map is
+// empty and the creature reads as carrying no aura of that type.
+func (s *Server) totemCreatureAuraMiscSums(m *creatureMotion, auraType uint32) map[int32]int32 {
+	out := map[int32]int32{}
+	if s == nil || m == nil || s.Data == nil {
+		return out
+	}
+	key := creatureAuraKeyForMotion(m)
+	if key.GUID == 0 {
+		return out
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != auraType {
+				continue
+			}
+			if index < len(aura.Amounts) {
+				out[effect.MiscValue] += aura.Amounts[index]
+			}
+		}
+	}
+	return out
+}
+
+// totemSessionAuraMiscSums folds one aura type's live amounts on the
+// observer session per MiscValue, for the invisibility value comparison
+// below (C++ m_invisibilityDetect values are per-type sums).
+func (s *session) totemSessionAuraMiscSums(auraType uint32) map[int32]int32 {
+	out := map[int32]int32{}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != auraType {
+			continue
+		}
+		out[aura.MiscValue] += int32(aura.Amount)
+	}
+	return out
+}
+
+// totemCanDetectCreature is the creature-victim half of
+// WorldObject::CanDetect (Object.cpp:1664-1686) for a totem's owner as
+// seer (the controller arm, Object.cpp:1665-1671: the totem itself
+// carries no detection, its owner's does). Stealth: MOD_STEALTH (16)
+// plus MOD_STEALTH_LEVEL (154) value, the DETECT_STEALTH (228)
+// misc-matched auto-detect arm, and the level/distance formula with
+// the owner's combat reach, orientation arc, and position as seer.
+// Invisibility: the MOD_INVISIBILITY (18) values must be covered by the
+// owner's MOD_INVISIBILITY_DETECT (19) values per type, plus the
+// reciprocal arm (Object.cpp:1704-1706): the owner's own invisibility
+// must be detectable by the creature's 19 values, or the owner cannot
+// see the creature at all. DBC-gated throughout: with no DBC row the
+// creature reads as neither stealthed nor invisible.
+func (s *session) totemCanDetectCreature(m *creatureMotion) bool {
+	if s == nil || m == nil || s.server == nil {
+		return true
+	}
+	if s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
+		return true
+	}
+	key := creatureAuraKeyForMotion(m)
+	stealthValue := s.server.creatureAuraTypeSum(key, 16) + s.server.creatureAuraTypeSum(key, 154)
+	if stealthValue > 0 {
+		if s.player == nil {
+			return false
+		}
+		if s.hasAuraType(151) {
+			return true
+		}
+		for misc := range s.server.totemCreatureAuraMiscSums(m, 16) {
+			if s.hasAuraTypeWithMiscValue(spellAuraDetectStealth, misc) {
+				return true
+			}
+		}
+		dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z)
+		combatReach := float64(1.5)
+		if s.player.CombatReach > 0 {
+			combatReach = float64(s.player.CombatReach)
+		}
+		if dist < combatReach {
+			return true
+		}
+		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, m.X, m.Y, math.Pi) {
+			return false
+		}
+		obsLevel := s.player.Level
+		if obsLevel == 0 {
+			obsLevel = 1
+		}
+		detectionValue := int32(30) + int32(obsLevel-1)*5 + s.getTotalAuraModifier(17) - stealthValue
+		visibilityRange := float64(detectionValue)*0.3 + combatReach
+		if visibilityRange > 30.0 {
+			visibilityRange = 30.0
+		}
+		if visibilityRange <= 0 || dist > visibilityRange {
+			return false
+		}
+	}
+	creatureInvisibility := s.server.totemCreatureAuraMiscSums(m, 18)
+	if len(creatureInvisibility) > 0 {
+		ownerDetect := s.totemSessionAuraMiscSums(19)
+		for misc, value := range creatureInvisibility {
+			if ownerDetect[misc] < value {
+				return false
+			}
+		}
+		ownerInvisibility := s.totemSessionAuraMiscSums(18)
+		for misc, value := range ownerInvisibility {
+			if s.server.creatureAuraTypeSumByMisc(key, 19, misc) < value {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// totemSessionInvisibilityReciprocalOK is the reciprocal arm of
+// WorldObject::CanDetectInvisibilityOf (Object.cpp:1704-1706) for a
+// session victim, scoped to the totem legs: the owner's own
+// invisibility values must be covered by the victim's
+// MOD_INVISIBILITY_DETECT (19) values per type, or the owner cannot
+// detect the victim. The shared canDetectInvisibilityOfPlayer helper
+// is deliberately untouched: its other caller is the client-visibility
+// filter, not CanSeeOrDetect, and widening it there would blind every
+// invisible observer to targets that cannot detect them.
+func (s *session) totemSessionInvisibilityReciprocalOK(other *session) bool {
+	if s == nil || other == nil {
+		return true
+	}
+	if s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
+		return true
+	}
+	victimDetect := other.totemSessionAuraMiscSums(19)
+	for misc, value := range s.totemSessionAuraMiscSums(18) {
+		if victimDetect[misc] < value {
+			return false
+		}
+	}
+	return true
 }
 
 // sweepTotemCreatureDebuffOutOfRange is the creature half of the
@@ -1049,15 +1235,34 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// (GridNotifiers.h:1072). The session legs use the owner as
 			// seer (CanDetect's controller arm, Object.cpp:1665-1671):
 			// canDetectStealthOf + canDetectInvisibilityOfPlayer, the
-			// same helpers the sentry ping uses. The creature legs use
-			// only the GM-hidden arm (totemCreatureHiddenFromOwner);
-			// creature stealth/invisibility auras stay unmodeled (no
-			// creature-target CanDetect helper). Terrain LOS is NOT a
+			// same helpers the sentry ping uses, plus the reciprocal
+			// invisibility arm and phase overlap. The creature legs use
+			// the GM-hidden arm (totemCreatureHiddenFromOwner) and the
+			// owner-seer CanDetect (totemCanDetectCreature: creature
+			// stealth/invisibility auras, reciprocal included).
+			// Terrain LOS is NOT a
 			// selection gate: CanSeeOrDetect has no LOS arm, so a
 			// behind-wall victim stays remembered in C++ (its cast may
 			// fail downstream) instead of being swapped for another
-			// target; phase mismatch likewise stays unmodeled.
+			// target. The range is the pulse spell's DBC hostile max
+			// range (TotemAI.cpp:63-65), not def.Radius, falling back
+			// to def.Radius with no DBC row. Session victims also
+			// gate on phase overlap with the owner (CanNeverSee,
+			// Object.cpp:1659-1662) and on the reciprocal
+			// invisibility arm; creature victims gate on the
+			// owner-seer CanDetect above. Creature phase stays
+			// unmodeled (no phase field on the motion; packet-time
+			// creature phase resolves from DB rows, not the motion).
 			owner := totemOwnerPos(s)
+			maxRange := float64(def.Radius)
+			if s.server != nil && s.server.Data != nil {
+				if spell, found, err := s.server.Data.Spell(def.PulseSpell); err == nil && found {
+					if spellRange, rangeFound, rangeErr := s.server.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound && spellRange.MaxHostile > 0 {
+						maxRange = float64(spellRange.MaxHostile)
+					}
+				}
+			}
+			ownerPhase := s.currentPlayerPhaseMask()
 			var victimGUID uint64
 			totem.mu.Lock()
 			remembered := totem.LastVictimGUID
@@ -1071,15 +1276,18 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				// flagged or immune creature, or another totem, was
 				// kept as victim until it died or walked out.
 				if m := s.server.findCreatureMotion(totem.Map, totem.InstanceID, remembered); m != nil &&
-					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= maxRange &&
 					s.server.totemEnemyCreatureValid(m, owner) &&
-					!s.totemCreatureHiddenFromOwner(m) {
+					!s.totemCreatureHiddenFromOwner(m) &&
+					s.totemCanDetectCreature(m) {
 					victimGUID = m.GUID
 				} else if other := s.server.findSessionByGUID(remembered); other != nil && other.player != nil &&
 					other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
-					distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+					distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= maxRange &&
 					s.totemEnemySessionHostile(other) &&
-					s.canDetectStealthOf(other) && s.canDetectInvisibilityOfPlayer(other) {
+					ownerPhase&other.currentPlayerPhaseMask() != 0 &&
+					s.canDetectStealthOf(other) && s.canDetectInvisibilityOfPlayer(other) &&
+					s.totemSessionInvisibilityReciprocalOK(other) {
 					victimGUID = other.playerGUID
 				}
 			}
@@ -1092,8 +1300,11 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				// on distance; a session-only search never fired
 				// before, so enemy players in range were never hit.
 				minDist := float64(math.MaxFloat64)
-				for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-					if !s.server.totemEnemyCreatureValid(m, owner) || s.totemCreatureHiddenFromOwner(m) {
+				for _, m := range s.server.totemCreatureTargets(totem, maxRange) {
+					if !s.server.totemCreatureTargetable(m) || s.totemCreatureHiddenFromOwner(m) || !s.totemCanDetectCreature(m) {
+						continue
+					}
+					if !s.server.isHostileFaction(m.Faction, owner) && !s.totemCreatureInCombatWithOwner(m) {
 						continue
 					}
 					if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d < minDist {
@@ -1105,10 +1316,12 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				for other := range s.server.sessions {
 					if other == nil || other.player == nil || other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
 						!s.totemEnemySessionHostile(other) ||
-						!s.canDetectStealthOf(other) || !s.canDetectInvisibilityOfPlayer(other) {
+						ownerPhase&other.currentPlayerPhaseMask() == 0 ||
+						!s.canDetectStealthOf(other) || !s.canDetectInvisibilityOfPlayer(other) ||
+						!s.totemSessionInvisibilityReciprocalOK(other) {
 						continue
 					}
-					if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= float64(def.Radius) && d < minDist {
+					if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= maxRange && d < minDist {
 						minDist = d
 						victimGUID = other.playerGUID
 					}
