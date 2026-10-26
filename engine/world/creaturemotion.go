@@ -2510,30 +2510,26 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			// OnAllCreatureUpdate analog: re-evaluate AutoBalance attributes;
 			// the recalc early-out keeps this cheap when nothing changed.
 			s.autoBalanceModifyCreatureAttributes(ctx, motion, false)
-			s.stepCreatureMotion(ctx, motion, players, now)
+			s.stepCreatureMotion(ctx, motion, players, now, false)
 		}
 		rows.Close()
 	}
 	s.stepSummonedVehicleMotions(ctx, players, distance, now)
+	s.stepSummonedNonVehicleMotions(ctx, players, distance, now)
 }
 
-// stepSummonedVehicleMotions steps summoned vehicles the DB-row sweep can
-// never reach: summonTempCreature funnels through motionFor with a dynamic
-// low GUID (>= 2000000, totems.go nextDynamicCreatureLowGUID), so no creature
-// row matches and stepCreatureMotion never runs for them — their VehicleAI
-// condition/dismiss arms never fire and only the 10-minute TTL prune removes
-// them. The pass mirrors the sweep's range gate (the same per-player X/Y box
-// on the player's map/instance, deduplicated across players) and runs only
-// the step head sequence — TempSummon expiry, then stepVehicleAI — never the
-// full step: a summoned motion carries its summoner's OwnerGUID, and the full
-// step diverts OwnerGUID != 0 motions into updatePetMotion (follow-owner and
-// aggressive-pet AI), which is wrong for a vehicle. Non-vehicle summons stay
-// unstepped (a later extension of this pass). Stepped motions stamp Refreshed
-// so the prune does not delete an in-range summoned vehicle mid-use; an
-// out-of-range summon still prunes after 10 minutes, as before.
-func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playerPos, distance float64, now time.Time) {
+// summonedMotionsInRange collects the temp-summon motions the DB-row sweep
+// can never reach: summonTempCreature funnels through motionFor with a
+// dynamic low GUID (>= 2000000, totems.go nextDynamicCreatureLowGUID), so
+// no creature row matches. The pass mirrors the sweep's range gate (the
+// same per-player X/Y box on the player's map/instance, deduplicated
+// across players); transport passengers are excluded, as in the sweep.
+// Totems and player pets never appear here: only the summon bridge stamps
+// IsTempSummon (lua_creature_events.go), pets carry UNIT_MASK_PET instead
+// and totems run their own pulse driver.
+func (s *Server) summonedMotionsInRange(players []playerPos, distance float64) []*creatureMotion {
 	if s == nil || len(players) == 0 {
-		return
+		return nil
 	}
 	seen := make(map[*creatureMotion]struct{})
 	var candidates []*creatureMotion
@@ -2557,8 +2553,25 @@ func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playe
 		}
 	}
 	s.motionMu.Unlock()
+	return candidates
+}
+
+// stepSummonedVehicleMotions steps summoned vehicles the DB-row sweep can
+// never reach — their VehicleAI condition/dismiss arms never fire and only
+// the 10-minute TTL prune removes them. It runs only the step head
+// sequence — TempSummon expiry, then stepVehicleAI — never the full step:
+// a summoned motion carries its summoner's OwnerGUID, and the full step
+// diverts OwnerGUID != 0 motions into updatePetMotion (follow-owner and
+// aggressive-pet AI), which is wrong for a vehicle. Stepped motions stamp
+// Refreshed so the prune does not delete an in-range summoned vehicle
+// mid-use; an out-of-range summon still prunes after 10 minutes, as
+// before. Non-vehicle summons ride stepSummonedNonVehicleMotions below.
+func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playerPos, distance float64, now time.Time) {
+	if s == nil || len(players) == 0 {
+		return
+	}
 	var vehicles []*creatureMotion
-	for _, motion := range candidates {
+	for _, motion := range s.summonedMotionsInRange(players, distance) {
 		if motion.Health == 0 || !s.isVehicleAI(motion) {
 			continue
 		}
@@ -2585,6 +2598,58 @@ func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playe
 			continue
 		}
 		s.stepVehicleAI(ctx, motion, now)
+	}
+}
+
+// stepSummonedNonVehicleMotions steps summoned non-vehicles through the
+// generic creature step in summon mode (TemporarySummon.cpp:66:
+// TempSummon::Update runs Creature::Update, then the timer arms — the
+// step's own expiry head covers the timed family, types 0-3, and the
+// corpse/dead legs stay the documented deltas they are on the DB path).
+// What the step delivers per leg, with no summon-specific gate in any of
+// them: regen + combat pulse, the 1s threat re-selection, combat pursuit
+// with leash/evade home (Home is the summon point, motionFor), the
+// sight-aggro scan (its guards are passive/faction/GM/dead/feign/stealth
+// only — a hostile aggressive summon acquires on sight, a passive or
+// friendly one does not, matching the spawn-time no-auto-aggro note in
+// the summon bridge, which covers spawn only), and Lua OnAIUpdate (event
+// 7, veto included). Wander is inert by construction: the summon bridge
+// passes MoveType 0 (IDLE) and Wander 0, and C++ demotes RANDOM to IDLE
+// at wander_distance 0 (Creature.cpp:543-545), so a summon stands until
+// engaged or scripted, exactly as C++ IdleMovementGenerator holds it.
+// Stepped motions stamp Refreshed like the vehicles, so an in-range
+// summon no longer vanishes at the 10-minute prune; vehicles are
+// excluded here (they already ran above, and re-stepping them through
+// the generic step would divert them into pet AI).
+func (s *Server) stepSummonedNonVehicleMotions(ctx context.Context, players []playerPos, distance float64, now time.Time) {
+	if s == nil || len(players) == 0 {
+		return
+	}
+	var summons []*creatureMotion
+	for _, motion := range s.summonedMotionsInRange(players, distance) {
+		if motion.Health == 0 || s.isVehicleAI(motion) {
+			continue
+		}
+		summons = append(summons, motion)
+	}
+	if len(summons) == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	var live []*creatureMotion
+	for _, motion := range summons {
+		if s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID) != motion {
+			continue
+		}
+		motion.Refreshed = now
+		live = append(live, motion)
+	}
+	s.motionMu.Unlock()
+	for _, motion := range live {
+		if motion.Health == 0 {
+			continue
+		}
+		s.stepCreatureMotion(ctx, motion, players, now, true)
 	}
 }
 
@@ -2812,7 +2877,12 @@ func (s *Server) creatureIsPolymorphed(motion *creatureMotion) bool {
 	return false
 }
 
-func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
+// summoned marks the temp-summon step: a temp summon carries its summoner's
+// OwnerGUID, but TempSummon::Update (TemporarySummon.cpp:66) runs
+// Creature::Update, not PetAI, so the summoned step bypasses the pet
+// diversion below and runs the generic legs (regen, combat pulse, threat
+// update, combat pursuit, sight-aggro scan, wander/idle, Lua OnAIUpdate).
+func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time, summoned bool) {
 	if motion == nil {
 		return
 	}
@@ -2910,8 +2980,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	s.stepCreatureRegen(motion)
 	s.stepCreatureCombatPulse(ctx, motion, players)
 
-	// Pet AI handling if this creature is a player pet
-	if motion.OwnerGUID != 0 {
+	// Pet AI handling if this creature is a player pet. Temp summons are
+	// not pets (UNIT_MASK_SUMMON, not UNIT_MASK_PET), so the summoned
+	// step skips this diversion: a summoned guardian must not follow its
+	// summoner or run aggressive-pet acquisition like a hunter pet.
+	if motion.OwnerGUID != 0 && !summoned {
 		s.updatePetMotion(ctx, motion, players, now)
 		return
 	}
@@ -3003,8 +3076,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// Creature::CallAssistance's delayed arm (AssistDelayEvent, Creature.h:523-536,
 	// Creature.cpp:226-243): after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the
 	// gathered assistants re-check CanAssistTo and engage the victim. Fires
-	// from the caller's combat tick; pets never carry a pending assist.
-	if !motion.AssistAt.IsZero() && motion.OwnerGUID == 0 && !now.Before(motion.AssistAt) {
+	// from the caller's combat tick; pets never carry a pending assist, but
+	// temp summons are not pets, so the summoned step runs it.
+	if !motion.AssistAt.IsZero() && (motion.OwnerGUID == 0 || summoned) && !now.Before(motion.AssistAt) {
 		s.fireCreatureAssistance(ctx, motion, players, now)
 	}
 
