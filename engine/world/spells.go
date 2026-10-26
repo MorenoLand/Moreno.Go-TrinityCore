@@ -34795,9 +34795,9 @@ func (s *session) setPlayerDrunkValue(itemID uint32, newDrunk uint8) {
 // handleEffectUnlearnSpecialization mirrors Spell::EffectUnlearnSpecialization
 // (SpellEffects.cpp:1249), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
 // player target: the target unlearns the effect's TriggerSpell
-// (Player::RemoveSpell). The session unlearnSpell helper (commands_learn.go)
-// mirrors RemoveSpell for the command path — drop the spell row, strip auras,
-// notify the client — and is reused here per target.
+// (Player::RemoveSpell, disabled=false, default learn_low_rank=true per
+// Player.h:1428). The session removeSpell helper (commands_learn.go) runs
+// the full RemoveSpell body and is reused here per target.
 func (s *session) handleEffectUnlearnSpecialization(ctx context.Context, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
@@ -34818,7 +34818,7 @@ func (s *session) handleEffectUnlearnSpecialization(ctx context.Context, eff wot
 				continue
 			}
 		}
-		targetSess.unlearnSpell(ctx, spellToUnlearn)
+		targetSess.removeSpell(ctx, spellToUnlearn, true, make(map[uint32]bool))
 	}
 }
 

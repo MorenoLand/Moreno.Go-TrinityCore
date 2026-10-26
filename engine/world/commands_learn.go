@@ -177,6 +177,277 @@ func (s *session) removeSpellCascade(ctx context.Context, spellID uint32, visite
 	}
 }
 
+// removeSpell mirrors Player::RemoveSpell (Player.cpp:3699) with
+// disabled=false, for callers that invoke RemoveSpell directly: the
+// .unlearn command (cs_learn.cpp:487, learn_low_rank = !allRanks) and
+// EffectUnlearnSpecialization (SpellEffects.cpp:1261, default
+// learn_low_rank = true per Player.h:1428). Unlike removeSpellCascade
+// (the ActivateSpec disabled=true path), this runs the full body: the
+// higher-rank recursion (learn_low_rank=false, non-talent only), the
+// spells-requiring-spell recursion, the SpellLearnSkill rollback, the
+// spell_learn_spell taught-spell recursion, and the prev-rank
+// reactivation. The DBC SPELL_EFFECT_LEARN_SPELL trigger leg is NOT
+// part of RemoveSpell (ActivateSpec/ResetTalents run it as a separate
+// loop); only the spell_learn_spell table leg recurses here.
+func (s *session) removeSpell(ctx context.Context, spellID uint32, learnLowRank bool, visited map[uint32]bool) {
+	if s == nil || s.player == nil || spellID == 0 || visited[spellID] || !s.hasLearnedSpell(spellID) {
+		return
+	}
+	visited[spellID] = true
+	// Player::RemoveSpell (Player.cpp:3703-3705) early-returns for
+	// PLAYERSPELL_TEMPORARY rows; Go hasLearnedSpell does not exclude
+	// them, so guard here.
+	for i := range s.player.Spells {
+		if s.player.Spells[i].ID == spellID && s.player.Spells[i].Temporary {
+			return
+		}
+	}
+	if s.server != nil {
+		if next := s.server.getNextSpellInChain(spellID); next != 0 && s.hasLearnedSpell(next) {
+			if cost, err := s.server.Data.TalentSpellCost(next); err == nil && cost == 0 {
+				s.removeSpell(ctx, next, false, visited)
+			}
+		}
+		for _, dep := range s.spellsRequiringSpell(ctx, spellID) {
+			s.removeSpell(ctx, dep, true, visited)
+		}
+	}
+	// Re-search: a requiring-spell recursion can already have removed
+	// this spell (Player.cpp:3720-3723).
+	if !s.hasLearnedSpell(spellID) {
+		return
+	}
+	curActive, curDependent := false, false
+	for i := range s.player.Spells {
+		if s.player.Spells[i].ID == spellID {
+			curActive = s.player.Spells[i].Active
+			curDependent = s.player.Spells[i].Dependent
+			break
+		}
+	}
+	var talentCost uint32
+	if s.server != nil && s.server.Data != nil {
+		talentCost, _ = s.server.Data.TalentSpellCost(spellID)
+	}
+	s.unlearnSpell(ctx, spellID)
+	s.applyRemoveSpellSkillLeg(ctx, spellID)
+	for _, taught := range s.spellsTaughtByLearnSpellTable(ctx, spellID) {
+		s.removeSpell(ctx, taught, true, visited)
+	}
+	// Prev-rank reactivation (Player.cpp:3845-3881): talent spells take
+	// the empty arm; a ranked, non-stackable, active spell re-activates
+	// its known prev rank. IsRanked is vacuous here: a prev rank in
+	// spell_ranks is rank >= 2 by construction.
+	if talentCost == 0 && curActive && s.server != nil {
+		if prev := s.server.getPrevSpellInChain(spellID); prev != 0 {
+			stackable := false
+			if s.server.Data != nil {
+				if st, found, err := s.server.Data.SpellStackableWithRanks(spellID); err == nil && found {
+					stackable = st
+				}
+			}
+			if !stackable {
+				for i := range s.player.Spells {
+					if s.player.Spells[i].ID != prev {
+						continue
+					}
+					if s.player.Spells[i].Dependent != curDependent {
+						s.player.Spells[i].Dependent = curDependent
+					}
+					if learnLowRank && !s.player.Spells[i].Active && !s.player.Spells[i].Disabled {
+						s.player.Spells[i].Active = true
+						if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+							_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 1 WHERE guid = ? AND spell = ?", s.playerGUID, prev)
+						}
+						_ = s.write(uint16(protocol.OpcodeSMSG_SUPERCEDED_SPELL), buildSupercededSpell(spellID, prev), true)
+						if s.unlearnSpellsPacketNeeded(prev) {
+							_ = s.write(uint16(protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS), s.buildUnlearnSpells(ctx, *s.player), true)
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+}
+
+// spellsTaughtByLearnSpellTable mirrors the SpellLearnSpellMap leg of
+// Player::RemoveSpell (Player.cpp:3827-3830): the spell_learn_spell rows
+// for spellID. It deliberately excludes the DBC SPELL_EFFECT_LEARN_SPELL
+// triggers that spellsTaughtBySpell also returns; those are not part of
+// RemoveSpell.
+func (s *session) spellsTaughtByLearnSpellTable(ctx context.Context, spellID uint32) []uint32 {
+	var out []uint32
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return out
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taught int64
+		if rows.Scan(&taught) == nil && taught > 0 {
+			out = append(out, uint32(taught))
+		}
+	}
+	return out
+}
+
+// spellLearnSkillNode mirrors SpellLearnSkillNode (SpellMgr.h:518) as
+// built by LoadSpellLearnSkills (SpellMgr.cpp:1037): DBC-derived only,
+// the first SPELL_EFFECT_SKILL or SPELL_EFFECT_DUAL_WIELD effect wins.
+type spellLearnSkillNode struct {
+	skill    uint16
+	step     uint16
+	value    uint16
+	maxvalue uint16
+}
+
+func (s *session) spellLearnSkill(spellID uint32) (spellLearnSkillNode, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return spellLearnSkillNode{}, false
+	}
+	spell, ok, err := s.server.Data.Spell(spellID)
+	if err != nil || !ok {
+		return spellLearnSkillNode{}, false
+	}
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectSkill:
+			node := spellLearnSkillNode{skill: uint16(eff.MiscValue), step: uint16(eff.CalcValue())}
+			if node.skill == 762 {
+				node.value = node.step * 75
+			} else {
+				node.value = 1
+			}
+			node.maxvalue = node.step * 75
+			return node, true
+		case spellEffectDualWield:
+			return spellLearnSkillNode{skill: 118, step: 1, value: 1, maxvalue: 1}, true
+		}
+	}
+	return spellLearnSkillNode{}, false
+}
+
+// applyRemoveSpellSkillLeg mirrors the SpellLearnSkill arm of
+// Player::RemoveSpell (Player.cpp:3766-3806): a first-rank unlearn drops
+// the skill; otherwise the skill rolls back to the nearest lower rank's
+// setting, clamped by the player's current values.
+func (s *session) applyRemoveSpellSkillLeg(ctx context.Context, spellID uint32) {
+	node, ok := s.spellLearnSkill(spellID)
+	if !ok || s.player == nil {
+		return
+	}
+	prev := uint32(0)
+	if s.server != nil {
+		prev = s.server.getPrevSpellInChain(spellID)
+	}
+	if prev == 0 {
+		s.setSkillFull(ctx, node.skill, 0, 0, 0)
+		return
+	}
+	prevSkill, found := s.spellLearnSkill(prev)
+	for !found && prev != 0 {
+		prev = s.server.getPrevSpellInChain(prev)
+		if prev == 0 {
+			break
+		}
+		prevSkill, found = s.spellLearnSkill(s.server.getFirstSpellInChain(prev))
+	}
+	if !found {
+		s.setSkillFull(ctx, node.skill, 0, 0, 0)
+		return
+	}
+	skillValue := s.getSkillValue(uint32(node.skill))
+	if skillValue > uint32(prevSkill.value) {
+		skillValue = uint32(prevSkill.value)
+	}
+	skillMax := s.getSkillMaxValue(uint32(node.skill))
+	newMax := uint32(prevSkill.maxvalue)
+	if newMax == 0 {
+		newMax = uint32(s.player.Level) * 5
+	}
+	if skillMax > newMax {
+		skillMax = newMax
+	}
+	s.setSkillFull(ctx, node.skill, prevSkill.step, uint16(skillValue), uint16(skillMax))
+}
+
+// setSkillFull mirrors Player::SetSkill for the RemoveSpell skill leg:
+// all-zero clears the skill row, otherwise the row takes the given
+// step/value/max. Go's character_skills writes carry no step column
+// (see setOrUpdateSkill), so step lives in memory only.
+func (s *session) setSkillFull(ctx context.Context, skillID, step, value, max uint16) {
+	if s.player == nil {
+		return
+	}
+	if step == 0 && value == 0 && max == 0 {
+		newSkills := make([]playerSkill, 0, len(s.player.Skills))
+		for _, sk := range s.player.Skills {
+			if sk.Skill != skillID {
+				newSkills = append(newSkills, sk)
+			}
+		}
+		s.player.Skills = newSkills
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", s.playerGUID, skillID)
+		}
+		s.sendPlayerUpdate()
+		return
+	}
+	for i := range s.player.Skills {
+		if s.player.Skills[i].Skill == skillID {
+			s.player.Skills[i].Step = step
+			s.player.Skills[i].Value = value
+			s.player.Skills[i].Max = max
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, s.playerGUID, skillID)
+			}
+			s.sendPlayerUpdate()
+			return
+		}
+	}
+	s.player.Skills = append(s.player.Skills, playerSkill{Skill: skillID, Step: step, Value: value, Max: max})
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, max)
+	}
+	s.sendPlayerUpdate()
+}
+
+func (s *session) getSkillMaxValue(skillID uint32) uint32 {
+	if s.player == nil {
+		return 0
+	}
+	for _, sk := range s.player.Skills {
+		if uint32(sk.Skill) == skillID {
+			return uint32(sk.Max)
+		}
+	}
+	return 0
+}
+
+// unlearnSpellsPacketNeeded mirrors the skill-line-ability half of
+// IsUnlearnSpellsPacketNeededForSpell (Player.cpp:3234): the spell has
+// skill-line abilities, none of which the client already supercedes.
+// The ranked/non-stackable gates already hold at the call site.
+func (s *session) unlearnSpellsPacketNeeded(spellID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
+	if err != nil || !found || len(abilities) == 0 {
+		return false
+	}
+	for _, ability := range abilities {
+		if ability.SupercededBySpell != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // spellsRequiringSpell mirrors the SpellsRequiringSpellMap lookup in
 // Player::RemoveSpell (Player.cpp:3715-3718): every spell whose
 // spell_required row gates on spellID.
@@ -745,22 +1016,21 @@ func (s *session) handleCmdUnLearn(ctx context.Context, args []string) {
 		}
 	}
 	if target.hasLearnedSpell(unlearnID) {
-		target.unlearnSpell(ctx, unlearnID)
-		if !allRanks && s.server != nil {
-			// RemoveSpell(spell, false, learnLowRank=true): dropping one rank
-			// re-teaches the previous rank.
-			if prev := s.server.getPrevSpellInChain(unlearnID); prev != 0 {
-				target.learnSpell(ctx, prev)
-			}
-		}
+		target.removeSpell(ctx, unlearnID, !allRanks, make(map[uint32]bool))
 	} else {
 		// LANG_FORGET_SPELL inlined from TDB enUS.
 		s.sendSysMessage("You have forgotten that spell.")
 	}
-	// Player::RemoveSpell (Player.cpp:3699+) carries no SendTalentsInfoData
-	// resend (that arm lives in Player::LearnTalent; see the note at
-	// handleLearnSpell). Its talent-point refund arm
-	// (m_usedTalentCount -= GetTalentSpellCost, Player.cpp:3751-3757) is
-	// vacuous in Go — free points are derived from the learned-spell list,
-	// which unlearnSpell already updated.
+	// HandleUnLearnCommand (cs_learn.cpp:487-492) resends the talent
+	// panel whenever the unlearned spell carries a talent cost, whether
+	// or not it was known. The talent-point refund arm
+	// (m_usedTalentCount -= GetTalentSpellCost, Player.cpp:3751-3757)
+	// has no Go counterpart: free points derive from the talent map,
+	// which RemoveSpell does not touch, so a .unlearn of a talent spell
+	// leaves Go's free-point count unchanged where C++ refunds it.
+	if s.server != nil && s.server.Data != nil {
+		if cost, err := s.server.Data.TalentSpellCost(unlearnID); err == nil && cost > 0 {
+			_ = target.sendTalentsInfo(false)
+		}
+	}
 }
