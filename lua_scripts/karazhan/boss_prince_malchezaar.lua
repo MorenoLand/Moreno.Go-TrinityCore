@@ -4,9 +4,8 @@
 -- Creature entries: 15690 Prince Malchezaar (wowhead npc=15690/prince-
 -- malchezaar; AddSC registers "boss_malchezaar"), 17646 Netherspite
 -- Infernal, 17650 Malchezaar's Axes. Instance data: DATA_GO_NETHER_DOOR =
--- 23 (karazhan.h:51) — door toggles only; no Go instance-script model, so
--- those arms are skipped and the encounter is admission-only via the
--- luaBossAI shim in engine/world/boss_ai.go.
+-- 23 (karazhan.h:51) — the door toggles port via FindNearestGameObject
+-- (GO_NETHERSPACE_DOOR 185134) + SetGoState (netherspite precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 9 OnDamageTaken (60% / 30% phase transitions, pre-damage
 -- health like C++ HealthBelowPct), 23 OnReset. Timers via CreateLuaEvent;
@@ -30,9 +29,9 @@
 -- attack legs (AttackStart, AddThreat who-redirect — AddThreat is
 -- self-threat only) have no bridge, so the phase-3
 -- AxesTargetSwitchTimer threat rewiring is skipped entirely and
--- AxesCleanup's cross-creature KillSelf on the axes is moot. No instance-script
--- model, so the DATA_GO_NETHER_DOOR toggles on Reset/JustEngagedWith/
--- JustDied are skipped. The phase-2 equipment swap is ported via
+-- AxesCleanup's cross-creature KillSelf on the axes is moot. The
+-- DATA_GO_NETHER_DOOR toggles on Reset/JustEngagedWith/JustDied ARE ported
+-- (see handlers). The phase-2 equipment swap is ported via
 -- creature:SetEquipmentSlots (33542,33542,0xFFFFFFFF at the phase-2
 -- transition; 0,0,0xFFFFFFFF at phase 3 = C++ ClearWeapons) alongside the
 -- visual SPELL_EQUIP_AXES (30857); only SetCanDualWield and the OFF_ATTACK
@@ -58,6 +57,7 @@
 -- and the preserved leftover is re-armed at phase-3 entry.
 
 local ENTRY_MALCHEZAAR = 15690
+local GO_NETHERSPACE_DOOR = 185134 -- karazhan.h: GO_NETHERSPACE_DOOR
 
 local SAY_AGGRO, SAY_AXE_TOSS1, SAY_AXE_TOSS2 = 0, 1, 2
 local SAY_SLAY, SAY_SUMMON, SAY_DEATH = 6, 7, 8
@@ -486,8 +486,13 @@ local function malchezaarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     malchezaarInitState(guid)
-    -- C++ JustEngagedWith: Talk(SAY_AGGRO) + door close (no instance model).
+    -- C++ JustEngagedWith: Talk(SAY_AGGRO) + nether-door close
+    -- (HandleGameObject(DATA_GO_NETHER_DOOR, false) = GO_STATE_READY,
+    -- InstanceScript.cpp:484; via the netherspite FindNearestGameObject
+    -- precedent, 100y room scale).
     creature:Talk(SAY_AGGRO)
+    local netherDoor = creature:FindNearestGameObject(GO_NETHERSPACE_DOOR, 100.0)
+    if netherDoor then netherDoor:SetGoState(1) end
     local st = malchezaarState[guid]
     st.enfeebleDeadlineSec = os.time() + 30
     schedule(guid, "enfeeble", 30000, function() onEnfeeble(creature, guid) end)
@@ -511,8 +516,11 @@ end
 local function malchezaarDied(event, creature, killer)
     -- C++ JustDied: Talk(SAY_DEATH), AxesCleanup / ClearWeapons /
     -- InfernalCleanup / positions reset (axes never spawn, so only the
-    -- infernal sweep ports), door open (no instance model).
+    -- infernal sweep ports) + nether-door open (HandleGameObject true =
+    -- GO_STATE_ACTIVE).
     creature:Talk(SAY_DEATH)
+    local netherDoor = creature:FindNearestGameObject(GO_NETHERSPACE_DOOR, 100.0)
+    if netherDoor then netherDoor:SetGoState(0) end
     cancelTimers(creature:GetGUID())
     despawnInfernals(creature)
     malchezaarInitState(creature:GetGUID())
@@ -523,6 +531,9 @@ local function malchezaarReset(event, creature)
     cancelTimers(guid)
     despawnInfernals(creature)
     malchezaarInitState(guid)
+    -- C++ Reset: nether-door open (HandleGameObject true = GO_STATE_ACTIVE).
+    local netherDoor = creature:FindNearestGameObject(GO_NETHERSPACE_DOOR, 100.0)
+    if netherDoor then netherDoor:SetGoState(0) end
 end
 
 local function malchezaarDamageTaken(event, creature, attacker, damage)

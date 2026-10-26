@@ -48,6 +48,9 @@
 -- fire unconditionally.
 
 local ENTRY_NIGHTBANE = 17225
+local GO_MASTERS_TERRACE_DOOR = 184274 -- karazhan.h
+local GO_MASTERS_TERRACE_DOOR2 = 184280
+local GO_BLACKENED_URN = 194092
 
 local EMOTE_SUMMON, YELL_AGGRO = 0, 1
 local YELL_FLY_PHASE, YELL_LAND_PHASE, EMOTE_BREATH = 2, 3, 4
@@ -366,7 +369,14 @@ end
 
 local function nightbaneDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    -- C++ JustDied: HandleTerraceDoors(true) — no instance-script model.
+    -- C++ JustDied: HandleTerraceDoors(true) = both terrace doors open
+    -- (GO_STATE_ACTIVE) via the netherspite FindNearestGameObject precedent.
+    -- The intro close (DoAction ACTION_SUMMON) stays out: no inbound
+    -- DoAction dispatch bridge.
+    for _, entry in ipairs({ GO_MASTERS_TERRACE_DOOR, GO_MASTERS_TERRACE_DOOR2 }) do
+        local door = creature:FindNearestGameObject(entry, 100.0)
+        if door then door:SetGoState(0) end
+    end
 end
 
 -- C++ boss_nightbane.cpp:142-145: JustReachedHome -> _DespawnAtEvade()
@@ -387,10 +397,16 @@ local function nightbaneReset(event, creature)
     nightbaneInitState(guid)
     -- C++ boss_nightbane::Reset (:126-133): _Reset(), _flyCount = 0,
     -- me->SetDisableGravity(true) (:130) — bridged (lua_creature_events.go,
-    -- PORTED 2026-10-22). The terrace-door leg has no instance bridge; the
-    -- urn leg stays out on the instance boss-state gate + cross-creature
-    -- DoAction (GO gossip itself is bridged — see header).
+    -- PORTED 2026-10-22) + HandleTerraceDoors(true) (both doors open) +
+    -- the blackened urn's GO_FLAG_IN_USE cleared unconditionally (no boss
+    -- state gate in the C++ Reset body; GO gossip itself is bridged).
     creature:SetDisableGravity(true)
+    for _, entry in ipairs({ GO_MASTERS_TERRACE_DOOR, GO_MASTERS_TERRACE_DOOR2 }) do
+        local door = creature:FindNearestGameObject(entry, 100.0)
+        if door then door:SetGoState(0) end
+    end
+    local urn = creature:FindNearestGameObject(GO_BLACKENED_URN, 100.0)
+    if urn then urn:RemoveFlag(9, 1) end -- GAMEOBJECT_FLAGS, GO_FLAG_IN_USE
 end
 
 local function nightbaneDamageTaken(event, creature, attacker, damage)

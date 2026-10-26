@@ -46,6 +46,7 @@ local SPELL_FIERYBURST = 13900
 local SPELL_WARSTOMP = 24375
 
 local ENTRY_MAGMUS = 9938
+local GO_THRONE_ROOM = 170575 -- instance_blackrock_depths.cpp:70, GO_THRONE_ROOM
 
 local magmusState = {}
 local timers = {}
@@ -128,6 +129,16 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied: throne-door open (HandleGameObject(DATA_THRONE_DOOR,
+-- true) = GO_STATE_ACTIVE, InstanceScript.cpp:484) + SetData
+-- TYPE_IRON_HALL DONE (no instance-data bridge). The door leg must NOT
+-- ride onCombatEnd: evade (event 2) never opens it in C++.
+local function onJustDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    local door = creature:FindNearestGameObject(GO_THRONE_ROOM, 100.0)
+    if door then door:SetGoState(0) end
+end
+
 local function onSpawn(_, creature)
     initState(creature:GetGUID())
 end
@@ -141,6 +152,6 @@ end
 RegisterCreatureEvent(ENTRY_MAGMUS, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_MAGMUS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_MAGMUS, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_MAGMUS, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_MAGMUS, 4, onJustDied)
 RegisterCreatureEvent(ENTRY_MAGMUS, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_MAGMUS, 23, onReset)

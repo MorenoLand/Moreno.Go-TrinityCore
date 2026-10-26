@@ -3,7 +3,7 @@
 -- Creature entry: 16524 (wowhead wotlk npc=16524/shade-of-aran).
 -- Instance data: DATA_ARAN = 6, DATA_GO_LIBRARY_DOOR = 21
 -- (karazhan.h:36,49); the encounter never reads encounter state — the
--- library-door arms have no Go model (see deviations).
+-- library-door arms port via FindNearestGameObject (184517) + SetGoState.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent. C++ Aran melees only
 -- when all three school cooldowns are armed — i.e. only right after a
@@ -68,6 +68,7 @@
 -- player:AddAura, as C++ casts it triggered on the unit).
 
 local ENTRY_SHADE_OF_ARAN = 16524
+local GO_PRIVATE_LIBRARY_DOOR = 184517 -- karazhan.h: GO_PRIVATE_LIBRARY_DOOR
 local ENTRY_WATER_ELEMENTAL = 17167
 local ENTRY_ARAN_BLIZZARD = 17161
 local ENTRY_SHADOW_OF_ARAN = 18254
@@ -385,9 +386,13 @@ local function aranEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     aranInitState(guid)
-    -- C++ JustEngagedWith: Talk(SAY_AGGRO); the library-door close and
-    -- SetBossState(IN_PROGRESS) have no instance-script model.
+    -- C++ JustEngagedWith: Talk(SAY_AGGRO) + library-door close
+    -- (HandleGameObject(DATA_GO_LIBRARY_DOOR, false) = GO_STATE_READY;
+    -- the 15s CloseDoorTimer close in UpdateAI is a redundant no-op once
+    -- the engage close lands). SetBossState(IN_PROGRESS) has no bridge.
     creature:Talk(SAY_AGGRO)
+    local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
+    if libraryDoor then libraryDoor:SetGoState(1) end
     schedule(timers, guid, "normal", 1, function()
         onNormalCast(creature, guid)
     end)
@@ -411,15 +416,21 @@ end
 local function aranDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
-    -- C++ JustDied: Talk(SAY_DEATH); the door re-open and SetBossState(DONE)
-    -- have no instance-script model.
+    -- C++ JustDied: Talk(SAY_DEATH) + library-door re-open
+    -- (HandleGameObject true = GO_STATE_ACTIVE); SetBossState(DONE) has
+    -- no bridge.
     creature:Talk(SAY_DEATH)
+    local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
+    if libraryDoor then libraryDoor:SetGoState(0) end
 end
 
 local function aranReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     aranInitState(guid)
+    -- C++ Reset: library-door open (HandleGameObject true = GO_STATE_ACTIVE).
+    local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
+    if libraryDoor then libraryDoor:SetGoState(0) end
 end
 
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 1, aranEnterCombat)
