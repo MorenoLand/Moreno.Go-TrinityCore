@@ -1031,39 +1031,66 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// in range, and hostile; only then does a new
 			// nearest-attackable-unit search run (TotemAI.cpp:66-76).
 			owner := totemOwnerPos(s)
-			var victim *creatureMotion
+			var victimGUID uint64
 			totem.mu.Lock()
 			remembered := totem.LastVictimGUID
 			totem.mu.Unlock()
 			if remembered != 0 && remembered != totem.TotemGUID {
-				if m := s.server.findCreatureMotion(totem.Map, totem.InstanceID, remembered); m != nil && m.Health > 0 &&
+				// Remembered-victim revalidation (TotemAI.cpp:66): the
+				// victim drops when no longer targetable, out of range,
+				// or friendly. The creature leg is the
+				// totemEnemyCreatureValid verdict (IsTotem/flag/immune
+				// gates + faction hostility), not bare faction: a
+				// flagged or immune creature, or another totem, was
+				// kept as victim until it died or walked out.
+				if m := s.server.findCreatureMotion(totem.Map, totem.InstanceID, remembered); m != nil &&
 					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
-					s.server.isHostileFaction(m.Faction, owner) {
-					victim = m
+					s.server.totemEnemyCreatureValid(m, owner) {
+					victimGUID = m.GUID
+				} else if other := s.server.findSessionByGUID(remembered); other != nil && other.player != nil &&
+					other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
+					distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+					s.totemEnemySessionHostile(other) {
+					victimGUID = other.playerGUID
 				}
 			}
-			if victim == nil {
+			if victimGUID == 0 {
+				// Nearest-attackable search (TotemAI.cpp:68-73 +
+				// GridNotifiers.h:1064): Cell::VisitAllObjects visits
+				// players as well as creatures, and the searcher
+				// shrinks to the nearest hit, so the nearest
+				// creature and the nearest hostile session compete
+				// on distance; a session-only search never fired
+				// before, so enemy players in range were never hit.
 				minDist := float64(math.MaxFloat64)
 				for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-					if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+					if !s.server.totemEnemyCreatureValid(m, owner) {
 						continue
 					}
 					if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d < minDist {
 						minDist = d
-						victim = m
+						victimGUID = m.GUID
 					}
 				}
+				s.server.sessionsMu.RLock()
+				for other := range s.server.sessions {
+					if other == nil || other.player == nil || other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
+						!s.totemEnemySessionHostile(other) {
+						continue
+					}
+					if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= float64(def.Radius) && d < minDist {
+						minDist = d
+						victimGUID = other.playerGUID
+					}
+				}
+				s.server.sessionsMu.RUnlock()
 			}
 			totem.mu.Lock()
-			if victim != nil {
-				totem.LastVictimGUID = victim.GUID
-			} else {
-				totem.LastVictimGUID = 0
-			}
+			totem.LastVictimGUID = victimGUID
 			totem.mu.Unlock()
 
-			if victim != nil {
-				s.executeSpellDamage(ctx, victim.GUID, def.PulseSpell, uint32(60), 0)
+			if victimGUID != 0 {
+				s.executeSpellDamage(ctx, victimGUID, def.PulseSpell, uint32(60), 0)
 			}
 		}
 
