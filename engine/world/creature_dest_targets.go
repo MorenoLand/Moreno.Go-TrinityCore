@@ -691,3 +691,246 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 	}
 	return bestGUID, true
 }
+
+// creatureFriendlyNearbyTarget ports Spell::SelectImplicitNearbyTargets
+// (Spell.cpp:1036) + Spell::SearchNearbyTarget (Spell.cpp:1869) for
+// TARGET_UNIT_NEARBY_PARTY (3) / TARGET_UNIT_NEARBY_ALLY (4) /
+// TARGET_UNIT_NEARBY_RAID (58) for a creature caster: the single nearest
+// unit within GetMaxRange(true) passing IsValidAssistTarget
+// (Object.cpp:3087: alive, not combat-disabled, non-hostile, never a GM
+// except the caster itself) and the party/raid scope of
+// Unit::IsInPartyWith / Unit::IsInRaidWith (Unit.cpp:12126/12155) for
+// the 3/58 legs. The caster itself is a candidate (assist-to-self, and
+// IsInPartyWith/IsInRaidWith return true for self), so it wins at
+// distance 0 whenever it passes. The ImplicitTargetConditions arm (base
+// WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is wired through
+// the entry-subset evaluator (implicitEntryConditionsMet) on the first
+// selecting effect's rows, the session twin's arm; a failing nearer
+// candidate never shrinks the nearest range (Spell.cpp:8394-8399).
+// Party/raid scope resolves through the charmer-or-owner (motion
+// OwnerGUID, CharmOwnerGUID fallback, the hostile twin's pattern):
+// a player owner contributes its group snapshot, a creature owner or
+// ownerless caster contributes same-faction unit-unit membership
+// (Unit.cpp:12126 tail), and the TREAT_AS_RAID_UNIT player-creature
+// arm has no Go template-flag model and stays unmodeled. Totem motions
+// are refused (TARGET_CHECK_ALLY/PARTY/RAID reject totems, Spell.cpp:8333).
+// No match returns false and the caller fails the cast
+// (Spell.cpp:1111).
+func (s *Server) creatureFriendlyNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
+	if s == nil || m == nil || s.Data == nil {
+		return 0, false
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok || rangeEntry.MaxFriendly <= 0 {
+		return 0, false
+	}
+	maxRange := spellDBCMaxRange(true, rangeEntry)
+	if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+		maxRange = modOwner.applySpellModFloat(spell, spellModRange, maxRange)
+	}
+	if maxRange <= 0 {
+		return 0, false
+	}
+	checks := make(map[uint8]struct{})
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
+			switch targetType {
+			case implicitTargetNearbyParty:
+				checks[friendlyCheckParty] = struct{}{}
+			case implicitTargetNearbyAlly:
+				checks[friendlyCheckAlly] = struct{}{}
+			case implicitTargetNearbyRaid:
+				checks[friendlyCheckRaid] = struct{}{}
+			}
+		}
+	}
+	if len(checks) == 0 {
+		return 0, false
+	}
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, firstFriendlyNearbyEffectMask(spell))
+	// Party/raid scope (Unit.cpp:12126/12155): the caster's effective
+	// referer is its charmer-or-owner when that is a player, else the
+	// caster creature itself (faction). A candidate's effective referer
+	// is itself for players, its player owner for owned creatures, else
+	// the creature itself (faction). Same referer wins; two players
+	// consult the group snapshot; mixed player/creature pairs fail
+	// (TREAT_AS_RAID_UNIT unmodeled); two creatures compare factions.
+	casterOwnerGUID := m.OwnerGUID
+	if casterOwnerGUID == 0 {
+		casterOwnerGUID = m.CharmOwnerGUID
+	}
+	casterIsPlayerReferer := false
+	var casterParty, casterRaid map[uint64]struct{}
+	casterInGroup := false
+	if casterOwnerGUID != 0 {
+		if ownerSess := s.findSessionByGUID(casterOwnerGUID); ownerSess != nil && ownerSess.player != nil {
+			_, casterParty, casterRaid, casterInGroup = groupMembershipSnapshot(s, ownerSess.groupID, casterOwnerGUID)
+			casterIsPlayerReferer = true
+		}
+	}
+	type referer struct {
+		isPlayer bool
+		guid     uint64
+		faction  uint32
+	}
+	casterReferer := referer{isPlayer: casterIsPlayerReferer, guid: casterOwnerGUID, faction: m.Faction}
+	candidateReferer := func(guid uint64, isPlayer bool, ownerGUID uint64, faction uint32) referer {
+		if isPlayer {
+			return referer{isPlayer: true, guid: guid}
+		}
+		if ownerGUID != 0 {
+			if ownerSess := s.findSessionByGUID(ownerGUID); ownerSess != nil && ownerSess.player != nil {
+				return referer{isPlayer: true, guid: ownerGUID}
+			}
+		}
+		return referer{faction: faction}
+	}
+	inScope := func(check uint8, cand referer) bool {
+		if check == friendlyCheckAlly {
+			return true
+		}
+		if cand == casterReferer {
+			return true
+		}
+		if !casterReferer.isPlayer || !cand.isPlayer {
+			return false
+		}
+		if !casterInGroup {
+			return false
+		}
+		if check == friendlyCheckParty {
+			_, ok := casterParty[cand.guid]
+			return ok
+		}
+		_, ok := casterRaid[cand.guid]
+		return ok
+	}
+	scopeOK := func(cand referer) bool {
+		_, wantAlly := checks[friendlyCheckAlly]
+		_, wantParty := checks[friendlyCheckParty]
+		_, wantRaid := checks[friendlyCheckRaid]
+		return (wantAlly && inScope(friendlyCheckAlly, cand)) || (wantParty && inScope(friendlyCheckParty, cand)) || (wantRaid && inScope(friendlyCheckRaid, cand))
+	}
+	playersOnly := spellSearchPlayersOnly(spell)
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	var bestX, bestY, bestZ float32
+	consider := func(guid uint64, x, y, z, reach float32) {
+		dist := float64(distance3D(x, y, z, m.X, m.Y, m.Z)) - float64(reach)
+		if dist < 0 {
+			dist = 0
+		}
+		if dist < bestDist {
+			bestDist, bestGUID, bestX, bestY, bestZ = dist, guid, x, y, z
+		}
+	}
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+			continue
+		}
+		p := targetSession.player
+		if p.Map != m.Map || p.InstanceID != m.InstanceID || p.Health == 0 {
+			continue
+		}
+		if sessionIsGameMaster(targetSession) {
+			continue
+		}
+		if spellTargetUnitBlocked(spell, p.UnitFlags, 0, true) {
+			continue
+		}
+		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
+		if s.isAttackableFaction(m.Faction, candidate) {
+			continue
+		}
+		if !implicitEntryConditionsMet(condRows, true, 0, 0) {
+			continue
+		}
+		if !scopeOK(candidateReferer(targetSession.playerGUID, true, 0, 0)) {
+			continue
+		}
+		consider(targetSession.playerGUID, p.X, p.Y, p.Z, p.CombatReach)
+	}
+	s.sessionsMu.RUnlock()
+	if !playersOnly {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		candidates := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				candidates = append(candidates, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range candidates {
+			if cand.Map != m.Map || cand.InstanceID != m.InstanceID || cand.Health == 0 {
+				continue
+			}
+			if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, true) {
+				continue
+			}
+			if !implicitEntryConditionsMet(condRows, false, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
+				continue
+			}
+			if s.factionTemplatesHostile(m.Faction, cand.Faction) {
+				continue
+			}
+			owner := cand.OwnerGUID
+			if owner == 0 {
+				owner = cand.CharmOwnerGUID
+			}
+			if !scopeOK(candidateReferer(cand.GUID, false, owner, cand.Faction)) {
+				continue
+			}
+			consider(cand.GUID, cand.X, cand.Y, cand.Z, cand.CombatReach)
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-maxRange, float64(m.X)+maxRange, float64(m.Y)-maxRange, float64(m.Y)+maxRange)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if uint32(rowMap) != m.Map || health <= 0 {
+						continue
+					}
+					if s.isTotemGUID(guid) || spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), true) {
+						continue
+					}
+					if !implicitEntryConditionsMet(condRows, false, uint32(entry), uint32(low)) {
+						continue
+					}
+					if s.factionTemplatesHostile(m.Faction, uint32(faction)) {
+						continue
+					}
+					if !scopeOK(candidateReferer(guid, false, 0, uint32(faction))) {
+						continue
+					}
+					consider(guid, float32(x), float32(y), float32(z), 0)
+				}
+			}
+		}
+	}
+	if bestGUID == 0 {
+		return 0, false
+	}
+	if !s.implicitUnitTargetLOSPassesForMotion(spell, m, bestGUID, bestX, bestY, bestZ) {
+		return 0, false
+	}
+	return bestGUID, true
+}

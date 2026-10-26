@@ -3132,7 +3132,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// castCreatureSpellInternal arm (boss_ai.go):
 			// TARGET_UNIT_NEARBY_ENTRY (38) /
 			// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) /
-			// TARGET_UNIT_NEARBY_ENEMY (2) replace the wire hit
+			// TARGET_UNIT_NEARBY_ENEMY (2) /
+			// TARGET_UNIT_NEARBY_PARTY (3) / TARGET_UNIT_NEARBY_ALLY (4) /
+			// TARGET_UNIT_NEARBY_RAID (58) replace the wire hit
 			// list with the single nearest matched target, and a
 			// miss fails the cast (Spell.cpp:1111) — rearm and return
 			// like the destFailed arm above. The packet's explicit
@@ -3178,8 +3180,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// (:1111). The unit pick drives the victim body below;
 				// a GO pick joins the hit list after it and takes no
 				// unit leg.
-				var unitPick, goPick, hostilePick uint64
-				unitOK, goOK, hostileOK := true, true, true
+				var unitPick, goPick, hostilePick, friendlyPick uint64
+				unitOK, goOK, hostileOK, friendlyOK := true, true, true, true
 				if isEntryNearbySpell(inlineSpell) {
 					unitPick, unitOK = nearbyWire(inlineSpell, true)
 				}
@@ -3189,12 +3191,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if isHostileNearbySpell(inlineSpell) {
 					hostilePick, hostileOK = s.creatureHostileNearbyTarget(ctx, motion, inlineSpell)
 				}
-				if !unitOK || !goOK || !hostileOK {
+				if isFriendlyNearbySpell(inlineSpell) {
+					friendlyPick, friendlyOK = s.creatureFriendlyNearbyTarget(ctx, motion, inlineSpell)
+				}
+				if !unitOK || !goOK || !hostileOK || !friendlyOK {
 					s.rearmAISpell(motion, dueSpell, spellID, now)
 					return
 				}
-				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) {
+				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) || isFriendlyNearbySpell(inlineSpell) {
 					nearby := goPick
+					if isFriendlyNearbySpell(inlineSpell) {
+						nearby = friendlyPick
+					}
 					if isHostileNearbySpell(inlineSpell) {
 						nearby = hostilePick
 					}
@@ -3279,12 +3287,55 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							}
 						}
 					}
+					// A non-anchor friendly pick takes the per-hit legs
+					// like the hostile pick above: a player pick joins
+					// areaHits, a creature pick joins areaCreatureHits;
+					// a static spawn pick rides the packet only.
+					friendlyJoinedLegs := false
+					if isFriendlyNearbySpell(inlineSpell) && friendlyPick != nearby {
+						for _, areaHit := range areaHits {
+							if areaHit != nil && areaHit.GUID == friendlyPick {
+								friendlyJoinedLegs = true
+								break
+							}
+						}
+						if !friendlyJoinedLegs {
+							for _, areaCreatureGUID := range areaCreatureHits {
+								if areaCreatureGUID == friendlyPick {
+									friendlyJoinedLegs = true
+									break
+								}
+							}
+						}
+						if !friendlyJoinedLegs {
+							for i := range players {
+								if players[i].GUID == friendlyPick {
+									areaHits = append(areaHits, &players[i])
+									friendlyJoinedLegs = true
+									break
+								}
+							}
+						}
+						if !friendlyJoinedLegs {
+							if pickSess := s.findSessionByGUID(friendlyPick); pickSess != nil && pickSess.player != nil {
+								p := pickSess.player
+								areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+								friendlyJoinedLegs = true
+							} else if s.findCreatureMotion(motion.Map, motion.InstanceID, friendlyPick) != nil {
+								areaCreatureHits = append(areaCreatureHits, friendlyPick)
+								friendlyJoinedLegs = true
+							}
+						}
+					}
 					hitTargets = nearbyHitTargets(nearby)
 					if isGONearbyEntrySpell(inlineSpell) && goPick != nearby {
 						hitTargets = append(hitTargets, goPick)
 					}
 					if isHostileNearbySpell(inlineSpell) && hostilePick != nearby && !hostileJoinedLegs {
 						hitTargets = append(hitTargets, hostilePick)
+					}
+					if isFriendlyNearbySpell(inlineSpell) && friendlyPick != nearby && !friendlyJoinedLegs {
+						hitTargets = append(hitTargets, friendlyPick)
 					}
 				}
 			}

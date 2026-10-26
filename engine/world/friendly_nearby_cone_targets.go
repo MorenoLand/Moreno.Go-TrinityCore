@@ -61,6 +61,23 @@ func isFriendlyNearbySpell(spell wotlk.Spell) bool {
 	return false
 }
 
+// firstFriendlyNearbyEffectMask returns the single-effect mask of the
+// lowest-index effect carrying 3/4/58 on a selecting slot, the friendly
+// counterpart of firstEntryImplicitEffectMask (Spell.cpp:1066: the
+// selecting effect's ImplicitTargetConditions; the 38 first-effect model
+// under Go's one-target-per-spell nearby pick).
+func firstFriendlyNearbyEffectMask(spell wotlk.Spell) uint32 {
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if isFriendlyNearbyTargetType(eff.ImplicitTargetA) || (isFriendlyNearbyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
+			return 1 << uint(i)
+		}
+	}
+	return 0
+}
+
 // isHostileNearbySpell reports the spells Spell::SelectImplicitNearbyTargets
 // (Spell.cpp:1036) resolves with TARGET_CHECK_ENEMY: any effect carrying
 // TARGET_UNIT_NEARBY_ENEMY (2) on a selecting slot. A B-slot 2 behind a
@@ -198,6 +215,27 @@ func isFriendlyConeSpell(spell wotlk.Spell) bool {
 		}
 	}
 	return false
+}
+
+// firstFriendlyConeEffect returns the single-effect mask and target value
+// of the lowest-index effect carrying 59/60 on a selecting slot
+// (Spell.cpp:1176: the selecting effect's ImplicitTargetConditions; the
+// 38 first-effect model). The target matters because the cone carries a
+// list, not one pick: the first effect's rows filter only its own leg —
+// a 59-first spell's rows must not filter the 60 leg, and vice versa.
+func firstFriendlyConeEffect(spell wotlk.Spell) (uint32, uint32) {
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		switch {
+		case isFriendlyConeTargetType(eff.ImplicitTargetA):
+			return 1 << uint(i), eff.ImplicitTargetA
+		case isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
+			return 1 << uint(i), eff.ImplicitTargetB
+		}
+	}
+	return 0, 0
 }
 
 func isFriendlyLastTargetAreaSpell(spell wotlk.Spell) bool {
@@ -453,7 +491,15 @@ func (s *session) friendlyReferer(ctx context.Context, guid uint64) friendlyRefe
 // IsValidAssistTarget, Object.cpp:3087: "can assist to self", and
 // Unit::IsInPartyWith/IsInRaidWith return true for self), so it wins at
 // distance 0 whenever it passes. No match -> SPELL_FAILED_BAD_IMPLICIT_TARGETS
-// (SharedDefines.h:993) and the cast fails (Spell.cpp:1111).
+// (SharedDefines.h:993) and the cast fails (Spell.cpp:1111). The
+// ImplicitTargetConditions arm (base WorldObjectSpellTargetCheck tail,
+// Spell.cpp:8380-8387, which runs for ALLY/PARTY/RAID as well as ENTRY)
+// is wired through the entry-subset evaluator
+// (implicitEntryConditionsMet): candidates failing the first selecting
+// effect's CONDITION_OBJECT_ENTRY_GUID rows never shrink the nearest
+// range, matching WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394-8399).
+// Non-entry condition types have no candidate-side Go evaluation and are
+// skipped (the shared entry/chain-twin gap).
 func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) (uint64, bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0, false
@@ -489,6 +535,9 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	if len(checks) == 0 {
 		return 0, false
 	}
+	// Spell.cpp:1066: the selecting effect's ImplicitTargetConditions;
+	// first selecting effect's list under Go's one-target-per-spell model.
+	condRows := s.loadImplicitTargetConditions(ctx, spell.ID, firstFriendlyNearbyEffectMask(spell))
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
 	scope := s.friendlyRefererScope(s.playerGUID)
@@ -503,6 +552,17 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 		_, wantParty := checks[friendlyCheckParty]
 		_, wantRaid := checks[friendlyCheckRaid]
 		if !((wantAlly) || (wantParty && scope.inParty(c)) || (wantRaid && scope.inRaid(c))) {
+			return
+		}
+		// Base WorldObjectSpellTargetCheck tail (Spell.cpp:8380-8387):
+		// a candidate failing the effect's conditions never becomes the
+		// nearest pick and never shrinks the search range. Spawn low
+		// mirrors the entry twin: the low 24 bits of the creature GUID.
+		spawnLow := uint32(0)
+		if !c.isPlayer {
+			spawnLow = uint32(c.guid & 0xFFFFFF)
+		}
+		if !implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow) {
 			return
 		}
 		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict less-than,
@@ -536,8 +596,13 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 // Spell.cpp:8432), the C++ cylinder range test (2D + |dz|, Spell.cpp:8409),
 // and the caster always in its own cone (Position::HasInArc, Position.cpp:120:
 // "always have self in arc"). 59 uses TARGET_CHECK_ALLY; 60 uses
-// TARGET_CHECK_ENTRY, which in C++ filters through ImplicitTargetConditions —
-// Go has no condition infra, so 60 selects any valid unit in the cone.
+// TARGET_CHECK_ENTRY. Both legs pass through the base
+// WorldObjectSpellTargetCheck tail (Spell.cpp:8380-8387), so the first
+// selecting effect's ImplicitTargetConditions filter their own leg
+// through the entry-subset evaluator (implicitEntryConditionsMet); a 60
+// leg with no rows still selects any valid unit in the cone (nil
+// _condSrcInfo, Spell.cpp:8377-8378), and non-entry condition types are
+// skipped (the shared entry/chain-twin gap).
 // A B-slot 59/60 behind a NEARBY/CONE/AREA A slot never selects
 // (Spell.cpp:866-900 processed-slot rule); only selecting effects
 // contribute checks and radius.
@@ -599,6 +664,11 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 	if radius <= 0 || len(checks) == 0 {
 		return nil
 	}
+	// Spell.cpp:1176: the selecting effect's ImplicitTargetConditions;
+	// first selecting effect's list, applied to its own leg only (see
+	// firstFriendlyConeEffect).
+	condMask, firstConeTarget := firstFriendlyConeEffect(spell)
+	condRows := s.loadImplicitTargetConditions(ctx, spell.ID, condMask)
 	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): CU_CONE_BACK
 	// (set in SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in
 	// the back cone (WorldObject::isInBack, Object.cpp:1417:
@@ -629,8 +699,17 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		}
 		_, wantAlly := checks[friendlyCheckAlly]
 		_, wantEntry := checks[friendlyCheckEntry]
-		pass := wantEntry
-		if !pass && wantAlly {
+		// Base WorldObjectSpellTargetCheck tail (Spell.cpp:8380-8387):
+		// the first selecting effect's conditions filter its own leg
+		// only; the other leg keeps its unconditioned selection. Spawn
+		// low mirrors the entry twin: the low 24 bits of the creature GUID.
+		spawnLow := uint32(0)
+		if !c.isPlayer {
+			spawnLow = uint32(c.guid & 0xFFFFFF)
+		}
+		condMet := implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow)
+		pass := wantEntry && (firstConeTarget != implicitTargetConeEntry || condMet)
+		if !pass && wantAlly && (firstConeTarget != implicitTargetConeAlly || condMet) {
 			// TARGET_CHECK_ALLY rejects totems (Spell.cpp:8333); TARGET_CHECK_ENTRY
 			// (target 60) carries no such exclusion, so the gate sits on the ally path only.
 			pass = s.friendlyAssistOK(spell, c, caster, allyOf) && !s.server.isTotemGUID(c.guid)

@@ -1503,8 +1503,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a
 		// creature caster: TARGET_UNIT_NEARBY_ENTRY (38) /
-		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) / TARGET_UNIT_NEARBY_ENEMY (2)
-		// replace the wire hit list
+		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) / TARGET_UNIT_NEARBY_ENEMY (2) /
+		// TARGET_UNIT_NEARBY_PARTY (3) / TARGET_UNIT_NEARBY_ALLY (4) /
+		// TARGET_UNIT_NEARBY_RAID (58) replace the wire hit list
 		// with the single nearest matched target — the explicit
 		// target is not in C++'s target list unless another effect adds
 		// it (SelectExplicitTargets only redirects, Spell.cpp:729-757) —
@@ -1514,14 +1515,14 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// SelectImplicitChainTargets on the picked target, Spell.cpp:1173).
 		// All legs select independently (Spell.cpp:761-900: each effect's
 		// selection adds to its own list), so a spell carrying several of
-		// 38, 40 and 2 takes each pick and a miss on any fails the cast
+		// 38, 40, 2 and 3/4/58 takes each pick and a miss on any fails the cast
 		// (:1111). The 38 pick drives the chain anchor below, else the
-		// hostile pick; a GO pick joins the hit list and takes no unit leg.
+		// hostile pick, else the friendly pick; a GO pick joins the hit list and takes no unit leg.
 		// The packet's explicit target (spellTarget) stays the
 		// wire target, mirroring C++ m_targets.
-		if isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) || isHostileNearbySpell(spellInfo) {
-			var unitPick, goPick, hostilePick uint64
-			unitOK, goOK, hostileOK := true, true, true
+		if isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) || isHostileNearbySpell(spellInfo) || isFriendlyNearbySpell(spellInfo) {
+			var unitPick, goPick, hostilePick, friendlyPick uint64
+			unitOK, goOK, hostileOK, friendlyOK := true, true, true, true
 			if isEntryNearbySpell(spellInfo) {
 				unitPick, unitOK = s.creatureEntryNearbyTarget(ctx, m, spellInfo)
 			}
@@ -1531,7 +1532,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if isHostileNearbySpell(spellInfo) {
 				hostilePick, hostileOK = s.creatureHostileNearbyTarget(ctx, m, spellInfo)
 			}
-			if !unitOK || !goOK || !hostileOK {
+			if isFriendlyNearbySpell(spellInfo) {
+				friendlyPick, friendlyOK = s.creatureFriendlyNearbyTarget(ctx, m, spellInfo)
+			}
+			if !unitOK || !goOK || !hostileOK || !friendlyOK {
 				return
 			}
 			hitTargets = nil
@@ -1545,9 +1549,15 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					targetGUID = hostilePick
 				}
 			}
+			if isFriendlyNearbySpell(spellInfo) {
+				hitTargets = append(hitTargets, friendlyPick)
+				if !isEntryNearbySpell(spellInfo) && !isHostileNearbySpell(spellInfo) {
+					targetGUID = friendlyPick
+				}
+			}
 			if isGONearbyEntrySpell(spellInfo) {
 				hitTargets = append(hitTargets, goPick)
-				if !isEntryNearbySpell(spellInfo) && !isHostileNearbySpell(spellInfo) {
+				if !isEntryNearbySpell(spellInfo) && !isHostileNearbySpell(spellInfo) && !isFriendlyNearbySpell(spellInfo) {
 					targetGUID = goPick
 				}
 			}

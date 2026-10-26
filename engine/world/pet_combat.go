@@ -3318,13 +3318,15 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a pet
 	// caster, the pet twin of the castCreatureSpellInternal arm
 	// (boss_ai.go): TARGET_UNIT_NEARBY_ENTRY (38) /
-	// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) / TARGET_UNIT_NEARBY_ENEMY (2)
+	// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) / TARGET_UNIT_NEARBY_ENEMY (2) /
+	// TARGET_UNIT_NEARBY_PARTY (3) / TARGET_UNIT_NEARBY_ALLY (4) /
+	// TARGET_UNIT_NEARBY_RAID (58)
 	// replace the wire hit list with the nearest matched targets, and a
 	// miss on any fails the cast (Spell.cpp:1111) — return true, the pet
 	// path's silent-fizzle convention like the destFailed arm above. The
 	// packet's explicit target (target) stays the wire target,
 	// mirroring C++ m_targets. All legs select independently (Spell.cpp:761-900): a spell
-	// carrying several of 38, 40 and 2 takes each pick, and a miss on any
+	// carrying several of 38, 40, 2 and 3/4/58 takes each pick, and a miss on any
 	// fails the cast (:1111). Area hits from
 	// other effects stay: C++ runs each effect's selection
 	// independently (Spell.cpp:761-900), so the nearby pick replaces
@@ -3334,9 +3336,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// via getCombatTarget and safely skip a GO guid
 	// (executePetSpellDamage no-ops on unresolvable GUIDs), so no
 	// unit leg lands on the gameobject.
-	if isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) || isHostileNearbySpell(spell) {
-		var unitPick, goPick, hostilePick uint64
-		unitOK, goOK, hostileOK := true, true, true
+	if isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) || isHostileNearbySpell(spell) || isFriendlyNearbySpell(spell) {
+		var unitPick, goPick, hostilePick, friendlyPick uint64
+		unitOK, goOK, hostileOK, friendlyOK := true, true, true, true
 		if isEntryNearbySpell(spell) {
 			unitPick, unitOK = s.server.creatureEntryNearbyTarget(ctx, motion, spell)
 		}
@@ -3346,40 +3348,46 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if isHostileNearbySpell(spell) {
 			hostilePick, hostileOK = s.server.creatureHostileNearbyTarget(ctx, motion, spell)
 		}
-		if !unitOK || !goOK || !hostileOK {
+		if isFriendlyNearbySpell(spell) {
+			friendlyPick, friendlyOK = s.server.creatureFriendlyNearbyTarget(ctx, motion, spell)
+		}
+		if !unitOK || !goOK || !hostileOK || !friendlyOK {
 			return true
 		}
 		targetGUID = unitPick
 		if isHostileNearbySpell(spell) && !isEntryNearbySpell(spell) {
 			targetGUID = hostilePick
 		}
-		if isGONearbyEntrySpell(spell) && !isEntryNearbySpell(spell) && !isHostileNearbySpell(spell) {
+		if isFriendlyNearbySpell(spell) && !isEntryNearbySpell(spell) && !isHostileNearbySpell(spell) {
+			targetGUID = friendlyPick
+		}
+		if isGONearbyEntrySpell(spell) && !isEntryNearbySpell(spell) && !isHostileNearbySpell(spell) && !isFriendlyNearbySpell(spell) {
 			targetGUID = goPick
 		}
 		keptAreaHits := make([]*playerPos, 0, len(areaHits))
 		for _, areaHit := range areaHits {
-			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick && areaHit.GUID != hostilePick {
+			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick && areaHit.GUID != hostilePick && areaHit.GUID != friendlyPick {
 				keptAreaHits = append(keptAreaHits, areaHit)
 			}
 		}
 		areaHits = keptAreaHits
 		keptAreaCreatureHits := make([]uint64, 0, len(areaCreatureHits))
 		for _, areaCreatureGUID := range areaCreatureHits {
-			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick && areaCreatureGUID != hostilePick {
+			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick && areaCreatureGUID != hostilePick && areaCreatureGUID != friendlyPick {
 				keptAreaCreatureHits = append(keptAreaCreatureHits, areaCreatureGUID)
 			}
 		}
 		areaCreatureHits = keptAreaCreatureHits
 		keptAreaAllyHits := make([]*playerPos, 0, len(areaAllyHits))
 		for _, areaHit := range areaAllyHits {
-			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick && areaHit.GUID != hostilePick {
+			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick && areaHit.GUID != hostilePick && areaHit.GUID != friendlyPick {
 				keptAreaAllyHits = append(keptAreaAllyHits, areaHit)
 			}
 		}
 		areaAllyHits = keptAreaAllyHits
 		keptAreaAllyCreatureHits := make([]uint64, 0, len(areaAllyCreatureHits))
 		for _, areaCreatureGUID := range areaAllyCreatureHits {
-			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick && areaCreatureGUID != hostilePick {
+			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick && areaCreatureGUID != hostilePick && areaCreatureGUID != friendlyPick {
 				keptAreaAllyCreatureHits = append(keptAreaAllyCreatureHits, areaCreatureGUID)
 			}
 		}
@@ -3387,12 +3395,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		delete(areaAllyChecks, unitPick)
 		delete(areaAllyChecks, goPick)
 		delete(areaAllyChecks, hostilePick)
+		delete(areaAllyChecks, friendlyPick)
 		hitTargets = nil
 		if isEntryNearbySpell(spell) {
 			hitTargets = append(hitTargets, unitPick)
 		}
 		if isHostileNearbySpell(spell) {
 			hitTargets = append(hitTargets, hostilePick)
+		}
+		if isFriendlyNearbySpell(spell) {
+			hitTargets = append(hitTargets, friendlyPick)
 		}
 		if isGONearbyEntrySpell(spell) {
 			hitTargets = append(hitTargets, goPick)
