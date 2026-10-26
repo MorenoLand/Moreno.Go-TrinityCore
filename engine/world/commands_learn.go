@@ -378,7 +378,11 @@ func (s *session) applyRemoveSpellSkillLeg(ctx context.Context, spellID uint32) 
 // setSkillFull mirrors Player::SetSkill for the RemoveSpell skill leg:
 // all-zero clears the skill row, otherwise the row takes the given
 // step/value/max. Go's character_skills writes carry no step column
-// (see setOrUpdateSkill), so step lives in memory only.
+// (see setOrUpdateSkill), so step lives in memory only. The non-zero arm
+// runs LearnSkillRewardedSpells plus the REACH_SKILL_LEVEL and
+// LEARN_SKILL_LEVEL criteria, as SetSkill does; the all-zero arm stays
+// row-drop-only (the prior tick's deliberate boundary: recursing the
+// skill-ability RemoveSpell cascade there would change .unlearn behavior).
 func (s *session) setSkillFull(ctx context.Context, skillID, step, value, max uint16) {
 	if s.player == nil {
 		return
@@ -406,6 +410,9 @@ func (s *session) setSkillFull(ctx context.Context, skillID, step, value, max ui
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, s.playerGUID, skillID)
 			}
 			s.sendPlayerUpdate()
+			s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(value))
+			s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
+			s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(max))
 			return
 		}
 	}
@@ -414,6 +421,9 @@ func (s *session) setSkillFull(ctx context.Context, skillID, step, value, max ui
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, max)
 	}
 	s.sendPlayerUpdate()
+	s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(value))
+	s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
+	s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(max))
 }
 
 func (s *session) getSkillMaxValue(skillID uint32) uint32 {

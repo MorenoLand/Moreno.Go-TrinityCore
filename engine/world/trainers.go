@@ -805,6 +805,8 @@ func (s *session) setOrUpdateSkill(ctx context.Context, skillID, maxVal uint16) 
 			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", s.player.Skills[i].Value, s.player.Skills[i].Max, s.playerGUID, skillID)
 			}
+			s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(s.player.Skills[i].Value))
+			s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(s.player.Skills[i].Value))
 			s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
 			break
 		}
@@ -824,6 +826,8 @@ func (s *session) setOrUpdateSkill(ctx context.Context, skillID, maxVal uint16) 
 		s.player.Skills = append(s.player.Skills, newSk)
 		s.updateAchievementCriteria(criteriaTypeLearnSkillLine, uint32(skillID), 1)
 		s.updateAchievementCriteria(criteriaTypeLearnSkillLineSpells, uint32(skillID), 1)
+		s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(val))
+		s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(val))
 		s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, val, maxVal)

@@ -937,10 +937,11 @@ func (s *session) applySkillStepEffect(ctx context.Context, spell wotlk.Spell, e
 
 // setSkillWithStep mirrors the add/update legs of Player::SetSkill
 // (Player.cpp: SetSkill): an existing skill takes the new step, value, and
-// max; a missing skill is appended. Documented no-bridge: UpdateSkillEnchantments
-// (the 21:32 run's standing delta), LearnSkillRewardedSpells (Go only runs
-// the rewarded-spell pass at login via loadSkillRewardedSpells), and the
-// SKILL_DELETED/uState bookkeeping (Go persists immediately).
+// max; a missing skill is appended. Both arms run LearnSkillRewardedSpells
+// via learnSkillRewardedSpells. UpdateSkillEnchantments stays a documented
+// no-bridge (Go computes enchantment activeness live from the current skill
+// value at equipment_stats.go, so no cached state needs refreshing), as does
+// the SKILL_DELETED/uState bookkeeping (Go persists immediately).
 func (s *session) setSkillWithStep(ctx context.Context, skillID, step, value, maxVal uint16) {
 	if s == nil || s.player == nil {
 		return
@@ -956,6 +957,7 @@ func (s *session) setSkillWithStep(ctx context.Context, skillID, step, value, ma
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, maxVal, s.playerGUID, skillID)
 		}
 		s.sendPlayerUpdate()
+		s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(value))
 		s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
 		s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
 		return
@@ -965,18 +967,81 @@ func (s *session) setSkillWithStep(ctx context.Context, skillID, step, value, ma
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, maxVal)
 	}
 	s.sendPlayerUpdate()
-	s.updateAchievementCriteria(criteriaTypeLearnSkillLine, uint32(skillID), 1)
+	s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(value))
 	s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(skillID), uint32(value))
 	s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(skillID), uint32(maxVal))
 }
+
+// learnSkillRewardedSpells mirrors Player::LearnSkillRewardedSpells
+// (Player.cpp:23365-23424) for a live session: every SkillLineAbility row
+// for the skill with a LEARNED_ON_SKILL_VALUE (1) or LEARNED_ON_SKILL_LEARN
+// (2) acquire method, race/class-gated, learns its spell at or above
+// MinSkillLineRank and removes it below that rank (value arm only); the
+// learn arm skips a spell whose superceding spell already has a
+// LEARNED_ON_SKILL_LEARN row at or below the value (the Seal of
+// Righteousness double-learn guard). Unlike the login pass
+// (loadSkillRewardedSpells), this runs the live spell-set arms:
+// learnSpellActive for learns, removeSpell (full cascade) for unlearns.
+// Termination: learns never touch skills, and removes only drop rows or
+// no-op, while a nested skill-leg rollback only lowers the value.
+func (s *session) learnSkillRewardedSpells(ctx context.Context, skillID, skillValue uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	abilities, found, err := s.server.Data.SkillLineAbilitiesForSkill(skillID)
+	if err != nil || !found {
+		return
+	}
+	raceMask, classMask := playerCreateMask(s.player.Race), playerCreateMask(s.player.Class)
+	visited := make(map[uint32]bool)
+	for _, ability := range abilities {
+		if ability.AcquireMethod != 1 && ability.AcquireMethod != 2 {
+			continue
+		}
+		if ability.RaceMask != 0 && ability.RaceMask&raceMask == 0 {
+			continue
+		}
+		if ability.ClassMask != 0 && ability.ClassMask&classMask == 0 {
+			continue
+		}
+		if _, spellFound, spellErr := s.server.Data.Spell(ability.Spell); spellErr != nil || !spellFound {
+			continue
+		}
+		if ability.AcquireMethod == 1 && skillValue < ability.MinSkillLineRank {
+			s.removeSpell(ctx, ability.Spell, true, visited)
+			continue
+		}
+		if ability.AcquireMethod == 2 && ability.SupercededBySpell != 0 {
+			if superseded, supersededFound, supersededErr := s.server.Data.SkillLineAbilities(ability.SupercededBySpell); supersededErr == nil && supersededFound {
+				skip := false
+				for _, next := range superseded {
+					if next.AcquireMethod == 2 && skillValue >= next.MinSkillLineRank {
+						skip = true
+						break
+					}
+				}
+				if skip {
+					continue
+				}
+			}
+		}
+		s.learnSpellActive(ctx, ability.Spell, true)
+	}
+}
+
+// bonusSkillLevels mirrors Player.cpp's static bonusSkillLevels table: the
+// skill thresholds whose crossing runs LearnSkillRewardedSpells on a craft
+// skill-up (UpdateCraftSkill only; plain UpdateSkillPro never runs it).
+var bonusSkillLevels = []uint32{75, 150, 225, 300, 375, 450}
 
 // updateCraftSkill mirrors Player::UpdateCraftSkill (Player.cpp:5789-5818):
 // the first SkillLineAbility.dbc row for the spell with a nonzero SkillLine
 // feeds the pure (bonus-free) skill value into SkillGainChance(high,
 // (high+low)/2, low) and grows the skill through updateSkillPro with the
-// SkillGain.Crafting step (World.cpp:1078 default 1). The alchemy-discovery
-// arm (MECHANIC_DISCOVERY, GetSkillDiscoverySpell + LearnSpell) has no Go
-// model — documented no-bridge.
+// SkillGain.Crafting step (World.cpp:1078 default 1). A gain crossing a
+// bonusSkillLevels threshold runs learnSkillRewardedSpells (UpdateCraftSkill
+// bonus loop). The alchemy-discovery arm (MECHANIC_DISCOVERY,
+// GetSkillDiscoverySpell + LearnSpell) has no Go model — documented no-bridge.
 func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return false
@@ -992,7 +1057,18 @@ func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
 		skillValue := uint32(playerPureSkillValue(s.player, ability.SkillLine))
 		green := (ability.TrivialRankHigh + ability.TrivialRankLow) / 2
 		chance := skillGainChance(skillValue, ability.TrivialRankHigh, green, ability.TrivialRankLow)
-		return s.updateSkillPro(ctx, ability.SkillLine, chance, skillGainCrafting)
+		oldValue := s.getSkillValue(ability.SkillLine)
+		if !s.updateSkillPro(ctx, ability.SkillLine, chance, skillGainCrafting) {
+			return false
+		}
+		newValue := s.getSkillValue(ability.SkillLine)
+		for _, bonus := range bonusSkillLevels {
+			if oldValue < bonus && newValue >= bonus {
+				s.learnSkillRewardedSpells(ctx, ability.SkillLine, newValue)
+				break
+			}
+		}
+		return true
 	}
 	return false
 }
