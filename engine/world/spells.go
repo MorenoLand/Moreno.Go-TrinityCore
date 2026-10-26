@@ -10139,8 +10139,79 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// C++ runs the effects (missed targets resolve null per-target) rather
 	// than early-returning, so kept allies are still healed when every enemy
 	// missed or evaded.
+	// Spell::DoProcessTargetContainer (Spell.cpp:3561-3571): DoDamageAndTriggers
+	// runs once per TargetInfo -- including missed ones -- after the effect loop.
+	// A missed target takes no effects, so its spell->m_damage stays 0 and it
+	// lands on the no-damage arm (Spell.cpp:2560-2575): createProcHitMask on a
+	// fresh damageInfo with the target's MissCondition, firing NODMG procs once
+	// per target. Hit targets already fired theirs through the damage funnels;
+	// only the filtered targets still owe this arm. This is the launch twin of
+	// the triggered path's post-loop: the launch missedTargets filter drops the
+	// same targets from hitTargets, and nothing else on this path fires their
+	// nodmg procs -- the damage funnels run on hitTargets only, and the tail
+	// legs (stand-up, aggro, hit triggers, PvP) take no proc arm for misses.
+	// Clean reflects are excluded: the retargeted caster fires through the hit
+	// path and the reflector's taken side rides ProcReflectDelayed
+	// (Spell.cpp:2181). A bounced reflect (ReflectStatus != NONE) is NOT
+	// excluded: its TargetInfo keeps MissCondition=REFLECT with a null
+	// _spellHitTarget (Spell.cpp:2350, 7740-7743), so DoDamageAndTriggers runs
+	// the nodmg arm with a REFLECT mask on the reflector -- no return-trip
+	// funnel ever runs for it, and ProcReflectDelayed is a separate PHASE_NONE
+	// event, so this cannot double-fire it. CanExecuteTriggersOnHit
+	// (Spell.cpp:8164-8174) needs a non-zero effect mask, so a spell with no
+	// explicit effects fires only the IMMUNE carve-out (Spell.cpp:2442). A
+	// victim inside its own proc evaluation (CanProc, Unit.h:1609) fires
+	// nothing on either side, mirroring the shared funnels' targetCantProc
+	// gate. The live-hit guard keeps the arm once per TargetInfo: a GUID still
+	// in hitTargets already fired through the hit path.
+	fireLaunchMissNodmgProcs := func(effCtx context.Context) {
+		hasExplicitEffects := false
+		for _, eff := range spell.Effects {
+			if eff.Effect == 0 && eff.Aura == 0 {
+				continue
+			}
+			hasExplicitEffects = true
+			break
+		}
+		liveHits := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			liveHits[guid] = struct{}{}
+		}
+		seen := make(map[uint64]struct{}, len(missStatus))
+		for _, miss := range missStatus {
+			guid := miss.TargetGUID
+			if guid == 0 {
+				continue
+			}
+			if _, dup := seen[guid]; dup {
+				continue
+			}
+			seen[guid] = struct{}{}
+			if _, live := liveHits[guid]; live {
+				continue
+			}
+			if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+				continue
+			}
+			if !hasExplicitEffects && miss.Reason != protocol.SpellMissImmune && miss.Reason != protocol.SpellMissImmune2 {
+				continue
+			}
+			if s.server != nil {
+				if victimSess := s.server.findSessionByGUID(guid); victimSess != nil && victimSess.procDeep > 0 {
+					continue
+				}
+			}
+			s.procSpellDamageNoDmgAuraTriggers(effCtx, guid, spellID, miss.Reason, false, false)
+			if s.server != nil {
+				if victimSess := s.server.findSessionByGUID(guid); victimSess != nil {
+					victimSess.procSpellDamageNoDmgTakenAuraTriggers(effCtx, s.playerGUID, spellID, miss.Reason, false, s.triggeredNoProcEvents > 0, false, s.castTriggerAuraSpell)
+				}
+			}
+		}
+	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
 		// Spell missed, do not trigger channel or effects
+		fireLaunchMissNodmgProcs(ctx)
 		return
 	}
 
@@ -10244,6 +10315,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		if len(hitTargets) == 0 && !isReflected {
+			fireLaunchMissNodmgProcs(effCtx)
 			return
 		}
 		// A missed primary target resolves no unit: the unit-targeted
@@ -12094,6 +12166,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else if spellID == 63624 || spellID == 63680 {
 			s.grantSecondSpec(effCtx)
 		}
+		// Missed targets owe the DoDamageAndTriggers no-damage arm (see
+		// fireLaunchMissNodmgProcs above): the effect loop ran on hitTargets
+		// only, so this is the launch path's once-per-target firing.
+		fireLaunchMissNodmgProcs(effCtx)
 	}
 
 	// Spell::_cast (Spell.cpp:3473-3494): the delayed-vs-immediate branch.
