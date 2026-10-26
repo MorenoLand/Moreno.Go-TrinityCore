@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"math"
+	"math/rand"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -933,4 +935,210 @@ func (s *Server) creatureFriendlyNearbyTarget(ctx context.Context, m *creatureMo
 		return 0, false
 	}
 	return bestGUID, true
+}
+
+// creatureFriendlyConeTargets ports Spell::SelectImplicitConeTargets
+// (Spell.cpp:1176) for TARGET_UNIT_CONE_ALLY (59) / TARGET_UNIT_CONE_ENTRY
+// (60) for a creature caster, mirroring the session twin
+// spellFriendlyConeTargets: coneAngle M_PI/2 (Spell.cpp:8432), the cylinder
+// range test (2D + |dz|, Spell.cpp:8409), the caster always in its own cone
+// (Position::HasInArc, Position.cpp:120), and per-selecting-effect radius
+// (CalcRadius, SpellInfo.cpp:551-574, SPELLMOD_RADIUS via the mod owner;
+// zero-radius fallback per effect via GetMaxRange(IsPositiveEffect),
+// Spell.cpp:1192). 59 uses TARGET_CHECK_ALLY, 60 uses TARGET_CHECK_ENTRY;
+// the first selecting effect's ImplicitTargetConditions filter their own
+// leg only through the entry-subset evaluator (firstFriendlyConeEffect,
+// the session twin's arm); a 60 leg with no rows still selects any valid
+// unit in the cone (nil _condSrcInfo, Spell.cpp:8377-8378). A B-slot 59/60
+// behind a NEARBY/CONE/AREA A slot never selects (Spell.cpp:866-900).
+// Ally leg gates mirror the creature friendly-nearby twin
+// (IsValidAssistTarget, Object.cpp:3087: alive, assist flag arm,
+// non-hostile, GM refused, totem refused per Spell.cpp:8333); the entry
+// leg carries no totem exclusion and no faction gate (ENTRY has no
+// faction-switch case, Spell.cpp:8316; session twin precedent). Every
+// candidate needs line of sight from the caster (Spell.cpp:7483-7492, the
+// motion LOS twin; the caster itself is exempt). MaxTargets caps the
+// merged list (Spell.cpp:1207-1211, RandomResize; no aura term — no motion
+// aura model, the entry-area twin's convention).
+func (s *Server) creatureFriendlyConeTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell) ([]uint64, map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return nil, nil
+	}
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	var maxRangePositive, maxRangeNegative float32
+	if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+		maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+		if modOwner != nil {
+			maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+			maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+		}
+	}
+	radius := float32(0)
+	checks := make(map[uint8]struct{})
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		var coneTarget uint32
+		switch {
+		case isFriendlyConeTargetType(eff.ImplicitTargetA):
+			coneTarget = eff.ImplicitTargetA
+		case isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
+			coneTarget = eff.ImplicitTargetB
+		default:
+			continue
+		}
+		switch coneTarget {
+		case implicitTargetConeAlly:
+			checks[friendlyCheckAlly] = struct{}{}
+		case implicitTargetConeEntry:
+			checks[friendlyCheckEntry] = struct{}{}
+		}
+		if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(m.Level)); err == nil && ok && value > 0 {
+			if modOwner != nil {
+				value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+			}
+			if value > radius {
+				radius = value
+			}
+		} else {
+			effMaxRange := maxRangeNegative
+			if spell.IsPositiveEffect(i) {
+				effMaxRange = maxRangePositive
+			}
+			if effMaxRange > radius {
+				radius = effMaxRange
+			}
+		}
+	}
+	if radius <= 0 || len(checks) == 0 {
+		return nil, nil
+	}
+	condMask, firstConeTarget := firstFriendlyConeEffect(spell)
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, condMask)
+	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
+	_, wantAlly := checks[friendlyCheckAlly]
+	_, wantEntry := checks[friendlyCheckEntry]
+	targets := make([]uint64, 0)
+	seen := make(map[uint64]struct{})
+	legBits := make(map[uint64]uint8)
+	accept := func(guid uint64, x, y, z float32, unitFlags, flagsExtra uint32, health uint32, hostile, totem, isPlayer, isGM bool, entry, spawnLow uint32) {
+		if guid == 0 || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) {
+			return
+		}
+		dx, dy := float64(x-m.X), float64(y-m.Y)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-m.Z)) > float64(radius) {
+			return
+		}
+		if guid != m.GUID {
+			if backCone {
+				if hasInArc(m.Orientation, m.X, m.Y, x, y, 2*math.Pi-math.Pi/2) {
+					return
+				}
+			} else if !hasInArc(m.Orientation, m.X, m.Y, x, y, math.Pi/2) {
+				return
+			}
+		}
+		condMet := implicitEntryConditionsMet(condRows, isPlayer, entry, spawnLow)
+		passEntry := wantEntry && (firstConeTarget != implicitTargetConeEntry || condMet)
+		passAlly := false
+		if wantAlly && (firstConeTarget != implicitTargetConeAlly || condMet) {
+			// TARGET_CHECK_ALLY rejects totems (Spell.cpp:8333) and GMs
+			// (Object.cpp:3104; the caster is a creature, so no self
+			// exemption applies); TARGET_CHECK_ENTRY carries neither
+			// exclusion, so both gates sit on the ally path only.
+			passAlly = !hostile && !isGM && !totem
+		}
+		if !passEntry && !passAlly {
+			return
+		}
+		if !s.implicitUnitTargetLOSPassesForMotion(spell, m, guid, x, y, z) {
+			return
+		}
+		if _, dup := seen[guid]; dup {
+			return
+		}
+		seen[guid] = struct{}{}
+		targets = append(targets, guid)
+		// Per-leg bits for the pet path's check-gated legs (the
+		// petAreaAllyCheck family): a target selected by both legs
+		// carries both bits, so each effect's leg sees only its own.
+		var bits uint8
+		if passEntry {
+			bits |= petAreaAllyCheckConeEntry
+		}
+		if passAlly {
+			bits |= petAreaAllyCheckConeAlly
+		}
+		legBits[guid] = bits
+	}
+	playersOnly := spellSearchPlayersOnly(spell)
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+			continue
+		}
+		p := targetSession.player
+		if p.Map != m.Map || p.InstanceID != m.InstanceID {
+			continue
+		}
+		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
+		accept(targetSession.playerGUID, p.X, p.Y, p.Z, p.UnitFlags, 0, p.Health, s.isAttackableFaction(m.Faction, candidate), s.isTotemGUID(targetSession.playerGUID), true, sessionIsGameMaster(targetSession), 0, 0)
+	}
+	s.sessionsMu.RUnlock()
+	if !playersOnly {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		candidates := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				candidates = append(candidates, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range candidates {
+			if cand.Map != m.Map || cand.InstanceID != m.InstanceID {
+				continue
+			}
+			accept(cand.GUID, cand.X, cand.Y, cand.Z, cand.UnitFlags, cand.FlagsExtra, cand.Health, s.factionTemplatesHostile(m.Faction, cand.Faction), s.isTotemGUID(cand.GUID), false, false, cand.Entry, uint32(cand.GUID&0xFFFFFF))
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-float64(radius), float64(m.X)+float64(radius), float64(m.Y)-float64(radius), float64(m.Y)+float64(radius))
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if uint32(rowMap) != m.Map {
+						continue
+					}
+					accept(guid, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), s.factionTemplatesHostile(m.Faction, uint32(faction)), s.isTotemGUID(guid), false, false, uint32(entry), uint32(low))
+				}
+			}
+		}
+	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(targets)) > maxTargets {
+		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
+		targets = targets[:maxTargets]
+		kept := make(map[uint64]struct{}, len(targets))
+		for _, guid := range targets {
+			kept[guid] = struct{}{}
+		}
+		for guid := range legBits {
+			if _, ok := kept[guid]; !ok {
+				delete(legBits, guid)
+			}
+		}
+	}
+	return targets, legBits
 }

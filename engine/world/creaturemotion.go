@@ -3338,6 +3338,63 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						hitTargets = append(hitTargets, friendlyPick)
 					}
 				}
+				// Spell::SelectImplicitConeTargets (Spell.cpp:1176) for a
+				// creature caster: friendly-cone (59/60) legs join the
+				// per-hit lists like the nearby picks above — a player
+				// cone target joins areaHits, a creature cone target
+				// joins areaCreatureHits, and a static spawn target
+				// rides the packet only (the anchor-static convention).
+				// Previously an inline cone spell hit the wire target
+				// only. Cone targets already on an area leg stay there;
+				// the per-hit legs below iterate the joined lists
+				// unconditionally, so a multi-family spell over-hits
+				// its cone members on non-cone effects — the same
+				// approximation the nearby picks above already make.
+				if isFriendlyConeSpell(inlineSpell) {
+					coneTargets, _ := s.creatureFriendlyConeTargets(ctx, motion, inlineSpell)
+					for _, coneGUID := range coneTargets {
+						if coneGUID == 0 {
+							continue
+						}
+						// Already on a leg (wire victim, nearby pick, or
+						// area leg — every leg appends to hitTargets, so
+						// membership here covers all of them); joining
+						// again would double-hit it below.
+						alreadyHit := false
+						for _, hitGUID := range hitTargets {
+							if hitGUID == coneGUID {
+								alreadyHit = true
+								break
+							}
+						}
+						if alreadyHit {
+							continue
+						}
+						playerJoined := false
+						for i := range players {
+							if players[i].GUID == coneGUID {
+								areaHits = append(areaHits, &players[i])
+								playerJoined = true
+								break
+							}
+						}
+						if !playerJoined {
+							if pickSess := s.findSessionByGUID(coneGUID); pickSess != nil && pickSess.player != nil {
+								p := pickSess.player
+								areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+								playerJoined = true
+							}
+						}
+						if playerJoined {
+							hitTargets = append(hitTargets, coneGUID)
+						} else if s.findCreatureMotion(motion.Map, motion.InstanceID, coneGUID) != nil {
+							areaCreatureHits = append(areaCreatureHits, coneGUID)
+							hitTargets = append(hitTargets, coneGUID)
+						} else {
+							hitTargets = append(hitTargets, coneGUID)
+						}
+					}
+				}
 			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 			// the inline path: a victim whose reflect roll succeeds becomes a

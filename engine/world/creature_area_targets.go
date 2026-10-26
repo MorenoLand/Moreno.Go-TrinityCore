@@ -693,6 +693,8 @@ const (
 	petAreaAllyCheckAlly uint8 = 1 << iota
 	petAreaAllyCheckParty
 	petAreaAllyCheckRaid
+	petAreaAllyCheckConeAlly
+	petAreaAllyCheckConeEntry
 )
 
 // petAreaAllyWantedMask maps an effect's two implicit targets to the check
@@ -701,16 +703,22 @@ const (
 func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
 	var wanted uint8
 	for _, targetType := range []uint32{targetA, targetB} {
-		if !isFriendlyAreaTargetType(targetType) {
+		switch {
+		case targetType == implicitTargetConeAlly:
+			wanted |= petAreaAllyCheckConeAlly
+		case targetType == implicitTargetConeEntry:
+			wanted |= petAreaAllyCheckConeEntry
+		case !isFriendlyAreaTargetType(targetType):
 			continue
-		}
-		switch friendlyAreaCheck(targetType) {
-		case friendlyCheckParty:
-			wanted |= petAreaAllyCheckParty
-		case friendlyCheckRaid:
-			wanted |= petAreaAllyCheckRaid
 		default:
-			wanted |= petAreaAllyCheckAlly
+			switch friendlyAreaCheck(targetType) {
+			case friendlyCheckParty:
+				wanted |= petAreaAllyCheckParty
+			case friendlyCheckRaid:
+				wanted |= petAreaAllyCheckRaid
+			default:
+				wanted |= petAreaAllyCheckAlly
+			}
 		}
 	}
 	return wanted

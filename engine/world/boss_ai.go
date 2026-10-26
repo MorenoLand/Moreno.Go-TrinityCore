@@ -1562,6 +1562,30 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::SelectImplicitConeTargets (Spell.cpp:1176) for a creature
+		// caster: friendly-cone (59/60) legs join the hit list like the
+		// area legs below — previously a boss cone spell hit the wire
+		// target only, even when allies stood in the cone. Dedupe
+		// against the nearby picks above (AddUnitTarget, Spell.cpp:2152);
+		// cone selection never chains, so the chain arm below still
+		// anchors on the nearby pick alone.
+		if isFriendlyConeSpell(spellInfo) {
+			seenCone := make(map[uint64]struct{}, len(hitTargets))
+			for _, guid := range hitTargets {
+				seenCone[guid] = struct{}{}
+			}
+			coneTargets, _ := s.creatureFriendlyConeTargets(ctx, m, spellInfo)
+			for _, coneGUID := range coneTargets {
+				if coneGUID == 0 {
+					continue
+				}
+				if _, dup := seenCone[coneGUID]; dup {
+					continue
+				}
+				seenCone[coneGUID] = struct{}{}
+				hitTargets = append(hitTargets, coneGUID)
+			}
+		}
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): entry-area
 		// (7/8) legs select every entry-matched unit in the area — the
 		// creature twin of the session spellEntryAreaTargets. Area

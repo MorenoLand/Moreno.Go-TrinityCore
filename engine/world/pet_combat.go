@@ -3418,6 +3418,49 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		hitTargets = append(hitTargets, areaAllyCreatureHits...)
 	}
+	// Spell::SelectImplicitConeTargets (Spell.cpp:1176) for a pet caster:
+	// friendly-cone (59/60) legs join the ally lists like the area-ally
+	// legs above — a player cone target joins areaAllyHits, a creature
+	// cone target joins areaAllyCreatureHits, and a static spawn target
+	// rides the packet only (the anchor-static convention). Previously a
+	// pet cone spell hit the wire target only. The twin's per-leg bits
+	// ride areaAllyChecks, so each effect's leg sees only its own leg's
+	// targets (petAreaAllyWantedMask maps 59/60 to the cone bits); area
+	// members carry no cone bits, so a mixed area+cone spell does not
+	// over-hit its area members on cone effects.
+	if isFriendlyConeSpell(spell) {
+		if areaAllyChecks == nil {
+			areaAllyChecks = make(map[uint64]uint8)
+		}
+		coneTargets, coneBits := s.server.creatureFriendlyConeTargets(ctx, motion, spell)
+		for _, coneGUID := range coneTargets {
+			if coneGUID == 0 {
+				continue
+			}
+			alreadyHit := false
+			for _, hitGUID := range hitTargets {
+				if hitGUID == coneGUID {
+					alreadyHit = true
+					break
+				}
+			}
+			if alreadyHit {
+				continue
+			}
+			if pickSess := s.server.findSessionByGUID(coneGUID); pickSess != nil && pickSess.player != nil {
+				p := pickSess.player
+				areaAllyHits = append(areaAllyHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+				areaAllyChecks[coneGUID] = coneBits[coneGUID]
+				hitTargets = append(hitTargets, coneGUID)
+			} else if s.server.findCreatureMotion(motion.Map, motion.InstanceID, coneGUID) != nil {
+				areaAllyCreatureHits = append(areaAllyCreatureHits, coneGUID)
+				areaAllyChecks[coneGUID] = coneBits[coneGUID]
+				hitTargets = append(hitTargets, coneGUID)
+			} else {
+				hitTargets = append(hitTargets, coneGUID)
+			}
+		}
+	}
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
