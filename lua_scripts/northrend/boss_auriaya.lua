@@ -330,12 +330,12 @@ end
 -- The LOS leg ports via the bridged creature:IsWithinLOS
 -- (WorldObject::IsWithinLOSInMap twin).
 -- Cats band twin: C++ GetDistance subtracts both reaches (Object.cpp:1169);
--- Lua subtracts own reach (target reach unbridged).
+-- player pool, reach 1.5, reach-exact.
 local function savagePounceTick(creature, guid)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead() then
-            local d = creature:GetDistance(unit) - creature:GetCombatReach()
+            local d = creature:GetDistance(unit) - creature:GetCombatReach() - 1.5
             if d >= 10.0 and d < 15.0 and creature:IsWithinLOS(unit) then
                 candidates[#candidates + 1] = unit
             end

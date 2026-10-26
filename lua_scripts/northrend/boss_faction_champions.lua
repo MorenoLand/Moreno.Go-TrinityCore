@@ -233,8 +233,8 @@ end
 local function meleeThreatCheck(creature)
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
-            local dist2d = creature:GetDistance2d(victim) - creature:GetCombatReach()
-            if dist2d < 0 then dist2d = 0 end -- C++ GetDistance2d clamps at 0 (Object.cpp:1187); target reach band unbridged
+            local dist2d = creature:GetDistance2d(victim) - creature:GetCombatReach() - 1.5
+            if dist2d < 0 then dist2d = 0 end -- C++ GetDistance2d clamps at 0 (Object.cpp:1187); player reach 1.5, reach-exact
             local distMod = 15.0 / (15.0 + dist2d)
             local armorMod = victim:GetArmor() / 16635.0
             local eh = (victim:GetHealth() + 1) * (1.0 + armorMod)
@@ -289,8 +289,12 @@ local function victimCheck(creature, guid, arm)
     local fire = false
     if victim ~= nil then
         local dist = creature:GetDistance2d(victim)
+        local targetReach = 1.5
+        if victim:GetObjectType() ~= "Player" then
+            targetReach = victim:GetCombatReach()
+        end
         if arm.minRange == nil then
-            fire = dist - creature:GetCombatReach() < arm.maxRange -- Wing Clip: C++ GetDistance2d < 6 (Object.cpp:1187, reach-subtracted); target reach band unbridged
+            fire = dist - creature:GetCombatReach() - targetReach < arm.maxRange -- Wing Clip: C++ GetDistance2d < 6 (Object.cpp:1187, both reaches); unfiltered victim branches target reach
         else
             -- WorldObject::IsInRange (Object.cpp:1329, is3D=false): 2D
             -- distance against min/max plus both combat reaches, dist
@@ -363,11 +367,15 @@ local COUNT_ARMS = {
 }
 
 -- Count twin: C++ GetDistance2d subtracts both reaches (Object.cpp:1187);
--- Lua subtracts own reach.
+-- unfiltered threat pool branches target reach (player 1.5).
 local function countCheck(creature, guid, arm)
     local count = 0
     for _, target in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(target) - creature:GetCombatReach() < 10.0 then
+        local targetReach = 1.5
+        if target:GetObjectType() ~= "Player" then
+            targetReach = target:GetCombatReach()
+        end
+        if creature:GetDistance2d(target) - creature:GetCombatReach() - targetReach < 10.0 then
             count = count + 1
         end
     end

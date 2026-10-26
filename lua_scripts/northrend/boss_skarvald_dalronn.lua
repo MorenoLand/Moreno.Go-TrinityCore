@@ -178,7 +178,7 @@ local function randomPlayer(creature, minDist, maxDist)
     local candidates = {}
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead() then
-            local dist = creature:GetDistance(plr) - creature:GetCombatReach()
+            local dist = creature:GetDistance(plr) - creature:GetCombatReach() - 1.5
             if (minDist <= 0 or dist >= minDist) and dist < maxDist then
                 candidates[#candidates + 1] = plr
             end
@@ -197,13 +197,17 @@ end
 -- threat-ordered GetAITargets (lua_creature_events.go:345); the C++
 -- bounds are inclusive on both ends, kept here (midnight's upper
 -- bound was exclusive). C++ GetDistance2d subtracts both reaches
--- (Object.cpp:1187); Lua subtracts own reach (skadi idiom). SelectTargetList
+-- (Object.cpp:1187); unfiltered pool branches target reach. SelectTargetList
 -- skips offline refs (UnitAI.h), so the dead entries Go
 -- GetAITargets still carries are filtered here.
 local function randomTargetInBand(creature, minDist, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        local dist = creature:GetDistance2d(t) - creature:GetCombatReach()
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        local dist = creature:GetDistance2d(t) - creature:GetCombatReach() - targetReach
         if not t:IsDead() and dist >= minDist and dist <= maxDist then
             candidates[#candidates + 1] = t
         end

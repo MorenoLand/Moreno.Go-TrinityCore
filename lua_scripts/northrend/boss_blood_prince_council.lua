@@ -480,7 +480,11 @@ end
 -- 72980).
 local function onNucleusAuraCheck(creature, guid)
     local victim = creature:GetVictim()
-    if victim ~= nil and creature:GetDistance(victim) - creature:GetCombatReach() < 15.0 -- C++ GetDistance gate (Object.cpp:1169)
+    local victimReach = 1.5
+    if victim ~= nil and victim:GetObjectType() ~= "Player" then
+        victimReach = victim:GetCombatReach()
+    end
+    if victim ~= nil and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 15.0 -- C++ GetDistance gate (Object.cpp:1169, both reaches)
             and not victim:HasAura(SPELL_SHADOW_RESONANCE_RESIST) then
         creature:CastSpell(victim, SPELL_SHADOW_RESONANCE_RESIST)
     end
@@ -494,7 +498,11 @@ local function nucleusEnterCombat(event, creature, target)
     -- (boss_blood_prince_council.cpp:1061-1066): >= 15.0f ->
     -- DoStartMovement (no bridge, dropped); else immediate
     -- DoCast(who, 71822), non-triggered.
-    if target ~= nil and creature:GetDistance(target) - creature:GetCombatReach() < 15.0 then -- C++ GetDistance gate (Object.cpp:1169)
+    local targetReach = 1.5
+    if target ~= nil and target:GetObjectType() ~= "Player" then
+        targetReach = target:GetCombatReach()
+    end
+    if target ~= nil and creature:GetDistance(target) - creature:GetCombatReach() - targetReach < 15.0 then -- C++ GetDistance gate (Object.cpp:1169, both reaches)
         creature:CastSpell(target, SPELL_SHADOW_RESONANCE_RESIST)
     end
     schedule(guid, "auracheck", 1000, function() onNucleusAuraCheck(creature, guid) end)

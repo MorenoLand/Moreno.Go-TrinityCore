@@ -155,7 +155,7 @@ local function randomPlayer45(creature)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - creature:GetCombatReach() < 45 then
+                and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 45 then
             candidates[#candidates + 1] = p
         end
     end

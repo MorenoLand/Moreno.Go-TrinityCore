@@ -300,10 +300,14 @@ local function globuleTick(creature, guid)
     end
 
     -- Check_Timer: within 5 yd of the victim (C++ IsWithinDistInMap
-    -- both reaches; twin subtracts own reach only, target reach unbridged) -> DoCastVictim
+    -- both reaches; unfiltered victim branches target reach) -> DoCastVictim
     -- 37871 + DespawnOrUnsummon (C++-exact; 1s pump granularity
     -- instead of the C++ 500ms re-arm — header).
-    if creature:GetDistance(victim) - creature:GetCombatReach() < GLOBULE_EXPLOSION_RANGE then
+    local victimReach = 1.5
+    if victim:GetObjectType() ~= "Player" then
+        victimReach = victim:GetCombatReach()
+    end
+    if creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < GLOBULE_EXPLOSION_RANGE then
         creature:CastSpell(victim, SPELL_GLOBULE_EXPLOSION)
         creature:Despawn()
         cancelPump(globuleTimers, guid)

@@ -229,7 +229,7 @@ end
 -- Ring distances are player->GetDistance(me pos) (Object.cpp:1181:
 -- exact minus the PLAYER's reach, inclusive 15-50); the fallback is a
 -- SelectTarget 150 gate (IsWithinCombatRange, Unit.cpp:583) — both
--- twinned below, own reach only (target reach unbridged, skadi idiom).
+-- twinned below, reach-exact (player reach 1.5).
 -- Player reach is DEFAULT_PLAYER_COMBAT_REACH 1.5 (ObjectDefines.h:40).
 local PLAYER_COMBAT_REACH = 1.5
 local function vezaxRandomTarget(creature)
@@ -246,7 +246,7 @@ local function vezaxRandomTarget(creature)
             if dist - PLAYER_COMBAT_REACH >= 15 and dist - PLAYER_COMBAT_REACH <= 50 then
                 ring[#ring + 1] = plr
             end
-            if dist - reach < 150 and not plr:IsDead()
+            if dist - reach - PLAYER_COMBAT_REACH < 150 and not plr:IsDead()
                     and creature:IsEngagedBy(plr) then
                 wide[#wide + 1] = plr
             end

@@ -235,8 +235,8 @@ end
 
 -- C++ SelectTarget(Random, 1, 100, true): UnitAI.h builds the list
 -- victim-first, so offset 1 removes the victim, not the threat head;
--- then player + alive + within 100 yd (GetDistance - own reach
--- twin for IsWithinCombatRange, Unit.cpp:583).
+-- then player + alive + within 100 yd (GetDistance - own reach - 1.5
+-- twin for IsWithinCombatRange, Unit.cpp:583, reach-exact).
 local function randomChargeTarget(creature)
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -249,7 +249,7 @@ local function randomChargeTarget(creature)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < 100 then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 100 then
             candidates[#candidates + 1] = t
         end
     end

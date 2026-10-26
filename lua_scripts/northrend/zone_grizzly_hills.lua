@@ -195,10 +195,10 @@ local function lakeFrogReceiveEmote(_, creature, player, textEmote)
         return
     end
     -- C++ IsWithinDistInMap(player, 30) compares raw 3D dist against
-    -- 30 + own reach + target reach (Object.cpp _IsWithinDist); Go's
-    -- IsWithinDist is raw, so compare reach-adjusted dist (target
-    -- reach unmodeled, ~1.5yd band; same-map gate vacuous here).
-    if textEmote == TEXT_EMOTE_KISS and creature:GetDistance(player) - creature:GetCombatReach() < 30
+    -- 30 + own reach + target reach (Object.cpp _IsWithinDist); the
+    -- emote source is a player (reach 1.5, ObjectDefines.h:40), so
+    -- the twin is reach-exact; same-map gate vacuous here.
+    if textEmote == TEXT_EMOTE_KISS and creature:GetDistance(player) - creature:GetCombatReach() - 1.5 < 30
         and player:HasItem(ITEM_WARTS_B_GONE_LIP_BALM, 1) then
         if not player:HasAura(SPELL_WARTSBGONE_LIP_BALM) then
             player:AddAura(SPELL_WARTS)

@@ -75,7 +75,7 @@ local function randomPlayer(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < 8 then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 8 then
             candidates[#candidates + 1] = t
         end
     end

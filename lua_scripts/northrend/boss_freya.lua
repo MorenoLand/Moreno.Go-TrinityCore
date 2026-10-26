@@ -337,13 +337,14 @@ end
 -- :453 strengthened roots with -SPELL_ROOTS_FREYA, :969 iron
 -- roots with -SPELL_ROOTS_IRONBRANCH): threat-list players
 -- alive + dist, offset 0 (tank eligible). Gate twin: IsWithinCombatRange
--- (Unit.cpp:583) — raw center minus own reach (target reach unbridged).
+-- (Unit.cpp:583) — raw center minus own reach minus player reach 1.5,
+-- reach-exact.
 local function randomPlayerInRange(creature, minDist, maxDist, excludeAura)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
                 and (excludeAura == nil or not unit:HasAura(excludeAura)) then
-            local dist = creature:GetDistance(unit) - creature:GetCombatReach()
+            local dist = creature:GetDistance(unit) - creature:GetCombatReach() - 1.5
             if (minDist <= 0 or dist >= minDist) and dist < maxDist then
                 candidates[#candidates + 1] = unit
             end

@@ -120,13 +120,13 @@ end
 -- _IsTargetAcceptable, Creature.cpp:2508) and skipped by
 -- SelectTargetList, while Go SortedEntries returns dead entries
 -- too. C++ IsWithinCombatRange adds both combat reaches
--- (Unit.cpp:583); plain GetDistance is the standing granularity
--- delta.
+-- (Unit.cpp:583); player reach 1.5 (ObjectDefines.h:40),
+-- reach-exact.
 local function randomThreatPlayerInRange(creature, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             candidates[#candidates + 1] = t
         end
     end

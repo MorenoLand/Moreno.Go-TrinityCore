@@ -195,12 +195,12 @@ end
 -- Random, 0, 60, true (:1568) — both draw from the threat list, not
 -- the map-player list (baltharus precedent). Gate twin: IsInRange
 -- (Object.cpp:1329) and SelectTarget (Unit.cpp:583) — raw center minus
--- own reach, >= min, < max.
+-- own reach minus player reach 1.5, >= min, < max, reach-exact.
 local function randomPlayerInRange(creature, minDist, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead() then
-            local dist = creature:GetDistance(t) - creature:GetCombatReach()
+            local dist = creature:GetDistance(t) - creature:GetCombatReach() - 1.5
             if (minDist <= 0 or dist >= minDist) and dist < maxDist then
                 candidates[#candidates + 1] = t
             end

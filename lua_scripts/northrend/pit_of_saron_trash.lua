@@ -104,7 +104,7 @@ local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-            and creature:GetDistance(t) - creature:GetCombatReach() < range then
+            and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < range then
             candidates[#candidates + 1] = t
         end
     end
@@ -166,7 +166,7 @@ local function trashEnterCombat(event, creature, target)
         -- JustEngagedWith (C++ :199-207): engager is a player AND
         -- farther than 5yd -> leap on the engager.
         if target ~= nil and target:GetObjectType() == "Player"
-            and creature:GetDistance(target) - creature:GetCombatReach() > 5.0 then
+            and creature:GetDistance(target) - creature:GetCombatReach() - 1.5 > 5.0 then
             creature:CastSpell(target, SPELL_LEAPING_FACE_MAUL)
         end
         schedule(guid, "leap", 9000, function() leapTick(creature, guid) end)

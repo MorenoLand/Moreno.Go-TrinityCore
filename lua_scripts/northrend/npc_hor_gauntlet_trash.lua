@@ -187,9 +187,13 @@ end
 local function randomPlayer(creature, maxDist, playersOnly)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
+        local targetReach = 1.5
+        if p:GetObjectType() ~= "Player" then
+            targetReach = p:GetCombatReach()
+        end
         if not p:IsDead()
                 and (playersOnly == false or p:GetObjectType() == "Player")
-                and (maxDist == nil or creature:GetDistance(p) - creature:GetCombatReach() < maxDist) then
+                and (maxDist == nil or creature:GetDistance(p) - creature:GetCombatReach() - targetReach < maxDist) then
             candidates[#candidates + 1] = p
         end
     end
