@@ -233,7 +233,7 @@ local function pickRandomThreatPlayerInRange(creature, maxDist)
     local found = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetTypeId() == 4 and not unit:IsDead()
-                and creature:GetDistance(unit) <= maxDist then
+                and creature:GetDistance(unit) - creature:GetCombatReach() < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             found[#found + 1] = unit
         end
     end

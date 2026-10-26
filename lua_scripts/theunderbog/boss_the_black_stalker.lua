@@ -150,15 +150,15 @@ local function pickThreatTargetSkipFirst(creature)
 end
 
 -- C++ SelectTarget(Random, 0, 30, true): random alive
--- threat-list player within 30 yd (thespia distance-gate
--- convention; IsWithinCombatRange approximated by GetDistance).
+-- threat-list player within 30 yd (IsWithinCombatRange gate,
+-- Unit.cpp:583; target-reach band unbridged, skadi idiom).
 -- Nil when none is in range — the caller skips the cast
 -- (C++-exact).
 local function pickThreatPlayerIn30Yd(creature)
     local found = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) <= 30.0 then
+                and creature:GetDistance(t) - creature:GetCombatReach() < 30.0 then -- IsWithinCombatRange gate (Unit.cpp:583)
             found[#found + 1] = t
         end
     end

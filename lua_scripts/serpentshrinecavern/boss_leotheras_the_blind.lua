@@ -454,11 +454,11 @@ local function leotherasTick(creature, guid)
         -- base-point-override parameter), so the port fires the plain
         -- DBC-base-point cast.
         local victim = creature:GetVictim()
-        if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+        if victim and creature:GetDistance(victim) - creature:GetCombatReach() < CHAOS_BLAST_RANGE then -- IsWithinDist gate (Unit.cpp:1233)
             creature:StopMoving()
         end
         if st.chaosBlast <= 1000 then
-            if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+            if victim and creature:GetDistance(victim) - creature:GetCombatReach() < CHAOS_BLAST_RANGE then -- IsWithinDist gate (Unit.cpp:1233)
                 creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             end
             st.chaosBlast = 3000
@@ -622,11 +622,11 @@ local function demonTick(creature, guid)
     -- AddSpellBP0(100) legs (no BP0 / original-caster bridge on the
     -- Lua CastSpell surface).
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < CHAOS_BLAST_RANGE then -- IsWithinDist gate (Unit.cpp:1233)
         creature:StopMoving()
     end
     if st.chaosBlast <= 1000 then
-        if victim and creature:GetDistance(victim) <= CHAOS_BLAST_RANGE then
+        if victim and creature:GetDistance(victim) - creature:GetCombatReach() < CHAOS_BLAST_RANGE then -- IsWithinDist gate (Unit.cpp:1233)
             creature:CastSpell(victim, SPELL_CHAOS_BLAST)
             st.chaosBlast = 3000
         end

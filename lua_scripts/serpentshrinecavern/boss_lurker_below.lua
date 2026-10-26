@@ -56,9 +56,9 @@
 -- and the spout delivers no damage in this model, header).
 -- Whirl 18s (20s right after a spout) -> DoCast self 37660,
 -- re-arm 18000 (C++-exact). CheckTimer 15s then 2s -> inRange =
--- any alive player in the instance within 5 yd (the C++ map
--- player-list IsWithinMeleeRange scan — 5-yd player stand-in,
--- gruul convention; the old threat-list attribution was wrong),
+-- any map player in melee range (the C++ map player-list
+-- IsWithinMeleeRange scan, boss_lurker_below.cpp:278; no alive
+-- check; the old threat-list attribution was wrong),
 -- re-arm 2000 (C++-exact).
 -- Geyser: timer fires -> target = random alive player
 -- excluding the victim (C++ SelectTarget(Random, 1),
@@ -165,8 +165,6 @@ local ADD_POS = {
     {14.388216, -423.468018, -19.625271},
     {42.471519, -445.115295, -19.769423},
 }
-
-local MELEE_RANGE_STANDIN = 5
 
 local lurkerTimers = {}
 local lurkerState = {}
@@ -326,13 +324,13 @@ local function lurkerTick(creature, guid)
             st.whirl = st.whirl - 1000
         end
 
-        -- CheckTimer 15s then 2s: melee-range scan via the
-        -- 5-yd player stand-in (header). Uses the raw player list:
+        -- CheckTimer 15s then 2s: IsWithinMeleeRange scan
+        -- (C++ boss_lurker_below.cpp:278). Uses the raw player list:
         -- C++ has no alive check, so dead players count.
         if st.check <= 1000 then
             st.inRange = false
             for _, p in ipairs(playersInInstanceRaw(creature)) do
-                if creature:GetDistance(p) <= MELEE_RANGE_STANDIN then
+                if creature:IsWithinMeleeRange(p) then
                     st.inRange = true
                     break
                 end

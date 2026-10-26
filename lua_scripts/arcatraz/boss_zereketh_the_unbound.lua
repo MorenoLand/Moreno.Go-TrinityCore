@@ -114,8 +114,8 @@ end
 -- victim-GUID exclusion (nil victim falls back to skipping index 1).
 -- The pick is uniform random over the filtered pool (nil when empty,
 -- matching the C++ GetThreatListSize() <= offset shortcut).
--- The 100-yd gate stays a GetDistance stand-in for C++
--- IsWithinCombatRange (venoxis convention); the alive filter is
+-- The 100-yd gate uses the IsWithinCombatRange reach twin
+-- (Unit.cpp:583; target-reach band unbridged); the alive filter is
 -- kept (a dead pick would fail the C++ cast outright).
 local function randomNonVictimPlayer(creature)
     local victim = creature:GetVictim()
@@ -130,7 +130,7 @@ local function randomNonVictimPlayer(creature)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetTypeId() == 4 and not t:IsDead()
-                and creature:GetDistance(t) <= TARGET_RANGE then
+                and creature:GetDistance(t) - creature:GetCombatReach() < TARGET_RANGE then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = t
         end
     end
