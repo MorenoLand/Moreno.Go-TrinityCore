@@ -95,8 +95,11 @@
 --   brandon/grondel phantom-cast timer leak is fixed); arnath
 --   smite (:947/:978-980) + rupert bomb/gun/rocket
 --   (:1138-1140/:1157-1169) ported this run with entry-gated
---   undead spell picks; arnath flash-heal/PW-shield stay out on
---   friendly-search legs, arnath dominate-mind PORTED this run
+--   undead spell picks; arnath flash-heal stays out on its
+--   FindFriendlyCreature leg; arnath PW-shield PORTED this run
+--   (DoFindFriendlyMissingBuff pool via entry sweep, empty-guard
+--   added over C++'s unguarded pick); arnath dominate-mind PORTED
+--   this run
 --   (Is25ManRaid + undead-entry gates, skip-first player pool),
 --   registered for both the living and undead entries (same
 --   struct/AI survives UpdateEntry): brandon
@@ -326,6 +329,8 @@ local SPELL_HAMMER_OF_BETRAYAL = 71784 -- :100
 local SPELL_SMITE_NORMAL = 71546 -- :91
 local SPELL_SMITE_UNDEAD = 71778 -- :94
 local SPELL_DOMINATE_MIND = 14515 -- :88
+local SPELL_POWER_WORD_SHIELD_NORMAL = 71548 -- :90
+local SPELL_POWER_WORD_SHIELD_UNDEAD = 71780 -- :93
 local SPELL_FEL_IRON_BOMB_NORMAL = 71592 -- :109
 local SPELL_FEL_IRON_BOMB_UNDEAD = 71787 -- :112
 local SPELL_MACHINE_GUN_NORMAL = 71594 -- :110
@@ -1059,6 +1064,37 @@ local function onArnathDominateMind(creature, guid)
         function() onArnathDominateMind(creature, guid) end)
 end
 
+-- C++ npc_captain_arnath::Reset :948 — ScheduleEvent(EVENT_ARNATH_PW_SHIELD,
+-- 8s, 14s); UpdateAI :972-975 — DoFindFriendlyMissingBuff(40.0f,
+-- SPELL_POWER_WORD_SHIELD) -> DoCast(random pick, shield), re-arm {15s, 20s}.
+-- The C++ pool (GridNotifiers.h FriendlyMissingBuffInRange) is alive +
+-- in-combat + non-hostile + within 40y + missing the aura, over creatures
+-- only (players are not creatures); the Lua pool sweeps exactly the
+-- in-encounter non-hostile creature entries (8 captains + Crok 37129),
+-- each filtered by those same predicates — hostile ymirjar/Svalna fail
+-- the IsHostileTo filter, so the entry sweep is equivalent in-room.
+-- Deviation: C++ picks from an unguarded list (empty = UB); Lua guards
+-- the empty pool and still re-arms, matching C++'s unconditional re-arm.
+local function onArnathPWShield(creature, guid)
+    local shield = SPELL_POWER_WORD_SHIELD_NORMAL
+    if creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
+        shield = SPELL_POWER_WORD_SHIELD_UNDEAD
+    end
+    local pool = {}
+    for _, entry in ipairs({NPC_CAPTAIN_ARNATH, NPC_CAPTAIN_BRANDON, NPC_CAPTAIN_GRONDEL, NPC_CAPTAIN_RUPERT, NPC_CAPTAIN_ARNATH_UNDEAD, NPC_CAPTAIN_BRANDON_UNDEAD, NPC_CAPTAIN_GRONDEL_UNDEAD, NPC_CAPTAIN_RUPERT_UNDEAD, ENTRY_CROK_SCOURGEBANE}) do
+        for _, c in ipairs(creature:GetCreaturesInGrid(entry, 40.0)) do
+            if c:IsAlive() and c:IsInCombat() and not creature:IsHostileTo(c) and not c:HasAura(shield) then
+                pool[#pool + 1] = c
+            end
+        end
+    end
+    if #pool > 0 then
+        creature:CastSpell(pool[math.random(#pool)], shield)
+    end
+    schedule(guid, "pw_shield", {15000, 20000},
+        function() onArnathPWShield(creature, guid) end)
+end
+
 local function arnathEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859):
     -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
@@ -1067,6 +1103,8 @@ local function arnathEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "smite", {3000, 6000},
         function() onArnathSmite(creature, guid) end)
+    schedule(guid, "pw_shield", {8000, 14000},
+        function() onArnathPWShield(creature, guid) end)
     if creature:Is25ManRaid() and creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
         schedule(guid, "dominate", {22000, 27000},
             function() onArnathDominateMind(creature, guid) end)
