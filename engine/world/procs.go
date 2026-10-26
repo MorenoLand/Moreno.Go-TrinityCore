@@ -1839,8 +1839,8 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 	// never runs, no matter how the return-trip damage crit, absorbed,
 	// or resisted. The damage arm's immunity check instead ASSIGNS
 	// PROC_HIT_IMMUNE (Spell.cpp:2540-2546); the no-damage arm carries
-	// no immunity check, and Go's no-damage callers only pass immune
-	// on a damage-arm hit, so immune-first is exact for both arms.
+	// no immunity check, so its callers pass false for immune and the
+	// immune-first fold above is damage-arm-only semantics.
 	// The heal arm never calls createProcHitMask, so heals take no
 	// reflect bit.
 	if reflected {

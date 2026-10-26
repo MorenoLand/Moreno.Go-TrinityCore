@@ -15744,12 +15744,17 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			}
 		}
 	} else if !instantKill && !targetCantProc {
-		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, true, immune, reflected)
+		// The no-damage arm carries no IsImmunedToDamage check (Spell.cpp:2563-2575:
+		// createProcHitMask on a fresh damageInfo, MissCondition alone decides), so the
+		// damage-immunity var must not reach it: an entry-zero spell on a damage-immune
+		// victim takes NORMAL (or REFLECT on a return trip), never IMMUNE.
+		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, true, false, reflected)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, true, immune, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
+				// Same no-damage-arm ruling as the done side: damage immunity never consulted.
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, true, false, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	}
