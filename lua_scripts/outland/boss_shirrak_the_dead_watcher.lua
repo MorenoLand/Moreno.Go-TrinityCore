@@ -53,8 +53,8 @@
 -- boss_shirrak_the_dead_watcherAI::UpdateAI FocusFire block
 -- (:150-163) — PORTED 2026-10-23 (focusfireTick, event 1; init 17000,
 -- re-arm 15000 + rand32() % 5000): SelectTarget(Random, 1) = random pick
--- among the threat list EXCLUDING the top-threat entry (UnitAI.h:162-174;
--- the ikiss offset-1 precedent via GetAITargets, threat-sorted), then the
+-- among the threat list EXCLUDING the current victim (UnitAI.h victim-first
+-- list, offset pop before any filter; ikiss precedent via GetAITargets), then the
 -- C++ player-type + IsAlive gates — then SummonCreature(NPC_FOCUS_FIRE
 -- 18374) at the target's position, TEMPSUMMON_TIMED_DESPAWN 5500ms +
 -- Talk(EMOTE_FOCUSED 0, target) (C++ arm order). The stale "no
@@ -153,8 +153,8 @@ end
 
 -- C++ FocusFire block (boss_shirrak_the_dead_watcher.cpp:150-163):
 -- SelectTarget(Random, 1) — random pick among the threat list EXCLUDING
--- the top-threat entry (UnitAI.h:162-174; the ikiss offset-1 precedent —
--- GetAITargets is threat-sorted, lua_creature_events.go:1018), then the
+-- the current victim (UnitAI.h template SelectTargetList builds the list
+-- victim-first and pops the offset before any filter), then the
 -- C++ player-type + IsAlive gates — then SummonCreature(NPC_FOCUS_FIRE
 -- 18374) at the target's position, TEMPSUMMON_TIMED_DESPAWN 5500ms +
 -- Talk(EMOTE_FOCUSED 0, target) (C++ arm order); re-arm
@@ -165,15 +165,34 @@ local function focusfireTick(creature, guid)
     -- threat-sorted rest, offline refs skipped, the first entry
     -- popped BEFORE any filter — then the pick is gated on
     -- player-type + alive, and a failed gate means NO summon that
-    -- cycle (C++ re-arms only). Black-stalker skip-first idiom:
-    -- pick from GetAITargets()[2..] unfiltered, so a dead or
+    -- cycle (C++ re-arms only). The pick excludes the victim by GUID
+    -- (victim-first pop, archimonde precedent), picked unfiltered so a dead or
     -- non-player pick fails the gate exactly like C++ (the old
     -- alive-prefilter over-summoned whenever a dead entry
     -- preceded the pick).
+    -- Nil victim: the pop removes the top-threat entry instead.
     local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+    local pool = {}
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        for i = 2, #targets do
+            pool[#pool + 1] = targets[i]
+        end
+    else
+        for _, t in ipairs(targets) do
+            if t:GetGUID() ~= victimGuid then
+                pool[#pool + 1] = t
+            end
+        end
+    end
     local pick = nil
-    if #targets > 1 then
-        pick = targets[math.random(2, #targets)]
+    if #pool > 0 then
+        pick = pool[math.random(#pool)]
     end
     if pick and pick:GetObjectType() == "Player" and pick:IsAlive() then
         local target = pick

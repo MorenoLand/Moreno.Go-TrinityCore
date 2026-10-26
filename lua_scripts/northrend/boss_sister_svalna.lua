@@ -179,7 +179,7 @@
 -- boss_sister_svalna JustEngagedWith EVENT_IMPALING_SPEAR
 --   (:359, 40-50s, re-arm 20-25s, :500-509) — PORTED: self-cast
 --   AETHER_SHIELD 71463 then victim-cast IMPALING_SPEAR 71443 on a
---   threat-list target (skip-first MaxThreat head, playerOnly,
+--   threat-list target (victim-first pop, playerOnly,
 --   -71443 aura exclusion via randomNonHeadPlayerTarget).
 -- boss_sister_svalna JustEngagedWith EVENT_AETHER_SHIELD
 --   (:360, 100-110s) — scheduled but has NO case in the UpdateAI
@@ -1075,19 +1075,32 @@ local function randomThreatTarget(creature)
 end
 
 -- C++ SelectTarget(Random, 1) (UnitAI.h:170-174): like randomThreatTarget
--- but the offset-1 skips the first MaxThreat-ordered entry (the tank) —
--- the netherspite/auriaya tank-skip idiom on the bridged threat list.
-local function randomNonHeadThreatTarget(creature)
+-- but the offset-1 pops the current victim from the victim-first list —
+-- the alive-minus-victim idiom on the bridged threat list.
+local function randomNonVictimThreatTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() then
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             candidates[#candidates + 1] = t
         end
     end
-    if #candidates <= 1 then
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        if #candidates <= 1 then
+            return nil
+        end
+        return candidates[math.random(2, #candidates)]
+    end
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #candidates == 0 then
         return nil
     end
-    return candidates[math.random(2, #candidates)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ npc_captain_rupert::Reset :1138-1140 — Reset-seeded timers
@@ -1105,8 +1118,8 @@ end
 -- arms are SelectTarget(Random, N) with playerOnly=FALSE (UnitAI.h:170),
 -- so the pools are the threat list via GetAITargets
 -- (lua_creature_events.go:345 — the midnight precedent); machine gun /
--- rocket launch skip the MaxThreat head (Random, 1, UnitAI.h:173-174 —
--- the netherspite/auriaya tank-skip idiom on the bridged threat list).
+-- rocket launch exclude the current victim (Random, 1, UnitAI.h —
+-- the alive-minus-victim idiom on the bridged threat list).
 local function onRupertFelIronBomb(creature, guid)
     local spell = SPELL_FEL_IRON_BOMB_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
@@ -1125,7 +1138,7 @@ local function onRupertMachineGun(creature, guid)
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_MACHINE_GUN_UNDEAD
     end
-    local target = randomNonHeadThreatTarget(creature)
+    local target = randomNonVictimThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end
@@ -1138,7 +1151,7 @@ local function onRupertRocketLaunch(creature, guid)
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_ROCKET_LAUNCH_UNDEAD
     end
-    local target = randomNonHeadThreatTarget(creature)
+    local target = randomNonVictimThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
     end

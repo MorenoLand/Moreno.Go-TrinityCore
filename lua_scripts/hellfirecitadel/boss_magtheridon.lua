@@ -84,7 +84,7 @@
 -- contained timers arm normally: shadow bolt volley 30510 20s
 -- then {15s,20s}, non-triggered DoCastAOE self-cast
 -- (kalecgos convention); fear 30530 {15s,20s} then {25s,40s}
--- on a random threat-list target skipping the first MaxThreat
+-- on a random threat-list target excluding the current victim
 -- entry (C++ SelectTarget(Random, 1), playerOnly defaults FALSE;
 -- nil pick keeps the schedule,
 -- burn convention); abyssal 30511 30s then 60s, non-triggered
@@ -221,24 +221,36 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1) (playerOnly defaults FALSE, UnitAI.h:170;
--- offset 1 skips the first MaxThreat entry for Random, UnitAI.h:162-163)
+-- offset 1 pops the current victim from the victim-first list (UnitAI.h)
 -- — threat-list pick via GetAITargets; C++ skips offline refs before the
--- offset pop (SelectTargetList), so the skip hits the first LIVE entry —
--- alive-filter then skip-first; threatListSize <= 1 yields nil
+-- offset pop (SelectTargetList), so the pop removes the victim, not the head
+-- alive-filter then victim-GUID exclusion; nil victim pops the top entry;
 -- (the C++ offset shortcut), and a nil pick keeps the schedule
 -- (the C++ Repeat sits outside the if).
-local function randomThreatTargetSkippingFirst(creature)
-    local targets = creature:GetAITargets()
+local function randomThreatTargetSkippingVictim(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local alive = {}
-    for _, t in ipairs(targets) do
-        if not t:IsDead() then
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             alive[#alive + 1] = t
         end
     end
-    if #alive <= 1 then
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        if #alive <= 1 then
+            return nil
+        end
+        return alive[math.random(2, #alive)]
+    end
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #alive == 0 then
         return nil
     end
-    return alive[math.random(2, #alive)]
+    return alive[math.random(#alive)]
 end
 
 -- ================= Magtheridon (17257) =================
@@ -416,7 +428,7 @@ local function channelerShadowBolt(creature, guid)
 end
 
 local function channelerFear(creature, guid)
-    local pick = randomThreatTargetSkippingFirst(creature)
+    local pick = randomThreatTargetSkippingVictim(creature)
     if pick then
         creature:CastSpell(pick, SPELL_FEAR)
     end

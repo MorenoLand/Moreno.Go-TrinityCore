@@ -119,7 +119,7 @@
 --   Talk(SAY_ANIMATE_DEAD) leg is PORTED in the reanimate6 arm below.
 --   SPELL_CURSE_OF_TORPOR 71237 (:706-710, ported): DoCast(target,
 --   non-triggered) on SelectTarget(Random, 1) (offset 1 skips the
---   MaxThreat head, UnitAI.h:172-174 — tank-skip unbridged, the
+--   current victim, UnitAI.h — alive-minus-victim idiom, the
 --   netherspite precedent); init 15s / re-arm 18s unconditional.
 -- npc_darnavan (38472/38485) — C++ Reset() EventMap (:838-844) re-keyed
 --   to OnEnterCombat: SPELL_BLADESTORM 65947 self-cast 10s/{90s,100s}
@@ -877,20 +877,33 @@ end
 
 -- C++ SelectTarget(Random, 1) (UnitAI.h:170-174): random over the threat
 -- list — playerOnly=FALSE so pets/totems are eligible — with offset 1
--- skipping the first MaxThreat-ordered entry (the tank). Bridged via
+-- popping the current victim from the victim-first list. Bridged via
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
--- the netherspite/auriaya tank-skip idiom on the bridged threat list.
-local function randomNonHeadThreatTarget(creature)
+-- the alive-minus-victim idiom on the bridged threat list.
+local function randomNonVictimThreatTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() then
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             candidates[#candidates + 1] = t
         end
     end
-    if #candidates <= 1 then
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        if #candidates <= 1 then
+            return nil
+        end
+        return candidates[math.random(2, #candidates)]
+    end
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #candidates == 0 then
         return nil
     end
-    return candidates[math.random(2, #candidates)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.
@@ -913,14 +926,14 @@ local function onShroudOfTheOccult(creature, guid)
 end
 
 -- C++ :706-710: DoCast(target, SPELL_CURSE_OF_TORPOR) non-triggered on
--- SelectTarget(Random, 1) — offset-1 skips the MaxThreat head
+-- SelectTarget(Random, 1) — offset-1 pops the current victim
 -- (UnitAI.h:173-174), playerOnly=FALSE (UnitAI.h:170) so pets/totems
 -- are eligible; lowered over the threat-ordered GetAITargets list
 -- (lua_creature_events.go:345 — the netherspite/auriaya tank-skip
 -- idiom on the bridged threat list); init 15s, re-arm 18s
 -- unconditional.
 local function onCurseOfTorpor(creature, guid)
-    local target = randomNonHeadThreatTarget(creature)
+    local target = randomNonVictimThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_TORPOR)
     end

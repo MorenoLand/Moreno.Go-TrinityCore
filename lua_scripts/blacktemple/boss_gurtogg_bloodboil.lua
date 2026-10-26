@@ -38,8 +38,8 @@
 -- non-triggered DoCastVictim / fel acid breath 40595 16s one-shot,
 -- non-triggered DoCastVictim / arcing smash 40599 8s then 13s,
 -- non-triggered DoCastVictim. Start phase 2: pick a random threat-listed
--- unit excluding the threat head (C++ SelectTarget(Random, 1) — offset 1
--- skips the first MaxThreat-order entry); if found, store
+-- unit excluding the current victim (C++ SelectTarget(Random, 1) — offset 1
+-- pops the victim from the victim-first list); if found, store
 -- its GUID (fel rage target), triggered self-cast fel rage 40594 +
 -- triggered casts fel rage target 40604 / fel rage 40616 / fel rage
 -- 41625 / fel geyser 40569 / fel rage target 46787 on the target,
@@ -167,20 +167,32 @@ local function cancelGroup(guid, keys)
 end
 
 -- C++ SelectTarget(Random, 1): any threat-listed unit (playerOnly=false
--- default, UnitAI.h:170), excluding the threat head — offset 1 skips the
--- first entry in MaxThreat order (UnitAI.h); no range cap.
+-- default, UnitAI.h:170), excluding the current victim — offset 1 pops the
+-- victim from the victim-first list (UnitAI.h); no range cap.
 local function randomAnyTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local alive = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() then
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             alive[#alive + 1] = t
         end
     end
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        if #alive <= 1 then
+            return nil
+        end
+        return alive[math.random(2, #alive)]
+    end
     -- C++ shortcut: threat list size <= offset ignores ALL elements.
-    if #alive <= 1 then
+    if #alive == 0 then
         return nil
     end
-    return alive[1 + math.random(#alive - 1)]
+    return alive[math.random(#alive)]
 end
 
 -- C++ SelectTarget(Random, 0, me->GetCombatReach()): any threat-listed

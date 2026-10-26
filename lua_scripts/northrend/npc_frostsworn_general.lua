@@ -66,9 +66,9 @@
 -- casts + reflection AttackStart). The summon leg itself is now
 -- bridgeable (engine/world/lua_creature_events.go:956) — the old
 -- no-summon claim is retracted — but the machine stays
--- documented-only on the MaxThreat target list (no threat-list
--- accessor bridge), the player-side casts (no player-cast bridge)
--- and AttackStart (no bridge).
+-- documented-only: the MaxThreat target-list leg rides
+-- creature:GetAITargets() (old no-accessor claim retracted); the player-side
+-- casts (no player-cast bridge) and AttackStart (no bridge) block it.
 -- (CORRECTION 2026-10-23: the JustEngagedWith DoZoneInCombat leg
 -- (:1908) IS ported below — creature:DoZoneInCombat() is bridged
 -- (engine/world/lua_creature_events.go); the stale "no bridge" claim
