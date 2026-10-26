@@ -299,7 +299,7 @@ local function summonPlayerTick(creature, guid)
         -- targets), then picks MaxThreat among survivors: skip
         -- in-range players, cast on the first player beyond the bar.
         for _, target in ipairs(targets) do
-            if target:GetObjectType() == "Player" then
+            if target:GetObjectType() == "Player" and not target:IsDead() then
                 local bar = 50 + creature:GetCombatReach() + 1.5
                 if creature:GetDistance(target) >= bar then
                     creature:CastSpell(target, SPELL_SUMMON_PLAYER)

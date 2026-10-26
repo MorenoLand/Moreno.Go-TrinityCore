@@ -78,7 +78,7 @@ end
 -- the bridged threat list (threat-sorted, same set).
 local function firstManaPlayer(creature)
     for _, target in ipairs(creature:GetAITargets()) do
-        if target:GetObjectType() == "Player" and target:GetPowerType() == POWER_MANA then
+        if target:GetObjectType() == "Player" and not target:IsDead() and target:GetPowerType() == POWER_MANA then
             return target
         end
     end

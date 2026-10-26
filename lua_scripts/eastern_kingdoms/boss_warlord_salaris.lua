@@ -192,7 +192,7 @@ end
 local function interceptTick(creature, guid)
     local inMeleeRange = false
     for _, unit in ipairs(creature:GetAITargets()) do
-        if creature:IsWithinMeleeRange(unit) then
+        if not unit:IsDead() and creature:IsWithinMeleeRange(unit) then
             inMeleeRange = true
             break
         end
