@@ -357,8 +357,12 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 // (Object.cpp:3087) used by TARGET_CHECK_ALLY/PARTY/RAID/RAID_CLASS: alive,
 // not combat-disabled, non-hostile, and never a GM (Object.cpp:3104; the
 // self arm at :3087 precedes it, so the caster itself is exempt).
-// Visibility and vehicle terms have no Go infra, and totem units are not
-// tracked in Go (TARGET_CHECK_* all reject totems in C++).
+// Visibility and vehicle terms have no Go infra. Totem rejection is NOT
+// part of IsValidAssistTarget in C++ either: WorldObjectSpellTargetCheck
+// rejects totems in the TARGET_CHECK_ALLY/PARTY/RAID arms (Spell.cpp:8345/
+// 8354/8371) before calling IsValidAssistTarget, so each session call site
+// gates on Server.isTotemGUID (live player totems, registered as motions)
+// instead — nearby below, cone ally leg, ref-centered area leg, area accept.
 func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caster playerPos, allyOf func(faction uint32) bool) bool {
 	if c.mapID != caster.Map || c.instanceID != caster.InstanceID || c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, true) {
 		return false
@@ -545,7 +549,10 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 	bestDist := maxRange
 	var bestX, bestY, bestZ float32
 	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
-		if !s.friendlyAssistOK(spell, c, caster, allyOf) {
+		// TARGET_CHECK_ALLY/PARTY/RAID all reject totems (Spell.cpp:8345/
+		// 8354/8371); the gate sits before the nearest-shrink step, so a
+		// nearer totem never blocks a farther passing candidate.
+		if s.server.isTotemGUID(c.guid) || !s.friendlyAssistOK(spell, c, caster, allyOf) {
 			return
 		}
 		_, wantAlly := checks[friendlyCheckAlly]
