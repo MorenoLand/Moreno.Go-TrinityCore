@@ -17036,6 +17036,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if miss == protocol.SpellMissMiss || miss == protocol.SpellMissResist || miss == protocol.SpellMissDeflect {
 					continue
 				}
+				// SPELL_MISS_DODGE/PARRY/BLOCK (Unit::MeleeSpellHitResult,
+				// Unit.cpp:2480-2486, via triggeredSpellTableResult): a
+				// dodged, parried, or fully blocked melee-spell target
+				// resolves no unit in DoEffectOnLaunchTarget
+				// (Spell.cpp:7736-7744) — the same null-unit arm as
+				// MISS/RESIST/DEFLECT — so it takes no effects either.
+				// The launch path already filters every miss reason
+				// (missedTargets); only this triggered filter enumerated
+				// a subset.
+				if miss == protocol.SpellMissDodge || miss == protocol.SpellMissParry || miss == protocol.SpellMissBlock {
+					continue
+				}
 				if miss == protocol.SpellMissReflect {
 					// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
 					// ReflectResult nulls _spellHitTarget — the reflected
@@ -17089,6 +17101,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// PreprocessTarget nulls _spellHitTarget on any non-NONE
 					// MissCondition — the jump target takes no effects.
 					if miss == protocol.SpellMissMiss || miss == protocol.SpellMissResist || miss == protocol.SpellMissDeflect {
+						continue
+					}
+					// SPELL_MISS_DODGE/PARRY/BLOCK (Unit::MeleeSpellHitResult,
+					// Unit.cpp:2480-2486, via triggeredSpellTableResult): same
+					// null-unit arm as MISS/RESIST/DEFLECT — a dodged,
+					// parried, or fully blocked jump takes no effects and
+					// consumes no falloff index, like the IMMUNE/EVADE jumps
+					// above it.
+					if miss == protocol.SpellMissDodge || miss == protocol.SpellMissParry || miss == protocol.SpellMissBlock {
 						continue
 					}
 					if miss == protocol.SpellMissReflect {
