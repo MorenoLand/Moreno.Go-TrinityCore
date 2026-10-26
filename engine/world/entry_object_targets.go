@@ -304,13 +304,17 @@ func (s *session) spellEntryNearbyGOTarget(ctx context.Context, spell wotlk.Spel
 // Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
 // TARGET_DEST_NEARBY_ENTRY (46): the destination becomes the position of the
 // nearest world object within GetMaxRange(IsPositive()) passing
-// SpellInfo::CheckTarget and the spell's implicit-target conditions. The
-// container mask starts from all types and is narrowed by
-// CONDITION_OBJECT_ENTRY_GUID rows; corpses have no Go model and never
-// match. With no conditions and RequiresSpellFocus set, the focus object's
-// position is used (Spell.cpp:1085). No match returns false and the caller
-// fails the cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
-func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.Spell, spellID uint32) (float32, float32, float32, bool) {
+// SpellInfo::CheckTarget and the effect's own implicit-target conditions
+// (Spell.cpp:1066: Effects[effIndex].ImplicitTargetConditions, loaded by
+// the single-effect mask — never the union over all 46 effects, whose
+// ElseGroup rows would AND together across effects and fail casts whose
+// effects match different entries). The container mask starts from all
+// types and is narrowed by CONDITION_OBJECT_ENTRY_GUID rows; corpses
+// have no Go model and never match. With no conditions for this effect
+// and RequiresSpellFocus set, the focus object's position is used
+// (Spell.cpp:1085). No match returns false and the caller fails the cast
+// with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.Spell, spellID uint32, effIndex int) (float32, float32, float32, bool) {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0, 0, 0, false
 	}
@@ -318,7 +322,7 @@ func (s *session) spellEntryNearbyDestPosition(ctx context.Context, spell wotlk.
 	if maxRange <= 0 {
 		return 0, 0, 0, false
 	}
-	condRows := s.loadImplicitTargetConditions(ctx, spellID, entryImplicitEffectMask(spell, implicitTargetDestNearbyEntry))
+	condRows := s.loadImplicitTargetConditions(ctx, spellID, 1<<uint(effIndex))
 	if len(condRows) == 0 && spell.RequiresSpellFocus != 0 {
 		// Spell.cpp:1089: focus-object position or cast failure.
 		if _, x, y, z, ok := s.spellFocusObject(ctx, spell); ok {

@@ -230,7 +230,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 			unitTarget, hasUnitTarget = resolved, true
 		}
 	}
-	for _, eff := range spell.Effects {
+	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
@@ -307,9 +307,12 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
 				// TARGET_DEST_NEARBY_ENTRY (46) — the destination becomes the
 				// nearest entry-matched object's position; no match fails the
-				// cast (Spell.cpp:1111), and without conditions a
-				// RequiresSpellFocus spell uses the focus object's position.
-				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID); ok {
+				// cast (Spell.cpp:1111), and without conditions for this
+				// effect a RequiresSpellFocus spell uses the focus
+				// object's position. The scan is per effect
+				// (Spell.cpp:1066), so a later effect's 46 arm re-scans
+				// with its own conditions and overwrites the destination.
+				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID, effIndex); ok {
 					x, y, z = nx, ny, nz
 				} else {
 					return target, false

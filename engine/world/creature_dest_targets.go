@@ -52,12 +52,13 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // the 76/106 channel destinations (motions hold channel duration but no
 // channel target).
 //
-// TARGET_DEST_NEARBY_ENTRY (46) resolves through
-// creatureEntryNearbyDestPosition below: a no-match fails the cast
-// (Spell.cpp:1111, SendCastResult SPELL_FAILED_BAD_IMPLICIT_TARGETS plus
-// finish(false)), reported via the destFailed return so call sites abort
-// before the GO packet — the session twin's per-arm fail, not the
-// seed-dest fallback the target-dest arms use without a resolvable
+// TARGET_DEST_NEARBY_ENTRY (46) resolves per effect through
+// creatureEntryNearbyDestPosition below: each effect scans with its own
+// ImplicitTargetConditions list (Spell.cpp:1066) and a no-match on any
+// 46 arm fails the cast (Spell.cpp:1111, SendCastResult
+// SPELL_FAILED_BAD_IMPLICIT_TARGETS plus finish(false)), reported via
+// the destFailed return so call sites abort before the GO packet — not
+// the seed-dest fallback the target-dest arms use without a resolvable
 // unit target.
 func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {
 	if s == nil || m == nil {
@@ -93,16 +94,17 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 			hasUnitTarget = true
 		}
 	}
-	// TARGET_DEST_NEARBY_ENTRY (46) resolves once up front: the scan's
-	// condition rows are effect-mask-unioned (the session twin's
-	// approximation), so every 46 arm in the loop takes the same nearest
-	// position and later effects still overwrite earlier ones.
+	// TARGET_DEST_NEARBY_ENTRY (46) scans per effect in the loop below:
+	// each effect's own ImplicitTargetConditions list (Spell.cpp:1066)
+	// gates its scan, cached across the effect's two slots. C++ merges
+	// effects sharing one conditions pointer into a single selection
+	// (Spell.cpp:885-900); rescanning an identical list yields the
+	// identical nearest position, so the per-effect scan is
+	// outcome-equivalent there and exact where the lists differ.
+	scannedEff := -1
 	var nearbyX, nearbyY, nearbyZ float32
 	nearbyFound := false
-	if isDestNearbyEntrySpell(spell) {
-		nearbyX, nearbyY, nearbyZ, nearbyFound = s.creatureEntryNearbyDestPosition(ctx, m, spell)
-	}
-	for _, eff := range spell.Effects {
+	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
@@ -124,13 +126,19 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 					x, y, z = nx, ny, nz
 				}
 			case targetType == implicitTargetDestNearbyEntry:
+				if effIndex != scannedEff {
+					nearbyX, nearbyY, nearbyZ, nearbyFound = s.creatureEntryNearbyDestPosition(ctx, m, spell, effIndex)
+					scannedEff = effIndex
+				}
 				if nearbyFound {
 					x, y, z = nearbyX, nearbyY, nearbyZ
+				} else {
+					return x, y, z, true, true
 				}
 			}
 		}
 	}
-	return x, y, z, true, isDestNearbyEntrySpell(spell) && !nearbyFound
+	return x, y, z, true, false
 }
 
 // creatureDestTargetOrientation returns the orientation of the explicit
@@ -180,7 +188,10 @@ func (s *Server) creatureEntryNearbyObjectRange(m *creatureMotion, spell wotlk.S
 // TARGET_DEST_NEARBY_ENTRY (46) for a creature caster, mirroring the session
 // twin spellEntryNearbyDestPosition: the destination becomes the position of
 // the nearest world object within GetMaxRange(IsPositive()) passing
-// SpellInfo::CheckTarget and the spell's implicit-target conditions.
+// SpellInfo::CheckTarget and the effect's own implicit-target conditions
+// (Spell.cpp:1066: Effects[effIndex].ImplicitTargetConditions, loaded by
+// the single-effect mask — never the union over all 46 effects, whose
+// ElseGroup rows would AND together across effects).
 // Candidates are player sessions, creature motions (the caster motion
 // itself included — C++ visits the caster's own grid cell, and the session
 // twin likewise includes the casting session), static DB creature spawns
@@ -190,9 +201,9 @@ func (s *Server) creatureEntryNearbyObjectRange(m *creatureMotion, spell wotlk.S
 // units: alive unless the spell allows dead targets (SpellInfo.cpp:1715),
 // not combat-disabled (spellTargetUnitBlocked, assist=false like the
 // session twin); corpses have no Go model and never match. With no
-// conditions and RequiresSpellFocus set, the focus object's position is
-// used (Spell.cpp:1085). No match returns false.
-func (s *Server) creatureEntryNearbyDestPosition(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (float32, float32, float32, bool) {
+// conditions for this effect and RequiresSpellFocus set, the focus
+// object's position is used (Spell.cpp:1085). No match returns false.
+func (s *Server) creatureEntryNearbyDestPosition(ctx context.Context, m *creatureMotion, spell wotlk.Spell, effIndex int) (float32, float32, float32, bool) {
 	if s == nil || m == nil {
 		return 0, 0, 0, false
 	}
@@ -200,7 +211,7 @@ func (s *Server) creatureEntryNearbyDestPosition(ctx context.Context, m *creatur
 	if maxRange <= 0 {
 		return 0, 0, 0, false
 	}
-	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, entryImplicitEffectMask(spell, implicitTargetDestNearbyEntry))
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, 1<<uint(effIndex))
 	if len(condRows) == 0 && spell.RequiresSpellFocus != 0 {
 		if x, y, z, ok := s.motionSpellFocusPosition(ctx, m, spell); ok {
 			return x, y, z, true
