@@ -3553,7 +3553,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// tail per TargetInfo (Spell.cpp:2565-2575 !hasDamage branch,
 		// 2609-2652) — NODAMAGE procs, the reflector stand-up, the
 		// SpellHitTarget hook with the pet as _spellHitTarget, and the
-		// per-hit trigger consumer. Only clean (NONE) reflects: a nulled
+		// per-hit trigger consumer. The proc mask is REFLECT alone:
+		// the return trip's MissCondition stays REFLECT into the no-damage
+		// arm (Spell.cpp:2565-2575, createProcHitMask Unit.cpp:10179-10247),
+		// matching the inline twin. Only clean (NONE) reflects: a nulled
 		// trip resolves no _spellHitTarget (Spell.cpp:2350) and runs
 		// nothing. The leech leg needs no arm here — a zero-damage trip
 		// has a zero leech basis.
@@ -3574,7 +3577,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						schoolMask:     uint32(zeroSchoolMask),
 						spellTypeMask:  procSpellTypeNoDmgHeal,
 						spellPhaseMask: procSpellPhaseHit,
-						hitMask:        procHitNormal,
+						hitMask:        procHitReflect,
 						triggered:      triggered,
 						eventSpell:     &spellCopy,
 						actorGUID:      motion.GUID,
@@ -5189,7 +5192,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// proc loop (m_damage > 0 pre-mitigation, so DAMAGE type with a
 			// zero post-mitigation amount), the reflector stand-up, the
 			// SpellHitTarget hook with the pet as _spellHitTarget, and the
-			// per-hit trigger consumer. The leech leg needs no arm: a
+			// per-hit trigger consumer. The proc mask is REFLECT alone
+			// (createProcHitMask's miss arm, Unit.cpp:10179-10247): a
+			// reflected trip never re-enters the normal/critical arm,
+			// however it mitigated. The leech leg needs no arm: a
 			// zero-damage trip has a zero leech basis.
 			if reflectorGUID != 0 && tm != nil && tm.Health != 0 {
 				if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
@@ -5202,7 +5208,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 								schoolMask:     uint32(schoolMask),
 								spellTypeMask:  procSpellTypeDamage,
 								spellPhaseMask: procSpellPhaseHit,
-								hitMask:        procHitNormal,
+								hitMask:        procHitReflect,
 								triggered:      triggered,
 								eventSpell:     &spellCopy,
 								actorGUID:      caster.GUID,
