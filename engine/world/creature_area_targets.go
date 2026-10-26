@@ -713,7 +713,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// CHEAT_GOD skip lives inside DealDamage, not the proc call.
 	// The creature actor has no auras, so only the taken leg runs.
 	if p.Sess != nil && p.Sess.player != nil && p.Sess.procDeep == 0 {
-		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, false, false, isCrit, 0, damage, false, false, 0)
+		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0)
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 	// non-friendly non-positive (or dispel-effect) spell hit stands
@@ -865,6 +865,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		}
 	}
 	var absorbed, resisted, blocked uint32
+	fullBlock := false
 	isCrit := false
 	hitInfo := uint32(0)
 	damageImmune := false
@@ -919,6 +920,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 			if b, ok := s.spellTakenBlockAmountFrom(victimTarget, false, nil, inlineSpell, damage, attackerLevel, motion.X, motion.Y); ok {
 				blocked = b
 				damage -= b
+				fullBlock = blocked > 0 && damage == 0
 			}
 		}
 		if damage > 0 {
@@ -1068,9 +1070,19 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	// arms alike, like the pet creature branch (the return trip's lethal
 	// skip is self-hit-specific: the caster's own auras are stripped
 	// before DoDamageAndTriggers runs).
-	procHitMask := procHitNormal
-	if isCrit {
-		procHitMask = procHitCritical
+	// createProcHitMask (Unit.cpp:10227-10246): a fully absorbed,
+	// fully resisted, or fully blocked hit carries no normal/critical
+	// bit, a partial block adds the block bit, and an immune hit
+	// carries the immune bit alone — the same helper the periodic
+	// ticks and the player path already use.
+	procHitMask := spellDamageProcHitMask(true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, false)
+	if fullBlock {
+		procHitMask = procHitBlock | procHitFullBlock
+		if absorbed > 0 {
+			procHitMask |= procHitAbsorb
+		}
+	} else if blocked > 0 {
+		procHitMask |= procHitBlock
 	}
 	if inlineSpellKnown && inlineSpell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 		if typeMask := spellDamageTakenProcTypeMask(inlineSpell) | procFlagTakenDamage; typeMask != 0 {

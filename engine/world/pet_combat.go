@@ -4666,6 +4666,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// melee/ranged-DmgClass block subtraction lands post-crit, pre-resilience
 	// on the pet path too.
 	blocked := uint32(0)
+	fullBlock := false
 	if target.GUID != caster.GUID {
 		// WorldObject::MagicSpellHitResult (Object.cpp:2555): the caster's
 		// m_modSpellHitChance arm runs for any unit caster — the pet's live
@@ -4895,6 +4896,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if b, ok := s.server.spellTakenBlockAmountFrom(target, isPlayerVictim, vicSess, blockSpell, damage, uint8(maxUint32(caster.Level, 1)), caster.X, caster.Y); ok {
 				blocked = b
 				damage -= b
+				fullBlock = blocked > 0 && damage == 0
 			}
 		}
 	}
@@ -5240,10 +5242,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// damage legs on both the lethal and non-lethal arms — C++ fires
 		// the call after DealSpellDamage regardless of the victim's death.
 		// Hit detail: misses (hitInfo 0x01) return before this branch, so
-		// the mask is NORMAL or CRIT; pet spell crits roll at the
+		// the mask follows the createProcHitMask nullification arms;
+		// pet spell crits roll at the
 		// taken-leg site above (Unit::SpellCritChanceDone, Unit.cpp:7167).
 		if victim.procDeep == 0 {
-			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, false, false, isCrit, absorbed, procEventDamage, triggered, false, 0)
+			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, resisted > 0 && procEventDamage == 0, absorbed > 0 && procEventDamage == 0, isCrit, absorbed, procEventDamage, triggered, false, 0)
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
@@ -5463,14 +5466,24 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// evaluate the hit as a taken-proc event (PROC_SPELL_TYPE_DAMAGE,
 	// PROC_SPELL_PHASE_HIT; Unit.cpp:10385-10418). Mirrors the
 	// player-victim branch's taken leg above: runs after the damage legs
-	// on both the lethal and non-lethal arms, the hit mask follows the crit roll
+	// on both the lethal and non-lethal arms, the hit mask follows the crit roll and the createProcHitMask nullification arms
 	// (misses return early above), the attr3 arm checked inline (the
 	// creature loop has no attr3 gate), and the trigger spell targeting
 	// the pet attacker. The self-hit is excluded — the return-trip
 	// bridge below already fires the combined done+taken event there.
-	procHitMask := procHitNormal
-	if isCrit {
-		procHitMask = procHitCritical
+	// createProcHitMask (Unit.cpp:10227-10246): a fully absorbed,
+	// fully resisted, or fully blocked hit carries no normal/critical
+	// bit, and a partial block adds the block bit — the same helper
+	// the periodic ticks and the player path already use. Immune
+	// hits return before this site, so no immune arm is needed.
+	procHitMask := spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, false)
+	if fullBlock {
+		procHitMask = procHitBlock | procHitFullBlock
+		if absorbed > 0 {
+			procHitMask |= procHitAbsorb
+		}
+	} else if blocked > 0 {
+		procHitMask |= procHitBlock
 	}
 	if target.GUID != caster.GUID {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
