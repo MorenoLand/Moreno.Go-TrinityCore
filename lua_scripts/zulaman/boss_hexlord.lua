@@ -600,7 +600,7 @@ local ADD_ARMS = {
           fire = function(creature)
               local target = lowestHpFriendly(creature, 99.0, 30000)
               if target then
-                  if creature:GetDistance(target) <= 50.0 then
+                  if creature:GetDistance(target) - creature:GetCombatReach() < 50.0 then -- IsWithinDistInMap gate (Object.cpp:1238)
                       creature:CastSpell(target, SPELL_FLASH_HEAL, false)
                   end
               elseif math.random(0, 1) == 1 then
