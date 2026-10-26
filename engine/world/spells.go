@@ -28288,6 +28288,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner (pet/totem
 		// caster -> owner player; wild/charmed -> nil, the C++ null path).
 		heal := effectValueMultiplied(paid, ts.calcValueMultiplierForAura(aura.SpellID, 62, ts.server.spellModOwnerSession(ts.player.Map, ts.player.InstanceID, aura.CasterGUID)))
+		// Unit::HealBySpell (Unit.cpp:6561-6574) runs CalcHealAbsorb before
+		// DealHeal, so the funnel heal is consumed by the target's 301
+		// shields first — the creature funnel already applies this leg.
+		if heal > 0 {
+			heal -= ts.applyHealAbsorb(uint32(aura.SchoolMask), heal)
+		}
 		curHP := ts.player.Health
 		maxHP := ts.player.MaxHealth
 		newHP := curHP + heal
@@ -28794,6 +28800,15 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 	// row is present. The heal stays the dealt damage, like the known path's
 	// zeroed flat leg.
 	heal = casterSess.healingTakenBonus(casterSess, aura.CasterGUID, aura.SpellID, heal, true)
+	// Unit::HealBySpell (Unit.cpp:6561-6574): CalcHealAbsorb consumes the
+	// leech self-heal against the caster's own 301 shields before DealHeal.
+	if heal > 0 {
+		absorbMask := uint32(aura.SchoolMask)
+		if leechKnown {
+			absorbMask = leechSpell.SchoolMask
+		}
+		heal -= casterSess.applyHealAbsorb(absorbMask, heal)
+	}
 	if heal > 0 {
 		curHP := casterSess.player.Health
 		maxHP := casterSess.player.MaxHealth
@@ -28898,6 +28913,15 @@ func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, inst
 			}
 		}
 		heal = creatureHealingTakenBonus(s, casterKey, casterGUID, tickSpell, tickKnown, heal, true)
+	}
+	// Unit::HealBySpell (Unit.cpp:6561-6574): CalcHealAbsorb consumes the
+	// leech self-heal against the caster motion's 301 shields before DealHeal.
+	if heal > 0 {
+		absorbMask := uint32(aura.SchoolMask)
+		if tickKnown {
+			absorbMask = tickSpell.SchoolMask
+		}
+		heal -= s.creatureApplyHealAbsorb(casterKey, absorbMask, heal)
 	}
 	// AuraEffect::HandlePeriodicLeech (SpellAuraEffects.cpp:5317) routes the
 	// caster self-heal through Unit::HealBySpell, which calls Unit::DealHeal
