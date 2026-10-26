@@ -1804,6 +1804,47 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 	})
 }
 
+// fireCreatureMissNodmgTakenProcs is the creature-victim twin of
+// procSpellDamageNoDmgTakenAuraTriggers for a missed target's no-damage arm
+// (Spell.cpp:2563-2579): the victim creature's own auras proc with the
+// taken-side positivity fallback, PROC_SPELL_TYPE_NO_DMG_HEAL,
+// PROC_SPELL_PHASE_HIT, and the miss-kind hit mask, and the trigger spell
+// targets the caster. The caller gates on the creature high word (0xF130)
+// so pet/vehicle GUIDs never alias into a creature motion; the creature
+// path carries no per-motion procDeep model (boss_ai.go), so no CanProc
+// gate applies here, matching the other creature taken legs.
+func (s *Server) fireCreatureMissNodmgTakenProcs(ctx context.Context, motion *creatureMotion, casterGUID uint64, spell wotlk.Spell, miss uint8, triggered bool, triggerAuraSpell uint32) {
+	if s == nil || motion == nil {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	if spellHasHealEffect(spell) {
+		return
+	}
+	typeMask := spellNoDmgHealTakenProcTypeMask(spell, spellDamageNoDmgPositive(spell))
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.fireCreatureAuraProcLoop(ctx, motion, casterGUID, procEventInfo{
+		typeMask:             typeMask,
+		schoolMask:           schoolMask,
+		spellTypeMask:        procSpellTypeNoDmgHeal,
+		spellPhaseMask:       procSpellPhaseHit,
+		hitMask:              spellNoDmgMissProcHitMask(miss, false, false),
+		triggered:            triggered,
+		eventSpell:           &spellCopy,
+		triggeredByAuraSpell: triggerAuraSpell,
+		actorGUID:            casterGUID,
+	})
+}
+
 // spellDamageProcHitMask mirrors the hit-mask derivation for spell damage
 // events (DamageInfo ctor from SpellNonMeleeDamage, Unit.cpp:183-192;
 // createProcHitMask, Unit.cpp:10179-10247): miss, immunity, and full resist

@@ -10205,6 +10205,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if s.server != nil {
 				if victimSess := s.server.findSessionByGUID(guid); victimSess != nil {
 					victimSess.procSpellDamageNoDmgTakenAuraTriggers(effCtx, s.playerGUID, spellID, miss.Reason, false, s.triggeredNoProcEvents > 0, false, s.castTriggerAuraSpell)
+				} else if uint16(guid>>48) == 0xF130 {
+					if motion := s.findCreatureMotion(guid); motion != nil {
+						s.server.fireCreatureMissNodmgTakenProcs(effCtx, motion, s.playerGUID, spell, miss.Reason, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
+					}
 				}
 			}
 		}
@@ -17430,6 +17434,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if s.server != nil {
 			if victimSess := s.server.findSessionByGUID(guid); victimSess != nil {
 				victimSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, miss, false, s.triggeredNoProcEvents > 0, false, s.castTriggerAuraSpell)
+			} else if uint16(guid>>48) == 0xF130 {
+				if motion := s.findCreatureMotion(guid); motion != nil {
+					s.server.fireCreatureMissNodmgTakenProcs(ctx, motion, s.playerGUID, spell, miss, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
+				}
 			}
 		}
 	}
