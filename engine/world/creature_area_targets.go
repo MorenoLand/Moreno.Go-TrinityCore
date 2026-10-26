@@ -1316,6 +1316,115 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 	return spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask)
 }
 
+// serverCreatureSpellMissVerdict rolls the MAGIC leg of
+// WorldObject::SpellHitResult (Object.cpp:2617-2663) for a creature caster:
+// the DmgClass dispatch (NONE/MELEE/RANGED take no table here — the melee
+// table is a separate unit), the IGNORE_HIT_RESULT, self-cast and
+// positive-vs-non-hostile early-outs, then the MagicSpellHitResult table
+// (Object.cpp:2534-2604): the level-diff base with the caster's aura-55
+// sum (pet-verdict precedent) plus the player-victim 186/160/rating legs,
+// the 178 debuff-resist arm and the 287 deflect arm. Callers run it after
+// the immune/evade/reflect verdicts, matching C++ order inside
+// SpellHitResult, so a reflected/evaded/immune target never rolls here.
+// Deltas shared with the pet verdict: the mechanic-resist roll, the
+// CU_BINARY average-resist arm and the trigger-caster level rule have no
+// Go model; creature victims carry no 186/160 sums. The dead-victim head
+// gate (Object.cpp:2525-2526) applies to creature victims only — player
+// victims are exempt in C++.
+func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) uint8 {
+	if s == nil || m == nil || targetGUID == 0 {
+		return protocol.SpellMissNone
+	}
+	if spell.DefenseType != spellDamageClassMagic {
+		return protocol.SpellMissNone
+	}
+	if spell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return protocol.SpellMissNone
+	}
+	if targetGUID == m.GUID {
+		return protocol.SpellMissNone
+	}
+	if spellIsPositive(spell) && s.creatureFriendlyToTarget(m, targetGUID) {
+		return protocol.SpellMissNone
+	}
+	var victimLevel uint8
+	isPlayerVictim := false
+	var victimSess *session
+	var victimMotion *creatureMotion
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		isPlayerVictim = true
+		victimSess = ts
+		victimLevel = ts.player.Level
+	} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		victimMotion = tm
+		if tm.Health == 0 {
+			return protocol.SpellMissNone
+		}
+		victimLevel = uint8(maxUint32(tm.Level, 1))
+	} else {
+		return protocol.SpellMissNone
+	}
+	casterLevel := uint8(maxUint32(m.Level, 1))
+	bonusHit := float64(s.creatureAuraSpellHitSum(creatureAuraKeyForMotion(m)))
+	if isPlayerVictim && victimSess != nil {
+		bonusHit += float64(victimSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellHitChance, int32(spell.SchoolMask)))
+		bonusHit -= spellRatingHitPct(float64(victimSess.player.CombatRatings[CombatRatingHitTakenSpell]), victimSess.player.Level)
+		if isAreaEnemySpell(spell) {
+			bonusHit -= float64(victimSess.totalAuraModifier(spellAuraModAoeAvoidance))
+		}
+	}
+	if miss := magicSpellHitResultFromBase(magicSpellHitBase(casterLevel, victimLevel, isPlayerVictim), bonusHit); miss != protocol.SpellMissNone {
+		return miss
+	}
+	if !spellIsPositive(spell) && spell.AttributesEx4&spellAttr4IgnoreResistances == 0 {
+		hasAura := false
+		for i := range spell.Effects {
+			if spellEffectIsAuraEffect(spell.Effects[i]) {
+				hasAura = true
+				break
+			}
+		}
+		if hasAura {
+			var chance int32
+			if isPlayerVictim && victimSess != nil {
+				chance = victimSess.totalAuraModifierByMiscValue(spellAuraModDebuffResistance, int32(spell.DispelType))
+			} else if victimMotion != nil {
+				chance = s.creatureAuraTypeSumByMisc(creatureAuraKeyForMotion(victimMotion), spellAuraModDebuffResistance, int32(spell.DispelType))
+			}
+			if chance > 0 && rand.Float64()*100 < float64(chance) {
+				return protocol.SpellMissResist
+			}
+		}
+	}
+	var deflectPct int32
+	var inFront bool
+	controlled := false
+	if isPlayerVictim && victimSess != nil {
+		controlled = victimIsControlled(s, true, victimSess, combatTarget{})
+		deflectPct = victimSess.totalAuraModifier(spellAuraDeflectSpells)
+		inFront = victimSess.hasAuraType(spellAuraIgnoreHitDirection) || hasInArc(victimSess.player.Orientation, victimSess.player.X, victimSess.player.Y, m.X, m.Y, math.Pi)
+	} else if victimMotion != nil {
+		controlled = victimIsControlled(s, false, nil, combatTarget{GUID: victimMotion.GUID, Map: victimMotion.Map, InstanceID: victimMotion.InstanceID, X: victimMotion.X, Y: victimMotion.Y, Orientation: victimMotion.Orientation})
+		key := creatureAuraKeyForMotion(victimMotion)
+		deflectPct = s.creatureAuraTypeSum(key, spellAuraDeflectSpells)
+		inFront = hasInArc(victimMotion.Orientation, victimMotion.X, victimMotion.Y, m.X, m.Y, math.Pi)
+		if !inFront {
+			s.auraMu.Lock()
+			for _, aura := range s.activeCreatureAuras[key] {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraIgnoreHitDirection {
+					inFront = true
+					break
+				}
+			}
+			s.auraMu.Unlock()
+		}
+	}
+	if !controlled && inFront && deflectPct > 0 && rand.Float64()*100 < float64(deflectPct) {
+		return protocol.SpellMissDeflect
+	}
+	return protocol.SpellMissNone
+}
+
 // armCastCreatureReflectProcDelayed mirrors the ProcReflectDelayed arm
 // (Spell.cpp:2181) for the castCreatureSpellInternal path: at
 // outbound-missile arrival the reflector's taken-side auras proc with
@@ -1446,7 +1555,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// strips the caster's auras first). A zero-damage trip with no
 	// effect-1 still returns — the old damage==0 guard.
 	if spell.ID != 0 && spellHasEffect(spell, spellEffectInstaKill) {
-		s.creatureEffectInstaKill(ctx, motion, spell.ID, []uint64{motion.GUID}, nil, nil, nil)
+		s.creatureEffectInstaKill(ctx, motion, spell.ID, []uint64{motion.GUID}, nil, nil, nil, nil)
 		if live := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); live == nil || live.Health == 0 {
 			return
 		}

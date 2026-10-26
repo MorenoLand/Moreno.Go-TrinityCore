@@ -1201,6 +1201,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	var reflectedTargets map[uint64]uint8
 	var evadedTargets map[uint64]bool
 	var immuneTargets map[uint64]bool
+	var missTargets map[uint64]uint8
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
@@ -1579,6 +1580,19 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					reflectedTargets[guid] = status
 					s.armCastCreatureReflectProcDelayed(ctx, m, guid, spellInfo)
 				}
+				// MAGIC table leg (SpellHitResult order: immune, evade,
+				// reflect, then the DmgClass table): a target that
+				// survived the verdicts above rolls the creature-caster
+				// miss table; a miss joins the GO miss list and skips
+				// every per-hit leg below like immune/evaded targets.
+				if !reflected {
+					if miss := s.serverCreatureSpellMissVerdict(ctx, m, spellInfo, guid); miss != protocol.SpellMissNone {
+						if missTargets == nil {
+							missTargets = map[uint64]uint8{}
+						}
+						missTargets[guid] = miss
+					}
+				}
 			}
 		}
 		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead
@@ -1680,7 +1694,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if sendGoPacket {
 		packetHits := hitTargets
 		var missStatus []protocol.SpellMissStatus
-		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 || len(missTargets) > 0 {
 			packetHits = make([]uint64, 0, len(hitTargets))
 			// Spell::UpdateSpellCastDataTargets (Spell.cpp:4486-4508) walks
 			// m_UniqueTargetInfo in target order, so miss entries ride hit
@@ -1696,6 +1710,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 				if immuneTargets[guid] {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissImmune})
+					continue
+				}
+				if miss, missed := missTargets[guid]; missed {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: miss})
 					continue
 				}
 				packetHits = append(packetHits, guid)
@@ -1735,7 +1753,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == spellEffectInstaKill {
-				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets)
+				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -1776,6 +1794,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				continue
 			}
 			if immuneTargets[guid] {
+				continue
+			}
+			if missTargets[guid] != protocol.SpellMissNone {
 				continue
 			}
 			if guid == 0 || s.creatureFriendlyToTarget(m, guid) {
@@ -1841,6 +1862,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if immuneTargets[guid] {
 				continue
 			}
+			if missTargets[guid] != protocol.SpellMissNone {
+				continue
+			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 			}
@@ -1863,7 +1887,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// _cast without a SpellInfo.
 	if spellKnown {
 		unreflectedHits := hitTargets
-		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 || len(missTargets) > 0 {
 			unreflectedHits = make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
 				// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2652):
@@ -1883,6 +1907,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					continue
 				}
 				if immuneTargets[guid] {
+					continue
+				}
+				if missTargets[guid] != protocol.SpellMissNone {
 					continue
 				}
 				unreflectedHits = append(unreflectedHits, guid)
@@ -2044,12 +2071,12 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 // OnDamage hook). The vehicle-mounted duel arm stays unbridged (no vehicle
 // model); the plain duel arm and the OwnerAttackedBy signal are bridged in
 // the player-victim path, the signal also in creatureInstaKillVictim.
-func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool) {
+func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
 	}
 	for _, guid := range hitTargets {
-		if guid == 0 || evaded[guid] || immune[guid] {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
 			continue
 		}
 		// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2349-2350):

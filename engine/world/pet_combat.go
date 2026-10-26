@@ -3733,7 +3733,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			for guid := range evadedSet {
 				evaded[guid] = true
 			}
-			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, nil)
+			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, nil, nil)
 		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
