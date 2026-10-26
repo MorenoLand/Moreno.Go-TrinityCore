@@ -3046,6 +3046,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if now.Before(motion.CastingUntil) {
 			return
 		}
+		// TurretAI::CanAIAttack (CombatAI.cpp:245-251) fails while the
+		// victim sits inside _minimumRange, so ThreatReference::ShouldBeOffline
+		// (ThreatManager.cpp:101-115) takes the victim offline and
+		// UpdateVictim fails — the turret casts nothing that tick. Go has
+		// no threat-offline model, so the tick just skips the cast: the
+		// threat entry survives, and casting resumes once the victim
+		// leaves the band. The max-range half rides aiDoCastVictimInRange.
+		if !s.turretCanAIAttack(motion, *target, dist3D) {
+			return
+		}
 		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now, players, true)
 		// ArcherAI::UpdateAI (CombatAI.cpp:217-229) casts only m_spells[0]
 		// and only outside _minimumRange: inside the band it melee-attacks
@@ -3059,6 +3069,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if archMin, _, archOK := s.archerSpellBand(motion); archOK && (spellID != motion.Spells[0] || dist3D < archMin+cReach+victimReach) {
 				dueOK = false
 			}
+		}
+		// TurretAI::UpdateAI (CombatAI.cpp:259-265) casts only m_spells[0]
+		// and has no melee fallback, so the generic event path must not
+		// fire a later template spell for a turret — the event stays due
+		// (no re-arm), exactly as the ArcherAI arm above. No min-band
+		// term here: DoSpellAttackIfReady gates on the max range only,
+		// and the min-band victim effect rides the CanAIAttack arm below.
+		if motion.AIName == "TurretAI" && dueOK && len(motion.Spells) > 0 && spellID != motion.Spells[0] {
+			dueOK = false
 		}
 		if dueOK && dueTargetGUID == 0 {
 			// UnitAI::DoCast (UnitAI.cpp:113-163): a null SelectTarget pick
@@ -3748,6 +3767,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// ArcherAI::AttackStart (CombatAI.cpp:199-215): a flying victim
+			// ends the generator chain in MoveIdle — the chase branches
+			// above never launch for one, and the flying check after them
+			// overrides any chase with idle. The combat tick has no
+			// persistent generator, so the per-tick twin stands here:
+			// face the victim, launch no spline. The spell arm above
+			// already ran, so a flying victim in spell range is still
+			// cast at, exactly as C++ UpdateAI casts while idle; the
+			// melee arm below only fires for a low flyer inside melee
+			// range, where C++ DoMeleeAttackIfReady likewise swings.
+			// The victim is a player in this tick, so the flying signal
+			// is the session's last movement packet — the player:IsFlying
+			// twin (Unit.h:1644, FLYING | DISABLE_GRAVITY). A player with
+			// no packet yet reads not flying, matching C++'s zero-flag
+			// default; creature victims never reach this tick.
+			if motion.AIName == "ArcherAI" && archerVictimFlying(target) {
+				faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+				if faceAngle < 0 {
+					faceAngle += 2 * math.Pi
+				}
+				motion.Orientation = faceAngle
+				motion.Moving = false
+				return
+			}
 			if motion.AIName != "TurretAI" {
 				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
 				// UNIT_STATE_NOT_MOVE (root | stun | died | distracted, Unit.h:256)
@@ -4427,7 +4470,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if motion.AIName == "TurretAI" || motion.AIName == "ArcherAI" {
 			zAttackRange += spellMaxRangeHostile(s, motion)
 		}
-		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		// TurretAI::CanAIAttack (CombatAI.cpp:245-251) rides CanStartAttack
+		// via CanCreatureAttack (Creature.cpp:1989, 2560-2572): a victim
+		// outside the spell[0] max range or inside _minimumRange never
+		// acquires. The max half is already inside aggroDist above; the
+		// helper re-checks the full band with the victim's real reach.
+		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -4767,6 +4815,66 @@ func combatDistanceSpellRange(s *Server, motion *creatureMotion) float32 {
 // range is 0, and m_CombatDistance is the hostile max range. ok is
 // false when no DBC range row resolves or the max range is 0, in which
 // case callers keep the generic behavior.
+// archerVictimFlying is Unit::IsFlying (Unit.h:1644) for the combat tick's
+// player victim: the session's last client movement packet carries FLYING
+// or DISABLE_GRAVITY, the same twin player:IsFlying uses (lua_player.go).
+func archerVictimFlying(target *playerPos) bool {
+	if target == nil || target.Sess == nil {
+		return false
+	}
+	if mi, ok := target.Sess.lastMovementInfoSnapshot(); ok {
+		return mi.Flags&(movementFlying|movementDisableGravity) != 0
+	}
+	return false
+}
+
+// turretSpellBand returns spell[0]'s DBC range band for TurretAI
+// (CombatAI.cpp:239-242): _minimumRange is the spell's hostile min range
+// with NO fallback — unlike ArcherAI, the turret ctor does not default a
+// zero min to MELEE_RANGE — and m_CombatDistance is the hostile max range.
+func (s *Server) turretSpellBand(motion *creatureMotion) (minRange, maxRange float32, ok bool) {
+	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
+		return 0, 0, false
+	}
+	spellInfo, found, err := s.Data.Spell(motion.Spells[0])
+	if err != nil || !found {
+		return 0, 0, false
+	}
+	rangeEntry, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex)
+	if rangeErr != nil || !rangeFound {
+		return 0, 0, false
+	}
+	return rangeEntry.MinHostile, rangeEntry.MaxHostile, rangeEntry.MaxHostile > 0
+}
+
+// turretCanAIAttack is TurretAI::CanAIAttack (CombatAI.cpp:245-251):
+// IsWithinCombatRange(who, m_CombatDistance) and NOT (minimumRange set
+// and IsWithinCombatRange(who, minimumRange)) — 3D distance against the
+// band plus both combat reaches (Unit.cpp:583). True for every other AI
+// (ArcherAI has no override; the UnitAI default is true) and whenever
+// the DBC band does not resolve, keeping the generic behavior.
+func (s *Server) turretCanAIAttack(motion *creatureMotion, target playerPos, dist3D float32) bool {
+	if motion == nil || motion.AIName != "TurretAI" {
+		return true
+	}
+	minRange, maxRange, ok := s.turretSpellBand(motion)
+	if !ok {
+		return true
+	}
+	cReach := motion.CombatReach
+	if cReach <= 0 {
+		cReach = 1.5
+	}
+	victimReach := float32(1.5)
+	if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
+		victimReach = target.Sess.player.CombatReach
+	}
+	if dist3D >= maxRange+cReach+victimReach {
+		return false
+	}
+	return !(minRange > 0 && dist3D < minRange+cReach+victimReach)
+}
+
 func (s *Server) archerSpellBand(motion *creatureMotion) (minRange, maxRange float32, ok bool) {
 	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
 		return 0, 0, false
