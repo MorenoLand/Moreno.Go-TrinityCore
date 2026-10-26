@@ -3047,6 +3047,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now, players, true)
+		// ArcherAI::UpdateAI (CombatAI.cpp:217-229) casts only m_spells[0]
+		// and only outside _minimumRange: inside the band it melee-attacks
+		// instead. The generic event path above can arm any template spell,
+		// so an archer with a later spell due, or a spell[0] due while the
+		// victim sits inside the band, must not cast here — the event stays
+		// due (no re-arm) and the tick falls through to the melee/pursuit
+		// arms below. The band is Unit::IsWithinCombatRange (Unit.cpp:583):
+		// 3D distance strictly below _minimumRange + both combat reaches.
+		if motion.AIName == "ArcherAI" && dueOK {
+			if archMin, _, archOK := s.archerSpellBand(motion); archOK && (spellID != motion.Spells[0] || dist3D < archMin+cReach+victimReach) {
+				dueOK = false
+			}
+		}
 		if dueOK && dueTargetGUID == 0 {
 			// UnitAI::DoCast (UnitAI.cpp:113-163): a null SelectTarget pick
 			// (ENEMY/DEBUFF with no in-range candidate) returns
@@ -3709,6 +3722,32 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// me->Attack(who, false), meleePossible=false); it stands and
 			// casts spell[0] when the victim sits in the range band, so an
 			// out-of-band victim just ends the tick here.
+			// ArcherAI::AttackStart (CombatAI.cpp:199-215): a victim outside
+			// _minimumRange is chased to m_CombatDistance, not to melee
+			// contact — ChaseRange MaxRange = range + CONTACT_DISTANCE
+			// (MovementDefines.cpp:25) plus both combat reaches. A victim
+			// already inside that stop distance stands (no spline launch);
+			// a victim inside _minimumRange falls through to the melee
+			// shorten below, mirroring the AttackStart within-minimum
+			// branch. C++ sets the chase once at AttackStart and the
+			// generator holds it; the Go tick has no persistent generator,
+			// so the branch is re-evaluated per tick — a victim that closes
+			// inside the band mid-fight is melee-chased here, where C++
+			// would hold its ranged chase and sit in the dead zone.
+			archerChaseStop := float32(0)
+			if motion.AIName == "ArcherAI" {
+				if archMin, archMax, archOK := s.archerSpellBand(motion); archOK && !(dist3D < archMin+cReach+victimReach) {
+					archerChaseStop = archMax + 0.5 + cReach + victimReach
+					if dist3D <= archerChaseStop {
+						faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+						if faceAngle < 0 {
+							faceAngle += 2 * math.Pi
+						}
+						motion.Orientation = faceAngle
+						return
+					}
+				}
+			}
 			if motion.AIName != "TurretAI" {
 				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
 				// UNIT_STATE_NOT_MOVE (root | stun | died | distracted, Unit.h:256)
@@ -3733,6 +3772,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// the creature stops at melee-ring contact, not on the
 						// victim's center.
 						shorten := float32(0.5) + cReach + victimReach
+						if archerChaseStop > 0 {
+							shorten = archerChaseStop
+						}
 						destX, destY := target.X, target.Y
 						if dist > shorten {
 							destX = target.X + (motion.X-target.X)/dist*shorten
@@ -3749,7 +3791,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// velocity below 0.001 fails validation — no spline is launched and no
 						// SMSG_MONSTER_MOVE is sent. A fully slowed chaser stands still; the
 						// melee swing below still fires.
-						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 {
+						// The 2D dist can sit inside the archer stop distance
+						// while the 3D band check above passed (large dz): never
+						// launch onto the victim's center in that case.
+						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) {
 							duration := splineDurationMs(float64(dist), speed)
 							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
@@ -4713,6 +4758,32 @@ func combatDistanceSpellRange(s *Server, motion *creatureMotion) float32 {
 		cReach = 1.5
 	}
 	return float32(calcMeleeRange(cReach, 1.5)) + spellMaxRangeHostile(s, motion)
+}
+
+// archerSpellBand returns spell[0]'s DBC range band for ArcherAI
+// (CombatAI.cpp:185-197): _minimumRange is the spell's hostile min
+// range, falling back to MELEE_RANGE (1.0, ObjectDefines.h:43:
+// NOMINAL_MELEE_RANGE 5 minus twice MIN_MELEE_REACH 2) when the min
+// range is 0, and m_CombatDistance is the hostile max range. ok is
+// false when no DBC range row resolves or the max range is 0, in which
+// case callers keep the generic behavior.
+func (s *Server) archerSpellBand(motion *creatureMotion) (minRange, maxRange float32, ok bool) {
+	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
+		return 0, 0, false
+	}
+	spellInfo, found, err := s.Data.Spell(motion.Spells[0])
+	if err != nil || !found {
+		return 0, 0, false
+	}
+	rangeEntry, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex)
+	if rangeErr != nil || !rangeFound {
+		return 0, 0, false
+	}
+	minRange = rangeEntry.MinHostile
+	if minRange == 0 {
+		minRange = 1
+	}
+	return minRange, rangeEntry.MaxHostile, rangeEntry.MaxHostile > 0
 }
 
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance, zAttackRange float32) bool {
