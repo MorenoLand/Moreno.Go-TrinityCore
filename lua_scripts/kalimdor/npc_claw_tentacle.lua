@@ -6,14 +6,17 @@
 -- Entry: 15725 (worker-verified from C++ NPC_CLAW_TENTACLE).
 -- Hamstring 26141 on victim (2s init -> 5s repeat per C++
 -- HamstringTimer reset; the giant-claw port (C++ repeat 10s) is
--- a different AI — not copied here). The EvadeTimer leg (5s
--- bridge — documented, not wired. The ctor and evade-leg
--- pPortal->SetReactState(REACT_PASSIVE) arms (boss_cthun.cpp :982,
--- :1040) ride the same unbridged portal-summon machinery: cross-
--- creature arms on the summoned NPC_SMALL_PORTAL.
+-- a different AI — not copied here). The EvadeTimer leg is PORTED
+-- 2026-10-26 (onEvadeCheck: 1s out-of-melee-range poll, pause
+-- semantics; hide/teleport/portal/EngageWithTarget, acid-pick skip).
+-- The ctor-summoned portal's JustDied/old-portal KillSelf legs stay
+-- out (no GUID->creature bridge; Lua never summoned the ctor portal).
 local ENTRY = 15725
+local ENTRY_SMALL_PORTAL = 15904
 local SPELL_GROUND_RUPTURE = 26139
 local SPELL_HAMSTRING = 26141
+local SPELL_DIGESTIVE_ACID = 26476
+local REACT_PASSIVE = 0
 
 local timers = {}
 
@@ -59,14 +62,82 @@ local function onHamstring(creature, guid)
     end)
 end
 
+-- C++ EvadeTimer leg (boss_cthun.cpp:1016-1056): while out of melee
+-- range the 5s timer ticks down (it PAUSES, never resets, back in
+-- range); on fire the tentacle hides, picks a random threat-list
+-- any-unit alive, kills itself on an empty pick, and — unless the pick
+-- carries Digestive Acid 26476 — teleports onto the pick, summons a
+-- small portal (15904, CORPSE_DESPAWN type 4, passive) at its new
+-- position, re-arms rupture 500ms / hamstring 2000ms, and
+-- AttackStart(pick) via EngageWithTarget; it unhides either way.
+-- Lua form: a 1s poll accumulating out-of-range time (pause semantics
+-- kept: in-range polls neither add nor reset); the acid-pick leg
+-- keeps the elapsed count so the next poll re-fires, as C++ re-fires
+-- every tick with an unreset timer. The ctor-summoned portal's
+-- JustDied/old-portal KillSelf legs stay out (no GUID->creature
+-- bridge; Lua never summoned the ctor portal).
+local evadeElapsed = {}
+
+local function onEvadeCheck(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and not creature:IsWithinMeleeRange(victim) then
+        local elapsed = (evadeElapsed[guid] or 0) + 1000
+        if elapsed >= 5000 then
+            evadeElapsed[guid] = 0
+            creature:SetVisible(false)
+            local candidates = {}
+            for _, unit in ipairs(creature:GetAITargets()) do
+                if not unit:IsDead() then
+                    candidates[#candidates + 1] = unit
+                end
+            end
+            local target = nil
+            if #candidates > 0 then
+                target = candidates[math.random(#candidates)]
+            end
+            if not target then
+                creature:Kill()
+                return
+            end
+            if not target:HasAura(SPELL_DIGESTIVE_ACID) then
+                creature:Teleport(target:GetX(), target:GetY(), target:GetZ(), 0)
+                local portal = creature:SummonCreature(ENTRY_SMALL_PORTAL,
+                    creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
+                if portal then
+                    portal:SetReactState(REACT_PASSIVE)
+                end
+                schedule(guid, "rupture", 500, function()
+                    onGroundRupture(creature, guid)
+                end)
+                schedule(guid, "hamstring", 2000, function()
+                    onHamstring(creature, guid)
+                end)
+                creature:EngageWithTarget(target)
+            end
+            creature:SetVisible(true)
+        else
+            evadeElapsed[guid] = elapsed
+        end
+    end
+    if timers[guid] then
+        schedule(guid, "evade", 1000, function()
+            onEvadeCheck(creature, guid)
+        end)
+    end
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    evadeElapsed[guid] = 0
     schedule(guid, "rupture", 500, function()
         onGroundRupture(creature, guid)
     end)
     schedule(guid, "hamstring", 2000, function()
         onHamstring(creature, guid)
+    end)
+    schedule(guid, "evade", 1000, function()
+        onEvadeCheck(creature, guid)
     end)
     -- boss_cthun.cpp:1008: npc_claw_tentacleAI JustEngagedWith tail —
     -- me-form DoZoneInCombat() on the live bridge (algalon/mandokir
@@ -77,10 +148,12 @@ end
 
 local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    evadeElapsed[creature:GetGUID()] = nil
 end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    evadeElapsed[creature:GetGUID()] = nil
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

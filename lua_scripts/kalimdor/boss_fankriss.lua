@@ -30,8 +30,8 @@
 --   TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT = bridge type 3, 15s, o=0 ->
 --   summoner-orientation fallback), C++-verbatim offsets and
 --   tunnel coords (boss_fankriss.cpp:139-206). The summoned hatchlings'
---   AttackStart(target) has no bridge (documented gap — they idle until
---   the engine engages them), and ModifyThreatByPercent(target, -100)
+--   AttackStart(target) is PORTED 2026-10-26 via hatchling:EngageWithTarget(target)
+--   (nefarian/malchezaar precedent), and ModifyThreatByPercent(target, -100)
 --   is PORTED 2026-10-24 (gate + cut after the ROOT cast). Re-arm {45000,60000} is
 --   unconditional on fire (C++ sets it inside the <=diff branch even
 --   with no target); the health gate drops the key when below 3%
@@ -102,8 +102,8 @@ end
 -- (-3,-3 / -3,+3 / -5,-5 / -5,+5, z = target z), o = 0 (bridge falls
 -- back to the summoner's orientation, Object.cpp:2061-2062 twin),
 -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (bridge type 3), 15s =
--- 15000ms. The hatchlings' AttackStart(target) has no bridge
--- (documented gap — they idle until the engine engages them).
+-- 15000ms. The hatchlings' AttackStart(target) is PORTED 2026-10-26 via
+-- hatchling:EngageWithTarget(target) (nefarian/malchezaar precedent).
 -- Re-arm {45000,60000} unconditionally on fire; below-3% health drops
 -- the key (C++ outer HealthAbovePct arm).
 local TUNNEL_SPOTS = {
@@ -138,8 +138,11 @@ local function onSpawnHatchlings(creature, guid)
             target:TeleportNear(spot[1], spot[2], spot[3], spot[4])
             local tx, ty, tz = target:GetX(), target:GetY(), target:GetZ()
             for _, off in ipairs({ { -3, -3 }, { -3, 3 }, { -5, -5 }, { -5, 5 } }) do
-                creature:SummonCreature(ENTRY_HATCHLING, tx + off[1],
+                local hatchling = creature:SummonCreature(ENTRY_HATCHLING, tx + off[1],
                     ty + off[2], tz, 0, 3, 15000)
+                if hatchling then
+                    hatchling:EngageWithTarget(target)
+                end
             end
         end
         schedule(guid, "hatchlings", math.random(45000, 60000), function()

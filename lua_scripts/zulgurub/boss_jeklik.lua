@@ -13,8 +13,9 @@
 -- Fight shape (C++ PHASE_ONE=1 bat form / PHASE_TWO=2 troll form):
 --   enter combat: Talk SAY_AGGRO(0), self-cast 23966 (bat form);
 --     charge 22911 at 20s then {15s,30s} on a random alive player (C++
---     DoCast on a random player, then AttackStart — the AttackStart arm
---     has no movement-model bridge and is skipped); sonic burst 23918
+--     DoCast on a random player, then AttackStart — PORTED 2026-10-26
+--     via creature:EngageWithTarget(target) (self-engage precedent);
+--     sonic burst 23918
 --     at 8s then {8s,13s} on the victim; screech 6605 at 13s then
 --     {18s,26s} on the victim; spawn six bloodseeker bats 11368 at the
 --     fixed SpawnBat positions at 60s then every 60s (no summon model —
@@ -32,8 +33,8 @@
 --     it — modeled C++-exact); greater heal 23954 at 50s then {25s,35s}
 --     self-cast; spawn flying bat 14965 at 10s then {10s,15s} (summon
 --     bridge, 2026-10-22 — the bat spawns at the target's position +15z;
---     its AttackStart leg has no bridge, so it idles until the engine
---     aggros it; the batrider AI below is registered so a spawned 14965
+--     its AttackStart leg is PORTED 2026-10-26 via bat:EngageWithTarget;
+--     the batrider AI below is registered so a spawned 14965
 --     fights correctly once engaged). The
 --     InterruptNonMeleeSpells(false) arms before the chain-mind-flay and
 --     greater-heal casts have no bridge (no UNIT_STATE model — timers
@@ -57,7 +58,7 @@
 -- ResetThreatList PORTED 2026-10-19
 -- (creature:ResetAllThreat, bridged lua_creature_events.go); no movement
 -- model — the
--- charge AttackStart arm skipped; SetCanFly IS bridged
+-- charge AttackStart arm is PORTED 2026-10-26 (see above); SetCanFly IS bridged
 -- (lua_creature_events.go, PORTED 2026-10-22) — the phase-1
 -- flight is cosmetic; the C++ while-loop casting gate
 -- (UNIT_STATE_CASTING checks in UpdateAI) has no bridge — timers fire
@@ -138,7 +139,9 @@ local function randomThreatPlayer(creature)
 end
 
 -- C++ EVENT_CHARGE_JEKLIK: non-triggered 22911 on a random player
--- (no-target tick keeps the re-arm, C++-exact); re-arm {15s,30s}.
+-- then AttackStart(target) (C++ order: cast, then re-target) via
+-- creature:EngageWithTarget(target) (self-engage precedent: ragnaros
+-- emerge); no-target tick keeps the re-arm, C++-exact; re-arm {15s,30s}.
 local function onCharge(creature, guid)
     if jeklikState(guid).phase ~= PHASE_ONE then
         return
@@ -146,6 +149,7 @@ local function onCharge(creature, guid)
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
+        creature:EngageWithTarget(target)
     end
     schedule(guid, "charge", math.random(15000, 30000), function()
         onCharge(creature, guid)
@@ -254,8 +258,9 @@ end
 -- cap) and summon a frenzied bat (14965) at the target's position +15z,
 -- o = 0 -> my orientation (C++ zero-o fallback, Object.cpp:2061),
 -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 15s = 15000ms.
--- flyingBat->AI()->AttackStart(target) has no bridge — the batrider AI
--- below is registered, so the bat fights once engaged (documented gap).
+-- flyingBat->AI()->AttackStart(target) is PORTED 2026-10-26 via
+-- bat:EngageWithTarget(target) (nefarian/malchezaar precedent); the
+-- batrider AI below is registered, so the bat fights once engaged.
 -- Re-arm {10s,15s} (one-shot per cycle, C++-exact).
 local function onSpawnFlyingBats(creature, guid)
     if jeklikState(guid).phase ~= PHASE_TWO then
@@ -263,8 +268,11 @@ local function onSpawnFlyingBats(creature, guid)
     end
     local target = randomThreatPlayer(creature)
     if target then
-        creature:SummonCreature(ENTRY_FRENZIED_BAT, target:GetX(),
+        local bat = creature:SummonCreature(ENTRY_FRENZIED_BAT, target:GetX(),
             target:GetY(), target:GetZ() + 15.0, creature:GetO(), 3, 15000)
+        if bat then
+            bat:EngageWithTarget(target)
+        end
     end
     schedule(guid, "flyingbat", math.random(10000, 15000), function()
         onSpawnFlyingBats(creature, guid)
