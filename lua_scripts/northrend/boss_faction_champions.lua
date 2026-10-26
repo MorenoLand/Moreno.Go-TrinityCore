@@ -233,7 +233,9 @@ end
 local function meleeThreatCheck(creature)
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
-            local distMod = 15.0 / (15.0 + creature:GetDistance2d(victim))
+            local dist2d = creature:GetDistance2d(victim) - creature:GetCombatReach()
+            if dist2d < 0 then dist2d = 0 end -- C++ GetDistance2d clamps at 0 (Object.cpp:1187); target reach band unbridged
+            local distMod = 15.0 / (15.0 + dist2d)
             local armorMod = victim:GetArmor() / 16635.0
             local eh = (victim:GetHealth() + 1) * (1.0 + armorMod)
             creature:ModifyThreatByPercent(victim, -100)
@@ -259,7 +261,7 @@ end
 
 -- Victim-gated rotation arms (per-struct Reset initial schedules, C++
 -- case arms): victim arm cfg holds the spell, init range, IsInRange
--- bounds (minRange nil = plain GetDistance2d < maxRange), and the
+-- bounds (minRange nil = GetDistance2d < maxRange, reach-subtracted), and the
 -- cast/miss reschedule ranges.
 local function victimCfg(spell, initMin, initMax, minRange, maxRange, hitMin, hitMax, missMin, missMax)
     return {
@@ -288,7 +290,7 @@ local function victimCheck(creature, guid, arm)
     if victim ~= nil then
         local dist = creature:GetDistance2d(victim)
         if arm.minRange == nil then
-            fire = dist < arm.maxRange
+            fire = dist - creature:GetCombatReach() < arm.maxRange -- Wing Clip: C++ GetDistance2d < 6 (Object.cpp:1187, reach-subtracted); target reach band unbridged
         else
             -- WorldObject::IsInRange (Object.cpp:1329, is3D=false): 2D
             -- distance against min/max plus both combat reaches, dist

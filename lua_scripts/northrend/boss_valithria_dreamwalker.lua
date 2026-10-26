@@ -209,7 +209,7 @@ local function randomPlayer(creature, minDist, manaOnly)
         local dist = creature:GetDistance(unit)
         local pastMin
         if manaOnly then
-            pastMin = dist > minDist
+            pastMin = dist - reach > minDist -- Mana-void selector: C++ GetDistance > 15 (reach-subtracted, Object.cpp:1169); target reach band unbridged
         else
             pastMin = dist - reach >= minDist
         end
@@ -268,7 +268,7 @@ end
 -- C++ :720 EVENT_COLUMN_OF_FROST — SelectTarget(Random, 1, -10.0f, true):
 -- negative dist rejects IsWithinCombatRange(10) (UnitAI.cpp:276-277), so
 -- the pool is raw >= 10 + reaches; twinned d - ownReach >= 10 (the mana
--- arm keeps the raw GetDistance > 15 predicate, :169, exact).
+-- arm is the reach-subtracted GetDistance > 15 twin, :169).
 local function onColumnOfFrost(creature, guid)
     local target = randomPlayer(creature, 10.0)
     if target then

@@ -68,12 +68,13 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EnemiesInRange (10.0f) (:693-697): threat-list victims within
--- 10.0 yd 2D, strict <; GetAITargets is the bridged threat list
+-- 10.0 yd 2D reach-subtracted, strict <; GetAITargets is the bridged threat list
 -- (boss_faction_champions.lua countCheck precedent).
 local function enemiesInRange(creature, dist)
     local count = 0
+    local reach = creature:GetCombatReach()
     for _, target in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(target) < dist then
+        if creature:GetDistance2d(target) - reach < dist then -- C++ GetDistance2d subtracts both reaches (Object.cpp:1187); target reach band unbridged
             count = count + 1
         end
     end
