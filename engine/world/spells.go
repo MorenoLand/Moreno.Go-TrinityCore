@@ -7617,7 +7617,15 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 		trig := targetSess.activeAuras[se.TriggerSpell]
 		synced := trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack
 		if synced {
-			trig.StackCount = parentStack
+			// Aura::ModStackAmount -> SetStackAmount (SpellAuras.cpp:1008)
+			// recalculates every effect amount from the new stack
+			// (CalculateAmount final term *= stack); a count-only sync
+			// left a linked periodic tick at the old stack's amount.
+			oldCount := uint32(trig.StackCount)
+			targetSess.refreshSkillBonusForAuraAmountChange(trig, func() {
+				trig.StackCount = parentStack
+				rescaleAuraAmountsByStack(trig, oldCount, uint32(parentStack))
+			})
 		}
 		var slot uint8
 		var positive bool
@@ -7683,7 +7691,12 @@ func (targetSess *session) propagateLinkedAuraStacks(ctx context.Context, spell 
 		trig := targetSess.activeAuras[linkedID]
 		synced := trig != nil && !trig.Stopped && trig.CasterGUID == parentCasterGUID && trig.StackCount != uint8(want)
 		if synced {
-			trig.StackCount = uint8(want)
+			// Same SetStackAmount recalc as the 284 sync above.
+			oldCount := uint32(trig.StackCount)
+			targetSess.refreshSkillBonusForAuraAmountChange(trig, func() {
+				trig.StackCount = uint8(want)
+				rescaleAuraAmountsByStack(trig, oldCount, uint32(want))
+			})
 		}
 		var slot uint8
 		var positive bool
@@ -7726,7 +7739,10 @@ func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureA
 		wantCaster := linkedTriggerCaster(triggered, spell, parentCasterGUID, key.GUID)
 		srv.auraMu.Lock()
 		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack {
+			// Same SetStackAmount recalc as the player sync above.
+			oldCount := uint32(trig.StackCount)
 			trig.StackCount = parentStack
+			rescaleAuraAmountsByStack(trig, oldCount, uint32(parentStack))
 		}
 		srv.auraMu.Unlock()
 	}
@@ -7762,7 +7778,10 @@ func (srv *Server) propagateCreatureLinkedAuraStacks(ctx context.Context, spell 
 		}
 		srv.auraMu.Lock()
 		if trig := srv.activeCreatureAuras[key][linkedID]; trig != nil && !trig.Stopped && trig.CasterGUID == parentCasterGUID && trig.StackCount != uint8(want) {
+			// Same SetStackAmount recalc as the player sync above.
+			oldCount := uint32(trig.StackCount)
 			trig.StackCount = uint8(want)
+			rescaleAuraAmountsByStack(trig, oldCount, uint32(want))
 		}
 		srv.auraMu.Unlock()
 	}
@@ -13984,7 +14003,11 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 		tgtGUID = target.playerGUID
 		tgt = combatTarget{GUID: tgtGUID}
 	}
-	flat += s.spellHealingApFlat(spell, tgtGUID, tgt, isDot, stack)
+	// DoneTotal arm: the leech/funnel zeroing loop (Unit.cpp:7607-7619) runs
+	// after the AP fold, so a leech/funnel spell's AP term is zeroed too.
+	if !spellHealingDoneZeroed(spell) {
+		flat += s.spellHealingApFlat(spell, tgtGUID, tgt, isDot, stack)
+	}
 	pct := s.spellHealingPctDone(spell, target)
 	tmp := float64(int32(heal)+flat) * pct
 	if tmp < 0 {
@@ -14018,7 +14041,9 @@ func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell
 	// Unit.cpp:7554 — the victim's SPELL_AURA_MOD_HEALING (115) auras raise
 	// the caster's advertised benefit (Amplify Magic / Dampen Magic), folded
 	// through the same coefficient and stack as the advertised base.
-	if spell.SchoolMask != 0 && s.server != nil {
+	// DoneTotal term, so the leech/funnel zeroing (Unit.cpp:7607-7619)
+	// kills it exactly like the flat leg above.
+	if !spellHealingDoneZeroed(spell) && spell.SchoolMask != 0 && s.server != nil {
 		victimFold := int32(0)
 		for _, amt := range creatureAuraModifiersByMiscMask(s.server, key, auraModHealing, spell.SchoolMask) {
 			victimFold += amt
@@ -14034,7 +14059,10 @@ func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell
 	// Unit.cpp:7560-7581 — the ap_bonus/ap_dot_bonus attack-power arm rides
 	// DoneTotal with the Impurity-adjusted ApCoeffMod; the victim's
 	// attacker-bonus aura folds from the creature aura store here.
-	flat += s.spellHealingApFlat(spell, victimGUID, combatTarget{GUID: victimGUID, Map: key.Map, InstanceID: key.InstanceID}, isDot, stack)
+	// Same zeroing as above: a leech/funnel spell's AP term is DoneTotal.
+	if !spellHealingDoneZeroed(spell) {
+		flat += s.spellHealingApFlat(spell, victimGUID, combatTarget{GUID: victimGUID, Map: key.Map, InstanceID: key.InstanceID}, isDot, stack)
+	}
 	pct := s.spellHealingPctDone(spell, nil)
 	// Unit.cpp:7634-7651 — the ATTR3_NO_DONE_BONUS /
 	// ATTR6_LIMIT_PCT_HEALING_MODS gates wrap the whole SpellHealingPctDone,
@@ -28664,13 +28692,11 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 			heal = effectValueMultiplied(heal, calcValueMultiplier(leechSpell, leechEffIndex, casterSess))
 		}
 		heal = casterSess.spellHealingBonusDone(leechSpell, heal, casterSess, leechEffIndex, true, stack)
-	} else if casterSess.player.SpellPower > 0 {
-		stack := uint32(aura.StackCount)
-		if stack == 0 {
-			stack = 1
-		}
-		heal += uint32(math.Round(float64(casterSess.player.SpellPower) * casterSess.spellBonusMultiplier(aura.SpellID, leechEffIndex, true) * float64(stack)))
 	}
+	// No unknown-spell spellpower term: the aura type itself is PERIODIC_LEECH,
+	// so C++ zeroes DoneTotal (Unit.cpp:7607-7619) whether or not the spell
+	// row is present. The heal stays the dealt damage, like the known path's
+	// zeroed flat leg.
 	heal = casterSess.healingTakenBonus(casterSess, aura.CasterGUID, aura.SpellID, heal, true)
 	if heal > 0 {
 		curHP := casterSess.player.Health
