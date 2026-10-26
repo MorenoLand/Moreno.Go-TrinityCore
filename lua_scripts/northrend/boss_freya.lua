@@ -156,16 +156,13 @@
 -- entries 32906 / 32915 / 32914 / 32913):
 -- Freya JustEngagedWith companion legs (:342-391) —
 -- DoZoneInCombat (:345) PORTED 2026-10-23 via the live bridge
--- (C++ arm order — before the elder scan); elder scan (instance
--- GetGuidData + alive
--- checks) -> SPELL_DRAINED_OF_POWER 62467 on the elder,
--- essence casts, RemoveLootMode, elder AttackStart + threat;
--- the Talk choice (SAY_AGGRO 0 vs SAY_AGGRO_WITH_ELDER 1);
--- CastSpell SPELL_ATTUNED_TO_NATURE 62519 with 150-stack
--- spell-mod (unbridgeable) — no instance GuidData / aura /
--- threat / spell-mod bridges (RemoveLootMode IS bridged,
--- lua_objects.go:993; the arm stays out on instance-GuidData /
--- cross-creature grounds, not the loot-mode bridge).
+-- (C++ arm order — before the elder scan); the elder loop is PORTED
+-- 2026-10-26 into freyaEnterCombat (grid scan + drained aura +
+-- essence casts + RemoveLootMode + EngageWithTarget + 250 threat,
+-- C++ arm order); the Talk choice (SAY_AGGRO 0 vs
+-- SAY_AGGRO_WITH_ELDER 1) was already ported. Still out: the
+-- CastSpell SPELL_ATTUNED_TO_NATURE 62519 with 150-stack spell-mod
+-- (no spell-mod bridge).
 -- Freya timer arms staying out:
 --   EVENT_NATURE_BOMB (:430-433, DoCastAOE 64604 triggered)
 --     — init scheduled only from the EVENT_WAVE arm after
@@ -431,14 +428,51 @@ local function freyaEnterCombat(event, creature, target)
     -- :357) reconstructed via GetCreaturesInGrid + IsAlive.
     local eldersAlive = 0
     local elderAlive = {}
+    local elderObj = {}
     for i, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
         elderAlive[i] = false
         for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
             if elder:IsAlive() then
                 eldersAlive = eldersAlive + 1
                 elderAlive[i] = true
+                if elderObj[i] == nil then
+                    elderObj[i] = elder
+                end
             end
         end
+    end
+    -- C++ JustEngagedWith elder loop (:347-358, Brightleaf/Stonebark/
+    -- Ironbranch order; instance GuidData in C++, the grid scan above
+    -- is the engage-time precedent): per alive elder — drained aura
+    -- onto the elder, ironbranch-essence cast onto Freya, loot-mode
+    -- strip, AttackStart onto the engager + 250 threat on the elder's
+    -- own list (C++ AddThreat(who, 250, Elder) lowers to the elder's
+    -- ThreatManager, ScriptedCreature.cpp:202-209). The elder's own
+    -- enter handler fires via the engage funnel, matching the C++
+    -- elder JustEngagedWith. The specific-essence casts (:360-377)
+    -- follow below; the 150-stack attuned cast has no spell-mod
+    -- bridge and stays out.
+    local victim = target or creature:GetVictim()
+    for i = 1, 3 do
+        local elder = elderObj[i]
+        if elder ~= nil then
+            elder:AddAura(SPELL_DRAINED_OF_POWER)
+            elder:CastSpell(creature, SPELL_IRONBRANCH_ESSENCE, true)
+            elder:RemoveLootMode(1) -- LOOT_MODE_DEFAULT (SharedDefines.h:42)
+            if victim ~= nil then
+                elder:EngageWithTarget(victim)
+                elder:AddThreat(victim, 250)
+            end
+        end
+    end
+    if elderAlive[1] then
+        elderObj[1]:CastSpell(creature, SPELL_BRIGHTLEAF_ESSENCE, true)
+    end
+    if elderAlive[2] then
+        elderObj[2]:CastSpell(creature, SPELL_STONEBARK_ESSENCE, true)
+    end
+    if elderAlive[3] then
+        elderObj[3]:CastSpell(creature, SPELL_IRONBRANCH_ESSENCE, true)
     end
     if eldersAlive == 0 then
         creature:Talk(SAY_AGGRO)

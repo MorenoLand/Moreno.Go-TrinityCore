@@ -106,8 +106,10 @@
 -- (MoveInLineOfSight sighting + cross-creature Talk relays) has no
 -- MoveInLineOfSight bridge — the fight starts on pull (ragnaros-
 -- intro convention). The no-victim threat handoff from the sister
--- and the sister AttackStart relays have no cross-creature/threat
--- bridges — unmodeled. Shadow Image (25214). OnReset(23): the NOT_
+-- and the sister AttackStart relays are PORTED 2026-10-26 into both
+-- enter handlers (FindNearestCreature + !GetVictim gate +
+-- EngageWithTarget; the no-victim threat handoff itself stays out —
+-- no threat-list bridge). Shadow Image (25214). OnReset(23): the NOT_
 -- SELECTABLE flag arm is PORTED 2026-10-20 via the live flag bridge
 -- (the old "no flag bridge" claim is retracted; C++:677-679 sets only
 -- the flag + Initialize(); the cast lives in the per-tick HasAura
@@ -293,8 +295,21 @@ end
 
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
-local function sacrolashEnterCombat(event, creature)
+local function sacrolashEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_eredar_twins.cpp:136 (JustEngagedWith arm 1; bridge live 2026-10-23)
+    -- C++ JustEngagedWith (:140-144): sister Alythess (25166; instance
+    -- GuidData in C++, the FindNearestCreature idiom here — the entry
+    -- is fight-unique, so the scan is the instance lookup) engages
+    -- the engager when alive and victimless. The back-relay fires
+    -- Alythess's own enter handler, whose !GetVictim gate blocks the
+    -- return leg, so no loop. SetBossState stays out (no bridge).
+    local victim = target or creature:GetVictim()
+    if victim ~= nil then
+        local sister = creature:FindNearestCreature(25166, 100)
+        if sister ~= nil and sister:IsAlive() and sister:GetVictim() == nil then
+            sister:EngageWithTarget(victim)
+        end
+    end
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
@@ -411,8 +426,20 @@ end
 
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
 -- five bridgeable timers.
-local function alythessEnterCombat(event, creature)
+local function alythessEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_eredar_twins.cpp:392 (JustEngagedWith arm 1; bridge live 2026-10-23)
+    -- C++ JustEngagedWith (:396-400): sister Sacrolash (25165; instance
+    -- GuidData in C++, the FindNearestCreature idiom here — the entry
+    -- is fight-unique) engages the engager when alive and
+    -- victimless; the back-relay is gated by Sacrolash's own
+    -- !GetVictim check. SetBossState stays out (no bridge).
+    local victim = target or creature:GetVictim()
+    if victim ~= nil then
+        local sister = creature:FindNearestCreature(25165, 100)
+        if sister ~= nil and sister:IsAlive() and sister:GetVictim() == nil then
+            sister:EngageWithTarget(victim)
+        end
+    end
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
     local guid = creature:GetGUID()

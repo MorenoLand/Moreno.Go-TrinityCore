@@ -25,8 +25,9 @@
 -- boss_emalon.cpp):
 -- boss_emalonAI::JustEngagedWith (:102-120) — the four ScheduleEvent
 -- calls seed the combat timers below; the summons-list
--- minion-AttackStart leg and the BossAI::JustEngagedWith(who)
--- passthrough are unmodeled.
+-- minion-AttackStart leg is PORTED 2026-10-26 into emalonEnterCombat
+-- (GetCreaturesInGrid + !GetVictim gate + EngageWithTarget). The
+-- BossAI::JustEngagedWith(who) passthrough is unmodeled.
 -- EVENT_CHAIN_LIGHTNING (:136-139) — SelectTarget(Random, 0) (:137,
 -- no distance filter) -> DoCast(target, SPELL_CHAIN_LIGHTNING
 -- 64213) (:138, 2-arg = non-triggered) -> CastSpell(target, 64213);
@@ -232,7 +233,22 @@ end
 
 -- C++ boss_emalonAI::JustEngagedWith (:102-120): the ScheduleEvent
 -- calls seed the combat timers below (5s / 40s / 6min / 45s).
-local function emalonEnterCombat(event, creature)
+local function emalonEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (:102-110, before the ScheduleEvents below):
+    -- each alive victimless minion (BossAI summons list in C++, the
+    -- GetCreaturesInGrid idiom here — the overchargeTick precedent,
+    -- 100 yd) engages the engager. The minion's own enter handler
+    -- (DoZoneInCombat + shock timer) fires via the engage funnel,
+    -- matching the C++ minion JustEngagedWith. The JustSummoned
+    -- AttackStart leg is a no-op at summon time (boss has no victim).
+    local victim = target or creature:GetVictim()
+    if victim ~= nil then
+        for _, minion in ipairs(creature:GetCreaturesInGrid(ENTRY_TEMPEST_MINION, 100)) do
+            if minion:IsAlive() and minion:GetVictim() == nil then
+                minion:EngageWithTarget(victim)
+            end
+        end
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "chainlightning", 5000, function()
@@ -274,10 +290,24 @@ end
 -- engine/world/lua_creature_events.go, 2026-10-23); EVENT_SHOCK
 -- scheduled at 20s (:222). The instance leg is unmodeled (documented
 -- in the header).
-local function minionEnterCombat(event, creature)
+local function minionEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:DoZoneInCombat() -- C++ :221
+    -- C++ npc_tempest_minionAI::JustEngagedWith (:227-229): Emalon
+    -- (instance GuidData in C++, the GetCreaturesInGrid idiom here —
+    -- the minionJustDied precedent) engages the engager when
+    -- victimless. Gate is victim-only per C++ (no IsAlive check).
+    -- The back-relay is gated by Emalon's own !GetVictim check on
+    -- its minions, so no loop (this minion already has a victim).
+    local victim = target or creature:GetVictim()
+    if victim ~= nil then
+        for _, emalon in ipairs(creature:GetCreaturesInGrid(ENTRY_EMALON, 100)) do
+            if emalon:GetVictim() == nil then
+                emalon:EngageWithTarget(victim)
+            end
+        end
+    end
     schedule(guid, "shock", 20000, function()
         shockTick(creature, guid)
     end)
