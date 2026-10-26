@@ -1058,22 +1058,32 @@ end
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
 -- the boss_midnight randomTargetAnywhere precedent.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ SelectTarget(Random, 1) (UnitAI.h:170-174): like randomThreatTarget
 -- but the offset-1 skips the first MaxThreat-ordered entry (the tank) —
 -- the netherspite/auriaya tank-skip idiom on the bridged threat list.
 local function randomNonHeadThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets <= 1 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates <= 1 then
         return nil
     end
-    return targets[math.random(2, #targets)]
+    return candidates[math.random(2, #candidates)]
 end
 
 -- C++ npc_captain_rupert::Reset :1138-1140 — Reset-seeded timers

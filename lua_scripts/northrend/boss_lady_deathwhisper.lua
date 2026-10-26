@@ -881,11 +881,16 @@ end
 -- creature:GetAITargets() (threat-ordered; lua_creature_events.go:345),
 -- the netherspite/auriaya tank-skip idiom on the bridged threat list.
 local function randomNonHeadThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets <= 1 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates <= 1 then
         return nil
     end
-    return targets[math.random(2, #targets)]
+    return candidates[math.random(2, #candidates)]
 end
 
 -- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.

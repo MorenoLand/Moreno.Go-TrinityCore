@@ -232,7 +232,7 @@ end
 local function acidCloudTick(creature, guid)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if creature:IsWithinDist(t, 100.0) then
+        if not t:IsDead() and creature:IsWithinDist(t, 100.0) then
             candidates[#candidates + 1] = t
         end
     end

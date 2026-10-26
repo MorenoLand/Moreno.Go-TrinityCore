@@ -376,14 +376,20 @@ end
 
 -- C++ SelectTarget(Random) draws the threat list (UnitAI.h), never the
 -- whole instance player pool — GetAITargets is the bridged threat list
--- (midnight precedent); C++ applies no dead/range filter here (no dist,
--- no playerOnly arg), so none added.
+-- (midnight precedent); SelectTargetList skips offline refs
+-- (UnitAI.h), so the dead entries Go GetAITargets still carries
+-- are filtered here.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ npc_guardian_of_yogg_saronAI::EVENT_DARK_VOLLEY:

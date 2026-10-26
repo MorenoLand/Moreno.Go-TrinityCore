@@ -195,13 +195,14 @@ end
 -- midnight randomTargetInBand precedent over the bridged,
 -- threat-ordered GetAITargets (lua_creature_events.go:345); the C++
 -- bounds are inclusive on both ends, kept here (midnight's upper
--- bound was exclusive — this one is C++-exact). C++ applies no dead
--- filter beyond threat-list offline-ness, so none is added.
+-- bound was exclusive — this one is C++-exact). SelectTargetList
+-- skips offline refs (UnitAI.h), so the dead entries Go
+-- GetAITargets still carries are filtered here.
 local function randomTargetInBand(creature, minDist, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         local dist = creature:GetDistance2d(t)
-        if dist >= minDist and dist <= maxDist then
+        if not t:IsDead() and dist >= minDist and dist <= maxDist then
             candidates[#candidates + 1] = t
         end
     end

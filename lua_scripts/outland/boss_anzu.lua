@@ -138,7 +138,9 @@ end
 local function randomThreatTarget(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        candidates[#candidates + 1] = t
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
     end
     if #candidates == 0 then
         return nil

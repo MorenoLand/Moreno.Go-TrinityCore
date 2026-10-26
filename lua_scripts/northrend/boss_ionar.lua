@@ -154,11 +154,16 @@ end
 -- (pets/totems included): plain pick over GetAITargets (the bridged
 -- threat list; midnight precedent), no Player filter.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return candidates[math.random(#candidates)]
 end
 
 -- C++ uiBallLightningTimer (:270-274): DoCastVictim(52780)
