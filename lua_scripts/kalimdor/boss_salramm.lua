@@ -142,7 +142,7 @@ local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             pool[#pool + 1] = t
         end
     end

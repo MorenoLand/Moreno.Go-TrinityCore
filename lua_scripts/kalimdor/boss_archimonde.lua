@@ -256,12 +256,12 @@ local function randomThreatTarget(creature)
 end
 
 -- C++ SelectTarget(Random, 0, maxDist) existence check: any alive
--- threat entry within maxDist yards (GetDistance approximates
--- IsWithinCombatRange; combat reach unmodeled). Only existence
+-- threat entry within maxDist yards (reach-exact IsWithinCombatRange
+-- twin, Unit.cpp:583; player reach 1.5). Only existence
 -- matters here, so the first match is returned, not a random pick.
 local function threatTargetInRange(creature, maxDist)
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+        if not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() - (t:GetObjectType() == "Player" and 1.5 or t:GetCombatReach()) < maxDist then
             return t
         end
     end

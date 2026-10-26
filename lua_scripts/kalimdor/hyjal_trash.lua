@@ -224,7 +224,7 @@ local function gateOk(creature, target, gate)
     if not gate then
         return true
     end
-    local d = creature:GetDistance(target) - creature:GetCombatReach()
+    local d = creature:GetDistance(target) - creature:GetCombatReach() - (target:GetObjectType() == "Player" and 1.5 or target:GetCombatReach())
     if gate.mode == "far" then
         return d >= gate.dist
     end
@@ -503,7 +503,7 @@ local function spawnSkeleton(creature, guid, entry, dx)
     local cands = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-            and creature:GetDistance(t) - creature:GetCombatReach() < 30 then
+            and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 30 then
             cands[#cands + 1] = t
         end
     end

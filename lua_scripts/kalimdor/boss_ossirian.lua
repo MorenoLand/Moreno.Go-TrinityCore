@@ -203,7 +203,7 @@ end
 local function checkKiting(creature, guid)
     local victim = creature:GetVictim()
     if victim then
-        local dist = creature:GetDistance(victim) - creature:GetCombatReach()
+        local dist = creature:GetDistance(victim) - creature:GetCombatReach() - (victim:GetObjectType() == "Player" and 1.5 or victim:GetCombatReach())
         if dist > 60.0 and dist < 120.0 then
             creature:CastSpell(victim, SPELL_SUMMON)
         end

@@ -95,8 +95,8 @@ end
 -- player/dist filters (offset-before-filter, svalna idiom); dead entries
 -- are offline refs in C++ (skipped at list build) so they are filtered
 -- here. minDist models C++'s negative SelectTarget dist ("at least
--- -dist yards away" per UnitAI.h — IsWithinCombatRange approximated by
--- GetDistance here). The old instance-player pool + victim-GUID
+-- -dist yards away" per UnitAI.h — reach-exact IsWithinCombatRange twin
+-- (Unit.cpp:583; player reach 1.5). The old instance-player pool + victim-GUID
 -- exclusion are retired (threat-list precedent, Oct-25 strips).
 local function randomThreatPlayer(creature, minDist, maxDist, skipFirst)
     local targets = creature:GetAITargets()
@@ -109,7 +109,7 @@ local function randomThreatPlayer(creature, minDist, maxDist, skipFirst)
     end
     local found = {}
     for i, t in ipairs(targets) do
-        local d = creature:GetDistance(t) - creature:GetCombatReach()
+        local d = creature:GetDistance(t) - creature:GetCombatReach() - 1.5
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and not t:IsDead()
