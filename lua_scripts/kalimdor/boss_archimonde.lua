@@ -278,25 +278,38 @@ local function onFear(creature, guid)
 end
 
 -- C++ EVENT_AIR_BURST: Talk(SAY_AIR_BURST) + DoCast(
--- SelectTarget(Random, 1), 32014) — position 1 ("not on tank") = skip
--- the first MaxThreat-order entry, then a random pick from the rest;
--- all defaults (no range cap, playerOnly false, withTank true), so the
--- pool is the alive-filtered threat-ordered GetAITargets list minus
--- its first live entry (C++ offline-skip-then-offset, UnitAI.h
--- SelectTargetList; creatures included). Nil when fewer than 2 live
--- entries (C++ returns nullptr when the threat list size <= offset).
+-- SelectTarget(Random, 1), 32014) — offset 1 pops the current victim
+-- from the victim-first list (UnitAI.h SelectTargetList), then a
+-- random pick from the rest; all defaults (no range cap, playerOnly
+-- false, withTank true), so the pool is the alive-filtered threat
+-- list minus the victim, not minus the top-threat entry (the two
+-- differ under fixate/taunt). Nil when the victim is the only live
+-- entry (C++ returns nullptr when the threat list size <= offset);
+-- with no current victim the offset pop removes the first entry
+-- instead (curator/ikiss nil-victim branch).
 local function onAirBurst(creature, guid)
     creature:Talk(SAY_AIR_BURST)
-    local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = victim and victim:GetGUID() or nil
     local alive = {}
-    for _, t in ipairs(targets) do
+    for _, t in ipairs(creature:GetAITargets()) do
         if not t:IsDead() then
             alive[#alive + 1] = t
         end
     end
+    local pool = {}
+    for i, t in ipairs(alive) do
+        if victimGuid ~= nil then
+            if t:GetGUID() ~= victimGuid then
+                pool[#pool + 1] = t
+            end
+        elseif i > 1 then
+            pool[#pool + 1] = t
+        end
+    end
     local target = nil
-    if #alive >= 2 then
-        target = alive[math.random(2, #alive)]
+    if #pool > 0 then
+        target = pool[math.random(#pool)]
     end
     if target then
         creature:CastSpell(target, SPELL_AIR_BURST)

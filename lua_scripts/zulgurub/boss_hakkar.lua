@@ -86,10 +86,17 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_WILL_OF_HAKKAR (boss_hakkar.cpp:137-139): the cast lands
--- on the top-threat player within 100 yd (MaxThreat, 0, 100, true).
+-- on the top-threat player within 100 yd (MaxThreat, 0, 100, true) —
+-- offset 0 returns the victim-first list front, so the victim wins
+-- when it passes the player/range filter, else the first sorted passer.
 local function topThreatPlayerInRange(creature, range)
     local targets = creature:GetAITargets()
     local reach = creature:GetCombatReach()
+    local victim = creature:GetVictim()
+    if victim ~= nil and victim:GetObjectType() == "Player" and not victim:IsDead()
+            and creature:GetDistance(victim) - reach - 1.5 < range then
+        return victim
+    end
     for _, unit in ipairs(targets) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - reach - 1.5 < range then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
@@ -122,12 +129,19 @@ local function onCorruptedBlood(creature, guid)
     end)
 end
 
--- C++ EVENT_WILL_OF_HAKKAR: only when more than one unit is fighting
--- (SelectTargetList MaxThreat, max 2, playerOnly=false — pets and
--- guardians count toward the gate), cast on the top-threat player
--- within 100 yd.
+-- C++ EVENT_WILL_OF_HAKKAR: only when more than one ONLINE unit is
+-- fighting (SelectTargetList MaxThreat, max 2, playerOnly=false —
+-- offline refs are skipped before the resize, so dead entries do
+-- not count toward the gate; pets and guardians do), cast on the
+-- top-threat player within 100 yd.
 local function onWillOfHakkar(creature, guid)
-    if #creature:GetAITargets() > 1 then
+    local aliveCount = 0
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            aliveCount = aliveCount + 1
+        end
+    end
+    if aliveCount > 1 then
         local target = topThreatPlayerInRange(creature, 100)
         if target then
             creature:CastSpell(target, SPELL_WILL_OF_HAKKAR, false)

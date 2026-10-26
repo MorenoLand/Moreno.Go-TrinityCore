@@ -473,7 +473,8 @@ local function leotherasTick(creature, guid)
         -- Inner demons: 30s one-shot, then pinned (C++-exact).
         -- C++ boss_leotheras_the_blind.cpp:524-562: threat-sorted
         -- list, players only, exclude the current victim (GetVictim
-        -- stands in for GetLastVictim), cap 5, alive only; per
+        -- stands in for GetLastVictim), cap 5 before the alive
+        -- filter (dead entries consume cap slots, no backfill); per
         -- player: SummonCreature(INNER_DEMON 21857, px+10, py+10,
         -- pz, o=0, type 3, 5000ms) + DoZoneInCombat (the AttackStart
         -- substitute — opera/broggok precedent) + player AddAura
@@ -483,14 +484,18 @@ local function leotherasTick(creature, guid)
         if st.innerDemons <= 1000 then
             local victim = creature:GetVictim()
             local victimGuid = victim and victim:GetGUID() or nil
-            local picked = 0
+            local picked = {}
             for _, target in ipairs(creature:GetAITargets()) do
-                if picked >= 5 then
+                if #picked >= 5 then
                     break
                 end
                 if target:GetObjectType() == "Player"
-                        and target:GetGUID() ~= victimGuid
-                        and not target:IsDead() then
+                        and target:GetGUID() ~= victimGuid then
+                    picked[#picked + 1] = target
+                end
+            end
+            for _, target in ipairs(picked) do
+                if not target:IsDead() then
                     local demon = creature:SummonCreature(ENTRY_INNER_DEMON,
                         target:GetX() + 10, target:GetY() + 10,
                         target:GetZ(), 0, 3, 5000)
@@ -498,7 +503,6 @@ local function leotherasTick(creature, guid)
                         demon:DoZoneInCombat()
                     end
                     target:AddAura(SPELL_INSIDIOUS_WHISPER)
-                    picked = picked + 1
                 end
             end
             creature:Talk(SAY_INNER_DEMONS)
