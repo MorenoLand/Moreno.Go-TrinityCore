@@ -9,9 +9,11 @@
 -- exist (lua_objects.go:1080/1095), but the device's GameObjectAI
 -- OnAIUpdate/OnLootState legs have no engine fire sites (creature event
 -- 7 fires, but GameObjectEventOnAIUpdate = 1 and OnLootState = 9 are
--- const-only, zero Trigger sites — re-verified 2026-10-24) and the JustDied
--- device scan rides the unbridged grid enumeration — machine unmodeled
--- (2026-10-23 re-key of the stale "no gameobject model" claim).
+-- const-only, zero Trigger sites — re-verified 2026-10-24); the device's
+-- own suppression-cast machine is unmodeled, but the JustDied
+-- deactivation itself is PORTED below on the GetGameObjectsInGrid bridge
+-- (2026-10-26 stale-bridge re-triage; the 2026-10-23 "unbridged grid
+-- enumeration" claim is now stale).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -22,7 +24,7 @@
 -- (C++ DoCast default is triggered=false — vaelastrasz convention),
 -- plus the 1s boundary check. Nil-victim ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied: Talk is not used by C++ — JustDied only runs
--- the suppression-device deactivation (no gameobject bridge). OnLeave
+-- the suppression-device deactivation (PORTED below). OnLeave
 -- Combat(2)/OnReset(23): cancel timers.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik
@@ -37,11 +39,14 @@
 -- per engagement) — the EnterEvadeMode(EVADE_REASON_BOUNDARY) leg stays
 -- out (no evade bridge), so the 1s re-arm cycle keeps running after
 -- the yell; the JustDied GetGameObjectListWithEntryInGrid
--- suppression-device scan and the DoAction(ACTION_DEACTIVATE) arms
--- stay out on the unbridged grid enumeration + unmodeled GameObjectAI
--- UpdateAI/OnLootState legs (the blanket "no gameobject bridge" claim
--- was stale — RegisterGameObjectEvent + GO SetGoState exist) — the
--- devices stay active after the kill;
+-- suppression-device scan + DoAction(ACTION_DEACTIVATE) arm PORTED
+-- 2026-10-26 (GetGameObjectsInGrid bridge, lua_creature_events.go:
+-- 2989; Deactivate() = SetGoState(GO_STATE_ACTIVE) + SetFlag
+-- GAMEOBJECT_FLAGS GO_FLAG_NOT_SELECTABLE — the _active latch and
+-- the CancelEvent legs are moot in-model since the device's own
+-- suppression-cast machine is unported, and the SetGoState/flag
+-- writes are idempotent, so repeat deactivation is harmless); the
+-- device's own cast/OnLootState machine stays unmodeled;
 -- the whole go_suppression_device machine (0-5s first suppression
 -- aura 22247 cast, 5s cycle, disarm-deactivate, 30-120s re-activate,
 -- DoAction deactivation) is not modeled (standing gameobject gap).
@@ -55,6 +60,10 @@ local SPELL_CLEAVE = 26350
 local SPELL_BLASTWAVE = 23331
 local SPELL_MORTALSTRIKE = 24573
 local SPELL_KNOCKBACK = 25778
+local GO_SUPPRESSION_DEVICE = 179784 -- blackwing_lair.h:75
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent: OBJECT_END 6 + 3
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_STATE_ACTIVE = 0 -- netherspite precedent: READY 1, ACTIVE 0
 -- SPELL_SUPPRESSION_AURA = 22247: unmodeled — go_suppression_device
 -- has no gameobject bridge.
 
@@ -189,9 +198,17 @@ local function broodlordLeaveCombat(event, creature)
 end
 
 local function broodlordDied(event, creature, killer)
-    -- C++ JustDied: the suppression-device scan + DoAction
-    -- deactivation stays out on the unbridged grid enumeration +
-    -- unmodeled GameObjectAI UpdateAI/OnLootState legs (see header).
+    -- C++ JustDied (boss_broodlord_lashlayer.cpp:78-86): scan
+    -- GO_SUPPRESSION_DEVICE in 200yd + DoAction(ACTION_DEACTIVATE)
+    -- per device; Deactivate() = SetGoState(ACTIVE) + SetFlag
+    -- NOT_SELECTABLE (the _active latch + CancelEvent legs are moot:
+    -- the device cast machine itself is unported, and both writes
+    -- are idempotent). The _JustDied() instance bookkeeping stays
+    -- out (no instance-script model).
+    for _, device in ipairs(creature:GetGameObjectsInGrid(GO_SUPPRESSION_DEVICE, 200)) do
+        device:SetGoState(GO_STATE_ACTIVE)
+        device:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
     broodlordResetState(creature:GetGUID())
 end
 

@@ -1,17 +1,19 @@
 -- npc_professions (part 1) — Lua triage of
 -- src/server/scripts/World/npc_professions.cpp lines 409-846.
 --
--- All three classes are DOCUMENTED-ONLY: every functional arm is gated on a
--- bridge that does not exist in the current runtime (verified against
--- engine/world/lua_player.go, lua_objects.go, lua_creature_events.go and
--- engine/scripting/object.go — no GetBaseSkillValue/GetSkillValue, no
--- player:CastSpell, no GetReputationRank, no SendListInventory/
--- SendTrainerList/PrepareQuestMenu, no GetGossipTextId, no
--- ProcessUnlearnAction/EquippedOk/ProfessionUnlearnSpells). Registering
--- partial hello/select hooks would also veto the engine's native
--- questgiver/vendor/trainer gossip fallthroughs (gossip.go), regressing
--- these NPCs versus no registration at all. Nothing is registered below;
--- this file exists so the next sweep does not re-triage the same arms.
+-- All three classes are DOCUMENTED-ONLY (re-triaged 2026-10-26 on the
+-- stale-bridge axis: the old "no GetSkillValue / no player:CastSpell"
+-- claims are STALE — player:GetSkillValue (lua_player.go:326) and
+-- player:CastSpell (lua_player.go:504) are both bridged; the verdict
+-- stands on the remaining gaps: no SendListInventory/SendTrainerList/
+-- PrepareQuestMenu Lua surface, no GetReputationRank (GetReputation
+-- returns raw standing only), no GetGossipTextId, no
+-- ProcessUnlearnAction/EquippedOk (GetItemByPos is a nil stub).
+-- Registering partial hello/select hooks would also veto the engine's
+-- native questgiver/vendor/trainer gossip fallthroughs (gossip.go),
+-- regressing these NPCs versus no registration at all. Nothing is
+-- registered below; this file exists so the next sweep does not
+-- re-triage the same arms.
 --
 -- CLASS 1: npc_prof_blacksmith (CreatureScript, C++ :409-671)
 -- Entries: 11145, 11176 (smith-omni), 11146, 11178 (weaponsmith),
@@ -23,14 +25,22 @@
 --   dead menu items and vetoes the native fallthroughs. BLOCKED.
 -- :444-488 specialty menu arms — gated on
 --   player->GetBaseSkillValue(SKILL_BLACKSMITHING) >= 225 (:444) and >= 250
---   (:467); GetBaseSkillValue has no bridge. The reputation gates
---   (GetReputationRank(REP_ARMOR 46 / REP_WEAPON 289) >= REP_FRIENDLY,
---   :451/:455) have no bridge either — player:GetReputation returns raw
---   standing, not a rank. BLOCKED.
+--   (:467); the skill gate itself is now computable — Go
+--   player:GetSkillValue returns the stored value without the bonus
+--   fold, while C++ GetBaseSkillValue = stored + PERM_BONUS
+--   (Player.cpp:6286), so the Go read sits low only by any perm
+--   bonus. The reputation gates (GetReputationRank(REP_ARMOR 46 /
+--   REP_WEAPON 289) >= REP_FRIENDLY, :451/:455) have no rank bridge —
+--   player:GetReputation returns raw standing (rank derivable via
+--   the 3000-standing Friendly threshold, but that does not unblock
+--   the select backends below). BLOCKED on the backends, not the gates.
 -- :506 SendActionMenu — learn arms :521-539 / :530-550 need
 --   player->CastSpell(player, S_LEARN_* 9789/9790/39099/39098/39097, true);
---   CastSpell exists only on the creature event surface
---   (lua_creature_events.go:62), not on the player. BLOCKED.
+--   the cast itself is now bridged (player:CastSpell, lua_player.go:
+--   504) — the arms stay blocked on the menu backends (no
+--   SendListInventory/SendTrainerList Lua surface for the
+--   quest/vendor/trainer items the C++ hello itself adds) and, for
+--   unlearn, on EquippedOk. BLOCKED.
 -- :521-556 unlearn arms (S_UNLEARN_* 36436/36435/36441/36439/36438) go
 --   through ProcessUnlearnAction (:385), which needs EquippedOk
 --   (item RequiredSpell scan), the player unlearn cast, and
@@ -45,19 +55,24 @@
 -- :709 OnGossipHello — player:HasSkill(SKILL_ENGINEERING) IS bridged and
 --   HasSpell(req) IS bridged, but CanLearn (:692) gates on
 --   player->GetBaseSkillValue(SKILL_ENGINEERING) >= 260 (Zap/Jhordy) or
---   >= 350 (Kablam/Smiles) — no bridge. BLOCKED.
+--   >= 350 (Kablam/Smiles) — computable via player:GetSkillValue
+--   within the perm-bonus edge (see blacksmith note above); the
+--   select leg stays blocked on the cast-menu backends. BLOCKED.
 -- :747 OnGossipSelect — player->CastSpell(player, SPELL_LEARN_TO_*,
---   false): 23490/23491/36956/36957 teaching 23486/23489/36954/36955; no
---   player CastSpell bridge. BLOCKED. (npc_text ids 6092/7251/7252/
---   10365/10363 are DB menu text, default 0 in Lua.)
+--   false): 23490/23491/36956/36957 teaching 23486/23489/36954/36955;
+--   the cast is now bridged (lua_player.go:504) but the menu backend
+--   (SendActionMenu equivalents) is not a Lua surface. BLOCKED.
+--   (npc_text ids 6092/7251/7252/10365/10363 are DB menu text,
+--   default 0 in Lua.)
 --
 -- CLASS 3: go_soothsaying_for_dummies (GameObjectScript, C++ :791-846)
 -- GO entry 177226, DB menu 7058 (hello is DB-driven; C++ only handles
 -- select, :814).
 -- :820-826 learn options (S_LEARN_GNOMISH 20220, S_LEARN_GOBLIN 20221,
 --   S_LEARN_DRAGONSCALE 10657, S_LEARN_ELEMENTAL 10659, S_LEARN_TRIBAL
---   10661) — player->CastSpell(player, ..., true); no player bridge.
---   BLOCKED.
+--   10661) — player->CastSpell(player, ..., true); the cast is now
+--   bridged (lua_player.go:504) but the GO menu backend is not a Lua
+--   surface. BLOCKED.
 -- :815-819 unlearn options (S_UNLEARN_GNOMISH 68333, S_UNLEARN_GOBLIN
 --   68334, cost 0) — ProcessUnlearnAction; no bridge chain. BLOCKED.
 --
