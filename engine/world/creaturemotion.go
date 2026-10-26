@@ -2969,7 +2969,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		leashDist := leashBase
 		if motion.AIName == "TurretAI" {
-			leashDist += turretSpellMaxRange(s, motion)
+			leashDist += combatDistanceSpellRange(s, motion)
 		}
 		leashVictimReach := float32(1.5)
 		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
@@ -4295,11 +4295,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// difference, detect-range aura terms, the expansion-max-level
 		// overwrite, then the RATE_CREATURE_AGGRO-scaled clamp and multiplier.
 		// (Creature::GetAggroRange, 3130-3168, is the pet-only variant —
-		// world-creature acquisition uses GetAttackDistance.) Residual: the
+		// world-creature acquisition uses GetAttackDistance.) The
 		// + m_CombatDistance term of CanStartAttack (Creature.cpp:1987-1989)
-		// stays unmodeled (creature motions carry no combat-distance field;
-		// only ArcherAI/TurretAI set it, and the turret arm below adds its
-		// spell range to the radius).
+		// is modeled below for ArcherAI/TurretAI, the only AIs whose ctors
+		// set it; the Z arm (Creature.cpp:1974) rides the zAttackRange
+		// argument to canCreatureStartAttack.
 		levelDiff := int32(motion.Level) - int32(p.Level)
 		if motion.ExpansionMaxLevelEntry != motion.Entry {
 			motion.ExpansionMaxLevel = 80
@@ -4352,15 +4352,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			aggroDist *= float32(aggroRate)
 		}
-		// TurretAI (CombatAI.cpp:239-242): m_SightDistance = m_CombatDistance
-		// = spell[0]'s max range, and Creature::CanStartAttack acquires at
-		// GetAttackDistance + m_CombatDistance (Creature.cpp:1986), so a
-		// turret sights far beyond the standard aggro radius.
-		if motion.AIName == "TurretAI" {
+		// TurretAI (CombatAI.cpp:239-242) and ArcherAI (CombatAI.cpp:185-197):
+		// both ctors set m_CombatDistance = spell[0]'s max range (and
+		// m_SightDistance to the same value), and Creature::CanStartAttack
+		// acquires at GetAttackDistance + m_CombatDistance
+		// (Creature.cpp:1986), so an archer sights as far beyond the
+		// standard aggro radius as a turret does.
+		if motion.AIName == "TurretAI" || motion.AIName == "ArcherAI" {
 			if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 				motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
 			}
-			aggroDist += turretSpellMaxRange(s, motion)
+			aggroDist += combatDistanceSpellRange(s, motion)
 		}
 		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
 			// CreatureAI::TriggerAlert (CreatureAI.cpp) via
@@ -4371,7 +4373,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			s.triggerCreatureAlert(ctx, motion, p, dist, aggroDist, now)
 			continue
 		}
-		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		// Creature::CanStartAttack (Creature.cpp:1974): the non-flyer Z
+		// arm is CREATURE_Z_ATTACK_RANGE + m_CombatDistance — 3yd for
+		// ordinary creatures (m_CombatDistance 0) and 3 + spell[0]'s
+		// hostile max range for ArcherAI/TurretAI, whose ctors set it.
+		// Spells were loaded above for both AIs, so the range resolves.
+		zAttackRange := float32(3.0)
+		if motion.AIName == "TurretAI" || motion.AIName == "ArcherAI" {
+			zAttackRange += spellMaxRangeHostile(s, motion)
+		}
+		if !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -4666,17 +4677,34 @@ func noGrayAggroBlocked(playerLevel, creatureLevel uint32, above, below uint32) 
 
 // canCreatureStartAttack mirrors the range arms of Creature::CanStartAttack
 // (Creature.cpp:1960-2004): the non-flyer Z check (CREATURE_Z_ATTACK_RANGE,
-// Creature.h:57 — the + m_CombatDistance term is unmodeled) and the
-// GetAttackDistance distance check (C++ also adds m_CombatDistance there).
-// The civilian, immunity, and _IsTargetAcceptable arms live in the aggro
-// scan's guard and its audit note above; the gray-aggro arm
-// (CheckNoGrayAggroConfig) is wired in the scan guard before the LOS check,
-// matching the C++ position ahead of IsWithinLOSInMap.
-// turretSpellMaxRange mirrors the m_CombatDistance arm of the TurretAI
-// constructor (CombatAI.cpp:239-242): spell[0]'s max range, expressed in the
-// same contactDist-relative terms as the combat tick's spell band
+// Creature.h:57, plus m_CombatDistance via the zAttackRange argument)
+// and the GetAttackDistance distance check (C++ also adds
+// m_CombatDistance there). The civilian, immunity, and
+// _IsTargetAcceptable arms live in the aggro scan's guard and its audit
+// note above; the gray-aggro arm (CheckNoGrayAggroConfig) is wired in the
+// scan guard before the LOS check, matching the C++ position ahead of
+// IsWithinLOSInMap.
+// spellMaxRangeHostile is spell[0]'s DBC hostile max range (RangeMax[0],
+// SpellInfo::GetMaxRange(false), SpellInfo.cpp:3061-3075) — the raw
+// m_CombatDistance value both the TurretAI and ArcherAI ctors store.
+// combatDistanceSpellRange mirrors that m_CombatDistance arm of the
+// TurretAI constructor (CombatAI.cpp:239-242) and the identical ArcherAI
+// constructor (CombatAI.cpp:185-197): spell[0]'s max range, expressed in
+// the same contactDist-relative terms as the combat tick's spell band
 // (spellMaxDist = contactDist + MaxHostile).
-func turretSpellMaxRange(s *Server, motion *creatureMotion) float32 {
+func spellMaxRangeHostile(s *Server, motion *creatureMotion) float32 {
+	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
+		return 0
+	}
+	if spellInfo, found, err := s.Data.Spell(motion.Spells[0]); err == nil && found {
+		if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
+			return spellRange.MaxHostile
+		}
+	}
+	return 0
+}
+
+func combatDistanceSpellRange(s *Server, motion *creatureMotion) float32 {
 	if s == nil || s.Data == nil || motion == nil || len(motion.Spells) == 0 {
 		return 0
 	}
@@ -4684,17 +4712,11 @@ func turretSpellMaxRange(s *Server, motion *creatureMotion) float32 {
 	if cReach <= 0 {
 		cReach = 1.5
 	}
-	maxDist := float32(calcMeleeRange(cReach, 1.5))
-	if spellInfo, found, err := s.Data.Spell(motion.Spells[0]); err == nil && found {
-		if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
-			maxDist += spellRange.MaxHostile
-		}
-	}
-	return maxDist
+	return float32(calcMeleeRange(cReach, 1.5)) + spellMaxRangeHostile(s, motion)
 }
 
-func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance float32) bool {
-	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= 3.0) && distance <= attackDistance
+func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance, zAttackRange float32) bool {
+	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= float64(zAttackRange)) && distance <= attackDistance
 }
 
 // npcEffectCanScale mirrors the canEffectScale switches in

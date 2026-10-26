@@ -1469,7 +1469,17 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 		}
 
 	case TotemPulseDispel:
-		s.totemDispelPulse(ctx, def, totem, s)
+		// FillTargetMap OWNER/area arm (SpellAuras.cpp:2649-2762), as the
+		// heal leg: 8171's script fires only on hit units
+		// (spell_shaman.cpp:397-407) and the Cleansing tooltip targets
+		// party members within 30 yards, so the owner's own tick is
+		// radius-gated like the group leg — an owner who walks out of
+		// range is not dispelled. No phase gate: the totem's phase
+		// tracks the owner's, as the heal leg.
+		if s.player != nil && s.player.Map == totem.Map && s.player.InstanceID == totem.InstanceID &&
+			totemWithinAreaRange(s.player.X, s.player.Y, s.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) {
+			s.totemDispelPulse(ctx, def, totem, s)
+		}
 		if s.server != nil && s.groupID != 0 {
 			// Area-aura phase gate (CheckTarget -> CanSeeOrDetect ->
 			// CanNeverSee, Object.cpp:1659-1662), as the heal leg: the
