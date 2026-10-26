@@ -193,11 +193,12 @@ end
 -- pets/totems are eligible. The bridged, threat-ordered GetAITargets
 -- list (lua_creature_events.go:345); the murmur
 -- randomThreatTarget(creature, 30, false) precedent.
+-- Gate twin: IsWithinCombatRange (Unit.cpp:583) — raw center minus own reach.
 local function randomThreatTarget(creature, minDist, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        local dist = creature:GetDistance(t)
-        if not t:IsDead() and dist >= minDist and dist <= maxDist then
+        local dist = creature:GetDistance(t) - creature:GetCombatReach()
+        if not t:IsDead() and (minDist <= 0 or dist >= minDist) and dist < maxDist then
             candidates[#candidates + 1] = t
         end
     end

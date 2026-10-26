@@ -336,14 +336,15 @@ end
 -- legs (boss_freya.cpp:426 sunbeam, :435 unstable energy,
 -- :453 strengthened roots with -SPELL_ROOTS_FREYA, :969 iron
 -- roots with -SPELL_ROOTS_IRONBRANCH): threat-list players
--- alive + dist, offset 0 (tank eligible).
+-- alive + dist, offset 0 (tank eligible). Gate twin: IsWithinCombatRange
+-- (Unit.cpp:583) — raw center minus own reach (target reach unbridged).
 local function randomPlayerInRange(creature, minDist, maxDist, excludeAura)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
                 and (excludeAura == nil or not unit:HasAura(excludeAura)) then
-            local dist = creature:GetDistance(unit)
-            if dist >= minDist and dist <= maxDist then
+            local dist = creature:GetDistance(unit) - creature:GetCombatReach()
+            if (minDist <= 0 or dist >= minDist) and dist < maxDist then
                 candidates[#candidates + 1] = unit
             end
         end

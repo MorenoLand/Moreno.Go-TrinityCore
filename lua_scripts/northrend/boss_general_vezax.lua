@@ -226,6 +226,12 @@ end
 -- SelectTarget(Random, 0, 150.0f, true) draws the THREAT list, so the
 -- wide pool is IsEngagedBy-filtered + alive (threat refs skip dead /
 -- offline at build, UnitAI.h) — not the whole instance pool.
+-- Ring distances are player->GetDistance(me pos) (Object.cpp:1181:
+-- exact minus the PLAYER's reach, inclusive 15-50); the fallback is a
+-- SelectTarget 150 gate (IsWithinCombatRange, Unit.cpp:583) — both
+-- twinned below, own reach only (target reach unbridged, skadi idiom).
+-- Player reach is DEFAULT_PLAYER_COMBAT_REACH 1.5 (ObjectDefines.h:40).
+local PLAYER_COMBAT_REACH = 1.5
 local function vezaxRandomTarget(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     local playersMin = 4
@@ -233,13 +239,14 @@ local function vezaxRandomTarget(creature)
         playersMin = 9
     end
     local ring, wide = {}, {}
+    local reach = creature:GetCombatReach()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
             local dist = creature:GetDistance(plr)
-            if dist >= 15 and dist <= 50 then
+            if dist - PLAYER_COMBAT_REACH >= 15 and dist - PLAYER_COMBAT_REACH <= 50 then
                 ring[#ring + 1] = plr
             end
-            if dist <= 150 and not plr:IsDead()
+            if dist - reach < 150 and not plr:IsDead()
                     and creature:IsEngagedBy(plr) then
                 wide[#wide + 1] = plr
             end

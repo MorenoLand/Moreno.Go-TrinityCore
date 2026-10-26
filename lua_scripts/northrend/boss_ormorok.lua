@@ -136,13 +136,14 @@ end
 
 -- C++ EVENT_CRYSTALLINE_TANGLER (:175-179): SelectTarget(Random, 0,
 -- OrmorokTanglerPredicate) -> DoCast(target, SPELL_SUMMON_
--- CRYSTALLINE_TANGLER 61564); predicate = GetDistance2d >= 5.0f,
+-- CRYSTALLINE_TANGLER 61564); predicate = GetDistance2d >= 5.0f
+-- (reach-subtracted, Object.cpp:1187; Lua subtracts own reach),
 -- threat-list pool, no playerOnly filter (UnitAI.h:176); re-arm
 -- 15s unconditional.
 local function tanglerTick(creature, guid)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance2d(t) >= 5.0 then
+        if t:IsAlive() and creature:GetDistance2d(t) - creature:GetCombatReach() >= 5.0 then
             candidates[#candidates + 1] = t
         end
     end

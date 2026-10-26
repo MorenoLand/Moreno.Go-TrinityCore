@@ -193,13 +193,15 @@ end
 -- C++ SelectTarget legs: runic charge is a lambda pick (TYPEID_PLAYER
 -- + IsInRange(me, 8, 40), boss_thorim.cpp:1475) and rune detonation is
 -- Random, 0, 60, true (:1568) — both draw from the threat list, not
--- the map-player list (baltharus precedent).
+-- the map-player list (baltharus precedent). Gate twin: IsInRange
+-- (Object.cpp:1329) and SelectTarget (Unit.cpp:583) — raw center minus
+-- own reach, >= min, < max.
 local function randomPlayerInRange(creature, minDist, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead() then
-            local dist = creature:GetDistance(t)
-            if dist >= minDist and dist <= maxDist then
+            local dist = creature:GetDistance(t) - creature:GetCombatReach()
+            if (minDist <= 0 or dist >= minDist) and dist < maxDist then
                 candidates[#candidates + 1] = t
             end
         end

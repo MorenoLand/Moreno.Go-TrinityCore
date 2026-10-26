@@ -360,10 +360,12 @@ local COUNT_ARMS = {
     [34456] = RETRO_COUNTS,
 }
 
+-- Count twin: C++ GetDistance2d subtracts both reaches (Object.cpp:1187);
+-- Lua subtracts own reach.
 local function countCheck(creature, guid, arm)
     local count = 0
     for _, target in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(target) < 10.0 then
+        if creature:GetDistance2d(target) - creature:GetCombatReach() < 10.0 then
             count = count + 1
         end
     end
