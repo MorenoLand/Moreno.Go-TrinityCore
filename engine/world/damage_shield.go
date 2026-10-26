@@ -353,7 +353,7 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 	// and the done pass on the original attacker, carrying the aura's spell.
 	ts.procSpellHitTakenAuraTriggers(ctx, attackerGUID, spellID, true, false, false, false, false, 0, damage, false, false, 0, false, false)
 	if attackerSess != nil {
-		attackerSess.procSpellHitAuraTriggers(ctx, ts.playerGUID, spellID, true, false, false, false, false, 0, damage, false)
+		attackerSess.procSpellHitAuraTriggers(ctx, ts.playerGUID, spellID, true, false, false, false, false, 0, damage, false, false, false)
 	}
 	ts.sendPlayerUpdate()
 	// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled creatures

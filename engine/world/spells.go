@@ -15560,6 +15560,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, nil, spell, damage); ok {
 				blocked = b
 				damage -= b
+				fullBlock = blocked > 0 && damage == 0
 			}
 		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079-1080,
@@ -15729,7 +15730,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// EffectInstaKill calls Unit::DealDamage directly, which contains zero
 	// ProcDamageAndSpell calls), so no spell-hit procs fire on either arm.
 	if !instantKill && hadIncomingDamage && !targetCantProc {
-		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected)
+		s.procSpellHitAuraTriggers(ctx, targetGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, reflected, blocked > 0, fullBlock)
 		// Taken-side aura procs on the victim's own auras (TrinityCore
 		// Unit::TriggerAurasProcOnEvent, Unit.cpp:10413-10418): the done
 		// side runs first, matching the ProcSkillsAndAuras ordering

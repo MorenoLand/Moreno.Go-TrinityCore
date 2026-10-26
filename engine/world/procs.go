@@ -1860,7 +1860,7 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 // spell-family, and triggered-cast gates engage exactly. Spells with
 // SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2441).
 // The trigger spell targets the victim.
-func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, reflected bool) {
+func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, reflected, blocked, fullBlock bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1869,6 +1869,20 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 	// even suppressed or CANT_TRIGGER_PROC targets feed the FINISH/CAST
 	// phase mask.
 	hitMask := spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed, reflected)
+	// createProcHitMask block arm (Unit.cpp:10227-10246), same fold as the
+	// taken helper: partial block ORs BLOCK, full block replaces the
+	// normal/critical bit with BLOCK | FULL_BLOCK (absorb rides along);
+	// immune and reflected trips take neither.
+	if !reflected && !immune {
+		if fullBlock {
+			hitMask = procHitBlock | procHitFullBlock
+			if absorbed > 0 {
+				hitMask |= procHitAbsorb
+			}
+		} else if blocked {
+			hitMask |= procHitBlock
+		}
+	}
 	s.castProcHitMask |= hitMask
 	spell, found, err := s.server.Data.Spell(spellID)
 	if err != nil || !found {
