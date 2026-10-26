@@ -169,7 +169,7 @@ local function onBugsTick(creature, guid)
         local pick = nil
         for _, entry in ipairs({ENTRY_BUG_1, ENTRY_BUG_2}) do
             for _, bug in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
-                if not bug:IsDead() and creature:IsWithinDistInMap(bug, ABUSE_BUG_RANGE) then
+                if not bug:IsDead() and creature:GetDistance(bug) - creature:GetCombatReach() - bug:GetCombatReach() < ABUSE_BUG_RANGE then
                     if pick == nil or math.random(0, 3) == 0 then
                         pick = bug
                     end
