@@ -65,10 +65,11 @@
 -- SummonCreature(NPC_REFLECTION) + player-side clone/ghost-visual
 -- casts + reflection AttackStart). The summon leg itself is now
 -- bridgeable (engine/world/lua_creature_events.go:956) — the old
--- no-summon claim is retracted — but the machine stays
--- documented-only: the MaxThreat target-list leg rides
--- creature:GetAITargets() (old no-accessor claim retracted); the player-side
--- casts (no player-cast bridge) and AttackStart (no bridge) block it.
+-- no-summon claim is retracted — and the player-side casts are
+-- bridged (player:CastSpell, the anetheron precedent) — but the
+-- machine stays documented-only: the MaxThreat target-list leg rides
+-- creature:GetAITargets() (old no-accessor claim retracted); only
+-- reflection AttackStart (no bridge) still blocks it.
 -- (CORRECTION 2026-10-23: the JustEngagedWith DoZoneInCombat leg
 -- (:1908) IS ported below — creature:DoZoneInCombat() is bridged
 -- (engine/world/lua_creature_events.go); the stale "no bridge" claim

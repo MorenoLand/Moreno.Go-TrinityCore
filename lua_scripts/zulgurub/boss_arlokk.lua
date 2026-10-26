@@ -127,14 +127,26 @@ local function arlokkState(guid)
 end
 
 -- C++ EVENT_MARK_OF_ARLOKK (boss_arlokk.cpp:221): MaxThreat with a
--- random 1-3 offset (the first 1-3 threat entries are skipped before
--- filtering, UnitAI.h), any unit (playerOnly=false), excluding units
--- already carrying the mark (aura -24210); the first surviving entry
--- in threat order wins, not a random draw.
+-- random 1-3 offset over the victim-first list (UnitAI.h: victim,
+-- then the rest in threat order; the offset pop runs before
+-- filtering, so the victim never wins the pick), any unit
+-- (playerOnly=false), excluding units already carrying the mark
+-- (aura -24210); the first surviving entry wins, not a random draw.
 local function markTarget(creature)
     local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = victim ~= nil and victim:GetGUID() or nil
+    local ordered = {}
+    if victim ~= nil then
+        ordered[#ordered + 1] = victim
+    end
+    for _, unit in ipairs(targets) do
+        if unit:GetGUID() ~= victimGuid then
+            ordered[#ordered + 1] = unit
+        end
+    end
     local skip = math.random(1, 3)
-    for i, unit in ipairs(targets) do
+    for i, unit in ipairs(ordered) do
         if i > skip and not unit:IsDead()
                 and not unit:HasAura(SPELL_MARK_OF_ARLOKK) then
             return unit
