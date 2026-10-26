@@ -11873,6 +11873,18 @@ func init() {
 	RegisterLuaBoss("npc_darkfallen_icc", 37571)
 	RegisterLuaBoss("npc_darkfallen_icc", 37666)
 	RegisterLuaBoss("npc_darkfallen_icc", 37901)
+
+	// npc_icc_orb_controller (Icecrown Citadel instance script):
+	// visual channel only — Reset 1s init grid sweep (10.0f, the 5
+	// darkfallen entries, alive only), first visual 1s later, alternating
+	// 3s/21s repeat, random in-world init minion self-casts blood orb
+	// visual 72099; SetGUID ACTION_COMBAT siphon, DoAction evade re-arm,
+	// and SpellHit orb-controller-active legs stay out (no cross-creature
+	// AI SetGUID/DoAction bridge, GO orb script unported).
+	// Entry verifiable from icecrown_citadel.h:248 — see
+	// lua_scripts/northrend/npc_icc_orb_controller.lua.
+	// Sixteenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_icc_orb_controller", 38008)
 }
 
 func init() {
