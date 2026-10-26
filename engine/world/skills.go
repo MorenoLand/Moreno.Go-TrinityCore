@@ -444,47 +444,26 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 	}
 
 	// Player::SetSkill remove arm (Player.cpp:6144-6164): unlearn the
-	// first-rank spell of every SkillLineAbility row for the skill, with
-	// RemoveSpell's higher-rank cascade (Player.cpp:3708-3713). The
-	// spells-requiring-spell leg (Player.cpp:3714-3718) has no Go bridge
-	// (Go keeps no reverse learn map), and the UpdateSkillEnchantments leg
-	// has no skill-enchantment model.
+	// first-rank spell of every SkillLineAbility row for the skill via
+	// the full RemoveSpell cascade (Player.cpp:3699): higher-rank,
+	// spells-requiring-spell, SpellLearnSkill, and spell_learn_spell
+	// legs, with the RemoveSpell defaults (disabled=false,
+	// learn_low_rank=true; the prev arm is vacuous for first-rank
+	// spells). The UpdateSkillEnchantments leg has no
+	// skill-enchantment model. One visited map spans the loop: a
+	// spell already dropped by an earlier row's cascade is a no-op
+	// on re-entry, as in C++'s re-search guard.
 	if s.server != nil && s.server.Data != nil {
 		if abilities, aok, aerr := s.server.Data.SkillLineAbilitiesForSkill(skillID); aerr == nil && aok {
+			visited := make(map[uint32]bool)
 			for _, ab := range abilities {
-				s.unlearnSpellRankChain(ctx, s.server.getFirstSpellInChain(ab.Spell))
+				s.removeSpell(ctx, s.server.getFirstSpellInChain(ab.Spell), true, visited)
 			}
 		}
 	}
 
 	s.sendPlayerUpdate()
 	return true
-}
-
-// unlearnSpellRankChain mirrors the Player::RemoveSpell rank recursion
-// (Player.cpp:3708-3713) used by the SetSkill remove arm: unlearn the spell
-// and walk up the rank chain while the higher rank is known. Higher ranks
-// that are talent spells are skipped (the GetTalentSpellPos arm).
-func (s *session) unlearnSpellRankChain(ctx context.Context, spellID uint32) {
-	if spellID == 0 || !s.hasLearnedSpell(spellID) {
-		return
-	}
-	next := uint32(0)
-	if s.server != nil {
-		next = s.server.getNextSpellInChain(spellID)
-	}
-	// Player::RemoveSpell (Player.cpp:3708-3713): the higher rank is
-	// removed before the current spell, so removal order is highest-rank
-	// down to first-rank.
-	if next != 0 && s.hasLearnedSpell(next) {
-		if s.server != nil && s.server.Data != nil {
-			if cost, cerr := s.server.Data.TalentSpellCost(next); cerr == nil && cost > 0 {
-				return
-			}
-		}
-		s.unlearnSpellRankChain(ctx, next)
-	}
-	s.unlearnSpell(ctx, spellID)
 }
 
 const (
