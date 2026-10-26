@@ -5463,11 +5463,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// evaluate the hit as a taken-proc event (PROC_SPELL_TYPE_DAMAGE,
 	// PROC_SPELL_PHASE_HIT; Unit.cpp:10385-10418). Mirrors the
 	// player-victim branch's taken leg above: runs after the damage legs
-	// on both the lethal and non-lethal arms, the hit mask always NORMAL
+	// on both the lethal and non-lethal arms, the hit mask follows the crit roll
 	// (misses return early above), the attr3 arm checked inline (the
 	// creature loop has no attr3 gate), and the trigger spell targeting
 	// the pet attacker. The self-hit is excluded — the return-trip
 	// bridge below already fires the combined done+taken event there.
+	procHitMask := procHitNormal
+	if isCrit {
+		procHitMask = procHitCritical
+	}
 	if target.GUID != caster.GUID {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 			typeMask := spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
@@ -5478,7 +5482,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					schoolMask:     uint32(schoolMask),
 					spellTypeMask:  procSpellTypeDamage,
 					spellPhaseMask: procSpellPhaseHit,
-					hitMask:        procHitNormal,
+					hitMask:        procHitMask,
 					triggered:      triggered,
 					eventSpell:     &spellCopy,
 					actorGUID:      caster.GUID,
