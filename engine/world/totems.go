@@ -349,6 +349,20 @@ func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) boo
 	return s.isHostileFaction(m.Faction, owner)
 }
 
+// totemCreatureHiddenFromOwner is the GM-visibility arm of
+// WorldObject::CanSeeOrDetect (Object.cpp:1622-1630) for a totem's
+// creature victim: the seer is the owner (CanDetect's controller arm,
+// Object.cpp:1665-1671), so a script-hidden motion (Unit::SetVisible,
+// Unit.cpp:8656) is invisible to an owner whose gmVisibilityDetect is
+// 0, and visible to one whose detect is nonzero — the same seesHidden
+// convention as the nearby-creature update filter (creatures.go:106).
+// Stealth/invisibility auras on creature victims are NOT covered here:
+// no creature-target CanDetect helper exists (the sentry residual),
+// so a stealthed creature motion still reads as visible.
+func (s *session) totemCreatureHiddenFromOwner(m *creatureMotion) bool {
+	return m != nil && m.ScriptHidden && (s == nil || s.gmVisibilityDetect == 0)
+}
+
 // sweepTotemCreatureDebuffOutOfRange is the creature half of the
 // Aura::UpdateTargetMap drop (SpellAuras.cpp:643-673): the C++ area-aura
 // refresh rebuilds the target list each interval and removes every
@@ -1028,8 +1042,21 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// me->CastSpell(victim, GetSpell()), non-triggered, so proc
 			// events fire (no DISALLOW_PROC_EVENTS arm). The victim is
 			// remembered in _victimGUID and reused while still attackable,
-			// in range, and hostile; only then does a new
-			// nearest-attackable-unit search run (TotemAI.cpp:66-76).
+			// in range, hostile, and visible under CanSeeOrDetect
+			// (TotemAI.cpp:66, default distanceCheck=false); only then
+			// does a new nearest-attackable-unit search run (66-76), whose
+			// check carries the same CanSeeOrDetect arm
+			// (GridNotifiers.h:1072). The session legs use the owner as
+			// seer (CanDetect's controller arm, Object.cpp:1665-1671):
+			// canDetectStealthOf + canDetectInvisibilityOfPlayer, the
+			// same helpers the sentry ping uses. The creature legs use
+			// only the GM-hidden arm (totemCreatureHiddenFromOwner);
+			// creature stealth/invisibility auras stay unmodeled (no
+			// creature-target CanDetect helper). Terrain LOS is NOT a
+			// selection gate: CanSeeOrDetect has no LOS arm, so a
+			// behind-wall victim stays remembered in C++ (its cast may
+			// fail downstream) instead of being swapped for another
+			// target; phase mismatch likewise stays unmodeled.
 			owner := totemOwnerPos(s)
 			var victimGUID uint64
 			totem.mu.Lock()
@@ -1045,12 +1072,14 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				// kept as victim until it died or walked out.
 				if m := s.server.findCreatureMotion(totem.Map, totem.InstanceID, remembered); m != nil &&
 					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
-					s.server.totemEnemyCreatureValid(m, owner) {
+					s.server.totemEnemyCreatureValid(m, owner) &&
+					!s.totemCreatureHiddenFromOwner(m) {
 					victimGUID = m.GUID
 				} else if other := s.server.findSessionByGUID(remembered); other != nil && other.player != nil &&
 					other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 					distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
-					s.totemEnemySessionHostile(other) {
+					s.totemEnemySessionHostile(other) &&
+					s.canDetectStealthOf(other) && s.canDetectInvisibilityOfPlayer(other) {
 					victimGUID = other.playerGUID
 				}
 			}
@@ -1064,7 +1093,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				// before, so enemy players in range were never hit.
 				minDist := float64(math.MaxFloat64)
 				for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-					if !s.server.totemEnemyCreatureValid(m, owner) {
+					if !s.server.totemEnemyCreatureValid(m, owner) || s.totemCreatureHiddenFromOwner(m) {
 						continue
 					}
 					if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d < minDist {
@@ -1075,7 +1104,8 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other == nil || other.player == nil || other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
-						!s.totemEnemySessionHostile(other) {
+						!s.totemEnemySessionHostile(other) ||
+						!s.canDetectStealthOf(other) || !s.canDetectInvisibilityOfPlayer(other) {
 						continue
 					}
 					if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= float64(def.Radius) && d < minDist {
