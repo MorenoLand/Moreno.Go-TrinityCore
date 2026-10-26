@@ -322,6 +322,31 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 	s.server.auraMu.Unlock()
 }
 
+// totemEnemySessionHostile is the session half of the TARGET_CHECK_ENEMY
+// verdict for the Totem of Wrath enemy leg (Spell.cpp:8316, Object.cpp:2977):
+// the enemy sweep's player leg keys hostility on team, not on the
+// creature-faction templates — opposite team, or a duel opponent even on
+// the same team (isFriendlyToPlayer's duel term, Object.cpp:2744-2746) —
+// then applies the player-vs-player attack terms (sanctuary, PvP flag,
+// FFA) via explicitTargetAttackPvPBlocked. The GM, taxi-flight,
+// non-attackable and dead gates mirror the session leg of
+// spellAreaEnemyTargets. The UBER term is deliberately absent: the pulse
+// caster is the totem creature, whose ToPlayer is null, so the
+// player-caster UBER arm cannot fire (creature-path VERIFIED-OUT).
+func (s *session) totemEnemySessionHostile(other *session) bool {
+	if s == nil || other == nil || other == s || !other.authed || !other.worldReady.Load() || other.player == nil {
+		return false
+	}
+	if other.player.Health == 0 || other.player.TaxiPath != "" || other.player.UnitFlags&unitFlagNonAttackable2 != 0 || sessionIsGameMaster(other) {
+		return false
+	}
+	if s.isFriendlyToPlayer(other) {
+		return false
+	}
+	duelHostile := s.duelPartner != 0 && s.duelPartner == other.playerGUID && s.player != nil && s.player.DuelTeam != 0 && other.player.DuelTeam != 0
+	return !s.explicitTargetAttackPvPBlocked(other, duelHostile)
+}
+
 // totemDisplayForRace bridges the race-dependent display arm of
 // Totem::InitStats (Totem.cpp:88-90): sObjectMgr->GetModelForTotem
 // (ObjectMgr.cpp:1747-1753) reads player_totem_model keyed by
@@ -814,6 +839,26 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 					continue
 				}
 				s.applyTotemEnemyDebuff(totem, m, def.DebuffSpell, ownerLevel)
+			}
+			// Enemy-player leg: the same area aura reaches hostile
+			// sessions in radius, with no group term (the buff arm's
+			// group gate is party-only). applyAuraFromCaster carries
+			// the totem GUID, so the destroy sweep below can key on
+			// it; the 2s pulse re-applies, refreshing the duration
+			// timer the same way the creature record is refreshed.
+			// The session victim's crit-taken fold reads this aura
+			// via playerAuraModifier(197) (combat.go), the session
+			// twin of the creature record's creatureAuraModifierSum.
+			if s.server != nil {
+				s.server.sessionsMu.RLock()
+				for other := range s.server.sessions {
+					if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
+						distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
+						s.totemEnemySessionHostile(other) {
+						other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel)
+					}
+				}
+				s.server.sessionsMu.RUnlock()
 			}
 		}
 
@@ -1691,6 +1736,34 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		s.server.auraMu.Unlock()
 		for _, key := range deadKeys {
 			s.server.removeCreatureAura(key, debuffSpell)
+		}
+	}
+
+	// Session leg of the same sweep: an enemy session's 30708 record is
+	// keyed on spell only in activeAuras, so the totem-GUID check here
+	// is what keeps a second live totem's debuff standing when this
+	// totem dies (same-spell replacement would otherwise make a
+	// spell-only sweep strip it). No radius or map gate: the pulse
+	// application, not the victim's current position, decides what
+	// this totem's death removes, matching the creature sweep above.
+	if debuffSpell > 0 && totemGUID != 0 && s.server != nil {
+		s.server.sessionsMu.RLock()
+		var doomed []*session
+		for other := range s.server.sessions {
+			if other == nil || other.player == nil {
+				continue
+			}
+			other.castMu.Lock()
+			aura := other.activeAuras[debuffSpell]
+			hit := aura != nil && !aura.Stopped && aura.CasterGUID == totemGUID
+			other.castMu.Unlock()
+			if hit {
+				doomed = append(doomed, other)
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+		for _, other := range doomed {
+			other.removeAura(debuffSpell)
 		}
 	}
 
