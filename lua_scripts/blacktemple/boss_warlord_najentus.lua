@@ -121,7 +121,7 @@ local function randomSpineTarget(creature)
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - creature:GetCombatReach() < 200 then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 200 then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
             candidates[#candidates + 1] = p
         end
     end

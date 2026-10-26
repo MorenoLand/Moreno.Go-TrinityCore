@@ -191,7 +191,11 @@ local function randomTargetWithinReach(creature)
     local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() and creature:GetDistance(t) - reach < reach then -- IsWithinCombatRange gate, dist param = own reach (Unit.cpp:583; target-reach band unbridged)
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if not t:IsDead() and creature:GetDistance(t) - reach - targetReach < reach then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; dist param = own reach, unfiltered pool branches target reach)
             candidates[#candidates + 1] = t
         end
     end

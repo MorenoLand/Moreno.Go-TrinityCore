@@ -421,7 +421,7 @@ local function randomTargetIn150(creature)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - creature:GetCombatReach() < 150 then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 150 then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
             candidates[#candidates + 1] = p
         end
     end

@@ -265,9 +265,13 @@ local function hammerJusticeTarget(creature)
     local reach = creature:GetCombatReach()
     for i, u in ipairs(targets) do
         local d = creature:GetDistance(u)
+        local targetReach = 1.5
+        if u:GetObjectType() ~= "Player" then
+            targetReach = u:GetCombatReach()
+        end
         if ((victimGuid ~= nil and u:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
-                and not u:IsDead() and d - reach >= 10 and d - reach < 40 then -- HammerTargetSelector IsInRange band (Object.cpp:1329): raw center >= min + reaches, < max + reaches; target reach band unbridged
+                and not u:IsDead() and d - reach - targetReach >= 10 and d - reach - targetReach < 40 then -- HammerTargetSelector IsInRange band (Object.cpp:1329; reach-exact: own + target reaches)
             candidates[#candidates + 1] = u
         end
     end
@@ -617,7 +621,11 @@ local function zerevorArcaneExplosion(creature, guid)
     if st.canUseArcaneExplosion then
         local near = {}
         for _, u in ipairs(creature:GetAITargets()) do
-            if not u:IsDead() and creature:GetDistance(u) - creature:GetCombatReach() < 10 then -- IsWithinCombatRange gate (Unit.cpp:583)
+            local targetReach = 1.5
+            if u:GetObjectType() ~= "Player" then
+                targetReach = u:GetCombatReach()
+            end
+            if not u:IsDead() and creature:GetDistance(u) - creature:GetCombatReach() - targetReach < 10 then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; unfiltered pool branches target reach)
                 near[#near + 1] = u
             end
         end

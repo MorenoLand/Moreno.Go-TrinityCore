@@ -167,7 +167,7 @@ local function randomShadowDeathTarget(creature)
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) - creature:GetCombatReach() < 100 -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 100 -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
                 and not p:HasAura(SPELL_SPIRITUAL_VENGEANCE) then
             candidates[#candidates + 1] = p
         end

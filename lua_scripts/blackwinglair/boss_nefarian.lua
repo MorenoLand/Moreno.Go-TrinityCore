@@ -204,13 +204,13 @@ end
 -- lua_creature_events.go:1912; fairbanks idiom, offset 0 so no
 -- entry is skipped). C++ IsWithinCombatRange is 3D distance <
 -- dist + both combat reaches (Unit.cpp:583) — the gate below is
--- the reach twin (own reach only; target reach unbridged, skadi idiom).
+-- the reach-exact twin (own reach + player reach 1.5, ObjectDefines.h:40).
 local function randomThreatPlayerInRange(creature, maxDist)
     local players = {}
     local reach = creature:GetCombatReach()
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - reach < maxDist then
+                and creature:GetDistance(t) - reach - 1.5 < maxDist then
             players[#players + 1] = t
         end
     end
