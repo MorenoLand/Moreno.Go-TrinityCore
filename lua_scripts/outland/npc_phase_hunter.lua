@@ -51,12 +51,13 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ ctor /
 -- Reset() values (Weak=false, Materialize=false,
 -- Drained=false, ManaBurnTimer 5000+rand32()%3*1000 —
--- 5-7s (5000 + rand32()%3*1000); the WeakPercent = 25+rand32()%16 init belongs to the
--- unmodeled quest arm, see deviations; the C++ Reset()
+-- 5-7s (5000 + rand32()%3*1000); WeakPercent = 25+rand32()%16
+-- rolls here (distribution-exact; only read in combat) + the
+-- JustEngagedWith player-GUID latch for the Weak arm; the C++ Reset()
 -- entry-restore arm (UpdateEntry(18879) when drained) PORTED
 -- 2026-10-24 (ev23 branch of onLeaveCombat, ingvar precedent)) + 1s scheduler pump; the
--- C++ JustEngagedWith override stores the player GUID, which
--- only feeds the unmodeled quest arms — lands nowhere.
+-- C++ JustEngagedWith player-GUID latch feeds the Weak arm
+-- in the pump below (non-player engagers store nil).
 -- Pump (C++ UpdateAI arm order): materialize arm — one-shot
 -- on the first tick: non-triggered DoCastSelf(SPELL_
 -- MATERIALIZE 34804) (C++-exact; in C++ it fires on the
@@ -82,20 +83,21 @@
 -- restore arm is PORTED (ev23 branch above); the Drained
 -- arm's UpdateEntry(NPC_DRAINED_PHASE_HUNTER_ENTRY) +
 -- SetHealth pct + LowerPlayerDamageReq + SetInCombatWith
--- stays unmodeled behind the quest-status + HasAura(34219)
--- gates (nether_drake precedent); no
+-- stays unmodeled behind the LowerPlayerDamageReq +
+-- SetInCombatWith legs (no Lua surface for either; its
+-- HasAura(34219) gate, UpdateEntry and SetHealth pct legs
+-- ARE bridged, so they no longer block it); no
 -- aura-state / unit-state bridge — the phase-slip arm
 -- (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or UNIT_STATE_
 -- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) unmodeled
--- (netherspite cast-state precedent); no quest-INCOMPLETE status
--- bridge — the Weak latch (Talk(EMOTE_WEAK 0) at HealthBelowPct
--- (WeakPct 25-40) while the engaging player's quest 10190 is
--- incomplete) and the whole drained arm sit behind quest-
--- status and HasAura(34219) gates (FailQuest/CompleteQuest are
--- bridged, but the status check is not — HasQuest is presence-only,
--- so it would also fire for rewarded players; hellfire quest
--- precedent); Talk(EMOTE_WEAK) fires nowhere in this model
--- (millhouse SAY_ICEBLOCK precedent).
+-- (netherspite cast-state precedent); the stale "no
+-- quest-INCOMPLETE status bridge" claim is retracted —
+-- player:GetQuestStatus is bridged (lua_player.go:690,
+-- INCOMPLETE = 3, QuestDef.h:106) — so the Weak latch
+-- (Talk(EMOTE_WEAK 0) at HealthBelowPct (WeakPct 25-40)
+-- while the engaging player's quest 10190 is incomplete)
+-- is PORTED in the pump above; the millhouse SAY_ICEBLOCK
+-- precedent for Talk not firing is retired with it.
 -- Zone set status: zone_netherstorm.cpp closed — commander_
 -- dawnforge + at_commander_dawnforge documented-only,
 -- npc_phase_hunter ported for both entries.
@@ -104,6 +106,10 @@ local SPELL_MATERIALIZE = 34804
 local SPELL_MANA_BURN = 13321
 
 local POWER_MANA = 0
+
+local QUEST_RECHARGING_THE_BATTERIES = 10190
+local QUEST_STATUS_INCOMPLETE = 3
+local EMOTE_WEAK = 0
 
 local PHASE_HUNTER_ENTRIES = {
     18879,  -- NPC_PHASE_HUNTER_ENTRY
@@ -189,18 +195,41 @@ local function combatTick(creature, guid)
     else
         st.manaBurnTimer = st.manaBurnTimer - 1000
     end
+
+    -- Weak latch arm (zone_netherstorm.cpp:439-445, after the
+    -- mana-burn arm in C++ UpdateAI order): once, when health
+    -- drops below WeakPercent while the ENGAGING player's quest
+    -- 10190 is incomplete, Talk(EMOTE_WEAK 0). GetPlayerByGUID
+    -- is the ObjectAccessor::GetPlayer twin (anastari
+    -- precedent) — a departed engaging player resolves nil
+    -- and skips, C++-exact; HealthBelowPct is strict <.
+    if not st.weak and st.playerGuid then
+        local player = GetPlayerByGUID(st.playerGuid)
+        if player and creature:GetHealthPct() < st.weakPercent
+            and player:GetQuestStatus(QUEST_RECHARGING_THE_BATTERIES) == QUEST_STATUS_INCOMPLETE then
+            creature:Talk(EMOTE_WEAK)
+            st.weak = true
+        end
+    end
 end
 
 -- C++ ctor / Reset() values land on OnEnterCombat: the C++
--- JustEngagedWith stores the player GUID, which only feeds
--- the unmodeled quest arms — lands nowhere (C++-exact).
-local function onEnterCombat(_, creature)
+-- JustEngagedWith player-GUID latch lands here too (event 1
+-- passes the engager as target; non-player engagers store
+-- nil, C++-exact) and feeds the Weak latch arm in the pump.
+local function onEnterCombat(_, creature, target)
     local guid = creature:GetGUID()
     cancelPump(guid)
     hunterState[guid] = {
         materialized = false,
         manaBurnTimer = 5000 + math.random(0, 2) * 1000,
+        weak = false,
+        weakPercent = 25 + math.random(0, 15),
+        playerGuid = nil,
     }
+    if target and target:GetObjectType() == "Player" then
+        hunterState[guid].playerGuid = target:GetGUID()
+    end
     hunterPump[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
     end, 1000, 0)
