@@ -554,11 +554,15 @@ local function vashjDied(event, creature, killer)
     resetVashj(creature:GetGUID())
 end
 
+local vashjCanAttack = {}
+
 local function vashjReset(event, creature)
     -- C++ Reset kills each stored shield channel (JUST_DIED) and the
     -- elementals KillSelf once vashj is out of combat (D3/D7).
     despawnStoredSummons(creature:GetGUID(), true)
     resetVashj(creature:GetGUID())
+    -- C++ Reset: non-JustCreated -> CanAttack true (wipe case).
+    vashjCanAttack[creature:GetGUID()] = true
     -- C++ boss_lady_vashjAI::Reset has no speed leg: the MOVE_WALK /
     -- MOVE_RUN 0.6f pair (:591-592) belongs to npc_enchanted_elementalAI::
     -- Reset, and the elemental is unregistered (movement-driven, header).
@@ -571,13 +575,17 @@ end
 -- cleared on 2/23 (ossirian convention; boss_lady_vashj.cpp:275-282).
 -- The Go fire site is the aggro-engage branch (hostile/attackable
 -- faction), a subset of C++'s any-unit LOS trigger — acceptable for
--- a one-shot intro line (ossirian precedent).
+-- a one-shot intro line (ossirian precedent). The CanAttack sight-engage
+-- gate is PORTED 2026-10-26 (ev27 veto until the 19s AggroTimer; the
+-- StartEvent/Phase!=2 legs ride event 1, which already Talks AGGRO +
+-- sets phase 1).
 local vashjSaidIntro = {}
 
 local function vashjMoveInLOS(event, creature, unit)
     local guid = creature:GetGUID()
     if not vashjSaidIntro[guid] then
         vashjSaidIntro[guid] = true
+        vashjCanAttack[guid] = false
         creature:Talk(SAY_INTRO)
         -- boss_lady_vashj.cpp:160 — the C++ ctor sets
         -- UNIT_FLAG_NON_ATTACKABLE "only once on Creature create";
@@ -588,7 +596,14 @@ local function vashjMoveInLOS(event, creature, unit)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         CreateLuaEvent(function()
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            vashjCanAttack[guid] = true
         end, 19000)
+        -- C++ :283-299: CanAttack gates the sight-engage, and Go's scan
+        -- ignores the NON_ATTACKABLE flag, so veto until the timer fires.
+        return true
+    end
+    if vashjCanAttack[guid] ~= true then
+        return true
     end
 end
 

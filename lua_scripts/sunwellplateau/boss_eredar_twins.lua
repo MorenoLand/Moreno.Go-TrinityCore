@@ -103,9 +103,11 @@
 -- SpellHitTarget bridge is LIVE (event 15, see header top); the arm
 -- stays unmodeled on hit-target-enumeration grounds. The 8-step intro
 -- chain
--- (MoveInLineOfSight sighting + cross-creature Talk relays) has no
--- MoveInLineOfSight bridge — the fight starts on pull (ragnaros-
--- intro convention). The no-victim threat handoff from the sister
+-- (MoveInLineOfSight sighting + cross-creature Talk relays) stays
+-- unmodeled — the trigger is sister-sighting at spawn (same-faction,
+-- non-attackable unit), which never coincides with Go's ev27
+-- attackable-player aggro-branch fire site, and Go has no spawn hook.
+-- The no-victim threat handoff from the sister
 -- and the sister AttackStart relays are PORTED 2026-10-26 into both
 -- enter handlers (FindNearestCreature + !GetVictim gate +
 -- EngageWithTarget; the no-victim threat handoff itself stays out —
@@ -136,9 +138,8 @@
 -- (DONE) gates plus the alythess intro cross-Talk are unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
 -- and the alythess blaze-summon (GO 187366) arms unmodeled; no
 -- summon bridge — the shadow-image spawns unmodeled; no flag/move/
--- threat/MoveInLineOfSight/kill bridges — the lootable-flag,
--- no-movement, AddThreat, intro-sighting and image KillSelf arms
--- unmodeled.
+-- threat bridge — the AddThreat and intro-sighting arms stay
+-- unmodeled (lootable-flag, no-movement and image KillSelf are PORTED).
 
 local SPELL_SHADOW_BLADES = 45248
 local SPELL_SHADOW_NOVA = 45329

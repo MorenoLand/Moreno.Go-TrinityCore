@@ -80,8 +80,8 @@
 -- emerging!"), phase=120000, return (C++-exact). The
 -- IsThreatened/EnterEvadeMode/DoZoneInCombat arms have no
 -- evade bridge — timers fire unconditionally (jeklik
--- convention). The MoveInLineOfSight aggro machine has no LOS
--- hook (hydross convention) — the fight starts on pull.
+-- convention). The MoveInLineOfSight no-sight-engage leg is PORTED
+-- 2026-10-26 (ev27 veto while !started; the fight starts on pull).
 -- OnDied(4): cleanup + despawnLurkerAdds (the SetData
 -- DONE/IN_PROGRESS arms are instance blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
@@ -107,8 +107,9 @@
 -- triggered) (the C++ AddSpellBP0(1100) arg has no bridge —
 -- quake/blaze SPELLVALUE precedent, documented deviation);
 -- re-arm 4000 + rand32()%5000; multishot += 1500 (C++-exact).
--- The MoveInLineOfSight 45-yd aggro machine has no LOS hook —
--- unmodeled (hydross precedent). OnDied(4)/OnLeaveCombat(2)/
+-- The MoveInLineOfSight 45-yd aggro machine's sight-engage leg is
+-- PORTED 2026-10-26 (ev27 veto; the radius leg is Go's scan guard).
+-- OnDied(4)/OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
@@ -168,6 +169,7 @@ local ADD_POS = {
 
 local lurkerTimers = {}
 local lurkerState = {}
+local lurkerStarted = {}
 local lurkerAdds = {}
 local ambusherTimers = {}
 local ambusherState = {}
@@ -448,11 +450,25 @@ local function lurkerTick(creature, guid)
     end
 end
 
+-- C++ boss_lurker_below.cpp:176-184 MoveInLineOfSight: no sight-engage
+-- while !CanStartEvent (invisible, pre-fishing). The fishing trigger
+-- (instance DATA_STRANGE_POOL via go_strange_pool) has no Lua model, so
+-- the latch tracks the Go fight lifecycle: false until the first pull
+-- (event 1), cleared on 2/4/23 (C++ Reset re-arms CanStartEvent false).
+-- Damage pulls bypass the scan, so the veto never blocks a Go pull;
+-- the radius/valid-target legs are Go's aggro-scan guards.
+local function lurkerMoveInLOS(event, creature, unit)
+    if not lurkerStarted[creature:GetGUID()] then
+        return true
+    end
+end
+
 local function lurkerEnterCombat(event, creature)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:99 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     resetLurker(guid)
     lurkerState[guid] = freshLurkerState()
+    lurkerStarted[guid] = true
     -- Repeats 0 = infinite (runtime.go:1189-1194 default is one-shot;
     -- the morogrim audit this tick caught this same missing arg class).
     lurkerTimers[guid] = CreateLuaEvent(function()
@@ -463,14 +479,17 @@ end
 local function lurkerLeaveCombat(event, creature)
     despawnLurkerAdds(creature:GetGUID())
     resetLurker(creature:GetGUID())
+    lurkerStarted[creature:GetGUID()] = nil
 end
 
 local function lurkerDied(event, creature, killer)
     despawnLurkerAdds(creature:GetGUID())
     resetLurker(creature:GetGUID())
+    lurkerStarted[creature:GetGUID()] = nil
 end
 
 local function lurkerReset(event, creature)
+    lurkerStarted[creature:GetGUID()] = nil
     despawnLurkerAdds(creature:GetGUID())
     -- C++ boss_the_lurker_below::Reset (boss_lurker_below.cpp:147-156):
     -- me->SetSwim(true) -> me->SetDisableGravity(true) (:150), both
@@ -489,6 +508,7 @@ RegisterCreatureEvent(ENTRY_LURKER, 1, lurkerEnterCombat)
 RegisterCreatureEvent(ENTRY_LURKER, 2, lurkerLeaveCombat)
 RegisterCreatureEvent(ENTRY_LURKER, 4, lurkerDied)
 RegisterCreatureEvent(ENTRY_LURKER, 23, lurkerReset)
+RegisterCreatureEvent(ENTRY_LURKER, 27, lurkerMoveInLOS)
 
 -- npc_coilfang_ambusher (21865) — see header.
 

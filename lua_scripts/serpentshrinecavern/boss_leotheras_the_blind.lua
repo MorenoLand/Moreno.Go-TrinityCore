@@ -174,8 +174,9 @@
 -- threat bridge beyond ResetAllThreat/ModifyThreatByPercent/Teleport
 -- — the NeedThreatReset MoveChase half (its ResetThreatList
 -- half is PORTED below via creature:ResetAllThreat), the chaos-
--- blast StopMoving arm and the leotheras MoveInLineOfSight
--- intro/aggro machine unmodeled; the switch-to-demon + Reset
+-- blast StopMoving arm unmodeled; the leotheras MoveInLineOfSight
+-- banish + front-arc veto legs are PORTED 2026-10-26 (ev27 veto; the
+-- radius/Z/LOS legs are Go's aggro-scan guards); the switch-to-demon + Reset
 -- MODEL_DEMON(20125)/MODEL_NIGHTELF(20514) SetDisplayId swaps and
 -- the paired UNIT_VIRTUAL_ITEM_SLOT zeroing arms are PORTED
 -- 2026-10-20 (display bridge + SetEquipmentSlots bridge, C++ arm
@@ -205,6 +206,7 @@ local SPELL_EARTHSHOCK = 39076
 local SPELL_SOUL_LINK = 38007
 local SPELL_SHADOWBOLT = 39309
 local SPELL_DEMONIC_ALIGNMENT = 37713
+local AURA_BANISH = 37833
 
 local SAY_AGGRO = 0
 local SAY_SWITCH_TO_DEMON = 1
@@ -595,6 +597,19 @@ local function leotherasDied(event, creature, killer)
     resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
 end
 
+-- C++ boss_leotheras_the_blind.cpp:280-297 MoveInLineOfSight: the
+-- banish gate (HasAura 37833) + front-arc gate (HasInArc pi/2 == NOT
+-- IsInBack(unit, 3*pi/2), solarian precedent) veto Go's sight-engage;
+-- the radius/Z/LOS/CanCreatureAttack legs are Go's aggro-scan guards.
+local function leotherasMoveInLOS(event, creature, unit)
+    if creature:HasAura(AURA_BANISH) then
+        return true
+    end
+    if creature:IsInBack(unit, 3 * math.pi / 2) then
+        return true
+    end
+end
+
 local function leotherasReset(event, creature)
     local guid = creature:GetGUID()
     -- C++ Reset() :249 CheckChannelers() — first arm, before
@@ -617,6 +632,7 @@ RegisterCreatureEvent(ENTRY_LEOTHERAS, 2, leotherasLeaveCombat)
 RegisterCreatureEvent(ENTRY_LEOTHERAS, 3, leotherasTargetDied)
 RegisterCreatureEvent(ENTRY_LEOTHERAS, 4, leotherasDied)
 RegisterCreatureEvent(ENTRY_LEOTHERAS, 23, leotherasReset)
+RegisterCreatureEvent(ENTRY_LEOTHERAS, 27, leotherasMoveInLOS)
 
 -- boss_leotheras_the_blind_demonform (21875) — see header.
 

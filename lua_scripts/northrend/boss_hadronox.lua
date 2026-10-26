@@ -94,15 +94,18 @@
 -- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): zero
 -- registration. The whole npc_hadronox_crusherPackAI engagement model is
 -- unbridged: SetData(DATA_CRUSHER_PACK_ID) -> SetReactState(REACT_PASSIVE)
--- (react-state + cross-AI SetData bridges absent), DoAction(
+-- (cross-AI SetData pack-ID bridge absent — SetReactState itself is
+-- bridged, lua_creature_events.go:1934), DoAction(
 -- ACTION_PACK_WALK) -> MotionMaster MovePoint(_positions[pack]) + the
 -- _doFacing SetFacingTo choreography (motion-master + DoAction bridges
 -- absent), MovementInform, MoveInLineOfSight passive-engage leg
 -- (CanStartAttack + IsWithinDistInMap(attackDistance + m_CombatDistance)
--- -> JustEngagedWith — react-state + distance bridges absent), group
+-- -> JustEngagedWith — pack-ID bridge absent; the distance leg is
+-- Go's aggro-scan guard), group
 -- pack-aggro JustEngagedWith (GetCreatureListWithEntryInGrid 40.0f,
--- same-pack SetReactState(AGGRESSIVE) + AttackStart — grid + cross-AI
--- bridges absent), EnterEvadeMode -> hadronox AI EnterEvadeMode
+-- same-pack SetReactState(AGGRESSIVE) + AttackStart — pack-ID bridge
+-- absent; grid + EngageWithTarget are bridged), EnterEvadeMode ->
+-- hadronox AI EnterEvadeMode
 -- (cross-AI absent). Port-pattern-ready _JustEngagedWith arms — Talk(
 -- CRUSHER_SAY_AGGRO 1) (bridgeable in isolation) + EVENT_SMASH DoCastVictim
 -- (SMASH 53318) 8-12s init, 13-21s repeat + pack-1-only instance DoAction(
