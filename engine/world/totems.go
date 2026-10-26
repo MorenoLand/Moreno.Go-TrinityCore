@@ -1369,11 +1369,20 @@ func totemOwnerPos(s *session) playerPos {
 // GUID and X/Y. The sentry totem is REACT_AGGRESSIVE (Totem::Summon,
 // Totem.cpp:103-104), so acquisition runs the standard
 // Creature::GetAttackDistance radius (Creature.cpp:2015-2058: 20yd at equal
-// level, +/-1yd per level difference, clamped [5,45]) with the totem at the
-// owner's level (Totem::Summon sets level from the owner, Totem.cpp:99);
-// the RATE_CREATURE_AGGRO multiplier, the detect-range aura terms and
-// CanSeeOrDetect are unmodeled, matching the aggro scan's documented
-// deltas, and the totem's combat reach stands in at the 1.5yd default.
+// level, +/-1yd per level difference, detect-range aura terms, then the
+// RATE_CREATURE_AGGRO-scaled clamp, then the rate multiplier) with the
+// totem at the owner's level (Totem::Summon sets level from the owner,
+// Totem.cpp:99); the rate comes from config (World.cpp:580,
+// Rate.Creature.Aggro, default 1.0). CanStartAttack's bridged subset
+// rides along: the non-flyer Z arm (Creature.cpp:1974, 3yd +
+// combatDistance), the gray-aggro config, line of sight, and the
+// CanSeeOrDetect stealth/invisibility legs for player victims via the
+// owner seer (Object.cpp:1660-1675: a totem's detection uses its
+// charmer/owner). Residual: the expansion-max-level arm (unreachable
+// for owner-level totems per the prior tick), creature-victim
+// stealth/invisibility (no creature-target CanDetect helper), and the
+// +m_CombatDistance add-on to the CanStartAttack radius. The totem's
+// combat reach stands in at the 1.5yd default.
 // The ping fires once per newly acquired hostile (the AttackStart-per-
 // acquisition analog), so the victim GUID is remembered until the totem
 // sees no hostile again. The creature leg is the totemEnemyCreatureValid
@@ -1391,25 +1400,52 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 		return
 	}
 	owner := totemOwnerPos(s)
-	aggroDist := func(victimLevel int32) float64 {
-		d := 20.0 - 1.5 + float64(int32(s.player.Level)-victimLevel)
-		if d < 5.0 {
-			d = 5.0
-		} else if d > 45.0 {
-			d = 45.0
+	aggroRate := s.server.Config.RateCreatureAggro
+	aggroDist := func(victimLevel int32, detectBonus float64) float64 {
+		if aggroRate == 0 {
+			return 0
 		}
-		return d
+		d := 20.0 - 1.5 + float64(int32(s.player.Level)-victimLevel)
+		if int32(s.player.Level)+5 <= 80 {
+			d += detectBonus
+		}
+		if d > 45.0*aggroRate {
+			d = 45.0 * aggroRate
+		} else if d < 5.0*aggroRate {
+			d = 5.0 * aggroRate
+		}
+		return d * aggroRate
+	}
+	combatReach := 1.5
+	observerDetect := float64(0)
+	if totemMotion := s.server.findCreatureMotion(totem.Map, totem.InstanceID, totem.TotemGUID); totemMotion != nil {
+		if totemMotion.CombatReach > 0 {
+			combatReach = float64(totemMotion.CombatReach)
+		}
+		observerDetect = float64(s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(totemMotion), spellAuraModDetectRange))
 	}
 	var nearestGUID uint64
 	minDist := float64(math.MaxFloat64)
-	for _, m := range s.server.totemCreatureTargets(totem, 45.0) {
+	for _, m := range s.server.totemCreatureTargets(totem, 45.0*aggroRate) {
 		if !s.server.totemEnemyCreatureValid(m, owner) {
 			continue
 		}
-		if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d <= aggroDist(int32(m.Level)) && d < minDist {
-			minDist = d
-			nearestGUID = m.GUID
+		d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
+		detectBonus := observerDetect + float64(s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(m), spellAuraModDetectedRange))
+		if d > aggroDist(int32(m.Level), detectBonus) || d >= minDist {
+			continue
 		}
+		if math.Abs(float64(totem.Z)-float64(m.Z)) > 3.0+combatReach {
+			continue
+		}
+		if noGrayAggroBlocked(uint32(m.Level), uint32(s.player.Level), s.server.Config.NoGrayAggroAbove, s.server.Config.NoGrayAggroBelow) {
+			continue
+		}
+		if !s.server.hasLineOfSight(totem.Map, totem.X, totem.Y, totem.Z, m.X, m.Y, m.Z) {
+			continue
+		}
+		minDist = d
+		nearestGUID = m.GUID
 	}
 	s.server.sessionsMu.RLock()
 	for other := range s.server.sessions {
@@ -1417,10 +1453,25 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 			!s.totemEnemySessionHostile(other) {
 			continue
 		}
-		if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= aggroDist(int32(other.player.Level)) && d < minDist {
-			minDist = d
-			nearestGUID = other.playerGUID
+		d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z)
+		detectBonus := observerDetect + float64(other.totalAuraModifier(spellAuraModDetectedRange))
+		if d > aggroDist(int32(other.player.Level), detectBonus) || d >= minDist {
+			continue
 		}
+		if math.Abs(float64(totem.Z)-float64(other.player.Z)) > 3.0+combatReach {
+			continue
+		}
+		if noGrayAggroBlocked(uint32(other.player.Level), uint32(s.player.Level), s.server.Config.NoGrayAggroAbove, s.server.Config.NoGrayAggroBelow) {
+			continue
+		}
+		if !s.canDetectStealthOf(other) || !s.canDetectInvisibilityOfPlayer(other) {
+			continue
+		}
+		if !s.server.hasLineOfSight(totem.Map, totem.X, totem.Y, totem.Z, other.player.X, other.player.Y, other.player.Z) {
+			continue
+		}
+		minDist = d
+		nearestGUID = other.playerGUID
 	}
 	s.server.sessionsMu.RUnlock()
 	totem.mu.Lock()
