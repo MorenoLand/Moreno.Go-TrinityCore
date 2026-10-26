@@ -563,9 +563,7 @@ func (s *Server) creatureEntryNearbyGOTarget(ctx context.Context, m *creatureMot
 // fails the cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
 // Documented deltas: the ImplicitTargetConditions arm (base
 // WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is not wired —
-// Go's condition evaluator is entry-oriented, the session twin's gap;
-// the session twin carries no GM arm on this path, while this twin applies
-// the Object.cpp:2946 GM exclusion from the area-enemy twin.
+// Go's condition evaluator is entry-oriented, the session twin's gap.
 func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
 	if s == nil || m == nil || s.Data == nil {
 		return 0, false

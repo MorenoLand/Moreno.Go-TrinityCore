@@ -87,7 +87,8 @@ func isHostileNearbySpell(spell wotlk.Spell) bool {
 // SpellInfo::CheckTarget and TARGET_CHECK_ENEMY (Spell.cpp:8323-8328:
 // totem rejection + IsValidAttackTarget, proxied by isAttackableFaction
 // for creatures and the alliance split for players, like the area-enemy
-// path). The nearby check is a 3D distance with strict less-than,
+// path). GM players are refused (Object.cpp:2946-2947), matching the
+// creature twin. The nearby check is a 3D distance with strict less-than,
 // shrinking to the nearest match (WorldObjectSpellNearbyTargetCheck,
 // Spell.cpp:8389-8399). The caster fails its own IsValidAttackTarget, so
 // it is never selected. No match returns false and the caller fails the
@@ -120,6 +121,12 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 			return
 		}
 		if c.isPlayer {
+			// WorldObject::IsValidAttackTarget (Object.cpp:2946-2947):
+			// can't attack GMs. Caster self is already excluded by the
+			// guid check above, so no self exemption applies here.
+			if c.isGM {
+				return
+			}
 			if c.alliance {
 				return
 			}
