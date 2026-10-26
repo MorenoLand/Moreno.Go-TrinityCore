@@ -118,7 +118,7 @@ local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) <= maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
             players[#players + 1] = t
         end
     end
@@ -178,7 +178,7 @@ local function onSleep(creature, guid)
     local victimGUID = victim and victim:GetGUID() or 0
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetGUID() ~= victimGUID and t:GetObjectType() == "Player"
-                and t:IsAlive() and creature:GetDistance(t) <= 30 then
+                and t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < 30 then
             creature:CastSpell(t, SPELL_SLEEP)
             break
         end

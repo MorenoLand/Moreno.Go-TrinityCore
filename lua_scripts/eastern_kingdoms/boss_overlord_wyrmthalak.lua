@@ -129,7 +129,7 @@ local function randomThreatPlayerInRange(creature, maxDist)
     local players = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:GetDistance(p) <= maxDist then
+                and creature:GetDistance(p) - creature:GetCombatReach() < maxDist then
             players[#players + 1] = p
         end
     end

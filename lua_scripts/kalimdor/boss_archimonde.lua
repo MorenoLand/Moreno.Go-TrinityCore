@@ -261,7 +261,7 @@ end
 -- matters here, so the first match is returned, not a random pick.
 local function threatTargetInRange(creature, maxDist)
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() and creature:GetDistance(t) <= maxDist then
+        if not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
             return t
         end
     end

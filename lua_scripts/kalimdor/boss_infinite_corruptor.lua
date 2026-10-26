@@ -114,7 +114,7 @@ local function randomThreatPlayer(creature, maxDist)
     local found = {}
     for _, t in ipairs(targets) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) <= maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
             found[#found + 1] = t
         end
     end

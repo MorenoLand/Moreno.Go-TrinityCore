@@ -128,7 +128,7 @@ local function nearestAlivePlayer(creature, maxDist)
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
                 and not p:IsDead() then
             local dist = creature:GetDistance(p)
-            if dist <= maxDist and (bestDist == nil or dist < bestDist) then
+            if dist - creature:GetCombatReach() < maxDist and (bestDist == nil or dist < bestDist) then
                 best, bestDist = p, dist
             end
         end
