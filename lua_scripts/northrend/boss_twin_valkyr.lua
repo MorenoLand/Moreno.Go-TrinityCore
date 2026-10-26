@@ -279,7 +279,7 @@ local function randomPlayerWithEssence(creature, auraIds, maxDist)
     local candidates = {}
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead()
-                and creature:IsWithinDist(plr, maxDist) then
+                and creature:GetDistance(plr) - creature:GetCombatReach() - 1.5 < maxDist then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             for _, aura in ipairs(auraIds) do
                 if plr:HasAura(aura) then
                     candidates[#candidates + 1] = plr

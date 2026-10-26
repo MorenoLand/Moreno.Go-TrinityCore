@@ -135,7 +135,7 @@ local function randomTargetsNoBrand(creature, range)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:IsWithinDist(t, range)
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < range
                 and not t:HasAura(SPELL_ENERVATING_BRAND)
                 and t:GetGUID() ~= victimGuid then
             candidates[#candidates + 1] = t

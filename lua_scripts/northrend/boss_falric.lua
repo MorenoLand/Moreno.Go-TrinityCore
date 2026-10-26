@@ -67,7 +67,7 @@
 --   72422) = victim-cast; re-arm 10000ms unconditional.
 -- EVENT_IMPENDING_DESPAIR (:129-135) — SelectTarget(Random, 0, 45.0f,
 --   playerOnly): random alive threat-list player within 45.0f (the
---   45.0f distance filter is modeled via IsWithinDist); target found
+--   45.0f distance filter is the IsWithinCombatRange twin); target found
 --   -> Talk(SAY_IMPENDING_DESPAIR 3) (:132) + non-triggered cast 72426
 --   on the target (:133); re-arm 13000ms unconditional (:135, outside
 --   the target-if).
@@ -180,7 +180,7 @@ local function randomPlayer(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:IsWithinDist(t, 45) then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 45 then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

@@ -182,7 +182,7 @@ local function randomFrostTombTarget(creature)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:IsWithinDist(unit, 100)
+                and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 < 100
                 and not unit:HasAura(SPELL_FROST_TOMB) then
             candidates[#candidates + 1] = unit
         end

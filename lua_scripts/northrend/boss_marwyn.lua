@@ -161,14 +161,14 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- Same threat-list pool with a distance filter (creature:IsWithinDist
--- is the bridged distance check — the maiden / kiljaeden precedent);
+-- Same threat-list pool with a distance filter (IsWithinCombatRange
+-- twin — the maiden / kiljaeden precedent, now reach-exact);
 -- used for the 100.0f WELL_OF_CORRUPTION target.
 local function randomPlayerInRange(creature, dist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:IsWithinDist(t, dist) then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < dist then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

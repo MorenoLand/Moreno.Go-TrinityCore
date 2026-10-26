@@ -391,7 +391,7 @@ local function randomPlayerTarget(creature, maxDist, skipFirst)
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and not t:IsDead()
-                and (not maxDist or creature:IsWithinDist(t, maxDist)) then
+                and (not maxDist or creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist) then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

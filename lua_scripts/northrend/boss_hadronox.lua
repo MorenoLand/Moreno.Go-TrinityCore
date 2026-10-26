@@ -232,7 +232,11 @@ end
 local function acidCloudTick(creature, guid)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if not t:IsDead() and creature:IsWithinDist(t, 100.0) then
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() - targetReach < 100.0 then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

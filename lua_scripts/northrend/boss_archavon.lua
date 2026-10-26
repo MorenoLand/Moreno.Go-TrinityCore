@@ -66,9 +66,9 @@
 -- unconditionally on their timers (the hodir UNIT_STATE_CASTING
 -- precedent).
 -- EVENT_CHOKING_CLOUD's SelectTarget min-range gate (-10.0f = skip
--- targets within 10y, :100) is ported via not IsWithinDist(t, 10)
--- (generic-fallback twin of IsWithinCombatRange to within reach
--- epsilon); the old "no bridge" note is retired.
+-- targets within 10y, :100) is ported via the negated
+-- IsWithinCombatRange twin (Unit.cpp:583; the raw fallback lacks both
+-- reaches); the old "no bridge" note is retired.
 -- DOCUMENTED-ONLY (in this header; entry 31125 is the sole
 -- registration):
 -- spell_archavon_rock_shards (SpellScriptLoader :138-182;
@@ -144,7 +144,7 @@ local function randomPlayer(creature)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and not creature:IsWithinDist(t, 10) then
+                and not (creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 10) then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

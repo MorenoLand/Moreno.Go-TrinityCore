@@ -142,7 +142,7 @@ local function randomPlayerInRange(creature, dist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:IsWithinDist(t, dist) then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < dist then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end
@@ -158,7 +158,7 @@ end
 local function maxThreatPlayerInRange(creature, dist)
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:IsWithinDist(t, dist) then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < dist then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             return t
         end
     end

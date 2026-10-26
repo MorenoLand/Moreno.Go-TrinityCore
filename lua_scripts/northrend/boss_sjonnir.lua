@@ -160,13 +160,13 @@ end
 -- C++ SelectTarget(Random, 0, 100, true) draws the threat list, not
 -- the instance-player pool (UnitAI.h; C++ skips offline refs, Go
 -- SortedEntries returns dead too — the bronjahm/devourer/nexus
--- threat-pool fix class); creature:IsWithinDist is bridged
--- (engine/scripting/object.go:167).
+-- threat-pool fix class); the gate is the IsWithinCombatRange twin
+-- (Unit.cpp:583; the raw fallback IsWithinDist lacks both reaches).
 local function randomPlayerInRange(creature, dist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:IsWithinDist(t, dist) then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < dist then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end
