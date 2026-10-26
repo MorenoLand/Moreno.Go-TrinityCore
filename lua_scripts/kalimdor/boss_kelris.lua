@@ -83,7 +83,7 @@ local function randomPlayerInRange(creature, maxDist)
     local reach = creature:GetCombatReach()
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive() then
-            if maxDist <= 0 or creature:GetDistance(t) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+            if maxDist <= 0 or creature:GetDistance(t) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
                 candidates[#candidates + 1] = t
             end
         end

@@ -244,11 +244,15 @@ local function randomThreatTarget(creature, playerOnly, maxDist)
     local targets = creature:GetAITargets()
     local pool = {}
     for i, t in ipairs(targets) do
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and not t:IsDead()
                 and (not playerOnly or t:GetObjectType() == "Player")
-                and (not maxDist or creature:GetDistance(t) - creature:GetCombatReach() < maxDist) then
+                and (not maxDist or creature:GetDistance(t) - creature:GetCombatReach() - targetReach < maxDist) then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; mixed pool branches target reach)
             pool[#pool + 1] = t
         end
     end

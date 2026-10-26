@@ -218,7 +218,7 @@ local function farthestPlayerTarget(creature, maxDist)
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead() then
             local dist = creature:GetDistance(plr)
-            if dist - reach < maxDist and (bestDist == nil or dist > bestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < maxDist + both reaches; target reach has no unit-surface bridge (documented band)
+            if dist - reach - 1.5 < maxDist and (bestDist == nil or dist > bestDist) then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
                 best, bestDist = plr, dist
             end
         end

@@ -118,7 +118,11 @@ end
 local function randomPlayerInRange(creature, range)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < range then
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() - targetReach < range then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; unfiltered pool branches target reach)
             candidates[#candidates + 1] = t
         end
     end
@@ -137,7 +141,11 @@ local function nearestPlayerInRange(creature, range)
     for _, t in ipairs(creature:GetAITargets()) do
         if t:IsAlive() then
             local dist = creature:GetDistance(t)
-            if dist - reach < range and (bestDist == nil or dist < bestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < range + both reaches; target reach band documented
+            local targetReach = 1.5
+            if t:GetObjectType() ~= "Player" then
+                targetReach = t:GetCombatReach()
+            end
+            if dist - reach - targetReach < range and (bestDist == nil or dist < bestDist) then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; unfiltered pool branches target reach)
                 best, bestDist = t, dist
             end
         end

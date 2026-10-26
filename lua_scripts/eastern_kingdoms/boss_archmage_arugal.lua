@@ -106,8 +106,9 @@ end
 -- UnitAI.h builds the list victim-first, so offset 1 removes the
 -- victim, not the threat head; a list of size <= 1 yields nil
 -- outright (the C++ shortcut). Distance via IsWithinCombatRange (UnitAI.cpp:273, Unit.cpp:583):
--- 3D center < dist + own reach + target reach; target reach
--- unbridged, so the twin subtracts own reach only.
+-- 3D center < dist + own reach + target reach; player targets
+-- carry the 1.5 reach (ObjectDefines.h:40), so the twin
+-- subtracts own reach + 1.5.
 local function randomTargetInRange(creature, range)
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -124,7 +125,7 @@ local function randomTargetInRange(creature, range)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - reach < range then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(t) - reach - 1.5 < range then -- IsWithinCombatRange gate, reach-exact (Unit.cpp:583; player reach 1.5)
             candidates[#candidates + 1] = t
         end
     end
