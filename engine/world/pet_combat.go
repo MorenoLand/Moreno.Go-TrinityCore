@@ -4754,11 +4754,14 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 	}
 }
 
-// petSpellMissVerdict rolls WorldObject::MagicSpellHitResult
-// (Object.cpp:2534-2604) for one pet-cast spell target: the level-diff
-// base with the pet's SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum and the
-// owner player's SPELLMOD_RESIST_MISS_CHANCE fold, then the 178
-// debuff-resist arm and the 287 deflect arm — the same three arms the
+// petSpellMissVerdict rolls WorldObject::SpellHitResult
+// (Object.cpp:2617-2663) for one pet-cast spell target: MELEE/RANGED
+// spells dispatch to the server creature-caster melee table
+// (serverCreatureMeleeMissVerdict), MAGIC spells roll MagicSpellHitResult
+// (Object.cpp:2534-2604) — the level-diff base with the pet's
+// SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum and the owner player's
+// SPELLMOD_RESIST_MISS_CHANCE fold, then the 178 debuff-resist arm and
+// the 287 deflect arm — the same three arms the
 // funnel used to roll after the GO packet. Spell::AddUnitTarget
 // (Spell.cpp:2152) rolls before SendSpellGo, so the verdict pass in
 // executePetSpellWithOptions runs it ahead of the packet and the funnel
@@ -4775,8 +4778,24 @@ func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotio
 	if s.server.Data != nil {
 		if ps, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
 			petSpell, petSpellKnown = ps, true
-			baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 		}
+	}
+	// DmgClass dispatch (SpellHitResult, Object.cpp:2648-2658): a
+	// MELEE/RANGED pet spell rolls MeleeSpellHitResult, not the magic
+	// table below — the server creature-caster twin re-based on the pet
+	// motion, which carries the head early-outs (IGNORE_HIT_RESULT,
+	// self, positive-friendly). Delta: the twin's miss chance carries no
+	// SPELLMOD_RESIST_MISS_CHANCE fold (creature-caster convention).
+	if petSpellKnown && (petSpell.DefenseType == spellDamageClassMelee || petSpell.DefenseType == spellDamageClassRanged) {
+		return s.server.serverCreatureMeleeMissVerdict(ctx, caster, petSpell, target.GUID)
+	}
+	// SpellHitResult head (Object.cpp:2645-2647): IGNORE_HIT_RESULT
+	// spells never miss, on any DmgClass leg.
+	if petSpellKnown && petSpell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
+		return protocol.SpellMissNone
+	}
+	if petSpellKnown {
+		baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 	}
 	if miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit); miss != protocol.SpellMissNone {
 		return miss
@@ -4850,8 +4869,16 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 			}
 		}
-		miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit)
-		if miss != protocol.SpellMissNone {
+		// DmgClass dispatch (same arm as petSpellMissVerdict): a
+		// MELEE/RANGED pet spell rolls the server creature-caster
+		// melee table, not the magic table below.
+		if petSpellKnown && (petSpell.DefenseType == spellDamageClassMelee || petSpell.DefenseType == spellDamageClassRanged) {
+			if miss := s.server.serverCreatureMeleeMissVerdict(ctx, caster, petSpell, targetGUID); miss != protocol.SpellMissNone {
+				missKind = miss
+				damage = 0
+				hitInfo = 0x01
+			}
+		} else if miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit); miss != protocol.SpellMissNone {
 			missKind = miss
 			damage = 0
 			hitInfo = 0x01
