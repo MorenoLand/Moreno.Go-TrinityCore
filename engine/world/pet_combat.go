@@ -4379,7 +4379,9 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 // pet path's non-zero-effect model and the creature path carries no CanProc
 // reader. The reflect return trip (target == caster) is excluded — its
 // bridge already fires the combined done+taken event on the pet's auras.
-func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered, isCrit bool) {
+// On an immune hit the damage arm ASSIGNS PROC_HIT_IMMUNE (Spell.cpp:2540-
+// 2546), so the done-side mask is IMMUNE, not the rolled crit.
+func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered, isCrit, immune bool) {
 	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || targetGUID == caster.GUID {
 		return
 	}
@@ -4390,9 +4392,12 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 	spellCopy := spell
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581): the
 	// done-side proc event's hit mask carries the rolled crit
-	// (targetInfo.IsCrit, Spell.cpp:7790).
+	// (targetInfo.IsCrit, Spell.cpp:7790), or IMMUNE on an immune hit
+	// (the damage arm's assignment, Spell.cpp:2540-2546).
 	hitMask := procHitNormal
-	if isCrit {
+	if immune {
+		hitMask = procHitImmune
+	} else if isCrit {
 		hitMask = procHitCritical
 	}
 	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
@@ -4884,9 +4889,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// PROC_HIT_IMMUNE (Spell.cpp:2540-2546), and the TAKEN_DAMAGE
 			// flag is ORed only by the non-immune else arm, so an immune
 			// return trip carries IMMUNE with no TAKEN_DAMAGE flag.
-			// Direct immune hits still return with no proc loop (the
-			// direct-hit immune-proc gap, separate from return trips).
-			if reflectorGUID != 0 && target.GUID == caster.GUID {
+			// A direct immune hit runs the same DoDamageAndTriggers tail
+			// on the victim (Spell.cpp:2581-2652): the proc loop with
+			// the IMMUNE mask and no TAKEN_DAMAGE flag (the damage arm
+			// bypasses the TAKEN_DAMAGE OR), then the stand-up, hook
+			// and trigger legs — only the damage pipeline returns
+			// nothing, so no log, hooks, strips, threat or leech fire.
+			if target.GUID == caster.GUID {
 				if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 					typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
 					if typeMask != 0 {
@@ -4905,10 +4914,50 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					}
 				}
 			}
+			if reflectorGUID == 0 && target.GUID != caster.GUID {
+				if isPlayerVictim {
+					if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && victim.procDeep == 0 {
+						victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, true, false, false, isCrit, 0, 0, triggered, false, 0)
+					}
+				} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
+					if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+						typeMask := spellDamageTakenProcTypeMask(spell)
+						if typeMask != 0 {
+							spellCopy := spell
+							s.server.fireCreatureAuraProcLoop(ctx, targetMotion, caster.GUID, procEventInfo{
+								typeMask:       typeMask,
+								schoolMask:     uint32(schoolMask),
+								spellTypeMask:  procSpellTypeDamage,
+								spellPhaseMask: procSpellPhaseHit,
+								hitMask:        procHitImmune,
+								triggered:      triggered,
+								eventSpell:     &spellCopy,
+								actorGUID:      caster.GUID,
+								damage:         0,
+							})
+						}
+					}
+				}
+				s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, true)
+			}
 			if reflectorGUID != 0 {
 				s.server.standPetReflectReflectorUp(caster, reflectorGUID, petSpell)
 				s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
 				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{caster.GUID})
+			} else if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
+				if victim.player.StandState != 0 && (!spellIsPositive(petSpell) || spellHasEffect(petSpell, spellEffectDispel)) {
+					victim.player.StandState = 0
+					victim.sendPlayerUpdate()
+				}
+				s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{target.GUID})
+			} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
+				if (!spellIsPositive(petSpell) || spellHasEffect(petSpell, spellEffectDispel)) && !s.server.creatureFriendlyToTarget(caster, target.GUID) {
+					s.server.standCreatureMotionUp(targetMotion)
+				}
+				s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
+				s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
+				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{target.GUID})
 			}
 			return
 		}
@@ -5285,7 +5334,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
-		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit)
+		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false)
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 		// non-friendly non-positive (or dispel-effect) spell hit stands
 		// the target up. The EVADE-miss arm is vacuous — misses zero the
@@ -5539,7 +5588,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
-	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit)
+	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false)
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
 	// reflect return trip: the pet is both caster and _spellHitTarget
 	// (Spell.cpp:2350), so its own auras evaluate the hit with the
