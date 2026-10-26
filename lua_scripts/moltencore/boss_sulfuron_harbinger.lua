@@ -13,8 +13,7 @@
 -- dark strike 19777 10s then {15s,18s}, non-triggered self-cast /
 -- demoralizing shout 19778 15s then {15s,20s}, non-triggered
 -- DoCastVictim / inspire 19779 13s then {20s,26s}, non-triggered
--- self-cast (the random-friendly-missing-buff arm has no bridge —
--- see deviations) / knockdown 19780 6s then {12s,15s}, non-triggered
+-- self-cast plus the random-friendly-missing-buff pick / knockdown 19780 6s then {12s,15s}, non-triggered
 -- DoCastVictim / flamespear 19781 2s then {12s,16s}, non-triggered
 -- on a threat-list player alive (C++ SelectTarget(Random, 0, 0.0f,
 -- true) — playerOnly, not any-unit; the old "any alive target" claim
@@ -37,9 +36,7 @@
 -- timers fire unconditionally (jeklik convention); no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the BOSS_SULFURON_HARBINGER
--- bookkeeping arms skipped); the DoFindFriendlyMissingBuff(45.0f,
--- SPELL_INSPIRE) arm has no friendly-creature bridge — only the
--- DoCast(me, SPELL_INSPIRE) arm is kept.
+-- bookkeeping arms skipped).
 
 local ENTRY_SULFURON_HARBINGER = 12098
 local ENTRY_FLAMEWAKER_HEALER = 11663 -- molten_core.h NPC_FLAMEWAKER_HEALER
@@ -97,21 +94,27 @@ local function onDemoralizingShout(creature, guid)
 end
 
 -- C++ EVENT_INSPIRE: DoFindFriendlyMissingBuff(45.0f, 19779) picks a
--- uniform-random friendly add in 45 yd missing the Inspire buff and
+-- uniform-random friendly unit in 45 yd missing the Inspire buff and
 -- DoCast(19779) on it, then DoCast(me, 19779); re-arm {20s,26s}.
--- Bridges: creature:GetCreaturesInGrid (lua_creature_events.go:2164) +
--- creature:HasAura (:335) on the event-object surface (the stale
--- "no friendly-creature bridge" claim is retracted). Add entries are the
--- MC flamewaker packs, molten_core.h: NPC_FLAMEWAKER_HEALER = 11663 /
--- NPC_FLAMEWAKER_ELITE = 11664.
+-- FriendlyMissingBuffInRange (GridNotifiers.h:897-914) admits alive +
+-- in-combat + non-hostile units in range missing the aura, with no
+-- self-exclusion, so the caster itself is in the pool whenever it
+-- lacks the aura; the entry list is the MC flamewaker packs,
+-- molten_core.h: NPC_FLAMEWAKER_HEALER = 11663 /
+-- NPC_FLAMEWAKER_ELITE = 11664 (the only non-hostile creatures in
+-- the encounter room besides the caster, and the in-combat leg
+-- excludes unpulled neighbouring packs).
 local function onInspire(creature, guid)
     local healers = {}
     for _, entry in ipairs({ ENTRY_FLAMEWAKER_HEALER, ENTRY_FLAMEWAKER_ELITE }) do
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 45.0)) do
-            if not add:IsDead() and not add:HasAura(SPELL_INSPIRE) then
+            if not add:IsDead() and add:IsInCombat() and not add:HasAura(SPELL_INSPIRE) then
                 healers[#healers + 1] = add
             end
         end
+    end
+    if not creature:HasAura(SPELL_INSPIRE) then
+        healers[#healers + 1] = creature
     end
     if #healers > 0 then
         creature:CastSpell(healers[math.random(#healers)], SPELL_INSPIRE)
