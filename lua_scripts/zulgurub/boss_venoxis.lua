@@ -148,16 +148,23 @@ end
 -- C++ EVENT_HOLY_NOVA: phase one; counts the top-10 threat targets
 -- (SelectTarget(MaxThreat, i), i = 0..9) within melee range — ported
 -- via the threat-ordered GetAITargets list, first 10 entries; the 5-yd
--- gate is creature:IsWithinMeleeRange, and C++ applies no
--- dead filter, so none added (midnight precedent) — and non-triggered
+-- gate is creature:IsWithinMeleeRange; C++ SelectTargetList skips
+-- offline refs (UnitAI.h), so dead entries are filtered before the
+-- top-10 slice (the midnight precedent is a raw loop, not
+-- SelectTarget) — and non-triggered
 -- DoCastVictim (23858) only when 3 or more qualify; the re-arm sits
 -- outside the count gate, so it fires {45s,75s} C++-exact either way.
 -- Nil-victim ticks cast nothing but keep the schedule (jeklik convention).
 local function onHolyNova(creature, guid)
     local inMelee = 0
-    local targets = creature:GetAITargets()
-    for i = 1, math.min(10, #targets) do
-        if creature:IsWithinMeleeRange(targets[i]) then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    for i = 1, math.min(10, #alive) do
+        if creature:IsWithinMeleeRange(alive[i]) then
             inMelee = inMelee + 1
         end
     end

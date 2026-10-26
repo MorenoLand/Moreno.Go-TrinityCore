@@ -161,13 +161,19 @@ end
 -- true (SetMeleeAttack(false) twin: the engine combat-tick swing
 -- gate honors NoMeleeAttack, creaturemotion.go:3261) + Wait_Timer =
 -- 10000. The threat pick is GetAITargets() random (Random,0 takes
--- any threat entry, victim included — no playerOnly filter in C++).
+-- any threat entry, victim included — no playerOnly filter in C++;
+-- SelectTargetList skips offline refs, so the pick is alive-filtered).
 local function onVanish(creature, guid)
     creature:CastSpell(creature, SPELL_VANISH)
-    local targets = creature:GetAITargets()
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
     creature:ResetAllThreat()
-    if #targets > 0 then
-        creature:AddThreat(targets[math.random(#targets)], 1000)
+    if #alive > 0 then
+        creature:AddThreat(alive[math.random(#alive)], 1000)
     end
     creature:SetMeleeAttack(false)
     schedule(guid, "vanishReveal", 10000, function() onVanishReveal(creature, guid) end)

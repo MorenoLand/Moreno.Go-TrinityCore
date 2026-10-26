@@ -463,7 +463,8 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 -- C++ 2s scheduler (boss_muru.cpp:410-419): REACT_AGGRESSIVE +
 -- RemoveFlag(NOT_SELECTABLE) unconditionally, then the summoner's
--- random threat target AttackStart (summoner-gated).
+-- random threat target AttackStart (summoner-gated; SelectTarget
+-- skips offline refs, UnitAI.h, so the pick is alive-filtered).
 local function darkFiendActivate(creature, guid)
     if not creature:IsAlive() then
         return
@@ -475,9 +476,14 @@ local function darkFiendActivate(creature, guid)
     -- (entropiusLeaveCombat uses the same 500 yd sweep).
     for _, summoner in ipairs(creature:GetCreaturesInGrid(ENTRY_ENTROPIUS, 500)) do
         if not summoner:IsDead() then
-            local targets = summoner:GetAITargets()
-            if #targets > 0 then
-                creature:EngageWithTarget(targets[math.random(#targets)])
+            local alive = {}
+            for _, t in ipairs(summoner:GetAITargets()) do
+                if not t:IsDead() then
+                    alive[#alive + 1] = t
+                end
+            end
+            if #alive > 0 then
+                creature:EngageWithTarget(alive[math.random(#alive)])
             end
             break
         end

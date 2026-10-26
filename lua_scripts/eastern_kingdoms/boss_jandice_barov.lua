@@ -150,14 +150,20 @@ end
 -- AttackStart on a random target + summoned->ApplySpellImmune(0,
 -- IMMUNITY_DAMAGE, MAGIC, true), in C++ order. SelectTarget(Random, 0)
 -- is the threat-list random pick via GetAITargets (gerstahn/kagani
--- precedent); AttackStart via EngageWithTarget (player-target
+-- precedent; SelectTargetList skips offline refs, UnitAI.h, so the
+-- pick is alive-filtered); AttackStart via EngageWithTarget (player-target
 -- funnel; a non-player random pick no-ops in the bridge).
 -- C++ JustSummoned carries no entry gate, so neither does this
 -- handler: Jandice summons only illusions (spell 17773).
 local function jandiceJustSummoned(event, creature, summon)
-    local targets = creature:GetAITargets()
-    if targets and #targets > 0 then
-        summon:EngageWithTarget(targets[math.random(#targets)])
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive > 0 then
+        summon:EngageWithTarget(alive[math.random(#alive)])
     end
     summon:ApplySpellImmune(0, IMMUNITY_OP_DAMAGE, SPELL_SCHOOL_MASK_MAGIC, true)
 end
