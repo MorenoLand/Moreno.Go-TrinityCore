@@ -15748,13 +15748,13 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// createProcHitMask on a fresh damageInfo, MissCondition alone decides), so the
 		// damage-immunity var must not reach it: an entry-zero spell on a damage-immune
 		// victim takes NORMAL (or REFLECT on a return trip), never IMMUNE.
-		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, true, false, reflected)
+		s.procSpellDamageNoDmgAuraTriggers(ctx, targetGUID, spellID, protocol.SpellMissNone, false, reflected)
 		// Taken-side no-damage pass on the victim's session, after the
 		// done side, matching the ProcSkillsAndAuras ordering.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
 				// Same no-damage-arm ruling as the done side: damage immunity never consulted.
-				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, true, false, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
+				playerSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, protocol.SpellMissNone, false, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
 			}
 		}
 	}
@@ -17313,6 +17313,43 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						comboGain += gain
 					}
 				}
+			}
+		}
+	}
+
+	// Spell::DoProcessTargetContainer (Spell.cpp:3561-3571): the effect loop
+	// above is DoTargetSpellHit per effect per target; DoDamageAndTriggers
+	// then runs once per TargetInfo — including missed ones. A missed target
+	// takes no effects, so its spell->m_damage stays 0 and it lands on the
+	// no-damage arm (Spell.cpp:2560-2575): createProcHitMask on a fresh
+	// damageInfo with the target's MissCondition, firing NODMG procs once
+	// per target — never per effect. Hit targets already fired theirs
+	// through the shared damage/heal funnels above; only the filtered
+	// targets still owe this arm. REFLECT is excluded: a reflected target
+	// retargets to the caster and fires through the hit path there, while
+	// the reflector's own taken procs ride ProcReflectDelayed.
+	// CanExecuteTriggersOnHit (Spell.cpp:8164-8174) needs a non-zero
+	// effect mask, so a spell with no explicit effects fires only the
+	// IMMUNE carve-out (Spell.cpp:2442). A victim inside its own proc
+	// evaluation (CanProc, Unit.h:1609) fires nothing on either side,
+	// mirroring the shared funnels' targetCantProc gate.
+	for _, guid := range triggeredMissGUIDs {
+		miss := triggeredMiss[guid]
+		if miss == protocol.SpellMissReflect {
+			continue
+		}
+		if !hasExplicitEffects && miss != protocol.SpellMissImmune && miss != protocol.SpellMissImmune2 {
+			continue
+		}
+		if s.server != nil {
+			if victimSess := s.server.findSessionByGUID(guid); victimSess != nil && victimSess.procDeep > 0 {
+				continue
+			}
+		}
+		s.procSpellDamageNoDmgAuraTriggers(ctx, guid, spellID, miss, false, false)
+		if s.server != nil {
+			if victimSess := s.server.findSessionByGUID(guid); victimSess != nil {
+				victimSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, miss, false, s.triggeredNoProcEvents > 0, false, s.castTriggerAuraSpell)
 			}
 		}
 	}

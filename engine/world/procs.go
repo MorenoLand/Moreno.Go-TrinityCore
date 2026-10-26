@@ -1716,7 +1716,7 @@ func spellDamageNoDmgPositive(spell wotlk.Spell) bool {
 // state (Spell::IsTriggered, Spell.cpp:7501-7504) so the
 // CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
 // gates engage exactly. The trigger spell targets the victim.
-func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, isHit, immune, reflected bool) {
+func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, miss uint8, immune, reflected bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1744,7 +1744,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 		schoolMask:           schoolMask,
 		spellTypeMask:        procSpellTypeNoDmgHeal,
 		spellPhaseMask:       procSpellPhaseHit,
-		hitMask:              spellDamageProcHitMask(isHit, immune, false, false, false, 0, reflected),
+		hitMask:              spellNoDmgMissProcHitMask(miss, immune, reflected),
 		triggered:            s.triggeredNoProcEvents > 0,
 		eventSpell:           &spellCopy,
 		triggeredByAuraSpell: s.castTriggerAuraSpell,
@@ -1768,7 +1768,7 @@ func (s *session) procSpellDamageNoDmgAuraTriggers(ctx context.Context, targetGU
 // targets the caster (Unit.cpp:10413). The triggered state comes from the
 // caster's cast, not the victim's session, matching Spell::IsTriggered on
 // the shared spell.
-func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, casterTriggered, reflected bool, triggerAuraSpell uint32) {
+func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, miss uint8, immune, casterTriggered, reflected bool, triggerAuraSpell uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1796,7 +1796,7 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 		schoolMask:           schoolMask,
 		spellTypeMask:        procSpellTypeNoDmgHeal,
 		spellPhaseMask:       procSpellPhaseHit,
-		hitMask:              spellDamageProcHitMask(isHit, immune, false, false, false, 0, reflected),
+		hitMask:              spellNoDmgMissProcHitMask(miss, immune, reflected),
 		triggered:            casterTriggered,
 		eventSpell:           &spellCopy,
 		triggeredByAuraSpell: triggerAuraSpell,
@@ -1850,6 +1850,59 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 		return procHitReflect
 	}
 	return hitMask
+}
+
+// spellMissProcHitMask mirrors the missCondition switch of createProcHitMask
+// (Unit.cpp:10179-10247) for the no-damage arm: the arm builds a fresh
+// SpellNonMeleeDamage (HitInfo 0, absorb 0, no block), so the miss kind
+// alone decides the mask — SPELL_MISS_NONE lands as NORMAL, SPELL_MISS_BLOCK
+// yields BLOCK|FULL_BLOCK ("spells can't be partially blocked"), and any
+// unknown kind yields PROC_HIT_NONE (the C++ default arm).
+func spellMissProcHitMask(miss uint8) uint32 {
+	switch miss {
+	case protocol.SpellMissNone:
+		return procHitNormal
+	case protocol.SpellMissMiss:
+		return procHitMiss
+	case protocol.SpellMissDodge:
+		return procHitDodge
+	case protocol.SpellMissParry:
+		return procHitParry
+	case protocol.SpellMissBlock:
+		return procHitBlock | procHitFullBlock
+	case protocol.SpellMissEvade:
+		return procHitEvade
+	case protocol.SpellMissImmune, protocol.SpellMissImmune2:
+		return procHitImmune
+	case protocol.SpellMissDeflect:
+		return procHitDeflect
+	case protocol.SpellMissAbsorb:
+		return procHitAbsorb
+	case protocol.SpellMissReflect:
+		return procHitReflect
+	case protocol.SpellMissResist:
+		return procHitFullResist
+	default:
+		return procHitNone
+	}
+}
+
+// spellNoDmgMissProcHitMask folds a miss kind with the damage-arm-only
+// immune/reflected overrides of spellDamageProcHitMask: the no-damage arm
+// carries no IsImmunedToDamage check (Spell.cpp:2563-2575), so its callers
+// pass false for immune and the immune fold below only preserves the
+// shared helper's shape for the reflected arm (Spell.cpp:2540-2546).
+func spellNoDmgMissProcHitMask(miss uint8, immune, reflected bool) uint32 {
+	if reflected {
+		if immune {
+			return procHitImmune
+		}
+		return procHitReflect
+	}
+	if immune {
+		return procHitImmune
+	}
+	return spellMissProcHitMask(miss)
 }
 
 // procSpellHitAuraTriggers evaluates real aura procs on the done side of a
