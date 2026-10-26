@@ -68,8 +68,9 @@
 -- trigger — Kael'thas's SPELL_RESSURECTION SpellHit — rides the
 -- instance-driven phase machine, so the arms stay out);
 -- MoveInLineOfSight / AttackStart _inFakeDeath /
--- NON_ATTACKABLE guards collapse into the pump (no flag
--- bridge); JustDied kael->AI()->DoAction(ACTION_ACTIVE_
+-- NON_ATTACKABLE guards collapse into the pump (sight leg is the Go
+-- aggro-scan flag guard, creaturemotion.go:4258; HasFlag bridged
+-- 2026-10-23 but no Lua arm needs it); JustDied kael->AI()->DoAction(ACTION_ACTIVE_
 -- ADVISOR) is a cross-creature/instance bridge — unmodeled.
 -- Thaladred (20064): OnEnterCombat(1): Talk(SAY_THALADRED_
 -- AGGRO) + JustEngagedWith AddThreat(who, 5000000.0f) PORTED

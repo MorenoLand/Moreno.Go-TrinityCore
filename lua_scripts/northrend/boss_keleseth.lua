@@ -274,6 +274,7 @@ end
 -- C++ EVENT_SHADOW_FISSURE (skeleton arm :311-317): DoCast(me,
 -- SPELL_SHADOW_FISSURE, true) + DoCastAOE(SPELL_BONE_ARMOR, true) ->
 -- self-cast + RemoveFlag(NOT_SELECTABLE) + SetStandState(STAND) +
+-- melee resume (UpdateAI :326 gate lifts with the flag) +
 -- re-arm DECREPIFY {4s,6s}, in C++ order. MoveChase(victim) stays out
 -- (no motion bridge); MoveIdle at fake-death likewise — the add keeps
 -- its motion state through the fake-death window.
@@ -282,6 +283,7 @@ local function skeletonShadowFissureTick(creature, guid)
     creature:CastSpell(creature, SPELL_BONE_ARMOR, true)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
+    creature:SetMeleeAttack(true) -- UpdateAI :326 gate lifts with the flag: swings resume
     schedule(guid, "decrepify", {4000, 6000}, function()
         skeletonDecrepifyTick(creature, guid)
     end)
@@ -311,7 +313,8 @@ end
 
 -- C++ npc_vrykul_skeleton::DamageTaken (:261-285): lethal damage is
 -- zeroed unconditionally; the fake-death machine (NOT_SELECTABLE +
--- STAND_DEAD + events.Reset + RESURRECT {18s,22s}) fires only once
+-- STAND_DEAD + events.Reset + RESURRECT {18s,22s} + UpdateAI :326
+-- melee suppression while flagged) fires only once
 -- per fake-death — the HasFlag gate (cleared at SHADOW_FISSURE)
 -- is C++-exact. The add is unkillable by damage by C++ design: it
 -- fake-dies and resurrects at full health instead.
@@ -321,6 +324,7 @@ local function skeletonDamageTaken(event, creature, attacker, damage)
         if not creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) then
             creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:SetStandState(7) -- UNIT_STAND_STATE_DEAD
+            creature:SetMeleeAttack(false) -- C++ UpdateAI :326: no DoMeleeAttackIfReady while NOT_SELECTABLE; Go swings are engine-driven, so suppress them for the fake-death window
             local guid = creature:GetGUID()
             cancelTimers(guid)
             schedule(guid, "resurrect", {18000, 22000}, function()
