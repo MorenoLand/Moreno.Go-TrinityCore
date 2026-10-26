@@ -10332,9 +10332,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		primaryLive := !primaryMissed
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 		// non-friendly non-positive (or dispel-effect) spell hit stands the
-		// target up. The EVADE-miss arm is vacuous (hitTargets excludes
-		// misses, and C++ needs a live _spellHitTarget); the AtTargetAttacked
-		// half is covered by the combat-state and aggro legs further below.
+		// target up. The miss arm is vacuous for every miss kind
+		// (hitTargets excludes misses, and C++ needs a live _spellHitTarget,
+		// which PreprocessTarget nulls for any non-NONE, non-clean-REFLECT
+		// MissCondition); the AtTargetAttacked half is covered by the
+		// combat-state and aggro legs further below.
 		// Creature targets stand through standCreatureMotionUp (Unit::
 		// SetStandState twin, Unit.cpp:10557-10570) instead of the player
 		// StandState field.

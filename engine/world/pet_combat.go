@@ -3353,12 +3353,31 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 	}
 	var missStatus []protocol.SpellMissStatus
+	// Spell::AddUnitTarget (Spell.cpp:2152) rolls the hit result BEFORE
+	// SendSpellGo, so the GO packet's miss list carries magic misses too:
+	// the verdict pass below runs the same roll the funnel used to run
+	// after the packet, and a verdict-missed target rides MissStatus,
+	// never packetHits. Reflected/evaded targets keep their own entries
+	// and the pet itself never rolls (return trips take no miss roll).
+	petMissVerdicts := make(map[uint64]uint8, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == motion.GUID || reflectedSet[guid] || evadedSet[guid] {
+			continue
+		}
+		if tgt, ok := s.getCombatTarget(ctx, guid); ok {
+			petMissVerdicts[guid] = s.petSpellMissVerdict(ctx, motion, tgt, spell.ID)
+		}
+	}
 	// Spell::SendSpellGo (Spell.cpp:4494-4507): only MISS_NONE targets ride
 	// HitTargets — reflected victims and the return-trip caster report
 	// through MissStatus (REFLECT + ReflectStatus), never as hits.
 	packetHits := make([]uint64, 0, len(hitTargets))
 	for _, guid := range hitTargets {
 		if reflectedSet[guid] || evadedSet[guid] {
+			continue
+		}
+		if verdict := petMissVerdicts[guid]; verdict != protocol.SpellMissNone {
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: verdict})
 			continue
 		}
 		packetHits = append(packetHits, guid)
@@ -3515,7 +3534,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if reflectedSet[targetGUID] {
 				reflectorGUID = targetGUID
 			}
-			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
+			missVerdict, hasMissVerdict := petMissVerdicts[targetGUID]
+			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,
@@ -3527,7 +3547,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if reflectedSet[areaHit.GUID] {
 					reflectorGUID = areaHit.GUID
 				}
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
+				missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 			}
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): the area-selected
@@ -3543,7 +3564,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if reflectedSet[areaCreatureGUID] {
 					reflectorGUID = areaCreatureGUID
 				}
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
+				missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 			}
 		}
 	}
@@ -4732,7 +4754,45 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 	}
 }
 
-func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64) {
+// petSpellMissVerdict rolls WorldObject::MagicSpellHitResult
+// (Object.cpp:2534-2604) for one pet-cast spell target: the level-diff
+// base with the pet's SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum and the
+// owner player's SPELLMOD_RESIST_MISS_CHANCE fold, then the 178
+// debuff-resist arm and the 287 deflect arm — the same three arms the
+// funnel used to roll after the GO packet. Spell::AddUnitTarget
+// (Spell.cpp:2152) rolls before SendSpellGo, so the verdict pass in
+// executePetSpellWithOptions runs it ahead of the packet and the funnel
+// consumes it instead of re-rolling.
+func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotion, target combatTarget, spellID uint32) uint8 {
+	if s == nil || s.server == nil || caster == nil {
+		return protocol.SpellMissNone
+	}
+	isPlayerVictim := s.server.findSessionByGUID(target.GUID) != nil
+	bonusHit := float64(s.server.creatureAuraSpellHitSum(creatureAuraKeyForMotion(caster)))
+	baseHit := int32(magicSpellHitBase(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim))
+	var petSpell wotlk.Spell
+	petSpellKnown := false
+	if s.server.Data != nil {
+		if ps, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+			petSpell, petSpellKnown = ps, true
+			baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
+		}
+	}
+	if miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit); miss != protocol.SpellMissNone {
+		return miss
+	}
+	if petSpellKnown {
+		if s.spellDebuffResisted(ctx, petSpell, target.GUID, s.server.findSessionByGUID(target.GUID)) {
+			return protocol.SpellMissResist
+		}
+		if s.spellDeflectedByVictim(ctx, target.GUID, s.server.findSessionByGUID(target.GUID), caster.X, caster.Y) {
+			return protocol.SpellMissDeflect
+		}
+	}
+	return protocol.SpellMissNone
+}
+
+func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64, missVerdict uint8, hasMissVerdict bool) {
 	if s == nil || s.server == nil || caster == nil {
 		return
 	}
@@ -4756,7 +4816,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	blocked := uint32(0)
 	fullBlock := false
 	missKind := protocol.SpellMissNone
-	if target.GUID != caster.GUID {
+	if hasMissVerdict && missVerdict != protocol.SpellMissNone {
+		// Pre-GO verdict (Spell::AddUnitTarget, Spell.cpp:2152) consumed
+		// here instead of a second roll: the GO packet already reported
+		// this target's miss, so the funnel must agree with it.
+		missKind = missVerdict
+		damage = 0
+		hitInfo = 0x01
+	}
+	if target.GUID != caster.GUID && !hasMissVerdict {
 		// WorldObject::MagicSpellHitResult (Object.cpp:2555): the caster's
 		// m_modSpellHitChance arm runs for any unit caster — the pet's live
 		// SPELL_AURA_MOD_SPELL_HIT_CHANCE (55) sum (AuraEffect::
@@ -5157,9 +5225,16 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// (Unit.cpp:735-737), so a god-cheat victim still feeds the heal —
 	// the damage log below likewise carries the pre-negation amount.
 	leechDealt := damage - overkill
-	logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2545): the
+	// damage log lives inside the m_damage > 0 arm — a miss never logs
+	// (its GO miss entry reports it, now that the verdict rolls before
+	// SendSpellGo like C++ AddUnitTarget). Fully-mitigated hits still
+	// log: their pre-mitigation damage was > 0, so the arm ran.
+	if hitInfo&0x01 == 0 {
+		logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
+	}
 	if damage == 0 {
 		// A missed or deflected hit never reaches Unit::DealDamage in C++
 		// (hitInfo 0x01 returns above). A zero-damage hit that reaches the
