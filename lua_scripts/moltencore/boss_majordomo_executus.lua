@@ -131,15 +131,22 @@ local function onBlastWave(creature, guid)
 end
 
 -- C++ EVENT_TELEPORT: non-triggered DoCast on a threat-list target
--- alive with the first MaxThreat entry skipped BEFORE filters
--- (SelectTarget(Random, 1); UnitAI.h offset-before-filter — not a
--- victim-GUID exclusion); a sole-entry tick casts nothing. Re-arm
--- 20s regardless (C++ re-arms unconditionally).
+-- alive with the victim skipped BEFORE filters
+-- (SelectTarget(Random, 1); UnitAI.h builds the list victim-first,
+-- so offset 1 pops the victim — akilzon idiom); a sole-entry tick
+-- casts nothing. Re-arm 20s regardless (C++ re-arms unconditionally).
 local function randomThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     for i, unit in ipairs(targets) do
-        if i > 1 and not unit:IsDead() then
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             out[#out + 1] = unit
         end
     end

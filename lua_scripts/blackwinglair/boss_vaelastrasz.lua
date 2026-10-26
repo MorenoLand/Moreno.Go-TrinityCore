@@ -179,12 +179,21 @@ end
 -- threat list, first <offset>=1 entry popped, then the predicate
 -- !IsPet + POWER_MANA + !HasAura(18173) applied). GetAITargets
 -- returns the list in MaxThreat order (lua_creature_events.go:1912;
--- fairbanks idiom), so skipping entry 1 is the C++ offset pop;
+-- fairbanks idiom), so a positional entry-1 drop diverges from
+-- the C++ offset pop under fixate/taunt; the victim exclusion
+-- below is the pop;
 -- players are never pets, so the Player filter is the !IsPet leg.
 local function onBurningAdrenalineCaster(creature, guid)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for i, t in ipairs(creature:GetAITargets()) do
-        if i ~= 1 and t:GetObjectType() == "Player" and t:IsAlive()
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i ~= 1))
+                and t:GetObjectType() == "Player" and t:IsAlive()
                 and t:GetPowerType() == POWER_MANA
                 and not t:HasAura(SPELL_BURNINGADRENALINE) then
             candidates[#candidates + 1] = t

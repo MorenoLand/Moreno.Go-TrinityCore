@@ -1421,20 +1421,29 @@ RegisterCreatureEvent(ENTRY_JULIANNE, 23, julianneLeaveCombat)
 RegisterCreatureEvent(ENTRY_JULIANNE, 24, julianneReachHome)
 
 -- C++ EVENT_BACKWARD_LUNGE (:1335-1343): SelectTarget(Random, 1, 100, true)
--- (offset 1 = second-threat pick, tank excluded) + !me->HasInArc(M_PI)
+-- (offset 1 = victim excluded, akilzon idiom) + !me->HasInArc(M_PI)
 -- (behind-target gate via the inArc twin above). The timer resets
 -- urand(15000,30000) ONLY on a successful cast; a failed gate or empty
 -- pick leaves the timer expired for a next-tick retry
 -- (yazzai-Polymorph precedent).
 local function romuloLunge(creature, guid)
-    -- C++ SelectTarget(Random, 1, 100, true) (:1336): offset 1 skips the
-    -- first threat entry BEFORE the player/alive/range filters
-    -- (UnitAI.h offset-before-filter), not a victim exclusion.
+    -- C++ SelectTarget(Random, 1, 100, true) (:1336): UnitAI.h builds
+    -- the list victim-first, so offset 1 pops the victim BEFORE the
+    -- player/alive/range filters (akilzon idiom); GetAITargets is
+    -- threat-sorted, so a positional i > 1 drop would cut the threat
+    -- head instead under fixate/taunt.
     local pool = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local reach = creature:GetCombatReach()
     for i, unit in ipairs(targets) do
-        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - reach < 100 then -- IsWithinCombatRange gate (Unit.cpp:583)
             pool[#pool + 1] = unit
         end

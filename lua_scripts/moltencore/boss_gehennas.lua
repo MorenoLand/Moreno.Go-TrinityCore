@@ -96,15 +96,23 @@ local function onRainOfFire(creature, guid)
 end
 
 -- C++ EVENT_SHADOW_BOLT: non-triggered cast 19728 on a threat-list
--- target alive with the first MaxThreat entry skipped BEFORE filters
--- (C++ SelectTarget(Random, 1); UnitAI.h offset-before-filter — not a
--- victim-GUID exclusion); a sole-entry tick casts nothing but keeps
--- the schedule. Re-arm 7s regardless.
+-- target alive with the victim skipped BEFORE filters
+-- (C++ SelectTarget(Random, 1); UnitAI.h builds the list
+-- victim-first, so offset 1 pops the victim — akilzon idiom);
+-- a sole-entry tick casts nothing but keeps the schedule.
+-- Re-arm 7s regardless.
 local function randomThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     for i, unit in ipairs(targets) do
-        if i > 1 and not unit:IsDead() then
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             out[#out + 1] = unit
         end
     end

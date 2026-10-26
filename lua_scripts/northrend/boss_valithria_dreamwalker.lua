@@ -192,15 +192,22 @@ end
 -- POWER_MANA + dist>15.0f, no player restriction (the selector
 -- carries no TYPEID check; the old "player" wording was wrong);
 -- C++ :720 SelectTarget(Random, 1, -10.0f, true) — min 10 yd,
--- playerOnly. Position=1 in both skips the first threat-list entry
--- BEFORE filters (UnitAI.h offset-before-filter); GetPowerType
+-- playerOnly. Position=1 in both pops the victim BEFORE filters
+-- (UnitAI.h victim-first list, akilzon idiom); GetPowerType
 -- is bridged (moroes.lua:294 precedent, phase-hunter any-unit gate).
 -- The IsDead gate follows the settled strip convention (C++
 -- skips only offline refs; dead picks are no-op casts).
 local function randomPlayer(creature, minDist, manaOnly)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for i, unit in ipairs(creature:GetAITargets()) do
-        if i > 1 and not unit:IsDead()
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead()
                 and creature:GetDistance(unit) > minDist
                 and (not manaOnly or unit:GetPowerType() == POWER_MANA)
                 and (manaOnly or unit:GetObjectType() == "Player") then

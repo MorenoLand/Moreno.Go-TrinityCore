@@ -93,15 +93,24 @@ local function schedule(store, guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1, 45, true) (boss_nalorakk.cpp:385): the pool
--- is the threat list, not the instance players. Offset 1 skips the first
--- MaxThreat entry BEFORE the player/alive/range filters (UnitAI.h
--- offset-before-filter; malchezaar idiom).
+-- is the threat list, not the instance players. UnitAI.h builds the
+-- list victim-first, so offset 1 pops the victim BEFORE the
+-- player/alive/range filters (akilzon idiom); GetAITargets is
+-- threat-sorted, so a positional i > 1 drop would cut the threat
+-- head instead under fixate/taunt.
 local function randomThreatPlayerSkipFirst(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     local reach = creature:GetCombatReach()
     for i, unit in ipairs(targets) do
-        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             out[#out + 1] = unit
         end

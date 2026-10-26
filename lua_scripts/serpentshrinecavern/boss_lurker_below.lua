@@ -239,14 +239,22 @@ local function randomThreatTarget(creature)
     return out[math.random(#out)]
 end
 
--- C++ SelectTarget(Random, 1): skip the first threat-list entry
--- BEFORE filters (UnitAI.h offset-before-filter), then a random
--- alive any-unit from the rest; nil when the rest is empty.
+-- C++ SelectTarget(Random, 1): UnitAI.h builds the list
+-- victim-first, so offset 1 pops the victim BEFORE filters
+-- (akilzon idiom), then a random alive any-unit from the rest;
+-- nil when the rest is empty.
 local function randomThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     for i, unit in ipairs(targets) do
-        if i > 1 and not unit:IsDead() then
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             out[#out + 1] = unit
         end
     end

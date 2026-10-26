@@ -104,14 +104,24 @@ local function doCastVictim(creature, spell)
     end
 end
 
--- C++ SelectTarget(Random, 1, 0, true, false): skip the first
--- threat-list entry BEFORE filters (UnitAI.h offset-before-filter),
--- then a random alive threat-list player; nil when the rest is empty.
+-- C++ SelectTarget(Random, 1, 0, true, false): UnitAI.h builds the
+-- list victim-first, so offset 1 pops the victim BEFORE filters
+-- (akilzon idiom), then a random alive threat-list player; nil
+-- when the rest is empty. The withTank=false tank leg (GetLastVictim
+-- exclusion) is unmodeled — no bridge on the handler surface; the
+-- victim exclusion covers the common victim==tank case.
 local function randomThreatPlayerSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     for i, unit in ipairs(targets) do
-        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead() then
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead() then
             out[#out + 1] = unit
         end
     end

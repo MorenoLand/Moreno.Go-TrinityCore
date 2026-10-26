@@ -85,15 +85,23 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1, 30.0f, true): random alive player from
--- the threat list within 30 yd, skipping the first entry in MaxThreat
--- order (UnitAI.h:162-184 — the list starts with the current victim,
+-- the threat list within 30 yd, popping the victim
+-- (UnitAI.h:162-184 — the list starts with the current victim,
 -- then the sorted threat list, and the first <offset> entries are
--- popped before the predicate filter; GetAITargets returns that order,
--- lua_creature_events.go:1912).
+-- popped before the predicate filter; GetAITargets returns
+-- threat-sorted order, so the victim exclusion below — not a
+-- positional drop — is the pop, lua_creature_events.go:1912).
 local function randomThreatPlayerSkippingFirstInRange(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local players = {}
     for i, t in ipairs(creature:GetAITargets()) do
-        if i ~= 1 and t:GetObjectType() == "Player" and t:IsAlive()
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i ~= 1))
+                and t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:GetDistance(t) <= maxDist then
             players[#players + 1] = t
         end

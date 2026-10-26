@@ -128,16 +128,23 @@ end
 
 -- C++ EVENT_FULLFILMENT: SelectTarget Random,1,45.0f,true ->
 -- DoCast(target, SPELL_TRUE_FULFILLMENT), init 15000 ->
--- urand(20000,30000). The position=1 arm skips the first entry
--- in MaxThreat order BEFORE the player/range predicate
--- (UnitAI.h offset-before-filter), so the pool is the threat
--- list minus its head, then alive players within 45.0f
--- (anastari precedent); the old victim-GUID exclusion was wrong
--- whenever the victim was not the threat head.
+-- urand(20000,30000). UnitAI.h builds the list victim-first,
+-- so position 1 pops the victim BEFORE the player/range
+-- predicate (akilzon idiom); GetAITargets is threat-sorted,
+-- so a positional i > 1 drop would cut the threat head
+-- instead under fixate/taunt. The pool is the threat list
+-- minus the victim, then alive players within 45.0f.
 local function onTrueFulfillment(creature, guid)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local cands = {}
     for i, p in ipairs(creature:GetAITargets()) do
-        if i > 1 and p:GetObjectType() == "Player" and not p:IsDead()
+        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:IsWithinDist(p, 45.0) then
             cands[#cands + 1] = p
         end

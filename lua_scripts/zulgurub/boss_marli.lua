@@ -129,17 +129,26 @@ local function marliState(guid)
     return st
 end
 
--- C++ SelectTarget(Random, 1, 100, true) (boss_marli.cpp:187): the
--- first MaxThreat entry is skipped BEFORE the player/alive/dist
--- filters (UnitAI.h:173-174) — "not aggro leader" is the threat head,
--- not the current victim — then a random surviving threat-list
--- player within 100 yd is picked.
+-- C++ SelectTarget(Random, 1, 100, true) (boss_marli.cpp:187):
+-- UnitAI.h builds the list victim-first, so offset 1 pops the
+-- victim ("not aggro leader" = the current victim) BEFORE the
+-- player/alive/dist filters (akilzon idiom); GetAITargets is
+-- threat-sorted, so a positional i > 1 drop would cut the threat
+-- head instead under fixate/taunt. Then a random surviving
+-- threat-list player within 100 yd is picked.
 local function randomThreatPlayerSkipFirstInRange(creature, maxDist)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local targets = creature:GetAITargets()
     local out = {}
     local reach = creature:GetCombatReach()
     for i, unit in ipairs(targets) do
-        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             out[#out + 1] = unit
         end

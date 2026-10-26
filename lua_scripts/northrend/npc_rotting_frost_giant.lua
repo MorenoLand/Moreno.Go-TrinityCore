@@ -43,15 +43,23 @@ end
 -- C++ SelectTarget(Random, 1, DeathPlagueTargetSelector(me))
 -- (icecrown_citadel.cpp:482, selector :426-443): threat-list
 -- player within 100.0f, no DEATH_PLAGUE_AURA and no
--- RECENTLY_INFECTED; position=1 skips the first threat-list entry
--- BEFORE the predicate (UnitAI.h offset-before-filter), replacing
--- the old victim-GUID exclusion. The IsDead gate follows the
--- settled strip convention (C++ skips only offline refs; dead
--- picks are no-op casts in both engines).
+-- RECENTLY_INFECTED; UnitAI.h builds the list victim-first, so
+-- position=1 pops the victim BEFORE the predicate (akilzon
+-- idiom) — the victim exclusion is the pop, not the positional
+-- drop it replaced. The IsDead gate follows the settled strip
+-- convention (C++ skips only offline refs; dead picks are no-op
+-- casts in both engines).
 local function selectDeathPlagueTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     for i, unit in ipairs(creature:GetAITargets()) do
-        if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player" and not unit:IsDead()
                 and creature:GetDistance(unit) <= 100.0
                 and not unit:HasAura(SPELL_DEATH_PLAGUE_AURA)
                 and not unit:HasAura(SPELL_RECENTLY_INFECTED) then
