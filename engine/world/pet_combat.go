@@ -3462,6 +3462,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		return guid
 	}
+	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2347-2351) and
+	// DoTargetSpellHit (Spell.cpp:2405): a miss (MISS/RESIST/DEFLECT/
+	// DODGE/PARRY/BLOCK, like IMMUNE/IMMUNE2) nulls _spellHitTarget, so
+	// no HIT_TARGET effect leg runs for it — heal, trigger, dispel,
+	// dispel-mechanic, insta-kill and aura alike. Reflected targets
+	// carry no miss verdict (the verdict pass skips them), so clean
+	// reflects still retarget their legs to the pet above; a target
+	// with no verdict entry (self, unknown) is a hit, as before.
+	missedTarget := func(guid uint64) bool {
+		return petMissVerdicts[guid] != protocol.SpellMissNone
+	}
 	stamp := gameTimeMS()
 	castFlags := uint32(spellCastFlagGo)
 	if triggered && castCount == 0 {
@@ -3659,6 +3670,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if immuneSet[targetGUID] {
 				continue
 			}
+			if missedTarget(targetGUID) {
+				continue
+			}
 			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
 			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
 			// the uint32 wrap must never turn a negative rolled value into
@@ -3729,6 +3743,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if immuneSet[target.UnitGUID] {
 					continue
 				}
+				if missedTarget(target.UnitGUID) {
+					continue
+				}
 				if reflectedSet[target.UnitGUID] {
 					triggerTarget.UnitGUID = motion.GUID
 				}
@@ -3736,7 +3753,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 		if effect.Effect == spellEffectDispel {
-			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] {
+			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
 				s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[targetGUID])
 			}
 		}
@@ -3748,7 +3765,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// player path bridges it (spells.go case 108). Reflection
 			// maps the victim to the pet like the 38 arm above
 			// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
-			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] {
+			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
 				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
 			}
 		}
@@ -3775,7 +3792,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			for guid := range evadedSet {
 				evaded[guid] = true
 			}
-			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, immuneSet, nil)
+			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, immuneSet, petMissVerdicts)
 		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -3790,6 +3807,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				continue
 			}
 			if immuneSet[targetGUID] {
+				continue
+			}
+			if missedTarget(targetGUID) {
 				continue
 			}
 			var victim combatTarget
@@ -3813,7 +3833,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaHit.GUID)
-					if aVictimGUID == 0 || immuneSet[areaHit.GUID] {
+					if aVictimGUID == 0 || immuneSet[areaHit.GUID] || missedTarget(areaHit.GUID) {
 						continue
 					}
 					var aVictim combatTarget
@@ -3834,7 +3854,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaCreatureGUID)
-					if aVictimGUID == 0 || immuneSet[areaCreatureGUID] {
+					if aVictimGUID == 0 || immuneSet[areaCreatureGUID] || missedTarget(areaCreatureGUID) {
 						continue
 					}
 					var aVictim combatTarget
