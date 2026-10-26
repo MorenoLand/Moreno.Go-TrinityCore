@@ -103,9 +103,10 @@ end
 -- the instance roster), nil when none qualify.
 local function randomThreatPlayer100(creature)
     local candidates = {}
+    local reach = creature:GetCombatReach()
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) <= 100 then
+                and creature:GetDistance(unit) - reach < 100 then -- IsWithinCombatRange gate (Unit.cpp:583)
             candidates[#candidates + 1] = unit
         end
     end

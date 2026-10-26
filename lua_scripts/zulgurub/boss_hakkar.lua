@@ -89,9 +89,10 @@ end
 -- on the top-threat player within 100 yd (MaxThreat, 0, 100, true).
 local function topThreatPlayerInRange(creature, range)
     local targets = creature:GetAITargets()
+    local reach = creature:GetCombatReach()
     for _, unit in ipairs(targets) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) <= range then
+                and creature:GetDistance(unit) - reach < range then -- IsWithinCombatRange gate (Unit.cpp:583)
             return unit
         end
     end

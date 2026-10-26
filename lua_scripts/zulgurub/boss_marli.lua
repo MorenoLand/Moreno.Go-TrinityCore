@@ -137,9 +137,10 @@ end
 local function randomThreatPlayerSkipFirstInRange(creature, maxDist)
     local targets = creature:GetAITargets()
     local out = {}
+    local reach = creature:GetCombatReach()
     for i, unit in ipairs(targets) do
         if i > 1 and unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) <= maxDist then
+                and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
             out[#out + 1] = unit
         end
     end
