@@ -322,6 +322,33 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 	s.server.auraMu.Unlock()
 }
 
+// totemEnemyCreatureValid is the creature half of the TARGET_CHECK_ENEMY
+// verdict for totem-caster area effects (Spell.cpp:8337-8341 +
+// Object.cpp:2930 IsValidAttackTarget, totem caster): the IsTotem reject
+// (an enemy player's totem motion is hostile-faction but never a valid
+// enemy target), the untargetable/unattackable flag set, the
+// immune-to-NPC leg (the totem caster carries no PLAYER_CONTROLLED flag,
+// so only that immunity leg can fire), and the faction hostility verdict
+// itself. Deliberately absent, matching the session twin: GM, UBER and
+// sanctuary arms need a player on one side, and visibility has no Go
+// motion model. Dead motions fail here too, which the sweep inherits:
+// C++ UpdateTargetMap drops dead targets (30708 allows no dead targets).
+func (s *Server) totemEnemyCreatureValid(m *creatureMotion, owner playerPos) bool {
+	if s == nil || m == nil || m.Health == 0 {
+		return false
+	}
+	if s.isTotemGUID(m.GUID) {
+		return false
+	}
+	if m.UnitFlags&(unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2|unitFlagNotSelectable) != 0 {
+		return false
+	}
+	if m.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return false
+	}
+	return s.isHostileFaction(m.Faction, owner)
+}
+
 // sweepTotemCreatureDebuffOutOfRange is the creature half of the
 // Aura::UpdateTargetMap drop (SpellAuras.cpp:643-673): the C++ area-aura
 // refresh rebuilds the target list each interval and removes every
@@ -330,7 +357,7 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 // debuff on the same creature survives; a motion that is gone entirely
 // is left alone, since the despawn path clears its auras itself. The
 // rebuild also drops targets failing CanBeAppliedOn, which in the Go
-// model is the isHostileFaction verdict (same call as the apply arm).
+// model is the totemEnemyCreatureValid verdict (same call as the apply arm).
 func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID uint32, radius float64) {
 	if s == nil || s.server == nil || totem == nil || spellID == 0 {
 		return
@@ -349,7 +376,7 @@ func (s *session) sweepTotemCreatureDebuffOutOfRange(totem *activeTotem, spellID
 		if m == nil {
 			continue
 		}
-		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius || !s.server.isHostileFaction(m.Faction, owner) {
+		if distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) > radius || !s.server.totemEnemyCreatureValid(m, owner) {
 			s.server.removeCreatureAura(key, spellID)
 		}
 	}
@@ -913,7 +940,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			}
 			owner := totemOwnerPos(s)
 			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-				if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+				if !s.server.totemEnemyCreatureValid(m, owner) {
 					continue
 				}
 				s.applyTotemEnemyDebuff(totem, m, def.DebuffSpell, ownerLevel)
@@ -988,7 +1015,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			owner := totemOwnerPos(s)
 			dmg := uint32(75)
 			for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-				if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+				if !s.server.totemEnemyCreatureValid(m, owner) {
 					continue
 				}
 				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0)

@@ -3779,6 +3779,8 @@ const (
 	unitFlagSilenced            = uint32(0x00002000)
 	unitFlagPacified            = uint32(0x00020000)
 	unitFlagNonAttackable2      = uint32(0x00010000) // UNIT_FLAG_NON_ATTACKABLE_2 (UnitDefines.h:140)
+	unitFlagTaxiFlight          = uint32(0x00100000) // UNIT_FLAG_TAXI_FLIGHT (UnitDefines.h:144)
+	unitFlagNotSelectable       = uint32(0x02000000) // UNIT_FLAG_NOT_SELECTABLE (UnitDefines.h:149)
 	unitFlagStunned             = uint32(0x00040000)
 	unitFlagConfused            = uint32(0x00400000)
 	unitFlagFleeing             = uint32(0x00800000)
