@@ -222,7 +222,7 @@ local function randomThreatPlayerInRange(creature, maxDist)
     local reach = creature:GetCombatReach()
     for _, unit in ipairs(targets) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - reach < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(unit) - reach - 1.5 < maxDist then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             out[#out + 1] = unit
         end
     end
@@ -600,7 +600,7 @@ local ADD_ARMS = {
           fire = function(creature)
               local target = lowestHpFriendly(creature, 99.0, 30000)
               if target then
-                  if creature:GetDistance(target) - creature:GetCombatReach() < 50.0 then -- IsWithinDistInMap gate (Object.cpp:1238)
+                  if creature:GetDistance(target) - creature:GetCombatReach() - target:GetCombatReach() < 50.0 then -- IsWithinDistInMap gate (Object.cpp:1238; both reaches)
                       creature:CastSpell(target, SPELL_FLASH_HEAL, false)
                   end
               elseif math.random(0, 1) == 1 then
