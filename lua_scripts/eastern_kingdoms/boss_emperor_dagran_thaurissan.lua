@@ -88,11 +88,16 @@ end
 -- not the maiden_of_virtue / thorim player-only pool (those C++
 -- calls pass playerOnly=true).
 local function randomThreatTarget(creature)
-    local pool = creature:GetAITargets()
-    if #pool == 0 then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return pool[math.random(#pool)]
+    return alive[math.random(#alive)]
 end
 
 local function onHandOfThaurissan(creature, guid)

@@ -78,11 +78,16 @@ end
 -- included) — plain pick over GetAITargets (the bridged threat list;
 -- midnight precedent), no range cap, no Player filter.
 local function randomThreatTarget(creature)
-    local targets = creature:GetAITargets()
-    if #targets == 0 then
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive == 0 then
         return nil
     end
-    return targets[math.random(#targets)]
+    return alive[math.random(#alive)]
 end
 
 -- C++ Wrath: DoCast(SelectTarget(Random, 0), 21807), non-triggered,
