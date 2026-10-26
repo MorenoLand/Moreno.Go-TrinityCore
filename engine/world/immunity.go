@@ -1520,6 +1520,10 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	// the caster, and the spell cannot pierce it (nil immuneSpellInfo
 	// behaves like Go's zero-value immune spell in
 	// canSpellPierceImmuneAura).
+	// C++ IsImmunedToSpell (Unit.cpp:7909) exempts a positive spell on a
+	// target friendly to its caster; the caster is a live Unit, never nil,
+	// so the exemption keys on the friendly verdict alone, not on a
+	// non-nil session caster.
 	if schoolMask := spell.SchoolMask; schoolMask != 0 {
 		var schoolImmunityMask uint32
 		for row := stats.SpellSchoolImmuneMask; row != 0; row &= row - 1 {
@@ -1527,7 +1531,7 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 			if bit&schoolMask == 0 {
 				continue
 			}
-			if !spellIsPositive(spell) || caster == nil || !friendly {
+			if !spellIsPositive(spell) || !friendly {
 				if !canSpellPierceImmuneAura(spell, wotlk.Spell{}) {
 					schoolImmunityMask |= bit
 				}
@@ -1553,7 +1557,7 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 						immuneSpell, immuneKnown = sp, true
 					}
 				}
-				if (immuneKnown && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !friendly {
+				if (immuneKnown && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || !friendly {
 					if !canSpellPierceImmuneAura(spell, immuneSpell) {
 						schoolImmunityMask |= bit
 					}

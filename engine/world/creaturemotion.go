@@ -3114,6 +3114,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// trip; reflected targets take no per-hit legs below.
 			reflectedSet := map[uint64]bool{}
 			evadedSet := map[uint64]bool{}
+			immuneSet := map[uint64]bool{}
 			type inlineReflectTrip struct {
 				victim *playerPos
 				status uint8
@@ -3127,6 +3128,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if inlineSpellKnown {
 				for _, p := range append([]*playerPos{target}, areaHits...) {
 					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] {
+						continue
+					}
+					if s.serverCreatureSpellImmuneVerdict(ctx, motion, inlineSpell, p.GUID) {
+						immuneSet[p.GUID] = true
 						continue
 					}
 					if ok, status := s.serverInlineReflectVerdict(ctx, motion, inlineSpell, p); ok {
@@ -3144,6 +3149,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
 						continue
 					}
+					if s.serverCreatureSpellImmuneVerdict(ctx, motion, inlineSpell, guid) {
+						immuneSet[guid] = true
+						continue
+					}
 					reflected, evaded, status := s.serverCastCreatureReflectVerdict(ctx, motion, inlineSpell, guid)
 					if evaded {
 						evadedSet[guid] = true
@@ -3158,7 +3167,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			var missStatus []protocol.SpellMissStatus
 			packetHits := make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
-				if reflectedSet[guid] || evadedSet[guid] {
+				if reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] {
 					continue
 				}
 				packetHits = append(packetHits, guid)
@@ -3189,6 +3198,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			for _, guid := range hitTargets {
 				if evadedSet[guid] {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
+					continue
+				}
+				if immuneSet[guid] {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissImmune})
 					continue
 				}
 				if status, ok := reflectStatus[guid]; ok {
@@ -3249,7 +3262,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				var instaTargets []uint64
 				aliveBefore := map[uint64]bool{}
 				for _, p := range append([]*playerPos{target}, areaHits...) {
-					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] {
+					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] || immuneSet[p.GUID] {
 						continue
 					}
 					instaTargets = append(instaTargets, p.GUID)
@@ -3264,7 +3277,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// the return trip below.
 				creatureAliveBefore := map[uint64]bool{}
 				for _, guid := range areaCreatureHits {
-					if guid == 0 || reflectedSet[guid] || evadedSet[guid] {
+					if guid == 0 || reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] {
 						continue
 					}
 					instaTargets = append(instaTargets, guid)
@@ -3273,7 +3286,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 				if len(instaTargets) > 0 {
-					s.creatureEffectInstaKill(ctx, motion, spellID, instaTargets, nil, nil)
+					s.creatureEffectInstaKill(ctx, motion, spellID, instaTargets, nil, nil, nil)
 					for _, p := range append([]*playerPos{target}, areaHits...) {
 						if p == nil || !aliveBefore[p.GUID] {
 							continue
@@ -3289,11 +3302,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
-			if !reflectedSet[target.GUID] && !instaKilled[target.GUID] {
+			if !reflectedSet[target.GUID] && !immuneSet[target.GUID] && !instaKilled[target.GUID] {
 				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
 			}
 			for _, areaHit := range areaHits {
-				if areaHit == nil || reflectedSet[areaHit.GUID] || instaKilled[areaHit.GUID] {
+				if areaHit == nil || reflectedSet[areaHit.GUID] || immuneSet[areaHit.GUID] || instaKilled[areaHit.GUID] {
 					continue
 				}
 				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
@@ -3302,7 +3315,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// creature-victim twin in creature_area_targets.go); reflected,
 			// evaded and instakilled creatures skip it like players.
 			for _, areaCreatureGUID := range areaCreatureHits {
-				if areaCreatureGUID == 0 || reflectedSet[areaCreatureGUID] || evadedSet[areaCreatureGUID] || instaKilled[areaCreatureGUID] {
+				if areaCreatureGUID == 0 || reflectedSet[areaCreatureGUID] || evadedSet[areaCreatureGUID] || immuneSet[areaCreatureGUID] || instaKilled[areaCreatureGUID] {
 					continue
 				}
 				s.applyInlineCreatureSpellHitCreature(ctx, motion, areaCreatureGUID, spellID, damage, schoolMask, target.Sess)

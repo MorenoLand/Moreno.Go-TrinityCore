@@ -1200,6 +1200,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// the GO send and the per-hit legs after the spellKnown block.
 	var reflectedTargets map[uint64]uint8
 	var evadedTargets map[uint64]bool
+	var immuneTargets map[uint64]bool
 	if spellKnown {
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
@@ -1553,6 +1554,16 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// the same way the inline path skips their per-hit legs.
 		if len(hitTargets) > 0 {
 			for _, guid := range hitTargets {
+				// WorldObject::SpellHitResult (Object.cpp:2617-2627):
+				// immunity precedes evade and reflect, so an immune
+				// target never rolls (or consumes) a reflect aura.
+				if s.serverCreatureSpellImmuneVerdict(ctx, m, spellInfo, guid) {
+					if immuneTargets == nil {
+						immuneTargets = map[uint64]bool{}
+					}
+					immuneTargets[guid] = true
+					continue
+				}
 				reflected, evaded, status := s.serverCastCreatureReflectVerdict(ctx, m, spellInfo, guid)
 				if evaded {
 					if evadedTargets == nil {
@@ -1669,7 +1680,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if sendGoPacket {
 		packetHits := hitTargets
 		var missStatus []protocol.SpellMissStatus
-		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 {
 			packetHits = make([]uint64, 0, len(hitTargets))
 			// Spell::UpdateSpellCastDataTargets (Spell.cpp:4486-4508) walks
 			// m_UniqueTargetInfo in target order, so miss entries ride hit
@@ -1681,6 +1692,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 				if evadedTargets[guid] {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissEvade})
+					continue
+				}
+				if immuneTargets[guid] {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissImmune})
 					continue
 				}
 				packetHits = append(packetHits, guid)
@@ -1720,7 +1735,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == spellEffectInstaKill {
-				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets)
+				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets)
 			}
 		}
 	}
@@ -1742,8 +1757,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 	// non-friendly non-positive (or dispel-effect) spell hit stands the
 	// target up. Placed ahead of the ev14/ev15 legs, matching C++ order
-	// (2609 precedes 2629). The EVADE-miss arm is vacuous (evaded targets
-	// are skipped below; PreprocessTarget, Spell.cpp:2347, nulls
+	// (2609 precedes 2629). Evaded and immune targets are skipped below;
+	// PreprocessTarget, Spell.cpp:2347, nulls
 	// _spellHitTarget on any miss, and this path models no plain-miss
 	// verdict, so every remaining hit target is live). A bounced reflect
 	// return trip (IMMUNE) nulls _spellHitTarget (Spell.cpp:2346-2350) and
@@ -1758,6 +1773,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				continue
 			}
 			if evadedTargets[guid] {
+				continue
+			}
+			if immuneTargets[guid] {
 				continue
 			}
 			if guid == 0 || s.creatureFriendlyToTarget(m, guid) {
@@ -1820,6 +1838,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			if evadedTargets[guid] {
 				continue
 			}
+			if immuneTargets[guid] {
+				continue
+			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 			}
@@ -1842,7 +1863,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// _cast without a SpellInfo.
 	if spellKnown {
 		unreflectedHits := hitTargets
-		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 {
+		if len(reflectedTargets) > 0 || len(evadedTargets) > 0 || len(immuneTargets) > 0 {
 			unreflectedHits = make([]uint64, 0, len(hitTargets))
 			for _, guid := range hitTargets {
 				// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2652):
@@ -1859,6 +1880,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 					continue
 				}
 				if evadedTargets[guid] {
+					continue
+				}
+				if immuneTargets[guid] {
 					continue
 				}
 				unreflectedHits = append(unreflectedHits, guid)
@@ -2020,12 +2044,12 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 // OnDamage hook). The vehicle-mounted duel arm stays unbridged (no vehicle
 // model); the plain duel arm and the OwnerAttackedBy signal are bridged in
 // the player-victim path, the signal also in creatureInstaKillVictim.
-func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool) {
+func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool) {
 	if s == nil || m == nil {
 		return
 	}
 	for _, guid := range hitTargets {
-		if guid == 0 || evaded[guid] {
+		if guid == 0 || evaded[guid] || immune[guid] {
 			continue
 		}
 		// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2349-2350):

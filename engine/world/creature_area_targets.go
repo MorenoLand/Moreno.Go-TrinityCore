@@ -1283,6 +1283,39 @@ func (s *Server) serverCastCreatureReflectVerdict(ctx context.Context, m *creatu
 	return true, false, s.serverCreatureReflectReturnStatus(ctx, m, spell)
 }
 
+// serverCreatureSpellImmuneVerdict mirrors the head of
+// WorldObject::SpellHitResult (Object.cpp:2617-2627) for a creature caster:
+// IsImmunedToSpell, then the damage-only IsImmunedToDamage arm for
+// damage-only spells. It runs ahead of the evade and reflect arms, so an
+// immune target never rolls (or consumes) a reflect aura, and ahead of the
+// positive/self arms, so a self-cast on an immune caster still reports
+// IMMUNE. Player victims use the session folds with a nil caster (the
+// harmful gate already returns false for positive spells there, so the
+// nil-caster school-fold term cannot misfire on friendly buffs);
+// creature victims use the template folds with the motion's friendly
+// verdict, which carries the positive-friendly school exemption exactly.
+func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		if ts.isImmuneToSpell(spell, nil) {
+			return true
+		}
+		return spellHasOnlyDamageEffects(spell) && ts.isImmuneToDamageSpell(spell, spell.SchoolMask)
+	}
+	tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(tm)
+	stats := s.loadCreatureStats(ctx, tm.Entry)
+	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, tm.Faction, func(uint32) bool { return s.creatureFriendlyToTarget(m, targetGUID) }) {
+		return true
+	}
+	return spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask)
+}
+
 // armCastCreatureReflectProcDelayed mirrors the ProcReflectDelayed arm
 // (Spell.cpp:2181) for the castCreatureSpellInternal path: at
 // outbound-missile arrival the reflector's taken-side auras proc with
@@ -1413,7 +1446,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// strips the caster's auras first). A zero-damage trip with no
 	// effect-1 still returns — the old damage==0 guard.
 	if spell.ID != 0 && spellHasEffect(spell, spellEffectInstaKill) {
-		s.creatureEffectInstaKill(ctx, motion, spell.ID, []uint64{motion.GUID}, nil, nil)
+		s.creatureEffectInstaKill(ctx, motion, spell.ID, []uint64{motion.GUID}, nil, nil, nil)
 		if live := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); live == nil || live.Health == 0 {
 			return
 		}
