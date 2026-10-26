@@ -154,6 +154,7 @@
 local ENTRY_GORTOK_PALEHOOF = 26687
 
 local SOUND_PALEHOOF_DEATH = 13467
+local GO_GORTOK_PALEHOOF_SPHERE = 188593 -- utgarde_pinnacle.h:94
 local ENTRY_FRENZIED_WORGEN = 26683
 local ENTRY_RAVENOUS_FURBOLG = 26684
 local ENTRY_MASSIVE_JORMUNGAR = 26685
@@ -445,6 +446,23 @@ local function jormungarEnterCombat(event, creature)
     schedule(guid, "poisonbreath", 13000, poisonBreathTick)
 end
 
+-- C++ boss_palehoofAI::Reset (:200-210): _Reset + SummonCreatureGroup
+-- (no bridge) + sphere re-arm: instance->GetGameObject(
+-- DATA_GORTOK_PALEHOOF_SPHERE) -> SetGoState(GO_STATE_READY) +
+-- RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE), via the
+-- kirtonos/gandling FindNearestGameObject precedent (100y room scale;
+-- C++ uses the instance GUID, Lua the nearest entry match).
+local function palehoofReset(event, creature)
+    cancelCombatTimers(event, creature)
+    if creature:IsAlive() then
+        local sphere = creature:FindNearestGameObject(GO_GORTOK_PALEHOOF_SPHERE, 100.0)
+        if sphere then
+            sphere:SetGoState(1) -- GO_STATE_READY
+            sphere:RemoveFlag(9, 16) -- GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE
+        end
+    end
+end
+
 -- C++ boss_palehoofAI::JustDied (:250-256): events.Reset() +
 -- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) (no instance
 -- bridge) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
@@ -458,7 +476,7 @@ RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 1, palehoofEnterCombat)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 3, palehoofKilledUnit)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 4, palehoofDied)
-RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, palehoofReset)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 1, furbolgEnterCombat)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 4, cancelCombatTimers)

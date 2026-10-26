@@ -1494,6 +1494,20 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.gameObjectHasFlag(state.Map, state.InstanceID, state.GUID, flag)}, nil
 	}
+	methods["RemoveFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if field == gameObjectFlags {
+			srv.clearGameObjectFlag(state.Map, state.InstanceID, state.GUID, flag)
+		}
+		return nil, nil
+	}
 	// SendCustomAnim mirrors GameObject::SendCustomAnim (GameObject.cpp):
 	// the SMSG_GAMEOBJECT_CUSTOM_ANIM broadcast for this GO's instance.
 	methods["SendCustomAnim"] = func(_ context.Context, args []any) ([]any, error) {

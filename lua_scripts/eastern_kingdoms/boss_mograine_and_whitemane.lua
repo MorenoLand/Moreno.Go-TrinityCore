@@ -38,8 +38,8 @@
 --
 -- Documented-unmodeled (no bridges):
 -- Mograine's fake-death DamageTaken machine: first lethal hit sets
--- _fakeDeath/_canDie=false, opens DATA_HIGH_INQUISITORS_DOOR (no GO/
--- instance bridge), orders whitemane via instance->GetCreature(
+-- _fakeDeath/_canDie=false, opens DATA_HIGH_INQUISITORS_DOOR (PORTED
+-- below via FindNearestGameObject), orders whitemane via instance->GetCreature(
 -- DATA_WHITEMANE) + MovePoint(WhitemaneIntroMovePos) + DoZoneInCombat
 -- (no instance creature-lookup, MotionMaster, or zone-combat bridges),
 -- InterruptNonMeleeSpells + UNIT_FLAG_NOT_SELECTABLE/NON_ATTACKABLE +
@@ -84,6 +84,7 @@
 
 local ENTRY_MOGRAINE = 3976
 local ENTRY_WHITEMANE = 3977
+local GO_HIGH_INQUISITORS_DOOR = 104600 -- scarlet_monastery.h:89
 
 local SAY_MO_AGGRO = 0
 local SAY_MO_KILL = 1
@@ -108,6 +109,7 @@ local SPELL_HOLY_SMITE = 9481
 local timers = {}
 local killYellOnCooldown = {}
 local mograineKillYellDone = {}
+local mograineDoorOpened = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -228,6 +230,7 @@ local function mograineReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     mograineKillYellDone[guid] = nil
+    mograineDoorOpened[guid] = nil
     -- C++ Reset: triggered self-cast (Reset-only arm); ev23 fires on death
     -- too (engine reset-then-died order) but C++ Reset() never runs on
     -- death, so the cast is alive-gated.
@@ -239,6 +242,27 @@ local function mograineReset(event, creature)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
         creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
         creature:SetReactState(2) -- REACT_AGGRESSIVE
+        -- C++ Reset (:103): instance->HandleGameObject(false, door) ->
+        -- GO_STATE_READY (InstanceScript.cpp:479: open=false -> READY).
+        local door = creature:FindNearestGameObject(GO_HIGH_INQUISITORS_DOOR, 100.0)
+        if door then door:SetGoState(1) end -- GO_STATE_READY (close)
+    end
+end
+
+-- C++ DamageTaken (:159-160): first lethal hit opens the door
+-- (instance->HandleGameObject(true, door) -> GO_STATE_ACTIVE). The
+-- damage-negation / stand-state / whitemane-order legs stay out with
+-- the unported resurrection machine (header above); the door leg is
+-- observable on its own and fires once per combat via the latch.
+local function mograineDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if mograineDoorOpened[guid] then
+        return
+    end
+    if damage >= creature:GetHealth() then
+        mograineDoorOpened[guid] = true
+        local door = creature:FindNearestGameObject(GO_HIGH_INQUISITORS_DOOR, 100.0)
+        if door then door:SetGoState(0) end -- GO_STATE_ACTIVE (open)
     end
 end
 
@@ -246,6 +270,7 @@ RegisterCreatureEvent(ENTRY_MOGRAINE, 1, mograineEnterCombat)
 RegisterCreatureEvent(ENTRY_MOGRAINE, 2, mograineLeaveCombat)
 RegisterCreatureEvent(ENTRY_MOGRAINE, 3, mograineTargetDied)
 RegisterCreatureEvent(ENTRY_MOGRAINE, 4, mograineDied)
+RegisterCreatureEvent(ENTRY_MOGRAINE, 9, mograineDamageTaken)
 RegisterCreatureEvent(ENTRY_MOGRAINE, 23, mograineReset)
 
 -- Whitemane --------------------------------------------------------------

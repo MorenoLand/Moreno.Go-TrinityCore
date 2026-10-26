@@ -186,6 +186,25 @@ func (s *Server) setGameObjectFlag(mapID, instanceID uint32, guid uint64, flag u
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
 }
 
+// clearGameObjectFlag mirrors GameObject::RemoveFlag(GAMEOBJECT_FLAGS, flag)
+// (GameObject.cpp ApplyModFlag path): AND-NOTs the bits out of the live
+// dynamic state and broadcasts the flags field, the setGameObjectFlag twin.
+func (s *Server) clearGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		s.objectsMu.Unlock()
+		return
+	}
+	st.Flags &^= flag
+	flags := st.Flags
+	s.objectsMu.Unlock()
+	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+}
+
 // gameObjectHasFlag mirrors GameObject::HasFlag(GAMEOBJECT_FLAGS, flag):
 // the live dynamic flags field, false when the GO has no live state.
 func (s *Server) gameObjectHasFlag(mapID, instanceID uint32, guid uint64, flag uint32) bool {
