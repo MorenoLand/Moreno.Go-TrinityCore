@@ -3308,62 +3308,74 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// caster, the pet twin of the castCreatureSpellInternal arm
 	// (boss_ai.go): TARGET_UNIT_NEARBY_ENTRY (38) /
 	// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) replace the wire hit list
-	// with the single nearest entry-matched target, and a miss fails
+	// with the nearest entry-matched targets, and a miss on either fails
 	// the cast (Spell.cpp:1111) — return true, the pet path's
 	// silent-fizzle convention like the destFailed arm above. The
 	// packet's explicit target (target) stays the wire target,
-	// mirroring C++ m_targets. A spell carrying both 38 and 40 takes
-	// the 38 leg only, the session twin's precedence. Area hits from
+	// mirroring C++ m_targets. Both legs select independently (Spell.cpp:761-900): a spell
+	// carrying both 38 and 40 takes both picks, and a miss on either
+	// fails the cast (:1111). Area hits from
 	// other effects stay: C++ runs each effect's selection
 	// independently (Spell.cpp:761-900), so the nearby pick replaces
 	// only the wire slot, and the pick drops out of the area lists
-	// so no leg hits it twice. The pick retargets the wire legs
-	// (targetGUID); a 40 pick retargets them too — unit legs resolve
+	// so no leg hits it twice. The unit pick retargets the wire legs
+	// (targetGUID); a 40-only pick retargets them too — unit legs resolve
 	// via getCombatTarget and safely skip a GO guid
 	// (executePetSpellDamage no-ops on unresolvable GUIDs), so no
 	// unit leg lands on the gameobject.
 	if isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) {
-		var nearby uint64
-		var ok bool
+		var unitPick, goPick uint64
+		unitOK, goOK := true, true
 		if isEntryNearbySpell(spell) {
-			nearby, ok = s.server.creatureEntryNearbyTarget(ctx, motion, spell)
-		} else {
-			nearby, ok = s.server.creatureEntryNearbyGOTarget(ctx, motion, spell)
+			unitPick, unitOK = s.server.creatureEntryNearbyTarget(ctx, motion, spell)
 		}
-		if !ok {
+		if isGONearbyEntrySpell(spell) {
+			goPick, goOK = s.server.creatureEntryNearbyGOTarget(ctx, motion, spell)
+		}
+		if !unitOK || !goOK {
 			return true
 		}
-		targetGUID = nearby
+		targetGUID = unitPick
+		if !isEntryNearbySpell(spell) {
+			targetGUID = goPick
+		}
 		keptAreaHits := make([]*playerPos, 0, len(areaHits))
 		for _, areaHit := range areaHits {
-			if areaHit != nil && areaHit.GUID != nearby {
+			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick {
 				keptAreaHits = append(keptAreaHits, areaHit)
 			}
 		}
 		areaHits = keptAreaHits
 		keptAreaCreatureHits := make([]uint64, 0, len(areaCreatureHits))
 		for _, areaCreatureGUID := range areaCreatureHits {
-			if areaCreatureGUID != nearby {
+			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick {
 				keptAreaCreatureHits = append(keptAreaCreatureHits, areaCreatureGUID)
 			}
 		}
 		areaCreatureHits = keptAreaCreatureHits
 		keptAreaAllyHits := make([]*playerPos, 0, len(areaAllyHits))
 		for _, areaHit := range areaAllyHits {
-			if areaHit != nil && areaHit.GUID != nearby {
+			if areaHit != nil && areaHit.GUID != unitPick && areaHit.GUID != goPick {
 				keptAreaAllyHits = append(keptAreaAllyHits, areaHit)
 			}
 		}
 		areaAllyHits = keptAreaAllyHits
 		keptAreaAllyCreatureHits := make([]uint64, 0, len(areaAllyCreatureHits))
 		for _, areaCreatureGUID := range areaAllyCreatureHits {
-			if areaCreatureGUID != nearby {
+			if areaCreatureGUID != unitPick && areaCreatureGUID != goPick {
 				keptAreaAllyCreatureHits = append(keptAreaAllyCreatureHits, areaCreatureGUID)
 			}
 		}
 		areaAllyCreatureHits = keptAreaAllyCreatureHits
-		delete(areaAllyChecks, nearby)
-		hitTargets = []uint64{nearby}
+		delete(areaAllyChecks, unitPick)
+		delete(areaAllyChecks, goPick)
+		hitTargets = nil
+		if isEntryNearbySpell(spell) {
+			hitTargets = append(hitTargets, unitPick)
+		}
+		if isGONearbyEntrySpell(spell) {
+			hitTargets = append(hitTargets, goPick)
+		}
 		for _, areaHit := range areaHits {
 			hitTargets = append(hitTargets, areaHit.GUID)
 		}

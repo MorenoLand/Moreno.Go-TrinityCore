@@ -1104,7 +1104,7 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 		if eff.Effect == 27 && eff.ImplicitTargetA == 18 {
 			return true
 		}
-		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+		if isAreaEnemyTargetType(eff.ImplicitTargetA) || (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -1180,11 +1180,14 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 	}
 	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
-		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
+		areaTargetB := (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
@@ -9252,9 +9255,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	} else if entryNearbySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
 		// TARGET_UNIT_NEARBY_ENTRY (38) — the single nearest entry-matched
-		// unit becomes the target; no match fails the cast.
+		// unit becomes the target; no match fails the cast. A spell
+		// carrying both 38 and 40 selects both legs independently
+		// (Spell.cpp:761-900), and a miss on either fails the cast.
 		if nearby, ok := s.spellEntryNearbyTarget(ctx, spell, spellID); ok {
 			hitTargets = []uint64{nearby}
+			if goNearbyEntrySpell {
+				if goNearby, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
+					hitTargets = append(hitTargets, goNearby)
+				} else {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby gameobject target")
+					return
+				}
+			}
 		} else {
 			// Spell.cpp:1111: no target found ->
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -16665,12 +16679,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	nearbyMatched := isFriendlyNearbySpell(spell) || isEntryNearbySpell(spell) || isHostileNearbySpell(spell) || isGONearbyEntrySpell(spell)
 	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) {
 		var nearby uint64
+		var goPick uint64
+		hasGoPick := false
 		var ok bool
 		switch {
 		case isFriendlyNearbySpell(spell):
 			nearby, ok = s.spellFriendlyNearbyTarget(ctx, spell, spellTarget)
 		case isEntryNearbySpell(spell):
 			nearby, ok = s.spellEntryNearbyTarget(ctx, spell, spellID)
+			if ok && isGONearbyEntrySpell(spell) {
+				var goOK bool
+				goPick, goOK = s.spellEntryNearbyGOTarget(ctx, spell, spellID)
+				if goOK {
+					hasGoPick = true
+				} else {
+					ok = false
+				}
+			}
 		case isHostileNearbySpell(spell):
 			nearby, ok = s.spellHostileNearbyTarget(ctx, spell)
 		case isGONearbyEntrySpell(spell):
@@ -16683,6 +16708,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		targetGUID = nearby
 		hitTargets = []uint64{nearby}
+		if hasGoPick {
+			hitTargets = append(hitTargets, goPick)
+		}
 		nearbySelected = true
 	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs the

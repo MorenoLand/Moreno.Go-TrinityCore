@@ -57,7 +57,7 @@ func hasFriendlyAreaEffect(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) {
+		if isFriendlyAreaTargetType(eff.ImplicitTargetA) || (isFriendlyAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -147,7 +147,10 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		if eff.Effect == 0 {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			if !isFriendlyAreaTargetType(targetType) {
 				continue
 			}

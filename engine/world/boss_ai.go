@@ -1511,23 +1511,35 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		// the 46 destFailed arm above. The pick also becomes the chain
 		// anchor below (SelectImplicitNearbyTargets ends with
 		// SelectImplicitChainTargets on the picked target, Spell.cpp:1173).
-		// A spell carrying both 38 and 40 takes the 38 leg only, the
-		// session twin's precedence; the GO leg for dual spells is a
-		// residual. The packet's explicit target (spellTarget) stays the
+		// Both legs select independently (Spell.cpp:761-900: each effect's
+		// selection adds to its own list), so a spell carrying both 38
+		// and 40 takes both picks and a miss on either fails the cast
+		// (:1111). The unit pick drives the chain anchor below; a GO
+		// pick joins the hit list and takes no unit leg.
+		// The packet's explicit target (spellTarget) stays the
 		// wire target, mirroring C++ m_targets.
-		if isEntryNearbySpell(spellInfo) {
-			if nearby, ok := s.creatureEntryNearbyTarget(ctx, m, spellInfo); ok {
-				hitTargets = []uint64{nearby}
-				targetGUID = nearby
-			} else {
+		if isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) {
+			var unitPick, goPick uint64
+			unitOK, goOK := true, true
+			if isEntryNearbySpell(spellInfo) {
+				unitPick, unitOK = s.creatureEntryNearbyTarget(ctx, m, spellInfo)
+			}
+			if isGONearbyEntrySpell(spellInfo) {
+				goPick, goOK = s.creatureEntryNearbyGOTarget(ctx, m, spellInfo)
+			}
+			if !unitOK || !goOK {
 				return
 			}
-		} else if isGONearbyEntrySpell(spellInfo) {
-			if nearby, ok := s.creatureEntryNearbyGOTarget(ctx, m, spellInfo); ok {
-				hitTargets = []uint64{nearby}
-				targetGUID = nearby
-			} else {
-				return
+			hitTargets = nil
+			if isEntryNearbySpell(spellInfo) {
+				hitTargets = append(hitTargets, unitPick)
+				targetGUID = unitPick
+			}
+			if isGONearbyEntrySpell(spellInfo) {
+				hitTargets = append(hitTargets, goPick)
+				if !isEntryNearbySpell(spellInfo) {
+					targetGUID = goPick
+				}
 			}
 		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the

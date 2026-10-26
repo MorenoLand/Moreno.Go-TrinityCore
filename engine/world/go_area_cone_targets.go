@@ -32,6 +32,16 @@ func implicitTargetBlocksSecondSlot(target uint32) bool {
 	return false
 }
 
+// implicitTargetSecondSlotSkipped reports whether a second slot's
+// selection never runs because the first slot already consumed the
+// effect's processed slot (Spell.cpp:866-900): the first slot must
+// itself select in NEARBY/CONE/AREA, and the second slot must too —
+// a DEFAULT, CHANNEL, TRAJ or NYI second slot still runs even when
+// the first slot consumed the effect.
+func implicitTargetSecondSlotSkipped(first, second uint32) bool {
+	return implicitTargetBlocksSecondSlot(first) && implicitTargetBlocksSecondSlot(second)
+}
+
 // goAreaLeg is one effect's GO area/cone selection: its center, its own
 // CalcRadius and its own ImplicitTargetConditions list. C++ selects per
 // effect (Spell.cpp:1227/1176) and each selection adds its matches, so the

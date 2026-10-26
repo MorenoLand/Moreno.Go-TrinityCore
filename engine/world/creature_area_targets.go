@@ -45,11 +45,14 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 	}
 	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
-		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
+		areaTargetB := (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
@@ -298,11 +301,14 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	}
 	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
-		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
+		areaTargetB := (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
@@ -487,7 +493,10 @@ func (s *Server) creatureAIAreaAllyGeometry(motion *creatureMotion, spell wotlk.
 			continue
 		}
 		hasFriendly := false
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			if !isFriendlyAreaTargetType(targetType) {
 				continue
 			}

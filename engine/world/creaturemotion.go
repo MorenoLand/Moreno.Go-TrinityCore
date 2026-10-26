@@ -3152,17 +3152,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					return s.creatureEntryNearbyGOTarget(ctx, motion, spell)
 				}
-				for _, nearbyKind := range []struct {
-					isUnit bool
-					check  func(wotlk.Spell) bool
-				}{{true, isEntryNearbySpell}, {false, isGONearbyEntrySpell}} {
-					if !nearbyKind.check(inlineSpell) {
-						continue
-					}
-					nearby, ok := nearbyWire(inlineSpell, nearbyKind.isUnit)
-					if !ok {
-						s.rearmAISpell(motion, dueSpell, spellID, now)
-						return
+				// C++ selects each effect's nearby leg independently
+				// (Spell.cpp:761-900): a spell carrying both 38 and 40
+				// takes both picks, and a miss on either fails the cast
+				// (:1111). The unit pick drives the victim body below;
+				// a GO pick joins the hit list after it and takes no
+				// unit leg.
+				var unitPick, goPick uint64
+				unitOK, goOK := true, true
+				if isEntryNearbySpell(inlineSpell) {
+					unitPick, unitOK = nearbyWire(inlineSpell, true)
+				}
+				if isGONearbyEntrySpell(inlineSpell) {
+					goPick, goOK = nearbyWire(inlineSpell, false)
+				}
+				if !unitOK || !goOK {
+					s.rearmAISpell(motion, dueSpell, spellID, now)
+					return
+				}
+				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) {
+					nearby := goPick
+					if isEntryNearbySpell(inlineSpell) {
+						nearby = unitPick
 					}
 					var pickPlayer *playerPos
 					for i := range players {
@@ -3202,7 +3213,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						nearbyReplacesWireVictim = true
 					}
 					hitTargets = nearbyHitTargets(nearby)
-					break
+					if isEntryNearbySpell(inlineSpell) && isGONearbyEntrySpell(inlineSpell) {
+						hitTargets = append(hitTargets, goPick)
+					}
 				}
 			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on

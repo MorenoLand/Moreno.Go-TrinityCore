@@ -26,7 +26,7 @@ func isEntryAreaSpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if isEntryAreaTargetType(eff.ImplicitTargetA) || isEntryAreaTargetType(eff.ImplicitTargetB) {
+		if isEntryAreaTargetType(eff.ImplicitTargetA) || (isEntryAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
