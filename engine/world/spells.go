@@ -19598,7 +19598,15 @@ func (s *session) masterPoisonerKeepsDoses() bool {
 // reach the aura's stack count the aura is removed outright through the
 // existing removal paths; otherwise StackCount is decremented and the new
 // stack count goes out on the wire, mirroring the aura-update packet the
-// stack-merge paths send.
+// stack-merge paths send. A surviving decrement also runs the
+// Aura::SetStackAmount recalc (SpellAuras.cpp:1008): C++ re-runs
+// CalculateAmount, whose final term multiplies by the new stack count
+// (SpellAuraEffects.cpp:537), so the stored amounts rescale by
+// newCount/oldCount exactly as the dispel paths do — without it the
+// poison's periodic amount would keep ticking at the pre-Envenom stack
+// level. The player branches run the skill-bonus re-credit wrapper around
+// the rescale, the creature branch the plain rescale, mirroring the
+// dispelPlayerAuraCharge / dispelCreatureAuraCharge split.
 func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poison *activeAura, doses uint32) {
 	if s == nil || s.server == nil || poison == nil || poison.Stopped || doses == 0 {
 		return
@@ -19624,7 +19632,11 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			s.castMu.Unlock()
 			return
 		}
-		aura.StackCount -= uint8(doses)
+		oldCount := uint32(aura.StackCount)
+		s.refreshSkillBonusForAuraAmountChange(aura, func() {
+			aura.StackCount -= uint8(doses)
+			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+		})
 		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.StoredCasterLevel
 		maxDur, dur := auraWireDurationsForAura(s, aura)
 		s.castMu.Unlock()
@@ -19642,7 +19654,11 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			other.castMu.Unlock()
 			return
 		}
-		aura.StackCount -= uint8(doses)
+		oldCount := uint32(aura.StackCount)
+		other.refreshSkillBonusForAuraAmountChange(aura, func() {
+			aura.StackCount -= uint8(doses)
+			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+		})
 		stack, slot, effectMask, positive, casterGUID, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.CasterGUID, aura.StoredCasterLevel
 		maxDur, dur := auraWireDurationsForAura(other, aura)
 		other.castMu.Unlock()
@@ -19661,7 +19677,9 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 			s.server.auraMu.Unlock()
 			return
 		}
+		oldCount := uint32(aura.StackCount)
 		aura.StackCount -= uint8(doses)
+		rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
 		stack, slot, effectMask, positive, casterLevel := aura.StackCount, aura.Slot, aura.EffectMask, aura.Positive, aura.StoredCasterLevel
 		casterGUID := aura.CasterGUID
 		if casterGUID == 0 {
