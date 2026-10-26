@@ -459,6 +459,190 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	go s.runTotemLifecycle(def, totem)
 }
 
+// sessionNoSlotTotemEffects returns the spell's SPELL_EFFECT_SUMMON effects
+// that C++ routes through the TOTEM arm (SpellEffects.cpp:2284-2342) but
+// that the slotted summonTotem path does not cover: Title TOTEM, Control
+// WILD/ALLY/UNK, no Guardian flag (512), and a SummonProperties Slot
+// outside the C++ totem-slot range 1..4 (SharedDefines.h:3324-3334).
+// Slotted spells missing from totemDefinitions are NOT returned here:
+// C++ occupies the owner's summon slot and sends SMSG_TOTEM_CREATED for
+// them (Totem::InitStats, Totem.cpp:78-84), which is a missing-definitions
+// data gap, not a no-slot producer gap. Lightwell (Title 11) stays out
+// per the standing no-bridge note.
+func (s *session) sessionNoSlotTotemEffects(spell wotlk.Spell) []wotlk.SpellEffect {
+	if s == nil || s.server == nil || s.server.Data == nil || isTotemSpell(spell.ID) {
+		return nil
+	}
+	var out []wotlk.SpellEffect
+	for _, eff := range spell.Effects {
+		if eff.Effect != spellEffectSummon || eff.MiscValue == 0 {
+			continue
+		}
+		props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB))
+		if err != nil || !found {
+			continue
+		}
+		switch props.Control {
+		case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		default:
+			continue
+		}
+		if props.Flags&512 != 0 || props.Title != summonTitleTotem {
+			continue
+		}
+		if props.Slot >= 1 && props.Slot <= 4 {
+			continue
+		}
+		out = append(out, eff)
+	}
+	return out
+}
+
+// summonSessionNoSlotTotem mirrors the TOTEM arm of
+// Spell::EffectSummonType (SpellEffects.cpp:2319-2342) for a player caster
+// whose spell carries no C++ totem slot (e.g. a death knight's Anti-Magic
+// Zone, properties 647): Map::SummonCreature still creates a Totem object
+// (Object.cpp:1917-1939) even though Totem::InitStats sends no
+// SMSG_TOTEM_CREATED and occupies no summon slot for it (Totem.cpp:78-84,
+// slot-range gate). So, unlike summonTotem, this producer touches neither
+// TotemSlots nor activeTotems: the motion is the totem, the gate set
+// (registerCreatureTotemGUID) is its only registry, and a second cast
+// does not destroy the first. Minion::InitStats
+// (TemporarySummon.cpp:350-356) stamps creator + owner faction; the level
+// is the owner's (Totem.cpp:99); the health is the effect's damage value
+// when positive (SpellEffects.cpp:2335-2339), else the slotted path's
+// flat 100. A zero/unknown duration means C++ unsummons on the totem's
+// first Update (Totem.cpp:44-56), so only the summon log is sent (the
+// InitSummon passive cast has no model on this path). Positive durations
+// fold SPELLMOD_DURATION (SpellEffects.cpp:2214-2215) and arm the expiry
+// in expireSessionNoSlotTotem.
+func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	entry := uint32(eff.MiscValue)
+	if entry == 0 {
+		return
+	}
+	durationMs := int32(0)
+	if spell.DurationIndex > 0 && s.server.Data != nil {
+		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && dur > 0 {
+			durationMs = dur
+		}
+	}
+	if modded := s.applySpellMod(spell, spellModDuration, durationMs); modded > 0 {
+		durationMs = modded
+	}
+	nextLow := s.server.nextDynamicCreatureLowGUID()
+	totemGUID := creatureWorldGUID(nextLow, entry)
+	if durationMs <= 0 {
+		s.sendSummonObjectLog(spell.ID, spellEffectSummon, totemGUID)
+		return
+	}
+	totemX, totemY, totemZ := s.player.X, s.player.Y, s.player.Z
+	if targetType, radiusIndex, found := totemSpellDestTarget(spell); found {
+		combatReach := s.player.CombatReach
+		if combatReach <= 0 {
+			combatReach = 1.5
+		}
+		totemX, totemY, totemZ = resolveCasterDestPosition(s.server.Data, targetType, radiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, func(r float32) float32 {
+			return float32(s.applySpellModFloat(spell, spellModRadius, float64(r)))
+		})
+	}
+	totemHealth := uint32(100)
+	if v := eff.CalcValueForLevel(spell, uint32(s.player.Level)); v > 0 {
+		totemHealth = uint32(v)
+	}
+	totemFaction := s.totemTemplateFaction(ctx, entry)
+	s.server.motionMu.Lock()
+	s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
+		GUID:        totemGUID,
+		Entry:       entry,
+		Map:         s.player.Map,
+		InstanceID:  s.player.InstanceID,
+		HomeX:       totemX,
+		HomeY:       totemY,
+		HomeZ:       totemZ,
+		HomeO:       s.player.Orientation,
+		X:           totemX,
+		Y:           totemY,
+		Z:           totemZ,
+		Orientation: s.player.Orientation,
+		Health:      totemHealth,
+		MaxHealth:   totemHealth,
+		Level:       maxUint32(uint32(s.player.Level), 1),
+		Faction:     totemFaction,
+		OwnerGUID:   s.playerGUID,
+	}
+	s.server.motionMu.Unlock()
+	s.server.registerCreatureTotemGUID(totemGUID)
+	s.sendSummonObjectLog(spell.ID, spellEffectSummon, totemGUID)
+	// Totem::InitStats (Totem.cpp:72-105) materializes the totem as a
+	// visible creature via Creature::AddToWorld; the Go twin sends the
+	// create block to the owner and nearby players (summonTotem
+	// pattern). Slot 255 maps to no C++ totem slot in
+	// totemDisplayForRace, so the race-model lookup is skipped and the
+	// template model stands — matching GetModelForTotem's miss path for
+	// a slot outside the totem range (Totem.cpp:88-92).
+	spawn := creatureSpawn{
+		GUID:           nextLow,
+		RawGUID:        totemGUID,
+		Entry:          entry,
+		Map:            s.player.Map,
+		X:              totemX,
+		Y:              totemY,
+		Z:              totemZ,
+		Orientation:    s.player.Orientation,
+		Model:          s.totemDisplayForRace(ctx, 255, entry),
+		Faction:        s.totemTemplateFaction(ctx, entry),
+		Level:          maxUint32(uint32(s.player.Level), 1),
+		Health:         totemHealth,
+		MaxHealth:      totemHealth,
+		CreatedBySpell: spell.ID,
+	}
+	stats := s.server.loadCreatureStats(ctx, entry)
+	spawn.UnitFlags = stats.UnitFlags
+	spawn.BoundingRadius = stats.BoundingRadius
+	spawn.CombatReach = stats.CombatReach
+	spawn.WalkSpeed, spawn.RunSpeed = s.totemTemplateSpeeds(ctx, entry)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
+	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+	}
+	srv, mapID, instanceID := s.server, s.player.Map, s.player.InstanceID
+	go func() {
+		time.Sleep(time.Duration(durationMs) * time.Millisecond)
+		srv.expireSessionNoSlotTotem(mapID, instanceID, totemGUID)
+	}()
+}
+
+// expireSessionNoSlotTotem is the Totem::UnSummon twin (Totem.cpp:122-162)
+// for no-slot player totems: the motion is removed, the gate-set entry
+// dropped, the totem's creature auras cleared, and SMSG_DESTROY_OBJECT
+// broadcast — mirroring expireTempSummonGuardian's teardown order
+// (motion delete, then gate unregister). Server-side only, so it runs
+// even after the owner's session is gone.
+func (s *Server) expireSessionNoSlotTotem(mapID, instanceID uint32, guid uint64) {
+	if s == nil || guid == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	if s.findCreatureMotionLocked(mapID, instanceID, guid) == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	delete(s.motionMapLocked(mapID, instanceID), guid)
+	s.motionMu.Unlock()
+	s.unregisterCreatureTotemGUID(guid)
+	s.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid})
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(guid)
+	destroyBuf.WriteU8(0)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+}
+
 func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *activeTotem) {
 	if s == nil || s.player == nil || totem == nil {
 		return
@@ -1214,10 +1398,12 @@ func (srv *Server) isTotemGUID(guid uint64) bool {
 	return false
 }
 
-// registerCreatureTotemGUID records a creature-cast TOTEM-arm summon so
-// the isTotemGUID gates cover it; unregistered on timed expiry
-// (expireTempSummonGuardian). Guarded by totemMu, the totem lifecycle
-// mutex (threat.go lock-order note: totemMu before motionMu).
+// registerCreatureTotemGUID records a creature-cast TOTEM-arm summon (or
+// a player-cast no-slot totem, summonSessionNoSlotTotem) so the
+// isTotemGUID gates cover it; unregistered on timed expiry
+// (expireTempSummonGuardian, expireSessionNoSlotTotem). Guarded by
+// totemMu, the totem lifecycle mutex (threat.go lock-order note: totemMu
+// before motionMu).
 func (srv *Server) registerCreatureTotemGUID(guid uint64) {
 	if srv == nil || guid == 0 {
 		return

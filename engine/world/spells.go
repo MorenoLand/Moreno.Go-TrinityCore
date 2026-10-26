@@ -11303,7 +11303,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (SpellEffects.cpp:2202-2208). The SUMMON_TYPE_TOTEM/LIGHTWELL
 				// arm summons via Map::SummonCreature (SpellEffects.cpp:2319-2342);
 				// its Go twin is summonTotem, already run for totem spells in the
-				// post-loop — routing those through handleSummonPet would mint a
+				// post-loop (plus summonSessionNoSlotTotem for TOTEM-title
+				// spells outside totemDefinitions) — routing those through handleSummonPet would mint a
 				// permanent character_pet row (and a bogus PetGUID) on every totem
 				// cast. Lightwell has no Go twin and stays a documented no-bridge;
 				// every other title takes the guardian/pet path.
@@ -12129,6 +12130,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.summonTotem(effCtx, spellID)
 		} else if spellID == 36936 { // Totemic Recall
 			s.destroyAllTotems()
+		} else if effs := s.sessionNoSlotTotemEffects(spell); len(effs) > 0 {
+			for _, eff := range effs {
+				s.summonSessionNoSlotTotem(effCtx, spell, eff)
+			}
 		}
 		if primaryLive && !interruptHandled && isInterruptSpell(spellID) {
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
