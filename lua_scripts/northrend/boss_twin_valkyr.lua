@@ -104,8 +104,11 @@
 -- instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL) + HandleRemoveAuras
 -- + summons.DespawnAll + DespawnOrUnsummon + DoUseDoorOrButton(
 -- DATA_MAIN_GATE): the RemoveAllAuras + DespawnOrUnsummon arms are PORTED
--- on event 24 below (both twins); instance SetBossState / door legs have
--- no bridges — fjola's EnterEvadeMode adds another DoUseDoorOrButton leg.
+-- on event 24 below (both twins); the instance SetBossState leg has no
+-- bridge, and the door legs ride the missing JustReachedHome /
+-- EnterEvadeMode events (no evade/home event — the door bridge itself,
+-- FindNearestGameObject + SetGoState, exists) — fjola's EnterEvadeMode
+-- adds another DoUseDoorOrButton leg.
 -- EVENT_SPECIAL_ABILITY (fjola only, 45s) — the shuffled stage
 -- machine: cross-AI sister->AI()->DoAction(ACTION_VORTEX /
 -- ACTION_PACT) or own DoAction for light stages (no cross-AI DoAction

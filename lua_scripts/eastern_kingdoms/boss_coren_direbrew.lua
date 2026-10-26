@@ -72,7 +72,9 @@
 -- instance-GUID latch — no faction/instance bridges); npc_direbrew_antagonist
 -- (DoAction Talk/faction arms — no bridges).
 -- Unmodeled: go_direbrew_mole_machine (GameObjectAI Reset -> UseDoorOrButton
--- + 50313 emerge + linked-trap GO activation — no GO-script bridge).
+-- + 50313 emerge + linked-trap GO activation — no GO Reset/Spawn event
+-- (gossip/use bridges exist, but the machine fires from Reset, not use);
+-- the GO surface also lacks CastSpell + GetLinkedTrap).
 -- Unmodeled: the six SpellScripts/AuraScripts (47691 target picker, 47370 send
 -- mug picker, 47344 request second mug, 47369 send mug control aura, 50278
 -- barreled control aura, 47407 disarm) — no SpellScript/AuraScript bridges

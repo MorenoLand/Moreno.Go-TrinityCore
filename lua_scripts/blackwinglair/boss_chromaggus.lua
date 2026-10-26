@@ -42,12 +42,14 @@
 -- boss admission via the luaBossAI shim (BossAI::_Reset/
 -- JustEngagedWith and the DATA_CHROMAGGUS bookkeeping arms skipped);
 -- the go_chromaggus_lever GameObjectScript (door open + boss-state
--- set + JustEngagedWith on lever gossip) is not registered: the GO
--- gossip bridge (RegisterGameObjectGossipEvent) + SetGoState exist, but
--- the lever's instance SetBossState leg has no instance bridge and the
--- fight can't be meaningfully lever-gated (broodlord suppression-device
--- convention) — the fight starts on pull instead of on the lever
--- (2026-10-23 re-key of the stale "no gameobject bridge" claim).
+-- set + JustEngagedWith on lever gossip) is PORTED below
+-- (RegisterGameObjectGossipEvent, kirtonos-brazier precedent): the
+-- instance SetBossState leg has no instance bridge, so the C++
+-- DONE/IN_PROGRESS gate is approximated by the boss-alive + no-victim
+-- gate (nil boss = dead/absent; live victim = fight already in
+-- progress) — engage + door legs fire only on a fresh pull; the
+-- lever's own SetFlag / SetGoState legs are unconditional in C++
+-- and stay unconditional here (2026-10-26 GO-interaction strip).
 
 local ENTRY_CHROMAGGUS = 14020
 
@@ -301,3 +303,35 @@ RegisterCreatureEvent(ENTRY_CHROMAGGUS, 2, chromaggusLeaveCombat)
 RegisterCreatureEvent(ENTRY_CHROMAGGUS, 4, chromaggusDied)
 RegisterCreatureEvent(ENTRY_CHROMAGGUS, 9, chromaggusDamageTaken)
 RegisterCreatureEvent(ENTRY_CHROMAGGUS, 23, chromaggusReset)
+
+-- C++ go_chromaggus_lever::OnGossipHello
+-- (boss_chromaggus.cpp:300-335): inside the boss-state gate
+-- (not DONE, not IN_PROGRESS): SetBossState(IN_PROGRESS) — no
+-- instance bridge, approximated by the no-victim gate below —
+-- GetCreature(DATA_CHROMAGGUS) -> JustEngagedWith(player), then
+-- HandleGameObject(true, door) = GO_STATE_ACTIVE 0
+-- (InstanceScript.cpp:484); outside the gate, unconditionally:
+-- SetFlag(GAMEOBJECT_FLAGS, NOT_SELECTABLE | IN_USE) + SetGoState
+-- (GO_STATE_ACTIVE). C++ returns true (handled) == Lua true.
+local GO_CHROMAGGUS_LEVER = 179148 -- blackwing_lair.h:72
+local GO_CHROMAGGUS_DOOR = 179116 -- blackwing_lair.h:73
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_FLAG_IN_USE = 1 -- SharedDefines.h:1637
+local GO_STATE_ACTIVE = 0 -- netherspite precedent: READY 1, ACTIVE 0
+
+local function onChromaggusLeverGossip(_, player, go)
+    local boss = go:FindNearestCreature(ENTRY_CHROMAGGUS, 100)
+    if boss and not boss:GetVictim() then
+        boss:EngageWithTarget(player)
+        local door = boss:FindNearestGameObject(GO_CHROMAGGUS_DOOR, 100)
+        if door then
+            door:SetGoState(GO_STATE_ACTIVE)
+        end
+    end
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE + GO_FLAG_IN_USE)
+    go:SetGoState(GO_STATE_ACTIVE)
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_CHROMAGGUS_LEVER, 1, onChromaggusLeverGossip)

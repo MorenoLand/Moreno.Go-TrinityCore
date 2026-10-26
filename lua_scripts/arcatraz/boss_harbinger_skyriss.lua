@@ -104,11 +104,12 @@
 -- shim (instance_arcatraz.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_HARBINGER_
 -- SKYRISS = 3 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); no game-object bridge — the intro phase-1
--- HandleGameObject(DATA_WARDENS_SHIELD, true) arm unmodeled;
+-- skipped); intro phase-1/2 HandleGameObject(DATA_WARDENS_SHIELD,
+-- true/false) arms PORTED in introTick (boss-anchored
+-- FindNearestGameObject sweep, entry 184802; 2026-10-26
+-- GO-interaction strip);
 -- no cross-creature bridge — the intro phase-2 mellic->
--- setDeathState(JUST_DIED)/SetHealth(0) kill and the phase-1
--- HandleGameObject(DATA_WARDENS_SHIELD, false) arm unmodeled
+-- setDeathState(JUST_DIED)/SetHealth(0) kill stays out
 -- (instance GUID data); the C++ Reset() SetImmuneToAll(!Intro)
 -- arm and the intro phase-3 SetImmuneToAll(false) arm are PORTED
 -- via the bridged unit-flags surface (see resetImmuneFlags); no
@@ -158,6 +159,9 @@ local SAY_DEATH = 6
 
 local ENTRY_SKYRISS = 20912
 local ENTRY_ALPHA_POD_TARGET = 21436
+local GO_WARDENS_SHIELD = 184802 -- arcatraz.h:65
+local GO_STATE_ACTIVE = 0 -- netherspite precedent: READY 1, ACTIVE 0
+local GO_STATE_READY = 1
 
 local INTRO_PHASE_1 = 1
 local INTRO_PHASE_2 = 2
@@ -227,16 +231,32 @@ local function introTick(creature, guid)
         return
     end
 
-    -- Intro machine in C++ arm order — the bridgeable Talk arms
-    -- and the phase-3 SetImmuneToAll(false) arm (see resetImmuneFlags)
-    -- are modeled; the game-object / cross-creature arms are
-    -- instance- or bridge-blocked, see deviations.
+    -- Intro machine in C++ arm order — the bridgeable Talk arms,
+    -- the phase-1/2 wardens-shield GO arms, and the phase-3
+    -- SetImmuneToAll(false) arm (see resetImmuneFlags) are modeled;
+    -- the mellic cross-creature kill arm is bridge-blocked,
+    -- see deviations.
     if st.phase == INTRO_PHASE_1 then
         creature:Talk(SAY_INTRO)
+        -- C++: instance->HandleGameObject(DATA_WARDENS_SHIELD, true)
+        -- = GO_STATE_ACTIVE 0 (InstanceScript.cpp:484); entry
+        -- GO_WARDENS_SHIELD 184802 via boss-anchored sweep
+        -- (mograine precedent, room-scale 100y).
+        local shield = creature:FindNearestGameObject(GO_WARDENS_SHIELD, 100)
+        if shield then
+            shield:SetGoState(GO_STATE_ACTIVE)
+        end
         st.phase = INTRO_PHASE_2
         st.timer = 25000
     elseif st.phase == INTRO_PHASE_2 then
         creature:Talk(SAY_AGGRO)
+        -- C++: instance->HandleGameObject(DATA_WARDENS_SHIELD, false)
+        -- = GO_STATE_READY 1; the mellic kill leg (setDeathState /
+        -- SetHealth(0)) stays out — no cross-creature kill bridge.
+        local shield = creature:FindNearestGameObject(GO_WARDENS_SHIELD, 100)
+        if shield then
+            shield:SetGoState(GO_STATE_READY)
+        end
         st.phase = INTRO_PHASE_3
         st.timer = 3000
     elseif st.phase == INTRO_PHASE_3 then
