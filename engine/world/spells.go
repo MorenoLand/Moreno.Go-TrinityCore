@@ -12795,17 +12795,12 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
 		amount = uint32(10 + int(s.player.Level)*2)
 	}
-	// Spell power bonus for the dynobj's periodic-damage and periodic-heal
-	// auras. C++ runs SpellDamageBonusDone / SpellHealingBonusDone per tick
-	// for DYNOBJ_AURA_TYPE auras (SpellAuraEffects.cpp:5145-5146 and
-	// 5373-5376, never baked at apply); Go bakes it at apply like the
-	// unit-aura path in auraEffectParams — the only divergence is a
-	// mid-duration spell-power change, which no Go path re-evaluates.
-	// Without this the dynobj DoT and HoT carried no done leg at all.
-	if s.player != nil && s.player.SpellPower > 0 && periodMs > 0 &&
-		(auraEffect.Aura == 3 || auraEffect.Aura == 53 || auraEffect.Aura == 8) {
-		amount += uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
-	}
+	// DYNOBJ_AURA_TYPE auras take no done leg at apply: AuraEffect::
+	// CalculateAmount runs SpellDamageBonusDone / SpellHealingBonusDone
+	// only for UNIT_AURA_TYPE (SpellAuraEffects.cpp:506-518), and the
+	// dynobj tick re-runs the leg per tick with live caster bonuses +
+	// stack (SpellAuraEffects.cpp:5145-5146, 5383-5384). The periodic
+	// tick paths run that leg, so spawn stores the raw base amount.
 	schoolMask := uint8(spell.SchoolMask)
 	if schoolMask == 0 {
 		schoolMask = 1
@@ -14950,6 +14945,15 @@ func periodicTickEffectIndex(spell wotlk.Spell, auraType uint32) int {
 		}
 	}
 	return -1
+}
+
+// periodicTickStack mirrors Aura::GetStackAmount for a tick: a fresh aura
+// carries StackCount 0, which the stacking merge treats as 1.
+func periodicTickStack(aura *activeAura) uint32 {
+	if aura == nil || aura.StackCount == 0 {
+		return 1
+	}
+	return uint32(aura.StackCount)
 }
 
 // periodicTickEffectIsArea mirrors the area gate of the periodic damage
@@ -27500,8 +27504,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// SpellAuraEffects.cpp:5136-5144 — Black Arrow (Warlock family,
 		// SpellFamilyFlags[1] & 0x4) ticks for 5x on targets with
 		// AURA_STATE_HEALTHLESS_20_PERCENT. Gated on PERIODIC_DAMAGE only
-		// like C++; Black Arrow is never a dynobj aura, so the done leg
-		// (baked into the stored amount at spawn) ordering is moot.
+		// like C++; Black Arrow is never a dynobj aura, so the dynobj done
+		// leg below never fires for it.
 		if aura.AuraType == 3 && tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock &&
 			tickSpell.SpellFamilyFlags[1]&0x4 != 0 &&
 			ts.unitAuraStateMask()&(1<<(auraStateHealthless20Pct-1)) != 0 {
@@ -27510,6 +27514,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		var tickCaster *session
 		if ts.server != nil {
 			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		// SpellAuraEffects.cpp:5145-5146 — DYNOBJ_AURA_TYPE ticks re-run
+		// SpellDamageBonusDone with live caster bonuses + stack; unit-aura
+		// DoTs baked it at apply (CalculateAmount :506-518) and skip it.
+		// Aura 89 takes the percent conversion instead (no done leg).
+		if aura.PersistentAreaAura && aura.AuraType == 3 && tickKnown && tickCaster != nil {
+			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true)
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
 		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
@@ -27768,16 +27779,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// DYNOBJ_AURA_TYPE — unit-aura HoTs take the done leg once, baked
 		// into the stored amount at apply (AuraEffect::CalculateAmount
 		// :506-518; Go: the auraEffectParams tickBonus bake, and
-		// petPeriodicApplyDoneLegs for pet casters). Re-running it here
-		// double-counted the spellpower flat, and wrongly gave aura-20 a
-		// done leg C++ never applies (20 is in neither the apply switch
-		// nor the tick arm). Persistent-area auras likewise bake at spawn
-		// (spawnPersistentAreaAura), so no per-tick done leg runs on this
-		// path; the taken leg below is the per-tick arm.
+		// petPeriodicApplyDoneLegs for pet casters), so re-running it for
+		// them here would double-count the spellpower flat. Aura-20 takes
+		// no done leg (20 is in neither the apply switch nor the tick
+		// arm). Dynobj HoTs run the leg below, on the stored amount.
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, Nourish,
 		// MOD_HOT_PCT and MOD_HEALING_RECEIVED run on the tick before the
 		// crit roll — the earlier Go path healed the raw aura amount.
+		if aura.PersistentAreaAura && aura.AuraType == 8 && healKnown && healCaster != nil {
+			heal = healCaster.spellHealingBonusDone(healSpell, heal, ts, periodicTickEffectIndex(healSpell, 8), true, periodicTickStack(aura))
+		}
 		if healCaster != nil {
 			heal = healCaster.healingTakenBonus(ts, aura.CasterGUID, aura.SpellID, heal, true)
 		} else {
@@ -28058,9 +28070,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->
-		// absorb/resist funnel as damage ticks; the dynobj done leg is already
-		// baked into AuraAmount at spawn like the damage path (see the dynobj
-		// comment at the persistent-area-aura spawn). The persistent-area-aura
+		// absorb/resist funnel as damage ticks; the dynobj done leg runs
+		// per tick below, like the damage path. The persistent-area-aura
 		// SpellHitResult gate (5244-5246) stays unbridged — Go models no miss
 		// roll on dynobj ticks, consistent with case 3.
 		leechEffIndex := 0
@@ -28075,6 +28086,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		var tickCaster *session
 		if ts.server != nil {
 			tickCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+		}
+		// SpellAuraEffects.cpp:5254-5255 — the leech damage side re-runs
+		// SpellDamageBonusDone per tick for DYNOBJ_AURA_TYPE auras, like
+		// the damage tick; unit-aura leeches baked it at apply.
+		if aura.PersistentAreaAura && tickKnown && tickCaster != nil {
+			dmg = tickCaster.spellDamageBonusDone(context.Background(), tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true)
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
 		// tickAttackerLevel (Unit.cpp:1693/1813): the armor/resist legs key on
@@ -29250,8 +29267,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SpellAuraEffects.cpp:5136-5144 — Black Arrow (Warlock family,
 		// SpellFamilyFlags[1] & 0x4) ticks for 5x on targets with
 		// AURA_STATE_HEALTHLESS_20_PERCENT. Gated on PERIODIC_DAMAGE only
-		// like C++; Black Arrow is never a dynobj aura, so the done leg
-		// (baked into the stored amount at spawn) ordering is moot.
+		// like C++; Black Arrow is never a dynobj aura, so the dynobj done
+		// leg below never fires for it.
 		if aura.AuraType == 3 && tickKnown && tickSpell.SpellFamilyName == spellFamilyWarlock &&
 			tickSpell.SpellFamilyFlags[1]&0x4 != 0 &&
 			s.creatureAuraStateMask(key, target)&(1<<(auraStateHealthless20Pct-1)) != 0 {
@@ -29262,6 +29279,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
 			if tickCaster == nil {
 				tickCaster = s
+			}
+		}
+		// SpellAuraEffects.cpp:5145-5146 — same dynobj per-tick done leg as
+		// the player path; the tickCaster=s fallback above must not feed
+		// it (an unresolved caster carries no live bonuses to re-run).
+		if aura.PersistentAreaAura && aura.AuraType == 3 && tickKnown && s.server != nil {
+			if doneCaster := s.server.findSessionByGUID(aura.CasterGUID); doneCaster != nil {
+				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, periodicTickEffectIndex(tickSpell, 3), true)
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
@@ -29570,14 +29595,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// per-tick SpellHealingBonusDone (DOT) re-run at :5383 is gated on
 		// DYNOBJ_AURA_TYPE — unit-aura HoTs take the done leg once, baked
 		// into the stored amount at apply (AuraEffect::CalculateAmount
-		// :506-518), on creature victims too. Re-running it here
-		// double-counted the spellpower flat, and wrongly gave aura-20 a
-		// done leg C++ never applies. The taken leg below is the per-tick
-		// arm.
+		// :506-518), on creature victims too, so re-running it for them
+		// here would double-count the spellpower flat. Aura-20 takes no
+		// done leg in C++. Dynobj HoTs run the leg below.
 		// Unit::SpellHealingBonusTaken with DOT type (Unit.cpp:7714-7759,
 		// called at SpellAuraEffects.cpp:5386): MOD_HEALING_PCT, the
 		// Nourish 1.2x leg, MOD_HOT_PCT and MOD_HEALING_RECEIVED run on
 		// the tick before the crit roll.
+		if aura.PersistentAreaAura && aura.AuraType == 8 && tickKnown && tickCaster != nil {
+			heal = tickCaster.spellHealingBonusDoneCreatureVictim(ctx, tickSpell, heal, key, aura.TargetGUID, target.Health, target.MaxHealth, periodicTickEffectIndex(tickSpell, 8), true, periodicTickStack(aura))
+		}
 		heal = creatureHealingTakenBonus(s.server, key, aura.CasterGUID, tickSpell, tickKnown, heal, true)
 		// Tick crit roll (roll_chance_f(GetCritChanceFor),
 		// SpellAuraEffects.cpp:5388-5390). Creature casters have no Go
@@ -29967,8 +29994,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 		// SpellAuraEffects.cpp:5232-5321 (HandlePeriodicHealthLeechAuraTick):
 		// the leech damage side runs the same taken->crit->armor->resilience->
-		// absorb/resist funnel as damage ticks; the dynobj done leg is already
-		// baked into AuraAmount at spawn like the damage path.
+		// absorb/resist funnel as damage ticks; the dynobj done leg runs
+		// per tick below, like the damage path.
 		leechEffIndex := 0
 		if tickKnown {
 			for i, eff := range tickSpell.Effects {
@@ -29983,6 +30010,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			tickCaster = s.server.findSessionByGUID(aura.CasterGUID)
 			if tickCaster == nil {
 				tickCaster = s
+			}
+		}
+		// SpellAuraEffects.cpp:5254-5255 — same dynobj per-tick done leg as
+		// the damage tick; the tickCaster=s fallback above must not feed
+		// it (an unresolved caster carries no live bonuses to re-run).
+		if aura.PersistentAreaAura && tickKnown && s.server != nil {
+			if doneCaster := s.server.findSessionByGUID(aura.CasterGUID); doneCaster != nil {
+				dmg = doneCaster.spellDamageBonusDone(ctx, tickSpell, tickKnown, dmg, aura.TargetGUID, leechEffIndex, true)
 			}
 		}
 		fixedDamage := tickKnown && tickSpell.AttributesEx4&spellAttr4FixedDamage != 0
