@@ -393,10 +393,36 @@ func (s *session) totemCreatureInCombatWithOwner(m *creatureMotion) bool {
 // 0, and visible to one whose detect is nonzero — the same seesHidden
 // convention as the nearby-creature update filter (creatures.go:106).
 // Stealth/invisibility auras on creature victims are NOT covered here:
-// they ride totemCanDetectCreature in the SingleTarget legs; the
-// sentry ping still uses only this GM arm for creature victims.
+// they ride totemCanDetectCreature, which the SingleTarget legs
+// and the sentry ping both apply alongside this GM arm.
 func (s *session) totemCreatureHiddenFromOwner(m *creatureMotion) bool {
 	return m != nil && m.ScriptHidden && (s == nil || s.gmVisibilityDetect == 0)
+}
+
+// totemCreaturePhaseOverlapsOwner is the CanNeverSee phase arm of
+// WorldObject::CanSeeOrDetect (Object.cpp:1659-1662, InSamePhase,
+// Object.h:324-325) for a totem's creature victim: the owner's phase
+// mask must intersect the creature's. The creature's mask is the
+// runtime 261-phase override while one is active (SpellAuraEffects
+// .cpp:1581-1632, replacing the static mask), else motion.PhaseMask
+// (the sweep's c.phaseMask row, summoner phase for temp summons and
+// pets), else PHASEMASK_NORMAL (1) for motions whose spawn row was
+// never read. A GM owner mask is all-bits, so no change for GMs.
+func (s *Server) totemCreaturePhaseOverlapsOwner(m *creatureMotion, ownerPhase uint32) bool {
+	if s == nil || m == nil {
+		return true
+	}
+	s.auraMu.Lock()
+	mask, ok := s.creaturePhaseOverride[creatureAuraKeyForMotion(m)]
+	s.auraMu.Unlock()
+	if ok && mask != 0 {
+		return mask&ownerPhase != 0
+	}
+	phase := m.PhaseMask
+	if phase == 0 {
+		phase = 1
+	}
+	return phase&ownerPhase != 0
 }
 
 // totemCreatureAuraMiscSums folds one aura type's live amounts on a
@@ -1250,9 +1276,8 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// gate on phase overlap with the owner (CanNeverSee,
 			// Object.cpp:1659-1662) and on the reciprocal
 			// invisibility arm; creature victims gate on the
-			// owner-seer CanDetect above. Creature phase stays
-			// unmodeled (no phase field on the motion; packet-time
-			// creature phase resolves from DB rows, not the motion).
+			// owner-seer CanDetect above, plus the motion.PhaseMask
+			// overlap (totemCreaturePhaseOverlapsOwner).
 			owner := totemOwnerPos(s)
 			maxRange := float64(def.Radius)
 			if s.server != nil && s.server.Data != nil {
@@ -1279,7 +1304,8 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 					distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z) <= maxRange &&
 					s.server.totemEnemyCreatureValid(m, owner) &&
 					!s.totemCreatureHiddenFromOwner(m) &&
-					s.totemCanDetectCreature(m) {
+					s.totemCanDetectCreature(m) &&
+					s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 					victimGUID = m.GUID
 				} else if other := s.server.findSessionByGUID(remembered); other != nil && other.player != nil &&
 					other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
@@ -1301,7 +1327,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				// before, so enemy players in range were never hit.
 				minDist := float64(math.MaxFloat64)
 				for _, m := range s.server.totemCreatureTargets(totem, maxRange) {
-					if !s.server.totemCreatureTargetable(m) || s.totemCreatureHiddenFromOwner(m) || !s.totemCanDetectCreature(m) {
+					if !s.server.totemCreatureTargetable(m) || s.totemCreatureHiddenFromOwner(m) || !s.totemCanDetectCreature(m) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 						continue
 					}
 					if !s.server.isHostileFaction(m.Faction, owner) && !s.totemCreatureInCombatWithOwner(m) {
@@ -1621,11 +1647,12 @@ func totemOwnerPos(s *session) playerPos {
 // combatDistance), the gray-aggro config, line of sight, and the
 // CanSeeOrDetect stealth/invisibility legs for player victims via the
 // owner seer (Object.cpp:1660-1675: a totem's detection uses its
-// charmer/owner). Residual: the expansion-max-level arm (unreachable
-// for owner-level totems per the prior tick), creature-victim
-// stealth/invisibility (no creature-target CanDetect helper), and the
-// +m_CombatDistance add-on to the CanStartAttack radius. The totem's
-// combat reach stands in at the 1.5yd default.
+// charmer/owner), and the CanSeeOrDetect phase arm (CanNeverSee,
+// Object.cpp:1659-1662) for both legs. Residual: the
+// expansion-max-level arm (unreachable for owner-level totems per
+// the prior tick) and the +m_CombatDistance add-on to the
+// CanStartAttack radius. The totem's combat reach stands in at
+// the 1.5yd default.
 // The ping fires once per newly acquired hostile (the AttackStart-per-
 // acquisition analog), so the victim GUID is remembered until the totem
 // sees no hostile again. The creature leg is the totemEnemyCreatureValid
@@ -1643,6 +1670,7 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 		return
 	}
 	owner := totemOwnerPos(s)
+	ownerPhase := s.currentPlayerPhaseMask()
 	aggroRate := s.server.Config.RateCreatureAggro
 	aggroDist := func(victimLevel int32, detectBonus float64) float64 {
 		if aggroRate == 0 {
@@ -1673,6 +1701,9 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 		if !s.server.totemEnemyCreatureValid(m, owner) {
 			continue
 		}
+		if s.totemCreatureHiddenFromOwner(m) || !s.totemCanDetectCreature(m) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
+			continue
+		}
 		d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
 		detectBonus := observerDetect + float64(s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(m), spellAuraModDetectedRange))
 		if d > aggroDist(int32(m.Level), detectBonus) || d >= minDist {
@@ -1693,7 +1724,9 @@ func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 	s.server.sessionsMu.RLock()
 	for other := range s.server.sessions {
 		if other == nil || other.player == nil || other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
-			!s.totemEnemySessionHostile(other) {
+			!s.totemEnemySessionHostile(other) ||
+			ownerPhase&other.currentPlayerPhaseMask() == 0 ||
+			!s.totemSessionInvisibilityReciprocalOK(other) {
 			continue
 		}
 		d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z)

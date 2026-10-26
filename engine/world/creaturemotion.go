@@ -73,6 +73,7 @@ type creatureMotion struct {
 	WanderSteps int
 
 	Faction               uint32
+	PhaseMask             uint32 // WorldObject::GetPhaseMask live value (Object.h:323): the spawn c.phaseMask row for DB creatures (updateActiveCreatures sweep), the summoner phase for temp summons and pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the totem phase helper
 	Level                 uint32
 	UnitFlags             uint32
 	DynamicFlags          uint32
@@ -2368,7 +2369,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	queryHead := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
-		c.curhealth
+		c.curhealth, c.phaseMask
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
@@ -2391,9 +2392,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			continue
 		}
 		for rows.Next() {
-			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, curHealth int64
+			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, curHealth, phaseMask int64
 			var x, y, z, orientation, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth, &phaseMask); err != nil {
 				continue
 			}
 			spawnKey := creatureMotionSpawnKey{MapID: p.Map, InstanceID: p.InstanceID, GUID: uint32(guid)}
@@ -2425,6 +2426,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				motion.UnitFlags = uint32(unitFlags)
 				motion.DynamicFlags = uint32(dynamicFlags)
 				motion.FlagsExtra = uint32(flagsExtra)
+				motion.PhaseMask = uint32(phaseMask)
 				if !motion.ReactStateKnown {
 					if reactState, known, aiName := s.loadCreatureReaction(ctx, uint32(entry)); known {
 						motion.ReactState = reactState

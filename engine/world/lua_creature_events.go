@@ -153,6 +153,15 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 		WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed),
 	}
 	s.motionMu.Unlock()
+	// Temp-summon phase (WorldObject::GetPhaseMaskForSpawn): a creature
+	// summoner passes its own motion phase, a player summoner its
+	// session phase; other summoners keep the PHASEMASK_NORMAL
+	// fallback in the totem phase helper.
+	if origin.SummonerMotion != nil {
+		summoned.PhaseMask = origin.SummonerMotion.PhaseMask
+	} else if summoner := s.findSessionByGUID(origin.GUID); summoner != nil {
+		summoned.PhaseMask = summoner.currentPlayerPhaseMask()
+	}
 	// Re-create the object client-side: the create block goes to the
 	// whole instance (respawnEvadedCreature pattern), not just nearby
 	// players — C++ AddToWorld notifies the full map.
