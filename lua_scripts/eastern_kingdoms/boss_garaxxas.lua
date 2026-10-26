@@ -170,7 +170,7 @@ end
 -- object.go fallback is raw center, so the arm uses the reach twin below.
 local function onWingClip(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 5 then -- IsWithinDistInMap twin, own reach only (victim reach unbridged)
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() - victim:GetCombatReach() < 5 then -- IsWithinDistInMap twin (Object.cpp:1238; both reaches)
         creature:CastSpell(victim, SPELL_WING_CLIP)
         schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
     else

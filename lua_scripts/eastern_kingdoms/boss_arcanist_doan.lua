@@ -102,7 +102,7 @@ local function randomThreatPlayerSkippingFirstInRange(creature, maxDist)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i ~= 1))
                 and t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             players[#players + 1] = t
         end
     end

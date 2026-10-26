@@ -67,7 +67,7 @@ local function randomPlayerInRange(creature, maxDist)
     local found = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and t:IsAlive()
-                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             found[#found + 1] = t
         end
     end
