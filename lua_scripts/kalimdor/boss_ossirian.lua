@@ -47,23 +47,26 @@
 -- Unmodeled (documented-only, no bridges):
 -- - Weather (WEATHER_STATE_HEAVY_SANDSTORM): no bridge.
 -- - Crystal/trigger summons (SpawnNextCrystal): PORTED (see spawnNextCrystal
---   below); the weakness-cast chain that drives SpellHit stays out —
---   crystal gossip -> boss DoAction -> trigger cast has no bridge
---   (GO handler cannot reach TriggerGUID; see the go_ossirian_crystal
---   note below), so the SpellHit arm fires only if a weakness spell
---   lands by other means.
+--   below); the weakness-cast chain is PORTED too (see onCrystalGossip
+--   below): the 2026-10-26 GO FindNearestCreature bridge retires the
+--   "GO handler cannot reach a creature" blocker, and the DoAction
+--   leg is inlined as a trigger self-cast (see note below).
 -- - onReset despawns the sand-vortex summons (C++ EnterEvadeMode
 --   summons.DespawnAll(), boss_ossirian.cpp:183-188).
--- - go_ossirian_crystal (GameObjectAI OnGossipHello): the GO gossip
---   hello hook IS bridged (RegisterGameObjectGossipEvent, engine/world/
---   gameobjects.go:747) — the 2026-10-18 "no bridge" claim was stale.
---   The arm stays unported on its real blockers: FindNearestCreature
---   (unbridged) + cross-AI DoAction(ACTION_TRIGGER_WEAKNESS) (unbridged).
---   go:SetLootState is bridged but is not the arm's driver.
---   Refined: FindNearestCreature IS bridged on creatures, but the GO
---   gossip handler's objects (player + GO) carry no creature lookup,
---   so the TriggerGUID receiver is unreachable from the handler; the
---   instance GetBossState(IN_PROGRESS) guard is unbridged too.
+-- - go_ossirian_crystal (GameObjectAI OnGossipHello): PORTED (see
+--   onCrystalGossip below; boss_ossirian.cpp:303-314, C++ order kept).
+--   The 2026-10-18 "no bridge" claim and the "GO handler cannot reach
+--   a creature" refinement are both STALE: player:FindNearestCreature
+--   (lua_player.go) is C++-exact for the ossirian lookup, and
+--   go:FindNearestCreature (lua_objects.go, chromaggus precedent) finds
+--   the trigger at the crystal's own coords. The DoAction leg is
+--   inlined (no DoAction bridge): trigger self-casts a random
+--   weakness, gated on not IsCasting (constant-false in Go, so the
+--   gate is vacuous here). The instance GetBossState(IN_PROGRESS)
+--   guard is approximated by ossirian IsInCombat (non-combat covers
+--   pre-pull, post-wipe reset, and dead states); nil ossirian also
+--   returns false. SetLootState(GO_ACTIVATED 2) stays unconditional
+--   in C++ order, before the gates.
 -- - MoveInLineOfSight SAY_INTRO: Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
 --   is live (lua_creature_events.go:531-560, shaffar/vorpil/ikiss/maladaar
 --   precedent) — ported below with a per-GUID one-shot SaidIntro latch
@@ -72,8 +75,8 @@
 --   proceeds (C++ falls through to BossAI::MoveInLineOfSight). The
 --   Go fire site is the aggro-engage branch, a subset of C++'s
 --   any-unit LOS trigger — acceptable for a one-shot intro line.
--- - DoAction(ACTION_TRIGGER_WEAKNESS): cross-AI via TriggerGUID,
---   no bridge.
+-- - DoAction(ACTION_TRIGGER_WEAKNESS): inlined into onCrystalGossip
+--   (trigger self-cast); no standalone DoAction bridge exists.
 -- - Cleanup()/EnterEvadeMode()/JustDied() instance legs: no bridge.
 -- - BossAI ctor leg DATA_OSSIRIAN and _Reset() — instance bridge,
 --   standing.
@@ -345,6 +348,24 @@ local function onMoveInLOS(event, creature, unit)
     end
 end
 
+-- C++ go_ossirian_crystal OnGossipHello (boss_ossirian.cpp:303-314),
+-- in C++ order: SetLootState(GO_ACTIVATED 2) unconditional, then the
+-- ossirian + IN_PROGRESS gates (false = native proceeds, gameobjects.go
+-- gossip polarity), then the DoAction leg inlined as a trigger self-cast.
+local GO_LOOT_ACTIVATED = 2
+local function onCrystalGossip(_, player, go)
+    go:SetLootState(GO_LOOT_ACTIVATED)
+    local ossirian = player:FindNearestCreature(ENTRY, 30.0)
+    if not ossirian or not ossirian:IsInCombat() then
+        return false
+    end
+    local trigger = go:FindNearestCreature(ENTRY_OSSIRIAN_TRIGGER, 5.0)
+    if trigger and not trigger:IsCasting() then
+        trigger:CastSpell(trigger, WEAKNESSES[math.random(1, 5)])
+    end
+    return true
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onTargetDied)
@@ -352,3 +373,4 @@ RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY, 23, onReset)
 RegisterCreatureEvent(ENTRY, 27, onMoveInLOS)
+RegisterGameObjectGossipEvent(GO_OSSIRIAN_CRYSTAL, 1, onCrystalGossip)
