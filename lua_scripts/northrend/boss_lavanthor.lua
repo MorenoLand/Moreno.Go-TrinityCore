@@ -97,12 +97,16 @@ end
 -- (UNIT_STATE_DIED fails _IsTargetAcceptable, Creature.cpp:2508)
 -- and skipped by SelectTargetList, while Go SortedEntries returns
 -- dead entries too. C++ IsWithinCombatRange adds both combat
--- reaches (Unit.cpp:583); Lua subtracts own reach, target-reach
--- band unbridged (skadi idiom).
+-- reaches (Unit.cpp:583); Lua subtracts own reach + target reach
+-- (1.5 if Player else target:GetCombatReach(), hadronox idiom).
 local function randomThreatTargetInRange(creature, maxDist, playerOnly)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() - targetReach < maxDist
                 and (not playerOnly or t:GetObjectType() == "Player") then
             candidates[#candidates + 1] = t
         end

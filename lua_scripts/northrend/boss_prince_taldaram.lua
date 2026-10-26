@@ -174,7 +174,7 @@ local function vanishTick(creature, guid)
     if #targets > 1 then
         local candidates = {}
         for _, t in ipairs(targets) do
-            if t:GetObjectType() == "Player" and not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() < 100 then
+            if t:GetObjectType() == "Player" and not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 100 then
                 candidates[#candidates + 1] = t
             end
         end

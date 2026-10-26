@@ -126,7 +126,7 @@ local function randomSpringTarget(creature, maxDist)
         if ((victimGuid ~= nil and plr:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and plr:GetObjectType() == "Player" and not plr:IsDead()
-                and creature:GetDistance(plr) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(plr) - creature:GetCombatReach() - 1.5 < maxDist then
             candidates[#candidates + 1] = plr
         end
     end

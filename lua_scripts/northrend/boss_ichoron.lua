@@ -171,15 +171,19 @@ end
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 50.0f) — no
 -- playerOnly flag, so any threat-listed unit within 50y qualifies
 -- (UnitAI.h:170, playerOnly=false default); C++ IsWithinCombatRange
--- adds both combat reaches (Unit.cpp:583), plain GetDistance is the
--- standing granularity delta. Alive filter: dead targets are offline
+-- adds both combat reaches (Unit.cpp:583); Lua subtracts own reach
+-- + target reach (1.5 if Player else target:GetCombatReach(), hadronox idiom). Alive filter: dead targets are offline
 -- (UNIT_STATE_DIED fails _IsTargetAcceptable, Creature.cpp:2508)
 -- and skipped by SelectTargetList, while Go SortedEntries returns
 -- dead entries too (erekem/pandemonius precedent).
 local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() - targetReach < maxDist then
             candidates[#candidates + 1] = t
         end
     end

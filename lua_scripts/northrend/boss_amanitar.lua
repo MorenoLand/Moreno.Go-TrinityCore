@@ -185,7 +185,11 @@ local function randomThreatTarget(creature, maxDist, playersOnly, hasAuraExclude
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:IsAlive() and ((not playersOnly) or t:GetObjectType() == "Player") then
-            if maxDist <= 0 or creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+            local targetReach = 1.5
+            if t:GetObjectType() ~= "Player" then
+                targetReach = t:GetCombatReach()
+            end
+            if maxDist <= 0 or creature:GetDistance(t) - creature:GetCombatReach() - targetReach < maxDist then
                 if hasAuraExclude == nil or not t:HasAura(hasAuraExclude) then
                     candidates[#candidates + 1] = t
                 end
@@ -213,7 +217,7 @@ local function randomNonVictimTarget(creature, maxDist)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:IsAlive() and t:GetObjectType() == "Player"
-                and (maxDist <= 0 or creature:GetDistance(t) - creature:GetCombatReach() < maxDist) then
+                and (maxDist <= 0 or creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist) then
             candidates[#candidates + 1] = t
         end
     end

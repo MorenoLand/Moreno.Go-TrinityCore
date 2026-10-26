@@ -180,7 +180,7 @@ local function randomThreatPlayer(creature, maxDist, skipFirst)
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < maxDist then
             found[#found + 1] = t
         end
     end
@@ -201,9 +201,13 @@ local function randomThreatUnit(creature, maxDist, skipFirst)
     end
     local found = {}
     for i, t in ipairs(targets) do
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
         if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
-                and not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
+                and not t:IsDead() and creature:GetDistance(t) - creature:GetCombatReach() - targetReach < maxDist then
             found[#found + 1] = t
         end
     end
