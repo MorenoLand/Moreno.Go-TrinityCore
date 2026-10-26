@@ -528,7 +528,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.gossip = prevGossip
 			stableBuf := protocol.NewBuffer(8)
 			stableBuf.WriteU64(guid)
-			return s.handleListStabledPets(ctx, stableBuf.Bytes())
+			stableOK := s.handleListStabledPets(ctx, stableBuf.Bytes())
+			// Player::OnGossipSelect (Player.cpp:14699): the stablepet
+			// arm breaks, so the BoxMoney charge still lands — this
+			// arm used to return before it.
+			s.chargeGossipBoxMoney(ctx, boxCost)
+			return stableOK
 		} else if item.Action == 16 { // GOSSIP_OPTION_UNLEARNTALENTS
 			// Player::OnGossipSelect (Player.cpp:14649-14651): SendCloseGossip
 			// (SMSG_GOSSIP_COMPLETE) goes out BEFORE SendTalentWipeConfirm —
@@ -671,14 +676,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
 		// after the option arms — early-return arms (invalid battlemaster
 		// above) never charge.
-		if boxCost > 0 && s.player != nil {
-			s.player.Money -= boxCost
-			s.questMoneyChanged(ctx)
-			if cdb := s.server.CharactersStore.DB; cdb != nil {
-				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-			}
-			s.sendPlayerUpdate()
-		}
+		s.chargeGossipBoxMoney(ctx, boxCost)
 	}
 	if s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect arms that send no packet leave the live
@@ -688,6 +686,23 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	}
 	s.debug("gossip selection handled", "account", s.accountName, "entry", entry, "list", listID)
 	return true
+}
+
+// chargeGossipBoxMoney applies the Player::OnGossipSelect tail charge
+// (Player.cpp:14699): ModifyMoney(-cost) after the option arms, with the
+// money-change notification, characters-row write, and player update.
+// Arms that return from inside the option switch (stablepet, GO questgiver)
+// call it explicitly — the shared tail never runs for them.
+func (s *session) chargeGossipBoxMoney(ctx context.Context, boxCost uint32) {
+	if boxCost == 0 || s.player == nil {
+		return
+	}
+	s.player.Money -= boxCost
+	s.questMoneyChanged(ctx)
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+	s.sendPlayerUpdate()
 }
 
 // handleGameObjectGossipSelect processes CMSG_GOSSIP_SELECT_OPTION for a
@@ -793,18 +808,16 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 			_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 			return true
 		}
-		return s.sendPreparedGameObjectQuest(ctx, guid, entry, quests)
+		questOK := s.sendPreparedGameObjectQuest(ctx, guid, entry, quests)
+		// Player::OnGossipSelect (Player.cpp:14699): the questgiver arm
+		// breaks, so the BoxMoney charge still lands — this case used
+		// to return before it.
+		s.chargeGossipBoxMoney(ctx, boxCost)
+		return questOK
 	}
 	// Player::OnGossipSelect (Player.cpp:14699): the BoxMoney charge lands
 	// after the option arms.
-	if boxCost > 0 {
-		s.player.Money -= boxCost
-		s.questMoneyChanged(ctx)
-		if cdb := s.server.CharactersStore.DB; cdb != nil {
-			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-		}
-		s.sendPlayerUpdate()
-	}
+	s.chargeGossipBoxMoney(ctx, boxCost)
 	if s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect arms that send no packet leave the live
 		// menu open (C++ never closes the menu for them) — restore it

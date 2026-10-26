@@ -61,7 +61,7 @@
 -- S_SPELLFIRE 26797 / S_MOONCLOTH 26798 / S_SHADOWEAVE 26801;
 -- DoLearnCost 200000 (:198), DoHighUnlearnCost 1500000 (:203),
 -- DoMedUnlearnCost 250000/500000/1000000 by level <51/<66/else (:208-216).
--- Confirm-box SHAPE (coded + boxMoney) is bridgeable via
+-- Confirm-box SHAPE (boxMessage + boxMoney, coded=false in C++) is bridgeable via
 -- player:GossipMenuAddItem(icon,msg,sender,action,coded,boxMsg,boxMoney);
 -- the hello gates are now bridgeable too. Re-triage when an
 -- equipped-item inspection bridge (real GetItemByPos), SendBuyError /
