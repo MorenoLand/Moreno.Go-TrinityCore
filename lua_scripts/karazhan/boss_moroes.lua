@@ -337,11 +337,17 @@ local function moroesReset(event, creature)
     local state = moroesState[guid]
     if state.addIds == nil then
         local pool = {17007, 19872, 19873, 19874, 19875, 19876}
-        local picked = {}
-        for i = 1, 4 do
-            local idx = math.random(#pool)
-            picked[i] = pool[idx]
-            table.remove(pool, idx)
+        -- RandomResize twin (Containers.h:77-98): order-preserving
+        -- keep-scan, so survivors keep pool order and pair with
+        -- Locations[i] as in C++; a random-remove take would permute
+        -- the guest-to-location assignment.
+        local picked, keep, left = {}, 4, #pool
+        for _, entry in ipairs(pool) do
+            if math.random(left) <= keep then
+                picked[#picked + 1] = entry
+                keep = keep - 1
+            end
+            left = left - 1
         end
         state.addIds = picked
     end

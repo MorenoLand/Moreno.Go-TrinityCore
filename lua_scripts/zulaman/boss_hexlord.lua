@@ -522,11 +522,17 @@ local function hexlordReset(event, creature)
     -- Timers re-arm on the next combat.
     if hexlordAddIds[guid] == nil then
         local pool = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
-        local picked = {}
-        for i = 1, 4 do
-            local idx = math.random(#pool)
-            picked[i] = pool[idx]
-            table.remove(pool, idx)
+        -- RandomResize twin (Containers.h:77-98): order-preserving
+        -- keep-scan, so survivors keep pool order and pair with
+        -- Pos_X[i] as in C++; a random-remove take would permute
+        -- the add-to-spawn-point assignment.
+        local picked, keep, left = {}, 4, #pool
+        for _, entry in ipairs(pool) do
+            if math.random(left) <= keep then
+                picked[#picked + 1] = entry
+                keep = keep - 1
+            end
+            left = left - 1
         end
         hexlordAddIds[guid] = picked
     end
