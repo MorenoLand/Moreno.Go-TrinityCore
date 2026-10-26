@@ -3276,7 +3276,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	var areaAllyHits []*playerPos
 	var areaAllyCreatureHits []uint64
 	var areaAllyChecks map[uint64]uint8
-	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) {
+	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
 				areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
@@ -3293,6 +3293,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				for guid, bits := range creatureChecks {
 					areaAllyChecks[guid] |= bits
 				}
+			}
+			if isEntryAreaSpell(spell) {
+				// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
+				// entry-area (7/8) legs select every entry-matched unit
+				// in the area — the creature twin of the session
+				// spellEntryAreaTargets — joining the area slices so
+				// the nearby-pick filter below drops the pick from
+				// them like the other legs.
+				entryPlayers, entryCreatures := s.server.creatureAIAreaEntryTargets(ctx, motion, spell, targetGUID, dx, dy, dz, hasDest)
+				areaHits = append(areaHits, entryPlayers...)
+				areaCreatureHits = append(areaCreatureHits, entryCreatures...)
 			}
 		}
 	}

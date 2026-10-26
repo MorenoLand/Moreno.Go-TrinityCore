@@ -1542,6 +1542,18 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): entry-area
+		// (7/8) legs select every entry-matched unit in the area — the
+		// creature twin of the session spellEntryAreaTargets. Area
+		// selection never chains (spells.go list-spell note), so the
+		// chain arm below still anchors on the nearby pick alone.
+		if isEntryAreaSpell(spellInfo) {
+			entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, m, spellInfo, targetGUID, destX, destY, destZ, hasDest)
+			for _, entryHit := range entryPlayers {
+				hitTargets = append(hitTargets, entryHit.GUID)
+			}
+			hitTargets = append(hitTargets, entryCreatures...)
+		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
 		// SelectTargets removal leg (Spell.cpp:807-830) for a creature

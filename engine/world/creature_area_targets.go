@@ -261,6 +261,259 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 	return hits
 }
 
+// creatureAIAreaEntryTargets is the creature-motion twin of
+// (*session).spellEntryAreaTargets: Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) for TARGET_UNIT_SRC_AREA_ENTRY (7) /
+// TARGET_UNIT_DEST_AREA_ENTRY (8) — every entry-matched unit in the
+// area, not just the wire victim. Per-effect legs mirror the session
+// twin: the selecting slot is A when A is 7/8, else B when B is 7/8 and
+// A did not consume the effect's processed slot (Spell.cpp:866-900);
+// each leg centers on its own reference (SRC = caster, DEST = resolved
+// destination, falling back to the caster when no destination resolved —
+// CheckDst seeds an unset dst at the caster, Spell.cpp:6523), with its
+// own CalcRadius and condition rows, unioned. Gates mirror the session
+// twin: same map/instance, alive unless the spell allows dead targets,
+// spellTargetUnitBlocked (assist=false — TARGET_CHECK_ENTRY has no
+// faction case, Spell.cpp:8316), the GetSearcherTypeMask players-only
+// narrowing, cylinder + LOS from the leg center. The wire victim and
+// the caster are excluded — both ride the wire leg already on the
+// creature paths, and the enemy/ally twins exclude them the same way —
+// so no leg double-hits. Static DB spawns without a motion join via the
+// WorldStore sweep (ally/enemy twin precedent), boxed per distinct leg
+// center like the session twin. MaxAffectedTargets caps the merged
+// player+creature list (Spell.cpp:1293); the motion has no aura model,
+// so no aura-modifier term applies (enemy twin precedent).
+func (s *Server) creatureAIAreaEntryTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, wireGUID uint64, destX, destY, destZ float32, hasDest bool) ([]*playerPos, []uint64) {
+	if s == nil || motion == nil || !isEntryAreaSpell(spell) {
+		return nil, nil
+	}
+	type entryAreaLeg struct {
+		cx, cy, cz     float32
+		radius         float32
+		condRows       []conditionRow
+		allowPlayers   bool
+		allowCreatures bool
+	}
+	// Spell.cpp:1282 zero-radius fallback, per effect via
+	// GetMaxRange(IsPositiveEffect); the mod owner folds SPELLMOD_RANGE
+	// (SpellInfo.cpp:3060-3072), like creatureAIAreaGeometry.
+	var maxRangePositive, maxRangeNegative float32
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	if s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+			if modOwner != nil {
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+			}
+		}
+	}
+	legs := make([]entryAreaLeg, 0)
+	hasDestCenter := false
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		var legTarget uint32
+		switch {
+		case isEntryAreaTargetType(eff.ImplicitTargetA):
+			legTarget = eff.ImplicitTargetA
+		case isEntryAreaTargetType(eff.ImplicitTargetB) && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA):
+			legTarget = eff.ImplicitTargetB
+		default:
+			continue
+		}
+		radius := float32(0)
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				radius = value
+			} else {
+				if spell.IsPositiveEffect(i) {
+					radius = maxRangePositive
+				} else {
+					radius = maxRangeNegative
+				}
+			}
+		}
+		if radius <= 0 {
+			continue
+		}
+		leg := entryAreaLeg{cx: motion.X, cy: motion.Y, cz: motion.Z, radius: radius, condRows: s.loadImplicitTargetConditionRows(ctx, spell.ID, 1<<uint(i))}
+		if legTarget == implicitTargetDestAreaEntry && hasDest {
+			leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			hasDestCenter = true
+		}
+		leg.allowPlayers, leg.allowCreatures = implicitTargetEntryMask(leg.condRows)
+		if spellSearchPlayersOnly(spell) {
+			leg.allowCreatures = false
+		}
+		legs = append(legs, leg)
+	}
+	if len(legs) == 0 {
+		return nil, nil
+	}
+	allowDead := spellAllowsDeadTarget(spell)
+	seen := map[uint64]struct{}{wireGUID: {}, motion.GUID: {}}
+	matched := func(isPlayer bool, x, y, z float32, unitFlags, flagsExtra uint32, health uint32, entry uint32, spawnLow uint32) bool {
+		if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) {
+			return false
+		}
+		if health == 0 && !allowDead {
+			return false
+		}
+		for _, leg := range legs {
+			if isPlayer && !leg.allowPlayers {
+				continue
+			}
+			if !isPlayer && !leg.allowCreatures {
+				continue
+			}
+			dx, dy := float64(x-leg.cx), float64(y-leg.cy)
+			if dx*dx+dy*dy > float64(leg.radius*leg.radius) || math.Abs(float64(z-leg.cz)) > float64(leg.radius) {
+				continue
+			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center, so every
+			// candidate needs line of sight from the leg's center.
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(motion.Map, leg.cx, leg.cy, leg.cz, x, y, z) {
+				continue
+			}
+			if implicitEntryConditionsMet(leg.condRows, isPlayer, entry, spawnLow) {
+				return true
+			}
+		}
+		return false
+	}
+	var players []*playerPos
+	var creatures []uint64
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+			continue
+		}
+		p := targetSession.player
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID {
+			continue
+		}
+		if _, dup := seen[targetSession.playerGUID]; dup {
+			continue
+		}
+		if !matched(true, p.X, p.Y, p.Z, p.UnitFlags, 0, p.Health, 0, 0) {
+			continue
+		}
+		seen[targetSession.playerGUID] = struct{}{}
+		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
+		cp := candidate
+		players = append(players, &cp)
+	}
+	s.sessionsMu.RUnlock()
+	s.motionMu.Lock()
+	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
+	candidates := make([]*creatureMotion, 0, len(motionMap))
+	motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+	for _, cand := range motionMap {
+		if cand != nil {
+			candidates = append(candidates, cand)
+			motionGUIDs[cand.GUID] = struct{}{}
+		}
+	}
+	s.motionMu.Unlock()
+	for _, cand := range candidates {
+		if cand.Map != motion.Map || cand.InstanceID != motion.InstanceID {
+			continue
+		}
+		if _, dup := seen[cand.GUID]; dup {
+			continue
+		}
+		if !matched(false, cand.X, cand.Y, cand.Z, cand.UnitFlags, cand.FlagsExtra, cand.Health, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
+			continue
+		}
+		seen[cand.GUID] = struct{}{}
+		creatures = append(creatures, cand.GUID)
+	}
+	// Static DB spawns have no motion, so the motion-map sweep above
+	// misses them: the ally/enemy twin's WorldStore sweep runs here too,
+	// boxed per distinct leg center like the session twin, skipping
+	// GUIDs that already have a motion.
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		scanCenters := [][3]float32{{motion.X, motion.Y, motion.Z}}
+		if hasDestCenter {
+			scanCenters = append(scanCenters, [3]float32{destX, destY, destZ})
+		}
+		maxRadius := float32(0)
+		for _, leg := range legs {
+			if leg.radius > maxRadius {
+				maxRadius = leg.radius
+			}
+		}
+		for _, center := range scanCenters {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(center[0]-maxRadius), float64(center[0]+maxRadius), float64(center[1]-maxRadius), float64(center[1]+maxRadius))
+			if err != nil {
+				continue
+			}
+			for rows.Next() {
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var x, y, z float64
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+					continue
+				}
+				guid := creatureWorldGUID(uint32(low), uint32(entry))
+				if _, hasMotion := motionGUIDs[guid]; hasMotion {
+					continue
+				}
+				if _, dup := seen[guid]; dup {
+					continue
+				}
+				if uint32(mapID) != motion.Map {
+					continue
+				}
+				if !matched(false, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), uint32(entry), uint32(low)) {
+					continue
+				}
+				seen[guid] = struct{}{}
+				creatures = append(creatures, guid)
+			}
+			rows.Close()
+		}
+	}
+	// Spell.cpp:1293: MaxAffectedTargets caps the merged list, then
+	// Trinity::Containers::RandomResize keeps that many chosen uniformly
+	// at random (shuffle + truncate draws the same uniform subset).
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(players))+uint32(len(creatures)) > maxTargets {
+		all := make([]uint64, 0, len(players)+len(creatures))
+		byGUID := make(map[uint64]*playerPos, len(players))
+		for _, pl := range players {
+			all = append(all, pl.GUID)
+			byGUID[pl.GUID] = pl
+		}
+		all = append(all, creatures...)
+		rand.Shuffle(len(all), func(a, b int) { all[a], all[b] = all[b], all[a] })
+		kept := make(map[uint64]struct{}, maxTargets)
+		for _, guid := range all[:maxTargets] {
+			kept[guid] = struct{}{}
+		}
+		var keptPlayers []*playerPos
+		var keptCreatures []uint64
+		for _, pl := range players {
+			if _, ok := kept[pl.GUID]; ok {
+				keptPlayers = append(keptPlayers, pl)
+			}
+		}
+		for _, guid := range creatures {
+			if _, ok := kept[guid]; ok {
+				keptCreatures = append(keptCreatures, guid)
+			}
+		}
+		players, creatures = keptPlayers, keptCreatures
+	}
+	return players, creatures
+}
+
 // creatureAIAreaEnemyPlayers mirrors Spell::SelectImplicitAreaTargets
 // (Spell.cpp:1227) for the inline AI victim-spell path. The inline path is a
 // shortcut that never runs SelectSpellTargets, so a creature-cast AoE applied

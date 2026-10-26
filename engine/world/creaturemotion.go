@@ -3108,6 +3108,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
 						hitTargets = append(hitTargets, areaCreatureGUID)
 					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
+					// entry-area (7/8) legs select every entry-matched
+					// unit in the area — the creature twin of the session
+					// spellEntryAreaTargets — joining the same area-hit
+					// slices so the nearby-pick filter below applies to
+					// them like the enemy legs above.
+					if isEntryAreaSpell(spellInfo) {
+						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, spellInfo, target.GUID, destX, destY, destZ, hasDest)
+						for _, entryHit := range entryPlayers {
+							areaHits = append(areaHits, entryHit)
+							hitTargets = append(hitTargets, entryHit.GUID)
+						}
+						for _, entryCreatureGUID := range entryCreatures {
+							areaCreatureHits = append(areaCreatureHits, entryCreatureGUID)
+							hitTargets = append(hitTargets, entryCreatureGUID)
+						}
+					}
 				}
 			}
 			// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a

@@ -54,7 +54,7 @@ func isFriendlyNearbySpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if isFriendlyNearbyTargetType(eff.ImplicitTargetA) || isFriendlyNearbyTargetType(eff.ImplicitTargetB) {
+		if isFriendlyNearbyTargetType(eff.ImplicitTargetA) || (isFriendlyNearbyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -153,7 +153,7 @@ func isFriendlyConeSpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB) {
+		if isFriendlyConeTargetType(eff.ImplicitTargetA) || (isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -432,7 +432,10 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 		if eff.Effect == 0 {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
 			switch targetType {
 			case implicitTargetNearbyParty:
 				checks[friendlyCheckParty] = struct{}{}
@@ -495,6 +498,9 @@ func (s *session) spellFriendlyNearbyTarget(ctx context.Context, spell wotlk.Spe
 // "always have self in arc"). 59 uses TARGET_CHECK_ALLY; 60 uses
 // TARGET_CHECK_ENTRY, which in C++ filters through ImplicitTargetConditions —
 // Go has no condition infra, so 60 selects any valid unit in the cone.
+// A B-slot 59/60 behind a NEARBY/CONE/AREA A slot never selects
+// (Spell.cpp:866-900 processed-slot rule); only selecting effects
+// contribute checks and radius.
 func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return nil
@@ -513,15 +519,24 @@ func (s *session) spellFriendlyConeTargets(ctx context.Context, spell wotlk.Spel
 		if eff.Effect == 0 {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
-			switch targetType {
-			case implicitTargetConeAlly:
-				checks[friendlyCheckAlly] = struct{}{}
-			case implicitTargetConeEntry:
-				checks[friendlyCheckEntry] = struct{}{}
-			default:
-				continue
-			}
+		// Spell.cpp:866-900: a B-slot 59/60 claim never runs when the
+		// A slot already consumed the effect's processed slot
+		// (NEARBY/CONE/AREA A), so only the selecting slot's check —
+		// and only selecting effects' radii — feed the cone.
+		var coneTarget uint32
+		switch {
+		case isFriendlyConeTargetType(eff.ImplicitTargetA):
+			coneTarget = eff.ImplicitTargetA
+		case isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
+			coneTarget = eff.ImplicitTargetB
+		default:
+			continue
+		}
+		switch coneTarget {
+		case implicitTargetConeAlly:
+			checks[friendlyCheckAlly] = struct{}{}
+		case implicitTargetConeEntry:
+			checks[friendlyCheckEntry] = struct{}{}
 		}
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
 			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
