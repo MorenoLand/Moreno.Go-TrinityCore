@@ -3,9 +3,12 @@ package world
 import (
 	"context"
 	"math"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -462,6 +465,144 @@ func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) 
 	s.vehicleMu.Unlock()
 }
 
+// conditionSourceCreatureTemplateVehicle is
+// CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE (ConditionMgr.h:139). It
+// cannot carry a SourceGroup (ConditionMgr.cpp:950), so its rows are keyed
+// on SourceEntry = creature entry alone, and it offers two targets
+// (Condition.cpp:794): 0 = the passenger player, 1 = the vehicle.
+const conditionSourceCreatureTemplateVehicle = 16
+
+// vehicleHasConditions bridges VehicleAI::LoadConditions
+// (CombatAI.cpp:308-311): HasConditionsForNotGroupedEntry for the
+// vehicle's entry. A missing table or query error reads as no conditions.
+func (s *Server) vehicleHasConditions(ctx context.Context, entry uint32) bool {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
+		return false
+	}
+	var one int
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? LIMIT 1", conditionSourceCreatureTemplateVehicle, entry).Scan(&one); err != nil {
+		return false
+	}
+	return true
+}
+
+// loadVehicleConditionRows loads the entry's vehicle-condition rows for
+// meetVehicleConditions. A missing table or query error yields no rows,
+// which evaluate as met (the check retries next second).
+func (s *Server) loadVehicleConditionRows(ctx context.Context, entry uint32) []conditionRow {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return nil
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx,
+		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceEntry = ? ORDER BY ElseGroup",
+		conditionSourceCreatureTemplateVehicle, entry)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var conditions []conditionRow
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return nil
+		}
+		conditions = append(conditions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+	return conditions
+}
+
+// meetVehicleConditions bridges VehicleAI::CheckConditions'
+// IsObjectMeetingNotGroupedConditions (CombatAI.cpp:326,
+// ConditionMgr.cpp:993): the passenger session evaluates the entry's rows
+// with target 0 = the passenger and target 1 = the vehicle creature, the
+// same target mapping as meetSpellClickConditions.
+func (s *session) meetVehicleConditions(ctx context.Context, entry uint32, vehicleGUID uint64) (bool, error) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	rows := s.server.loadVehicleConditionRows(ctx, entry)
+	return s.evalConditionGroups(ctx, rows, func(ctx context.Context, row conditionRow) (bool, error) {
+		return s.evalCondition(ctx, row, entry, vehicleGUID)
+	})
+}
+
+// seatedPassengerGUIDs returns the GUIDs of seated passengers in seat-id
+// order, the deterministic twin of VehicleAI::CheckConditions' seat scan
+// (CombatAI.cpp:320-338 iterates Vehicle::Seats; the C++ order is
+// unspecified, Go fixes seat order so the first failing passenger is
+// stable). It reads the passenger GUIDs directly under the kit read lock
+// rather than via IsEmpty, which would re-acquire it.
+func (v *VehicleKit) seatedPassengerGUIDs() []uint64 {
+	if v == nil {
+		return nil
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	ids := make([]int8, 0, len(v.Seats))
+	for id := range v.Seats {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var guids []uint64
+	for _, id := range ids {
+		if seat := v.Seats[id]; seat != nil && seat.Passenger.GUID != 0 {
+			guids = append(guids, seat.Passenger.GUID)
+		}
+	}
+	return guids
+}
+
+// despawnVehicleMotion bridges the VehicleAI::UpdateAI dismiss expiry
+// (CombatAI.cpp:285-292: DespawnOrUnsummon): the motion leaves the world
+// immediately with a destroy broadcast and the remove hook, and its kit is
+// dropped so a respawn builds a fresh one. A DB-spawned vehicle respawns
+// on its normal delay; a summoned one is gone, mirroring the Lua
+// Creature::DespawnOrUnsummon bridge.
+func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+	m, ok := motions[motion.GUID]
+	if !ok {
+		s.motionMu.Unlock()
+		return
+	}
+	delete(motions, motion.GUID)
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	maxHealth := m.MaxHealth
+	x, y, z := m.X, m.Y, m.Z
+	s.motionMu.Unlock()
+	s.removeVehicleKit(mapID, instanceID, guid)
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(guid)
+	destroyBuf.WriteU8(0)
+	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+	if maxHealth == 0 {
+		maxHealth = 1
+	}
+	dbGUID := uint32(guid & 0x00FFFFFF)
+	dbSpawned := false
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var one int
+		dbSpawned = s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature WHERE guid = ?", dbGUID).Scan(&one) == nil
+	}
+	if !dbSpawned {
+		return
+	}
+	if instanceID == 0 {
+		_, _ = s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", dbGUID)
+		s.scheduleCreatureRespawn(ctx, dbGUID, maxHealth, time.Now())
+	} else {
+		s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, MaxHealth: maxHealth}, maxHealth, time.Now())
+	}
+}
+
 // loadVehicleSeatAddons queries vehicle_seat_addon from world database.
 // Reference: ObjectMgr::LoadVehicleSeatAddons (ObjectMgr.cpp:3638-3685).
 func (s *Server) loadVehicleSeatAddons(ctx context.Context) {
@@ -821,6 +962,16 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
+	// VehicleAI::OnCharmed (CombatAI.cpp:295-306), charmed branch: a
+	// vehicle in use again is no longer marked for dismiss, so a
+	// re-boarding passenger clears the timer armed by exitVehicle.
+	if s.server != nil {
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); motion != nil && s.server.isVehicleAI(motion) {
+			motion.VehicleDismiss = false
+			motion.VehicleDismissAt = time.Time{}
+		}
+	}
+
 	// VehicleJoinEvent::Execute (Vehicle.cpp:840): boarding interrupts the
 	// passenger's non-melee spells, and (Vehicle.cpp:841) strips mounted
 	// auras; the pet is temporarily unsummoned unless the seat carries
@@ -873,6 +1024,21 @@ func (s *session) exitVehicle(ctx context.Context) {
 				if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) && !wasUnselectable {
 					s.player.UnitFlags &^= 0x02000000
 				}
+			}
+		}
+	}
+
+	// VehicleAI::OnCharmed (CombatAI.cpp:295-306): when the last passenger
+	// leaves a conditioned vehicle that is no longer in use and no longer
+	// charmed, the vehicle is marked for dismiss. Go sets no charm state
+	// on boarding, so the exit itself is the OnCharmed twin; the 5s timer
+	// is armed here and consumed by the vehicle step, and boarding again
+	// clears it (enterVehicle).
+	if s.server != nil && oldVehGUID != 0 {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, oldVehGUID); kit != nil && !kit.IsVehicleInUse() {
+			if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
+				motion.VehicleDismiss = true
+				motion.VehicleDismissAt = time.Now().Add(5 * time.Second)
 			}
 		}
 	}

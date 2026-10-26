@@ -124,6 +124,23 @@ type creatureMotion struct {
 	CreatureType uint32
 	// AIName mirrors creature_template.AIName (TurretAI, CombatAI.cpp:231-265).
 	AIName string
+	// VehicleCondKnown / VehicleHasConditions cache VehicleAI::LoadConditions
+	// (CombatAI.cpp:308-311: HasConditionsForNotGroupedEntry for
+	// CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE, entry): resolved once
+	// on the first vehicle step, since conditions only change on reload.
+	VehicleCondKnown     bool
+	VehicleHasConditions bool
+	// VehicleCondCheckAt is the next VehicleAI::CheckConditions fire time
+	// (CombatAI.cpp:313-342, VEHICLE_CONDITION_CHECK_TIME 1000ms); zero
+	// means the check runs on the next vehicle step.
+	VehicleCondCheckAt time.Time
+	// VehicleDismiss / VehicleDismissAt are VehicleAI::_dismiss and
+	// _dismissTimer (CombatAI.cpp:295-306, VEHICLE_DISMISS_TIME 5000ms):
+	// armed when the last passenger exits a conditioned vehicle, cleared
+	// when a passenger boards again; on expiry the step despawns the
+	// motion (DespawnOrUnsummon).
+	VehicleDismiss   bool
+	VehicleDismissAt time.Time
 	// FleeingUntil is the CritterAI flee timer (TimedFleeingMovementGenerator,
 	// CONFIG_CREATURE_FAMILY_FLEE_DELAY 7000ms, Unit.cpp:11712): while in the
 	// future the critter is fleeing and the step tick skips combat/wander;
@@ -2750,6 +2767,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 	}
+	// VehicleAI::UpdateAI runs even while the vehicle is mounted
+	// (CombatAI.cpp:278), ahead of the charm gate below: a spell-charmed
+	// vehicle still runs its condition/dismiss arms in C++.
+	if s.stepVehicleAI(ctx, motion, now) {
+		return
+	}
 	if motion.Charmed && motion.OwnerGUID == 0 {
 		return
 	}
@@ -4977,6 +5000,61 @@ func (s *Server) archerSpellBand(motion *creatureMotion) (minRange, maxRange flo
 		minRange = 1
 	}
 	return minRange, rangeEntry.MaxHostile, rangeEntry.MaxHostile > 0
+}
+
+// isVehicleAI reports whether the motion runs VehicleAI (CombatAI.cpp:268):
+// an explicit AIName match, or — mirroring VehicleAI::Permissible
+// (CombatAI.cpp:344-350, PERMIT_BASE_SPECIAL for IsVehicle creatures) — an
+// unnamed, unscripted creature carrying a vehicle kit. An explicit AIName or
+// a Lua script wins over the selector, as in CreatureAISelector.cpp.
+func (s *Server) isVehicleAI(motion *creatureMotion) bool {
+	if motion == nil {
+		return false
+	}
+	if motion.AIName == "VehicleAI" {
+		return true
+	}
+	if motion.AIName != "" || motion.ScriptName != "" {
+		return false
+	}
+	return s != nil && s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil
+}
+
+// stepVehicleAI bridges VehicleAI::UpdateAI (CombatAI.cpp:278-293): the
+// 1s condition check, then the dismiss countdown. It runs on every step,
+// even while mounted and out of combat, matching the C++ note that
+// VehicleAI::UpdateAI runs while the vehicle is mounted. It returns true
+// when the motion was despawned, so the caller stops the step.
+func (s *Server) stepVehicleAI(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if s == nil || motion == nil || !s.isVehicleAI(motion) {
+		return false
+	}
+	if !motion.VehicleCondKnown {
+		motion.VehicleCondKnown = true
+		motion.VehicleHasConditions = s.vehicleHasConditions(ctx, motion.Entry)
+	}
+	if motion.VehicleHasConditions && (motion.VehicleCondCheckAt.IsZero() || !now.Before(motion.VehicleCondCheckAt)) {
+		motion.VehicleCondCheckAt = now.Add(time.Second)
+		if kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID); kit != nil {
+			for _, passengerGUID := range kit.seatedPassengerGUIDs() {
+				passenger := s.findSessionByGUID(passengerGUID)
+				if passenger == nil {
+					continue
+				}
+				met, err := passenger.meetVehicleConditions(ctx, motion.Entry, motion.GUID)
+				if err == nil && met {
+					continue
+				}
+				passenger.exitVehicle(ctx)
+				break
+			}
+		}
+	}
+	if motion.VehicleDismiss && !motion.VehicleDismissAt.IsZero() && !now.Before(motion.VehicleDismissAt) {
+		s.despawnVehicleMotion(ctx, motion)
+		return true
+	}
+	return false
 }
 
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance, zAttackRange float32) bool {
