@@ -373,23 +373,24 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, offset, dist, true) over the threat list
--- (UnitAI.h offset-before-filter): skipFirst drops the MaxThreat head
+-- (UnitAI.h offset-before-filter): skipFirst drops the current victim
 -- BEFORE the playerOnly/alive/distance filters; maxDist is the C++ dist
 -- gate (IsWithinDist approximation). The old map-player pool is retired;
 -- the stale "offset-1 has no bridge" claim is retracted.
 local function randomPlayerTarget(creature, maxDist, skipFirst)
     local targets = creature:GetAITargets()
-    local start = 1
+    local victimGuid = nil
     if skipFirst then
-        if #targets <= 1 then
-            return nil
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
         end
-        start = 2
     end
     local candidates = {}
-    for i = start, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and (not maxDist or creature:IsWithinDist(t, maxDist)) then
             candidates[#candidates + 1] = t
         end
@@ -401,21 +402,24 @@ local function randomPlayerTarget(creature, maxDist, skipFirst)
 end
 
 -- C++ SelectTarget(Random, 1, 0.0f, playerOnly=TRUE) offset-1
--- tank-skip twin: GetAITargets is threat-descending
--- (threat.go SortedEntries), so index 1 is the MaxThreat head C++
--- skips (UnitAI.h:217-218); the playerOnly gate applies AFTER the
--- skip, matching DefaultTargetSelector order (UnitAI.cpp:254-289);
+-- tank-skip twin: C++ SelectTargetList builds victim-first
+-- (UnitAI.h), so the offset-1 pop removes the current victim, not
+-- the threat-sorted head; GetVictim exclusion models that (index
+-- drop diverges when fixate/taunt puts the victim below top
+-- threat, threat.go reselectVictimLocked). The playerOnly gate
+-- applies AFTER the skip, matching DefaultTargetSelector order
+-- (UnitAI.cpp:254-289);
 -- excludeAura (nil or a spell id) drops carriers (the -aura arg);
 -- dead entries are offline refs, skipped (SelectTargetList skip).
 local function randomNonHeadPlayerTarget(creature, excludeAura)
     local targets = creature:GetAITargets()
-    if #targets <= 1 then
-        return nil
-    end
+    local victim = creature:GetVictim()
+    local victimGuid = victim and victim:GetGUID() or nil
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and (excludeAura == nil or not t:HasAura(excludeAura)) then
             candidates[#candidates + 1] = t
         end

@@ -100,14 +100,23 @@ end
 -- Random alive player from the creature's threat list within maxDist
 -- (C++ SelectTarget draws from the threat list, UnitAI.h:162-184;
 -- GetAITargets returns it in MaxThreat order,
--- lua_creature_events.go:1912). skipFirst drops the first entry in
--- MaxThreat order before the predicate filter (C++ Random offset:
--- the list starts with the current victim, then the sorted threat
--- list, and the first <offset> entries are popped first).
+-- lua_creature_events.go:1912). skipFirst drops the current victim
+-- before the predicate filter (C++ Random offset: the list starts
+-- with the current victim, then the sorted threat list, and the
+-- first <offset> entries are popped first; Go's list is
+-- threat-sorted, so the victim-GUID exclusion models the pop).
 local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
+    local victimGuid = nil
+    if skipFirst then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
+    end
     local players = {}
     for i, t in ipairs(creature:GetAITargets()) do
-        if not (skipFirst and i == 1)
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
                 and t:GetObjectType() == "Player" and t:IsAlive()
                 and creature:GetDistance(t) <= maxDist then
             players[#players + 1] = t

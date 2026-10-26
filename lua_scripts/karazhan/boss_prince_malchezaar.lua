@@ -126,14 +126,26 @@ end
 
 -- C++ SelectTarget(Random, offset, 100, true) (boss_prince_malchezaar.cpp:
 -- :531 SWPain phase 3 offset 1, :504 amplify offset 0): the pool is the
--- threat list, not the instance players. Offset 1 skips the first threat
--- entry BEFORE the player/alive/range filters (UnitAI.h offset-before-
--- filter), so it is positional, not a victim-GUID exclusion.
+-- threat list, not the instance players. Offset 1 skips the current
+-- victim BEFORE the player/alive/range filters (UnitAI.h builds the
+-- list victim-first, so the offset pop removes the victim; Go's
+-- threat-sorted list needs the victim-GUID exclusion, since an
+-- index drop diverges when fixate/taunt puts the victim below top
+-- threat).
 local function randomThreatPlayer(creature, skipFirst, maxDist)
     local targets = creature:GetAITargets()
+    local victimGuid = nil
+    if skipFirst then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
+    end
     local out = {}
     for i, unit in ipairs(targets) do
-        if (not skipFirst or i > 1) and unit:GetObjectType() == "Player"
+        if (not skipFirst or (victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and unit:GetObjectType() == "Player"
                 and not unit:IsDead() and creature:GetDistance(unit) <= maxDist then
             out[#out + 1] = unit
         end

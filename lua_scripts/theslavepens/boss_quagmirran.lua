@@ -87,21 +87,27 @@ local function resetBoss(guid)
 end
 
 -- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 1
--- skips the MaxThreat head BEFORE the player/dist filters
--- (offset-before-filter, salramm idiom). Dead members are offline refs
+-- skips the current victim BEFORE the player/dist filters
+-- (offset-before-filter: C++ builds the list victim-first, so the
+-- offset pop removes the victim; Go's threat-sorted list needs the
+-- victim-GUID exclusion). Dead members are offline refs
 -- in C++ (skipped at list build) so they are filtered here. The old
--- instance-player pool and victim-GUID exclusion are retired
+-- instance-player pool is retired
 -- (threat-list precedent, Oct-25 strips).
 local function randomThreatPlayerInRange(creature, maxDist, skipFirst)
     local targets = creature:GetAITargets()
-    local start = 1
+    local victimGuid = nil
     if skipFirst then
-        start = 2
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
     end
     local pool = {}
-    for i = start, #targets do
-        local t = targets[i]
-        if t:GetObjectType() == "Player" and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if (not skipFirst or (victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetObjectType() == "Player" and not t:IsDead()
                 and creature:GetDistance(t) <= maxDist then
             pool[#pool + 1] = t
         end
@@ -152,7 +158,7 @@ local function bossTick(creature, guid)
     end
 
     -- Uppercut 32055: 20s init then 22s — threat-list player
-    -- alive within 10 yd with the MaxThreat head skipped first
+    -- alive within 10 yd with the current victim skipped first
     -- (C++ SelectTarget(Random, 1, 10.0f, true), salramm idiom),
     -- nil pick casts nothing, re-arm 22000 regardless
     -- (C++-exact).
