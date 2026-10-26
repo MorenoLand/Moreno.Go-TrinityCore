@@ -3085,7 +3085,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// destination in the GO packet; C++ SendSpellGo writes
 					// m_targets (Spell.cpp:4338). Resolved the same way
 					// castCreatureSpellInternal does.
-					destX, destY, destZ, hasDest := s.resolveCreatureSpellDestination(ctx, motion, spellInfo, target.GUID)
+					destX, destY, destZ, hasDest, destFailed := s.resolveCreatureSpellDestination(ctx, motion, spellInfo, target.GUID)
+					if destFailed {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					if hasDest {
 						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
 						spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}

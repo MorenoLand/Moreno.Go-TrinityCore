@@ -42,7 +42,8 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 //
 // Later effects overwrite earlier ones and each effect's A arm runs before
 // its B arm, matching the player path and the C++ per-effect order.
-// ok is false when the spell carries no bridgeable dest-family target.
+// ok is false when the spell carries no bridgeable dest-family target;
+// destFailed is true when a 46 arm found no match.
 //
 // Documented no-bridge: TARGET_DEST_TRAJ (89) beyond the seed —
 // SelectImplicitTrajTargets early-returns on m_speed == 0 (Spell.cpp:1628)
@@ -52,16 +53,18 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // channel target).
 //
 // TARGET_DEST_NEARBY_ENTRY (46) resolves through
-// creatureEntryNearbyDestPosition below: a no-match keeps the running
-// destination (C++ fails the cast, Spell.cpp:1111) because this resolver
-// carries no fail channel — the same fallback the target-dest arms use
-// without a resolvable unit target.
-func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool) {
+// creatureEntryNearbyDestPosition below: a no-match fails the cast
+// (Spell.cpp:1111, SendCastResult SPELL_FAILED_BAD_IMPLICIT_TARGETS plus
+// finish(false)), reported via the destFailed return so call sites abort
+// before the GO packet — the session twin's per-arm fail, not the
+// seed-dest fallback the target-dest arms use without a resolvable
+// unit target.
+func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {
 	if s == nil || m == nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, false, false
 	}
 	if !spellHasCreatureDestTarget(spell) {
-		return 0, 0, 0, false
+		return 0, 0, 0, false, false
 	}
 	x, y, z := m.X, m.Y, m.Z
 	combatReach := m.CombatReach
@@ -127,7 +130,7 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 			}
 		}
 	}
-	return x, y, z, true
+	return x, y, z, true, isDestNearbyEntrySpell(spell) && !nearbyFound
 }
 
 // creatureDestTargetOrientation returns the orientation of the explicit
