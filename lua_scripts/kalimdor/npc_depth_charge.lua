@@ -27,7 +27,7 @@ local DESPAWN_DELAY_MS = 1000
 local despawnPending = {}
 
 local function onMoveInLOS(event, creature, player)
-    if creature:IsWithinDistInMap(player, PROXIMITY_YARDS) then
+    if creature:GetDistance(player) - creature:GetCombatReach() - 1.5 < PROXIMITY_YARDS then -- IsWithinDistInMap twin (zone_azshara.cpp:351; player reach 1.5)
         -- C++ casts on every MoveInLineOfSight with a player in range;
         -- the WeMustDie latch gates only the despawn. Arm the despawn
         -- once per creature so repeated proximity fires within the 1s

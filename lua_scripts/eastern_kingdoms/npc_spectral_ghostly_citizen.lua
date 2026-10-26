@@ -86,7 +86,7 @@ local function onReceiveEmote(_, creature, player, textEmote)
     elseif textEmote == TEXT_EMOTE_KISS then
         creature:PerformEmote(EMOTE_ONESHOT_FLEX)
     elseif textEmote == TEXT_EMOTE_RUDE then
-        if player and creature:IsWithinDist(player, 5) then
+        if player and creature:GetDistance(player) - creature:GetCombatReach() - 1.5 < 5 then -- IsWithinDistInMap twin (stratholme.cpp:305; player reach 1.5)
             creature:CastSpell(player, SPELL_SLAP)
         else
             creature:PerformEmote(EMOTE_ONESHOT_RUDE)

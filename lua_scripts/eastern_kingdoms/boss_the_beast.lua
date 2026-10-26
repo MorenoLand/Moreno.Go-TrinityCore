@@ -130,7 +130,7 @@ local function randomThreatPlayerInRange(creature, range)
     local candidates = {}
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead()
-                and creature:IsWithinDist(plr, range) then
+                and creature:GetDistance(plr) - creature:GetCombatReach() - 1.5 < range then -- IsWithinCombatRange twin (Unit.cpp:583; player reach 1.5)
             candidates[#candidates + 1] = plr
         end
     end

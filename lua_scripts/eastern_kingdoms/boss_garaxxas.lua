@@ -167,10 +167,10 @@ end
 
 -- Wing-clip machine: fires only within ATTACK_DISTANCE (5.0f,
 -- ObjectDefines.h) of the victim — the victim-distance gate is
--- bridged (IsWithinDist, maiden precedent), so this arm ports.
+-- object.go fallback is raw center, so the arm uses the reach twin below.
 local function onWingClip(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsWithinDist(victim, 5) then
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 5 then -- IsWithinDistInMap twin, own reach only (victim reach unbridged)
         creature:CastSpell(victim, SPELL_WING_CLIP)
         schedule(guid, "wingclip", 4000, function() onWingClip(creature, guid) end)
     else
