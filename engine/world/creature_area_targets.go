@@ -356,6 +356,304 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	return hits
 }
 
+// petAreaAllyCheck* bits are the per-candidate selection checks a pet
+// area-ally sweep records: every listed candidate satisfies the ALLY check
+// (TARGET_CHECK_PARTY and TARGET_CHECK_RAID both require
+// IsValidAssistTarget first, Spell.cpp:8342/8354), and the party/raid bits
+// record the extra group arms so one merged list can serve per-effect legs
+// gated on different checks.
+const (
+	petAreaAllyCheckAlly uint8 = 1 << iota
+	petAreaAllyCheckParty
+	petAreaAllyCheckRaid
+)
+
+// petAreaAllyWantedMask maps an effect's two implicit targets to the check
+// bits a candidate must carry for that effect's area leg: 0 when neither
+// target is a friendly-area type, so the leg stays wire-only.
+func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
+	var wanted uint8
+	for _, targetType := range []uint32{targetA, targetB} {
+		if !isFriendlyAreaTargetType(targetType) {
+			continue
+		}
+		switch friendlyAreaCheck(targetType) {
+		case friendlyCheckParty:
+			wanted |= petAreaAllyCheckParty
+		case friendlyCheckRaid:
+			wanted |= petAreaAllyCheckRaid
+		default:
+			wanted |= petAreaAllyCheckAlly
+		}
+	}
+	return wanted
+}
+
+// creatureAIAreaAllyGeometry is the radius/center computation for the
+// pet-caster area-ally sweeps, mirroring creatureAIAreaGeometry with the
+// friendly-area target types: radius from the friendly-area effects
+// (CalcRadius, SpellInfo.cpp:551-574, zero-radius fallback to the spell's
+// max range per IsPositiveEffect, Spell.cpp:1282, both folded through the
+// mod owner), center on the caster except DEST-reference types (31/34),
+// which fall back to the wire target's position like the enemy twin's
+// DEST arm (the pet path never resolves a dest packet field). Ally areas
+// are never cones (24/54/104 are enemy-only), so no cone arm applies.
+func (s *Server) creatureAIAreaAllyGeometry(motion *creatureMotion, spell wotlk.Spell, victim *playerPos) (radius, centerX, centerY, centerZ float32) {
+	destinationCenter := false
+	var maxRangePositive, maxRangeNegative float32
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	if s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+			if modOwner != nil {
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+			}
+		}
+	}
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		hasFriendly := false
+		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if !isFriendlyAreaTargetType(targetType) {
+				continue
+			}
+			hasFriendly = true
+			if friendlyAreaDestCentered(targetType) {
+				destinationCenter = true
+			}
+		}
+		if !hasFriendly {
+			continue
+		}
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				if value > radius {
+					radius = value
+				}
+			} else {
+				effMaxRange := maxRangeNegative
+				if spell.IsPositiveEffect(i) {
+					effMaxRange = maxRangePositive
+				}
+				if effMaxRange > radius {
+					radius = effMaxRange
+				}
+			}
+		}
+	}
+	centerX, centerY, centerZ = motion.X, motion.Y, motion.Z
+	if destinationCenter {
+		centerX, centerY, centerZ = victim.X, victim.Y, victim.Z
+	}
+	return radius, centerX, centerY, centerZ
+}
+
+// petAreaAllyGroupScope resolves the pet owner's party/raid membership for
+// the area-ally sweeps: the owner counts as party/raid with itself (C++
+// IsInPartyWith/IsInRaidWith self arm, Unit.cpp:12126/12155), other players
+// resolve through the owner's group snapshot, and creatures through their
+// charmer/owner GUID (Unit.cpp:12126). A nil owner has no group, so only
+// the (absent) owner self-match could pass and no candidate gains a bit.
+func petAreaAllyGroupScope(server *Server, owner *session) (ownerGUID uint64, inParty, inRaid func(uint64) bool) {
+	if owner == nil {
+		return 0, func(uint64) bool { return false }, func(uint64) bool { return false }
+	}
+	ownerGUID = owner.playerGUID
+	_, partyMembers, raidMembers, inGroup := groupMembershipSnapshot(server, owner.groupID, owner.playerGUID)
+	inParty = func(guid uint64) bool {
+		if guid == ownerGUID {
+			return true
+		}
+		if !inGroup {
+			return false
+		}
+		_, ok := partyMembers[guid]
+		return ok
+	}
+	inRaid = func(guid uint64) bool {
+		if guid == ownerGUID {
+			return true
+		}
+		if !inGroup {
+			return false
+		}
+		_, ok := raidMembers[guid]
+		return ok
+	}
+	return ownerGUID, inParty, inRaid
+}
+
+// creatureAIAreaAllyPlayers is the player half of the pet-caster area-ally
+// twin of creatureAIAreaEnemyPlayers: Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) with TARGET_CHECK_ALLY/PARTY/RAID selects every friendly
+// player in the area, not just the wire target, so a pet AoE heal or
+// party aura lands on the whole area. The ally test is the inverted enemy
+// gate (WorldObject::IsValidAssistTarget's faction arm, Object.cpp:3147:
+// both reactions >= NEUTRAL — the enemy sweep's isAttackableFaction gate
+// negated, so neutrals pass on both sides), plus the assist flag arm
+// (spellTargetUnitBlocked, assist=true, like the session friendly twin),
+// the cylinder area (Spell.cpp:8409) and line of sight from the center
+// (Spell.cpp:7479-7481). The wire victim is excluded (it rides the wire
+// leg; C++ merges it into one TargetInfo, AddUnitTarget Spell.cpp:2152).
+// Returns the extra player hits plus each hit's check bits; the MaxTargets
+// cap mirrors the enemy twin (Spell.cpp:1293, shuffle + truncate).
+func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session) ([]*playerPos, map[uint64]uint8) {
+	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
+		return nil, nil
+	}
+	radius, centerX, centerY, centerZ := s.creatureAIAreaAllyGeometry(motion, spell, victim)
+	if radius <= 0 {
+		return nil, nil
+	}
+	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
+	seen := map[uint64]struct{}{victim.GUID: {}}
+	checks := make(map[uint64]uint8)
+	var hits []*playerPos
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
+			continue
+		}
+		if targetSession.player.Map != motion.Map || targetSession.player.InstanceID != motion.InstanceID {
+			continue
+		}
+		if _, dup := seen[targetSession.playerGUID]; dup {
+			continue
+		}
+		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
+		if s.isAttackableFaction(motion.Faction, candidate) {
+			continue
+		}
+		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {
+			continue
+		}
+		dx, dy := float64(candidate.X-centerX), float64(candidate.Y-centerY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(candidate.Z-centerZ)) > float64(radius) {
+			continue
+		}
+		if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, candidate.X, candidate.Y, candidate.Z) {
+			continue
+		}
+		seen[targetSession.playerGUID] = struct{}{}
+		bits := petAreaAllyCheckAlly
+		if inParty(targetSession.playerGUID) {
+			bits |= petAreaAllyCheckParty
+		}
+		if inRaid(targetSession.playerGUID) {
+			bits |= petAreaAllyCheckRaid
+		}
+		checks[targetSession.playerGUID] = bits
+		cp := candidate
+		hits = append(hits, &cp)
+	}
+	s.sessionsMu.RUnlock()
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
+		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
+		hits = hits[:maxTargets]
+		kept := make(map[uint64]struct{}, len(hits))
+		for _, hit := range hits {
+			kept[hit.GUID] = struct{}{}
+		}
+		for guid := range checks {
+			if _, ok := kept[guid]; !ok {
+				delete(checks, guid)
+			}
+		}
+	}
+	return hits, checks
+}
+
+// creatureAIAreaAllyCreatures is the creature half of the pet-caster
+// area-ally twin, mirroring creatureAIAreaEnemyCreatures with the ally
+// test (WorldObject::IsValidAssistTarget, Object.cpp:3087: not a totem,
+// assist flag arm, non-hostile faction) in place of the enemy test. The
+// wire victim and the caster are excluded, like the enemy twin. Party and
+// raid bits resolve through the candidate's charmer/owner GUID
+// (Unit.cpp:12126), like the session friendly twin.
+func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session) ([]uint64, map[uint64]uint8) {
+	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
+		return nil, nil
+	}
+	if spellSearchPlayersOnly(spell) {
+		return nil, nil
+	}
+	radius, centerX, centerY, centerZ := s.creatureAIAreaAllyGeometry(motion, spell, victim)
+	if radius <= 0 {
+		return nil, nil
+	}
+	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
+	s.motionMu.Lock()
+	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
+	candidates := make([]*creatureMotion, 0, len(motionMap))
+	for _, cand := range motionMap {
+		if cand != nil {
+			candidates = append(candidates, cand)
+		}
+	}
+	s.motionMu.Unlock()
+	seen := map[uint64]struct{}{victim.GUID: {}, motion.GUID: {}}
+	checks := make(map[uint64]uint8)
+	var hits []uint64
+	for _, cand := range candidates {
+		if cand.Map != motion.Map || cand.InstanceID != motion.InstanceID || cand.Health == 0 {
+			continue
+		}
+		if _, dup := seen[cand.GUID]; dup {
+			continue
+		}
+		if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, true) {
+			continue
+		}
+		if s.factionTemplatesHostile(motion.Faction, cand.Faction) {
+			continue
+		}
+		dx, dy := float64(cand.X-centerX), float64(cand.Y-centerY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(cand.Z-centerZ)) > float64(radius) {
+			continue
+		}
+		if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, cand.X, cand.Y, cand.Z) {
+			continue
+		}
+		seen[cand.GUID] = struct{}{}
+		ownerGUID := cand.OwnerGUID
+		if ownerGUID == 0 {
+			ownerGUID = cand.CharmOwnerGUID
+		}
+		bits := petAreaAllyCheckAlly
+		if inParty(ownerGUID) {
+			bits |= petAreaAllyCheckParty
+		}
+		if inRaid(ownerGUID) {
+			bits |= petAreaAllyCheckRaid
+		}
+		checks[cand.GUID] = bits
+		hits = append(hits, cand.GUID)
+	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
+		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
+		hits = hits[:maxTargets]
+		kept := make(map[uint64]struct{}, len(hits))
+		for _, guid := range hits {
+			kept[guid] = struct{}{}
+		}
+		for guid := range checks {
+			if _, ok := kept[guid]; !ok {
+				delete(checks, guid)
+			}
+		}
+	}
+	return hits, checks
+}
+
 // applyInlineCreatureSpellHit runs the per-hit legs of the inline AI
 // victim-spell path for one player hit: the AutoBalance damage scaling,
 // Unit::DealDamage (Unit.cpp:735-973), the SMSG_SPELLNONMELEEDAMAGELOG

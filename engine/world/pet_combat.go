@@ -3266,16 +3266,37 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// GUIDs extend the GO packet hit list below.
 	var areaHits []*playerPos
 	var areaCreatureHits []uint64
-	if isAreaEnemySpell(spell) {
+	var areaAllyHits []*playerPos
+	var areaAllyCreatureHits []uint64
+	var areaAllyChecks map[uint64]uint8
+	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
-			areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos)
-			areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos)
+			if isAreaEnemySpell(spell) {
+				areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos)
+				areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos)
+			}
+			if hasFriendlyAreaEffect(spell) {
+				var playerChecks, creatureChecks map[uint64]uint8
+				areaAllyHits, playerChecks = s.server.creatureAIAreaAllyPlayers(ctx, motion, spell, victimPos, s)
+				areaAllyCreatureHits, creatureChecks = s.server.creatureAIAreaAllyCreatures(ctx, motion, spell, victimPos, s)
+				areaAllyChecks = make(map[uint64]uint8, len(playerChecks)+len(creatureChecks))
+				for guid, bits := range playerChecks {
+					areaAllyChecks[guid] = bits
+				}
+				for guid, bits := range creatureChecks {
+					areaAllyChecks[guid] |= bits
+				}
+			}
 		}
 	}
 	for _, areaHit := range areaHits {
 		hitTargets = append(hitTargets, areaHit.GUID)
 	}
 	hitTargets = append(hitTargets, areaCreatureHits...)
+	for _, areaHit := range areaAllyHits {
+		hitTargets = append(hitTargets, areaHit.GUID)
+	}
+	hitTargets = append(hitTargets, areaAllyCreatureHits...)
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
@@ -3493,6 +3514,24 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
+	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
+	// an area-selected target takes only the effects that selected it, so
+	// the damage leg fans out to the area hits only when a damage effect
+	// itself selects the area — a single-target damage effect on a spell
+	// whose aura or heal effect sweeps the area must not damage the
+	// whole area. The wire target always takes the leg, like before.
+	damageAreaEnemy := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+			if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+				damageAreaEnemy = true
+			}
+		}
+	}
 	if hasDamage {
 		// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683, 6725-6731): the
 		// guardian's GetBonusDamage() rides the advertised benefit into the
@@ -3588,14 +3627,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// enemy takes its own hit — the per-target miss roll, resistance,
 		// absorb and kill legs run per target inside
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
-		for _, areaHit := range areaHits {
-			if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
-				reflectorGUID := uint64(0)
-				if reflectedSet[areaHit.GUID] {
-					reflectorGUID = areaHit.GUID
+		if damageAreaEnemy {
+			for _, areaHit := range areaHits {
+				if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
+					reflectorGUID := uint64(0)
+					if reflectedSet[areaHit.GUID] {
+						reflectorGUID = areaHit.GUID
+					}
+					missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
+					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 				}
-				missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 			}
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): the area-selected
@@ -3605,14 +3646,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// above already ran for these GUIDs through hitTargets, so a
 		// reflected creature hit lands on the pet and an evaded one
 		// resolves to 0 and skips, exactly like the player area hits.
-		for _, areaCreatureGUID := range areaCreatureHits {
-			if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
-				reflectorGUID := uint64(0)
-				if reflectedSet[areaCreatureGUID] {
-					reflectorGUID = areaCreatureGUID
+		if damageAreaEnemy {
+			for _, areaCreatureGUID := range areaCreatureHits {
+				if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
+					reflectorGUID := uint64(0)
+					if reflectedSet[areaCreatureGUID] {
+						reflectorGUID = areaCreatureGUID
+					}
+					missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
+					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 				}
-				missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
 			}
 		}
 	}
@@ -3746,6 +3789,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					applyHeal(areaCreatureGUID)
 				}
 			}
+			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+				for _, areaHit := range areaAllyHits {
+					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+						applyHeal(areaHit.GUID)
+					}
+				}
+				for _, areaCreatureGUID := range areaAllyCreatureHits {
+					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+						applyHeal(areaCreatureGUID)
+					}
+				}
+			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
@@ -3780,6 +3835,26 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						areaTrigger(areaCreatureGUID)
 					}
 				}
+				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+					for _, areaHit := range areaAllyHits {
+						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+							if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+								triggerTarget := target
+								triggerTarget.UnitGUID = rt
+								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							}
+						}
+					}
+					for _, areaCreatureGUID := range areaAllyCreatureHits {
+						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+							if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+								triggerTarget := target
+								triggerTarget.UnitGUID = rt
+								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							}
+						}
+					}
+				}
 			}
 		}
 		if effect.Effect == spellEffectDispel {
@@ -3798,6 +3873,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				for _, areaCreatureGUID := range areaCreatureHits {
 					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
 						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
+					}
+				}
+			}
+			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+				for _, areaHit := range areaAllyHits {
+					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+							s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
+						}
+					}
+				}
+				for _, areaCreatureGUID := range areaAllyCreatureHits {
+					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+							s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
+						}
 					}
 				}
 			}
@@ -3825,6 +3916,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 				}
 			}
+			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+				for _, areaHit := range areaAllyHits {
+					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+							s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+						}
+					}
+				}
+				for _, areaCreatureGUID := range areaAllyCreatureHits {
+					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+							s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+						}
+					}
+				}
+			}
 		}
 		if effect.Effect == spellEffectInstaKill {
 			// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a pet
@@ -3849,7 +3956,31 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			for guid := range evadedSet {
 				evaded[guid] = true
 			}
-			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, immuneSet, petMissVerdicts)
+			// Spell::SelectImplicitAreaTargets effect-mask rule
+			// (Spell.cpp:866-897): the insta-kill applies to the wire target
+			// plus only the area targets this effect itself selects —
+			// the old hitTargets pass killed every area target of every
+			// other effect too, including the new ally area hits.
+			instaTargets := []uint64{targetGUID}
+			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+				for _, areaHit := range areaHits {
+					instaTargets = append(instaTargets, areaHit.GUID)
+				}
+				instaTargets = append(instaTargets, areaCreatureHits...)
+			}
+			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+				for _, areaHit := range areaAllyHits {
+					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+						instaTargets = append(instaTargets, areaHit.GUID)
+					}
+				}
+				for _, areaCreatureGUID := range areaAllyCreatureHits {
+					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+						instaTargets = append(instaTargets, areaCreatureGUID)
+					}
+				}
+			}
+			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, instaTargets, reflected, evaded, immuneSet, petMissVerdicts)
 		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -3858,26 +3989,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// row all come from it, like hitInfo.AuraBasePoints.
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
-			victimGUID := resolveReflectTarget(targetGUID)
-			if victimGUID == 0 {
-				// Spell.cpp:2350 — nulled reflect victim: no aura leg.
-				continue
-			}
-			if immuneSet[targetGUID] {
-				continue
-			}
-			if missedTarget(targetGUID) {
-				continue
-			}
-			var victim combatTarget
-			if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
-				victim = ct
-			}
-			amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
-			// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
-			// the periodic done leg bakes at apply for unit auras.
-			amount = s.petPeriodicApplyDoneLegs(ctx, motion, auraSpell, i, victimGUID, victim, amount)
-			if s.applyPetAura(ctx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
+			// Spell.cpp:2350 — a nulled reflect victim, an immune wire
+			// target, or a missed wire target takes no wire leg, but the
+			// gates are a condition, not a continue: each area target is
+			// its own TargetInfo (Spell.cpp:2405) and still takes the
+			// area legs below.
+			if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
+				var victim combatTarget
+				if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
+					victim = ct
+				}
+				amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
+				// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
+				// the periodic done leg bakes at apply for unit auras.
+				amount = s.petPeriodicApplyDoneLegs(ctx, motion, auraSpell, i, victimGUID, victim, amount)
+				if s.applyPetAura(ctx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
+				}
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
 			// an enemy area aura applies to every unit the area selection
@@ -3922,6 +4049,33 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
 					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+				}
+			}
+			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+				applyAllyAura := func(origGUID uint64) {
+					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
+					aDurationMs := petAuraDuration(s.server, aSpell, motion)
+					aVictimGUID := resolveReflectTarget(origGUID)
+					if aVictimGUID == 0 || immuneSet[origGUID] || missedTarget(origGUID) {
+						return
+					}
+					var aVictim combatTarget
+					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
+						aVictim = ct
+					}
+					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+				}
+				for _, areaHit := range areaAllyHits {
+					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+						applyAllyAura(areaHit.GUID)
+					}
+				}
+				for _, areaCreatureGUID := range areaAllyCreatureHits {
+					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+						applyAllyAura(areaCreatureGUID)
+					}
 				}
 			}
 		}
