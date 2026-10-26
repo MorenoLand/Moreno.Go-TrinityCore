@@ -234,7 +234,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 		if eff.Effect == 0 {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slotIndex, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
 			case isCasterDestTarget(targetType):
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1312-1424):
@@ -312,6 +312,12 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// object's position. The scan is per effect
 				// (Spell.cpp:1066), so a later effect's 46 arm re-scans
 				// with its own conditions and overwrites the destination.
+				// A B-slot 46 behind a NEARBY/CONE/AREA A slot never selects
+				// (Spell.cpp:866-900 processed-slot rule) and must not fail
+				// the cast here.
+				if slotIndex == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+					continue
+				}
 				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID, effIndex); ok {
 					x, y, z = nx, ny, nz
 				} else {

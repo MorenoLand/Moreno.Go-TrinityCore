@@ -21,7 +21,7 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 			isTargetDestTarget(eff.ImplicitTargetA) || isTargetDestTarget(eff.ImplicitTargetB) ||
 			isDestDestTarget(eff.ImplicitTargetA) || isDestDestTarget(eff.ImplicitTargetB) ||
 			eff.ImplicitTargetA == implicitTargetDestTraj || eff.ImplicitTargetB == implicitTargetDestTraj ||
-			eff.ImplicitTargetA == implicitTargetDestNearbyEntry || eff.ImplicitTargetB == implicitTargetDestNearbyEntry {
+			eff.ImplicitTargetA == implicitTargetDestNearbyEntry || (eff.ImplicitTargetB == implicitTargetDestNearbyEntry && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -108,7 +108,7 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 		if eff.Effect == 0 {
 			continue
 		}
-		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		for slotIndex, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
 			case isCasterDestTarget(targetType):
 				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, modRadius)
@@ -126,6 +126,12 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 					x, y, z = nx, ny, nz
 				}
 			case targetType == implicitTargetDestNearbyEntry:
+				// A B-slot 46 behind a NEARBY/CONE/AREA A slot never selects
+				// (Spell.cpp:866-900 processed-slot rule); without this guard
+				// the arm re-scanned and could fail a cast C++ never fails.
+				if slotIndex == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+					continue
+				}
 				if effIndex != scannedEff {
 					nearbyX, nearbyY, nearbyZ, nearbyFound = s.creatureEntryNearbyDestPosition(ctx, m, spell, effIndex)
 					scannedEff = effIndex
@@ -531,6 +537,141 @@ func (s *Server) creatureEntryNearbyGOTarget(ctx context.Context, m *creatureMot
 		}
 	})
 	if bestGUID == 0 {
+		return 0, false
+	}
+	return bestGUID, true
+}
+
+// creatureHostileNearbyTarget ports the UNIT half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for
+// TARGET_UNIT_NEARBY_ENEMY (2) for a creature caster, mirroring the
+// session twin spellHostileNearbyTarget: the single nearest hostile unit
+// within GetMaxRange(false) — the spell's hostile max range, folded through
+// SPELLMOD_RANGE via the mod-owner session (SpellInfo.cpp:3070-3072) —
+// passing SpellInfo::CheckTarget and TARGET_CHECK_ENEMY (Spell.cpp:8323-8328:
+// totem rejection + IsValidAttackTarget). The caster itself never selects
+// (IsValidAttackTarget fails for self). Players gate on isAttackableFaction
+// (the area-enemy twin's gate) and creatures on factionTemplatesHostile
+// (the creature-vs-creature verdict); static DB spawns without motions join
+// via the template-faction query (the area-enemy twin's leg). Distance is
+// GetDistance (Object.cpp:1175): 3D distance minus the candidate's combat
+// reach, floored at 0, strict less-than shrinking to the nearest match
+// (WorldObjectSpellNearbyTargetCheck, Spell.cpp:8388). The pick takes the
+// session twin's CheckEffectTarget LOS gate
+// (implicitUnitTargetLOSPassesForMotion, Spell.cpp:2098/7395): a LOS-blocked
+// pick fails instead of rescanning. No match returns false and the caller
+// fails the cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+// Documented deltas: the ImplicitTargetConditions arm (base
+// WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is not wired —
+// Go's condition evaluator is entry-oriented, the session twin's gap;
+// the session twin carries no GM arm on this path, while this twin applies
+// the Object.cpp:2946 GM exclusion from the area-enemy twin.
+func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
+	if s == nil || m == nil || s.Data == nil {
+		return 0, false
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok || rangeEntry.MaxHostile <= 0 {
+		return 0, false
+	}
+	maxRange := spellDBCMaxRange(false, rangeEntry)
+	if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+		maxRange = modOwner.applySpellModFloat(spell, spellModRange, maxRange)
+	}
+	if maxRange <= 0 {
+		return 0, false
+	}
+	playersOnly := spellSearchPlayersOnly(spell)
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	var bestX, bestY, bestZ float32
+	consider := func(guid uint64, x, y, z, reach float32) {
+		dist := float64(distance3D(x, y, z, m.X, m.Y, m.Z)) - float64(reach)
+		if dist < 0 {
+			dist = 0
+		}
+		if dist < bestDist {
+			bestDist, bestGUID, bestX, bestY, bestZ = dist, guid, x, y, z
+		}
+	}
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+			continue
+		}
+		p := targetSession.player
+		if p.Map != m.Map || p.InstanceID != m.InstanceID || p.Health == 0 {
+			continue
+		}
+		if sessionIsGameMaster(targetSession) {
+			continue
+		}
+		if spellTargetUnitBlocked(spell, p.UnitFlags, 0, false) {
+			continue
+		}
+		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
+		if !s.isAttackableFaction(m.Faction, candidate) {
+			continue
+		}
+		consider(targetSession.playerGUID, p.X, p.Y, p.Z, p.CombatReach)
+	}
+	s.sessionsMu.RUnlock()
+	if !playersOnly {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		candidates := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				candidates = append(candidates, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range candidates {
+			if cand.GUID == m.GUID || cand.Map != m.Map || cand.InstanceID != m.InstanceID || cand.Health == 0 {
+				continue
+			}
+			if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
+				continue
+			}
+			if !s.factionTemplatesHostile(m.Faction, cand.Faction) {
+				continue
+			}
+			consider(cand.GUID, cand.X, cand.Y, cand.Z, cand.CombatReach)
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-maxRange, float64(m.X)+maxRange, float64(m.Y)-maxRange, float64(m.Y)+maxRange)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if guid == m.GUID || uint32(rowMap) != m.Map || health <= 0 {
+						continue
+					}
+					if s.isTotemGUID(guid) || spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), false) {
+						continue
+					}
+					if !s.factionTemplatesHostile(m.Faction, uint32(faction)) {
+						continue
+					}
+					consider(guid, float32(x), float32(y), float32(z), 0)
+				}
+			}
+		}
+	}
+	if bestGUID == 0 {
+		return 0, false
+	}
+	if !s.implicitUnitTargetLOSPassesForMotion(spell, m, bestGUID, bestX, bestY, bestZ) {
 		return 0, false
 	}
 	return bestGUID, true

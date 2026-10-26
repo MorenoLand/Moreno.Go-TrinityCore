@@ -13,14 +13,16 @@ const (
 )
 
 // isGONearbyEntrySpell reports spells carrying TARGET_GAMEOBJECT_NEARBY_ENTRY
-// (40) on any effect: {GOBJ, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
+// (40) on a selecting slot: {GOBJ, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
 // table, SpellInfo.cpp:260; SelectImplicitNearbyTargets, Spell.cpp:1036).
+// A B-slot 40 behind a NEARBY/CONE/AREA A slot never selects (Spell.cpp:866-900
+// processed-slot rule, the hostile-nearby gating precedent).
 func isGONearbyEntrySpell(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == implicitTargetGONearbyEntry || eff.ImplicitTargetB == implicitTargetGONearbyEntry {
+		if eff.ImplicitTargetA == implicitTargetGONearbyEntry || (eff.ImplicitTargetB == implicitTargetGONearbyEntry && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -28,14 +30,16 @@ func isGONearbyEntrySpell(spell wotlk.Spell) bool {
 }
 
 // isDestNearbyEntrySpell reports spells carrying TARGET_DEST_NEARBY_ENTRY
-// (46) on any effect: {DEST, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
+// (46) on a selecting slot: {DEST, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
 // table, SpellInfo.cpp:266; SelectImplicitNearbyTargets, Spell.cpp:1036).
+// A B-slot 46 behind a NEARBY/CONE/AREA A slot never selects (Spell.cpp:866-900
+// processed-slot rule, the hostile-nearby gating precedent).
 func isDestNearbyEntrySpell(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == implicitTargetDestNearbyEntry || eff.ImplicitTargetB == implicitTargetDestNearbyEntry {
+		if eff.ImplicitTargetA == implicitTargetDestNearbyEntry || (eff.ImplicitTargetB == implicitTargetDestNearbyEntry && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
@@ -73,15 +77,17 @@ func (s *session) entryNearbyObjectRange(spell wotlk.Spell) float64 {
 }
 
 // entryImplicitEffectMask collects the effect bits carrying the given
-// implicit target on either slot, for the implicit-target condition loader
+// implicit target on a selecting slot, for the implicit-target condition loader
 // (CONDITION_SOURCE_TYPE_SPELL_IMPLICIT_TARGET, SourceGroup & effectMask).
+// A B-slot target behind a NEARBY/CONE/AREA A slot never selects
+// (Spell.cpp:866-900), so it contributes no effect bit.
 func entryImplicitEffectMask(spell wotlk.Spell, target uint32) uint32 {
 	var effectMask uint32
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == target || eff.ImplicitTargetB == target {
+		if eff.ImplicitTargetA == target || (eff.ImplicitTargetB == target && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			effectMask |= 1 << uint(i)
 		}
 	}
@@ -89,19 +95,21 @@ func entryImplicitEffectMask(spell wotlk.Spell, target uint32) uint32 {
 }
 
 // firstEntryImplicitEffectMask returns the single-effect mask of the
-// lowest-index effect carrying the given implicit target on either slot.
+// lowest-index effect carrying the given implicit target on a selecting slot.
 // Spell::SelectEffectImplicitTargets (Spell.cpp:885-900) merges later
 // effects into the first selection only when TargetA, TargetB, the
 // condition list pointer and the radius all match, so the first
 // selection always runs on the first effect's list; loading the union
 // over all effects would merge distinct ElseGroup rows into one AND
-// group and fail casts whose effects match different entries.
+// group and fail casts whose effects match different entries. A first
+// effect carrying the target only on a skipped B slot must not supply
+// the list — the selecting effect's list is the one C++ loads.
 func firstEntryImplicitEffectMask(spell wotlk.Spell, target uint32) uint32 {
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == target || eff.ImplicitTargetB == target {
+		if eff.ImplicitTargetA == target || (eff.ImplicitTargetB == target && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return 1 << uint(i)
 		}
 	}

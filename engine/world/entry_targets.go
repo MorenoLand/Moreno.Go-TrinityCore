@@ -15,14 +15,17 @@ const (
 )
 
 // isEntryNearbySpell reports spells carrying TARGET_UNIT_NEARBY_ENTRY (38)
-// on any effect: {UNIT, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
+// on a selecting slot: {UNIT, CASTER, NEARBY, ENTRY} (SpellImplicitTargetInfo
 // table, SpellInfo.cpp:218-330; SelectImplicitNearbyTargets, Spell.cpp:1036).
+// A B-slot 38 behind a NEARBY/CONE/AREA A slot never selects (Spell.cpp:866-900
+// processed-slot rule, the hostile-nearby gating precedent), so such an effect
+// does not make the spell a 38 spell.
 func isEntryNearbySpell(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == implicitTargetNearbyEntry || eff.ImplicitTargetB == implicitTargetNearbyEntry {
+		if eff.ImplicitTargetA == implicitTargetNearbyEntry || (eff.ImplicitTargetB == implicitTargetNearbyEntry && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}

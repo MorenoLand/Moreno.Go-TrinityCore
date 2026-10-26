@@ -3131,22 +3131,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// creature caster, the inline twin of the
 			// castCreatureSpellInternal arm (boss_ai.go):
 			// TARGET_UNIT_NEARBY_ENTRY (38) /
-			// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) replace the wire hit
-			// list with the single nearest entry-matched target, and a
+			// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) /
+			// TARGET_UNIT_NEARBY_ENEMY (2) replace the wire hit
+			// list with the single nearest matched target, and a
 			// miss fails the cast (Spell.cpp:1111) — rearm and return
 			// like the destFailed arm above. The packet's explicit
 			// target (spellTarget) stays the wire target, mirroring C++
-			// m_targets. A spell carrying both 38 and 40 takes the 38
-			// leg only, the session twin's precedence. Area hits from
-			// other effects stay: C++ runs each effect's selection
-			// independently (Spell.cpp:761-900), so the nearby pick
-			// replaces only the wire slot. A player pick becomes the
-			// leg victim (target points into the tick's players slice,
-			// like the wire victim at :2888, with a session-built
-			// fallback for a player who joined after the slice was
-			// built); a creature pick joins the area-creature legs and
-			// a GO pick takes no unit leg, so both skip the wire
-			// player legs below.
+			// m_targets. Legs select independently (Spell.cpp:761-900),
+			// so a spell carrying several of 38, 40 and 2 takes each
+			// pick. Area hits from other effects stay: C++ runs each
+			// effect's selection independently (Spell.cpp:761-900), so
+			// the nearby pick replaces only the wire slot. A player pick
+			// becomes the leg victim (target points into the tick's
+			// players slice, like the wire victim at :2888, with a
+			// session-built fallback for a player who joined after the
+			// slice was built); a creature pick joins the
+			// area-creature legs and a GO pick takes no unit leg, so
+			// both skip the wire player legs below. The 38 pick drives
+			// the victim body, else the hostile pick; a non-anchor
+			// hostile pick joins the area legs instead.
 			nearbyReplacesWireVictim := false
 			if inlineSpellKnown {
 				nearbyHitTargets := func(nearby uint64) []uint64 {
@@ -3175,20 +3178,26 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// (:1111). The unit pick drives the victim body below;
 				// a GO pick joins the hit list after it and takes no
 				// unit leg.
-				var unitPick, goPick uint64
-				unitOK, goOK := true, true
+				var unitPick, goPick, hostilePick uint64
+				unitOK, goOK, hostileOK := true, true, true
 				if isEntryNearbySpell(inlineSpell) {
 					unitPick, unitOK = nearbyWire(inlineSpell, true)
 				}
 				if isGONearbyEntrySpell(inlineSpell) {
 					goPick, goOK = nearbyWire(inlineSpell, false)
 				}
-				if !unitOK || !goOK {
+				if isHostileNearbySpell(inlineSpell) {
+					hostilePick, hostileOK = s.creatureHostileNearbyTarget(ctx, motion, inlineSpell)
+				}
+				if !unitOK || !goOK || !hostileOK {
 					s.rearmAISpell(motion, dueSpell, spellID, now)
 					return
 				}
-				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) {
+				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) {
 					nearby := goPick
+					if isHostileNearbySpell(inlineSpell) {
+						nearby = hostilePick
+					}
 					if isEntryNearbySpell(inlineSpell) {
 						nearby = unitPick
 					}
@@ -3229,9 +3238,53 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					} else {
 						nearbyReplacesWireVictim = true
 					}
+					// A non-anchor hostile pick still takes the per-hit legs:
+					// a player pick joins areaHits, a creature pick joins
+					// areaCreatureHits (dedupe against legs already holding
+					// it); a static spawn pick has no leg and rides the
+					// packet only, the anchor-static convention above.
+					hostileJoinedLegs := false
+					if isHostileNearbySpell(inlineSpell) && hostilePick != nearby {
+						for _, areaHit := range areaHits {
+							if areaHit != nil && areaHit.GUID == hostilePick {
+								hostileJoinedLegs = true
+								break
+							}
+						}
+						if !hostileJoinedLegs {
+							for _, areaCreatureGUID := range areaCreatureHits {
+								if areaCreatureGUID == hostilePick {
+									hostileJoinedLegs = true
+									break
+								}
+							}
+						}
+						if !hostileJoinedLegs {
+							for i := range players {
+								if players[i].GUID == hostilePick {
+									areaHits = append(areaHits, &players[i])
+									hostileJoinedLegs = true
+									break
+								}
+							}
+						}
+						if !hostileJoinedLegs {
+							if pickSess := s.findSessionByGUID(hostilePick); pickSess != nil && pickSess.player != nil {
+								p := pickSess.player
+								areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+								hostileJoinedLegs = true
+							} else if s.findCreatureMotion(motion.Map, motion.InstanceID, hostilePick) != nil {
+								areaCreatureHits = append(areaCreatureHits, hostilePick)
+								hostileJoinedLegs = true
+							}
+						}
+					}
 					hitTargets = nearbyHitTargets(nearby)
-					if isEntryNearbySpell(inlineSpell) && isGONearbyEntrySpell(inlineSpell) {
+					if isGONearbyEntrySpell(inlineSpell) && goPick != nearby {
 						hitTargets = append(hitTargets, goPick)
+					}
+					if isHostileNearbySpell(inlineSpell) && hostilePick != nearby && !hostileJoinedLegs {
+						hitTargets = append(hitTargets, hostilePick)
 					}
 				}
 			}
