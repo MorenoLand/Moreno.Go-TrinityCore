@@ -214,11 +214,11 @@ end
 -- threat-list player within 30yd.
 local function farthestPlayerTarget(creature, maxDist)
     local best, bestDist = nil, nil
+    local reach = creature:GetCombatReach()
     for _, plr in ipairs(creature:GetAITargets()) do
-        if plr:GetObjectType() == "Player"
-                and not plr:IsDead() and creature:IsWithinDist(plr, maxDist) then
+        if plr:GetObjectType() == "Player" and not plr:IsDead() then
             local dist = creature:GetDistance(plr)
-            if bestDist == nil or dist > bestDist then
+            if dist - reach < maxDist and (bestDist == nil or dist > bestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < maxDist + both reaches; target reach has no unit-surface bridge (documented band)
                 best, bestDist = plr, dist
             end
         end

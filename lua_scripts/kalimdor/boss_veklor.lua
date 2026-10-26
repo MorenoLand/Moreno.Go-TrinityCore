@@ -244,10 +244,11 @@ end
 -- distance-poller idiom).
 local function onArcaneBurst(creature, guid)
     local nearest, nearestDist = nil, nil
+    local reach = creature:GetCombatReach()
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead() then
             local d = creature:GetDistance(p)
-            if d <= 5.0 and (nearestDist == nil or d < nearestDist) then
+            if d - reach < 5.0 and (nearestDist == nil or d < nearestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < 5.0 + both reaches; target reach band documented
                 nearest, nearestDist = p, d
             end
         end

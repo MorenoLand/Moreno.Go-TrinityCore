@@ -133,10 +133,11 @@ end
 -- players).
 local function nearestPlayerInRange(creature, range)
     local best, bestDist = nil, nil
+    local reach = creature:GetCombatReach()
     for _, t in ipairs(creature:GetAITargets()) do
         if t:IsAlive() then
             local dist = creature:GetDistance(t)
-            if dist <= range and (bestDist == nil or dist < bestDist) then
+            if dist - reach < range and (bestDist == nil or dist < bestDist) then -- IsWithinCombatRange gate (Unit.cpp:583): center < range + both reaches; target reach band documented
                 best, bestDist = t, dist
             end
         end

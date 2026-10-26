@@ -72,6 +72,7 @@ RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 23, assaultBotReset)
 
 -- Unmodeled: the UNIT_STATE_ROOT retarget arm (C++ UpdateAI: on ROOT,
 -- SelectTarget(MinDistance, 0, 30.0f) + ResetAllThreat + AttackStart).
--- HasUnitState has no bridge on the handler-creature surface and
--- AttackStart has no bridge (anomalus header precedent); the magnetic
+-- HasUnitState/IsRooted has no bridge on the handler-creature surface
+-- (ResetAllThreat and the EngageWithTarget AttackStart twin are both
+-- bridged -- the root-state read alone blocks the arm); the magnetic
 -- field timer above is the whole engage-gated behavior.
