@@ -3507,7 +3507,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			return d
 		}
 		if rt := resolveReflectTarget(targetGUID); rt != 0 {
-			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered)
+			reflectorGUID := uint64(0)
+			if reflectedSet[targetGUID] {
+				reflectorGUID = targetGUID
+			}
+			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,
@@ -3515,8 +3519,52 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
 		for _, areaHit := range areaHits {
 			if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered)
+				reflectorGUID := uint64(0)
+				if reflectedSet[areaHit.GUID] {
+					reflectorGUID = areaHit.GUID
+				}
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
 			}
+		}
+	}
+	if !hasDamage {
+		// Reflect return trip for a spell with no damage effect: the
+		// damage leg never runs, but DoDamageAndTriggers still runs its
+		// tail per TargetInfo (Spell.cpp:2565-2575 !hasDamage branch,
+		// 2609-2652) — NODAMAGE procs, the reflector stand-up, the
+		// SpellHitTarget hook with the pet as _spellHitTarget, and the
+		// per-hit trigger consumer. Only clean (NONE) reflects: a nulled
+		// trip resolves no _spellHitTarget (Spell.cpp:2350) and runs
+		// nothing. The leech leg needs no arm here — a zero-damage trip
+		// has a zero leech basis.
+		zeroSchoolMask := uint8(spell.SchoolMask)
+		if zeroSchoolMask == 0 {
+			zeroSchoolMask = 1
+		}
+		for _, trip := range reflectTrips {
+			if reflectNulled[trip.victimGUID] {
+				continue
+			}
+			if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+				typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
+				if typeMask != 0 {
+					spellCopy := spell
+					s.server.fireCreatureAuraProcLoop(ctx, motion, motion.GUID, procEventInfo{
+						typeMask:       typeMask,
+						schoolMask:     uint32(zeroSchoolMask),
+						spellTypeMask:  procSpellTypeNoDmgHeal,
+						spellPhaseMask: procSpellPhaseHit,
+						hitMask:        procHitNormal,
+						triggered:      triggered,
+						eventSpell:     &spellCopy,
+						actorGUID:      motion.GUID,
+						damage:         0,
+					})
+				}
+			}
+			s.server.standPetReflectReflectorUp(motion, trip.victimGUID, spell)
+			s.server.fireCreatureSpellHitTarget(ctx, motion, motion.GUID, spell.ID)
+			s.server.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
 		}
 	}
 	for i, effect := range spell.Effects {
@@ -4440,7 +4488,39 @@ func (s *Server) applyPetHealthLeechHeal(caster *creatureMotion, spellID uint32,
 	s.motionMu.Unlock()
 }
 
-func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool) {
+// standPetReflectReflectorUp runs the DoDamageAndTriggers stand-up arm
+// (Spell.cpp:2609-2617) for a pet-path reflect return trip: C++ stands
+// TargetInfo::unit — the reflector, resolved from TargetGUID — not
+// _spellHitTarget (the pet, PreprocessTarget Spell.cpp:2350). Gated on
+// the C++ arms: not friendly to the pet caster, and non-positive or
+// dispel-effect. A player reflector stands via its session, a creature
+// reflector via standCreatureMotionUp.
+func (s *Server) standPetReflectReflectorUp(caster *creatureMotion, reflectorGUID uint64, spell wotlk.Spell) {
+	if s == nil || caster == nil || reflectorGUID == 0 || spell.ID == 0 {
+		return
+	}
+	if spellIsPositive(spell) && !spellHasEffect(spell, spellEffectDispel) {
+		return
+	}
+	if s.creatureFriendlyToTarget(caster, reflectorGUID) {
+		return
+	}
+	if rsess := s.findSessionByGUID(reflectorGUID); rsess != nil && rsess.player != nil {
+		if rsess.player.StandState != 0 {
+			rsess.player.StandState = 0
+			rsess.sendPlayerUpdate()
+		}
+		return
+	}
+	if tm := s.findCreatureMotion(caster.Map, caster.InstanceID, reflectorGUID); tm != nil {
+		s.standCreatureMotionUp(tm)
+	}
+}
+
+// executePetSpellDamage deals one pet-cast spell hit. reflectorGUID is the
+// reflecting victim's GUID on a reflect return trip (the damage target is
+// the pet itself), or 0 on a direct hit.
+func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64) {
 	if s == nil || s.server == nil || caster == nil || damage == 0 {
 		return
 	}
@@ -4654,6 +4734,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			immuneToDmg = creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(target), petSpell, uint32(schoolMask))
 		}
 		if immuneToDmg {
+			// Reflect return trip: C++ still runs the stand-up, hook
+			// and trigger legs on an immune hit (DoDamageAndTriggers gates
+			// them only on MissCondition != EVADE and a non-null
+			// _spellHitTarget) — only the damage pipeline returns nothing.
+			if reflectorGUID != 0 {
+				s.server.standPetReflectReflectorUp(caster, reflectorGUID, petSpell)
+				s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
+				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{caster.GUID})
+			}
 			return
 		}
 	}
@@ -4878,6 +4967,37 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				}
 				s.server.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell)
 			}
+			// Reflect return trip, fully mitigated: C++ still runs the
+			// DoDamageAndTriggers tail (Spell.cpp:2581-2652) — the damage
+			// proc loop (m_damage > 0 pre-mitigation, so DAMAGE type with a
+			// zero post-mitigation amount), the reflector stand-up, the
+			// SpellHitTarget hook with the pet as _spellHitTarget, and the
+			// per-hit trigger consumer. The leech leg needs no arm: a
+			// zero-damage trip has a zero leech basis.
+			if reflectorGUID != 0 && tm != nil && tm.Health != 0 {
+				if hitSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
+					if hitSpell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+						typeMask := spellDamageProcTypeMask(hitSpell) | spellDamageTakenProcTypeMask(hitSpell) | procFlagTakenDamage
+						if typeMask != 0 {
+							spellCopy := hitSpell
+							s.server.fireCreatureAuraProcLoop(ctx, caster, caster.GUID, procEventInfo{
+								typeMask:       typeMask,
+								schoolMask:     uint32(schoolMask),
+								spellTypeMask:  procSpellTypeDamage,
+								spellPhaseMask: procSpellPhaseHit,
+								hitMask:        procHitNormal,
+								triggered:      triggered,
+								eventSpell:     &spellCopy,
+								actorGUID:      caster.GUID,
+								damage:         0,
+							})
+						}
+					}
+					s.server.standPetReflectReflectorUp(caster, reflectorGUID, hitSpell)
+					s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
+					s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{caster.GUID})
+				}
+			}
 		}
 		return
 	}
@@ -5046,6 +5166,20 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// NO_INITIAL_AGGRO gates here) and refined in the threat block
 	// below with the true pre-damage engagement state.
 	threatGated := s.spellDamageStep1Gate(spellID, false)
+	// Reflect return trip: EffectHealthLeech runs in the effect dispatch
+	// (DoProcessTargetContainer, Spell.cpp:3555-3566) ahead of
+	// DoDamageAndTriggers, so the pet heals for the damage it is about
+	// to take — before the health mutation below, not as a tail. That
+	// order is observable here because caster == victim: a leech heal
+	// can keep a would-be-lethal trip non-lethal, and the MaxHealth cap
+	// applies to the pre-damage health. The basis is the direct-hit
+	// leechDealt (post-absorb damage actually lost, overkill excluded);
+	// the tail leech call below is skipped when this pre-heal ran.
+	leechPreHealed := false
+	if reflectorGUID != 0 && leechDealt > 0 {
+		s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
+		leechPreHealed = true
+	}
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	newlyTapped := false
@@ -5269,9 +5403,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 		// non-friendly non-positive (or dispel-effect) spell hit stands
 		// the target up — ahead of the AI legs below, matching C++ order
-		// (2609 precedes 2629). Misses return early above (damage == 0),
-		// and this path models no reflect verdict, so the target is live.
-		if !spellIsPositive(hitSpell) || spellHasEffect(hitSpell, spellEffectDispel) {
+		// (2609 precedes 2629). On a reflect return trip the stood unit
+		// is the reflector (TargetInfo::unit, resolved from TargetGUID),
+		// not the pet _spellHitTarget — the helper carries the C++ gates
+		// for that case. Misses return early above (damage == 0).
+		if reflectorGUID != 0 {
+			s.server.standPetReflectReflectorUp(caster, reflectorGUID, hitSpell)
+		} else if !spellIsPositive(hitSpell) || spellHasEffect(hitSpell, spellEffectDispel) {
 			if target.GUID != 0 && !s.server.creatureFriendlyToTarget(caster, target.GUID) {
 				s.server.standCreatureMotionUp(targetMotion)
 			}
@@ -5283,6 +5421,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a pet
 	// caster on the creature-victim arm: the caster-heal arm for this
 	// hit's leech basis, at the cast-completion position like the
-	// player-victim arm above and the inline twin.
-	s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
+	// player-victim arm above and the inline twin. Skipped on a return
+	// trip: the pre-heal above already healed for this hit.
+	if !leechPreHealed {
+		s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
+	}
 }
