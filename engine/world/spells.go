@@ -17401,9 +17401,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// damageInfo with the target's MissCondition, firing NODMG procs once
 	// per target — never per effect. Hit targets already fired theirs
 	// through the shared damage/heal funnels above; only the filtered
-	// targets still owe this arm. REFLECT is excluded: a reflected target
-	// retargets to the caster and fires through the hit path there, while
-	// the reflector's own taken procs ride ProcReflectDelayed.
+	// targets still owe this arm. A clean reflect is excluded: the
+	// retargeted cast fires through the hit path on the caster, while
+	// the reflector's own taken procs ride ProcReflectDelayed. A bounced
+	// reflect (non-NONE ReflectResult, Spell.cpp:2350/7740-7743) resolves
+	// no unit, so no hit funnel runs — its TargetInfo still runs this
+	// nodmg arm with MissCondition=REFLECT on the reflector, the
+	// launch-path bounced leg's twin.
 	// CanExecuteTriggersOnHit (Spell.cpp:8164-8174) needs a non-zero
 	// effect mask, so a spell with no explicit effects fires only the
 	// IMMUNE carve-out (Spell.cpp:2442). A victim inside its own proc
@@ -17411,7 +17415,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// mirroring the shared funnels' targetCantProc gate.
 	for _, guid := range triggeredMissGUIDs {
 		miss := triggeredMiss[guid]
-		if miss == protocol.SpellMissReflect {
+		if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
 			continue
 		}
 		if !hasExplicitEffects && miss != protocol.SpellMissImmune && miss != protocol.SpellMissImmune2 {
