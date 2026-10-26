@@ -1411,7 +1411,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 					schoolMask:     uint32(schoolMask),
 					spellTypeMask:  procSpellTypeNoDmgHeal,
 					spellPhaseMask: procSpellPhaseHit,
-					hitMask:        procHitNormal,
+					hitMask:        procHitReflect,
 					triggered:      false,
 					eventSpell:     &spellCopy,
 					actorGUID:      motion.GUID,
@@ -1696,12 +1696,25 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	// runs, so the event evaluates an empty set (net no-op); the
 	// KILL/KILLED/DEATH legs (Unit.cpp:11283-11290) are a standing gap —
 	// no creature death path in Go fires them.
-	procHitMask := procHitNormal
-	if isCrit {
-		procHitMask = procHitCritical
+	// createProcHitMask (Unit.cpp:10179-10247) on the return trip: the
+	// TargetInfo's MissCondition stays SPELL_MISS_REFLECT into
+	// DoDamageAndTriggers (Spell.cpp:2544), so the switch returns
+	// PROC_HIT_REFLECT alone — no normal/critical bit even when the
+	// trip crit, and no absorb/block/full-resist bit either. The
+	// damage arm's immunity check instead ASSIGNS PROC_HIT_IMMUNE
+	// (Spell.cpp:2540-2546), and immune trips reach this loop, so
+	// they carry IMMUNE; the TAKEN_DAMAGE flag is ORed only by the
+	// non-immune else arm (Spell.cpp:2545), so immune trips drop it
+	// (the player taken loop already models this, procs.go).
+	procHitMask := procHitReflect
+	if damageImmune {
+		procHitMask = procHitImmune
 	}
 	if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
-		typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
+		typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
+		if !damageImmune {
+			typeMask |= procFlagTakenDamage
+		}
 		if typeMask != 0 {
 			spellCopy := spell
 			s.fireCreatureAuraProcLoop(ctx, live, guid, procEventInfo{

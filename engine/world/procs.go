@@ -1831,12 +1831,23 @@ func spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit bool,
 	if absorbed > 0 {
 		hitMask |= procHitAbsorb
 	}
-	// createProcHitMask (Unit.cpp:10213): a reflected hit (MissCondition ==
-	// SPELL_MISS_REFLECT, Spell.cpp:2544/2564) ORs PROC_HIT_REFLECT into the
-	// hit mask on top of the normal/crit/absorb bits. The heal arm never
-	// calls createProcHitMask, so heals take no reflect bit.
+	// createProcHitMask (Unit.cpp:10179-10247) on a reflected hit: the
+	// TargetInfo's MissCondition stays SPELL_MISS_REFLECT into
+	// DoDamageAndTriggers (Spell.cpp:2544), so the missCondition != NONE
+	// switch returns PROC_HIT_REFLECT alone — the missCondition == NONE
+	// arm (normal/critical, absorb, block, full-resist, nullification)
+	// never runs, no matter how the return-trip damage crit, absorbed,
+	// or resisted. The damage arm's immunity check instead ASSIGNS
+	// PROC_HIT_IMMUNE (Spell.cpp:2540-2546); the no-damage arm carries
+	// no immunity check, and Go's no-damage callers only pass immune
+	// on a damage-arm hit, so immune-first is exact for both arms.
+	// The heal arm never calls createProcHitMask, so heals take no
+	// reflect bit.
 	if reflected {
-		hitMask |= procHitReflect
+		if immune {
+			return procHitImmune
+		}
+		return procHitReflect
 	}
 	return hitMask
 }

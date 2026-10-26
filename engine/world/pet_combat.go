@@ -4589,6 +4589,15 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 		return
 	}
 	spellCopy := spell
+	// createProcHitMask (Unit.cpp:10179-10247) on the no-damage arm
+	// (Spell.cpp:2565-2575): a reflected TargetInfo's MissCondition
+	// stays SPELL_MISS_REFLECT, so the switch returns PROC_HIT_REFLECT
+	// alone; ordinary zero-damage hits (MissCondition NONE) take the
+	// NONE arm's normal bit. reflectorGUID marks the return trip.
+	zeroTripHitMask := procHitNormal
+	if reflectorGUID != 0 {
+		zeroTripHitMask = procHitReflect
+	}
 	if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && victim.procDeep == 0 {
 			victim.procAuraTriggerLoop(ctx, caster.GUID, procEventInfo{
@@ -4596,7 +4605,7 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 				schoolMask:     uint32(schoolMask),
 				spellTypeMask:  procSpellTypeNoDmgHeal,
 				spellPhaseMask: procSpellPhaseHit,
-				hitMask:        procHitNormal,
+				hitMask:        zeroTripHitMask,
 				triggered:      triggered,
 				eventSpell:     &spellCopy,
 				actorGUID:      caster.GUID,
@@ -4613,7 +4622,7 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 					schoolMask:     uint32(schoolMask),
 					spellTypeMask:  procSpellTypeNoDmgHeal,
 					spellPhaseMask: procSpellPhaseHit,
-					hitMask:        procHitNormal,
+					hitMask:        zeroTripHitMask,
 					triggered:      triggered,
 					eventSpell:     &spellCopy,
 					actorGUID:      caster.GUID,
@@ -4870,6 +4879,32 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// and trigger legs on an immune hit (DoDamageAndTriggers gates
 			// them only on MissCondition != EVADE and a non-null
 			// _spellHitTarget) — only the damage pipeline returns nothing.
+			// The proc loop runs too, ahead of those legs (Spell.cpp:2581
+			// precedes 2609): the damage arm's immunity check ASSIGNS
+			// PROC_HIT_IMMUNE (Spell.cpp:2540-2546), and the TAKEN_DAMAGE
+			// flag is ORed only by the non-immune else arm, so an immune
+			// return trip carries IMMUNE with no TAKEN_DAMAGE flag.
+			// Direct immune hits still return with no proc loop (the
+			// direct-hit immune-proc gap, separate from return trips).
+			if reflectorGUID != 0 && target.GUID == caster.GUID {
+				if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+					typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
+					if typeMask != 0 {
+						spellCopy := spell
+						s.server.fireCreatureAuraProcLoop(ctx, caster, caster.GUID, procEventInfo{
+							typeMask:       typeMask,
+							schoolMask:     uint32(schoolMask),
+							spellTypeMask:  procSpellTypeDamage,
+							spellPhaseMask: procSpellPhaseHit,
+							hitMask:        procHitImmune,
+							triggered:      triggered,
+							eventSpell:     &spellCopy,
+							actorGUID:      caster.GUID,
+							damage:         0,
+						})
+					}
+				}
+			}
 			if reflectorGUID != 0 {
 				s.server.standPetReflectReflectorUp(caster, reflectorGUID, petSpell)
 				s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
@@ -5517,10 +5552,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// DoDamageAndTriggers runs, so a lethal return trip evaluates an empty
 	// set (net no-op).
 	if targetMotion.Health != 0 && target.GUID == caster.GUID {
-		returnTripHitMask := procHitNormal
-		if isCrit {
-			returnTripHitMask = procHitCritical
-		}
+		// createProcHitMask (Unit.cpp:10179-10247) on the return trip:
+		// MissCondition stays SPELL_MISS_REFLECT into DoDamageAndTriggers
+		// (Spell.cpp:2544), so the switch returns PROC_HIT_REFLECT
+		// alone — no normal/critical bit even when the trip crit.
+		// Immune trips return before this site, so no immune arm.
+		returnTripHitMask := procHitReflect
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
 			typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell) | procFlagTakenDamage
 			if typeMask != 0 {
