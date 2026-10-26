@@ -305,7 +305,7 @@ local function advanceDive(creature, guid)
         -- target's position — creature:Teleport (NearTeleportTo twin) —
         -- and StopMoving() (both bridged).
         local dist = 3.0
-        if creature:IsWithinDist3d(target, 5.0) then
+        if creature:GetDistance(target) - creature:GetCombatReach() < 5.0 then -- IsWithinDist3d twin (Object.cpp:1213, own reach only)
             dist = 5.0
         end
         creature:Teleport(target:GetX(), target:GetY(), target:GetZ(), 0.0)

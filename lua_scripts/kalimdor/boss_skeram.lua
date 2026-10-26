@@ -145,7 +145,7 @@ local function onTrueFulfillment(creature, guid)
         if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:IsWithinDist(p, 45.0) then
+                and creature:GetDistance(p) - creature:GetCombatReach() < 45.0 then -- IsWithinDist twin (Object.cpp:1233)
             cands[#cands + 1] = p
         end
     end

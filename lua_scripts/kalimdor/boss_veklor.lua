@@ -196,7 +196,7 @@ end
 -- on both arms.
 local function onShadowBolt(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsWithinDist(victim, 45) then
+    if victim and creature:GetDistance(victim) - creature:GetCombatReach() < 45 then -- IsWithinDist twin (Object.cpp:1233)
         creature:CastSpell(victim, SPELL_SHADOWBOLT)
     end
     schedule(guid, "sb", 2000, function()
@@ -213,7 +213,7 @@ local function onBlizzard(creature, guid)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
         if p:GetObjectType() == "Player" and not p:IsDead()
-                and creature:IsWithinDist(p, 45) then
+                and creature:GetDistance(p) - creature:GetCombatReach() < 45 then -- IsWithinDist twin (Object.cpp:1233)
             candidates[#candidates + 1] = p
         end
     end

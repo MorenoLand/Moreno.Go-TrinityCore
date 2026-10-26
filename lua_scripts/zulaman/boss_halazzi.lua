@@ -262,9 +262,8 @@ end
 -- C++ PHASE_MERGE 1s check (boss_halazzi.cpp:292-304): each tick the
 -- lynx and boss MoveFollow each other and the merge completes when
 -- within 6 yd. MoveFollow has no bridge, so a 1s proximity poll twins
--- the check (IsWithinDistInMap bridged via the generic object
--- fallback: same-map gate, raw 3D distance with no combat-reach
--- subtraction — a small conservative deviation); the 2s mergewait
+-- the check (reach twin: raw < 6 + own reach, Object.cpp:1238;
+-- same-map gate vacuous for a FindNearestCreature lynx); the 2s mergewait
 -- timer stays as the fallback for lynxes that never close distance.
 local function onMergePoll(creature, guid)
     local st = halazziState(guid)
@@ -272,7 +271,7 @@ local function onMergePoll(creature, guid)
         return
     end
     local lynx = creature:FindNearestCreature(ENTRY_SPIRIT_LYNX, 100.0)
-    if lynx and creature:IsWithinDistInMap(lynx, 6.0) then
+    if lynx and creature:GetDistance(lynx) - creature:GetCombatReach() < 6.0 then -- IsWithinDistInMap twin (Object.cpp:1238)
         onMergeComplete(creature, guid)
         return
     end

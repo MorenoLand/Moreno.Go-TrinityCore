@@ -121,7 +121,7 @@ local function inhibitTick(creature, guid)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
-                and not p:IsDead() and creature:IsWithinDist(p, 45) then
+                and not p:IsDead() and creature:GetDistance(p) - creature:GetCombatReach() < 45 then -- C++ GetDistance < 45 twin (Object.cpp:1169)
             p:RemoveAura(SPELL_INHIBITMAGIC)
             p:AddAura(SPELL_INHIBITMAGIC)
         end

@@ -147,7 +147,7 @@ local function randomMeleePlayer(creature)
     local candidates = {}
     for _, plr in ipairs(creature:GetAITargets()) do
         if plr:GetObjectType() == "Player" and not plr:IsDead()
-                and creature:IsWithinDist(plr, 5.0) then
+                and creature:GetDistance(plr) - creature:GetCombatReach() < 5.0 then -- IsWithinDist twin (Object.cpp:1233)
             candidates[#candidates + 1] = plr
         end
     end
@@ -240,7 +240,7 @@ end
 local function onHealBrother(creature, guid)
     local other = creature:FindNearestCreature(ENTRY_VEKLOR, 150.0)
     local delay = 100
-    if other ~= nil and creature:IsWithinDist(other, 60) then
+    if other ~= nil and creature:GetDistance(other) - creature:GetCombatReach() < 60 then -- IsWithinDist twin (Object.cpp:1233)
         creature:CastSpell(other, SPELL_HEAL_BROTHER)
         delay = 1000
     end

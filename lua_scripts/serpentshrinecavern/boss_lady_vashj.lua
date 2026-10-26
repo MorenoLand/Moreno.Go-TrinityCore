@@ -635,7 +635,7 @@ local function elementalTick(creature, guid)
     -- (2026-10-25 audit D4; the old teron player-only pick is retired).
     if st.poisonBolt <= 1000 then
         local pick = pickRandomThreatTarget(creature)
-        if pick and creature:IsWithinDistInMap(pick, POISON_BOLT_RANGE) then
+        if pick and creature:GetDistance(pick) - creature:GetCombatReach() < POISON_BOLT_RANGE then -- IsWithinDistInMap twin (Object.cpp:1238)
             creature:CastSpell(pick, SPELL_POISON_BOLT)
         end
         st.poisonBolt = 5000 + math.random(0, 4999)
