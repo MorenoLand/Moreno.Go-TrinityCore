@@ -56,22 +56,36 @@ end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 1) — the bridged,
 -- threat-ordered GetAITargets list (lua_creature_events.go:345);
--- offset 1 skips the first (MaxThreat-ordered) LIVE entry — C++ skips
--- offline refs before the offset pop (UnitAI.h SelectTargetList);
+-- offset 1 pops the current victim from the victim-first list
+-- (UnitAI.h SelectTargetList pushes the victim first, then sorted
+-- rest minus offline refs) — not the threat head, which diverges
+-- under fixate/taunt; nil victim pops the top-threat entry;
 -- the pick runs over the REST of the alive threat list — players,
 -- pets, totems (playerOnly defaults FALSE, UnitAI.h:170).
 local function randomNonTankThreatTarget(creature)
-    local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local alive = {}
-    for _, t in ipairs(targets) do
-        if not t:IsDead() then
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() and (victimGuid == nil or t:GetGUID() ~= victimGuid) then
             alive[#alive + 1] = t
         end
     end
-    if #alive <= 1 then
+    if victimGuid == nil then
+        -- No victim: the offset pop removes the top-threat entry.
+        if #alive <= 1 then
+            return nil
+        end
+        return alive[1 + math.random(#alive - 1)]
+    end
+    -- C++ shortcut: threat list size <= offset ignores ALL elements.
+    if #alive == 0 then
         return nil
     end
-    return alive[1 + math.random(#alive - 1)]
+    return alive[math.random(#alive)]
 end
 
 -- C++ :90-99 EVENT_BRUTAL_STRIKE: DoCastVictim(SPELL_BRUTAL_STRIKE)
@@ -169,9 +183,9 @@ end
 
 -- Documented-only arms (no bridge):
 -- EVENT_DAGGER_THROW (:100-103): PORTED above via the threat-list
--- pool (randomNonTankThreatTarget — offset 1 skips the MaxThreat
--- head, the netherspite/curator offset-1 precedent generalized to
--- the whole threat list since playerOnly defaults FALSE).
+-- pool (randomNonTankThreatTarget — offset 1 pops the victim from
+-- the victim-first list, the netherspite/curator offset-1 precedent
+-- generalized to the whole threat list since playerOnly defaults FALSE).
 -- EVENT_CHECK_RANGE (:108-113): PORTED above (onCheckRange) via the
 -- handler-surface GetHomePosition bridge + GetCombatReach bridge — the
 -- "no home-position accessor" rationale recorded here 2026-10-21 is stale
