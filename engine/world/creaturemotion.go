@@ -3002,7 +3002,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// summoner in CharmOwnerGUID) instead of running guardian AI. The
 	// Charmed && OwnerGUID == 0 gate above never fires — charm always
 	// sets OwnerGUID — so it is not the charm gate; this diversion is.
-	if motion.OwnerGUID != 0 && (!summoned || motion.Charmed) {
+	// VehicleAI::OnCharmed (CombatAI.cpp:295-306) overrides without
+	// scheduling an AI change, so a charmed vehicle keeps VehicleAI —
+	// it never becomes PetAI the way a charmed non-vehicle does (base
+	// CreatureAI::OnCharmed -> ScheduleAIChange -> UpdateCharmAI ->
+	// PetAI). A charmed vehicle must therefore not ride this
+	// diversion: its step already ran the vehicle arms above, and
+	// follow-owner/aggressive-pet AI would be a second, wrong AI.
+	if motion.OwnerGUID != 0 && (!summoned || motion.Charmed) && !(motion.Charmed && s.isVehicleAI(motion)) {
 		s.updatePetMotion(ctx, motion, players, now)
 		return
 	}

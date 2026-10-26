@@ -1122,6 +1122,23 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if s.server != nil && s.player.Map == 628 {
 		s.server.handleICCreatureKilled(s, creatureEntry)
 	}
+
+	// TempSummon corpse/dead legs at death time (TemporarySummon.cpp:66-170):
+	// the in-range passes only observe summons near players, so an
+	// out-of-range corpse previously started its type-5 timer late (first
+	// observation) and a type-1/4 corpse lingered to the prune. This
+	// funnel runs wherever the kill happened, so run the dead legs
+	// here: types 1/4 unsummon at once, type 5 starts its timer at
+	// death; other types leave the corpse to the prune, as
+	// checkDeadTempSummon holds. Kills outside this funnel
+	// (creature-killed summons) keep the first-observation stamp as
+	// fallback. Placed last so every kill broadcast, loot write, and
+	// reward above still sees the corpse.
+	if s.server != nil {
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.checkDeadTempSummon(ctx, motion, now)
+		}
+	}
 }
 
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):

@@ -638,18 +638,21 @@ func (s *Server) checkTempSummonExpiry(ctx context.Context, motion *creatureMoti
 //     so a dead summon of either type vanishes at once instead of
 //     leaving a lootable corpse until the prune.
 //   - CORPSE_TIMED_DESPAWN (5) runs its InitStats duration while dead:
-//     the first dead observation stamps TempSummonExpiresAt (the Go
-//     death proxy — the passes only see in-range summons, so an
-//     out-of-range corpse starts its timer late by that interval),
-//     and a later observation past it unsummons; a zero lifetime
-//     unsummons at once, matching m_timer 0 <= diff on the first
-//     CORPSE tick.
+//     the kill funnel (onCreatureKilled tail) stamps
+//     TempSummonExpiresAt at death for funneled kills; the
+//     first-observation stamp below is the fallback for kills outside
+//     that funnel (creature-killed summons), and a later observation
+//     past it unsummons; a zero lifetime unsummons at once, matching
+//     m_timer 0 <= diff on the first CORPSE tick. A surviving type-5
+//     observation stamps Refreshed, so an actively observed corpse
+//     persists to its timer instead of pruning at 10 minutes; an
+//     unobserved corpse still prunes, as before.
 //   - TIMED_OR_DEAD (0), TIMED_DESPAWN (2), TIMED_DESPAWN_OUT_OF_COMBAT
 //     (3), DEAD_DESPAWN (6) and MANUAL (7) leave the corpse to the
 //     prune (C++ unsummons them only at DEAD state or UnSummon).
 //
-// Dead motions never stamp Refreshed here, so the prune still removes
-// the types left behind. Returns true when the summon was unsummoned.
+// Dead motions other than surviving type-5 observations never stamp
+// Refreshed here, so the prune still removes the types left behind. Returns true when the summon was unsummoned.
 func (s *Server) checkDeadTempSummon(ctx context.Context, motion *creatureMotion, now time.Time) bool {
 	if s == nil || motion == nil || !motion.IsTempSummon || motion.Health != 0 {
 		return false
@@ -671,12 +674,12 @@ func (s *Server) checkDeadTempSummon(ctx context.Context, motion *creatureMotion
 		}
 		if motion.TempSummonExpiresAt.IsZero() {
 			motion.TempSummonExpiresAt = now.Add(motion.TempSummonLifetime)
-			return false
 		}
 		if !now.Before(motion.TempSummonExpiresAt) {
 			s.expireTempSummonGuardian(ctx, motion)
 			return true
 		}
+		motion.Refreshed = now
 	}
 	return false
 }
