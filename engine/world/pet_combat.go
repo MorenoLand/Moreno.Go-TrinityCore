@@ -3331,6 +3331,21 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (Spell.cpp:2181) fires the reflector's taken-side procs at missile
 	// arrival — creature reflectors have no Go event-list model, so only
 	// player reflectors arm it (same as the player-path doReflect).
+	// SpellHitResult immune head (Object.cpp:2617-2627) for a pet
+	// caster: the server creature-caster immune verdict, which precedes
+	// evade and reflect in C++ order, so an immune target never rolls
+	// (or consumes) a reflect aura and reports IMMUNE, not REFLECT or
+	// EVADE. Runs ahead of the reflect pass below, like the
+	// castCreatureSpellInternal twin (boss_ai.go).
+	immuneSet := map[uint64]bool{}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if s.server.serverCreatureSpellImmuneVerdict(ctx, motion, spell, guid) {
+			immuneSet[guid] = true
+		}
+	}
 	reflectedSet := map[uint64]bool{}
 	evadedSet := map[uint64]bool{}
 	type petReflectTrip struct {
@@ -3339,7 +3354,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	var reflectTrips []petReflectTrip
 	for _, guid := range hitTargets {
-		if guid == 0 || reflectedSet[guid] {
+		if guid == 0 || reflectedSet[guid] || immuneSet[guid] {
 			continue
 		}
 		reflected, evaded, status := s.petSpellReflectVerdict(ctx, motion, spell, guid)
@@ -3357,15 +3372,36 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// SendSpellGo, so the GO packet's miss list carries magic misses too:
 	// the verdict pass below runs the same roll the funnel used to run
 	// after the packet, and a verdict-missed target rides MissStatus,
-	// never packetHits. Reflected/evaded targets keep their own entries
-	// and the pet itself never rolls (return trips take no miss roll).
+	// never packetHits. Reflected/evaded/immune targets keep their own
+	// entries and the pet itself never rolls (return trips take no
+	// miss roll).
 	petMissVerdicts := make(map[uint64]uint8, len(hitTargets))
 	for _, guid := range hitTargets {
-		if guid == motion.GUID || reflectedSet[guid] || evadedSet[guid] {
+		if reflectedSet[guid] || evadedSet[guid] {
+			continue
+		}
+		if immuneSet[guid] {
+			petMissVerdicts[guid] = protocol.SpellMissImmune
+			continue
+		}
+		if guid == motion.GUID {
 			continue
 		}
 		if tgt, ok := s.getCombatTarget(ctx, guid); ok {
-			petMissVerdicts[guid] = s.petSpellMissVerdict(ctx, motion, tgt, spell.ID)
+			verdict := s.petSpellMissVerdict(ctx, motion, tgt, spell.ID)
+			// IMMUNE2 upgrade (Spell.cpp:2108-2112, 4491-4492):
+			// a target that survived the table but is immune to
+			// every effect reports IMMUNE2 in the GO miss list, like
+			// the castCreatureSpellInternal twin (boss_ai.go). It
+			// joins immuneSet, so the effect legs below skip it
+			// (EffectMask == 0 applies nothing); the reflect pass
+			// already ran, so a reflecting IMMUNE2 target still
+			// reports REFLECT, matching the creature path.
+			if verdict == protocol.SpellMissNone && s.server.serverCreatureFullyEffectImmuneVerdict(ctx, motion, spell, guid) {
+				verdict = protocol.SpellMissImmune2
+				immuneSet[guid] = true
+			}
+			petMissVerdicts[guid] = verdict
 		}
 	}
 	// Spell::SendSpellGo (Spell.cpp:4494-4507): only MISS_NONE targets ride
@@ -3620,6 +3656,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if resolveReflectTarget(targetGUID) == 0 {
 				continue
 			}
+			if immuneSet[targetGUID] {
+				continue
+			}
 			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
 			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
 			// the uint32 wrap must never turn a negative rolled value into
@@ -3687,6 +3726,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					// trigger spell does not fire.
 					continue
 				}
+				if immuneSet[target.UnitGUID] {
+					continue
+				}
 				if reflectedSet[target.UnitGUID] {
 					triggerTarget.UnitGUID = motion.GUID
 				}
@@ -3694,7 +3736,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 		if effect.Effect == spellEffectDispel {
-			if rt := resolveReflectTarget(targetGUID); rt != 0 {
+			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] {
 				s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[targetGUID])
 			}
 		}
@@ -3706,7 +3748,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// player path bridges it (spells.go case 108). Reflection
 			// maps the victim to the pet like the 38 arm above
 			// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
-			if rt := resolveReflectTarget(targetGUID); rt != 0 {
+			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] {
 				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
 			}
 		}
@@ -3733,7 +3775,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			for guid := range evadedSet {
 				evaded[guid] = true
 			}
-			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, nil, nil)
+			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded, immuneSet, nil)
 		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
@@ -3745,6 +3787,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			victimGUID := resolveReflectTarget(targetGUID)
 			if victimGUID == 0 {
 				// Spell.cpp:2350 — nulled reflect victim: no aura leg.
+				continue
+			}
+			if immuneSet[targetGUID] {
 				continue
 			}
 			var victim combatTarget
@@ -3768,7 +3813,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaHit.GUID)
-					if aVictimGUID == 0 {
+					if aVictimGUID == 0 || immuneSet[areaHit.GUID] {
 						continue
 					}
 					var aVictim combatTarget
@@ -3789,7 +3834,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaCreatureGUID)
-					if aVictimGUID == 0 {
+					if aVictimGUID == 0 || immuneSet[areaCreatureGUID] {
 						continue
 					}
 					var aVictim combatTarget
@@ -4794,6 +4839,15 @@ func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotio
 	if petSpellKnown && petSpell.AttributesEx3&spellAttr3IgnoreHitResult != 0 {
 		return protocol.SpellMissNone
 	}
+	// SpellHitResult positive arm (Object.cpp:2631-2632): a positive
+	// spell never misses a non-hostile target. The MELEE/RANGED leg
+	// above carries the same arm inside the melee twin; the magic leg
+	// below lacked it, so a pet buff on a friendly target could roll
+	// MISS. Friendly-proxy per the creature-path convention: a neutral
+	// target still rolls, where C++ returns NONE.
+	if petSpellKnown && spellIsPositive(petSpell) && s.server.creatureFriendlyToTarget(caster, target.GUID) {
+		return protocol.SpellMissNone
+	}
 	if petSpellKnown {
 		baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 	}
@@ -4869,10 +4923,18 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 			}
 		}
-		// DmgClass dispatch (same arm as petSpellMissVerdict): a
-		// MELEE/RANGED pet spell rolls the server creature-caster
-		// melee table, not the magic table below.
-		if petSpellKnown && (petSpell.DefenseType == spellDamageClassMelee || petSpell.DefenseType == spellDamageClassRanged) {
+		// SpellHitResult immune head (Object.cpp:2617-2627) on the
+		// fallback roll: no-GO backlash casts still resolve
+		// AddUnitTarget verdicts in C++, so an immune backlash target
+		// reports IMMUNE here instead of rolling the table.
+		if petSpellKnown && s.server.serverCreatureSpellImmuneVerdict(ctx, caster, petSpell, targetGUID) {
+			missKind = protocol.SpellMissImmune
+			damage = 0
+			hitInfo = 0x01
+		} else if petSpellKnown && spellIsPositive(petSpell) && s.server.creatureFriendlyToTarget(caster, targetGUID) {
+			// SpellHitResult positive arm (Object.cpp:2631-2632):
+			// no roll on a non-hostile target.
+		} else if petSpellKnown && (petSpell.DefenseType == spellDamageClassMelee || petSpell.DefenseType == spellDamageClassRanged) {
 			if miss := s.server.serverCreatureMeleeMissVerdict(ctx, caster, petSpell, targetGUID); miss != protocol.SpellMissNone {
 				missKind = miss
 				damage = 0
