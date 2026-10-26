@@ -179,7 +179,7 @@ end
 local function randomThreatTargetInRange(creature, maxDist)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance(t) <= maxDist then
+        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < maxDist then
             candidates[#candidates + 1] = t
         end
     end
