@@ -1286,6 +1286,11 @@ func (s *Server) castAggroConditionSpells(ctx context.Context, m *creatureMotion
 	if s == nil || m == nil || victimGUID == 0 {
 		return
 	}
+	// AggressorAI has no JustEngagedWith override (CombatAI.cpp:43-50),
+	// so it casts no AICOND_AGGRO template spell at engage either.
+	if m.AIName == "AggressorAI" {
+		return
+	}
 	if len(m.Spells) == 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
 		m.Spells = s.loadCreatureSpells(ctx, m.Entry)
 	}
@@ -1709,6 +1714,14 @@ func (s *Server) scheduleAISpellEvents(m *creatureMotion, now time.Time) {
 	if s == nil || m == nil || s.Data == nil {
 		return
 	}
+	// AggressorAI (CombatAI.cpp:43-50) has no event system at all: no
+	// JustEngagedWith override, no _events, UpdateAI is UpdateVictim +
+	// DoMeleeAttackIfReady only. The generic engage pre-arm must not
+	// arm template-spell events for it, or the combat tick would cast
+	// spells a C++ aggressor never casts.
+	if m.AIName == "AggressorAI" {
+		return
+	}
 	if m.SpellEventTimes == nil {
 		m.SpellEventTimes = make(map[uint32]time.Time)
 	}
@@ -1788,6 +1801,11 @@ func (s *Server) scheduleCasterAISpellEvents(ctx context.Context, m *creatureMot
 // that _events is always armed by JustEngagedWith.
 func (s *Server) dueAISpell(ctx context.Context, m *creatureMotion, victimGUID uint64, now time.Time, players []playerPos, allowMotionLookup bool) (uint32, wotlk.Spell, uint64, bool) {
 	if s == nil || m == nil || s.Data == nil || len(m.Spells) == 0 {
+		return 0, wotlk.Spell{}, 0, false
+	}
+	// AggressorAI has no event system (CombatAI.cpp:43-50): even a
+	// schedule armed before this guard existed must never fire here.
+	if m.AIName == "AggressorAI" {
 		return 0, wotlk.Spell{}, 0, false
 	}
 	armed := false
@@ -3767,6 +3785,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// CasterAI::AttackStart (CombatAI.h:60) is AttackStartCaster
+			// (UnitAI.cpp:55): MoveChase(victim, _attackDistance), where
+			// CasterAI::InitializeAI (CombatAI.cpp:121-130) sets
+			// _attackDistance to the smallest AICOND_COMBAT spell's
+			// AISpellInfo maxRange — GetMaxRange(false) * 3/4
+			// (UnitAI.cpp:231) — starting from 30, and collapses an
+			// untouched 30 to MELEE_RANGE (1.0). ChaseRange(range)
+			// (MovementDefines.cpp:25) stops at range + CONTACT_DISTANCE
+			// plus both combat reaches, the same stop formula as the
+			// ArcherAI arm above; a caster inside it stands and casts
+			// via the event arm above instead of melee-chasing the
+			// victim, and CasterAI::UpdateAI never swings (the swing
+			// gate below suppresses it). Per-tick re-evaluation, same
+			// caveat as the archer arm: C++ holds the chase from
+			// AttackStart, Go re-decides each tick.
+			casterChaseStop := float32(0)
+			if motion.AIName == "CasterAI" {
+				if attackDist, ok := s.casterAttackDistance(motion); ok {
+					casterChaseStop = attackDist + 0.5 + cReach + victimReach
+					if dist3D <= casterChaseStop {
+						faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+						if faceAngle < 0 {
+							faceAngle += 2 * math.Pi
+						}
+						motion.Orientation = faceAngle
+						return
+					}
+				}
+			}
 			// ArcherAI::AttackStart (CombatAI.cpp:199-215): a flying victim
 			// ends the generator chain in MoveIdle — the chase branches
 			// above never launch for one, and the flying check after them
@@ -3818,6 +3865,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						if archerChaseStop > 0 {
 							shorten = archerChaseStop
 						}
+						if casterChaseStop > 0 {
+							shorten = casterChaseStop
+						}
 						destX, destY := target.X, target.Y
 						if dist > shorten {
 							destX = target.X + (motion.X-target.X)/dist*shorten
@@ -3837,7 +3887,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// The 2D dist can sit inside the archer stop distance
 						// while the 3D band check above passed (large dz): never
 						// launch onto the victim's center in that case.
-						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) {
+						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
 							duration := splineDurationMs(float64(dist), speed)
 							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
@@ -4873,6 +4923,41 @@ func (s *Server) turretCanAIAttack(motion *creatureMotion, target playerPos, dis
 		return false
 	}
 	return !(minRange > 0 && dist3D < minRange+cReach+victimReach)
+}
+
+// casterAttackDistance is CasterAI::_attackDistance (CombatAI.cpp:121-130):
+// the smallest AICOND_COMBAT template spell's AISpellInfo maxRange
+// (GetMaxRange(false) * 3/4, UnitAI.cpp:231), starting from 30; an
+// untouched 30 collapses to MELEE_RANGE (1.0, ObjectDefines.h:43). A
+// spell whose DBC range row does not resolve reads MaxHostile 0, the
+// SpellInfo::GetMaxRange no-RangeEntry twin. ok is false only when the
+// DBC store itself is unavailable, in which case callers keep the
+// generic melee chase.
+func (s *Server) casterAttackDistance(motion *creatureMotion) (float32, bool) {
+	if s == nil || s.Data == nil || motion == nil {
+		return 0, false
+	}
+	dist := float32(30)
+	for _, spellID := range motion.Spells {
+		spellInfo, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if s.aiSpellCondition(spellInfo) != aiSpellCondCombat {
+			continue
+		}
+		maxHostile := float32(0)
+		if rangeEntry, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
+			maxHostile = rangeEntry.MaxHostile
+		}
+		if scaled := maxHostile * 3 / 4; dist > scaled {
+			dist = scaled
+		}
+	}
+	if dist == 30 {
+		dist = 1
+	}
+	return dist, true
 }
 
 func (s *Server) archerSpellBand(motion *creatureMotion) (minRange, maxRange float32, ok bool) {
