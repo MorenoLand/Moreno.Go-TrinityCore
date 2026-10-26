@@ -397,6 +397,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		damage = 0
 	}
 	var absorbed, resisted, blocked uint32
+	fullBlock := false
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
 	// direct-spell path: victim-side taken pct legs (EffectSchoolDMG) run
 	// first, then the physical-school armor arm (Unit.cpp:1002-1006),
@@ -510,6 +511,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			if b, ok := s.spellTakenBlockAmountFrom(victimTarget, true, p.Sess, inlineSpell, damage, uint8(maxUint32(motion.Level, 1)), motion.X, motion.Y); ok {
 				blocked = b
 				damage -= b
+				fullBlock = blocked > 0 && damage == 0
 			}
 		}
 		// Unit::CalculateSpellDamageTaken resilience arm (Unit.cpp:1079,
@@ -733,7 +735,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// CHEAT_GOD skip lives inside DealDamage, not the proc call.
 	// The creature actor has no auras, so only the taken leg runs.
 	if p.Sess != nil && p.Sess.player != nil && p.Sess.procDeep == 0 {
-		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0)
+		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0, blocked > 0, fullBlock)
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 	// non-friendly non-positive (or dispel-effect) spell hit stands

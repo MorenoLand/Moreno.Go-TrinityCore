@@ -4917,7 +4917,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			if reflectorGUID == 0 && target.GUID != caster.GUID {
 				if isPlayerVictim {
 					if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && victim.procDeep == 0 {
-						victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, true, false, false, isCrit, 0, 0, triggered, false, 0)
+						victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, true, false, false, isCrit, 0, 0, triggered, false, 0, false, false)
 					}
 				} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
 					if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
@@ -5330,7 +5330,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// pet spell crits roll at the
 		// taken-leg site above (Unit::SpellCritChanceDone, Unit.cpp:7167).
 		if victim.procDeep == 0 {
-			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, resisted > 0 && procEventDamage == 0, absorbed > 0 && procEventDamage == 0, isCrit, absorbed, procEventDamage, triggered, false, 0)
+			victim.procSpellHitTakenAuraTriggers(ctx, caster.GUID, spellID, true, false, resisted > 0 && procEventDamage == 0, absorbed > 0 && procEventDamage == 0, isCrit, absorbed, procEventDamage, triggered, false, 0, blocked > 0, fullBlock)
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.

@@ -1904,12 +1904,16 @@ func (s *session) procSpellHitAuraTriggers(ctx context.Context, targetGUID uint6
 // the casting spell, the same hit mask) but the type mask is the victim-side
 // pre-fill/fallback, and the damage arm ORs PROC_FLAG_TAKEN_DAMAGE into
 // procVictim (Spell.cpp:2545) — skipped on the immune arm, whose branch
-// bypasses the TAKEN_DAMAGE OR. Spells with SPELL_ATTR3_CANT_TRIGGER_PROC
+// bypasses the TAKEN_DAMAGE OR. Block bits ride the
+// createProcHitMask arm (Unit.cpp:10227-10246): blocked ORs PROC_HIT_BLOCK
+// and fullBlock replaces the normal/critical bit with PROC_HIT_BLOCK |
+// PROC_HIT_FULL_BLOCK (absorb rides along); immune and reflected trips
+// take neither. Spells with SPELL_ATTR3_CANT_TRIGGER_PROC
 // never reach the loop (Spell.cpp:2441). Runs on the victim's session so its
 // own auras gate; the trigger spell targets the caster (Unit.cpp:10413). The
 // triggered state comes from the caster's cast, not the victim's session,
 // matching Spell::IsTriggered on the shared spell.
-func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, casterTriggered, reflected bool, triggerAuraSpell uint32) {
+func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID uint64, spellID uint32, isHit, immune, fullyResisted, fullAbsorb, crit bool, absorbed, damage uint32, casterTriggered, reflected bool, triggerAuraSpell uint32, blocked, fullBlock bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -1929,12 +1933,30 @@ func (s *session) procSpellHitTakenAuraTriggers(ctx context.Context, casterGUID 
 		schoolMask = 1
 	}
 	spellCopy := spell
+	// createProcHitMask (Unit.cpp:10227-10246) on the missCondition == NONE
+	// arm: a blocked hit carries PROC_HIT_BLOCK, and a fully blocked hit
+	// carries PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK in place of the
+	// normal/critical bit (the absorb bit rides along); the immune arm
+	// assigns IMMUNE and the reflected arm yields REFLECT alone, so
+	// neither takes block bits — the same fold the creature-victim twin
+	// applies outside this helper.
+	hitMask := spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed, reflected)
+	if !reflected && !immune {
+		if fullBlock {
+			hitMask = procHitBlock | procHitFullBlock
+			if absorbed > 0 {
+				hitMask |= procHitAbsorb
+			}
+		} else if blocked {
+			hitMask |= procHitBlock
+		}
+	}
 	s.procAuraTriggerLoop(ctx, casterGUID, procEventInfo{
 		typeMask:             typeMask,
 		schoolMask:           schoolMask,
 		spellTypeMask:        procSpellTypeDamage,
 		spellPhaseMask:       procSpellPhaseHit,
-		hitMask:              spellDamageProcHitMask(isHit, immune, fullyResisted, fullAbsorb, crit, absorbed, reflected),
+		hitMask:              hitMask,
 		triggered:            casterTriggered,
 		eventSpell:           &spellCopy,
 		triggeredByAuraSpell: triggerAuraSpell,

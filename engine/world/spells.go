@@ -15308,6 +15308,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	resisted := uint32(0)
 	absorbed := uint32(0)
 	blocked := uint32(0)
+	fullBlock := false
 	fullyResisted := false
 	immune := false
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:983): SPELL_ATTR4_FIXED_DAMAGE
@@ -15443,6 +15444,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				if b, ok := s.spellTakenBlockAmount(target, isPlayerVictim, playerSess, dmgSpell, damage); ok {
 					blocked = b
 					damage -= b
+					fullBlock = blocked > 0 && damage == 0
 				}
 			}
 			// SPELL_ATTR4_FIXED_DAMAGE skips the whole taken-mitigation
@@ -15737,7 +15739,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// taken passes iterate the same aura list.
 		if s.server != nil {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell)
+				playerSess.procSpellHitTakenAuraTriggers(ctx, s.playerGUID, spellID, true, immune, fullyResisted, absorbed > 0 && damage == 0, crit && !fixedDamageSpell, absorbed, damage, s.triggeredNoProcEvents > 0, reflected, s.castTriggerAuraSpell, blocked > 0, fullBlock)
 			}
 		}
 	} else if !instantKill && !targetCantProc {

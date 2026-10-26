@@ -351,7 +351,7 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 	ts.stripRecursiveDirectDamageAuras(spellID, damage)
 	// ProcDamageAndSpellFor (Unit.cpp:10179+): the taken pass on the victim
 	// and the done pass on the original attacker, carrying the aura's spell.
-	ts.procSpellHitTakenAuraTriggers(ctx, attackerGUID, spellID, true, false, false, false, false, 0, damage, false, false, 0)
+	ts.procSpellHitTakenAuraTriggers(ctx, attackerGUID, spellID, true, false, false, false, false, 0, damage, false, false, 0, false, false)
 	if attackerSess != nil {
 		attackerSess.procSpellHitAuraTriggers(ctx, ts.playerGUID, spellID, true, false, false, false, false, 0, damage, false)
 	}
