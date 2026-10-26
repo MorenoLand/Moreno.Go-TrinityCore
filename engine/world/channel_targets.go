@@ -67,14 +67,22 @@ func (s *session) channelDestForSpell(ctx context.Context, spell wotlk.Spell) (x
 					return channel.DestX, channel.DestY, channel.DestZ, true
 				}
 				if channel.ChannelObjectGUID != 0 {
-					// C++ GetWorldObject resolves units and gameobjects; Go
-					// has no GO-target model, so players and creatures are
-					// covered.
+					// C++ GetWorldObject resolves units and gameobjects;
+					// units resolve above, static gameobjects via their
+					// DB row below (dynamic GOs have no row and stay
+					// unresolved).
 					if ts := s.server.findSessionByGUID(channel.ChannelObjectGUID); ts != nil && ts.player != nil {
 						return ts.player.X, ts.player.Y, ts.player.Z, true
 					}
 					if tgt, found := s.getCombatTarget(ctx, channel.ChannelObjectGUID); found {
 						return tgt.X, tgt.Y, tgt.Z, true
+					}
+					if uint16(channel.ChannelObjectGUID>>48) == 0xF110 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+						var goMap int64
+						var gx, gy, gz float64
+						if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM gameobject WHERE guid = ?", uint32(channel.ChannelObjectGUID&0xFFFFFF)).Scan(&goMap, &gx, &gy, &gz); err == nil && uint32(goMap) == s.player.Map {
+							return float32(gx), float32(gy), float32(gz), true
+						}
 					}
 				}
 				return 0, 0, 0, false

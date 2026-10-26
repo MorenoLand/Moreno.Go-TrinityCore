@@ -262,13 +262,16 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 			if triggerMax > bestDist {
 				bestDist = triggerMax
 			}
-		}
-		if limit := dist2d; limit < 300 {
-			if limit < bestDist {
-				bestDist = limit
+			// The min(dist2d, 300) clamp lives inside the same
+			// GetSpellInfo gate (Spell.cpp:1651-1655): with no trigger
+			// row C++ keeps the spell's own max range unclamped.
+			if limit := dist2d; limit < 300 {
+				if limit < bestDist {
+					bestDist = limit
+				}
+			} else if bestDist > 300 {
+				bestDist = 300
 			}
-		} else if bestDist > 300 {
-			bestDist = 300
 		}
 	}
 	candidates := s.trajCandidates(ctx, spell, sx, sy, dist2d)

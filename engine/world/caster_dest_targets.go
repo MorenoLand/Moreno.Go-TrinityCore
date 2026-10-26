@@ -189,6 +189,10 @@ func (s *session) fishingDestPoint(spell wotlk.Spell) (x, y, z float32) {
 			minRange, maxRange = entry.MinFriendly, entry.MaxFriendly
 		}
 	}
+	// SpellInfo.cpp:3061-3072: GetMaxRange(true, caster, spell) folds
+	// SPELLMOD_RANGE through the caster's spell-mod owner; GetMinRange
+	// carries no mod arm.
+	maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
 	// frand(minDist, maxDist) (Spell.cpp:1362).
 	dist := minRange
 	if maxRange > minRange {
