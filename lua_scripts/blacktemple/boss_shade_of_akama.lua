@@ -255,12 +255,12 @@ end
 
 -- C++ npc_akama_shade::OnGossipSelect (boss_shade_of_akama.cpp:536-541):
 -- gossipListId 0 -> CloseGossipMenuFor + EVENT_SHADE_START at 500ms.
--- The Go select hook passes (sender, action), not gossipListId; the
--- menu is DB-side, so sender == 0 identifies the DB menu's option
--- (grandmother precedent in bosses_opera.lua). C++ returns false
--- (native select arms proceed).
-local function akamaShadeGossipSelect(event, player, creature, sender, action)
-    if sender ~= 0 then
+-- The creature select hook now carries the trailing listID arg
+-- (gossip.go), so listID == 0 IS the C++ gate (sender == 0 retained;
+-- DB items carry sender 0). C++ returns false (native select arms
+-- proceed).
+local function akamaShadeGossipSelect(event, player, creature, sender, action, code, listID)
+    if sender ~= 0 or listID ~= 0 then
         return false
     end
     player:GossipClearMenu()

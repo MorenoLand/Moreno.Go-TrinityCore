@@ -928,18 +928,18 @@ RegisterCreatureEvent(ENTRY_WOLF, 24, wolfReachHome)
 
 -- Grandmother (npc_grandmother, C++ ScriptName for 17603):
 -- OnGossipSelect (bosses_opera.cpp:824-834) gates on menu 7443 option 0.
--- The Go select hook passes the menu item's (Sender, Action), not
--- (menuId, gossipListId); DB items carry sender 0 and this creature has
--- no Lua hello, so sender == 0 identifies the DB menu's option
--- (majordomo precedent). C++ arm order: CloseGossipMenuFor, summon the
+-- The creature select hook now carries the trailing listID arg
+-- (gossip.go), so listID == 0 IS the C++ option gate (sender == 0
+-- retained; DB items carry sender 0). C++ arm order:
+-- CloseGossipMenuFor, summon the
 -- Big Bad Wolf (17521) at my position,
 -- TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (0), 2h = 7200000ms, then
 -- self-despawn. C++ pBigBadWolf->AI()->AttackStart(player) is PORTED
 -- below via EngageWithTarget (the boss_bigbadwolf AI above is
 -- registered, so the wolf fights once engaged). C++ returns false (AI/native
 -- select arms proceed — they do nothing here).
-local function grandmotherGossipSelect(event, player, creature, sender, action)
-    if sender ~= 0 then
+local function grandmotherGossipSelect(event, player, creature, sender, action, code, listID)
+    if sender ~= 0 or listID ~= 0 then
         return false
     end
     player:GossipClearMenu()

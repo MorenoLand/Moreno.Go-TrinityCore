@@ -53,15 +53,11 @@
 -- OnGossipHello's DATA_QUEL_DELAR_EVENT gate (IN_PROGRESS/SPECIAL
 -- clears the menu): no instance bridge, so the menu shows
 -- regardless; the gate stays out per the checkpoint head.
--- OnGossipSelect case 1 (SKIP_INTRO): the Go select hook carries
--- (sender, action) = (0, OptionType) for DB-loaded menus
--- (gossip.go select dispatch + loadCreatureGossipOptions), with no
--- list index, so the two plain gossip options arrive identically
--- and cannot be told apart — every select runs the case-0 start
--- path (forge intro precedent: entry-alone gating). The skip
--- shortcut is therefore unmappable: it would summon the LK intro
--- NPC, set REACT_PASSIVE, and jump to LK_4 after 15s. Same end
--- state as the full chain, longer RP.
+-- OnGossipSelect case 1 (SKIP_INTRO): PORTED — the creature select
+-- hook now carries the trailing listID arg (gossip.go), so case 1
+-- branches to the skip chain: LK summoned at 1s with REACT_PASSIVE
+-- (movement/door legs stay out, no motion/GO bridges), then LK_4
+-- (takeFrostmourne) at +15s, reusing the LK_STEPS tail from index 4.
 -- All MovePoint legs (intro walks, LK walk-away, Falric/Marwyn
 -- intro walks, Koreln/Loralen moves): no movement bridge.
 -- Koreln/Loralen arms (MovePoint + feign-death 29266): instance
@@ -85,6 +81,7 @@ local UNIT_NPC_FLAGS_MASK = 0x00000003
 local UNIT_STAND_STATE_STAND = 0
 local EMOTE_ONESHOT_NO = 274
 local EMOTE_STATE_COWER = 431
+local REACT_PASSIVE = 0
 
 local UTHER_SPAWN = { 5307.814, 2003.168, 709.4244, 4.537856 }
 local LK_SPAWN = { 5362.463, 2062.693, 707.7781, 3.944444 }
@@ -315,15 +312,35 @@ local function onDeath(event, creature)
     cancelChain(creature:GetGUID())
 end
 
-local function onGossipSelect(event, player, creature, sender, action)
+local function summonLKPassive(st)
+    local lk = st.creature:SummonCreature(ENTRY_LK_INTRO,
+        LK_SPAWN[1], LK_SPAWN[2], LK_SPAWN[3], LK_SPAWN[4])
+    if lk then
+        lk:SetReactState(REACT_PASSIVE)
+        st.lk = lk
+    end
+end
+
+local function onGossipSelect(event, player, creature, sender, action, code, listID)
     player:GossipClearMenu()
-    player:GossipComplete()
-    creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
-        bit32.bnot(UNIT_NPC_FLAGS_MASK)))
-    if creature:GetEntry() == ENTRY_JAINA_INTRO then
-        scheduleChain(creature, JAINA_STEPS, 1000)
-    else
-        scheduleChain(creature, SYLVANAS_STEPS, 1000)
+    if listID == 1 then
+        player:GossipComplete()
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
+            bit32.bnot(UNIT_NPC_FLAGS_MASK)))
+        local skipSteps = { { fn = summonLKPassive, delay = 15000 } }
+        for i = 4, #LK_STEPS do
+            table.insert(skipSteps, LK_STEPS[i])
+        end
+        scheduleChain(creature, skipSteps, 1000)
+    elseif listID == 0 then
+        player:GossipComplete()
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
+            bit32.bnot(UNIT_NPC_FLAGS_MASK)))
+        if creature:GetEntry() == ENTRY_JAINA_INTRO then
+            scheduleChain(creature, JAINA_STEPS, 1000)
+        else
+            scheduleChain(creature, SYLVANAS_STEPS, 1000)
+        end
     end
 end
 

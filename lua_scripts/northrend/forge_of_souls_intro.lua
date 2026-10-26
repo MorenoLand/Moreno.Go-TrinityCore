@@ -22,11 +22,11 @@
 --   reset NPC stops mid-intro exactly like C++.
 --
 -- DOCUMENTED-ONLY:
--- The C++ (menuId, gossipListId) gate cannot be expressed: the Go
--- select hook carries the chosen item's (sender, action), not the menu
--- id (gossip.go:351), so the port gates on entry alone. The part-1
--- NPCs offer only the intro menu DB-side, so no other select can
--- reach this handler in practice.
+-- The C++ (menuId, gossipListId) gate: the menuId half is encoded by
+-- entry (each part-1 creature offers only its own menu DB-side) and
+-- the gossipListId == 0 half is now gated on the hook's listID arg
+-- (gossip.go creature select dispatch); non-zero selects return false
+-- with no side effects, exactly like the C++ gate failing.
 -- The ctor SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) leg is
 -- template/DB-side in Go; only the select-time removal ports (the
 -- vaelastrasz SetNPCFlags bit-clear precedent). Reset does NOT restore
@@ -80,7 +80,10 @@ local function startIntro(creature, delays)
     end, 1000)
 end
 
-local function onGossipSelect(event, player, creature, sender, action)
+local function onGossipSelect(event, player, creature, sender, action, code, listID)
+    if listID ~= 0 then
+        return false
+    end
     player:GossipClearMenu()
     player:GossipComplete()
     if creature:GetEntry() == ENTRY_JAINA_PART1 then

@@ -348,14 +348,21 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	prevGossip := s.gossip
 	s.gossip = nil
 	s.gossipClosed = false
-	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action}
-	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175) dispatches on
-	// !code.empty() — Eluna::OnGossipSelectCode (5 args) vs OnGossipSelect
-	// (4 args) — not on the coded flag: a coded option answered with an
-	// empty code string takes the non-code path.
-	if code != "" {
-		args = append(args, code)
-	}
+	// Creature select Lua args are (event, player, creature, sender, action,
+	// code, listID). Code is always forwarded ("" when the option has no code
+	// box) so listID sits at a stable trailing position, mirroring the
+	// gameobject select hook (fireGameObjectGossipSelectHook); Eluna's
+	// OnGossipSelectCode-vs-OnGossipSelect dispatch on !code.empty()
+	// (MiscHandler.cpp:175) is not reproduced — no ported handler reads
+	// code, and a varying arg count would make listID unreadable.
+	// listID is the CMSG_GOSSIP_SELECT_OPTION menu index — the C++
+	// gossipListId CreatureAI::OnGossipSelect receives — so arms that
+	// branch on gossipListId directly (halls of reflection start/skip,
+	// forge intro, grandmother/majordomo/akama listId-0 gates) port
+	// directly; sender/action remain the GetGossipOptionSender/Action
+	// twins. menuID is intentionally not forwarded: the post-hook
+	// stale-menu gate below already enforces it.
+	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action, code, listID}
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
 		// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175-204, 209):
 		// the AI and native arms run only when the Eluna hook did NOT veto
