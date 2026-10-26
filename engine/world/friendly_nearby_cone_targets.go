@@ -93,10 +93,15 @@ func isHostileNearbySpell(spell wotlk.Spell) bool {
 // Spell.cpp:8389-8399). The caster fails its own IsValidAttackTarget, so
 // it is never selected. No match returns false and the caller fails the
 // cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993;
-// Spell.cpp:1111). Documented deltas: the ImplicitTargetConditions arm
-// (base WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is not
-// wired — Go's condition evaluator is entry-oriented (entry_targets.go);
-// corpse-type candidates have no Go model.
+// Spell.cpp:1111). The ImplicitTargetConditions arm (base
+// WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is wired through
+// the entry-subset evaluator (implicitEntryConditionsMet): candidates
+// failing the first selecting effect's CONDITION_OBJECT_ENTRY_GUID rows
+// never shrink the nearest range, matching WorldObjectSpellNearbyTargetCheck
+// (Spell.cpp:8394-8399), which shrinks only on a passing target.
+// Non-entry condition types have no candidate-side Go evaluation and are
+// skipped (the shared entry/chain-twin gap); corpse-type candidates have
+// no Go model.
 func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spell) (uint64, bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0, false
@@ -116,6 +121,12 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 	// with GetMaxRange(positive, m_caster, this), which folds SPELLMOD_RANGE
 	// (SpellInfo.cpp:3070-3072).
 	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+	// SelectImplicitNearbyTargets (Spell.cpp:1066) passes the selecting
+	// effect's ImplicitTargetConditions into the nearby check; Go carries
+	// one target per spell, so the first selecting effect's list applies
+	// (the 38 first-effect model). A missing table or empty list loads
+	// no rows and passes every candidate, matching C++ no-conditions.
+	condRows := s.loadImplicitTargetConditions(ctx, spell.ID, firstEntryImplicitEffectMask(spell, implicitTargetNearbyEnemy))
 	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	bestGUID := uint64(0)
 	bestDist := maxRange
@@ -137,6 +148,18 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 				return
 			}
 		} else if !s.server.isAttackableFaction(c.faction, player) {
+			return
+		}
+		// Base WorldObjectSpellTargetCheck tail (Spell.cpp:8380-8387):
+		// a candidate failing the effect's conditions never becomes the
+		// nearest pick and never shrinks the search range, so a farther
+		// passing candidate still wins. Spawn low mirrors the entry twin
+		// (entry_targets.go): the low 24 bits of the creature GUID.
+		spawnLow := uint32(0)
+		if !c.isPlayer {
+			spawnLow = uint32(c.guid & 0xFFFFFF)
+		}
+		if !implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow) {
 			return
 		}
 		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict

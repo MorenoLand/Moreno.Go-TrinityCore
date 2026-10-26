@@ -561,9 +561,13 @@ func (s *Server) creatureEntryNearbyGOTarget(ctx context.Context, m *creatureMot
 // (implicitUnitTargetLOSPassesForMotion, Spell.cpp:2098/7395): a LOS-blocked
 // pick fails instead of rescanning. No match returns false and the caller
 // fails the cast with SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
-// Documented deltas: the ImplicitTargetConditions arm (base
-// WorldObjectSpellTargetCheck tail, Spell.cpp:8380-8387) is not wired —
-// Go's condition evaluator is entry-oriented, the session twin's gap.
+// The ImplicitTargetConditions arm (base WorldObjectSpellTargetCheck
+// tail, Spell.cpp:8380-8387) is wired through the entry-subset evaluator
+// (implicitEntryConditionsMet, the session twin's arm): candidates failing
+// the first selecting effect's CONDITION_OBJECT_ENTRY_GUID rows never
+// shrink the nearest range, matching WorldObjectSpellNearbyTargetCheck
+// (Spell.cpp:8394-8399). Non-entry condition types have no candidate-side
+// Go evaluation and are skipped (the shared entry/chain-twin gap).
 func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
 	if s == nil || m == nil || s.Data == nil {
 		return 0, false
@@ -579,6 +583,10 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 	if maxRange <= 0 {
 		return 0, false
 	}
+	// Spell.cpp:1066: the selecting effect's ImplicitTargetConditions,
+	// first selecting effect's list under Go's one-target-per-spell model
+	// (the 38 first-effect model, the session twin's arm).
+	condRows := s.loadImplicitTargetConditionRows(ctx, spell.ID, firstEntryImplicitEffectMask(spell, implicitTargetNearbyEnemy))
 	playersOnly := spellSearchPlayersOnly(spell)
 	bestGUID := uint64(0)
 	bestDist := maxRange
@@ -607,6 +615,9 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 		if spellTargetUnitBlocked(spell, p.UnitFlags, 0, false) {
 			continue
 		}
+		if !implicitEntryConditionsMet(condRows, true, 0, 0) {
+			continue
+		}
 		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
 		if !s.isAttackableFaction(m.Faction, candidate) {
 			continue
@@ -633,6 +644,9 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 			if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
 				continue
 			}
+			if !implicitEntryConditionsMet(condRows, false, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
+				continue
+			}
 			if !s.factionTemplatesHostile(m.Faction, cand.Faction) {
 				continue
 			}
@@ -656,6 +670,9 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 						continue
 					}
 					if s.isTotemGUID(guid) || spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), false) {
+						continue
+					}
+					if !implicitEntryConditionsMet(condRows, false, uint32(entry), uint32(low)) {
 						continue
 					}
 					if !s.factionTemplatesHostile(m.Faction, uint32(faction)) {
