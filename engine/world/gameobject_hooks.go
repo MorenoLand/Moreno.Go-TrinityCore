@@ -194,7 +194,15 @@ func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64
 
 // fireGameObjectGossipSelectHook mirrors Eluna::OnGossipSelect[Code]
 // (LuaEngine/GossipHooks.cpp:36-61): ClearMenus, then (player, go, sender,
-// action[, code]) on the GOSSIP_EVENT_ON_SELECT bindings keyed by GO entry.
+// action, code, listID) on the GOSSIP_EVENT_ON_SELECT bindings keyed by GO
+// entry. Eluna passes no list index; listID is a Go extension appended after
+// code (code is "" when the option has no code box, so listID is always the
+// last argument). listID is the CMSG_GOSSIP_SELECT_OPTION menu index — the
+// C++ gossipListId PlayerTalkClass resolves via GetGossipOptionSender/Action
+// — so select arms that index tables by gossipListId (icecrown teleport) port
+// directly, while action-branching arms read sender/action as before. menuID
+// is intentionally not forwarded: the post-hook stale-menu gate already
+// enforces it, and no ported arm branches on it.
 // HandleGossipSelectOptionOpcode runs the native arms only when the Eluna
 // hook did NOT veto (MiscHandler.cpp:198-204, 225:
 // `if (!sEluna->OnGossipSelect[Code](...))` then AI + native arms), and the
@@ -204,7 +212,7 @@ func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64
 // Returns true (skip native) when a hook is registered and no handler
 // returned false. (An older revision had this inverted; corrected
 // 2026-10-19 against the in-tree Eluna sources.)
-func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string) bool {
+func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string, listID uint32) bool {
 	if s == nil || s.server == nil || uint16(guid>>48) != 0xF110 {
 		return false
 	}
@@ -225,10 +233,7 @@ func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint6
 		return false
 	}
 	s.gossip = nil
-	args := []any{s.luaPlayer(), goObj, sender, action}
-	if code != "" {
-		args = append(args, code)
-	}
+	args := []any{s.luaPlayer(), goObj, sender, action, code, listID}
 	values, err := s.server.Features.Scripts.TriggerGameObjectGossipEvent(ctx, entry, scripting.GossipEventOnSelect, args...)
 	if err != nil {
 		s.debug("lua gameobject gossip select failed", "entry", entry, "error", err)

@@ -314,7 +314,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	// GossipSendMenu, so selects on them must route here rather than drop at
 	// the creature lookup.
 	if uint16(guid>>48) == 0xF110 {
-		return s.handleGameObjectGossipSelect(ctx, guid, menuID, item, code)
+		return s.handleGameObjectGossipSelect(ctx, guid, menuID, listID, item, code)
 	}
 	if guid == s.playerGUID {
 		return s.handlePlayerGossipSelect(ctx, menuID, item, code)
@@ -686,8 +686,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 // handleGameObjectGossipSelect processes CMSG_GOSSIP_SELECT_OPTION for a
 // gameobject GUID — the gameobject arm of
 // WorldSession::HandleGossipSelectOptionOpcode (MiscHandler.cpp:131-136,
-// 168-173, 198-204).
-func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64, menuID uint32, item gossipMenuItem, code string) bool {
+// 168-173, 198-204). listID is the packet's menu index (the C++ gossipListId);
+// it is threaded to the select hook, which forwards it to Lua past the code
+// argument, because table-indexing select arms need it.
+func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64, menuID uint32, listID uint32, item gossipMenuItem, code string) bool {
 	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return true
 	}
@@ -724,7 +726,7 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// (MiscHandler.cpp:198-204, 225) — i.e. a Lua false return lets the
 	// native arms proceed (Eluna polarity; see
 	// fireGameObjectGossipSelectHook).
-	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code) {
+	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code, listID) {
 		return true
 	}
 	// Player::OnGossipSelect (Player.cpp:14565-14569): for gameobject
