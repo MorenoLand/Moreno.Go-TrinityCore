@@ -81,11 +81,11 @@
 --   ObjectAccessor::GetCreature via triggerGUID, no
 --   world-access bridge), the trigger kill and tank MoveChase
 --   at landing — no movement / MotionMaster bridges.
--- - JustSummoned remainder (AttackStart on a random target,
---   summons.Summon, lair-guard setActive) —
---   the ported summons carry DoZoneInCombat, and the lair guard
---   also carries SetFarVisible(true); no
---   AttackStart / setActive bridge for the summoned object.
+-- - JustSummoned remainder (summons.Summon, lair-guard setActive) —
+--   the ported summons carry DoZoneInCombat + the AttackStart random
+--   target leg (EngageWithTarget twin, whelp/lair-guard spawns above)
+--   and the lair guard also carries SetFarVisible(true); no setActive
+--   bridge for the summoned object.
 -- - Bellowing Roar floor-eruption leg (GameObjectInRangeCheck +
 --   instance SetGuidData(DATA_FLOOR_ERUPTION_GUID) into the
 --   instance-script BFS eruption machine) — no GO-enumeration /
@@ -237,9 +237,24 @@ end
 -- C++ EVENT_WHELP_SPAWN (phase BREATH): summon one whelp at each of
 -- SpawnLocations[0] and [1], TEMPSUMMON_CORPSE_DESPAWN (Go type 4);
 -- each successful summon counts (C++ JustSummoned increments
--- SummonWhelpCount) and gets DoZoneInCombat (the AttackStart random
--- target leg has no bridge); if the count reaches RAID_MODE(20, 40)
--- the count resets and the next spawn is 90s out, else 500ms.
+-- SummonWhelpCount) and gets DoZoneInCombat + AttackStart on a random
+-- target (SelectTarget(Random, 0): alive threat-list units of any type,
+-- fireball idiom; a non-player pick no-ops through the EngageWithTarget
+-- funnel, ramstein precedent, leaving the DoZoneInCombat seeds); if the
+-- count reaches RAID_MODE(20, 40) the count resets and the next spawn is
+-- 90s out, else 500ms.
+local function randomAliveThreatUnit(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        return candidates[math.random(#candidates)]
+    end
+    return nil
+end
 local function onWhelpSpawn(creature, guid)
     local st = stateFor(guid)
     for i = 1, 2 do
@@ -248,6 +263,10 @@ local function onWhelpSpawn(creature, guid)
             loc[1], loc[2], loc[3], loc[4], 4, 0)
         if summoned then
             summoned:DoZoneInCombat()
+            local target = randomAliveThreatUnit(creature)
+            if target then
+                summoned:EngageWithTarget(target)
+            end
             st.whelps = st.whelps + 1
         end
     end
@@ -265,15 +284,20 @@ end
 
 -- C++ EVENT_LAIR_GUARD (phase BREATH): summon one lair guard at
 -- SpawnLocations[2], TEMPSUMMON_CORPSE_DESPAWN (Go type 4), with
--- DoZoneInCombat + SetFarVisible(true) (the C++ JustSummoned
--- lair-guard legs; setActive has no bridge — Go dynamic motions
--- are tracked by default); 15s first, 30s repeats.
+-- DoZoneInCombat + SetFarVisible(true) + AttackStart on a random target
+-- (the shared C++ JustSummoned arm, same pick as the whelp leg above;
+-- setActive has no bridge — Go dynamic motions are tracked by
+-- default); 15s first, 30s repeats.
 local function onLairGuard(creature, guid)
     local loc = SPAWN_LOCATIONS[3]
     local summoned = creature:SummonCreature(NPC_LAIRGUARD,
         loc[1], loc[2], loc[3], loc[4], 4, 0)
     if summoned then
         summoned:DoZoneInCombat()
+        local target = randomAliveThreatUnit(creature)
+        if target then
+            summoned:EngageWithTarget(target)
+        end
         summoned:SetFarVisible(true)
     end
     schedule(guid, "lairguard", 30000, function()
