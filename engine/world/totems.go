@@ -1284,10 +1284,11 @@ func (s *session) totemDispelPulse(ctx context.Context, def TotemDef, totem *act
 // Earthbind pulses did nothing. The Go pulse model re-applies the slow aura
 // to hostile creatures and enemy players in radius each tick
 // with the totem's motion as caster (applyPetAura carries the no-stack
-// purge, the aura-update wire, and the duration timer). The duration bridges
-// two pulses so the slow neither flickers between ticks nor lingers long
-// after the totem dies or the target leaves the radius — C++ drops the aura
-// when the area aura no longer reaches the target.
+// purge, the aura-update wire, and the duration timer). The duration is
+// the slow spell's DBC duration (5000ms for 3600, refreshed each 3s pulse),
+// so the slow neither flickers between ticks nor lingers past the DBC
+// window after the last pulse; C++ drops the aura when the area aura no
+// longer reaches the target, and the sweeps below cover leave-range.
 func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activeTotem) {
 	if s == nil || s.server == nil || totem == nil || def.PulseSpell == 0 || s.server.Data == nil {
 		return
@@ -1305,6 +1306,16 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 	if intervalMs <= 0 {
 		intervalMs = 2000
 	}
+	// DBC duration, not the old 2-pulse fudge: 3600 lasts 5000ms, and
+	// each pulse replaces the record (stopping the old timer), so the
+	// 3s interval is bridged with 2s of margin and no flicker. The
+	// 2-pulse value survives only when the DBC row is unavailable.
+	slowDurationMs := uint32(intervalMs * 2)
+	if slowSpell.DurationIndex > 0 {
+		if dur, ok, err := s.server.Data.SpellDuration(slowSpell.DurationIndex, uint32(totemMotion.Level)); err == nil && ok && dur > 0 {
+			slowDurationMs = uint32(dur)
+		}
+	}
 	for _, eff := range slowSpell.Effects {
 		if eff.Effect != spellEffectApplyAura {
 			continue
@@ -1314,12 +1325,12 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 			if !s.server.totemEnemyCreatureValid(m, owner) {
 				continue
 			}
-			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, uint32(intervalMs*2), uint32(amount))
+			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, slowDurationMs, uint32(amount))
 		}
 	}
 	// Enemy-player leg: the same area aura reaches hostile sessions in
 	// radius (Cell::VisitAllObjects visits players too), with no group
-	// term. The 2-pulse duration mirrors the creature leg, so the
+	// term. The DBC duration mirrors the creature leg, so the
 	// session slow neither flickers between ticks nor lingers long
 	// after the totem dies; the pulse re-applies, refreshing the timer.
 	if s.server != nil {
@@ -1328,7 +1339,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 			if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 				distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z) <= float64(def.Radius) &&
 				s.totemEnemySessionHostile(other) {
-				other.applyAuraFromCaster(def.PulseSpell, uint32(intervalMs*2), totem.TotemGUID, uint8(totemMotion.Level))
+				other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level))
 			}
 		}
 		s.server.sessionsMu.RUnlock()
@@ -1336,7 +1347,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 	// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds
 	// the area target list, so applications whose target left the
 	// radius or stopped being a valid enemy drop here instead of
-	// lingering until the 2-pulse timer runs out.
+	// lingering until the DBC timer runs out.
 	s.sweepTotemCreatureDebuffOutOfRange(totem, def.PulseSpell, float64(def.Radius))
 	s.sweepTotemSessionAuraOutOfRange(totem, def.PulseSpell, float64(def.Radius), func(other *session) bool {
 		return !s.totemEnemySessionHostile(other)
@@ -2001,7 +2012,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	// applications are caster-keyed to the totem exactly like the debuff
 	// leg (creature records via applyPetAura, session records via
 	// applyAuraFromCaster), so they drop here instead of lingering to
-	// the 2-pulse timer when the totem dies. Gated to TotemPulseSlow:
+	// the DBC timer when the totem dies. Gated to TotemPulseSlow:
 	// the other PulseSpell carriers deal instant damage/healing or
 	// dispel and leave no records to sweep.
 	if totemGUID != 0 && s.server != nil {
