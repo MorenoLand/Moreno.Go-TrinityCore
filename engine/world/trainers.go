@@ -576,7 +576,33 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 			JOIN spell_ranks AS r2 ON r1.first_spell_id = r2.first_spell_id
 			WHERE r2.spell_id = ? AND r1.rank = r2.rank - 1 LIMIT 1`, spellID).Scan(&prevSpellID)
 	}
-	if prevSpellID > 0 && !reenabled && s.hasLearnedSpell(prevSpellID) {
+	// Player::AddSpell (Player.cpp:3424-3431): a newly learned non-talent
+	// spell first learns its previous rank (LearnSpell, dependent) — the
+	// insert that follows then supercedes it below, so a rank-3 learn
+	// leaves ranks 1-2 known-but-inactive, not unknown. Talent spells
+	// take the other branch (other talent ranks unlearned, handled by
+	// learnTalent) and disabled-case re-enables skip the insert block.
+	// A disabled previous rank keeps its stored active flag (LearnSpell
+	// recomputes active from the disabled row); an unknown one learns
+	// active, matching AddSpell's LearnSpell(prev, true) call.
+	isTalentSpell := false
+	if s.server != nil && s.server.Data != nil {
+		if talentCost, costErr := s.server.Data.TalentSpellCost(spellID); costErr == nil && talentCost > 0 {
+			isTalentSpell = true
+		}
+	}
+	if prevSpellID > 0 && !reenabled && !isTalentSpell {
+		prevActive := true
+		for i := range s.player.Spells {
+			if s.player.Spells[i].ID == prevSpellID {
+				prevActive = s.player.Spells[i].Active
+				break
+			}
+		}
+		s.learnSpellActive(ctx, prevSpellID, prevActive)
+	}
+
+	if prevSpellID > 0 && !reenabled && active && s.hasLearnedSpell(prevSpellID) {
 		if cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", s.playerGUID, prevSpellID)
 		}
@@ -592,16 +618,35 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 		_ = s.write(uint16(protocol.OpcodeSMSG_SUPERCEDED_SPELL), buildSupercededSpell(prevSpellID, spellID), true)
 	}
 
+	// Player::AddSpell's supercede loop (Player.cpp:3452-3473), lower-rank
+	// arm: learning a rank while a higher rank is already active marks
+	// the NEW spell inactive (SendSupercededSpell(new, higher)); it does
+	// not displace the higher rank. The active gate mirrors the loop's
+	// newspell.active condition; re-enabled spells skip the loop with
+	// the rest of the insert block (disabled_case).
+	effectiveActive := active
+	if !reenabled && active && s.server != nil {
+		if nextSpellID := s.server.getNextSpellInChain(spellID); nextSpellID != 0 {
+			for i := range s.player.Spells {
+				if s.player.Spells[i].ID == nextSpellID && s.player.Spells[i].Active {
+					effectiveActive = false
+					_ = s.write(uint16(protocol.OpcodeSMSG_SUPERCEDED_SPELL), buildSupercededSpell(spellID, nextSpellID), true)
+					break
+				}
+			}
+		}
+	}
+
 	if cdb != nil {
 		activeInt := 0
-		if active {
+		if effectiveActive {
 			activeInt = 1
 		}
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, ?, 0)", s.playerGUID, spellID, activeInt)
 	}
 	s.learnOwnerPetAuraSources(ctx, spellID)
 	if !reenabled {
-		s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: active, Disabled: false})
+		s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: effectiveActive, Disabled: false})
 	}
 
 	learnedBuf := protocol.NewBuffer(6)
@@ -697,6 +742,45 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 				}
 			}
 			_ = rows.Close()
+		}
+	}
+
+	// Player::LearnSpell's disabled cascade (Player.cpp:3685-3700): a
+	// re-enabled spell re-learns its disabled higher rank and every
+	// disabled spell requiring it (spell_required reverse map; Go table
+	// spell_required_spell per commands_learn.go). Each target keeps its
+	// stored active flag. Recursion terminates: every call clears
+	// Disabled before cascading, so a revisited row takes the early
+	// return at the top of this function.
+	if reenabled && s.server != nil {
+		if nextSpellID := s.server.getNextSpellInChain(spellID); nextSpellID != 0 {
+			for i := range s.player.Spells {
+				if s.player.Spells[i].ID == nextSpellID && s.player.Spells[i].Disabled {
+					s.learnSpellActive(ctx, nextSpellID, s.player.Spells[i].Active)
+					break
+				}
+			}
+		}
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			rows, rerr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id FROM spell_required_spell WHERE req_spell = ?", spellID)
+			if rerr == nil {
+				var reqSpells []uint32
+				for rows.Next() {
+					var reqSpell uint32
+					if serr := rows.Scan(&reqSpell); serr == nil && reqSpell > 0 {
+						reqSpells = append(reqSpells, reqSpell)
+					}
+				}
+				_ = rows.Close()
+				for _, reqSpell := range reqSpells {
+					for i := range s.player.Spells {
+						if s.player.Spells[i].ID == reqSpell && s.player.Spells[i].Disabled {
+							s.learnSpellActive(ctx, reqSpell, s.player.Spells[i].Active)
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 }
