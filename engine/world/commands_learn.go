@@ -417,6 +417,7 @@ func (s *session) setSkillFull(ctx context.Context, skillID, step, value, max ui
 		}
 	}
 	s.player.Skills = append(s.player.Skills, playerSkill{Skill: skillID, Step: step, Value: value, Max: max})
+	s.reapplySkillBonusAuras(uint32(skillID))
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, max)
 	}
@@ -889,6 +890,7 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 	}
 	if !found {
 		target.player.Skills = append(target.player.Skills, playerSkill{Skill: uint16(skillID), Step: step, Value: maxLevel, Max: maxLevel})
+		target.reapplySkillBonusAuras(skillID)
 	}
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", target.playerGUID, skillID, maxLevel, maxLevel)

@@ -73,6 +73,64 @@ func (s *session) applySkillBonusArms(aura *activeAura, sign int32) {
 	}
 }
 
+// reapplySkillBonusAuras mirrors the SetSkill add arm (Player.cpp:6195-6210):
+// the bonus word starts at 0 and every live SPELL_AURA_MOD_SKILL (30) /
+// SPELL_AURA_MOD_SKILL_TALENT (98) effect for this skill re-applies once.
+// It exists because applySkillBonusArms only credits an aura when it
+// applies, gated on the skill already being known, so an aura active
+// before the skill is learned otherwise never credits. Only effects for
+// this skill are touched, so other skills on a multi-effect aura are not
+// double-credited, and the zeroing matches C++ resetting the bonus word
+// before the re-apply, so stale entries from a prior learn/remove cycle
+// cannot survive into the new row.
+func (s *session) reapplySkillBonusAuras(skillID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	delete(s.skillTempBonus, skillID)
+	delete(s.skillTalentBonus, skillID)
+	for _, aura := range s.activeAuras {
+		if aura == nil {
+			continue
+		}
+		sp, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range sp.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			var talent bool
+			switch effect.Aura {
+			case spellAuraModSkill:
+			case spellAuraModSkillTalent:
+				talent = true
+			default:
+				continue
+			}
+			if uint32(effect.MiscValue) != skillID {
+				continue
+			}
+			var amount int32
+			if index < len(aura.Amounts) {
+				amount = aura.Amounts[index]
+			}
+			if talent {
+				if s.skillTalentBonus == nil {
+					s.skillTalentBonus = make(map[uint32]int32)
+				}
+				s.skillTalentBonus[skillID] += amount
+			} else {
+				if s.skillTempBonus == nil {
+					s.skillTempBonus = make(map[uint32]int32)
+				}
+				s.skillTempBonus[skillID] += amount
+			}
+		}
+	}
+}
+
 // skillAuraBonus returns the accumulated temporary (30) and talent (98)
 // bonuses for a skill line, or zero when the session is nil.
 func (s *session) skillAuraBonus(skillID uint32) (temp, talent int32) {

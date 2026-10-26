@@ -824,6 +824,7 @@ func (s *session) setOrUpdateSkill(ctx context.Context, skillID, maxVal uint16) 
 			Bonus: 0,
 		}
 		s.player.Skills = append(s.player.Skills, newSk)
+		s.reapplySkillBonusAuras(uint32(skillID))
 		s.updateAchievementCriteria(criteriaTypeLearnSkillLine, uint32(skillID), 1)
 		s.updateAchievementCriteria(criteriaTypeLearnSkillLineSpells, uint32(skillID), 1)
 		s.learnSkillRewardedSpells(ctx, uint32(skillID), uint32(val))

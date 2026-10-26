@@ -963,6 +963,7 @@ func (s *session) setSkillWithStep(ctx context.Context, skillID, step, value, ma
 		return
 	}
 	s.player.Skills = append(s.player.Skills, playerSkill{Skill: skillID, Step: step, Value: value, Max: maxVal})
+	s.reapplySkillBonusAuras(uint32(skillID))
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, value, maxVal)
 	}
