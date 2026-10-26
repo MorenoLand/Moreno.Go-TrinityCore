@@ -60,8 +60,10 @@
 -- Talk(EMOTE_SPAWN 1) via the summoner-side ev19 hook (midnight /
 -- jindo precedents; summoned object carries Talk); latent until
 -- SummonCreatureGroup ports, entry-gated so inert otherwise.
--- SummonedCreatureDies/Despawn:
--- guardCorpses GUID-set bookkeeping — no consumer bridge;
+-- SummonedCreatureDies/Despawn: guardCorpses GUID-set bookkeeping —
+-- ev21 (SummonedCreatureDied) IS bridged (lua_creature_events.go:3672),
+-- but the scarab port below re-derives the pool from the grid instead
+-- of tracking GUIDs (see EVENT_SCARABS);
 -- EVENT_IMPALE — PORTED 2026-10-25: SelectTarget(Random,0) ->
 -- DoCast(Impale 28783 / 25-man 56090, raid-moded via
 -- creature:Is25ManRaid() — C++ casts auto-resolve difficulty at
@@ -80,18 +82,17 @@
 -- Single-key-timer delta: a C++ impale still pending past swarm end
 -- would coexist with the LOCUST_ENDS re-schedule (two interleaved
 -- impale timers); the Lua harness replaces it — timing-only delta.
--- EVENT_SCARABS — random guardCorpses corpse ->
--- creatureTarget->CastSpell(SUMMON_CORPSE_SCARABS_MOB 28864) +
+-- EVENT_SCARABS — PORTED 2026-10-26 (scarabTick below): random
+-- guardCorpses corpse -> corpse CastSpell(self, 28864) +
 -- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
--- repeat randtime(40s,60s) — cross-AI corpse cast/Talk/despawn +
--- guardCorpses GUID bookkeeping, no bridges (creature:SummonCreature /
--- creature:Despawn are live on the boss surface, not cross-AI);
+-- repeat randtime(40s,60s) unconditional (Repeat sits outside the
+-- empty-check); PHASE_NORMAL-only with the EventMap erase rule
+-- (swarm-expired drop, LOCUST_ENDS re-schedule 20s-30s);
 -- EVENT_LOCUST / EVENT_LOCUST_ENDS phase legs — events.SetPhase(
 -- PHASE_SWARM/PHASE_NORMAL) has no bridge, but its OBSERVABLE
 -- effects on impale are modeled (swarm drop + LOCUST_ENDS impale
 -- re-schedule, see EVENT_IMPALE above); the LOCUST_ENDS re-scheduling
--- of SCARABS has no modeled content (scarabs stay out with the
--- guardCorpses machine);
+-- of SCARABS is modeled in swarmEndTick below;
 -- KilledUnit player-gated arm — victim->CastSpell(victim,
 -- SPELL_SUMMON_CORPSE_SCARABS_PLR 29105, me->GetGUID()) — ported to the
 -- event-3 handler below (moroes convention: creature casts on the victim,
@@ -119,6 +120,8 @@ local SPELL_IMPALE = 28783
 local SPELL_IMPALE_25 = 56090 -- boss_anubrekhan.cpp:51
 local SPELL_BERSERK = 27680
 local SPELL_SUMMON_CORPSE_SCARABS_PLR = 29105 -- boss_anubrekhan.cpp:55
+local SPELL_SUMMON_CORPSE_SCARABS_MOB = 28864 -- boss_anubrekhan.cpp:56
+local EMOTE_SCARAB = 2 -- boss_anubrekhan.cpp:38
 
 local timers = {}
 
@@ -179,9 +182,49 @@ local function impaleTick(creature, guid)
     end)
 end
 
--- C++ EVENT_LOCUST_ENDS (boss_anubrekhan.cpp:209-213): phase back
--- to NORMAL + re-schedule impale randtime(10s,20s) (scarabs leg
--- stays out with the guardCorpses machine).
+-- C++ EVENT_SCARABS (boss_anubrekhan.cpp:197-208): random
+-- guardCorpses corpse -> corpse CastSpell(self,
+-- SUMMON_CORPSE_SCARABS_MOB 28864) + Talk(EMOTE_SCARAB 2) +
+-- DespawnOrUnsummon, init randtime(20s,30s), repeat randtime(40s,60s)
+-- unconditional (Repeat sits outside the empty-check). The C++
+-- guardCorpses set (SummonedCreatureDies insert /
+-- SummonedCreatureDespawn erase) is modeled by re-deriving the pool
+-- from the grid each fire: dead creatures stay in the motion map for
+-- their corpse window (kill.go corpse-removal phase), so
+-- GetCreaturesInGrid(16573) + not-IsAlive == the set in practice;
+-- the 150yd bound is a room-scale approximation of the range-free set
+-- (guards die in combat near the boss; crypt guards exist only as
+-- boss summons, so no foreign entry-16573 corpses pollute the pool).
+-- PHASE_NORMAL-only: a scarab expiring during PHASE_SWARM is dropped
+-- with no re-arm (EventMap erase rule, see EVENT_IMPALE above).
+-- OrigCaster attribution (me->GetGUID()) has no Lua slot (29105
+-- precedent above); the creature cast path executes the summon
+-- effect, so the scarabs still spawn.
+local function scarabTick(creature, guid)
+    local st = swarmState[guid]
+    if st and st.swarm then
+        return
+    end
+    local corpses = {}
+    for _, c in ipairs(creature:GetCreaturesInGrid(NPC_CRYPT_GUARD, 150)) do
+        if not c:IsAlive() then
+            corpses[#corpses + 1] = c
+        end
+    end
+    if #corpses > 0 then
+        local corpse = corpses[math.random(#corpses)]
+        corpse:CastSpell(corpse, SPELL_SUMMON_CORPSE_SCARABS_MOB)
+        corpse:Talk(EMOTE_SCARAB)
+        corpse:Despawn()
+    end
+    schedule(guid, "scarab", math.random(40000, 60000), function()
+        scarabTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_LOCUST_ENDS (boss_anubrekhan.cpp:220-222): phase back
+-- to NORMAL + re-schedule impale randtime(10s,20s) + scarabs
+-- randtime(20s,30s).
 local function swarmEndTick(creature, guid)
     local st = swarmState[guid]
     if st then
@@ -189,6 +232,9 @@ local function swarmEndTick(creature, guid)
     end
     schedule(guid, "impale", math.random(10000, 20000), function()
         impaleTick(creature, guid)
+    end)
+    schedule(guid, "scarab", math.random(20000, 30000), function()
+        scarabTick(creature, guid)
     end)
 end
 
@@ -253,6 +299,9 @@ local function anubrekhanEnterCombat(event, creature, target)
     end)
     schedule(guid, "impale", math.random(10000, 20000), function()
         impaleTick(creature, guid)
+    end)
+    schedule(guid, "scarab", math.random(20000, 30000), function()
+        scarabTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
