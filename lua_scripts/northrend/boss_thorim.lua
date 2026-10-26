@@ -109,9 +109,11 @@
 -- unported pillar machine.
 -- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) —
 -- DoAction(ACTION_ACTIVATE_RUNIC_SMASH)-gated; no DoAction bridge.
--- npc_runic_colossusAI / npc_ancient_rune_giantAI JustDied — GO door legs
--- (DATA_RUNIC_DOOR / DATA_STONE_DOOR) + cross-creature thorim Talk(SAY_SPECIAL
--- 2); no GO / cross-creature-Talk bridges.
+-- npc_runic_colossusAI / npc_ancient_rune_giantAI Reset + JustDied — GO door legs
+-- (DATA_RUNIC_DOOR / DATA_STONE_DOOR) PORTED below via boss-anchored
+-- FindNearestGameObject + SetGoState (magmus/malchezaar precedent; the
+-- header's old "no GO bridge" claim was stale); the cross-creature thorim
+-- Talk(SAY_SPECIAL) + giant SetImmuneToPC/DoAction legs stay out.
 -- npc_sifAI (entry 33196) — all events gated by DoAction(ACTION_START_HARD_MODE);
 -- no DoAction bridge; not registered.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI — per-entry trash-ability
@@ -130,6 +132,8 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_RENAME = 0x00000010
 local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
+local GO_THORIM_RUNIC_DOOR = 194557 -- ulduar.h:286
+local GO_THORIM_STONE_DOOR = 194558 -- ulduar.h:287
 local ENTRY_DARK_RUNE_WARBRINGER = 32877
 local ENTRY_LIGHTNING_ORB = 33138 -- ulduar.h:189
 local ENTRY_SIF = 33196 -- ulduar.h:192
@@ -374,6 +378,8 @@ end
 -- IsAlive-guarded like thorimReset. The runic-door instance leg stays out.
 local function colossusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
+    if runicDoor then runicDoor:SetGoState(1) end
     if creature:IsAlive() then
         creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2218.38, -297.50, 412.18, 1.030, 5, 3000)
         creature:SummonCreature(ENTRY_IRON_RING_GUARD, 2235.07, -297.98, 412.18, 1.613, 5, 3000)
@@ -386,6 +392,8 @@ end
 
 local function colossusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
+    if runicDoor then runicDoor:SetGoState(0) end
 end
 
 -- C++ EVENT_STOMP: DoCastAOE(SPELL_STOMP 62411) (non-triggered),
@@ -440,6 +448,8 @@ end
 -- IsAlive-guarded. The stone-door instance leg stays out.
 local function giantReset(event, creature)
     cancelTimers(creature:GetGUID())
+    local stoneDoor = creature:FindNearestGameObject(GO_THORIM_STONE_DOOR, 100)
+    if stoneDoor then stoneDoor:SetGoState(1) end
     if creature:IsAlive() then
         creature:SummonCreature(ENTRY_IRON_HONOR_GUARD, 2198.05, -428.77, 419.95, 6.056, 5, 3000)
         creature:SummonCreature(ENTRY_IRON_HONOR_GUARD, 2220.31, -436.22, 412.26, 1.064, 5, 3000)
@@ -451,6 +461,8 @@ end
 
 local function giantDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local stoneDoor = creature:FindNearestGameObject(GO_THORIM_STONE_DOOR, 100)
+    if stoneDoor then stoneDoor:SetGoState(0) end
 end
 
 -- C++ JustSummoned NPC_LIGHTNING_ORB (boss_thorim.cpp:649-663):

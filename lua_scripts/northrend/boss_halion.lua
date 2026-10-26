@@ -105,10 +105,11 @@
 -- boss_halion UpdateAI — Talk(SAY_METEOR_STRIKE 3) rides
 -- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
 -- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
--- 286-296); the EVENT_ACTIVATE_FIREWALL / EVENT_FIERY_COMBUSTION
--- DoCastSelf / CastSpell legs ride the same phase machine (SetPhase
--- :246/:288/:426/:477 + cross-creature controller SetData
--- :260/:296/:667 — no phase-machine bridge). EVENT_BREATH /
+-- 286-296); the EVENT_FIERY_COMBUSTION DoCastSelf leg rides the phase
+-- machine (SetPhase :246/:288/:426/:477 + cross-creature controller SetData
+-- :260/:296/:667 — no phase-machine bridge). EVENT_ACTIVATE_FIREWALL is
+-- PORTED below: its C++ schedule carries no phase group, so the 5s
+-- engage-anchored one-shot fires regardless of phase. EVENT_BREATH /
 -- EVENT_CLEAVE / EVENT_TAIL_LASH are PORTED above (phase-ungated
 -- engage arms, stopped by the 75% latch).
 -- boss_twilight_halion JustEngagedWith — zero Talk; the four
@@ -223,6 +224,8 @@
 
 local ENTRY_HALION = 39863
 local ENTRY_TWILIGHT_HALION = 40142
+local GO_FLAME_RING = 203007 -- ruby_sanctum.h:112
+local GO_TWILIGHT_FLAME_RING = 203624 -- ruby_sanctum.h:113
 local ENTRY_LIVING_INFERNO = 40681 -- ruby_sanctum.h:83
 local ENTRY_LIVING_EMBER = 40683 -- ruby_sanctum.h:84
 
@@ -322,9 +325,11 @@ local fightPhaseThree = false
 -- events.ScheduleEvent(EVENT_FIERY_COMBUSTION, randtime(15s,18s));
 -- events.ScheduleEvent(EVENT_METEOR_STRIKE, 18s) + SendEncounterUnit +
 -- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_ONE). The three
--- phase-ungated timer arms port below; the firewall / fiery_combustion /
--- meteor_strike / precision-aura / encounter-frame / controller legs
--- have no bridges (documented above).
+-- phase-ungated timer arms port below, plus the firewall ring-close
+-- (HandleGameObject false = READY 1 on both rings, cancelled on combat
+-- end by halionCombatEnd's cancelTimers, matching events.Reset); the
+-- fiery_combustion / meteor_strike / precision-aura / encounter-frame /
+-- controller legs have no bridges (documented above).
 local function halionEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -339,6 +344,12 @@ local function halionEnterCombat(event, creature, target)
     end)
     schedule(guid, "mat_breath", {5000, 15000}, function()
         matBreathTick(creature, guid)
+    end)
+    schedule(guid, "firewall", 5000, function()
+        local flameRing = creature:FindNearestGameObject(GO_FLAME_RING, 100)
+        if flameRing then flameRing:SetGoState(1) end
+        local twilightRing = creature:FindNearestGameObject(GO_TWILIGHT_FLAME_RING, 100)
+        if twilightRing then twilightRing:SetGoState(1) end
     end)
 end
 
