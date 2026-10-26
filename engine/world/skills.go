@@ -137,8 +137,12 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	// rank of the talent leaves the in-memory spell set with its auras and
 	// owner-pet auras stripped, and the new rank's spell enters it. The
 	// same-session prereq/tier arms read it via playerHasSpell.
+	// RemoveSpell's early return (Player.cpp:3703) skips a disabled row
+	// only when the disabled flag is set, so a rank learned with
+	// disabled=false removes disabled old ranks too: gate on
+	// hasLearnedSpell, not playerHasSpell.
 	for _, rankSpell := range tEntry.SpellRank {
-		if rankSpell == 0 || rankSpell == spellID || !playerHasSpell(s.player, rankSpell) {
+		if rankSpell == 0 || rankSpell == spellID || !s.hasLearnedSpell(rankSpell) {
 			continue
 		}
 		if s.hasAura(rankSpell) {
@@ -150,6 +154,16 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 				s.player.Spells = append(s.player.Spells[:i], s.player.Spells[i+1:]...)
 				break
 			}
+		}
+	}
+	// AddSpell's disabled_case (Player.cpp:3382, 3405) re-enables a
+	// disabled row in place instead of inserting a second row: drop any
+	// existing entry for the new spell before appending the active one,
+	// or a re-learned disabled talent spell would live twice in the set.
+	for i := range s.player.Spells {
+		if s.player.Spells[i].ID == spellID {
+			s.player.Spells = append(s.player.Spells[:i], s.player.Spells[i+1:]...)
+			break
 		}
 	}
 	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true})

@@ -548,8 +548,21 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 // explicit active flag (Player.cpp:3661-3666 → AddSpell, Player.cpp:3490+):
 // the row's Active flag is stored, not hardcoded.
 func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active bool) {
-	if s.hasLearnedSpell(spellID) {
-		return
+	// Player::LearnSpell (Player.cpp:3661-3666) re-learns a disabled
+	// spell in place (AddSpell's disabled_case, Player.cpp:3382, 3405):
+	// the row is re-enabled, not duplicated, and the insert/supercede
+	// block is skipped. A non-disabled known spell still returns early.
+	reenabled := false
+	for i := range s.player.Spells {
+		if s.player.Spells[i].ID == spellID {
+			if !s.player.Spells[i].Disabled {
+				return
+			}
+			s.player.Spells[i].Active = active
+			s.player.Spells[i].Disabled = false
+			reenabled = true
+			break
+		}
 	}
 	cdb := s.server.CharactersStore.DB
 
@@ -563,7 +576,7 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 			JOIN spell_ranks AS r2 ON r1.first_spell_id = r2.first_spell_id
 			WHERE r2.spell_id = ? AND r1.rank = r2.rank - 1 LIMIT 1`, spellID).Scan(&prevSpellID)
 	}
-	if prevSpellID > 0 && s.hasLearnedSpell(prevSpellID) {
+	if prevSpellID > 0 && !reenabled && s.hasLearnedSpell(prevSpellID) {
 		if cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", s.playerGUID, prevSpellID)
 		}
@@ -587,7 +600,9 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, ?, 0)", s.playerGUID, spellID, activeInt)
 	}
 	s.learnOwnerPetAuraSources(ctx, spellID)
-	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: active, Disabled: false})
+	if !reenabled {
+		s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: active, Disabled: false})
+	}
 
 	learnedBuf := protocol.NewBuffer(6)
 	learnedBuf.WriteU32(spellID)
