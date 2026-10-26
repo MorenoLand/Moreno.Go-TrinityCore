@@ -1357,54 +1357,71 @@ func totemOwnerPos(s *session) playerPos {
 // range, the totem's owner receives MSG_MINIMAP_PING carrying the totem's
 // GUID and X/Y. The sentry totem is REACT_AGGRESSIVE (Totem::Summon,
 // Totem.cpp:103-104), so acquisition runs the standard
-// Creature::GetAttackDistance radius (Creature.cpp:2022-2058: 20yd at equal
+// Creature::GetAttackDistance radius (Creature.cpp:2015-2058: 20yd at equal
 // level, +/-1yd per level difference, clamped [5,45]) with the totem at the
 // owner's level (Totem::Summon sets level from the owner, Totem.cpp:99);
-// the RATE_CREATURE_AGGRO multiplier and aura detect-range terms are
-// unmodeled, matching the aggro scan's documented deltas. The ping fires
-// once per newly acquired hostile (the AttackStart-per-acquisition analog),
-// so the victim GUID is remembered until the totem sees no hostile again.
-// Go scans creature motions only — hostile players near the totem have no
-// bridge (no enemy-player proximity model on totems).
+// the RATE_CREATURE_AGGRO multiplier, the detect-range aura terms and
+// CanSeeOrDetect are unmodeled, matching the aggro scan's documented
+// deltas, and the totem's combat reach stands in at the 1.5yd default.
+// The ping fires once per newly acquired hostile (the AttackStart-per-
+// acquisition analog), so the victim GUID is remembered until the totem
+// sees no hostile again. The creature leg is the totemEnemyCreatureValid
+// verdict, not bare faction: a flagged, immune or totem motion never
+// acquires, matching the SingleTarget/ToW legs. The player leg is the
+// totemEnemySessionHostile verdict: AttackStart fires for hostile
+// players too (Cell::VisitAllObjects visits players in the aggro scan's
+// neighborhood), and the nearest hostile session competes on distance
+// with the nearest creature motion. The scan bound is the 45yd maximum
+// aggro radius, not the def's 20yd radius: a lower-level enemy at 25yd
+// is inside its own aggro distance and acquires in C++, so a 20yd scan
+// would miss it; the per-victim aggro-distance gate decides.
 func (s *session) sentryTotemPing(def TotemDef, totem *activeTotem) {
 	if s == nil || s.player == nil || totem == nil || s.server == nil {
 		return
 	}
 	owner := totemOwnerPos(s)
-	var nearest *creatureMotion
+	aggroDist := func(victimLevel int32) float64 {
+		d := 20.0 - 1.5 + float64(int32(s.player.Level)-victimLevel)
+		if d < 5.0 {
+			d = 5.0
+		} else if d > 45.0 {
+			d = 45.0
+		}
+		return d
+	}
+	var nearestGUID uint64
 	minDist := float64(math.MaxFloat64)
-	for _, m := range s.server.totemCreatureTargets(totem, float64(def.Radius)) {
-		if m == nil || m.Health == 0 || !s.server.isHostileFaction(m.Faction, owner) {
+	for _, m := range s.server.totemCreatureTargets(totem, 45.0) {
+		if !s.server.totemEnemyCreatureValid(m, owner) {
 			continue
 		}
-		// Creature::GetAttackDistance from the totem's side (totem level =
-		// owner level; 1.5yd default combat reach, no reach data on totems).
-		levelDiff := int32(s.player.Level) - int32(m.Level)
-		aggroDist := float32(20.0) - 1.5 + float32(levelDiff)
-		if aggroDist < 5.0 {
-			aggroDist = 5.0
-		} else if aggroDist > 45.0 {
-			aggroDist = 45.0
-		}
-		d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z)
-		if float32(d) > aggroDist {
-			continue
-		}
-		if d < minDist {
+		if d := distance3D(m.X, m.Y, m.Z, totem.X, totem.Y, totem.Z); d <= aggroDist(int32(m.Level)) && d < minDist {
 			minDist = d
-			nearest = m
+			nearestGUID = m.GUID
 		}
 	}
+	s.server.sessionsMu.RLock()
+	for other := range s.server.sessions {
+		if other == nil || other.player == nil || other.player.Map != totem.Map || other.player.InstanceID != totem.InstanceID ||
+			!s.totemEnemySessionHostile(other) {
+			continue
+		}
+		if d := distance3D(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z); d <= aggroDist(int32(other.player.Level)) && d < minDist {
+			minDist = d
+			nearestGUID = other.playerGUID
+		}
+	}
+	s.server.sessionsMu.RUnlock()
 	totem.mu.Lock()
 	defer totem.mu.Unlock()
-	if nearest == nil {
+	if nearestGUID == 0 {
 		totem.LastPingVictim = 0
 		return
 	}
-	if nearest.GUID == totem.LastPingVictim {
+	if nearestGUID == totem.LastPingVictim {
 		return
 	}
-	totem.LastPingVictim = nearest.GUID
+	totem.LastPingVictim = nearestGUID
 	buf := protocol.NewBuffer(16)
 	buf.WriteU64(totem.TotemGUID)
 	buf.WriteF32(totem.X)
@@ -1812,6 +1829,47 @@ func (srv *Server) totemOwnerSessionGUID(totemGUID uint64) uint64 {
 	return 0
 }
 
+// removeTotemCasterSpellAuras drops every creature record and session aura
+// of spellID cast by the given totem GUID, with no radius or map gate:
+// the destroy sweep keys on caster, not on the victim's current position,
+// so a second live totem's same-spell applications survive. It mirrors
+// the debuff leg of destroyTotemGUID, factored out for the slow-pulse
+// leg, whose records share the same caster-keyed shape.
+func (s *session) removeTotemCasterSpellAuras(totemGUID uint64, spellID uint32) {
+	if s == nil || s.server == nil || totemGUID == 0 || spellID == 0 {
+		return
+	}
+	s.server.auraMu.Lock()
+	var deadKeys []creatureAuraKey
+	for key, auras := range s.server.activeCreatureAuras {
+		if aura, ok := auras[spellID]; ok && aura != nil && aura.CasterGUID == totemGUID {
+			deadKeys = append(deadKeys, key)
+		}
+	}
+	s.server.auraMu.Unlock()
+	for _, key := range deadKeys {
+		s.server.removeCreatureAura(key, spellID)
+	}
+	s.server.sessionsMu.RLock()
+	var doomed []*session
+	for other := range s.server.sessions {
+		if other == nil || other.player == nil {
+			continue
+		}
+		other.castMu.Lock()
+		aura := other.activeAuras[spellID]
+		hit := aura != nil && !aura.Stopped && aura.CasterGUID == totemGUID
+		other.castMu.Unlock()
+		if hit {
+			doomed = append(doomed, other)
+		}
+	}
+	s.server.sessionsMu.RUnlock()
+	for _, other := range doomed {
+		other.removeAura(spellID)
+	}
+}
+
 func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	if s == nil || s.playerGUID == 0 || slotID >= 4 {
 		return
@@ -1936,6 +1994,19 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		s.server.sessionsMu.RUnlock()
 		for _, other := range doomed {
 			other.removeAura(debuffSpell)
+		}
+	}
+
+	// Slow-pulse leg of the same sweep (slow-pulse residual): the 3600
+	// applications are caster-keyed to the totem exactly like the debuff
+	// leg (creature records via applyPetAura, session records via
+	// applyAuraFromCaster), so they drop here instead of lingering to
+	// the 2-pulse timer when the totem dies. Gated to TotemPulseSlow:
+	// the other PulseSpell carriers deal instant damage/healing or
+	// dispel and leave no records to sweep.
+	if totemGUID != 0 && s.server != nil {
+		if def, ok := totemDefinitions[creatingSpellID]; ok && def.PulseType == TotemPulseSlow && def.PulseSpell != 0 && def.PulseSpell != debuffSpell {
+			s.removeTotemCasterSpellAuras(totemGUID, def.PulseSpell)
 		}
 	}
 
