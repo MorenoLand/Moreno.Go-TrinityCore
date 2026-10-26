@@ -170,6 +170,14 @@ type creatureMotion struct {
 	Happiness          uint32
 	Experience         uint32
 
+	// ExpansionMaxLevel caches GetMaxLevelForExpansion(template expansion)
+	// (SharedDefines.h:58: 0 -> 60, 1 -> 70, else 80); ExpansionMaxLevelEntry
+	// is the entry it was resolved for, so an UpdateEntry re-seat re-resolves
+	// instead of reusing a stale value. Unresolved reads 80, so the arm stays
+	// inert without DB data (the sentry totem convention, totems.go).
+	ExpansionMaxLevel      int32
+	ExpansionMaxLevelEntry uint32
+
 	TargetGUID uint64
 	InCombat   bool
 	LastAttack time.Time
@@ -4282,30 +4290,67 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			continue
 		}
 		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
-		// Creature::GetAttackDistance (Creature.cpp:2022-2058): 20 yards at equal
+		// Creature::GetAttackDistance (Creature.cpp:2015-2058): 20 yards at equal
 		// level, minus combat reach, +/-1 yard per creature-minus-player level
-		// difference, clamped to [5, 45]. (Creature::GetAggroRange, 3130-3168,
-		// is the pet-only variant — world-creature acquisition uses
-		// GetAttackDistance.) Documented deltas: the RATE_CREATURE_AGGRO
-		// multiplier and the expansion-max-level clamp are unmodeled (no rate
-		// model); the + m_CombatDistance term of CanStartAttack
-		// (Creature.cpp:1987-1989) is unmodeled (creature motions carry no
-		// combat-distance field).
+		// difference, detect-range aura terms, the expansion-max-level
+		// overwrite, then the RATE_CREATURE_AGGRO-scaled clamp and multiplier.
+		// (Creature::GetAggroRange, 3130-3168, is the pet-only variant —
+		// world-creature acquisition uses GetAttackDistance.) Residual: the
+		// + m_CombatDistance term of CanStartAttack (Creature.cpp:1987-1989)
+		// stays unmodeled (creature motions carry no combat-distance field;
+		// only ArcherAI/TurretAI set it, and the turret arm below adds its
+		// spell range to the radius).
 		levelDiff := int32(motion.Level) - int32(p.Level)
+		if motion.ExpansionMaxLevelEntry != motion.Entry {
+			motion.ExpansionMaxLevel = 80
+			motion.ExpansionMaxLevelEntry = motion.Entry
+			if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+				var expansion int64
+				if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT expansion FROM creature_template WHERE entry = ?", motion.Entry).Scan(&expansion); err == nil {
+					switch expansion {
+					case 0:
+						motion.ExpansionMaxLevel = 60
+					case 1:
+						motion.ExpansionMaxLevel = 70
+					default:
+						motion.ExpansionMaxLevel = 80
+					}
+				}
+			}
+		}
 		aggroDist := float32(20.0) - motion.CombatReach + float32(levelDiff)
 		// Creature::GetAttackDistance (Creature.cpp:2031-2040): the creature's
 		// own SPELL_AURA_MOD_DETECT_RANGE (91) and the player's
 		// SPELL_AURA_MOD_DETECTED_RANGE (152) shift the aggro radius; both
 		// apply only while the creature's level+5 stays under the max player
-		// level (80 in 3.3.5).
-		if motion.Level+5 <= 80 {
+		// level (CONFIG_MAX_PLAYER_LEVEL, 80 in 3.3.5).
+		maxPlayerLevel := s.Config.MaxPlayerLevel
+		if maxPlayerLevel == 0 {
+			maxPlayerLevel = 80
+		}
+		if motion.Level+5 <= maxPlayerLevel {
 			aggroDist += float32(s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange))
 			aggroDist += float32(p.Sess.totalAuraModifier(spellAuraModDetectedRange))
 		}
-		if aggroDist < 5.0 {
-			aggroDist = 5.0
-		} else if aggroDist > 45.0 {
-			aggroDist = 45.0
+		// Creature::GetAttackDistance (Creature.cpp:2042-2044): a creature
+		// above its template expansion's max level gets the max-level
+		// treatment — the overwrite discards the detect terms added above.
+		if int32(motion.Level) > motion.ExpansionMaxLevel {
+			aggroDist = float32(20.0) - motion.CombatReach + float32(motion.ExpansionMaxLevel-int32(p.Level))
+		}
+		// Creature::GetAttackDistance (Creature.cpp:2017-2022, 2050-2056):
+		// a zero rate means no aggro radius at all; otherwise the radius
+		// clamps to the rate-scaled [5, 45] band and then multiplies by it.
+		aggroRate := s.Config.RateCreatureAggro
+		if aggroRate == 0 {
+			aggroDist = 0
+		} else {
+			if aggroDist > float32(45.0*aggroRate) {
+				aggroDist = float32(45.0 * aggroRate)
+			} else if aggroDist < float32(5.0*aggroRate) {
+				aggroDist = float32(5.0 * aggroRate)
+			}
+			aggroDist *= float32(aggroRate)
 		}
 		// TurretAI (CombatAI.cpp:239-242): m_SightDistance = m_CombatDistance
 		// = spell[0]'s max range, and Creature::CanStartAttack acquires at
