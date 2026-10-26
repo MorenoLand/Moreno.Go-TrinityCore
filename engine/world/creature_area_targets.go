@@ -1066,7 +1066,8 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586): the
 	// victim-side taken proc half, with PROC_FLAG_TAKEN_DAMAGE ORed by
-	// the damage arm (Spell.cpp:2545). Runs on lethal and non-lethal
+	// the non-immune damage arm (Spell.cpp:2545); the immune arm bypasses
+	// the OR (Spell.cpp:2540-2546). Runs on lethal and non-lethal
 	// arms alike, like the pet creature branch (the return trip's lethal
 	// skip is self-hit-specific: the caster's own auras are stripped
 	// before DoDamageAndTriggers runs).
@@ -1085,7 +1086,11 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		procHitMask |= procHitBlock
 	}
 	if inlineSpellKnown && inlineSpell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
-		if typeMask := spellDamageTakenProcTypeMask(inlineSpell) | procFlagTakenDamage; typeMask != 0 {
+		typeMask := spellDamageTakenProcTypeMask(inlineSpell)
+		if !damageImmune {
+			typeMask |= procFlagTakenDamage
+		}
+		if typeMask != 0 {
 			spellCopy := inlineSpell
 			s.fireCreatureAuraProcLoop(ctx, live, motion.GUID, procEventInfo{
 				typeMask:       typeMask,
