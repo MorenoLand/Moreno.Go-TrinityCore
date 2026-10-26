@@ -3260,18 +3260,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): pet casts run the
 	// full target selection in C++ — an area AoE applies to every enemy unit
 	// in the area, not just the wire target. The motion-anchored twin
-	// (creatureAIAreaEnemyPlayers) finds the extra enemy players; the wire
-	// victim is excluded from its results, and their GUIDs extend the GO
-	// packet hit list below.
+	// (creatureAIAreaEnemyPlayers) finds the extra enemy players and the
+	// creature-motion twin (creatureAIAreaEnemyCreatures) the extra enemy
+	// creatures; the wire victim is excluded from both results, and their
+	// GUIDs extend the GO packet hit list below.
 	var areaHits []*playerPos
+	var areaCreatureHits []uint64
 	if isAreaEnemySpell(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos)
+			areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos)
 		}
 	}
 	for _, areaHit := range areaHits {
 		hitTargets = append(hitTargets, areaHit.GUID)
 	}
+	hitTargets = append(hitTargets, areaCreatureHits...)
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
@@ -3526,6 +3530,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
 			}
 		}
+		// SelectImplicitAreaTargets (Spell.cpp:1227): the area-selected
+		// enemy creatures take their own hits too — executePetSpellDamage
+		// is GUID-generic (getCombatTarget resolves motions; the taken
+		// side runs the creature twin), and the reflect/evade verdicts
+		// above already ran for these GUIDs through hitTargets, so a
+		// reflected creature hit lands on the pet and an evaded one
+		// resolves to 0 and skips, exactly like the player area hits.
+		for _, areaCreatureGUID := range areaCreatureHits {
+			if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
+				reflectorGUID := uint64(0)
+				if reflectedSet[areaCreatureGUID] {
+					reflectorGUID = areaCreatureGUID
+				}
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID)
+			}
+		}
 	}
 	if !hasDamage {
 		// Reflect return trip for a spell with no damage effect: the
@@ -3723,6 +3743,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaHit.GUID)
+					if aVictimGUID == 0 {
+						continue
+					}
+					var aVictim combatTarget
+					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
+						aVictim = ct
+					}
+					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+				}
+				// SelectImplicitAreaTargets (Spell.cpp:1227): the
+				// area-selected enemy creatures take the area aura
+				// too — applyPetAura is GUID-generic (creature
+				// targets land in the creature aura store), and the
+				// downrank map above already covers these GUIDs
+				// through hitTargets.
+				for _, areaCreatureGUID := range areaCreatureHits {
+					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
+					aDurationMs := petAuraDuration(s.server, aSpell, motion)
+					aVictimGUID := resolveReflectTarget(areaCreatureGUID)
 					if aVictimGUID == 0 {
 						continue
 					}

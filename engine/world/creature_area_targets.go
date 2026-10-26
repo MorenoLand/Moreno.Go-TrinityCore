@@ -11,6 +11,191 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+// creatureAIAreaGeometry is the shared radius/cone/center computation for
+// the creature-caster area sweeps (Spell.cpp:1227-1293). It duplicates the
+// geometry block of creatureAIAreaEnemyPlayers and of the player-path
+// spellAreaEnemyTargets rather than refactoring either: both twins are
+// live and behavior-verified, and the creature sweep below is the only
+// new consumer. A later tick may fold the twins onto it.
+func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spell, victim *playerPos) (radius float32, cone, backCone bool, centerX, centerY, centerZ float32) {
+	destinationCenter := false
+	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone
+	// direction is C++-custom-attr driven — CU_CONE_BACK (set in
+	// SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in the back
+	// cone; otherwise the front cone at the hardcoded M_PI/2 (same read as
+	// the player-path area sweep).
+	backCone = len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
+	// Spell.cpp:1282: when an effect has no radius entry (CalcRadius == 0),
+	// the area radius falls back to the spell's max range — per effect via
+	// GetMaxRange(IsPositiveEffect(effIndex)); the caster overload folds
+	// SPELLMOD_RANGE via GetSpellModOwner (SpellInfo.cpp:3060-3072,
+	// Object.cpp:2246-2268) — the pet/totem owner's session, nil for wild
+	// casters.
+	var maxRangePositive, maxRangeNegative float32
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	if s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+			if modOwner != nil {
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+			}
+		}
+	}
+	for i, eff := range spell.Effects {
+		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
+		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
+		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
+			continue
+		}
+		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if targetType == 24 || targetType == 54 || targetType == 104 {
+				cone = true
+			}
+			if targetType == 16 || targetType == 18 || targetType == 28 {
+				destinationCenter = true
+			}
+		}
+		// SpellEffectInfo::CalcRadius(m_caster): per-level radius from the
+		// DBC entry; the creature path has no client-side radius override.
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the
+				// DBC radius folds SPELLMOD_RADIUS via the mod owner.
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				if value > radius {
+					radius = value
+				}
+			} else {
+				// Spell.cpp:1282: zero-radius fallback — per effect.
+				effMaxRange := maxRangeNegative
+				if spell.IsPositiveEffect(i) {
+					effMaxRange = maxRangePositive
+				}
+				if effMaxRange > radius {
+					radius = effMaxRange
+				}
+			}
+		}
+	}
+	// SelectImplicitAreaTargets (Spell.cpp:1227-1270): CASTER/SRC reference
+	// types center on the caster; DEST reference types center on the
+	// destination. The creature path never resolves a dest packet field, so a
+	// DEST-ref area falls back to the wire target's position — the same
+	// fallback the player twin applies for target-dest on the creature
+	// path.
+	centerX, centerY, centerZ = motion.X, motion.Y, motion.Z
+	if destinationCenter {
+		centerX, centerY, centerZ = victim.X, victim.Y, victim.Z
+	}
+	return radius, cone, backCone, centerX, centerY, centerZ
+}
+
+// creatureAIAreaEnemyCreatures is the creature-motion twin of
+// creatureAIAreaEnemyPlayers: Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) selects every enemy unit in the area, not just enemy
+// players, so a creature standing in a pet/inline AoE is a hit target too.
+// The player twin's session-only sweep left those creatures out entirely:
+// no verdict, no hit, no return trip. Returns the extra creature hits (the
+// wire victim and the caster are excluded) as GUIDs in an
+// unspecified order. Callers re-resolve live state from the GUIDs — the
+// sweep snapshot must not hand out live motion pointers. The gates mirror the player-path motion accept:
+// same map/instance, alive, not a totem, not unit-flag blocked
+// (spellTargetUnitBlocked, Spell.cpp:8316/2980), hostile by the
+// creature-vs-creature template verdict (factionTemplatesHostile —
+// reputation terms are player-only in C++, Object.cpp:2708-2840),
+// cylinder area (Spell.cpp:8409), cone arc + line of sight
+// (Spell.cpp:7479-7492). MaxAffectedTargets caps this list alone:
+// C++ caps the merged player+creature area list (Spell.cpp:1293), so a
+// mixed area can exceed the cap by the overlap — the same approximation
+// the player twin already makes for its own list.
+func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos) []uint64 {
+	if s == nil || motion == nil || victim == nil || !isAreaEnemySpell(spell) {
+		return nil
+	}
+	// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842): ONLY_TARGET_PLAYERS
+	// / ONLY_TARGET_GHOSTS drop the CREATURE container, like the
+	// player-path sweep's playersOnly arm.
+	if spellSearchPlayersOnly(spell) {
+		return nil
+	}
+	radius, cone, backCone, centerX, centerY, centerZ := s.creatureAIAreaGeometry(motion, spell, victim)
+	if radius <= 0 {
+		return nil
+	}
+	s.motionMu.Lock()
+	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
+	candidates := make([]*creatureMotion, 0, len(motionMap))
+	for _, cand := range motionMap {
+		if cand != nil {
+			candidates = append(candidates, cand)
+		}
+	}
+	s.motionMu.Unlock()
+	seen := map[uint64]struct{}{victim.GUID: {}, motion.GUID: {}}
+	var hits []uint64
+	for _, cand := range candidates {
+		if cand.Map != motion.Map || cand.InstanceID != motion.InstanceID || cand.Health == 0 {
+			continue
+		}
+		if _, dup := seen[cand.GUID]; dup {
+			continue
+		}
+		if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
+			continue
+		}
+		if !s.factionTemplatesHostile(motion.Faction, cand.Faction) {
+			continue
+		}
+		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the
+		// area is a cylinder — 2D distance within the radius AND |dz| within
+		// the radius — not a 3D sphere.
+		dx, dy := float64(cand.X-centerX), float64(cand.Y-centerY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(cand.Z-centerZ)) > float64(radius) {
+			continue
+		}
+		if cone {
+			if backCone {
+				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+				if hasInArc(motion.Orientation, motion.X, motion.Y, cand.X, cand.Y, 2*math.Pi-math.Pi/2) {
+					continue
+				}
+			} else if !hasInArc(motion.Orientation, motion.X, motion.Y, cand.X, cand.Y, math.Pi/2) {
+				continue
+			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+			// cone selection passes losPosition == nullptr, so every cone
+			// candidate needs line of sight from the caster (the motion),
+			// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, cand.X, cand.Y, cand.Z) {
+				continue
+			}
+		} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, cand.X, cand.Y, cand.Z) {
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center, so every area
+			// candidate needs line of sight from the area center.
+			continue
+		}
+		seen[cand.GUID] = struct{}{}
+		hits = append(hits, cand.GUID)
+	}
+	// Spell.cpp:1293: MaxAffectedTargets caps the area list, then
+	// Trinity::Containers::RandomResize keeps that many chosen uniformly at
+	// random (shuffle + truncate draws the same uniform subset). The motion
+	// has no aura model, so no SPELL_AURA_MOD_MAX_AFFECTED_TARGETS term
+	// applies.
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
+		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
+		hits = hits[:maxTargets]
+	}
+	return hits
+}
+
 // creatureAIAreaEnemyPlayers mirrors Spell::SelectImplicitAreaTargets
 // (Spell.cpp:1227) for the inline AI victim-spell path. The inline path is a
 // shortcut that never runs SelectSpellTargets, so a creature-cast AoE applied
