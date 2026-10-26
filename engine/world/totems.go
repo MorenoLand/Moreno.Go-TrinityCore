@@ -158,6 +158,12 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Frost Resistance Totem
 	8181: {SpellID: 8181, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+	// Frost Resistance ranks 2-6 (trainer reqSpell chain 8181->10478->10479->25560->58741->58745, levels 38/54/67/75/80); entry + buff follow the shared rank-1 convention of the Stoneskin/Strength multi-rank defs, no per-rank creature evidence in-tree.
+	10478: {SpellID: 10478, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+	10479: {SpellID: 10479, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+	25560: {SpellID: 25560, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+	58741: {SpellID: 58741, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+	58745: {SpellID: 58745, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
 
 	// Totem of Wrath (Fire slot per glyph script m_SummonSlot[1];
 	// aura radius 40 per the aura pages; aura IDs cross-checked against
@@ -197,6 +203,12 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Fire Resistance Totem
 	8184: {SpellID: 8184, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
+	// Fire Resistance ranks 2-6 (trainer reqSpell chain 8184->10537->10538->25563->58737->58739, levels 42/58/68/75/80); shared rank-1 entry + buff, same convention as above.
+	10537: {SpellID: 10537, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
+	10538: {SpellID: 10538, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
+	25563: {SpellID: 25563, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
+	58737: {SpellID: 58737, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
+	58739: {SpellID: 58739, SlotID: TotemSlotWater, Entry: 5928, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8185, Radius: 30.0, PulseSecs: 2},
 
 	// --- Air Totems (Slot 3) ---
 	// Windfury Totem
@@ -214,6 +226,12 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Nature Resistance Totem
 	10595: {SpellID: 10595, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+	// Nature Resistance ranks 2-6 (trainer reqSpell chain 10595->10600->10601->25574->58746->58749, levels 44/60/69/75/80); shared rank-1 entry + buff, same convention as above.
+	10600: {SpellID: 10600, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+	10601: {SpellID: 10601, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+	25574: {SpellID: 25574, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+	58746: {SpellID: 58746, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
+	58749: {SpellID: 58749, SlotID: TotemSlotAir, Entry: 5926, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 10596, Radius: 30.0, PulseSecs: 2},
 
 	// Sentry Totem (Totem::Summon sets REACT_AGGRESSIVE, Totem.cpp:103-104;
 	// 5-minute duration; the ping arm scans the standard aggro radius).
