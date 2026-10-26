@@ -1809,10 +1809,13 @@ func (s *session) procSpellDamageNoDmgTakenAuraTriggers(ctx context.Context, cas
 // (Spell.cpp:2563-2579): the victim creature's own auras proc with the
 // taken-side positivity fallback, PROC_SPELL_TYPE_NO_DMG_HEAL,
 // PROC_SPELL_PHASE_HIT, and the miss-kind hit mask, and the trigger spell
-// targets the caster. The caller gates on the creature high word (0xF130)
-// so pet/vehicle GUIDs never alias into a creature motion; the creature
-// path carries no per-motion procDeep model (boss_ai.go), so no CanProc
-// gate applies here, matching the other creature taken legs.
+// targets the caster. The caller gates on motion high words (0xF130
+// creature, 0xF140 pet, 0xF150 vehicle): pet motions are keyed by petGUID
+// in the same motion map (registerPetMotion) and findCreatureMotion
+// resolves them by direct map hit, the 11959 hit-event precedent, so no
+// separate pet proc loop is needed; the creature path carries no
+// per-motion procDeep model (boss_ai.go), so no CanProc gate applies here,
+// matching the other creature taken legs.
 func (s *Server) fireCreatureMissNodmgTakenProcs(ctx context.Context, motion *creatureMotion, casterGUID uint64, spell wotlk.Spell, miss uint8, triggered bool, triggerAuraSpell uint32) {
 	if s == nil || motion == nil {
 		return
