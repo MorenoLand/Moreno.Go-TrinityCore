@@ -3664,97 +3664,142 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
 			// ReflectResult nulls _spellHitTarget, so the heal leg never
 			// runs for the nulled victim (resolveReflectTarget returns 0).
-			if resolveReflectTarget(targetGUID) == 0 {
-				continue
-			}
-			if immuneSet[targetGUID] {
-				continue
-			}
-			if missedTarget(targetGUID) {
-				continue
-			}
-			// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
-			// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
-			// the uint32 wrap must never turn a negative rolled value into
-			// a huge heal. The old raw 105 here was
-			// SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916), not
-			// SPELL_EFFECT_HEAL_MECHANICAL (75) — summon-object spells were
-			// being healed.
-			healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
-			if healValue > 0 {
-				heal := uint32(healValue)
-				if effect.Effect == spellEffectHealPct {
-					// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
-					// the effect value is a percentage of the TARGET's max
-					// health (Unit::CountPctFromMaxHealth), not a flat
-					// amount — like the player path at spells.go:10110.
-					healTarget, ok := s.getCombatTarget(ctx, resolveReflectTarget(targetGUID))
-					if !ok || healTarget.MaxHealth == 0 {
-						continue
-					}
-					heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
+			// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
+			// so the wire target below plus the area-selected targets take
+			// it when this heal effect itself selects the area (same
+			// effect-mask rule as the aura leg below).
+			applyHeal := func(origGUID uint64) {
+				victimGUID := resolveReflectTarget(origGUID)
+				if victimGUID == 0 {
+					return
 				}
-				// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
-				// the guardian's GetBonusDamage() rides the heal advertised
-				// benefit into the per-effect DoneTotal. Direct heal effects:
-				// the direct coefficient and a stack of 1.
-				if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, resolveReflectTarget(targetGUID), false, 1); bonus != 0 {
-					if adjusted := int32(heal) + bonus; adjusted > 0 {
-						heal = uint32(adjusted)
-					} else {
+				if immuneSet[origGUID] {
+					return
+				}
+				if missedTarget(origGUID) {
+					return
+				}
+				// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
+				// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
+				// the uint32 wrap must never turn a negative rolled value into
+				// a huge heal. The old raw 105 here was
+				// SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916), not
+				// SPELL_EFFECT_HEAL_MECHANICAL (75) — summon-object spells were
+				// being healed.
+				healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
+				if healValue > 0 {
+					heal := uint32(healValue)
+					if effect.Effect == spellEffectHealPct {
+						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
+						// the effect value is a percentage of the TARGET's max
+						// health (Unit::CountPctFromMaxHealth), not a flat
+						// amount — like the player path at spells.go:10110.
+						healTarget, ok := s.getCombatTarget(ctx, victimGUID)
+						if !ok || healTarget.MaxHealth == 0 {
+							return
+						}
+						heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
+					}
+					// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
+					// the guardian's GetBonusDamage() rides the heal advertised
+					// benefit into the per-effect DoneTotal. Direct heal effects:
+					// the direct coefficient and a stack of 1.
+					if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, victimGUID, false, 1); bonus != 0 {
+						if adjusted := int32(heal) + bonus; adjusted > 0 {
+							heal = uint32(adjusted)
+						} else {
+							heal = 0
+						}
+					}
+					// Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the done
+					// percent leg is per victim in C++ and multiplies after the
+					// flat DoneTotal — heal = (healamount + DoneTotal) *
+					// DoneTotalMod (Unit.cpp:7612). The leech/funnel zeroing kills
+					// only the flat leg, so this fold runs even when the bonus
+					// above was 0.
+					if pct := s.petHealingPctDone(ctx, motion, spell, victimGUID); pct != 1.0 {
+						tmp := float64(int32(heal)) * pct
+						if tmp < 0 {
+							tmp = 0
+						}
+						heal = uint32(tmp)
+					}
+					// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
+					// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
+					// total via GetSpellModOwner — the owner player (s). The pet
+					// cast loop carries direct heal effects only, so the op is
+					// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
+					if out := s.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
 						heal = 0
+					} else {
+						heal = uint32(out)
 					}
+					s.executePetSpellHeal(ctx, motion, victimGUID, spell.ID, heal)
 				}
-				// Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the done
-				// percent leg is per victim in C++ and multiplies after the
-				// flat DoneTotal — heal = (healamount + DoneTotal) *
-				// DoneTotalMod (Unit.cpp:7612). The leech/funnel zeroing kills
-				// only the flat leg, so this fold runs even when the bonus
-				// above was 0.
-				if pct := s.petHealingPctDone(ctx, motion, spell, resolveReflectTarget(targetGUID)); pct != 1.0 {
-					tmp := float64(int32(heal)) * pct
-					if tmp < 0 {
-						tmp = 0
-					}
-					heal = uint32(tmp)
+			}
+			applyHeal(targetGUID)
+			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+				for _, areaHit := range areaHits {
+					applyHeal(areaHit.GUID)
 				}
-				// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
-				// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
-				// total via GetSpellModOwner — the owner player (s). The pet
-				// cast loop carries direct heal effects only, so the op is
-				// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
-				if out := s.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
-					heal = 0
-				} else {
-					heal = uint32(out)
+				for _, areaCreatureGUID := range areaCreatureHits {
+					applyHeal(areaCreatureGUID)
 				}
-				s.executePetSpellHeal(ctx, motion, resolveReflectTarget(targetGUID), spell.ID, heal)
 			}
 		}
 		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
-				triggerTarget := target
-				if reflectNulled[target.UnitGUID] {
-					// Spell.cpp:2350 — nulled reflect victim: the trigger
-					// leg's _spellHitTarget resolves no unit, so the
-					// trigger spell does not fire.
-					continue
+				// Spell.cpp:2350 — a nulled reflect victim or an evaded wire
+				// target resolves no _spellHitTarget, so the trigger leg
+				// does not fire for it; immune and missed wire targets
+				// likewise take no leg (PreprocessTarget, Spell.cpp:2347-2351).
+				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
+				// so the area-selected targets take it too when this trigger
+				// effect itself selects the area (effect-mask merge rule,
+				// Spell.cpp:866-897). The wire gates are a condition, not a
+				// continue, so a gated wire target never skips the area legs.
+				if !reflectNulled[target.UnitGUID] && !evadedSet[target.UnitGUID] && !immuneSet[target.UnitGUID] && !missedTarget(target.UnitGUID) {
+					triggerTarget := target
+					if reflectedSet[target.UnitGUID] {
+						triggerTarget.UnitGUID = motion.GUID
+					}
+					s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 				}
-				if immuneSet[target.UnitGUID] {
-					continue
+				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+					areaTrigger := func(origGUID uint64) {
+						if rt := resolveReflectTarget(origGUID); rt != 0 && !immuneSet[origGUID] && !missedTarget(origGUID) {
+							triggerTarget := target
+							triggerTarget.UnitGUID = rt
+							s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+						}
+					}
+					for _, areaHit := range areaHits {
+						areaTrigger(areaHit.GUID)
+					}
+					for _, areaCreatureGUID := range areaCreatureHits {
+						areaTrigger(areaCreatureGUID)
+					}
 				}
-				if missedTarget(target.UnitGUID) {
-					continue
-				}
-				if reflectedSet[target.UnitGUID] {
-					triggerTarget.UnitGUID = motion.GUID
-				}
-				s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 			}
 		}
 		if effect.Effect == spellEffectDispel {
 			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
 				s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[targetGUID])
+			}
+			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405);
+				// the area legs run only when this dispel effect itself selects
+				// the area (effect-mask merge rule, Spell.cpp:866-897).
+				for _, areaHit := range areaHits {
+					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
+					}
+				}
+				for _, areaCreatureGUID := range areaCreatureHits {
+					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
+					}
+				}
 			}
 		}
 		if effect.Effect == spellEffectDispelMechanic {
@@ -3767,6 +3812,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
 			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
 				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+			}
+			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+				for _, areaHit := range areaHits {
+					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+					}
+				}
+				for _, areaCreatureGUID := range areaCreatureHits {
+					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+					}
+				}
 			}
 		}
 		if effect.Effect == spellEffectInstaKill {
@@ -3828,7 +3885,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// old raw 27 was SPELL_EFFECT_PERSISTENT_AREA_AURA, which C++
 			// routes through DynamicObject (no pet-path bridge), never
 			// per-target application.
-			if effect.Effect == spellEffectApplyAreaAuraEnemy && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
+			// A plain ApplyAura effect with an area-enemy target selects the same area (Spell.cpp:1227).
+			if (effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAura) && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
 				for _, areaHit := range areaHits {
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
