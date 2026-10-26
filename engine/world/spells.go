@@ -14938,6 +14938,56 @@ func (s *session) aoeDamageAvoidanceMultiplier(ctx context.Context, victimGUID u
 	return mult
 }
 
+// periodicTickEffectIndex returns the index of the ticking periodic effect
+// (the first effect whose ApplyAuraName matches the aura type), or -1 when
+// the spell carries no such effect. The periodic tick handlers key their
+// effect-scoped legs (area gate below) on this index, like C++'s
+// Effects[GetEffIndex()].
+func periodicTickEffectIndex(spell wotlk.Spell, auraType uint32) int {
+	for i, eff := range spell.Effects {
+		if eff.Aura == auraType {
+			return i
+		}
+	}
+	return -1
+}
+
+// periodicTickEffectIsArea mirrors the area gate of the periodic damage
+// tick (SpellAuraEffects.cpp:5184-5188): SpellEffectInfo::IsTargetingArea
+// (SpellInfo.cpp:380-383, via the in-tree spellImplicitTargetIsArea set) or
+// IsAreaAuraEffect (:385-395) or the persistent-area-aura effect itself.
+func periodicTickEffectIsArea(eff wotlk.SpellEffect) bool {
+	if spellImplicitTargetIsArea(eff.ImplicitTargetA) || spellImplicitTargetIsArea(eff.ImplicitTargetB) {
+		return true
+	}
+	switch eff.Effect {
+	case spellEffectPersistentAreaAura, spellEffectApplyAreaAuraParty, spellEffectApplyAreaAuraRaid, spellEffectApplyAreaAuraPet, spellEffectApplyAreaAuraFriend, spellEffectApplyAreaAuraEnemy, spellEffectApplyAreaAuraOwner:
+		return true
+	}
+	return false
+}
+
+// periodicTickAoeAvoidanceMultiplier mirrors Unit::CalculateAOEAvoidance
+// (Unit.cpp:12397-12404) for periodic damage ticks: the victim's
+// SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (229) product by school mask, plus the
+// SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE (310) product when the caster
+// is a creature. It shares the plain-product form of the direct-spell
+// aoeDamageAvoidanceMultiplier above (no same-effect stack-rule highest-wins
+// arm); the victim amounts arrive resolved by the caller (player session
+// amounts vs creature-key amounts).
+func periodicTickAoeAvoidanceMultiplier(amounts229, amounts310 []int32, casterIsCreature bool) float64 {
+	mult := 1.0
+	for _, amount := range amounts229 {
+		mult *= 1.0 + float64(amount)/100.0
+	}
+	if casterIsCreature {
+		for _, amount := range amounts310 {
+			mult *= 1.0 + float64(amount)/100.0
+		}
+	}
+	return mult
+}
+
 // creatureDamageFromCasterMultiplier mirrors the
 // SPELL_AURA_MOD_DAMAGE_FROM_CASTER arm of TrinityCore
 // Unit::SpellDamageBonusTaken (Unit.cpp:7094) for creature victims: the
@@ -27543,8 +27593,8 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
 		// schools only; Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000)
 		// skips the armor leg for FIXED_DAMAGE spells, as the resilience
-		// leg below already does. The AOE-avoidance leg (5184-5188) has no
-		// Go model and stays unbridged. Hybrid (melee+magic) spells skip
+		// leg below already does. The AOE-avoidance leg (5184-5188) runs
+		// below, between armor and resilience. Hybrid (melee+magic) spells skip
 		// this arm: C++ strips the NORMAL bit at load (SpellMgr.cpp:2830),
 		// so IsDamageReducedByArmor is false for them, and the armor
 		// comparison moves into CalcSpellResistedDamage (Unit.cpp:1764-1770).
@@ -27552,12 +27602,27 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
+		// AOE avoidance (SpellAuraEffects.cpp:5184-5188): after armor,
+		// before resilience; area-targeting / area-aura / persistent-area
+		// effects only, skipped for fixed damage. C++ scales by the
+		// victim's avoidance product (Unit.cpp:12397-12404), with the
+		// creature-caster twin (310) when the caster is a creature.
+		if !fixedDamage && tickKnown {
+			if effIdx := periodicTickEffectIndex(tickSpell, aura.AuraType); effIdx >= 0 && periodicTickEffectIsArea(tickSpell.Effects[effIdx]) {
+				casterIsCreature := ts.findCreatureMotion(aura.CasterGUID) != nil
+				if avoid := periodicTickAoeAvoidanceMultiplier(ts.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, aura.SchoolMask), ts.auraTypeModifiersByMiscMask(spellAuraModCreatureAoeDamageAvoidance, aura.SchoolMask), casterIsCreature); avoid != 1 {
+					dmg = uint32(float64(dmg) * avoid)
+				}
+			}
+		}
 		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
 		// damage; the isCrit arm now carries the real tick crit instead of
 		// the earlier hardcoded false. The caster gate is the aura's captured
 		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450), not a live
-		// re-resolve: wild-creature DoTs do not trigger resilience.
-		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
+		// re-resolve: wild-creature DoTs do not trigger resilience. C++
+		// carries no caster-is-target exclusion, so self-ticks run the
+		// leg like any other player-victim tick.
+		if !fixedDamage {
 			ts.applyResilienceToDamage(aura.ApplyResilience, &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828) handles resist then absorb
@@ -28086,10 +28151,24 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
 		}
+		// AOE avoidance (HandlePeriodicHealthLeechAuraTick runs the
+		// damage-tick tail: armor -> avoidance -> resilience): area effects
+		// only, skipped for fixed damage, with the creature-caster twin
+		// (310) when the caster is a creature (Unit.cpp:12401-12402).
+		if !fixedDamage && tickKnown {
+			if effIdx := periodicTickEffectIndex(tickSpell, 53); effIdx >= 0 && periodicTickEffectIsArea(tickSpell.Effects[effIdx]) {
+				casterIsCreature := ts.findCreatureMotion(aura.CasterGUID) != nil
+				if avoid := periodicTickAoeAvoidanceMultiplier(ts.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, aura.SchoolMask), ts.auraTypeModifiersByMiscMask(spellAuraModCreatureAoeDamageAvoidance, aura.SchoolMask), casterIsCreature); avoid != 1 {
+					dmg = uint32(float64(dmg) * avoid)
+				}
+			}
+		}
 		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450) caster gate:
 		// captured at aura creation — a DoT applied by a wild creature does
 		// not trigger resilience; player and player-owned-pet casters do.
-		if !fixedDamage && aura.CasterGUID != aura.TargetGUID {
+		// C++ carries no caster-is-target exclusion, so self-ticks run the
+		// leg like any other player-victim tick.
+		if !fixedDamage {
 			ts.applyResilienceToDamage(aura.ApplyResilience, &dmg, crit, CombatRatingCritTakenSpell)
 		}
 		resisted := uint32(0)
@@ -29269,9 +29348,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182); skipped for
-		// FIXED_DAMAGE spells (Unit.cpp:999-1000). Resilience has no Go
-		// creature-victim model (Unit.cpp:12345-12355: owner-is-player only)
-		// and stays unbridged, as does AOE-avoidance. Hybrid (melee+magic)
+		// FIXED_DAMAGE spells (Unit.cpp:999-1000). The AOE-avoidance leg
+		// (5184-5188) and the resilience leg (5190-5192) run below, between
+		// armor and resist. Hybrid (melee+magic)
 		// spells skip this arm: C++ strips the NORMAL bit at load
 		// (SpellMgr.cpp:2830), so IsDamageReducedByArmor is false for them,
 		// and the armor comparison moves into CalcSpellResistedDamage
@@ -29287,6 +29366,32 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			if armor > 0 {
 				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+			}
+		}
+		// AOE avoidance (SpellAuraEffects.cpp:5184-5188): after armor,
+		// before resilience; area-targeting / area-aura / persistent-area
+		// effects only, skipped for fixed damage. The victim's avoidance
+		// product (Unit.cpp:12397-12404) includes the creature-caster twin
+		// (310) when the caster is a creature.
+		if !fixedDamage && tickKnown {
+			if effIdx := periodicTickEffectIndex(tickSpell, aura.AuraType); effIdx >= 0 && periodicTickEffectIsArea(tickSpell.Effects[effIdx]) {
+				casterIsCreature := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID) != nil
+				if avoid := periodicTickAoeAvoidanceMultiplier(creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAoeDamageAvoidance, aura.SchoolMask), creatureAuraModifiersByMiscMask(s.server, key, spellAuraModCreatureAoeDamageAvoidance, aura.SchoolMask), casterIsCreature); avoid != 1 {
+					dmg = uint32(float64(dmg) * avoid)
+				}
+			}
+		}
+		// Resilience (SpellAuraEffects.cpp:5190-5192): skipped for fixed
+		// damage; the gate is the aura's captured ApplyResilience (the
+		// caster-side CanApplyResilience, SpellAuras.cpp:450), and the
+		// victim-side arm (Unit.cpp:12342-12350) resolves a creature victim
+		// to its player owner, whose ratings absorb the hit. Wild-creature
+		// victims (no player owner) take no resilience, matching C++.
+		if !fixedDamage && aura.ApplyResilience {
+			if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); motion != nil {
+				if owner := s.server.ownerPlayerSessionOfMotion(motion); owner != nil {
+					owner.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+				}
 			}
 		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1828): resist then absorb at the
@@ -29951,6 +30056,29 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			if armor > 0 {
 				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+			}
+		}
+		// AOE avoidance (HandlePeriodicHealthLeechAuraTick runs the
+		// damage-tick tail: armor -> avoidance -> resilience): area effects
+		// only, skipped for fixed damage, with the creature-caster twin
+		// (310) when the caster is a creature (Unit.cpp:12401-12402).
+		if !fixedDamage && tickKnown {
+			if effIdx := periodicTickEffectIndex(tickSpell, 53); effIdx >= 0 && periodicTickEffectIsArea(tickSpell.Effects[effIdx]) {
+				casterIsCreature := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID) != nil
+				if avoid := periodicTickAoeAvoidanceMultiplier(creatureAuraModifiersByMiscMask(s.server, key, spellAuraModAoeDamageAvoidance, aura.SchoolMask), creatureAuraModifiersByMiscMask(s.server, key, spellAuraModCreatureAoeDamageAvoidance, aura.SchoolMask), casterIsCreature); avoid != 1 {
+					dmg = uint32(float64(dmg) * avoid)
+				}
+			}
+		}
+		// Resilience (HandlePeriodicHealthLeechAuraTick runs the damage-tick
+		// tail): skipped for fixed damage; the captured ApplyResilience
+		// gates, and the victim-side arm resolves a creature victim to its
+		// player owner (Unit.cpp:12342-12350), whose ratings absorb the hit.
+		if !fixedDamage && aura.ApplyResilience {
+			if motion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); motion != nil {
+				if owner := s.server.ownerPlayerSessionOfMotion(motion); owner != nil {
+					owner.applyResilienceToDamage(true, &dmg, crit, CombatRatingCritTakenSpell)
+				}
 			}
 		}
 		resisted := uint32(0)
