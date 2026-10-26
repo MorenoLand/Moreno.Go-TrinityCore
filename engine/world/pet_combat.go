@@ -3617,6 +3617,31 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
 			}
 		}
+		if effect.Effect == spellEffectInstaKill {
+			// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a pet
+			// caster: the HIT_TARGET arm, previously missing on this path
+			// entirely — an effect-1 pet spell killed nothing. C++ runs it
+			// per hit target (DoProcessTargetContainer, Spell.cpp:3555-
+			// 3566), so the wire victim plus the area-selected victims
+			// all take it, unlike the heal/dispel/aura arms above which
+			// only model the wire target. The shared creature-caster twin
+			// (boss_ai.go) carries the gates, the INSTAKILLLOG fan-out
+			// and the kill funnels; its reflected map retargets landed
+			// reflects to the pet (Spell.cpp:2350) and skips bounced
+			// and evaded victims, matching the damage leg's
+			// resolveReflectTarget. Runs after the damage leg above —
+			// the pet path's grouped-effect approximation, like the
+			// other arms in this loop.
+			reflected := make(map[uint64]uint8, len(reflectTrips))
+			for _, trip := range reflectTrips {
+				reflected[trip.victimGUID] = trip.status
+			}
+			evaded := make(map[uint64]bool, len(evadedSet))
+			for guid := range evadedSet {
+				evaded[guid] = true
+			}
+			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, hitTargets, reflected, evaded)
+		}
 		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
 			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
 			// a target whose aura scales takes the aura from the

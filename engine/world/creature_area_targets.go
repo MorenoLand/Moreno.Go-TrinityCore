@@ -818,7 +818,26 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 // after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
 // the pet-path bridge.
 func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage uint32, schoolMask uint8) {
-	if s == nil || motion == nil || reflector == nil || damage == 0 {
+	if s == nil || motion == nil || reflector == nil {
+		return
+	}
+	// Spell::EffectInstaKill (SpellEffects.cpp:274-296) on the return
+	// trip: the reflected spell's effects land on the caster
+	// (PreprocessTarget, Spell.cpp:2350; DoProcessTargetContainer runs
+	// the effect dispatch ahead of DoDamageAndTriggers, Spell.cpp:3555-
+	// 3566), so a reflected effect-1 spell kills the motion through the
+	// shared creature-caster twin (boss_ai.go) instead of dealing it the
+	// outbound fallback damage. Runs ahead of the damage pipeline below:
+	// C++ kills through DealDamage NODAMAGE with no damage log, and a
+	// lethal trip skips the proc/trigger legs that follow (the kill
+	// strips the caster's auras first). A zero-damage trip with no
+	// effect-1 still returns — the old damage==0 guard.
+	if spell.ID != 0 && spellHasEffect(spell, spellEffectInstaKill) {
+		s.creatureEffectInstaKill(ctx, motion, spell.ID, []uint64{motion.GUID}, nil, nil)
+		if live := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); live == nil || live.Health == 0 {
+			return
+		}
+	} else if damage == 0 {
 		return
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2560): the

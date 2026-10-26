@@ -3172,11 +3172,50 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// condition keeps _spellHitTarget away from the reflector
 			// (Spell.cpp:2350), and the return trip below is the only effect
 			// that lands.
-			if !reflectedSet[target.GUID] {
+			// Spell::EffectInstaKill (SpellEffects.cpp:274-296) on the
+			// inline path: C++ runs the effect dispatch (DoTargetSpellHit
+			// per effect index, Spell.cpp:3555-3566) ahead of
+			// DoDamageAndTriggers, so an effect-1 AI spell kills its hit
+			// victims before the damage/hook/trigger legs below run — the
+			// shared creature-caster twin (boss_ai.go) carries the gates,
+			// the INSTAKILLLOG fan-out and the kill funnels. Reflected
+			// victims take no leg here (their return trip below is the
+			// only effect that lands). A victim the twin kills skips the
+			// damage legs below: C++ never deals damage to an instakill
+			// victim, and the damage path's own death chain would
+			// double-fire. Only victims alive before the twin ran are
+			// skipped, so a pre-dead target keeps its previous hit-leg
+			// behavior.
+			instaKilled := map[uint64]bool{}
+			if inlineSpellKnown && spellHasEffect(inlineSpell, spellEffectInstaKill) {
+				var instaTargets []uint64
+				aliveBefore := map[uint64]bool{}
+				for _, p := range append([]*playerPos{target}, areaHits...) {
+					if p == nil || p.GUID == 0 || reflectedSet[p.GUID] {
+						continue
+					}
+					instaTargets = append(instaTargets, p.GUID)
+					if p.Sess != nil && p.Sess.player != nil && p.Sess.player.Health > 0 {
+						aliveBefore[p.GUID] = true
+					}
+				}
+				if len(instaTargets) > 0 {
+					s.creatureEffectInstaKill(ctx, motion, spellID, instaTargets, nil, nil)
+					for _, p := range append([]*playerPos{target}, areaHits...) {
+						if p == nil || !aliveBefore[p.GUID] {
+							continue
+						}
+						if p.Sess != nil && p.Sess.player != nil && p.Sess.player.Health == 0 {
+							instaKilled[p.GUID] = true
+						}
+					}
+				}
+			}
+			if !reflectedSet[target.GUID] && !instaKilled[target.GUID] {
 				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
 			}
 			for _, areaHit := range areaHits {
-				if areaHit == nil || reflectedSet[areaHit.GUID] {
+				if areaHit == nil || reflectedSet[areaHit.GUID] || instaKilled[areaHit.GUID] {
 					continue
 				}
 				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
