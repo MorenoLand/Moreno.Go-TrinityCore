@@ -248,7 +248,7 @@ local function randomThreatTarget(creature, playerOnly, maxDist)
                 or (victimGuid == nil and i > 1))
                 and not t:IsDead()
                 and (not playerOnly or t:GetObjectType() == "Player")
-                and (not maxDist or creature:GetDistance(t) <= maxDist) then
+                and (not maxDist or creature:GetDistance(t) - creature:GetCombatReach() < maxDist) then
             pool[#pool + 1] = t
         end
     end

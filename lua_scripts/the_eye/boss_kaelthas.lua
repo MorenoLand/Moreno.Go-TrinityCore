@@ -242,7 +242,7 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
         return
     end
     if unit ~= nil and creature:IsValidAttackTarget(unit)
-            and creature:GetDistance(unit) <= 30.0 then
+            and creature:GetDistance(unit) - creature:GetCombatReach() < 30.0 then
         creature:SetTarget(unit)
         kaelPreEncounter[guid] = false
     end
@@ -452,7 +452,7 @@ local function capernianTick(creature, guid)
     -- DoCastVictim (C++ IsWithinDistInMap branch, C++-exact).
     if st.conflagration <= 1000 then
         local target = randomThreatUnit(creature)
-        if target and creature:GetDistance(target) <= 30 then
+        if target and creature:GetDistance(target) - creature:GetCombatReach() < 30 then
             creature:CastSpell(target, SPELL_CONFLAGRATION)
         else
             creature:CastSpell(nil, SPELL_CONFLAGRATION)
