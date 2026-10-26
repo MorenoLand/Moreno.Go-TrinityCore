@@ -30,9 +30,13 @@
 -- is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the CallForHelp(30.0f)
--- lieutenant-fetch leg and instance->SetBossState(DATA_BJARNGRIM,
--- IN_PROGRESS) have no bridges — the boss_bookkeeping precedent).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) + CallForHelp(30.0f) emulation
+-- (event 1): lieutenants in 30y (GetCreaturesInGrid 29240) with no
+-- victim engage the entering player (C++ CallOfHelpCreatureInRangeDo
+-- EngageWithTarget leg; IsEngaged skip via !GetVictim, LOS/faction/
+-- react gates unmodeled, 2D+reach scan vs C++ 3D absolute 30.0f).
+-- instance->SetBossState(DATA_BJARNGRIM, IN_PROGRESS) has no bridge
+-- — the boss_bookkeeping precedent.
 -- KilledUnit — Talk(SAY_SLAY 4) (event 3 — C++-UNCONDITIONAL: the Talk
 -- fires for any victim; no nalorakk gate here — the anubrekhan
 -- unconditional variant precedent).
@@ -250,6 +254,13 @@ end
 -- re-inits them, so ev1 (re)builds the whole stance state.
 local function bjarngrimEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    if target then
+        for _, lt in ipairs(creature:GetCreaturesInGrid(ENTRY_STORMFORGED_LIEUTENANT, 30)) do
+            if not lt:GetVictim() then
+                lt:EngageWithTarget(target)
+            end
+        end
+    end
     bjarngrimStanceStart(creature)
 end
 

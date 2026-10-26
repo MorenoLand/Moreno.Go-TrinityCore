@@ -142,9 +142,10 @@
 --   Ellris summon-imp 44163 (summon), seed-of-corruption 44141 /
 --   curse-of-agony 14875 / fear 38595 (SelectTarget Random,0);
 --   Yazzai polymorph 13323 / blizzard 44178 (SelectTarget Random,0),
---   blink 14514 (combat-manager any-combatant melee-range check —
---   victim-distance proxy would fabricate targeting); Salaris
---   intercept 27577 (melee-range iteration + SelectTarget Random,0);
+--   blink 14514 + Salaris intercept 27577: PORTED in boss_yazzai.lua
+--   / boss_warlord_salaris.lua (threat-list melee-range proxy +
+--   IsWithinMeleeRange bridge; lowmention triage's "Lua absent"
+--   verdict was stale — both files already carried the arms).
 --   Garaxxas freezing-trap 44136 (one-trap-at-a-time GO check),
 --   sliver pet 24552 (summon); Zelfan recombobulate 44274 (lackey-
 --   GUID-list + polymorph check); all common-AI instance/threat/
