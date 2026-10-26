@@ -170,7 +170,7 @@ local function focusfireTick(creature, guid)
     -- non-player pick fails the gate exactly like C++ (the old
     -- alive-prefilter over-summoned whenever a dead entry
     -- preceded the pick).
-    -- Nil victim: the pop removes the top-threat entry instead.
+    -- Nil victim: the pop removes the first online entry instead.
     local targets = creature:GetAITargets()
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -179,9 +179,20 @@ local function focusfireTick(creature, guid)
     end
     local pool = {}
     if victimGuid == nil then
-        -- No victim: the offset pop removes the top-threat entry.
-        for i = 2, #targets do
-            pool[#pool + 1] = targets[i]
+        -- No victim: the offset pop removes the first online entry
+        -- (UnitAI.h offline-skip before pop), not the raw head, so a
+        -- dead head entry must not consume the pop (census idiom);
+        -- the rest of the pool stays unfiltered for the gate below.
+        local aliveSeen = 0
+        for _, t in ipairs(targets) do
+            local skip = false
+            if not t:IsDead() then
+                aliveSeen = aliveSeen + 1
+                skip = aliveSeen == 1
+            end
+            if not skip then
+                pool[#pool + 1] = t
+            end
         end
     else
         for _, t in ipairs(targets) do
