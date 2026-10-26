@@ -1554,6 +1554,64 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 			hitTargets = append(hitTargets, entryCreatures...)
 		}
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): enemy and
+		// friendly area legs join the hit list like the entry-area leg
+		// above — the inline path (creaturemotion.go) and the pet path
+		// (pet_combat.go) already fan out enemy hits, and the pet path
+		// fans out ally hits too; this path carried entry-area only, so
+		// a boss AoE landed on the wire target (plus entry matches) and
+		// missed every other enemy/ally in the area. The sweeps exclude
+		// only the current target GUID (the nearby pick, like the entry
+		// leg); the dedupe below merges area overlaps into one TargetInfo
+		// per unit (AddUnitTarget, Spell.cpp:2152), so a unit selected by
+		// several legs appears once ahead of the aura-scaling, chain,
+		// reflect and per-hit legs below. Delta: the ally sweeps return
+		// every non-hostile candidate without a per-effect party/raid
+		// filter (this path has no per-effect legs to gate, unlike the
+		// pet path), so a party/raid-only area spell also reaches
+		// non-hostile players in the area where C++ IsInPartyWith /
+		// IsInRaidWith (Unit.cpp:12126/12155) would admit same-faction
+		// creatures but not players, absent TREAT_AS_RAID_UNIT.
+		if isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) {
+			areaVictim := &playerPos{GUID: targetGUID}
+			seenArea := make(map[uint64]struct{}, len(hitTargets))
+			for _, guid := range hitTargets {
+				seenArea[guid] = struct{}{}
+			}
+			appendAreaGUID := func(guid uint64) {
+				if guid == 0 {
+					return
+				}
+				if _, dup := seenArea[guid]; dup {
+					return
+				}
+				seenArea[guid] = struct{}{}
+				hitTargets = append(hitTargets, guid)
+			}
+			if isAreaEnemySpell(spellInfo) {
+				for _, enemyHit := range s.creatureAIAreaEnemyPlayers(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+					if enemyHit != nil {
+						appendAreaGUID(enemyHit.GUID)
+					}
+				}
+				for _, enemyCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+					appendAreaGUID(enemyCreatureGUID)
+				}
+			}
+			if hasFriendlyAreaEffect(spellInfo) {
+				allyOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+				allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+				for _, allyHit := range allyPlayers {
+					if allyHit != nil {
+						appendAreaGUID(allyHit.GUID)
+					}
+				}
+				allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+				for _, allyCreatureGUID := range allyCreatures {
+					appendAreaGUID(allyCreatureGUID)
+				}
+			}
+		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
 		// SelectTargets removal leg (Spell.cpp:807-830) for a creature

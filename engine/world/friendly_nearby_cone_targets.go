@@ -63,13 +63,17 @@ func isFriendlyNearbySpell(spell wotlk.Spell) bool {
 
 // isHostileNearbySpell reports the spells Spell::SelectImplicitNearbyTargets
 // (Spell.cpp:1036) resolves with TARGET_CHECK_ENEMY: any effect carrying
-// TARGET_UNIT_NEARBY_ENEMY (2).
+// TARGET_UNIT_NEARBY_ENEMY (2) on a selecting slot. A B-slot 2 behind a
+// NEARBY/CONE/AREA A slot never selects (Spell.cpp:866-900 processed-slot
+// rule, the friendly-nearby/cone gating above); previously the B slot was
+// read ungated, so such a spell took the hostile-nearby branch even though
+// C++ never runs the 2 selection for that effect.
 func isHostileNearbySpell(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == implicitTargetNearbyEnemy || eff.ImplicitTargetB == implicitTargetNearbyEnemy {
+		if eff.ImplicitTargetA == implicitTargetNearbyEnemy || (eff.ImplicitTargetB == implicitTargetNearbyEnemy && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
 	}
