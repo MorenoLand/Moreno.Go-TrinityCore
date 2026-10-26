@@ -1023,6 +1023,17 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 			})
 		}
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2652): the
+	// return trip's _spellHitTarget is the caster itself (Spell.cpp:2350),
+	// so the per-hit trigger consumer runs on the motion, like the
+	// castCreatureSpellInternal retarget (boss_ai.go) and unlike the old
+	// return trip, which ran the proc loop but no trigger consumer — a
+	// reflected hit fired no ADD_TARGET_TRIGGER or spell_linked type-1
+	// row. Lethal trips never reach here (the kill branch above returns),
+	// and a nulled trip never reaches this function (the verdict gate).
+	if spell.ID != 0 {
+		s.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
+	}
 }
 
 // armInlineReflectProcDelayed mirrors the ProcReflectDelayed arm (Spell.cpp:2181)
