@@ -378,6 +378,24 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			inlineSpell, inlineSpellKnown = sp, true
 		}
 	}
+	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2527-2535): the
+	// IsImmunedToDamage check is the FIRST arm of the damage block —
+	// ahead of CalculateSpellDamageTaken, so ahead of the taken, block,
+	// resilience, resist and absorb legs below. On immune the damage
+	// zeroes and no damage-log packet is sent; DealDamage never runs,
+	// so no hooks, strips, threat or leech fire — but the
+	// DoDamageAndTriggers tail still runs (proc loop :2581, stand-up
+	// :2609, hook :2639, trigger consumer :2652). Gated on incoming
+	// damage > 0 like the pet path: a zero-damage hit never consults
+	// immunity. An unresolvable spell has no immunity arm here (the
+	// creature-victim twin's convention).
+	damageImmune := false
+	if inlineSpellKnown && damage > 0 && p != nil && p.Sess != nil && p.Sess.player != nil {
+		damageImmune = p.Sess.isImmuneToDamageSpell(inlineSpell, uint32(schoolMask))
+	}
+	if damageImmune {
+		damage = 0
+	}
 	var absorbed, resisted, blocked uint32
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
 	// direct-spell path: victim-side taken pct legs (EffectSchoolDMG) run
@@ -396,7 +414,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// stays 0 unless the player-owned crit arm below fires.
 	isCrit := false
 	hitInfo := uint32(0)
-	if p.Sess != nil && p.Sess.player != nil && damage > 0 {
+	if p.Sess != nil && p.Sess.player != nil && damage > 0 && !damageImmune {
 		takenBlockRan = true
 		if inlineSpellKnown {
 			damage = spellDamageBonusTaken(damage, inlineSpell, uint32(schoolMask), p.Sess, nil, 1.0)
@@ -566,7 +584,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			damage += bypass
 		}
 	}
-	if !takenBlockRan {
+	if !takenBlockRan && !damageImmune {
 		damage = s.autoBalanceModifyDealDamage(motion, p.Sess, damage)
 	}
 	overkill := uint32(0)
@@ -575,7 +593,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// — captured before the damage legs mutate health; the caster-heal arm
 	// lands at the end of this function with the other cast-completion legs.
 	leechDealt := uint32(0)
-	if p.Sess != nil && p.Sess.player != nil {
+	if p.Sess != nil && p.Sess.player != nil && !damageImmune {
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD victims take no
 		// damage — the kill/health legs are skipped explicitly (not via a
 		// damage==0 gate) because absorbed-to-zero damage still runs them
@@ -698,7 +716,9 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586):
 	// Unit::ProcSkillsAndAuras (Unit.cpp:5355-5366) fires the victim-
 	// side half with the taken pre-fill plus PROC_FLAG_TAKEN_DAMAGE
-	// ORed by the damage arm (Spell.cpp:2545) — the player victim's
+	// ORed by the damage arm (Spell.cpp:2545) — on an immune hit that
+	// arm bypasses the OR (Spell.cpp:2540-2546) and the helper yields
+	// the IMMUNE hit mask with damage 0 — the player victim's
 	// own auras evaluate the hit as a taken-proc event
 	// (PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT; Unit.cpp:
 	// 10385-10418). The canEffectTrigger gate (Spell.cpp:2440-2442):
@@ -713,7 +733,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	// CHEAT_GOD skip lives inside DealDamage, not the proc call.
 	// The creature actor has no auras, so only the taken leg runs.
 	if p.Sess != nil && p.Sess.player != nil && p.Sess.procDeep == 0 {
-		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0)
+		p.Sess.procSpellHitTakenAuraTriggers(ctx, motion.GUID, spellID, true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0)
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 	// non-friendly non-positive (or dispel-effect) spell hit stands
