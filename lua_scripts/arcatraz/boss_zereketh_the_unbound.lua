@@ -115,7 +115,7 @@ end
 -- The pick is uniform random over the filtered pool (nil when empty,
 -- matching the C++ GetThreatListSize() <= offset shortcut).
 -- The 100-yd gate uses the IsWithinCombatRange reach twin
--- (Unit.cpp:583; target-reach band unbridged); the alive filter is
+-- (Unit.cpp:583; reach-exact twin, player reach 1.5); the alive filter is
 -- kept (a dead pick would fail the C++ cast outright).
 local function randomNonVictimPlayer(creature)
     local victim = creature:GetVictim()
@@ -130,7 +130,7 @@ local function randomNonVictimPlayer(creature)
         if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and t:GetTypeId() == 4 and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < TARGET_RANGE then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < TARGET_RANGE then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             candidates[#candidates + 1] = t
         end
     end

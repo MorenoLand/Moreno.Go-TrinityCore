@@ -151,14 +151,14 @@ end
 
 -- C++ SelectTarget(Random, 0, 30, true): random alive
 -- threat-list player within 30 yd (IsWithinCombatRange gate,
--- Unit.cpp:583; target-reach band unbridged, skadi idiom).
+-- Unit.cpp:583; reach-exact twin, player reach 1.5).
 -- Nil when none is in range — the caller skips the cast
 -- (C++-exact).
 local function pickThreatPlayerIn30Yd(creature)
     local found = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
-                and creature:GetDistance(t) - creature:GetCombatReach() < 30.0 then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(t) - creature:GetCombatReach() - 1.5 < 30.0 then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             found[#found + 1] = t
         end
     end

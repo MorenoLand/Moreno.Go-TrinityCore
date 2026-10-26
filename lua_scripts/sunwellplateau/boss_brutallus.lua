@@ -99,7 +99,7 @@ local function randomThreatPlayerInRange(creature, maxDist, excludeAura)
     local out = {}
     for _, unit in ipairs(targets) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - creature:GetCombatReach() < maxDist -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 < maxDist -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
                 and (excludeAura == nil or not unit:HasAura(excludeAura)) then
             out[#out + 1] = unit
         end

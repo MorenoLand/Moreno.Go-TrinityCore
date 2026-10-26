@@ -88,7 +88,7 @@ local function pickRandomPlayerIn30Yd(creature)
     local found = {}
     for _, u in ipairs(creature:GetAITargets()) do
         if u:GetObjectType() == "Player" and not u:IsDead()
-                and creature:GetDistance(u) - creature:GetCombatReach() < 30.0 then -- IsWithinCombatRange gate (Unit.cpp:583)
+                and creature:GetDistance(u) - creature:GetCombatReach() - 1.5 < 30.0 then -- IsWithinCombatRange gate (Unit.cpp:583; player reach 1.5, ObjectDefines.h:40)
             found[#found + 1] = u
         end
     end
