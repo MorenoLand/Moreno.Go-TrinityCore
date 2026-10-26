@@ -445,7 +445,11 @@ RegisterCreatureEvent(ENTRY_PORTAL, 19, portalJustSummoned)
 -- NOTE: C++ gate is IsWithinDist(victim, 5.0f), NOT IsWithinMeleeRange (thresholds differ); the reach twin applies as for SelectTarget gates.
 local function darkFiendProximity(creature, guid)
     local victim = creature:GetVictim()
-    if creature:IsAlive() and victim and creature:GetDistance(victim) - creature:GetCombatReach() < 5 -- IsWithinDist gate (Unit.cpp:1233)
+    local victimReach = 1.5
+    if victim ~= nil and victim:GetObjectType() ~= "Player" then
+        victimReach = victim:GetCombatReach()
+    end
+    if creature:IsAlive() and victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 5 -- IsWithinDist gate (Unit.cpp:1233; both reaches)
             and creature:HasAura(SPELL_DARKFIEND_SKIN) then
         creature:CastSpell(creature, SPELL_DARKFIEND_DAMAGE)
         cancelTimers(guid)

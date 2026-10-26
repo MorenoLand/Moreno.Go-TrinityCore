@@ -219,7 +219,7 @@ local function ikissMoveInLOS(event, creature, unit)
     end
     if not state.intro
             and unit:GetObjectType() == "Player"
-            and creature:GetDistance(unit) - creature:GetCombatReach() < 100.0 then -- IsWithinDistInMap 3D + reaches (Object.cpp:1238)
+            and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 < 100.0 then -- IsWithinDistInMap 3D + reaches (Object.cpp:1238; player-gated, player reach 1.5)
         state.intro = true
         creature:Talk(SAY_INTRO)
     end

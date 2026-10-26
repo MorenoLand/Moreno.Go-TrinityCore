@@ -183,12 +183,16 @@ end
 -- false)) via GetAITargets, the threat-list bridge (same file's
 -- charge / deathcoil / polymorph precedent). Distance rule kept
 -- from the old player-pool twin: raw 2D dist minus the caster's
--- combat reach (target reach unmodeled, ~1.5yd band).
+-- combat reach plus the target's (1.5 for players, else target reach).
 local function randomThreatTargetInRange2d(creature, range)
     local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(t) - reach < range then
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        if creature:GetDistance2d(t) - reach - targetReach < range then
             candidates[#candidates + 1] = t
         end
     end

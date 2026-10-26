@@ -74,7 +74,11 @@ local function enemiesInRange(creature, dist)
     local count = 0
     local reach = creature:GetCombatReach()
     for _, target in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(target) - reach < dist then -- C++ GetDistance2d subtracts both reaches (Object.cpp:1187); target reach band unbridged
+        local targetReach = 1.5
+        if target:GetObjectType() ~= "Player" then
+            targetReach = target:GetCombatReach()
+        end
+        if creature:GetDistance2d(target) - reach - targetReach < dist then -- C++ GetDistance2d subtracts both reaches (Object.cpp:1187)
             count = count + 1
         end
     end

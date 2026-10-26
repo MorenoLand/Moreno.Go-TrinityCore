@@ -114,11 +114,15 @@ local function randomTargetInBand(creature, minDist, maxDist)
     -- C++ IsWithinDist(me, d, false) compares raw 2D dist against
     -- d + own reach + target reach (Object.cpp _IsWithinDist); Go's
     -- GetDistance2d is raw, so subtract the creature's own reach
-    -- (target reach has no unit-surface bridge, ~1.5yd band unmodeled).
+    -- plus the target's (1.5 for players, else target:GetCombatReach()).
     local reach = creature:GetCombatReach()
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        local dist = creature:GetDistance2d(t) - reach
+        local targetReach = 1.5
+        if t:GetObjectType() ~= "Player" then
+            targetReach = t:GetCombatReach()
+        end
+        local dist = creature:GetDistance2d(t) - reach - targetReach
         if dist >= minDist and dist < maxDist then
             candidates[#candidates + 1] = t
         end

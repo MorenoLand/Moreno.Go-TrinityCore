@@ -60,7 +60,7 @@ local function selectDeathPlagueTarget(creature)
         if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))
                 and unit:GetObjectType() == "Player" and not unit:IsDead()
-                and creature:GetDistance(unit) - creature:GetCombatReach() <= 100.0
+                and creature:GetDistance(unit) - creature:GetCombatReach() - 1.5 <= 100.0
                 and not unit:HasAura(SPELL_DEATH_PLAGUE_AURA)
                 and not unit:HasAura(SPELL_RECENTLY_INFECTED) then
             candidates[#candidates + 1] = unit

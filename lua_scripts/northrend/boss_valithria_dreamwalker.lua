@@ -207,11 +207,15 @@ local function randomPlayer(creature, minDist, manaOnly)
     local reach = creature:GetCombatReach()
     for i, unit in ipairs(creature:GetAITargets()) do
         local dist = creature:GetDistance(unit)
+        local targetReach = 1.5
+        if manaOnly and unit:GetObjectType() ~= "Player" then
+            targetReach = unit:GetCombatReach()
+        end
         local pastMin
         if manaOnly then
-            pastMin = dist - reach > minDist -- Mana-void selector: C++ GetDistance > 15 (reach-subtracted, Object.cpp:1169); target reach band unbridged
+            pastMin = dist - reach - targetReach > minDist -- Mana-void selector: C++ GetDistance > 15 (both reaches, Object.cpp:1169)
         else
-            pastMin = dist - reach >= minDist
+            pastMin = dist - reach - targetReach >= minDist -- :720 min-10 arm, playerOnly: player reach 1.5
         end
         if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
                 or (victimGuid == nil and i > 1))

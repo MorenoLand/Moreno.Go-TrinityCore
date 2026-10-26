@@ -173,8 +173,8 @@ local function threatCheck(creature, guid)
     end
     for _, victim in ipairs(creature:GetAITargets()) do
         if victim:GetObjectType() == "Player" then
-            local dist2d = creature:GetDistance2d(victim) - creature:GetCombatReach()
-            if dist2d < 0 then dist2d = 0 end -- C++ GetDistance2d clamps at 0 (Object.cpp:1187); target reach band unbridged
+            local dist2d = creature:GetDistance2d(victim) - creature:GetCombatReach() - 1.5
+            if dist2d < 0 then dist2d = 0 end -- C++ GetDistance2d clamps at 0 (Object.cpp:1187); victim ToPlayer-gated, player reach 1.5
             local distMod = 15.0 / (15.0 + dist2d)
             local armorMod = victim:GetArmor() / 16635.0
             local eh = (victim:GetHealth() + 1) * (1.0 + armorMod)
