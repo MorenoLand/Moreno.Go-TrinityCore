@@ -11710,9 +11710,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// unhandled-effect debug arm.
 			case spellEffectTalentSpecCount: // 161: SPELL_EFFECT_TALENT_SPEC_COUNT (EffectSpecCount, SpellEffects.cpp:5556)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
-				// target: UpdateSpecCount(damage). Go has no dual-spec model —
-				// explicit no-op so the effect stops hitting the
-				// unhandled-effect debug arm.
+				// target: UpdateSpecCount(damage). The count change itself
+				// rides the 63624/63680 post-arm (grantSecondSpec) below, so
+				// this case stays an explicit no-op and the effect stops
+				// hitting the unhandled-effect debug arm.
 			case spellEffectPortalTeleport, spellEffectPortal, spellEffectRitualBase,
 				spellEffectRitualSpecialize, spellEffectRitualActivatePortal, spellEffectDodge,
 				spellEffectEvade, spellEffectWeapon, spellEffectDefense, spellEffectSpellDefense,
@@ -11994,12 +11995,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.activateSpec(effCtx, 0)
 		} else if spellID == 63644 {
 			s.activateSpec(effCtx, 1)
-		} else if (spellID == 63624 || spellID == 63680) && s.player != nil && s.player.TalentGroupsCount < 2 {
-			s.player.TalentGroupsCount = 2
-			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				_, _ = s.server.CharactersStore.DB.ExecContext(effCtx, "UPDATE characters SET talentGroupsCount = 2 WHERE guid = ?", s.playerGUID)
-			}
-			_ = s.sendTalentsInfo(false)
+		} else if spellID == 63624 || spellID == 63680 {
+			s.grantSecondSpec(effCtx)
 		}
 	}
 
@@ -17176,6 +17173,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 
+	// The gossip dualspec casts (gossip.go LEARNDUALSPEC arm) ride this
+	// triggered path, which never enters finishSpellCast and carries no
+	// SPELL_EFFECT_TALENT_SPEC_COUNT arm in its per-target dispatch — so
+	// without this leg the 63680/63624 casts paid for but never granted
+	// the second spec. The finishSpellCast twin arm (spells.go:11997
+	// region) covers client-initiated casts of the same spells.
+	if spellID == 63624 || spellID == 63680 {
+		s.grantSecondSpec(ctx)
+	}
 	// Spell::_cast (Spell.cpp:3502-3511): a triggered cast (C++
 	// Unit::CastSpell(id, true)) runs the same _cast tail, so the
 	// spell_linked_spell list fires here too. The CHEAT_COOLDOWN leg
@@ -32641,6 +32647,25 @@ func (s *session) sendActionButtons() {
 		return
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), buildActionButtons(s.player.Actions), true)
+}
+
+// grantSecondSpec mirrors Player::UpdateSpecCount(2) (Player.cpp:26245):
+// the spec count flips to 2, the new spec's action buttons start as copies
+// of the current spec's buttons (CHAR_INS_CHAR_ACTION spec 1), and the
+// talent frame refreshes. The count leg is what Spell::EffectSpecCount
+// (SpellEffects.cpp:5556) drives when 63680/63624 land; the button copy
+// is the count > curCount arm of the same function.
+func (s *session) grantSecondSpec(ctx context.Context) {
+	if s.player == nil || s.player.TalentGroupsCount >= 2 {
+		return
+	}
+	s.player.TalentGroupsCount = 2
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET talentGroupsCount = 2 WHERE guid = ?", s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) SELECT guid, 1, button, action, type FROM character_action WHERE guid = ? AND spec = ?", s.playerGUID, s.player.ActiveTalentGroup)
+	}
+	_ = s.sendTalentsInfo(false)
 }
 
 // activateSpec mirrors Player::ActivateSpec (Player.cpp:26292).
