@@ -118,7 +118,7 @@ end
 local function randomPlayerInRange(creature, range)
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
-        if t:IsAlive() and creature:GetDistance(t) <= range then
+        if t:IsAlive() and creature:GetDistance(t) - creature:GetCombatReach() < range then
             candidates[#candidates + 1] = t
         end
     end

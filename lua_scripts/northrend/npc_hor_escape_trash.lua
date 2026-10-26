@@ -181,8 +181,8 @@ local function ghoulJump(creature, guid)
     if not alive(guid) then return end
     local victim = creature:GetVictim()
     if victim then
-        local dist = creature:GetDistance(victim)
-        if dist >= 5 and dist <= 30 then
+        local dist = creature:GetDistance(victim) - creature:GetCombatReach()
+        if dist >= 5 and dist < 30 then
             creature:CastSpell(victim, SPELL_GHOUL_JUMP)
             return
         end

@@ -81,7 +81,7 @@ local function randomPlayerInRange(creature, maxDist, playersOnly)
     for _, plr in ipairs(creature:GetAITargets()) do
         if (not playersOnly or plr:GetObjectType() == "Player")
                 and not plr:IsDead() then
-            if creature:GetDistance(plr) <= maxDist then
+            if creature:GetDistance(plr) - creature:GetCombatReach() < maxDist then
                 candidates[#candidates + 1] = plr
             end
         end
@@ -98,7 +98,7 @@ end
 local function enemiesInRange(creature, dist)
     local count = 0
     for _, target in ipairs(creature:GetAITargets()) do
-        if creature:GetDistance2d(target) < dist then
+        if creature:GetDistance2d(target) - creature:GetCombatReach() < dist then
             count = count + 1
         end
     end

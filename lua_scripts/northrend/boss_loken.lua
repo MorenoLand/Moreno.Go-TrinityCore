@@ -304,7 +304,7 @@ local lokenIntroDone = {}
 
 local function lokenMoveInLOS(event, creature, unit)
     local guid = creature:GetGUID()
-    if not lokenIntroDone[guid] and unit:GetDistance(creature) <= 40 then
+    if not lokenIntroDone[guid] and unit:GetDistance(creature) - creature:GetCombatReach() < 40 then
         lokenIntroDone[guid] = true
         creature:Talk(SAY_INTRO_1)
         schedule(guid, "introDialogue", 20000, function()
