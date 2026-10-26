@@ -245,6 +245,9 @@ local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1
 local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
 local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
 local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :103 ("Phase spell from phase 2 to phase 3")
+local GO_HALION_PORTAL_1 = 202794 -- ruby_sanctum.h:107
+local GO_HALION_PORTAL_2 = 202795 -- ruby_sanctum.h:108
+local GO_HALION_PORTAL_EXIT = 202796 -- ruby_sanctum.h:109
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the krystallus / bjarngrim-lieutenant convention.
@@ -664,3 +667,29 @@ end
 
 RegisterCreatureEvent(ENTRY_LIVING_INFERNO, 4, livingAddJustDied)
 RegisterCreatureEvent(ENTRY_LIVING_EMBER, 4, livingAddJustDied)
+
+-- go_twilight_portal::OnGossipHello (boss_halion.cpp:1370-1375):
+-- portals 1/2 cast SPELL_TWILIGHT_REALM 74807 (C++ ctor :1358-1363
+-- falls back to 74807 since the WDB template spell is nonexistent);
+-- the exit portal casts its goober spellId, which ruby_sanctum.h:109
+-- documents as Leave Twilight Realm 74812. C++ returns true (handled)
+-- == Lua true (kirtonos polarity). NOT ported: the ctor SetPhaseMask
+-- legs (0x20 exit / 0x1 portals — no SetPhaseMask bridge on the GO
+-- surface) and the UpdateAI delete leg (:1377-1387 — instance
+-- GetBossState gate + no GO-AI UpdateAI fire site, broodlord
+-- suppression precedent); without phase masks all three portals are
+-- clickable in either phase in Go, but the wrong-realm casts are
+-- benign (re-entering / leaving when already there is a no-op on
+-- the aura state).
+local function onTwilightPortalGossip(_, player, go)
+    if go:GetEntry() == GO_HALION_PORTAL_EXIT then
+        player:CastSpell(player, SPELL_LEAVE_TWILIGHT_REALM, true)
+    else
+        player:CastSpell(player, SPELL_TWILIGHT_REALM, true)
+    end
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_HALION_PORTAL_1, 1, onTwilightPortalGossip)
+RegisterGameObjectGossipEvent(GO_HALION_PORTAL_2, 1, onTwilightPortalGossip)
+RegisterGameObjectGossipEvent(GO_HALION_PORTAL_EXIT, 1, onTwilightPortalGossip)
