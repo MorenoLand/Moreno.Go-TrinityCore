@@ -100,21 +100,27 @@ local function resetBoss(guid)
     states[guid] = nil
 end
 
--- C++ SelectTarget draws the threat list (UnitAI.h:217-218): position 1
--- skips the MaxThreat head BEFORE any filter (offset-before-filter,
--- salramm idiom); playerOnly defaults false, so any threat-list unit
+-- C++ SelectTarget(Random, 1) (boss_mekgineer_steamrigger.cpp:146):
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head; playerOnly defaults false, so any threat-list unit
 -- qualifies (not just players). Dead members are offline refs in C++
 -- (skipped at list build) so they are filtered here. The old
--- instance-player pool and victim-GUID exclusion are retired
--- (threat-list precedent, Oct-25 strips). Nil when the threat list
+-- the victim-GUID exclusion below is the offset-1 skip. Nil when the threat list
 -- holds at most the head — the caller falls back to the victim
 -- (C++-exact).
 local function pickRandomThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
     local found = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if not t:IsDead() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not t:IsDead() then
             found[#found + 1] = t
         end
     end

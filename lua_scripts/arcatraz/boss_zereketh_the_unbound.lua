@@ -108,23 +108,28 @@ local function freshState()
     }
 end
 
--- C++ SelectTarget(Random, 1, 100, true) (UnitAI.h:170-197):
--- the threat list in MaxThreat order, the first entry skipped,
--- then player-only + within-100-yd filtered, then a uniform
--- random pick (nil when the filtered list is empty, matching
--- the C++ GetThreatListSize() <= offset shortcut). GetAITargets
--- is that threat-sorted list (SortedEntries, threat.go:889);
--- skipping targets[1] is the C++ offset-1 skip (the head is the
--- current victim in the normal victim-holds-top-threat case).
+-- C++ SelectTarget(Random, 1, 100, true) (boss_zereketh_the_unbound.cpp:93/:103):
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head; Go's threat-sorted list needs the
+-- victim-GUID exclusion (nil victim falls back to skipping index 1).
+-- The pick is uniform random over the filtered pool (nil when empty,
+-- matching the C++ GetThreatListSize() <= offset shortcut).
 -- The 100-yd gate stays a GetDistance stand-in for C++
 -- IsWithinCombatRange (venoxis convention); the alive filter is
 -- kept (a dead pick would fail the C++ cast outright).
 local function randomNonVictimPlayer(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
     local candidates = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if t:GetTypeId() == 4 and not t:IsDead()
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and t:GetTypeId() == 4 and not t:IsDead()
                 and creature:GetDistance(t) <= TARGET_RANGE then
             candidates[#candidates + 1] = t
         end

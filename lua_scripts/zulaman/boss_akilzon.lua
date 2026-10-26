@@ -94,15 +94,23 @@ local function schedule(store, guid, key, delay, fn)
 end
 
 -- C++ SelectTarget(Random, 1) (boss_akilzon.cpp:236/:251): the pool is
--- the threat list, not the instance players. Offset 1 skips the first
--- MaxThreat entry BEFORE the filters (UnitAI.h offset-before-filter);
+-- the threat list, not the instance players. UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
 -- defaults carry no dist cap and playerOnly=false, so pets/totems are
 -- eligible. The selector skips dead units, mirrored by the IsDead gate.
 local function randomThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
     local out = {}
     for i, unit in ipairs(targets) do
-        if i > 1 and not unit:IsDead() then
+        if ((victimGuid ~= nil and unit:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not unit:IsDead() then
             out[#out + 1] = unit
         end
     end

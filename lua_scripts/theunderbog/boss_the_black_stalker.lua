@@ -122,19 +122,24 @@ local function pickThreatTarget(creature)
     return found[math.random(#found)]
 end
 
--- C++ SelectTarget(Random, 1): the threat head is skipped
--- BEFORE the alive filter (UnitAI.h:172-174
--- offset-before-filter, steamrigger convention) — the head is
--- the current victim in the C++ list construction, so this is
--- not a victim-GUID exclusion: a non-victim head is still
--- skipped. Nil when the threat list holds only the head —
--- the caller skips the cast (C++-exact).
+-- C++ SelectTarget(Random, 1) (boss_the_black_stalker.cpp:98/:166):
+-- UnitAI.h builds the list victim-first, so offset 1 removes the
+-- victim, not the threat head. Nil when the pool is empty — the
+-- levitate caller skips the cast, the summon caller falls back
+-- to the victim (both C++-exact).
 local function pickThreatTargetSkipFirst(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
     local found = {}
-    for i = 2, #targets do
-        local t = targets[i]
-        if not t:IsDead() then
+    for i, t in ipairs(targets) do
+        if ((victimGuid ~= nil and t:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not t:IsDead() then
             found[#found + 1] = t
         end
     end

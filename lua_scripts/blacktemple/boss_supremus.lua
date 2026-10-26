@@ -148,15 +148,21 @@ local function hatefulStrikeTarget(creature)
 end
 
 -- C++ SelectTarget(Random, 1, 100.0f, true): threat-list players
--- alive within 100 yd, with the first MaxThreat entry skipped
--- BEFORE the filters (UnitAI.h offset-before-filter) — not a
--- victim-GUID exclusion; differs when victim != threat head.
+-- alive within 100 yd, minus the victim (UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head).
 local function chargeTarget(creature)
-    local candidates = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local p = targets[i]
-        if p:GetObjectType() == "Player" and not p:IsDead()
+    local candidates = {}
+    for i, p in ipairs(targets) do
+        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= 100 then
             candidates[#candidates + 1] = p
         end

@@ -353,16 +353,23 @@ onNetherbreath = function(creature, guid)
     schedule(guid, "netherbreath", { 5000, 7000 }, function() onNetherbreath(creature, guid) end)
 end
 
--- C++ SelectTarget(Random, 1, dist, true): the offset-1 head entry in
--- MaxThreat order is skipped BEFORE the filters (UnitAI.h:162-176,
--- 270-277) — not a victim-GUID exclusion, which differs when the
--- victim is not the threat head (teron convention).
+-- C++ SelectTarget(Random, 1, dist, true): UnitAI.h builds the list
+-- victim-first, so offset 1 removes the victim, not the threat head;
+-- Go's threat-sorted list needs the victim-GUID exclusion
+-- (nil victim falls back to skipping index 1).
 local function randomNonTankPlayerInRange(creature, maxDist)
-    local candidates = {}
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local p = targets[i]
-        if p:GetObjectType() == "Player" and not p:IsDead()
+    local candidates = {}
+    for i, p in ipairs(targets) do
+        if ((victimGuid ~= nil and p:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and p:GetObjectType() == "Player" and not p:IsDead()
                 and creature:GetDistance(p) <= maxDist then
             candidates[#candidates + 1] = p
         end
@@ -377,8 +384,8 @@ local function onVoidZone(creature, guid)
     if netherState[guid] == nil then
         return
     end
-    -- C++ SelectTarget(Random, 1, 45, true): offset 1 skips the first
-    -- MaxThreat-ordered entry, i.e. the tank (UnitAI.h:172-174).
+    -- C++ SelectTarget(Random, 1, 45, true): offset 1 removes the
+    -- victim (UnitAI.h builds the list victim-first).
     local target = randomNonTankPlayerInRange(creature, 45)
     if target ~= nil then
         creature:CastSpell(target, SPELL_VOIDZONE, true)

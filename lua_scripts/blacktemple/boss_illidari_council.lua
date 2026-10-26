@@ -251,17 +251,22 @@ local function randomThreatTarget(creature)
 end
 
 -- C++ HammerTargetSelector + SelectTarget(Random, 1, predicate):
--- threat-list any-unit alive 10-40 yd from the boss, with the
--- first MaxThreat entry skipped BEFORE the filters (UnitAI.h
--- offset-before-filter) — not a victim-GUID exclusion; differs
--- when victim != threat head.
+-- threat-list any-unit alive 10-40 yd from the boss, minus the
+-- victim (UnitAI.h builds the list victim-first, so offset 1
+-- removes the victim, not the threat head).
 local function hammerJusticeTarget(creature)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
     local candidates = {}
     local targets = creature:GetAITargets()
-    for i = 2, #targets do
-        local u = targets[i]
+    for i, u in ipairs(targets) do
         local d = creature:GetDistance(u)
-        if not u:IsDead() and d >= 10 and d <= 40 then
+        if ((victimGuid ~= nil and u:GetGUID() ~= victimGuid)
+                or (victimGuid == nil and i > 1))
+                and not u:IsDead() and d >= 10 and d <= 40 then
             candidates[#candidates + 1] = u
         end
     end
