@@ -37894,6 +37894,60 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			// push the inventory update so the client sees the destroyed items.
 			_ = s.sendInventoryItems(ctx)
 		}
+	case 5730, 6390, 6391, 6392, 10427, 10428, 25525, 58580, 58581, 58582:
+		// Stoneclaw Totem (spell_shaman.cpp spell_sha_stoneclaw_totem):
+		// the summon spell's script effect casts the Stoneclaw absorb
+		// (55277, SENTRY_STONECLAW_SPELLID) triggered on every live totem
+		// in the hit unit's summon slots, with BP0 = the script effect's
+		// value; the Glyph of Stoneclaw Totem (63298) leg casts the same
+		// absorb on the hit unit with BP0 = value * glyph amount (C++
+		// multiplies, no /100 — the glyph DBC amount is the factor).
+		// The effect loop runs before summonTotem, so the just-summoned
+		// Stoneclaw totem is not yet in the slots — C++ orders the script
+		// effect (EFFECT_0) ahead of the summon the same way. A zero
+		// script-effect value casts nothing (no degenerate 0-absorb aura).
+		absorb := eff.CalcValueForLevel(spell, uint32(s.player.Level))
+		if absorb <= 0 {
+			return
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			return
+		}
+		var totemGUIDs []uint64
+		s.server.totemMu.RLock()
+		slots := s.server.activeTotems[targetSess.playerGUID]
+		for slot := 0; slot < 4; slot++ {
+			totem := slots[slot]
+			if totem == nil {
+				continue
+			}
+			totem.mu.Lock()
+			stopped := totem.Stopped
+			guid := totem.TotemGUID
+			totem.mu.Unlock()
+			if !stopped && guid != 0 {
+				totemGUIDs = append(totemGUIDs, guid)
+			}
+		}
+		s.server.totemMu.RUnlock()
+		for _, guid := range totemGUIDs {
+			s.castSpellDirectWithBasePoint(ctx, sentryStoneclawSpellID, guid, uint32(absorb))
+		}
+		targetSess.castMu.Lock()
+		glyph, ok := targetSess.activeAuras[63298]
+		var glyphAmount int32
+		var glyphLive bool
+		if ok && glyph != nil {
+			glyphLive = !glyph.Stopped
+			glyphAmount = glyph.Amounts[0]
+		}
+		targetSess.castMu.Unlock()
+		if glyphLive && glyphAmount != 0 {
+			if glyphBP := int32(int64(absorb) * int64(glyphAmount)); glyphBP > 0 {
+				s.castSpellDirectWithBasePoint(ctx, sentryStoneclawSpellID, targetGUID, uint32(glyphBP))
+			}
+		}
 	}
 }
 

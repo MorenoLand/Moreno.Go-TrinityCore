@@ -499,6 +499,34 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	// Apply immediate initial pulse
 	s.executeTotemPulse(ctx, def, totem)
 
+	// Glyph of Totem of Wrath (spell_shaman.cpp
+	// spell_sha_glyph_of_totem_of_wrath): the glyph aura (63280) procs on
+	// a totem cast whose spell icon is Totem of Wrath (2019) — the four
+	// ToW summon defs — and casts the spell-power buff (63283) on the
+	// caster with BP0/BP1 = pct of the totem aura spell's effect 0/1
+	// values (CalculatePct, Util.h:66). The totem must exist (fire slot
+	// creature), so the proc rides the completed summon; a missing DBC
+	// row for the aura spell skips it (data gate, inert against the
+	// shipped DBs).
+	if spellID == 30706 || spellID == 57720 || spellID == 57721 || spellID == 57722 {
+		s.castMu.Lock()
+		glyph, ok := s.activeAuras[63280]
+		var glyphAmount int32
+		var glyphLive bool
+		if ok && glyph != nil {
+			glyphLive = !glyph.Stopped
+			glyphAmount = glyph.Amounts[0]
+		}
+		s.castMu.Unlock()
+		if glyphLive && glyphAmount > 0 && s.server != nil && s.server.Data != nil && def.BuffSpell > 0 {
+			if auraSpell, found, err := s.server.Data.Spell(def.BuffSpell); err == nil && found && len(auraSpell.Effects) >= 2 {
+				bp0 := int32(int64(auraSpell.Effects[0].CalcValueForLevel(auraSpell, uint32(s.player.Level))) * int64(glyphAmount) / 100)
+				bp1 := int32(int64(auraSpell.Effects[1].CalcValueForLevel(auraSpell, uint32(s.player.Level))) * int64(glyphAmount) / 100)
+				s.castSpellDirectWithBasePoints(ctx, 63283, s.playerGUID, []int32{bp0, bp1})
+			}
+		}
+	}
+
 	// Launch pulse / lifecycle loop
 	go s.runTotemLifecycle(def, totem)
 }
