@@ -110,7 +110,16 @@ var totemDefinitions = map[uint32]TotemDef{
 	2484: {SpellID: 2484, SlotID: TotemSlotEarth, Entry: 2630, DurationMs: 45000, PulseType: TotemPulseSlow, PulseSpell: 3600, Radius: 10.0, PulseSecs: 3},
 
 	// Stoneclaw Totem
-	5730: {SpellID: 5730, SlotID: TotemSlotEarth, Entry: 3579, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	5730:  {SpellID: 5730, SlotID: TotemSlotEarth, Entry: 3579, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	6390:  {SpellID: 6390, SlotID: TotemSlotEarth, Entry: 3911, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	6391:  {SpellID: 6391, SlotID: TotemSlotEarth, Entry: 3912, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	6392:  {SpellID: 6392, SlotID: TotemSlotEarth, Entry: 3913, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	10427: {SpellID: 10427, SlotID: TotemSlotEarth, Entry: 7398, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	10428: {SpellID: 10428, SlotID: TotemSlotEarth, Entry: 7399, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	25525: {SpellID: 25525, SlotID: TotemSlotEarth, Entry: 15478, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	58580: {SpellID: 58580, SlotID: TotemSlotEarth, Entry: 31120, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	58581: {SpellID: 58581, SlotID: TotemSlotEarth, Entry: 31121, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
+	58582: {SpellID: 58582, SlotID: TotemSlotEarth, Entry: 31122, DurationMs: 15000, PulseType: TotemPulseNone, Radius: 8.0, PulseSecs: 2},
 
 	// Earth Elemental Totem
 	2062: {SpellID: 2062, SlotID: TotemSlotEarth, Entry: 15353, DurationMs: 120000, PulseType: TotemPulseNone, Radius: 0, PulseSecs: 0},
@@ -149,6 +158,14 @@ var totemDefinitions = map[uint32]TotemDef{
 
 	// Frost Resistance Totem
 	8181: {SpellID: 8181, SlotID: TotemSlotFire, Entry: 5927, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 8182, Radius: 30.0, PulseSecs: 2},
+
+	// Totem of Wrath (Fire slot per glyph script m_SummonSlot[1];
+	// aura radius 40 per the aura pages; aura IDs cross-checked against
+	// bot_shaman_ai.cpp commented ranks 57658/57660/57662/57663)
+	30706: {SpellID: 30706, SlotID: TotemSlotFire, Entry: 17539, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57658, Radius: 40.0, PulseSecs: 2},
+	57720: {SpellID: 57720, SlotID: TotemSlotFire, Entry: 30652, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57660, Radius: 40.0, PulseSecs: 2},
+	57721: {SpellID: 57721, SlotID: TotemSlotFire, Entry: 30653, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57662, Radius: 40.0, PulseSecs: 2},
+	57722: {SpellID: 57722, SlotID: TotemSlotFire, Entry: 30654, DurationMs: 300000, PulseType: TotemPulseBuff, BuffSpell: 57663, Radius: 40.0, PulseSecs: 2},
 
 	// --- Water Totems (Slot 2) ---
 	// Healing Stream Totem
