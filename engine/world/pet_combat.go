@@ -1796,6 +1796,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// fired here because this branch skips onCreatureKilled; an owner-gone
 				// pet resolves to no session, so this no-ops, C++-correct.
 				s.creditNoFunnelKillingBlow(motion)
+				// Unit::Kill battleground tail (Unit.cpp:11451+) - the funnel leg,
+				// fired here because this branch skips onCreatureKilled.
+				s.handleNoFunnelBattlegroundKill(victim, motion)
 				// Creature::RemoveCorpse schedules the respawn for every death
 				// (boss_ai.go precedent: the owner path gets it from
 				// onCreatureKilled); placed ahead of the dead-leg stamp, so the

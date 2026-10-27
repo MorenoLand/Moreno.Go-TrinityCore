@@ -2579,6 +2579,9 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// Unit::Kill killing-blow achievement leg (Unit.cpp:11293-11297) — the funnel leg,
 	// fired here because the no-owner arm skips onCreatureKilled.
 	s.creditNoFunnelKillingBlow(m)
+	// Unit::Kill battleground tail (Unit.cpp:11451+) - the funnel leg,
+	// fired here because the no-owner arm skips onCreatureKilled.
+	s.handleNoFunnelBattlegroundKill(tm, m)
 	// Creature::RemoveCorpse schedules the respawn for every death; the
 	// owner path gets it from onCreatureKilled.
 	if tm.InstanceID == 0 {

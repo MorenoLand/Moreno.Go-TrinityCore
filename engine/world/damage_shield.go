@@ -566,6 +566,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			// Unit::Kill killing-blow achievement leg (Unit.cpp:11293-11297) — the funnel leg,
 			// fired here because the attackerSess == nil arm skips onCreatureKilled.
 			s.creditNoFunnelKillingBlow(attackerMotion)
+			// Unit::Kill battleground tail (Unit.cpp:11451+) - the funnel leg,
+			// fired here because the attackerSess == nil arm skips onCreatureKilled.
+			s.handleNoFunnelBattlegroundKill(m, attackerMotion)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1

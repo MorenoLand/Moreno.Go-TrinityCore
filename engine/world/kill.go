@@ -1421,6 +1421,43 @@ func (s *Server) creditNoFunnelKillingBlow(killer *creatureMotion) {
 	player.creditKillingBlowCriteria(nil)
 }
 
+// handleNoFunnelBattlegroundKill is the Unit::Kill battleground tail
+// (Unit.cpp:11451+) for the no-funnel death chains: player &&
+// InBattleground -> bg->HandleKillUnit(creature victim, player). The
+// funnel already runs this tail via its map dispatch (AV 30, SA 607,
+// IC 628); no no-funnel chain did. Attribution is the same Kill-level
+// player as creditNoFunnelKillingBlow (attacker->
+// GetCharmerOrOwnerPlayerOrPlayerItself, Unit.h:1170: IsCharmed ?
+// CharmerGUID : OwnerGUID) - a wild killer resolves to no session and
+// an owner-gone killer likewise, C++-correct. Only AV, IC, and SA
+// override HandleKillUnit in C++ (Battleground.h:428 base is empty;
+// WSG, AB, and EOTS have no override), so the dispatch mirrors the
+// funnel's three maps and the per-BG handlers re-gate on the session
+// map. C++ gates on player->InBattleground() where Go's dispatch gates
+// on map presence - the funnel's existing delta, shared here rather
+// than fixed one-sided on these chains.
+func (s *Server) handleNoFunnelBattlegroundKill(victim, killer *creatureMotion) {
+	if s == nil || victim == nil || killer == nil {
+		return
+	}
+	guid := killer.OwnerGUID
+	if killer.Charmed {
+		guid = killer.CharmerGUID
+	}
+	player := s.findSessionByGUID(guid)
+	if player == nil || player.player == nil {
+		return
+	}
+	switch player.player.Map {
+	case AVMapID:
+		s.handleAVCreatureKilled(player, victim.Entry)
+	case SAMapID:
+		s.handleSACreatureKilled(player, victim.Entry)
+	case ICMapID:
+		s.handleICCreatureKilled(player, victim.Entry)
+	}
+}
+
 // clearCreatureDeathState is the Unit::setDeathState (Unit.cpp:8901-8911)
 // leg for the no-funnel death chains: setDeathState runs CombatStop,
 // which clears the visual target (AttackStop -> Creature::SetTarget,
