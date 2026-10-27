@@ -16755,8 +16755,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// targets, Spell.cpp:1173/1575). The jumps join the SMSG_SPELL_GO hit list
 	// and the initial-threat target set like C++'s m_UniqueTargetInfo; the
 	// per-effect jump caps and falloff thread through the effect loop below.
-	// A missed jump rolls like any target below (jumps join hitTargets,
-	// hence triggeredRollTargets) and rides the GO miss trailer.
+	// A missed jump rolls like any target below (jumps join triggeredRollTargets
+	// deduped against the area list) and rides the GO miss trailer.
 	chainJumpGUIDs := []uint64{}
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)
@@ -16767,9 +16767,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// area family replaces the wire-only hit list with the area search,
 	// mirroring the client path above (empty area lists never fail the
 	// cast: area selection has no BAD_IMPLICIT_TARGETS gate, unlike the
-	// nearby arms). The chain block above can never fire for area spells
-	// (chainSelectionEligibleTarget excludes the area category), so the
-	// replacement cannot discard real jumps. Spell::SelectImplicitConeTargets
+	// nearby arms). A chain-eligible effect (NEARBY/TARGET-reference) of a
+	// mixed spell still chains even when another effect is area — the
+	// replacement below strips those jumps from hitTargets, so they rejoin
+	// only through triggeredRollTargets (roll + GO packet) and the per-effect
+	// threading below. Spell::SelectImplicitConeTargets
 	// (Spell.cpp:1176) joins the same switch: friendly ALLY/ENTRY (59/60)
 	// and GO (108) cones replace the hit list with the cone search — enemy
 	// cone (24/54/104) already rides the area-enemy arm, and cone selection
@@ -16931,6 +16933,26 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		triggeredRollTargets = append(triggeredRollTargets, hitTargets...)
 		triggeredRollTargets = append(triggeredRollTargets, triggeredFriendlyEffectTargets...)
 	}
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1619) adds jumps via
+	// AddUnitTarget, so a mixed spell's jumps share m_UniqueTargetInfo with
+	// the area list: they roll SpellHitResult and ride the GO hit/miss
+	// lists like any selected target (Spell.cpp:4486-4508), and a jump
+	// already in the area list merges instead of adding a second entry
+	// (Spell.cpp:2117). The area replacement above stripped jumps from
+	// hitTargets, so they rejoin here, deduped against the union.
+	if len(chainJumpGUIDs) > 0 {
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		for _, jumpGUID := range chainJumpGUIDs {
+			if _, dup := seen[jumpGUID]; dup {
+				continue
+			}
+			seen[jumpGUID] = struct{}{}
+			triggeredRollTargets = append(triggeredRollTargets, jumpGUID)
+		}
+	}
 	for _, guid := range triggeredRollTargets {
 		if guid == 0 || guid == s.playerGUID {
 			continue
@@ -17071,7 +17093,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		s.breakHitBySpellAuras(ctx, spell, selGUID)
 	}
+	// C++ PreprocessTarget runs once per merged TargetInfo entry, so a jump
+	// already in the selection list breaks auras once, not twice.
+	selectionSet := make(map[uint64]struct{}, len(selectionTargets))
+	for _, selGUID := range selectionTargets {
+		selectionSet[selGUID] = struct{}{}
+	}
 	for _, jumpGUID := range chainJumpGUIDs {
+		if _, dup := selectionSet[jumpGUID]; dup {
+			continue
+		}
 		if _, missed := triggeredMiss[jumpGUID]; missed {
 			continue
 		}
@@ -17295,16 +17326,36 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// casters the 10-target cap (damage * 10 / targetAmount over the
 		// whole unique target list, hits and misses). targetAmount is
 		// m_UniqueTargetInfo.size(): Spell::AddUnitTarget (Spell.cpp:2189)
-		// has exactly one emplace_back per target, so hitTargets — which
-		// already holds every target once, reflectors included — is the
+		// has exactly one emplace_back per target, so the unique union of
+		// hitTargets and chainJumpGUIDs — reflectors included — is the
 		// complete count. A clean reflect does NOT add a second entry.
 		areaDmgEffect := eff.Effect == 2 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect))
 		aoeCapDivisor := 0
 		if areaDmgEffect {
+			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7755-7757):
+			// targetAmount is m_UniqueTargetInfo.size(), so a mixed
+			// spell's chain jumps count toward the 10-target cap even
+			// though the area replacement stripped them from hitTargets;
+			// merged jumps count once (Spell.cpp:2117).
+			counted := make(map[uint64]struct{}, len(hitTargets)+len(chainJumpGUIDs))
 			for _, guid := range hitTargets {
 				if guid == 0 || guid == s.playerGUID {
 					continue
 				}
+				if _, dup := counted[guid]; dup {
+					continue
+				}
+				counted[guid] = struct{}{}
+				aoeCapDivisor++
+			}
+			for _, guid := range chainJumpGUIDs {
+				if guid == 0 || guid == s.playerGUID {
+					continue
+				}
+				if _, dup := counted[guid]; dup {
+					continue
+				}
+				counted[guid] = struct{}{}
 				aoeCapDivisor++
 			}
 			if aoeCapDivisor <= 10 {
