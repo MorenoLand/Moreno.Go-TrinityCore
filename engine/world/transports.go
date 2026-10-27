@@ -876,9 +876,24 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
 	}
+	failedDirect := make(map[uint64]struct{})
 	for _, passenger := range teleports {
+		if passenger.session == nil || passenger.session.player == nil {
+			continue
+		}
 		passenger.session.resetTransportPassengerVisibility()
-		passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true)
+		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true) {
+			failedDirect[passenger.session.playerGUID] = struct{}{}
+			// DelayedTeleportTransport (Transport.cpp:676) removes a
+			// passenger whose TeleportTo fails; without this the
+			// session keeps a TransportGUID pointing at a transport
+			// now on another map, and no later tick re-teleports
+			// it (the cross-map arm only fires on a map change).
+			// Same detach shape as the vehicle-cross arm below.
+			passenger.session.player.TransportGUID = 0
+			passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = 0, 0, 0, 0
+			passenger.session.player.TransportSeat = 0
+		}
 	}
 	// Cross-map steady-state vehicle riders (arm above): teleportToOptions
 	// exits the vehicle (Player.cpp:1703-1704) and, with stayOnTransport,
@@ -894,6 +909,23 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	// RemovePassenger on a failed TeleportTo (Transport.cpp:676).
 	for _, passenger := range vehicleCrossTeleports {
 		if passenger.session == nil || passenger.session.player == nil {
+			continue
+		}
+		if _, driverFailed := failedDirect[passenger.session.player.VehicleGUID]; driverFailed {
+			// The rider's driver was a direct-arm passenger whose
+			// teleport failed and detached above; the rider was
+			// pre-resolved against that driver's dest, so teleporting
+			// it would strand it alone on the new map while its
+			// driver stays on the origin map. It keeps the
+			// out-of-range treatment the pending arm deferred.
+			updates := protocol.NewUpdateData()
+			updates.AddOutOfRangeGUID(rawGUID)
+			for _, guid := range passenger.session.clearTransportPassengerVisibility(rawGUID) {
+				updates.AddOutOfRangeGUID(guid)
+			}
+			if packet, err := updates.BuildPacket(0); err == nil {
+				_ = passenger.session.write(packet.Opcode, packet.Payload.Bytes(), true)
+			}
 			continue
 		}
 		passenger.session.resetTransportPassengerVisibility()
