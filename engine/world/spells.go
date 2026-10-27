@@ -34007,8 +34007,9 @@ func (s *session) channelTargetAuraStale(ctx context.Context, spell wotlk.Spell,
 	return distance3D(s.player.X, s.player.Y, s.player.Z, tx, ty, tz) > rng
 }
 
-// channelTick applies one periodic effect tick of the channeled spell and
-// schedules the next while the channel is alive.
+// channelTick revalidates the channeled target list and schedules the next
+// tick while the channel is alive. It applies no spell effects: the
+// SPELL_STATE_CASTING leg never re-fires them (see below).
 func (s *session) channelTick() {
 	s.castMu.Lock()
 	channel := s.activeChannel
@@ -34043,50 +34044,23 @@ func (s *session) channelTick() {
 		s.finishChannel()
 		return
 	}
-	// Spell.h:548 — the tick claims the channel for execution, closing the
-	// IsInterruptable gate until the tick's effects land.
-	s.castMu.Lock()
-	channel.Executing = true
-	s.castMu.Unlock()
 	// Spell::update (Spell.cpp:3844-3879): the SPELL_STATE_CASTING leg
 	// never re-fires spell effects - it only revalidates the channeled
 	// target list and runs the channel timer out. A direct effect fires
 	// exactly once, at handle_immediate's DoProcessTargetContainer
-	// (Spell.cpp:3554-3567, 3607), which finishSpellCast's applyEffects
-	// already ran; per-tick delivery for aura spells is the aura's own
-	// periodic tick, not this function. So no damage leg belongs here:
-	// effects 2/17 would double-deliver the cast-time hit, effect 87
-	// (gameobject damage) never targets a unit, and effect 108
-	// (dispel mechanic) is already handled at cast time by applyEffects.
-	var channelCasterLevel uint32
-	if s.player != nil {
-		channelCasterLevel = uint32(s.player.Level)
-	}
-	for effectIndex, effect := range spell.Effects {
-		if effect.Effect == 0 {
-			continue
-		}
-		amount := uint32(effect.CalcValueForLevel(spell, channelCasterLevel))
-		if amount == 0 {
-			continue
-		}
-		switch effect.Effect {
-		case 10, 136:
-			if targetGUID != 0 && targetGUID != s.playerGUID {
-				if s.server != nil {
-					if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
-						s.executeSpellHeal(ctx, targetGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
-					}
-				}
-			} else {
-				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
-			}
-		}
-	}
-
-	// Gate reopens: the tick's effects have landed.
+	// (Spell.cpp:3554-3567, 3607). No heal leg belongs here either, and
+	// nothing distinguishes 10/136 from the deleted damage legs: the
+	// cast-time arms carry no channeled gate (client path: finishSpellCast
+	// applyEffects case 10/136; triggered path: effect-10 arm), so a
+	// per-tick re-hit double-delivers the cast-time heal. Per-tick
+	// delivery for aura heals (Tranquility/Divine Hymn class) is the
+	// aura's own periodic tick, not this function. The leg's blast radius
+	// was narrow anyway: the tick period is the aura effects' AuraPeriod,
+	// so a pure direct-heal channeled spell schedules no ticks at all
+	// and the leg could only fire on a spell that also carries a periodic
+	// aura effect. With no effects left in the tick, the Spell.h:548
+	// Executing gate has nothing to protect and goes with the loop.
 	s.castMu.Lock()
-	channel.Executing = false
 	channel = s.activeChannel
 	if channel == nil || channel.Stopped {
 		s.castMu.Unlock()
