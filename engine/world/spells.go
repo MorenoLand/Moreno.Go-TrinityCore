@@ -17863,6 +17863,67 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// HIT_TARGET per player unit target: the client arm's helper
 				// over the single miss-filtered target.
 				s.handleEffectQuestStart(ctx, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectPullTowards {
+				// Spell::EffectPullTowards (SpellEffects.cpp:4667) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target (player targets only,
+				// same as the client arm).
+				s.handleEffectPullTowards([]uint64{effectTarget})
+			} else if eff.Effect == spellEffectPullTowardsDest {
+				// Spell::EffectPullTowardsDest (SpellEffects.cpp:4697) runs
+				// at HIT_TARGET per unit target: the client arm's helper
+				// over the single miss-filtered target, with this path's
+				// spellTarget carrying the DestLocation flag exactly
+				// where C++'s HasDst gate fires.
+				s.handleEffectPullTowardsDest(spellTarget, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectDistract {
+				// Spell::EffectDistract (SpellEffects.cpp:2547) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target (creature targets only,
+				// same as the client arm).
+				s.handleEffectDistract(ctx, spell, eff, []uint64{effectTarget}, spellTarget)
+			} else if eff.Effect == spellEffectSanctuary {
+				// Spell::EffectSanctuary (SpellEffects.cpp:3757) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target.
+				s.handleEffectSanctuary(ctx, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectDurabilityDamage || eff.Effect == spellEffectDurabilityDamagePct {
+				// Spell::EffectDurabilityDamage/DurabilityDamagePCT
+				// (SpellEffects.cpp:4857/4886) run at HIT_TARGET per
+				// player unit target: the client arm's helper over the
+				// single miss-filtered target.
+				s.handleEffectDurabilityDamage(ctx, spell, spellID, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectLearnSpell {
+				// Spell::EffectLearnSpell (SpellEffects.cpp:2406) runs at
+				// HIT_TARGET per unit target: the client arm's legs over
+				// the single miss-filtered target (player target learns
+				// via its own session, any pet unit target teaches
+				// through its owner's session; other targets learn
+				// nothing).
+				if s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.learnSpellEffectTarget(ctx, spellID, spell, eff, casterLevel)
+					} else if s.petNumberForGUID(effectTarget) != 0 {
+						s.teachPetSpell(ctx, eff.TriggerSpell)
+					} else if os := s.server.findSessionByPetGUID(effectTarget); os != nil {
+						os.teachPetSpell(ctx, eff.TriggerSpell)
+					}
+				}
+			} else if eff.Effect == spellEffectCreateItem || eff.Effect == spellEffectCreateItem2 {
+				// Spell::EffectCreateItem/EffectCreateItem2
+				// (SpellEffects.cpp:1679/1688) run at HIT_TARGET per unit
+				// target: the client arm's helper over the single
+				// miss-filtered target (the helper falls back to the
+				// caster when the target is 0, and takes the
+				// loot-crafting arm for effect 157).
+				s.handleEffectCreateItem(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectScriptEffect {
+				// Spell::EffectScriptEffect (SpellEffects.cpp:3604) runs
+				// at HIT_TARGET per unit target: the client arm's helper
+				// over the single miss-filtered target (only the
+				// generic-family arms with a Go bridge fire, same as the
+				// client arm).
+				s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget)
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
