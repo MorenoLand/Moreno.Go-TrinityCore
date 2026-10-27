@@ -1704,6 +1704,38 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// (SpellAuraEffects.cpp:4690) rides ahead of the strip, and
 				// death-persistent auras survive it, mirroring
 				// onCreatureKilled's strip.
+				// Unit::Kill's KILL/KILLED/DEATH proc legs (Unit.cpp:11257-11279)
+				// fire before the strip, while the victim's auras are still
+				// present — the boss_ai no-owner precedent: KILL on the
+				// pet attacker's auras, KILLED on the victim's, DEATH on the
+				// victim's; the KILL/KILLED legs gate on the victim not
+				// being a critter, DEATH is unconditional. The pet/totem-
+				// owner arm (Unit.cpp:11257-11263) stays vacuous here: the
+				// attacker is the pet itself, and its owner unit is gone
+				// with the session — no owner bearer exists to proc.
+				if victim.CreatureType != creatureTypeCritter {
+					s.fireCreatureMeleeAuraProcs(ctx, motion, targetGUID, procEventInfo{
+						typeMask:       procFlagKill,
+						spellTypeMask:  procSpellTypeMaskAll,
+						spellPhaseMask: procSpellPhaseNone,
+						hitMask:        procHitNone,
+						actorGUID:      motion.GUID,
+					})
+					s.fireCreatureMeleeAuraProcs(ctx, victim, motion.GUID, procEventInfo{
+						typeMask:       procFlagKilled,
+						spellTypeMask:  procSpellTypeMaskAll,
+						spellPhaseMask: procSpellPhaseNone,
+						hitMask:        procHitNone,
+						actorGUID:      victim.GUID,
+					})
+				}
+				s.fireCreatureMeleeAuraProcs(ctx, victim, targetGUID, procEventInfo{
+					typeMask:       procFlagDeath,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      victim.GUID,
+				})
 				deathKey := creatureAuraKeyForMotion(victim)
 				s.auraMu.Lock()
 				var deathAuras []*activeAura
@@ -1727,12 +1759,26 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// summon cleanup on the event-4 fire (e.g. vancleef's
 				// blackguards) even when the pet owner is gone mid-tick.
 				// luaPlayer() is nil-safe for the gone owner; the killer
-				// arg is informational on this path.
+				// arg is informational on this path. When the owner is nil
+				// outright no session twin exists, so the fire runs through
+				// the server twin with the pet motion as killer — the
+				// boss_ai no-owner precedent — instead of dropping event 4.
 				if owner != nil {
 					owner.fireCreatureDied(ctx, victim)
+				} else {
+					s.fireCreatureDiedByCreature(ctx, victim, motion)
 				}
 				if victim.BossAI != nil {
 					victim.BossAI.OnDied(ctx, s, victim)
+				}
+				// Creature::RemoveCorpse schedules the respawn for every death
+				// (boss_ai.go precedent: the owner path gets it from
+				// onCreatureKilled); placed ahead of the dead-leg stamp, so the
+				// respawn legs run before the stamp like on that path.
+				if victim.InstanceID == 0 {
+					s.scheduleCreatureRespawn(ctx, uint32(targetGUID&0x00FFFFFF), uint32(math.Max(float64(victim.MaxHealth), 1)), time.Now())
+				} else {
+					s.scheduleInstanceCreatureRespawn(ctx, killedTarget, uint32(math.Max(float64(victim.MaxHealth), 1)), time.Now())
 				}
 				// TempSummon corpse/dead legs: the owner-session funnel
 				// is skipped on this path, so stamp here, placed last
