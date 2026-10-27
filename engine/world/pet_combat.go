@@ -4381,6 +4381,41 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
+	// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488) + EffectEnergize
+	// (:1775) + EffectEnergizePct (:1847) + EffectPowerDrain (:1265) +
+	// EffectPowerBurn (:1352) + EffectRemoveAura (:5611) +
+	// EffectModifyThreatPercent (:4915) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// the HIT_TARGET arms riding their twins, with the launch
+	// reflected map. The twin/inline vs pet parity census this tick
+	// found these seven handled on both other paths and nowhere on
+	// the pet path (the pet post-damage loop covers heal 10/75/136
+	// but not 67, and no pet file calls the energize, power-take,
+	// remove-aura or modify-threat helpers). None of the seven C++
+	// arms gates on a player caster (target-alive/power gates ride
+	// the twins). The burn damage leg stays out like the twin's:
+	// drained x value multiplier into TargetInfo.Damage has no
+	// amount-based damage applier on this path — the damage arms
+	// are effect-value-driven — so only the power take, the Mana
+	// Burn cap, the caster gain and the take-target-power log land.
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectHealMaxHealth:
+			s.server.creatureEffectHealMaxHealth(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectEnergize:
+			s.server.creatureEffectEnergize(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectEnergizePct:
+			s.server.creatureEffectEnergizePct(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectPowerDrain:
+			s.server.creatureEffectPowerDrain(ctx, motion, spell, spell.Effects[i], i, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectPowerBurn:
+			s.server.creatureEffectPowerBurn(ctx, motion, spell, spell.Effects[i], i, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectRemoveAura:
+			s.server.creatureEffectRemoveAura(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectModifyThreatPercent:
+			s.server.creatureEffectModifyThreatPercent(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
