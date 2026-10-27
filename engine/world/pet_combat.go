@@ -3901,12 +3901,25 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		castFlags |= protocol.SpellCastFlagPowerLeftSelf
 		power = &remainingPower
 	}
-	goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
-	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
-		return false
+	// Spell::IsNeedSendToClient (Spell.cpp:7543-7547), the twin of the
+	// creature path (boss_ai.go): a triggered cast with no visual, not
+	// channeled, and no speed sends no GO packet — non-triggered casts
+	// always send (the final || term: !triggeredByAuraSpell &&
+	// !IsTriggered, and Go's triggered covers both aura-triggered and
+	// directly-triggered casts). Previously the pet path sent the packet
+	// unconditionally, so an invisible triggered pet spell announced a
+	// cast the client never sees in C++. The skip covers both writes
+	// (owner + nearby broadcast, the two halves of C++ SendSpellGo); the
+	// rest of _cast still runs below — cooldown, spell_linked, procs —
+	// like the twin.
+	if !triggered || spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
+		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
+		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
+			return false
+		}
+		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
-	nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
