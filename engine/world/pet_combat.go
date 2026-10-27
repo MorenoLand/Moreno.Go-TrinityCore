@@ -4188,6 +4188,50 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectForceCast(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, forceReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
+	// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt (:3131) +
+	// EffectTeleportUnits (:1199) + EffectKnockBack (:4552) +
+	// EffectResurrect (:4270) + EffectResurrectNew (:246) + EffectLeap
+	// (:4334) + EffectTeleUnitsFaceCaster (:2618) + EffectPullTowards
+	// (:4667) + EffectPullTowardsDest (:4697) + EffectDistract (:2547)
+	// + EffectSanctuary (:3757) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// all twelve are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
+	// twins, with the launch reflected map (reflectedSet keys at None,
+	// trip statuses overriding — every reflected GUID rides a trip, so
+	// it matches the force-cast map). Previously a pet-cast spell
+	// carrying any of these effects added no threat, taunted,
+	// teleported, knocked back, resurrected, leapt, pulled, distracted
+	// or sanctuaried nothing server-side (non-pet creature casts ride
+	// the twin). Self-resurrect 94 and resurrect-pet 109 stay out:
+	// player-caster-only in C++, like the twin.
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectThreat:
+			s.server.creatureEffectThreat(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectAttackMe:
+			s.server.creatureEffectTaunt(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectTeleportUnits:
+			s.server.creatureEffectTeleportUnits(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectKnockBack, spellEffectKnockBackDest:
+			s.server.creatureEffectKnockBack(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectResurrect:
+			s.server.creatureEffectResurrect(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectResurrectNew:
+			s.server.creatureEffectResurrectNew(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectLeap:
+			s.server.creatureEffectLeap(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectTeleportUnitsFaceCaster:
+			s.server.creatureEffectTeleUnitsFaceCaster(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectPullTowards:
+			s.server.creatureEffectPullTowards(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectPullTowardsDest:
+			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectDistract:
+			s.server.creatureEffectDistract(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectSanctuary:
+			s.server.creatureEffectSanctuary(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
