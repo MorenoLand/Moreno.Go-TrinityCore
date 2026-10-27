@@ -1604,6 +1604,7 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 	target.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
 	if s.server != nil {
 		s.server.updateArenaHealingScore(s, effectiveHeal)
+		s.server.addBGScore(s, func(score *bgPlayerScore) { score.HealingDone += effectiveHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
 	}
 	logPkt := protocol.BuildPeriodicAuraLogHeal(target.playerGUID, totem.TotemGUID, def.PulseSpell, spellAuraPeriodicHeal, heal, overheal, absorbed, false)
 	// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides

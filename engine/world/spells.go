@@ -19060,6 +19060,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	overheal := heal - effectiveHeal
 	if s.server != nil {
 		s.server.updateArenaHealingScore(s, effectiveHeal)
+		s.server.addBGScore(s, func(score *bgPlayerScore) { score.HealingDone += effectiveHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
 	}
 
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
@@ -28213,6 +28214,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if healCredit != nil && healCredit.player != nil {
 			if ts.server != nil {
 				ts.server.updateArenaHealingScore(healCredit, effectiveTickHeal)
+				ts.server.addBGScore(healCredit, func(score *bgPlayerScore) { score.HealingDone += effectiveTickHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
 			}
 			if effectiveTickHeal > 0 {
 				healCredit.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveTickHeal)
@@ -29155,6 +29157,7 @@ func (s *session) applyPeriodicLeechHeal(casterSess *session, aura *activeAura, 
 		// HIGHEST_HEALING_RECEIVED on the same session.
 		if s.server != nil {
 			s.server.updateArenaHealingScore(casterSess, effectiveHeal)
+			s.server.addBGScore(casterSess, func(score *bgPlayerScore) { score.HealingDone += effectiveHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
 		}
 		if effectiveHeal > 0 {
 			casterSess.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveHeal)
@@ -30108,6 +30111,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					tickHeal = heal - overheal
 				}
 				s.server.updateArenaHealingScore(tickCredit, tickHeal)
+				s.server.addBGScore(tickCredit, func(score *bgPlayerScore) { score.HealingDone += tickHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
 				if tickHeal > 0 {
 					tickCredit.updateAchievementCriteria(criteriaTypeHealingDone, 0, tickHeal)
 				}

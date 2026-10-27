@@ -1267,6 +1267,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				// HIGHEST_HIT_DEALT) fire on any player-attacker damage, plus
 				// the victim-side HIGHEST_HIT_RECEIVED arm.
 				s.server.updateArenaDamageScore(s, damage)
+				s.server.addBGScore(s, func(score *bgPlayerScore) { score.DamageDone += damage }) // BattlegroundScore twin of the arena line above (Unit.cpp:855-877)
 				victimHealth := playerSess.player.Health
 				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
 				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
@@ -2032,6 +2033,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				// ranged damage exactly like the melee leg; DAMAGE_DONE and
 				// TOTAL_DAMAGE_RECEIVED are capped at pre-damage health.
 				s.server.updateArenaDamageScore(s, damage)
+				s.server.addBGScore(s, func(score *bgPlayerScore) { score.DamageDone += damage }) // BattlegroundScore twin of the arena line above (Unit.cpp:855-877)
 				victimHealth := vicSess.player.Health
 				s.updateAchievementCriteria(criteriaTypeDamageDone, 0, min(damage, victimHealth))
 				s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)

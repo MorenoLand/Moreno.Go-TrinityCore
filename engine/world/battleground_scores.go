@@ -22,8 +22,9 @@ type bgScoreKey struct {
 // fields every score row carries, plus the objectives fields of the six C++
 // subclasses (BattlegroundWS/EY/AB/IC/AV/SA headers). The fields coexist
 // union-style; only the instance's own subclass block is serialized, so a WS
-// row never emits AV fields. BonusHonor, DamageDone, and HealingDone have no
-// Go UpdatePlayerScore callers yet and serialize as zero; the objectives
+// row never emits AV fields. The base legs are wired by addBGScore from the
+// damage, healing, and honor tails (Unit.cpp:855-877, Unit.cpp:6292,
+// Player.cpp:7018); the objectives
 // fields are wired by addBGObjectiveScore from the per-BG handlers, except
 // AV MinesCaptured, which C++ never credits to a player
 // (BattlegroundAV::HandleKillUnit only changes the mine owner) and stays zero.
@@ -136,6 +137,37 @@ func (s *Server) recordBGKillPlayerScores(victim, killer *session) {
 // has neither. Callers hold their BG state's mu; this takes objectsMu only.
 func (s *Server) addBGObjectiveScore(sess *session, add func(*bgPlayerScore)) {
 	if s == nil || sess == nil || sess.player == nil || add == nil {
+		return
+	}
+	key := bgScoreKey{MapID: sess.player.Map, InstanceID: sess.bgData.InstanceID}
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	if s.bgScores == nil {
+		s.bgScores = make(map[bgScoreKey]map[uint64]*bgPlayerScore)
+	}
+	table := s.bgScores[key]
+	if table == nil {
+		table = make(map[uint64]*bgPlayerScore)
+		s.bgScores[key] = table
+	}
+	score := table[sess.playerGUID]
+	if score == nil {
+		score = &bgPlayerScore{}
+		table[sess.playerGUID] = score
+	}
+	add(score)
+}
+
+// addBGScore increments one base field of the acting player's row, the
+// Battleground::UpdatePlayerScore twin of addBGObjectiveScore for the
+// SCORE_DAMAGE_DONE / SCORE_HEALING_DONE / SCORE_BONUS_HONOR legs. The
+// InBattleground gate is bgData.InstanceID != 0, the mirror the kill-player
+// gates use (Player.h:1906); arena maps keep their own ArenaPlayerScore
+// table, so they never land in this store. C++ UpdatePlayerScore no-ops
+// for a player absent from PlayerScores; Go follows the getOrCreate
+// convention, so a BG participant's row exists once they act.
+func (s *Server) addBGScore(sess *session, add func(*bgPlayerScore)) {
+	if s == nil || sess == nil || sess.player == nil || add == nil || sess.bgData.InstanceID == 0 || IsArenaMap(sess.player.Map) {
 		return
 	}
 	key := bgScoreKey{MapID: sess.player.Map, InstanceID: sess.bgData.InstanceID}

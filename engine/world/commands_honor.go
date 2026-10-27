@@ -276,7 +276,8 @@ func (s *session) rewardHonorKill(ctx context.Context, victim *session) {
 // the SMSG_PVP_CREDIT packet, ModifyHonorPoints, today's contribution, and
 // the battleground score update. CONFIG_PVP_TOKEN_ENABLE is false in the Go
 // tree's config, so the token branch is moot; the battleground score bridge
-// (Battleground::UpdatePlayerScore SCORE_BONUS_HONOR) is unbuilt and noted.
+// (Battleground::UpdatePlayerScore SCORE_BONUS_HONOR) is wired below via
+// addBGScore for non-arena BG instances.
 func (t *session) grantHonor(ctx context.Context, honor int32, victimGUID uint64, victimRank uint32) {
 	t.sendPVPCredit(honor, victimGUID, victimRank)
 	newValue := int64(t.player.TotalHonorPoints) + int64(honor)
@@ -296,6 +297,15 @@ func (t *session) grantHonor(ctx context.Context, honor int32, victimGUID uint64
 			t.addKnownCurrency(t.player, itemHonorPointsID)
 		}
 		t.player.TodayHonorPoints += uint32(honor) // PLAYER_FIELD_TODAY_CONTRIBUTION
+	}
+	// Player::RewardHonor (Player.cpp:7018-7022): honor granted while in a
+	// battleground also credits SCORE_BONUS_HONOR, with doAddHonor=false so
+	// the UpdatePlayerScore arm cannot loop back into RewardHonor. The
+	// addBGScore gates (InstanceID != 0, non-arena map) carry the
+	// InBattleground condition and the arena table's exclusion; the value
+	// is the granted honor, not the capped points delta, matching C++.
+	if honor > 0 {
+		t.server.addBGScore(t, func(score *bgPlayerScore) { score.BonusHonor += uint32(honor) })
 	}
 	t.persistHonorFields(ctx)
 	t.sendPlayerUpdate()
