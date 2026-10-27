@@ -3662,6 +3662,42 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						}
 					}
 				}
+				// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) +
+				// SelectImplicitConeTargets (Spell.cpp:1176) for a creature
+				// caster: GO-area (51/52) / GO-cone (108) legs join the hit
+				// list like the friendly-cone leg above — the
+				// castCreatureSpellInternal twin (boss_ai.go) already
+				// selects them, so a creature-cast GO-area/cone AI spell
+				// previously carried no GO targets in the GO packet. GO
+				// GUIDs take no unit leg below, like the nearby GO pick
+				// above. The dest the selection block resolved is
+				// block-scoped there, so the DEST-area center reads it back
+				// out of spellTarget, which carries it exactly when a dest
+				// resolved; the nearby rebuild above would have dropped
+				// legs appended before it, so these join here, after it.
+				if isGOAreaSpell(inlineSpell) || isGOConeSpell(inlineSpell) {
+					appendInlineGOGUID := func(goGUID uint64) {
+						if goGUID == 0 {
+							return
+						}
+						for _, hitGUID := range hitTargets {
+							if hitGUID == goGUID {
+								return
+							}
+						}
+						hitTargets = append(hitTargets, goGUID)
+					}
+					if isGOAreaSpell(inlineSpell) {
+						for _, goGUID := range s.creatureGOAreaTargets(ctx, motion, inlineSpell, spellID, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, target.GUID) {
+							appendInlineGOGUID(goGUID)
+						}
+					}
+					if isGOConeSpell(inlineSpell) {
+						for _, goGUID := range s.creatureGOConeTargets(ctx, motion, inlineSpell, spellID) {
+							appendInlineGOGUID(goGUID)
+						}
+					}
+				}
 			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 			// the inline path: a victim whose reflect roll succeeds becomes a
