@@ -3339,6 +3339,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			hitTargets := []uint64{target.GUID}
 			var areaHits []*playerPos
 			var areaCreatureHits []uint64
+			// areaVictim is the area-selection anchor: the wire victim, or the
+			// Grounding Totem redirect below — the area sweeps exclude only
+			// this GUID (their seen set), mirroring the twin's post-redirect
+			// areaVictim. The nearby block reassigns target, never areaVictim.
+			areaVictim := target
+			// nearbyReplacesWireVictim also covers the redirect below: a
+			// redirected cast's wire victim takes no player leg, like a nearby
+			// pick. Declared here (not at the nearby block) so the redirect arm
+			// can set it before the area legs run.
+			nearbyReplacesWireVictim := false
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
 			var inlineSpell wotlk.Spell
 			inlineSpellKnown := false
@@ -3361,17 +3371,97 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
 						spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
 					}
+					// SpellInfo::CheckTarget (Spell.cpp:5372), the inline twin of
+					// the castCreatureSpellInternal arm: a wire victim failing any
+					// CheckTarget gate (dead without a dead-target allowance,
+					// GM-blocked, in-flight, aura-state/spell mismatch) fizzles the
+					// cast — rearm and return like the destFailed arm above. The AI
+					// range gate already ran, but C++ runs CheckCast for every
+					// DoCastVictim, so the inline path runs it too.
+					if !s.checkCreatureSpellCheckTarget(ctx, motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast behind/facing arms (Spell.cpp:5379-5384), same
+					// twin: custom-attr behind/facing requirements on the wire victim
+					// fizzle the cast.
+					if !s.checkCreatureSpellBehindFacing(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast unit-target LOS arm (Spell.cpp:5391-5401), same
+					// twin: the wire victim must be within LOS unless the spell
+					// exempts LOS checks. Defaults to true without terrain data.
+					if target.GUID != 0 && target.GUID != motion.GUID &&
+						spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+						spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+						if x, y, z, _, _, found := s.aiThreatUnitPos(motion, target.GUID, nil, true); found {
+							if !s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
+								s.rearmAISpell(motion, dueSpell, spellID, now)
+								return
+							}
+						}
+					}
+					// Spell::CheckCast dest LOS arm (Spell.cpp:5400-5408), same twin:
+					// the resolved destination must be within LOS unless exempted.
+					// Evaluated on the pre-redirect destination — C++ runs this at
+					// CheckCast time, before the redirect below.
+					if hasDest &&
+						spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+						spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+						if !s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, destX, destY, destZ) {
+							s.rearmAISpell(motion, dueSpell, spellID, now)
+							return
+						}
+					}
+					// Spell::CheckCast pet-presence arm (Spell.cpp:5410-5432), same
+					// twin: any TARGET_UNIT_PET effect fizzles — creature motions carry
+					// no guardian pet, and the npcbot arm has no Go model. Placed after
+					// the LOS arms, matching C++ order.
+					if spellFirstEffectTargetsUnitPet(spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::SelectExplicitTargets magic-redirect arm (Spell.cpp:724-757),
+					// the inline twin of the castCreatureSpellInternal arm: a live
+					// Grounding Totem magnet on the wire victim pulls the cast onto the
+					// totem. The totem joins the creature legs (areaCreatureHits) and
+					// the wire victim takes no player leg below (nearbyReplacesWireVictim,
+					// same flag as the nearby pick); the area legs anchor on the
+					// redirect (their seen set), and the destination re-resolves on it
+					// like the twin. Melee/ranged redirect (GetMeleeHitRedirectTarget)
+					// has no Go model — the twin covers magic only, same gap here.
+					if redirectGUID, ok := s.creatureGroundingTotemRedirect(ctx, motion, spellInfo, target.GUID); ok {
+						spellTarget.UnitGUID = redirectGUID
+						hitTargets = []uint64{redirectGUID}
+						areaVictim = &playerPos{GUID: redirectGUID}
+						nearbyReplacesWireVictim = true
+						areaCreatureHits = append(areaCreatureHits, redirectGUID)
+						var redirectDestFailed bool
+						destX, destY, destZ, hasDest, redirectDestFailed = s.resolveCreatureSpellDestination(ctx, motion, spellInfo, redirectGUID)
+						if redirectDestFailed {
+							s.rearmAISpell(motion, dueSpell, spellID, now)
+							return
+						}
+						if hasDest {
+							spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+							spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
+						} else {
+							spellTarget.Flags &^= protocol.SpellTargetFlagDestLocation
+							spellTarget.Destination = protocol.SpellTargetLocation{}
+						}
+					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): a
 					// creature-cast AoE hits every enemy in the area, so the
 					// GO packet's hit list extends past the wire victim.
-					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, target, destX, destY, destZ, hasDest) {
+					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
 						areaHits = append(areaHits, areaHit)
 						hitTargets = append(hitTargets, areaHit.GUID)
 					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the
 					// area also picks enemy creatures (creatureAIAreaEnemyCreatures),
 					// not just enemy players — their GUIDs join the GO hit list too.
-					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, target, destX, destY, destZ, hasDest) {
+					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
 						areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
 						hitTargets = append(hitTargets, areaCreatureGUID)
 					}
@@ -3382,7 +3472,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// slices so the nearby-pick filter below applies to
 					// them like the enemy legs above.
 					if isEntryAreaSpell(spellInfo) {
-						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, spellInfo, target.GUID, destX, destY, destZ, hasDest)
+						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, spellInfo, areaVictim.GUID, destX, destY, destZ, hasDest)
 						for _, entryHit := range entryPlayers {
 							areaHits = append(areaHits, entryHit)
 							hitTargets = append(hitTargets, entryHit.GUID)
@@ -3401,7 +3491,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// would otherwise double-hit in the area damage/dispatch loops below.
 					if hasFriendlyAreaEffect(spellInfo) {
 						allyOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
-						allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, motion, spellInfo, target, allyOwner, destX, destY, destZ, hasDest)
+						allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 						for _, allyHit := range allyPlayers {
 							if allyHit == nil || allyHit.GUID == 0 {
 								continue
@@ -3419,7 +3509,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							areaHits = append(areaHits, allyHit)
 							hitTargets = append(hitTargets, allyHit.GUID)
 						}
-						allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, motion, spellInfo, target, allyOwner, destX, destY, destZ, hasDest)
+						allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 						for _, allyCreatureGUID := range allyCreatures {
 							if allyCreatureGUID == 0 {
 								continue
@@ -3465,7 +3555,6 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// both skip the wire player legs below. The 38 pick drives
 			// the victim body, else the hostile pick; a non-anchor
 			// hostile pick joins the area legs instead.
-			nearbyReplacesWireVictim := false
 			if inlineSpellKnown {
 				nearbyHitTargets := func(nearby uint64) []uint64 {
 					rebuilt := []uint64{nearby}
