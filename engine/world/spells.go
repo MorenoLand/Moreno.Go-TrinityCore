@@ -17747,10 +17747,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if eff.Effect == spellEffectKnockBack || eff.Effect == spellEffectKnockBackDest {
 				// Spell::EffectKnockBack (SpellEffects.cpp:4552) runs at
 				// HIT_TARGET per unit target; the client arm's helper over
-				// the single miss-filtered target. The 144 dest leg stays
-				// gated: this path's spellTarget carries no Destination
-				// (unit-wire flags only), so C++'s !HasDst return holds
-				// and only the 98 caster-point leg can fire here.
+				// the single miss-filtered target. The 144 dest leg is live,
+				// not gated off: this path's spellTarget carries the
+				// resolveImplicitSpellDestination result (target_dest_targets.go),
+				// which sets the DestLocation flag for dest-family spells, so
+				// the helper's HasDst gate fires exactly where C++'s does;
+				// a 144 spell with no dest-family implicit target still
+				// returns via that gate, matching C++'s !HasDst arm.
 				s.handleEffectKnockBack(ctx, spell, eff, []uint64{effectTarget}, spellTarget)
 			} else if eff.Effect == spellEffectModifyThreatPercent {
 				// Spell::EffectModifyThreatPercent (SpellEffects.cpp:4915)
@@ -17810,6 +17813,56 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
 				}
+			} else if eff.Effect == spellEffectPlaySound {
+				// Spell::EffectPlaySound (SpellEffects.cpp:5578) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectPlaySound(eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectPlayMusic {
+				// Spell::EffectPlayMusic (SpellEffects.cpp:5537) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectPlayMusic(eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectReputation {
+				// Spell::EffectReputation (SpellEffects.cpp:4349) runs at
+				// HIT_TARGET per player unit target: the client arm's inline
+				// legs over the single miss-filtered target (faction-entry
+				// gate, rolled value via CalcValueForLevel).
+				if eff.MiscValue != 0 && s.server != nil && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
+					}
+				}
+			} else if eff.Effect == spellEffectQuestComplete {
+				// Spell::EffectQuestComplete (SpellEffects.cpp:4371) runs at
+				// HIT_TARGET per player unit target: the client arm's inline
+				// leg over the single miss-filtered target.
+				if eff.MiscValue != 0 && s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.completeQuestFromSpell(ctx, uint32(eff.MiscValue))
+					}
+				}
+			} else if eff.Effect == spellEffectAddHonor {
+				// Spell::EffectAddHonor (SpellEffects.cpp:2661) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target; an item-cast trigger
+				// (castItemGUID set) takes the item-based damage/10 leg.
+				s.handleEffectAddHonor(ctx, spell, eff, []uint64{effectTarget}, castItemGUID != 0)
+			} else if eff.Effect == spellEffectQuestClear {
+				// Spell::EffectQuestClear (SpellEffects.cpp:4611) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectQuestClear(ctx, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectQuestFail {
+				// Spell::EffectQuestFail (SpellEffects.cpp:5283) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectQuestFail(ctx, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectQuestStart {
+				// Spell::EffectQuestStart (SpellEffects.cpp:5294) runs at
+				// HIT_TARGET per player unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectQuestStart(ctx, eff, []uint64{effectTarget})
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
