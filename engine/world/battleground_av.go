@@ -232,8 +232,9 @@ type avBattlegroundState struct {
 	Mines                  [2]avMineState
 	CaptureDuration        time.Duration
 	MineTickDuration       time.Duration
-	MineTickElapsedMs      int64 // == m_Mine_Timer accumulation toward the 45s score tick
-	Winner                 int8  // -1: ongoing, 0: Alliance, 1: Horde
+	MineTickElapsedMs      int64     // == m_Mine_Timer accumulation toward the 45s score tick
+	Winner                 int8      // -1: ongoing, 0: Alliance, 1: Horde
+	EndedAt                time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
 	StopTicker             chan struct{}
 }
 
@@ -1167,6 +1168,8 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 		return
 	}
 	av.Winner = winner
+	av.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(av.MapID)
 	// Reference: BattlegroundAV::PostUpdateImpl (BattlegroundAV.cpp:363-364) gates
 	// the whole node-timer loop on GetStatus() == STATUS_IN_PROGRESS: once the
 	// battle ends the node timers stop. Go models each node timer as a

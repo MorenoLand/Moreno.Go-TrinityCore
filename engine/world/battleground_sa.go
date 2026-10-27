@@ -171,7 +171,8 @@ type saBattlegroundState struct {
 	RoundScores          [2]saRoundScore
 	DemolishersAlive     [2]bool
 	GateDestroyed        bool
-	Winner               int8 // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
+	Winner               int8      // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
+	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
 	DemolishersDestroyed map[uint64]uint32
 	GatesDestroyed       map[uint64]uint32
 	StopTicker           chan struct{}
@@ -763,6 +764,8 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 		return
 	}
 	sa.Winner = winner
+	sa.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(sa.MapID)
 	sa.Status = SAStatusFinished
 	sa.TimerEnabled = false
 	s.updateSAWorldState(sa.MapID, SAWorldStateEnableTimer, 0)

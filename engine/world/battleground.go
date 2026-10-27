@@ -2264,6 +2264,134 @@ func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
 	}
 }
 
+// bgWaitLeaveAutoRemove mirrors TIME_TO_AUTOREMOVE (Battleground.h:151):
+// _ProcessLeave removes stayers 120 seconds after the match ends.
+const bgWaitLeaveAutoRemove = 120 * time.Second
+
+// markBGSlotsWaitLeave flips every live participant slot on mapID to
+// BGStatusWaitLeave, the Go form of Battleground::EndBattleground setting
+// STATUS_WAIT_LEAVE (Battleground.cpp:715). Player::LeaveBattleground
+// (Player.cpp:22475-22499) casts deserter and tracks desertion only while
+// the BG is STATUS_IN_PROGRESS or STATUS_WAIT_JOIN, so without this flip a
+// player who stays to the end and then leaves — voluntarily or by the
+// auto-remove below — would wrongly take deserter. Called from each
+// per-map end arm with that map's state mu held; it takes no BG mu, only
+// sessionsMu, following the endArena slot-flip precedent. No status packet
+// is sent here: the end arms broadcast the result already, and the leave
+// funnel sends STATUS_NONE on removal.
+func (s *Server) markBGSlotsWaitLeave(mapID uint32) {
+	if s == nil || mapID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena {
+				e.Status = BGStatusWaitLeave
+			}
+		}
+	}
+}
+
+// updateBattlegroundWaitLeave ports Battleground::_ProcessLeave
+// (Battleground.cpp:506-528) for the six non-arena maps: once a match has
+// been ended for TIME_TO_AUTOREMOVE, every remaining player is removed via
+// the voluntary-leave funnel (handleLeaveBattlefield, the RemovePlayerAtLeave
+// + TeleportToBGEntryPoint pair with Transport=true, SendPacket=true), which
+// deletes the stayer's score row, resurrects, teleports to the entry point,
+// and lets the last leave delete the per-map state. Arenas already port
+// this in updateArenaTick (processArenaLeave); Wintergrasp is a Battlefield,
+// not a Battleground, and keeps its own timers. The sweep peeks the
+// registries (never getOrCreate, so a map with no BG creates no state) and
+// runs on the world tick's 1s cadence beside the other per-map battle
+// ticks. A Winner>=0 state with a zero EndedAt (an end arm added without
+// the stamp) is treated as due rather than left to persist indefinitely.
+// The AV peek uses objectsMu, the creation lock, per the deleteAVState
+// comment; the other maps peek under their own registry mu. No registry
+// or state mu is held while the leave funnel runs.
+func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.bgWaitLeaveTickLast.IsZero() && now.Sub(s.bgWaitLeaveTickLast) < time.Second {
+		return
+	}
+	s.bgWaitLeaveTickLast = now
+	due := make(map[uint32]bool)
+	consider := func(mapID uint32, winner int8, endedAt time.Time) {
+		if winner >= 0 && (endedAt.IsZero() || now.Sub(endedAt) >= bgWaitLeaveAutoRemove) {
+			due[mapID] = true
+		}
+	}
+	s.wsgMu.RLock()
+	wsg := s.wsgState[WSGMapID]
+	s.wsgMu.RUnlock()
+	if wsg != nil {
+		wsg.mu.Lock()
+		consider(WSGMapID, wsg.Winner, wsg.EndedAt)
+		wsg.mu.Unlock()
+	}
+	s.abMu.RLock()
+	ab := s.abState[ABMapID]
+	s.abMu.RUnlock()
+	if ab != nil {
+		ab.mu.Lock()
+		consider(ABMapID, ab.Winner, ab.EndedAt)
+		ab.mu.Unlock()
+	}
+	s.objectsMu.RLock()
+	av := s.avState[AVMapID]
+	s.objectsMu.RUnlock()
+	if av != nil {
+		av.mu.Lock()
+		consider(AVMapID, av.Winner, av.EndedAt)
+		av.mu.Unlock()
+	}
+	s.eotsMu.RLock()
+	eots := s.eotsState[EOTSMapID]
+	s.eotsMu.RUnlock()
+	if eots != nil {
+		eots.mu.Lock()
+		consider(EOTSMapID, eots.Winner, eots.EndedAt)
+		eots.mu.Unlock()
+	}
+	s.saMu.RLock()
+	sa := s.saState[SAMapID]
+	s.saMu.RUnlock()
+	if sa != nil {
+		sa.mu.Lock()
+		consider(SAMapID, sa.Winner, sa.EndedAt)
+		sa.mu.Unlock()
+	}
+	s.icMu.RLock()
+	ic := s.icState[ICMapID]
+	s.icMu.RUnlock()
+	if ic != nil {
+		ic.mu.Lock()
+		consider(ICMapID, ic.Winner, ic.EndedAt)
+		ic.mu.Unlock()
+	}
+	if len(due) == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	stayers := make([]*session, 0)
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 || !due[sess.player.Map] {
+			continue
+		}
+		stayers = append(stayers, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range stayers {
+		sess.handleLeaveBattlefield(ctx, nil, false, false)
+	}
+}
+
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
 // Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795) and Player::ReportedAfkBy (Player.cpp:22524).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {

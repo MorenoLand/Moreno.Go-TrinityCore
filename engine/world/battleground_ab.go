@@ -153,7 +153,8 @@ type abBattlegroundState struct {
 	HordeBasesCount      uint32
 	Nodes                [ABNodeMax]abNodeState
 	CaptureDuration      time.Duration
-	Winner               int8 // -1 = ongoing, 0 = Alliance, 1 = Horde
+	Winner               int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
+	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
 	AllianceAccumMs      int64
 	HordeAccumMs         int64
 	HonorTicsAccum       [2]uint32 // resource points banked toward the next trickle-honor award
@@ -731,6 +732,8 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 				if ab.AllianceResources >= ab.MaxResources {
 					ab.AllianceResources = ab.MaxResources
 					ab.Winner = 0
+					ab.EndedAt = time.Now()
+					s.markBGSlotsWaitLeave(ab.MapID)
 					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 0)
 				}
@@ -758,6 +761,8 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 				if ab.HordeResources >= ab.MaxResources {
 					ab.HordeResources = ab.MaxResources
 					ab.Winner = 1
+					ab.EndedAt = time.Now()
+					s.markBGSlotsWaitLeave(ab.MapID)
 					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 1)
 				}

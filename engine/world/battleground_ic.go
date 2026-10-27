@@ -376,7 +376,8 @@ type icBattlegroundState struct {
 	Nodes                  [ICMaxNodes]icNodeState
 	BannerCaptureDuration  time.Duration
 	ResourceTickDuration   time.Duration
-	Winner                 int8 // -1: ongoing, 0: Alliance, 1: Horde
+	Winner                 int8      // -1: ongoing, 0: Alliance, 1: Horde
+	EndedAt                time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
 	VehiclesDestroyed      map[uint64]uint32
 	StopTicker             chan struct{}
 	ResourceAccumMs        int64 // ms accumulated toward the next 45s resource tick
@@ -1102,6 +1103,8 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 		return
 	}
 	ic.Winner = winner
+	ic.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(ic.MapID)
 	// Reference: Battleground::EndBattleground (Battleground.cpp:667) sets the
 	// winner and the instance leaves STATUS_IN_PROGRESS, so the zone
 	// PostUpdateImpl timer arms never tick again and the timers die with the

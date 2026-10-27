@@ -145,6 +145,7 @@ type eotsBattlegroundState struct {
 	PointTickAccumMs    int64     // m_PointAddingTimer countdown (PostUpdateImpl arm)
 	HonorTicsAccum      [2]uint32 // m_HonorScoreTics per team (AddPoints arm)
 	Winner              int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
+	EndedAt             time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
 	CenterX             float32
 	CenterY             float32
 	CenterZ             float32
@@ -735,6 +736,8 @@ func (s *Server) addEOTSResources(eots *eotsBattlegroundState, team uint32, poin
 		*resources = eots.MaxResources
 		if eots.Winner < 0 {
 			eots.Winner = int8(team)
+			eots.EndedAt = time.Now()
+			s.markBGSlotsWaitLeave(eots.MapID)
 			// Reference: Battleground::EndBattleground (Battleground.cpp:667)
 			// sets the winner and the instance leaves STATUS_IN_PROGRESS, so
 			// the m_FlagsTimer arm (BattlegroundEY PostUpdateImpl) never ticks

@@ -75,7 +75,8 @@ type wsgBattlegroundState struct {
 	AllianceScore       uint32
 	HordeScore          uint32
 	MaxScore            uint32
-	Winner              int8 // -1 = ongoing, 0 = Alliance, 1 = Horde, 2 = draw; set by endWSGVictory/endWSGTie, read by the MSG_PVP_LOG_DATA ended block (battleground_scores.go)
+	Winner              int8      // -1 = ongoing, 0 = Alliance, 1 = Horde, 2 = draw; set by endWSGVictory/endWSGTie, read by the MSG_PVP_LOG_DATA ended block (battleground_scores.go)
+	EndedAt             time.Time // EndBattleground time: Battleground::_ProcessLeave removes stayers after TIME_TO_AUTOREMOVE (Battleground.cpp:506-528, Battleground.h:151 = 120s)
 	AllianceFlagState   uint32
 	HordeFlagState      uint32
 	AllianceCarrierGUID uint64
@@ -820,6 +821,8 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	// 320-323); only the stage bookkeeping needs clearing here.
 	wsg.StalemateStage = 0
 	wsg.Winner = int8(winningTeam)
+	wsg.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(mapID)
 	teamName := "Alliance"
 	if winningTeam == 1 {
 		teamName = "Horde"
@@ -890,6 +893,8 @@ func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
 	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 0)
 	wsg.StalemateStage = 0
 	wsg.Winner = 2
+	wsg.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(mapID)
 	s.rewardBGEndHonor(mapID, 0, 2)
 	s.rewardBGEndHonor(mapID, 1, 2)
 }
