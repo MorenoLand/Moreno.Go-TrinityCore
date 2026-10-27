@@ -699,6 +699,8 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		x, y, z, o float32
 	}
 	teleports := make([]passengerTeleport, 0)
+	vehicleCrossTeleports := make([]passengerTeleport, 0)
+	pendingVehicleRiders := make([]*session, 0)
 	refresh := make([]*session, 0)
 	stream := make([]*session, 0)
 	vehicleRiders := make([]*session, 0)
@@ -734,6 +736,55 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
 			teleports = append(teleports, passengerTeleport{session: sess, x: x, y: y, z: z, o: o})
 			continue
+		} else if change.OldSpawn.Map != change.Spawn.Map && sess.player.Map == change.OldSpawn.Map && sess.player.VehicleGUID != 0 && sess.player.TransportGUID == sess.player.VehicleGUID && !sess.nearTeleportPending && !sess.farTeleportPending {
+			// Transport::DelayedTeleportTransport (Transport.cpp:650-691)
+			// teleports every player in the passenger set across the map
+			// change with no vehicle skip: TeleportTo exits the vehicle
+			// first (Player.cpp:1703-1704) and NOT_LEAVE_TRANSPORT keeps
+			// the rider a transport passenger. A steady-state rider
+			// reports the vehicle as its transport (movement.go), so the
+			// direct arm above never matches it; without this arm the
+			// rider is left on the origin map while its vehicle creature
+			// reloads onto the new map. The dest keeps the rider's exact
+			// placement relative to the vehicle: the vehicle world
+			// position on the origin map comes from the old spawn plus
+			// the vehicle's transport-frame offsets, and the rider's
+			// offset from it rotates by the vehicle's orientation change
+			// onto the new map. A rider whose vehicle is not a reloading
+			// transport passenger falls through to the out-of-range arm
+			// below, as before.
+			matched := false
+			for _, passenger := range change.Passengers {
+				vehicleGUID := passenger.RawGUID
+				if vehicleGUID == 0 {
+					vehicleGUID = creatureWorldGUID(passenger.GUID, passenger.Entry)
+				}
+				if vehicleGUID != sess.player.VehicleGUID {
+					continue
+				}
+				vehOldX, vehOldY, vehOldZ, vehOldO := CalculatePassengerPosition(change.OldSpawn.X, change.OldSpawn.Y, change.OldSpawn.Z, change.OldSpawn.Orientation, passenger.TransportX, passenger.TransportY, passenger.TransportZ, passenger.TransportO)
+				dx, dy, dz := sess.player.X-vehOldX, sess.player.Y-vehOldY, sess.player.Z-vehOldZ
+				dO := normalizeOrientation(passenger.Orientation - vehOldO)
+				cosO, sinO := float32(math.Cos(float64(dO))), float32(math.Sin(float64(dO)))
+				x := passenger.X + dx*cosO - dy*sinO
+				y := passenger.Y + dx*sinO + dy*cosO
+				z := passenger.Z + dz
+				o := normalizeOrientation(sess.player.Orientation + dO)
+				vehicleCrossTeleports = append(vehicleCrossTeleports, passengerTeleport{session: sess, x: x, y: y, z: z, o: o})
+				matched = true
+				break
+			}
+			if matched {
+				continue
+			}
+			// Not a reloading creature vehicle: the rider may be on a
+			// player vehicle whose driver crosses on this same broadcast
+			// via the direct arm. Map iteration order means the driver's
+			// dest may not be collected yet, so resolution runs post-loop
+			// below; the out-of-range arm is skipped here and re-applied
+			// post-loop only if the driver does not resolve.
+			pendingVehicleRiders = append(pendingVehicleRiders, sess)
+			continue
 		}
 		if change.OldSpawn.Map != change.Spawn.Map && sess.player.Map == change.OldSpawn.Map {
 			updates := protocol.NewUpdateData()
@@ -763,9 +814,97 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		}
 	}
 	s.sessionsMu.RUnlock()
+	// Pending player-vehicle riders (arm above): resolve each against its
+	// driver's direct-arm dest, which is collected by now while the
+	// driver's old position is still intact (the teleports below have not
+	// run). The dest keeps the rider's exact placement relative to the
+	// driver, rotated by the driver's orientation change, exactly as the
+	// creature-vehicle arm does. A rider whose driver is not a player
+	// vehicle crossing on this broadcast keeps the out-of-range treatment
+	// the loop skipped, unchanged from before.
+	for _, sess := range pendingVehicleRiders {
+		if sess == nil || sess.player == nil || sess.player.Map != change.OldSpawn.Map || sess.nearTeleportPending || sess.farTeleportPending {
+			continue
+		}
+		driver := s.findSessionByGUID(sess.player.VehicleGUID)
+		if driver == nil || driver.player == nil {
+			continue
+		}
+		kit := s.getVehicleKit(driver.player.Map, driver.player.InstanceID, sess.player.VehicleGUID)
+		if kit == nil || !kit.IsPlayer {
+			continue
+		}
+		var dest *passengerTeleport
+		for i := range teleports {
+			if teleports[i].session == driver {
+				dest = &teleports[i]
+				break
+			}
+		}
+		if dest == nil {
+			continue
+		}
+		dx, dy, dz := sess.player.X-driver.player.X, sess.player.Y-driver.player.Y, sess.player.Z-driver.player.Z
+		dO := normalizeOrientation(dest.o - driver.player.Orientation)
+		cosO, sinO := float32(math.Cos(float64(dO))), float32(math.Sin(float64(dO)))
+		x := dest.x + dx*cosO - dy*sinO
+		y := dest.y + dx*sinO + dy*cosO
+		z := dest.z + dz
+		o := normalizeOrientation(sess.player.Orientation + dO)
+		vehicleCrossTeleports = append(vehicleCrossTeleports, passengerTeleport{session: sess, x: x, y: y, z: z, o: o})
+	}
+	for _, sess := range pendingVehicleRiders {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		resolved := false
+		for _, passenger := range vehicleCrossTeleports {
+			if passenger.session == sess {
+				resolved = true
+				break
+			}
+		}
+		if resolved {
+			continue
+		}
+		updates := protocol.NewUpdateData()
+		updates.AddOutOfRangeGUID(rawGUID)
+		for _, guid := range sess.clearTransportPassengerVisibility(rawGUID) {
+			updates.AddOutOfRangeGUID(guid)
+		}
+		if packet, err := updates.BuildPacket(0); err == nil {
+			_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
 	for _, passenger := range teleports {
 		passenger.session.resetTransportPassengerVisibility()
 		passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true)
+	}
+	// Cross-map steady-state vehicle riders (arm above): teleportToOptions
+	// exits the vehicle (Player.cpp:1703-1704) and, with stayOnTransport,
+	// keeps the stored attachment — but the rider's stored attachment is
+	// the vehicle, not the transport, so it is rewritten to the transport
+	// GUID with transport-frame offsets first: otherwise the far branch
+	// sends TRANSFER_PENDING without the transport and the ack cannot
+	// re-attach (buildAttachedTransportUpdate resolves TransportGUID
+	// against the transport spawns), and the rider's stale vehicle seat
+	// would leak into the new map's movement packet. The seat becomes -1,
+	// the standing-passenger value (handleTransportUse). A failed teleport
+	// detaches the rider, mirroring DelayedTeleportTransport's
+	// RemovePassenger on a failed TeleportTo (Transport.cpp:676).
+	for _, passenger := range vehicleCrossTeleports {
+		if passenger.session == nil || passenger.session.player == nil {
+			continue
+		}
+		passenger.session.resetTransportPassengerVisibility()
+		passenger.session.player.TransportGUID = rawGUID
+		passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = CalculatePassengerOffset(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, passenger.x, passenger.y, passenger.z, passenger.o)
+		passenger.session.player.TransportSeat = -1
+		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true) {
+			passenger.session.player.TransportGUID = 0
+			passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = 0, 0, 0, 0
+			passenger.session.player.TransportSeat = 0
+		}
 	}
 	// Deferred vehicle riders (same-map arm above): relocate through the
 	// vehicle from its fresh world position plus seat offsets, as
