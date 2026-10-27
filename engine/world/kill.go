@@ -1270,6 +1270,12 @@ func (s *Server) recordCreatureKillLoot(victim, killer *creatureMotion) {
 // never reach it. The group-looter election stays lazy at loot-open
 // (loot.go), as in the funnel; the off-map recipient group-member
 // fallback (Unit.cpp:11182-11195) is not modeled, as in the loot leg.
+// Quest kill credit rides the same RewardPlayerAndGroupAtKill call
+// (KillRewarder::_RewardKillCredit, KillRewarder.cpp:186-195) via the
+// funnel's grantCreatureKillQuestCredit twin, after the XP arm; the
+// instance-bind leg is NOT folded in here — Unit.cpp:11404-11425 runs
+// outside the reward gate (no damage/pet-victim check), so it gets its
+// own helper and call site below.
 // Placed after recordCreatureKillLoot at each site: the loot leg already
 // resolved the same owner, and on the denial path the damage gate below
 // returns before the cleared tap can fall back to the killer's owner.
@@ -1320,6 +1326,68 @@ func (s *Server) grantCreatureKillReward(ctx context.Context, victim, killer *cr
 		mobLevel = 1
 	}
 	player.rewardCreatureKillXP(ctx, combatTarget{GUID: victim.GUID, Map: victim.Map, InstanceID: victim.InstanceID, X: victim.X, Y: victim.Y, Z: victim.Z, CombatReach: victim.CombatReach}, creatureEntry, mobLevel)
+	var creatureType uint32
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&creatureType)
+	}
+	player.grantCreatureKillQuestCredit(ctx, creatureEntry, creatureType, combatTarget{GUID: victim.GUID, Map: victim.Map, InstanceID: victim.InstanceID, X: victim.X, Y: victim.Y, Z: victim.Z, CombatReach: victim.CombatReach})
+}
+
+// bindInstanceOnNoFunnelKill is the Unit::Kill dungeon instance-binding
+// leg (Unit.cpp:11404-11425) for the no-funnel death chains, kept separate
+// from grantCreatureKillReward because C++ runs it outside the reward
+// block: no damage-requirement or pet-victim gate, only a
+// player-attributed kill of an INSTANCE_BIND-flagged creature in a raid
+// or heroic dungeon. Attribution is the ATTACKER's charmer/owner player
+// (attacker->GetCharmerOrOwnerPlayerOrPlayerItself, or attacker == victim
+// for a suicide), NOT the reward player — a wild killer with an online
+// tapper still binds nothing, and an owner-gone killer binds nothing
+// (C++'s offline-owner bind is a @todo there, unimplemented here too).
+// Callers place it after grantCreatureKillReward: C++ runs the bind block
+// after JustDied (Unit.cpp:11391 vs :11404) and the reward block precedes
+// it. The non-raid/non-heroic arm only extends the save's reset time,
+// which Go's read-only resettime model does not schedule (as in
+// maybePermBindInstance, the funnel twin whose dungeon/flag/difficulty
+// checks this mirrors).
+func (s *Server) bindInstanceOnNoFunnelKill(ctx context.Context, victim, killer *creatureMotion) {
+	if s == nil || victim == nil || killer == nil || victim.InstanceID == 0 {
+		return
+	}
+	if killer.GUID != victim.GUID {
+		attackerPlayer := s.findSessionByGUID(killer.OwnerGUID)
+		if attackerPlayer == nil {
+			attackerPlayer = s.findSessionByGUID(killer.CharmerGUID)
+		}
+		if attackerPlayer == nil {
+			return
+		}
+	}
+	if s.Data == nil {
+		return
+	}
+	mapEntry, found, mapErr := s.Data.Map(victim.Map)
+	if mapErr != nil || !found || !mapEntry.IsDungeon() {
+		return
+	}
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	var difficulty uint32
+	if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT difficulty FROM instance WHERE id = ?", victim.InstanceID).Scan(&difficulty); err != nil {
+		return
+	}
+	creatureEntry := uint32((victim.GUID >> 24) & 0xFFFFFF)
+	var flagsExtra uint32
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT flags_extra FROM creature_template WHERE entry = ?", creatureEntry).Scan(&flagsExtra); err != nil {
+		return
+	}
+	if !(mapEntry.IsRaid() || difficulty == 1) {
+		return
+	}
+	if flagsExtra&0x1 == 0 {
+		return
+	}
+	s.permBindAllPlayers(ctx, victim.Map, victim.InstanceID, difficulty)
 }
 
 // clearCreatureDeathState is the Unit::setDeathState (Unit.cpp:8901-8911)

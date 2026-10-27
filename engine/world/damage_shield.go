@@ -560,6 +560,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
 			// fired here because the attackerSess == nil arm skips onCreatureKilled.
 			s.grantCreatureKillReward(ctx, m, attackerMotion)
+			// Unit::Kill dungeon instance-binding block (Unit.cpp:11404-11425) — the funnel leg,
+			// fired here because this path skips onCreatureKilled.
+			s.bindInstanceOnNoFunnelKill(ctx, m, attackerMotion)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1
