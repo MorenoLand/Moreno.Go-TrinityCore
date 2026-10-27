@@ -805,10 +805,10 @@ func (s *Server) DamageICGate(mapID uint32, gateID uint8, damage uint32, attacke
 // handleICPlayerDeath decrements team reinforcements on death.
 // Reference: BattlegroundIC::HandleKillPlayer (BattlegroundIC.cpp:405-419).
 func (s *Server) handleICPlayerDeath(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != ICMapID && !sess.hasActiveBGMap(ICMapID)) {
 		return
 	}
-	ic := s.getOrCreateICState(sess.player.Map)
+	ic := s.getOrCreateICState(ICMapID)
 	if ic == nil {
 		return
 	}

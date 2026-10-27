@@ -909,10 +909,10 @@ func (s *Server) updateAVScore(av *avBattlegroundState, team uint8, delta int32)
 // handleAVPlayerDeath handles reinforcement decrement (-1) on player death in AV.
 // Reference: BattlegroundAV::HandleKillPlayer (BattlegroundAV.cpp:74-81).
 func (s *Server) handleAVPlayerDeath(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != AVMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != AVMapID && !sess.hasActiveBGMap(AVMapID)) {
 		return
 	}
-	av := s.getOrCreateAVState(sess.player.Map)
+	av := s.getOrCreateAVState(AVMapID)
 	if av == nil {
 		return
 	}
