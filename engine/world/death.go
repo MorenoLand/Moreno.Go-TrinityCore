@@ -700,7 +700,9 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 				// at-distance honorable kills — battleground_scores.go.
 				// Arena matches keep their own ArenaPlayerScore table
 				// and their packet serializes killing blows only, so
-				// the base deaths/honorable-kills rows stay out here.
+				// the base deaths/honorable-kills rows stay out here;
+				// the arena killing-blows leg runs below, on the
+				// killer's arena, for every lethal path.
 				s.server.recordBGKillPlayerScores(s, killer)
 				// Battleground.cpp:1690-1691: non-arena victims take
 				// UNIT_FLAG_SKINNABLE so the insignia can be removed;
@@ -720,6 +722,12 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 			s.server.handleAVPlayerDeath(s)
 			s.server.handleSAPlayerDeath(s)
 			s.server.handleICPlayerDeath(s)
+			// Arena::HandleKillPlayer (Arena.cpp:118-126) base leg:
+			// the killer's arena killing-blows credit. Placed ahead
+			// of the victim-arena alive/win arm below, mirroring the
+			// C++ base-scores-then-world-state order; the helper
+			// no-ops for non-arena killers.
+			s.server.creditArenaKillingBlow(s, killer)
 			s.server.handleArenaPlayerDeath(s)
 		}
 		s.server.handleWGPlayerDeath(s, killer)

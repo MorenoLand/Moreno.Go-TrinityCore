@@ -1373,6 +1373,43 @@ func (s *Server) updateArenaDamageScore(attacker *session, damage uint32) {
 	}
 }
 
+// creditArenaKillingBlow ports the killing-blows leg of the base
+// Battleground::HandleKillPlayer (Battleground.cpp:1676) for arena matches,
+// reached via Arena::HandleKillPlayer (Arena.cpp:118-126). The Unit::Kill tail
+// (Unit.cpp:11446-11455) runs HandleKillPlayer on the killer's battleground,
+// so the credit resolves on the killer's roster arena, not the victim's: in a
+// shared match both are the same state, and the alive decrement / win check
+// in handleArenaPlayerDeath stays on the victim's arena. Deaths and honorable
+// kills from the same base leg have no arena score field: ArenaScore inherits
+// BattlegroundScore in C++ but its packet (Arena.cpp:32-42) serializes only
+// killing blows, team, damage, and healing, so only killing blows are kept.
+// Suicide (killer == victim) credits nothing: the base leg returns after the
+// deaths increment (Battleground.cpp:1671-1675), and a killer with no row in
+// the arena table is a no-op, matching UpdatePlayerScore for absent players
+// (Battleground.cpp:1225-1228). The killPlayer tail calls this for every
+// lethal path, so melee, spell, pet, and ranged kills all credit here and no
+// damage path credits killing blows inline.
+func (s *Server) creditArenaKillingBlow(victim, killer *session) {
+	if s == nil || victim == nil || killer == nil || killer.player == nil {
+		return
+	}
+	if killer == victim {
+		return
+	}
+	arena := s.findArenaStateForPlayer(killer.playerGUID)
+	if arena == nil {
+		return
+	}
+	arena.mu.Lock()
+	defer arena.mu.Unlock()
+	if arena.Status != ArenaStatusInProgress {
+		return
+	}
+	if sc, ok := arena.Scores[killer.playerGUID]; ok {
+		sc.KillingBlows++
+	}
+}
+
 // updateArenaHealingScore updates healing done for a player in the arena score table.
 func (s *Server) updateArenaHealingScore(healer *session, healing uint32) {
 	if s == nil || healer == nil || healer.player == nil {

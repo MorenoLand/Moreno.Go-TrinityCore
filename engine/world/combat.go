@@ -2044,15 +2044,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				if duelDefeatOnDamage(vicSess, s.playerGUID, damage, victimHealth) {
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
 				} else if victimHealth > 0 && damage+1 >= victimHealth {
-					if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
-						arena.mu.Lock()
-						if arena.Status == ArenaStatusInProgress && s.playerGUID != vicSess.playerGUID {
-							if sc, ok := arena.Scores[s.playerGUID]; ok {
-								sc.KillingBlows++
-							}
-						}
-						arena.mu.Unlock()
-					}
+					// Arena killing blows are credited by the killPlayer
+					// tail below (creditArenaKillingBlow), not here: an
+					// inline credit would double-count now that melee,
+					// spell, and pet kills credit through the same tail.
 					vicSess.player.Health = 0
 					vicSess.sendPlayerUpdate()
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
