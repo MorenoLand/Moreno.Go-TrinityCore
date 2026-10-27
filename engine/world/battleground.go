@@ -2089,10 +2089,8 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
-		if state.Map == WSGMapID {
-			if matchStart := s.server.peekWSGMatchStartTime(state.Map); !matchStart.IsZero() {
-				startTime = matchStart
-			}
+		if matchStart := s.server.peekNonArenaBGMatchStartTime(state.Map); !matchStart.IsZero() {
+			startTime = matchStart
 		}
 		clientInstanceID = s.server.peekBGClientInstanceID(s.bgData.InstanceID)
 	}
@@ -2105,9 +2103,11 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// 0 horde, Player::SetBGTeam).
 		// StartTime is the live match clock, not the login time: C++ Time2
 		// is time from bg start (BattlegroundMgr.cpp:225), so a login-time
-		// stamp resets the client's elapsed timer on every relog. The
-		// other five non-arena maps carry no start clock, so they keep
-		// the login time. ClientInstanceID is the pop-claimed display id
+		// stamp resets the client's elapsed timer on every relog. WSG's
+		// clock arms lazily on first flag interaction and the other five
+		// non-arena clocks arm at state creation, so a non-zero peek above
+		// replaces the login-time stamp; a zero peek (pre-first-interaction
+		// WSG) keeps it. ClientInstanceID is the pop-claimed display id
 		// for the persisted internal id; arenas keep 0 (arenas have no
 		// client-instance ids, BattlegroundMgr.cpp:325-328).
 		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: startTime, ClientInstanceID: clientInstanceID, ArenaFaction: 1 - uint8(s.bgData.Team)}
@@ -2148,6 +2148,74 @@ func (s *Server) peekWSGMatchStartTime(mapID uint32) time.Time {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return state.MatchStartTime
+}
+
+// peekNonArenaBGMatchStartTime reads the per-map match clock for the six
+// non-arena maps without creating a state, following peekNonArenaBGState's
+// registry pattern (AV under objectsMu, the rest under their own registry
+// mu). WSG delegates to peekWSGMatchStartTime (lazily armed, zero before
+// the first flag interaction); AB/EOTS/AV/SA/IC read the MatchStartTime
+// armed at state creation. Zero when no state exists.
+func (s *Server) peekNonArenaBGMatchStartTime(mapID uint32) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	switch mapID {
+	case WSGMapID:
+		return s.peekWSGMatchStartTime(mapID)
+	case ABMapID:
+		s.abMu.RLock()
+		state := s.abState[mapID]
+		s.abMu.RUnlock()
+		if state == nil {
+			return time.Time{}
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.MatchStartTime
+	case AVMapID:
+		s.objectsMu.RLock()
+		state := s.avState[mapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return time.Time{}
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.MatchStartTime
+	case EOTSMapID:
+		s.eotsMu.RLock()
+		state := s.eotsState[mapID]
+		s.eotsMu.RUnlock()
+		if state == nil {
+			return time.Time{}
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.MatchStartTime
+	case SAMapID:
+		s.saMu.RLock()
+		state := s.saState[mapID]
+		s.saMu.RUnlock()
+		if state == nil {
+			return time.Time{}
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.MatchStartTime
+	case ICMapID:
+		s.icMu.RLock()
+		state := s.icState[mapID]
+		s.icMu.RUnlock()
+		if state == nil {
+			return time.Time{}
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.MatchStartTime
+	default:
+		return time.Time{}
+	}
 }
 
 // peekNonArenaBGState peeks the per-map battleground state for the six

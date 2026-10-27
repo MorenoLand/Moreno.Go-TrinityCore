@@ -173,6 +173,7 @@ type saBattlegroundState struct {
 	GateDestroyed        bool
 	Winner               int8      // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
 	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	MatchStartTime       time.Time // Go form of C++ m_StartTime (Battleground.cpp:222, accumulated elapsed): armed at state creation, since Go has no StartBattleground/STATUS_IN_PROGRESS transition for this map; it spans both rounds, as C++ resets m_StartTime only on Reset (Battleground.cpp:939), not per round. The restore slot anchors its elapsed clock here instead of the login time.
 	PrematureCountDown   bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs     int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	DemolishersDestroyed map[uint64]uint32
@@ -235,6 +236,7 @@ func (s *Server) getOrCreateSAState(mapID uint32) *saBattlegroundState {
 			RoundLength:          SARoundLength,
 			SecondWarmupLength:   SASecondWarmupLength,
 			EndRoundTimer:        SARoundLength,
+			MatchStartTime:       time.Now(),
 			Winner:               -1,
 			DemolishersDestroyed: make(map[uint64]uint32),
 			GatesDestroyed:       make(map[uint64]uint32),

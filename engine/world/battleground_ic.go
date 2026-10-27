@@ -378,6 +378,7 @@ type icBattlegroundState struct {
 	ResourceTickDuration   time.Duration
 	Winner                 int8      // -1: ongoing, 0: Alliance, 1: Horde
 	EndedAt                time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	MatchStartTime         time.Time // Go form of C++ m_StartTime (Battleground.cpp:222, accumulated elapsed): armed at state creation, since Go has no StartBattleground/STATUS_IN_PROGRESS transition for this map; the restore slot anchors its elapsed clock here instead of the login time.
 	PrematureCountDown     bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs       int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	VehiclesDestroyed      map[uint64]uint32
@@ -453,6 +454,7 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 			HordeBossAlive:         true,
 			BannerCaptureDuration:  ICDefaultBannerCaptureDuration,
 			ResourceTickDuration:   ICResourceTickDuration,
+			MatchStartTime:         time.Now(),
 			Winner:                 -1,
 			VehiclesDestroyed:      make(map[uint64]uint32),
 			StopTicker:             make(chan struct{}),

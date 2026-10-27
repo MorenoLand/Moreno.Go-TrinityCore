@@ -146,6 +146,7 @@ type eotsBattlegroundState struct {
 	HonorTicsAccum      [2]uint32 // m_HonorScoreTics per team (AddPoints arm)
 	Winner              int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
 	EndedAt             time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	MatchStartTime      time.Time // Go form of C++ m_StartTime (Battleground.cpp:222, accumulated elapsed): armed at state creation, since Go has no StartBattleground/STATUS_IN_PROGRESS transition for this map; the restore slot anchors its elapsed clock here instead of the login time.
 	PrematureCountDown  bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs    int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	CenterX             float32
@@ -191,13 +192,14 @@ func (s *Server) getOrCreateEOTSState(mapID uint32) *eotsBattlegroundState {
 	state, ok := s.eotsState[mapID]
 	if !ok {
 		state = &eotsBattlegroundState{
-			MapID:        mapID,
-			MaxResources: EOTSMaxResources,
-			FlagState:    EOTSFlagStateAtCenter,
-			Winner:       -1,
-			CenterX:      2174.0,
-			CenterY:      1569.0,
-			CenterZ:      1160.0,
+			MapID:          mapID,
+			MaxResources:   EOTSMaxResources,
+			FlagState:      EOTSFlagStateAtCenter,
+			Winner:         -1,
+			MatchStartTime: time.Now(),
+			CenterX:        2174.0,
+			CenterY:        1569.0,
+			CenterZ:        1160.0,
 		}
 		// Initialize the 4 towers
 		towerCoords := [EOTSTowerMax][3]float32{

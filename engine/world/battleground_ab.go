@@ -155,6 +155,7 @@ type abBattlegroundState struct {
 	CaptureDuration      time.Duration
 	Winner               int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
 	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	MatchStartTime       time.Time // Go form of C++ m_StartTime (Battleground.cpp:222, accumulated elapsed): armed at state creation, since Go has no StartBattleground/STATUS_IN_PROGRESS transition for this map; the restore slot anchors its elapsed clock here instead of the login time.
 	PrematureCountDown   bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs     int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	AllianceAccumMs      int64
@@ -230,6 +231,7 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 			MaxResources:    ABMaxResources,
 			CaptureDuration: ABBannerCaptureTimeDefault,
 			Winner:          -1,
+			MatchStartTime:  time.Now(),
 		}
 		// Initialize the 5 nodes in neutral state
 		nodeCoords := [ABNodeMax][3]float32{
