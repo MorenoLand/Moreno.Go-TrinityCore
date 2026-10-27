@@ -758,6 +758,7 @@ type bgQueueEntry struct {
 	ArenaGroupJoin   bool   // entry was queued by the group join path (ginfo group, not a 1-player solo ginfo)
 	MapID            uint32
 	StartTime        time.Time
+	InviteTime       time.Time // sim-pop fire time: RemoveInviteTime (BattlegroundQueue.cpp:451), 0 = never invited
 }
 
 type battlegroundLoginData struct {

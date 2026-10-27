@@ -659,6 +659,7 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		} else {
 			e.MapID = battlegroundMapForType(bgTypeID)
 		}
+		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
 		// (BattlegroundQueue.cpp:238, called per player from InviteGroupToBG:463):
@@ -679,9 +680,9 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// The slot/instance/join-time guard is the Go form of
 		// IsPlayerInvited's instance+remove-time match: it drops the re-send
 		// if the slot was left, reused, or the invite already expired.
-		// (The re-sent packet carries the full accept window, not C++'s
-		// INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME: threading a
-		// remaining-time would need pop-time state Go doesn't keep.)
+		// (The re-sent packet now carries the remaining window via
+		// InviteTime, matching C++'s INVITE_ACCEPT_WAIT_TIME -
+		// INVITATION_REMIND_TIME at the remind.)
 		remindID := instanceID
 		time.AfterFunc(bgInvitationRemindTime, func() {
 			if s == nil || !s.playerLoaded || s.player == nil {
@@ -764,6 +765,7 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 		// Battleground object).
 		e.InstanceID = instanceID
 		e.MapID = battlegroundMapForType(battlegroundAA)
+		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// Same invite-time recording as simulateBGQueueInvite
 		// (BattlegroundQueue.cpp:463): arenas key by the rated flag
@@ -1943,10 +1945,21 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 		buf.WriteU64(0)
 		// time to remove: C++ sends getMSTimeDiff(now, ginfo.RemoveInviteTime)
 		// (BattleGroundHandler.cpp:585), with RemoveInviteTime = invite +
-		// INVITE_ACCEPT_WAIT_TIME (Battleground.h:150). The simulated
-		// invite fires this status immediately, so the full accept window
-		// stands.
-		buf.WriteU32(uint32(bgInviteAcceptWindow.Milliseconds())) // time to remove
+		// INVITE_ACCEPT_WAIT_TIME (Battleground.h:150); the remind re-send
+		// carries INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME
+		// (BattlegroundQueue.cpp:1039). InviteTime is the Go RemoveInviteTime
+		// anchor, so a later status request reads the shrinking remainder,
+		// not the full window; an unstamped entry falls back to the full
+		// window, and the remainder floors at 0 past expiry.
+		remaining := bgInviteAcceptWindow
+		if !entry.InviteTime.IsZero() {
+			if elapsed := time.Since(entry.InviteTime); elapsed < remaining {
+				remaining -= elapsed
+			} else {
+				remaining = 0
+			}
+		}
+		buf.WriteU32(uint32(remaining.Milliseconds())) // time to remove
 	case BGStatusInProgress:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
