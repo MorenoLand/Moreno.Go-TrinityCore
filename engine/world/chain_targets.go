@@ -48,6 +48,43 @@ func chainSelectionEligibleTarget(target uint32) bool {
 	return false
 }
 
+// targetObjectTarget reports the TARGET-reference UNIT object targets
+// (SpellInfo.cpp:218-330): the DEFAULT-category subset of the chain set
+// above. SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs for
+// these regardless of ChainTarget, adding the explicit unit target via
+// AddUnitTarget ahead of the chain search — so a ChainTarget-1 effect
+// still adds the wire primary even though SelectImplicitChainTargets
+// (Spell.cpp:1582) adds no jumps for it. Nearby targets (2/3/4/38/58)
+// are excluded: their target is the nearby pick, not the wire target.
+// Caster-object targets (1/5/27/92/94/96-103) are excluded: their target
+// is the caster. GO-typed TARGET effects (23/26) add the explicit object
+// target through the same arm, but a unit wire target with a GO-typed
+// effect is a malformed combination with no incidence, so it stays out
+// of the unit-primary scope. The area-category TARGET effect (61) is
+// excluded: it selects through the area arm, not the object arm.
+func targetObjectTarget(target uint32) bool {
+	switch target {
+	case 6, 21, 25, 35, 45, 57, 90, 95: // TARGET_OBJECT_TYPE_UNIT + TARGET_REFERENCE_TYPE_TARGET
+		return true
+	}
+	return false
+}
+
+// spellHasTargetObjectEffect reports whether any live effect of the spell
+// carries a TARGET-reference UNIT object implicit target, the scope of
+// the plain-primary rejoin on the triggered path.
+func spellHasTargetObjectEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 && eff.Aura == 0 {
+			continue
+		}
+		if targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB) {
+			return true
+		}
+	}
+	return false
+}
+
 // chainCheckType maps a chain-eligible implicit target to its
 // SpellImplicitTargetInfo::GetCheckType (the SelectionCheckType column of
 // the SpellInfo.cpp:218-330 table) — the predicate

@@ -17178,6 +17178,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			chainUnitPrimary = targetGUID
 		}
 	}
+	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) adds
+	// the explicit unit target via AddUnitTarget for every TARGET-object
+	// effect regardless of ChainTarget, so a spell with no chaining
+	// effect at all still holds the wire primary as a merged entry — and
+	// the area/cone switch below still drops it. This rejoin is
+	// independent of the chain gate above: it is set whenever any live
+	// effect carries a TARGET-object implicit target, and it threads
+	// only into those effects (never into nearby, caster-object, or
+	// area-category effects, whose targets are not the wire target).
+	// A gameobject wire target takes the AddGOTarget arm instead and
+	// stays out, like the chain primary.
+	plainObjectPrimary := uint64(0)
+	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && spellHasTargetObjectEffect(spell) {
+		plainObjectPrimary = targetGUID
+	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
 	// casts too — SelectSpellTargets carries no IsTriggered gate, so the
 	// area family replaces the wire-only hit list with the area search,
@@ -17384,6 +17399,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, chainUnitPrimary)
 		}
 	}
+	// The plain object primary rejoins the same way: the area/cone
+	// switch dropped it from the roll list and the GO packet even though
+	// C++ holds it as a merged entry (Spell.cpp:1575, AddUnitTarget
+	// merge at :2117). Dedup keeps the already-listed cases (non-area
+	// spells, nearby picks, primaries inside the area list, and the
+	// chain primary, which is the same GUID when both are set)
+	// unchanged, and the threat leg below reads the rejoined list.
+	if plainObjectPrimary != 0 {
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[plainObjectPrimary]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, plainObjectPrimary)
+		}
+	}
 	for _, guid := range triggeredRollTargets {
 		if guid == 0 || guid == s.playerGUID {
 			continue
@@ -17546,6 +17577,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if _, dup := selectionSet[chainUnitPrimary]; !dup {
 			if _, missed := triggeredMiss[chainUnitPrimary]; !missed {
 				s.breakHitBySpellAuras(ctx, spell, chainUnitPrimary)
+			}
+		}
+	}
+	// The rejoined plain primary breaks auras like any merged entry
+	// (PreprocessTarget runs per m_UniqueTargetInfo entry, Spell.cpp:2334);
+	// a primary already in the selection list breaks once, via that list,
+	// and one already broken as the chain primary is not broken twice.
+	if plainObjectPrimary != 0 && plainObjectPrimary != chainUnitPrimary {
+		if _, dup := selectionSet[plainObjectPrimary]; !dup {
+			if _, missed := triggeredMiss[plainObjectPrimary]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, plainObjectPrimary)
 			}
 		}
 	}
@@ -17790,6 +17832,36 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 			}
 		}
+		// The plain object primary threads only into TARGET-object
+		// effects (Spell.cpp:1575 adds it with each such effect's own
+		// mask), with jumpIndex 0 (unscaled, like a seed entry). When a
+		// chaining effect exists, the chain block above already threaded
+		// the same GUID into every chain-eligible effect — TARGET-object
+		// effects included — so this block runs only when no chain
+		// primary was set; otherwise the primary would double-list.
+		// Dedup vs the seed and miss handling mirror the chain block.
+		if plainObjectPrimary != 0 && chainUnitPrimary == 0 && (targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
+			if _, dup := seedSet[plainObjectPrimary]; !dup {
+				target := plainObjectPrimary
+				reflected := false
+				take := true
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+						reflected = true
+						target = s.playerGUID
+					} else {
+						take = false
+					}
+				}
+				if take {
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, reflected: reflected})
+				}
+			}
+		}
 		// Spell::DoEffectOnLaunchTarget AOE legs (Spell.cpp:7749-7758) run
 		// per effect for area-targeting damage effects: the victim's
 		// Unit::CalculateAOEAvoidance product per target, and for player
@@ -17835,6 +17907,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if chainUnitPrimary != 0 && chainUnitPrimary != s.playerGUID {
 				if _, dup := counted[chainUnitPrimary]; !dup {
 					counted[chainUnitPrimary] = struct{}{}
+					aoeCapDivisor++
+				}
+			}
+			// The plain primary counts too: targetAmount is the whole
+			// m_UniqueTargetInfo size (Spell.cpp:7755), and the primary
+			// is a merged entry (Spell.cpp:1575), not a jump; dedup
+			// folds it with the chain primary when both are set.
+			if plainObjectPrimary != 0 && plainObjectPrimary != s.playerGUID {
+				if _, dup := counted[plainObjectPrimary]; !dup {
+					counted[plainObjectPrimary] = struct{}{}
 					aoeCapDivisor++
 				}
 			}
