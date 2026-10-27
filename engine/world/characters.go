@@ -1506,8 +1506,10 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.player == nil {
 		return false
 	}
-	// Player::RemoveFromWorld (Player.cpp:1976-1979): a far teleport releases
-	// the active loot, which also clears the UNIT_FLAG_LOOTING bit set at open.
+	// Fallback for paths reaching the ack without teleportToOptions: the C++-faithful
+	// release already ran at teleport initiation (commands.go, while the player was still
+	// on the origin map); in the normal path activeLoot is already nil here and this is
+	// a no-op apart from clearing a stuck UNIT_FLAG_LOOTING bit.
 	s.releaseActiveLoot()
 	originOrientation := s.farTeleportOriginOrientation
 	s.worldReady.Store(false)

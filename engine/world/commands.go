@@ -329,6 +329,14 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		s.farTeleportOriginInstanceID = s.player.InstanceID
 		s.nearTeleportPending = false
 		s.nearTeleportDest = nearTeleportDestination{}
+		// Player::RemoveFromWorld (Player.cpp:1976-1979) via Map::RemovePlayerFromMap
+		// (Map.cpp:1016): a far teleport releases the active loot while the player is
+		// still on the origin map at the origin position, before SMSG_NEW_WORLD — so the
+		// creature/gameobject cleanup legs evaluate the origin map and distance (a corpse
+		// just looted is adjacent, so they run). Go has no RemoveFromWorld step and
+		// overwrites player.Map/coords below, so the release must run here: by
+		// completeWorldPort time the map/distance gates would suppress those legs.
+		s.releaseActiveLoot()
 		s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation = mapID, x, y, z, orientation
 	}
 	if !sameMap {
