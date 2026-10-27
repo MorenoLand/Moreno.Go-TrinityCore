@@ -1319,17 +1319,32 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 
 	// Player.cpp:5127-5128 (RepopAtGraveyard): a battleground member's grave
 	// comes from bg->GetClosestGraveyard, never the standing map, so an
-	// off-map roster member repops to the IC/SA node grave; a standing IC/SA
-	// map keeps its own dispatch.
+	// off-map roster member repops to the BG node grave; a standing BG map
+	// keeps its own dispatch.
 	repopMap := s.player.Map
-	if repopMap != ICMapID && repopMap != SAMapID {
+	if repopMap != ICMapID && repopMap != SAMapID && repopMap != AVMapID && repopMap != WSGMapID && repopMap != ABMapID && repopMap != EOTSMapID {
 		if s.hasActiveBGMap(ICMapID) {
 			repopMap = ICMapID
 		} else if s.hasActiveBGMap(SAMapID) {
 			repopMap = SAMapID
+		} else if s.hasActiveBGMap(AVMapID) {
+			repopMap = AVMapID
+		} else if s.hasActiveBGMap(WSGMapID) {
+			repopMap = WSGMapID
+		} else if s.hasActiveBGMap(ABMapID) {
+			repopMap = ABMapID
+		} else if s.hasActiveBGMap(EOTSMapID) {
+			repopMap = EOTSMapID
 		}
 	}
-	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, repopMap, s.player.Zone, playerTeam(s.player.Race))
+	team := playerTeam(s.player.Race)
+	var grave wotlk.WorldSafeLoc
+	var ok bool
+	if loc, found := s.server.closestRepopGraveyard(s.player.X, s.player.Y, s.player.Z, repopMap, team); found {
+		grave, ok = loc, true
+	} else {
+		grave, ok = s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, repopMap, s.player.Zone, team)
+	}
 	if ok {
 		if s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation) {
 			if shouldResurrect {
@@ -1393,6 +1408,33 @@ func playerTeam(race uint8) uint32 {
 		return teamHorde
 	}
 	return 0
+}
+
+// closestRepopGraveyard is the battleground leg of Player::RepopAtGraveyard
+// (Player.cpp:5127-5128): when the repop map is a battleground map, the grave
+// comes from that battleground's GetClosestGraveyard override, never the
+// generic zone lookup. It is deliberately separate from closestGraveyard (the
+// ObjectMgr generic path the spirit-healer and corpse-query legs use), so the
+// BG overrides do not leak into those legs. A false return falls through to
+// closestGraveyard, which still carries the IC/SA dispatch for its own
+// callers.
+func (s *Server) closestRepopGraveyard(x, y, z float32, mapID, team uint32) (wotlk.WorldSafeLoc, bool) {
+	switch mapID {
+	case ICMapID:
+		return s.closestICGraveyard(x, y, team)
+	case SAMapID:
+		return s.closestSAGraveyard(x, y, z, team)
+	case AVMapID:
+		return s.closestAVGraveyard(x, y, team)
+	case WSGMapID:
+		return s.closestWSGraveyard(team)
+	case ABMapID:
+		return s.closestABGraveyard(x, y, team)
+	case EOTSMapID:
+		return s.closestEYGraveyard(x, y, z, team)
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
 }
 
 // closestGraveyard mirrors ObjectMgr::GetClosestGraveyard.

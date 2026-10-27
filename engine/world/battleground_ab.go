@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -170,6 +171,65 @@ type abBattlegroundState struct {
 	// script (BattlegroundAB.cpp:707-713).
 	Scores500Disadvantage [2]bool
 	StopAccumulation      chan struct{}
+}
+
+// ABGraveyardIDs mirrors BG_AB_GraveyardIds (BattlegroundAB.h:237): the five
+// dynamic nodes in node order, then the per-team starting graves.
+var abGraveyardIDs = [7]uint32{895, 894, 893, 897, 896, 898, 899}
+
+// closestABGraveyard mirrors BattlegroundAB::GetClosestGraveyard
+// (BattlegroundAB.cpp:638-669): the closest 2D graveyard among the nodes the
+// team occupies (m_Nodes[i] == teamIndex+3, i.e. Go's controlled states), or
+// the per-team starting grave when the team occupies no node. A false return
+// lets the generic zone path run (C++ always returns an entry; Go falls back
+// when the DBC rows are missing).
+func (s *Server) closestABGraveyard(x, y float32, team uint32) (wotlk.WorldSafeLoc, bool) {
+	var occupied uint32
+	var fallbackIdx uint32
+	switch team {
+	case teamAlliance:
+		occupied, fallbackIdx = ABNodeStateControlledAlliance, 5
+	case teamHorde:
+		occupied, fallbackIdx = ABNodeStateControlledHorde, 6
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	ab := s.getOrCreateABState(ABMapID)
+	if ab == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	ab.mu.Lock()
+	states := make([]uint32, ABNodeMax)
+	for i := uint32(0); i < ABNodeMax; i++ {
+		states[i] = ab.Nodes[i].State
+	}
+	ab.mu.Unlock()
+	var best wotlk.WorldSafeLoc
+	bestDist := float32(999999.0)
+	found := false
+	for i := uint32(0); i < ABNodeMax; i++ {
+		if states[i] != occupied {
+			continue
+		}
+		loc, ok, err := s.Data.WorldSafeLoc(abGraveyardIDs[i])
+		if err != nil || !ok {
+			continue
+		}
+		if dist := (loc.X-x)*(loc.X-x) + (loc.Y-y)*(loc.Y-y); !found || dist < bestDist {
+			best, bestDist, found = loc, dist, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	loc, ok, err := s.Data.WorldSafeLoc(abGraveyardIDs[fallbackIdx])
+	if err != nil || !ok {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	return loc, true
 }
 
 func isABBanner(entry uint32) bool {

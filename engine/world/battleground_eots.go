@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -154,6 +155,62 @@ type eotsBattlegroundState struct {
 	CenterZ             float32
 	AllianceAccumMs     int64
 	HordeAccumMs        int64
+}
+
+// EOTSGraveyardIDs mirrors m_CapturingPointTypes[].GraveyardId
+// (BattlegroundEY.h:345) in Go tower order: Mage Tower, Draenei Ruins, Blood
+// Elf Tower, Fel Reaver Ruins.
+var eotsGraveyardIDs = [EOTSTowerMax]uint32{1108, 1107, 1106, 1105}
+
+// closestEYGraveyard mirrors BattlegroundEY::GetClosestGraveyard
+// (BattlegroundEY.cpp:872-916): the per-team main grave seeds the minimum 3D
+// distance, and every tower the team owns under control replaces it when
+// strictly closer. Go collapses C++'s capture-progress point states into the
+// controlled states, so a tower mid-capture still counts for its previous
+// owner until the flip. A false return lets the generic zone path run (C++
+// returns null when the main grave is missing; Go falls back the same way).
+func (s *Server) closestEYGraveyard(x, y, z float32, team uint32) (wotlk.WorldSafeLoc, bool) {
+	var controlled uint32
+	var mainID uint32
+	switch team {
+	case teamAlliance:
+		controlled, mainID = EOTSTowerStateControlledAlliance, 1103
+	case teamHorde:
+		controlled, mainID = EOTSTowerStateControlledHorde, 1104
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	eots := s.getOrCreateEOTSState(EOTSMapID)
+	if eots == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	eots.mu.Lock()
+	states := make([]uint32, EOTSTowerMax)
+	for i := uint32(0); i < EOTSTowerMax; i++ {
+		states[i] = eots.Towers[i].State
+	}
+	eots.mu.Unlock()
+	best, found, err := s.Data.WorldSafeLoc(mainID)
+	if err != nil || !found {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	bestDist := (best.X-x)*(best.X-x) + (best.Y-y)*(best.Y-y) + (best.Z-z)*(best.Z-z)
+	for i := uint32(0); i < EOTSTowerMax; i++ {
+		if states[i] != controlled {
+			continue
+		}
+		loc, ok, err := s.Data.WorldSafeLoc(eotsGraveyardIDs[i])
+		if err != nil || !ok {
+			continue
+		}
+		if dist := (loc.X-x)*(loc.X-x) + (loc.Y-y)*(loc.Y-y) + (loc.Z-z)*(loc.Z-z); dist < bestDist {
+			best, bestDist = loc, dist
+		}
+	}
+	return best, true
 }
 
 func isEOTSGameObject(entry uint32) bool {

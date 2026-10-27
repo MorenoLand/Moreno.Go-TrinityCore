@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -115,6 +116,47 @@ type wsgBattlegroundState struct {
 	// on the first flag interaction of the match.
 	MatchStartTime   time.Time
 	MatchMinuteTimer *time.Timer
+}
+
+// closestWSGraveyard mirrors BattlegroundWS::GetClosestGraveyard
+// (BattlegroundWS.cpp:798-817): an in-progress match returns the per-team main
+// graveyard, any other status the flagroom graveyard, so a player dying in the
+// preparation phase cannot teleport outside the flagroom and run while the
+// doors are closed. Go has no STATUS_WAIT_JOIN to STATUS_IN_PROGRESS
+// transition for WSG, so Winner == -1 (ongoing) stands in for in-progress and
+// Winner >= 0 (ended, including draws) for the flagroom leg. A false return
+// lets the generic zone path run (C++ always returns an entry; Go falls back
+// when the DBC row is missing).
+func (s *Server) closestWSGraveyard(team uint32) (wotlk.WorldSafeLoc, bool) {
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	wsg := s.getOrCreateWSGState(WSGMapID)
+	if wsg == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	wsg.mu.Lock()
+	inProgress := wsg.Winner < 0
+	wsg.mu.Unlock()
+	var id uint32
+	if team == teamAlliance {
+		if inProgress {
+			id = 771
+		} else {
+			id = 769
+		}
+	} else {
+		if inProgress {
+			id = 772
+		} else {
+			id = 770
+		}
+	}
+	loc, found, err := s.Data.WorldSafeLoc(id)
+	if err != nil || !found {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	return loc, true
 }
 
 func isWSGFlag(entry uint32) bool {

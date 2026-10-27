@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -239,6 +240,63 @@ type avBattlegroundState struct {
 	PrematureCountDown     bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs       int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	StopTicker             chan struct{}
+}
+
+// AVGraveyardIDs mirrors BG_AV_GraveyardIds (BattlegroundAV.h:1317): the seven
+// graveyard nodes in node order, then the per-team main graves.
+var avGraveyardIDs = [9]uint32{751, 689, 729, 169, 749, 690, 750, 611, 610}
+
+// closestAVGraveyard mirrors BattlegroundAV::GetClosestGraveyard
+// (BattlegroundAV.cpp:1109-1137): the per-team main grave seeds the minimum
+// 2D distance, and every graveyard node (0..Frostwolf Hut) the team owns in
+// the controlled state replaces it when strictly closer. C++ Owner is the team
+// and State POINT_CONTROLED; Go encodes them as AVTeam*/AVNodeStateControlled.
+// A false return lets the generic zone path run (C++ always returns an entry;
+// Go falls back when the DBC rows are missing).
+func (s *Server) closestAVGraveyard(x, y float32, team uint32) (wotlk.WorldSafeLoc, bool) {
+	var teamIndex uint8
+	var mainIdx uint32
+	switch team {
+	case teamAlliance:
+		teamIndex, mainIdx = AVTeamAlliance, 7
+	case teamHorde:
+		teamIndex, mainIdx = AVTeamHorde, 8
+	default:
+		return wotlk.WorldSafeLoc{}, false
+	}
+	if s == nil || s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	av := s.getOrCreateAVState(AVMapID)
+	if av == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	av.mu.Lock()
+	owners := make([]uint8, AVNodeFrostwolfHut+1)
+	states := make([]uint8, AVNodeFrostwolfHut+1)
+	for i := uint32(0); i <= AVNodeFrostwolfHut; i++ {
+		owners[i] = av.Nodes[i].Owner
+		states[i] = av.Nodes[i].State
+	}
+	av.mu.Unlock()
+	best, found, err := s.Data.WorldSafeLoc(avGraveyardIDs[mainIdx])
+	if err != nil || !found {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	bestDist := (best.X-x)*(best.X-x) + (best.Y-y)*(best.Y-y)
+	for i := uint32(0); i <= AVNodeFrostwolfHut; i++ {
+		if owners[i] != teamIndex || states[i] != AVNodeStateControlled {
+			continue
+		}
+		loc, ok, err := s.Data.WorldSafeLoc(avGraveyardIDs[i])
+		if err != nil || !ok {
+			continue
+		}
+		if dist := (loc.X-x)*(loc.X-x) + (loc.Y-y)*(loc.Y-y); dist < bestDist {
+			best, bestDist = loc, dist
+		}
+	}
+	return best, true
 }
 
 func isAVGameObject(entry uint32) bool {
