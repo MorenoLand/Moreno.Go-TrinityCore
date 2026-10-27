@@ -3691,6 +3691,45 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) +
+	// SelectImplicitConeTargets (Spell.cpp:1176) for a pet caster: GO-area
+	// (51/52) and GO-cone (108) legs join the hit list like the unit area
+	// legs above, via the creature twins (go_area_cone_targets.go) — the
+	// pet path previously selected no GO targets, so a pet GO-area/cone
+	// spell named no gameobject in its GO packet. Placement mirrors the
+	// inline path: after the nearby rebuild above, which would have
+	// dropped legs appended before it, and ahead of the chain arm below
+	// (area/cone selection never chains, and the pet chain anchor is
+	// targetGUID, so these legs cannot move it). GO GUIDs take no unit leg
+	// below, like the nearby GO pick above — the pet path runs no GO-arm
+	// dispatch, same as the inline path — and ride the GO packet only;
+	// the verdict passes already treat an unresolvable GUID as a hit, and
+	// the aura-scaling pass drops them only under the same full-mask
+	// shape the twin drops them under, so no new downstream hazard class
+	// arrives with these legs.
+	if isGOAreaSpell(spell) || isGOConeSpell(spell) {
+		appendPetGOGUID := func(goGUID uint64) {
+			if goGUID == 0 {
+				return
+			}
+			for _, hitGUID := range hitTargets {
+				if hitGUID == goGUID {
+					return
+				}
+			}
+			hitTargets = append(hitTargets, goGUID)
+		}
+		if isGOAreaSpell(spell) {
+			for _, goGUID := range s.server.creatureGOAreaTargets(ctx, motion, spell, spell.ID, hasDest, dx, dy, dz, targetGUID) {
+				appendPetGOGUID(goGUID)
+			}
+		}
+		if isGOConeSpell(spell) {
+			for _, goGUID := range s.server.creatureGOConeTargets(ctx, motion, spell, spell.ID) {
+				appendPetGOGUID(goGUID)
+			}
+		}
+	}
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) for a pet
 	// caster: chain selection runs out of the nearby pick (Spell.cpp:1173)
 	// and the explicit object target (Spell.cpp:1575); the twin (boss_ai.go)
