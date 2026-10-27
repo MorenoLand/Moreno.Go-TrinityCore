@@ -3047,7 +3047,7 @@ func (s *Server) bgAutoRemoveRemaining(mapID uint32) uint32 {
 // (Player.cpp:22475-22499) casts deserter and tracks desertion only while
 // the BG is STATUS_IN_PROGRESS or STATUS_WAIT_JOIN, so without this flip a
 // player who stays to the end and then leaves — voluntarily or by the
-// auto-remove below — would wrongly take deserter. Called from each
+// auto-remove below — would wrongly take deserter. Slots match by their own MapID (set at invite fire, accept, or restore), so a merely-queued slot for another BG (MapID 0 or another map) is untouched: flipping it would strand that queue, since invite fire requires WaitQueue. Called from each
 // per-map end arm with that map's state mu held; it takes no BG mu, only
 // sessionsMu, following the endArena slot-flip precedent. No status packet
 // is sent here: the end arms broadcast the result already, and the leave
@@ -3063,7 +3063,7 @@ func (s *Server) markBGSlotsWaitLeave(mapID uint32) {
 			continue
 		}
 		for i := range sess.bgQueues {
-			if e := &sess.bgQueues[i]; e.Active && !e.IsArena {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID {
 				e.Status = BGStatusWaitLeave
 			}
 		}
