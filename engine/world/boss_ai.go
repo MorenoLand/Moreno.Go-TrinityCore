@@ -1854,9 +1854,31 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// target (Spell::AddUnitTarget, Spell.cpp:2152), and ride the GO
 		// packet plus the Eluna/trigger legs with it. Triggered casts run
 		// the arm too — SelectSpellTargets carries no IsTriggered gate.
+		// Deduped against hitTargets like the inline/pet legs: C++
+		// SearchChainTargets (Spell.cpp:1891) removes only the primary
+		// from its candidates, so a jump may land on a unit another
+		// leg already selected (an area/cone pick, or the channel
+		// target of a 77 effect), and C++ folds it into that unit's
+		// single m_UniqueTargetInfo entry — appending it twice here
+		// would double-list it in the GO packet and double-fire the
+		// per-hit legs below.
 		if spellKnown && targetGUID != 0 {
 			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
-				hitTargets = append(hitTargets, s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)...)
+				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask) {
+					if jumpGUID == 0 {
+						continue
+					}
+					alreadyHit := false
+					for _, guid := range hitTargets {
+						if guid == jumpGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if !alreadyHit {
+						hitTargets = append(hitTargets, jumpGUID)
+					}
+				}
 			}
 		}
 		// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
