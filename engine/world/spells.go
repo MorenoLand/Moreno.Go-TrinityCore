@@ -17370,6 +17370,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 			}
 		}
+		if eff.Effect == spellEffectSummonPet {
+			// Spell::EffectSummonPet (SpellEffects.cpp:3017) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target —
+			// the client arm's helper plus the summon-object log, same
+			// as the case-28 arm above. The no-owner SummonGuardian
+			// fallback has no Go twin on this player-session path,
+			// same as the client arm.
+			if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue)); guid != 0 {
+				s.sendSummonObjectLog(spellID, eff.Effect, guid)
+			}
+		}
 		if eff.Effect == spellEffectSummonObjectSlot1 || eff.Effect == spellEffectSummonObjectSlot2 || eff.Effect == spellEffectSummonObjectSlot3 || eff.Effect == spellEffectSummonObjectSlot4 {
 			// Spell::EffectSummonObject (SpellEffects.cpp:4215) runs once at
 			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target — the
@@ -17488,6 +17499,28 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// the recharge is idempotent, so the client arm's
 			// once-per-effect call is outcome-identical here.
 			s.handleEffectRechargeManaGem(ctx, spell)
+		}
+		if eff.Effect == spellEffectInebriate {
+			// Spell::EffectInebriate (SpellEffects.cpp:4143) runs at
+			// HIT_TARGET per player unit target; the client arm's
+			// helper iterates the target list itself, so it rides
+			// here once per effect over the miss-filtered effect
+			// targets. The cast-item entry (C++ m_CastItem's entry,
+			// 0 without a cast item) derives from this path's
+			// castItemGUID via the item_instance row, the same
+			// lookup the CheckItems block above runs.
+			inebriateGUIDs := make([]uint64, 0, len(effectTargets))
+			for _, et := range effectTargets {
+				inebriateGUIDs = append(inebriateGUIDs, et.guid)
+			}
+			var inebriateItemEntry uint32
+			if castItemGUID != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				var itemEntry int64
+				if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1`, int64(castItemGUID)).Scan(&itemEntry); err == nil {
+					inebriateItemEntry = uint32(itemEntry)
+				}
+			}
+			s.handleEffectInebriate(ctx, spell, eff, inebriateGUIDs, inebriateItemEntry)
 		}
 		if eff.Effect == spellEffectActivateObject || eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
 			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
@@ -18200,6 +18233,96 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// HIT_TARGET per unit target: the client arm's helper over
 				// the single miss-filtered target.
 				s.handleEffectAllowRenamePet(ctx, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectAddExtraAttacks {
+				// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4300) runs at
+				// HIT_TARGET per unit target: a live target with no pending
+				// extra attacks banks the effect value, logged. The known
+				// extra-attack spells resolve the target to the caster, and
+				// Go models the counter on the caster session only, so only
+				// the caster target banks — the client arm's shape. The
+				// finish-phase consume leg below then spends the bank;
+				// without this arm it spent nothing.
+				if effectTarget == s.playerGUID {
+					if amount := eff.CalcValueForLevel(spell, casterLevel); amount > 0 && s.grantExtraAttacks(uint32(amount)) {
+						s.sendExtraAttacksLog(spellID, effectIndex, uint32(amount))
+					}
+				}
+			} else if eff.Effect == spellEffectLearnPetSpell {
+				// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) runs at
+				// HIT_TARGET per unit target: the learn-spell arm's shape
+				// over the single miss-filtered target — a player target
+				// runs the EffectLearnSpell path, any pet unit target
+				// learns TriggerSpell into the pet spellbook through its
+				// owner's session; other targets learn nothing.
+				if s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.learnSpellEffectTarget(ctx, spellID, spell, eff, casterLevel)
+					} else if s.petNumberForGUID(effectTarget) != 0 {
+						s.teachPetSpell(ctx, eff.TriggerSpell)
+					} else if os := s.server.findSessionByPetGUID(effectTarget); os != nil {
+						os.teachPetSpell(ctx, eff.TriggerSpell)
+					}
+				}
+			} else if eff.Effect == spellEffectDismissPet {
+				// Spell::EffectDismissPet (SpellEffects.cpp:4201) runs at
+				// HIT_TARGET per unit target gated on the target being a
+				// pet: the client arm's shape — the owning session of a
+				// pet target dismisses it; non-pet targets dismiss nothing.
+				if s.server != nil {
+					if ts := s.server.findSessionByPetGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.handleDismissPet(ctx, spellID)
+					}
+				}
+			} else if eff.Effect == 55 { // SPELL_EFFECT_TAMECREATURE
+				// Spell::EffectTameCreature (SpellEffects.cpp:2960) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target (hunter-only, no live
+				// pet, non-pet creature gates ride along).
+				s.handleTameCreature(ctx, spellID, effectTarget)
+			} else if eff.Effect == spellEffectDuel {
+				// Spell::EffectDuel (SpellEffects.cpp:3795) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target (castID is 0 on this
+				// path, C++ m_cast_count for triggered casts).
+				s.handleDuelEffect(ctx, castID, spell, spellID, effectTarget)
+			} else if eff.Effect == spellEffectSendTaxi {
+				// Spell::EffectSendTaxi (SpellEffects.cpp:4656) runs at
+				// HIT_TARGET per player unit target: the target player's
+				// session runs the client arm's helper (the usual target
+				// is the caster, so this matches the client arm there; a
+				// foreign player target taxis that player, per C++).
+				if s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.handleEffectSendTaxi(ctx, eff)
+					}
+				}
+			} else if eff.Effect == spellEffectDiscoverTaxi {
+				// Spell::EffectDiscoverTaxi (SpellEffects.cpp:5390) runs at
+				// HIT_TARGET per player unit target: the target player's
+				// session runs the client arm's helper, same shape as
+				// the taxi arm above.
+				if s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.handleEffectDiscoverTaxi(ctx, eff)
+					}
+				}
+			} else if eff.Effect == spellEffectCreateTamedPet {
+				// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) runs at
+				// HIT_TARGET per player unit target: the client arm's
+				// helper over the single miss-filtered target — it
+				// self-gates to the caster (hunter, no pet, MiscValue
+				// creature entry), so non-caster targets are no-ops.
+				s.handleCreateTamedPet(ctx, spellID, effectTarget, eff)
+			} else if eff.Effect == spellEffectTalentSpecSelect {
+				// Spell::EffectActivateSpec (SpellEffects.cpp:5567) runs at
+				// HIT_TARGET per player unit target: the target player's
+				// session activates spec damage-1 via the client arm's
+				// helper (the usual target is the caster).
+				if s.server != nil {
+					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+						ts.activateSpec(ctx, uint8(eff.CalcValueForLevel(spell, casterLevel)-1))
+					}
+				}
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
