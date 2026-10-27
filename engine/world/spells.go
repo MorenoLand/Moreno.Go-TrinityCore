@@ -34068,7 +34068,17 @@ func (s *session) channelTick() {
 			if targetGUID != 0 && targetGUID != s.playerGUID {
 				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			}
-		case 6, 10, 136, 105: // auras and heals tick on the target or caster
+		case 10, 136:
+			if targetGUID != 0 && targetGUID != s.playerGUID {
+				if s.server != nil {
+					if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+						s.executeSpellHeal(ctx, targetGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
+					}
+				}
+			} else {
+				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
+			}
+		case 6, 105: // auras tick on the target or caster
 			if targetGUID != 0 && targetGUID != s.playerGUID {
 				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			} else {
