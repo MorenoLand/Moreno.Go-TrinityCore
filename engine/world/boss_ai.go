@@ -2338,8 +2338,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// (hunter-class gate plus CreateTamedPetFrom/SetMinion/talent
 	// init, unmodeled for creature casters); summon-pet 56 (the
 	// owner-player and totem-owner legs need a player owner, and the
-	// ownerless leg is the properties-67 SummonGuardian arm that
-	// creatureEffectSummonType already skips as unmodeled); skill 118
+	// ownerless leg is the properties-67 SummonGuardian arm with no
+	// effect-56 call site on this path (the guardian mechanism itself now
+	// rides creatureEffectSummonType for effect 28); skill 118
 	// (the C++ body is a log line only); the totem family rides the
 	// creatureEffectSummonType TOTEM leg already (totem pulses stay out,
 	// as documented there). The GO arms 86-89 ride the GO-target block
@@ -3009,20 +3010,22 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 // (the Go creature path's resolved dest, else the caster's position). Like
 // the Transmitted/InstaKill legs above, C++ executes effects in effect-index
 // order; this path groups by effect instead (documented approximation).
-// Only the default WILD/ALLY/UNK leg (SpellEffects.cpp:2319-2341) and the
-// TOTEM arm (SpellEffects.cpp:2319-2342, Map::SummonCreature Totem
-// creation, Object.cpp:1890-2003) are bridged: the SummonGuardian
-// (pet/guardian/minion titles, Flags&512), charm (PUPPET), vehicle,
-// lightwell, and minipet arms have no Go model — the multi-summon
-// property-ID list (SpellEffects.cpp:2225-2242)
-// keys on the effect's damage value, which this path does not model, so
-// numSummons is always 1 (documented delta). The timed/dead summon-type
-// choice (SpellEffects.cpp:2322) uses the bridge's 0-based scheme; the
-// ALLY owner/faction stamp (2333-2337), the Eluna::JustSummoned fire
-// (CreatureHooks.cpp:165-171 — the shared summonTempCreature funnel fires
-// CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) on the caster), and the
-// ExecuteLogEffectSummonObject SMSG_SPELLLOGEXECUTE write (SpellEffects.cpp
-// spell log convention, Transmitted-leg format) are twinned.
+// All dispatch arms are bridged through the shared summonTempCreature
+// funnel: the default WILD/ALLY/UNK leg (SpellEffects.cpp:2319-2341), the
+// SummonGuardian arms (Flags&512, PET/GUARDIAN/GUARDIAN2/MINION titles,
+// PET control — SpellEffects.cpp:5461), the VEHICLE-title arm (2273-2278),
+// the LIGHTWELL/TOTEM arm (2280-2301), the MINIPET arm (2303-2315), the
+// PUPPET arm (2353-2359) and the VEHICLE-control arm (2361-2400). The
+// multi-summon property-ID list (2225-2242) keys on the effect's calculated
+// value at the caster's level, and multi-spawns randomize within the effect
+// radius (default leg) or 5.0 (guardian leg). The timed/dead summon-type
+// choice uses the bridge's 0-based scheme; the ALLY owner/faction stamp
+// (2333-2337), the Eluna::JustSummoned fire (CreatureHooks.cpp:165-171 —
+// the shared funnel fires CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) on
+// the caster), and the ExecuteLogEffectSummonObject SMSG_SPELLLOGEXECUTE
+// write (Transmitted-leg format) are twinned. Stay-outs, per arm, are noted
+// at the arm sites (guardian level/follow-angle/27893/slot, minipet
+// immunity, puppet possess charm, vehicle ride cast).
 func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, dx, dy, dz float32) {
 	if s == nil || m == nil || s.Data == nil {
 		return
@@ -3036,6 +3039,10 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
 			duration = dur
 		}
+	}
+	baseX, baseY, baseZ := m.X, m.Y, m.Z
+	if hasDest {
+		baseX, baseY, baseZ = dx, dy, dz
 	}
 	for i := range spell.Effects {
 		eff := spell.Effects[i]
@@ -3053,61 +3060,208 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		if err != nil || !found {
 			continue
 		}
-		switch props.Control {
-		case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
-		default:
-			continue // PET/PUPPET/VEHICLE: guardian, charm, vehicle arms unmodeled
+		// C++ damage (SpellEffects.cpp:2225-2242): the effect's calculated
+		// value at the caster's level; the numSummons property-ID list keys
+		// on it, so the multi-summon count is modelable on this path.
+		value := eff.CalcValueForLevel(spell, uint32(lvl))
+		numSummons := uint32(1)
+		switch props.ID {
+		case 64, 61, 1101, 66, 648, 2301, 1061, 1261, 629, 181, 715, 1562, 833, 1161, 713:
+			if value > 0 {
+				numSummons = uint32(value)
+			}
 		}
-		if props.Flags&512 != 0 {
-			continue // SummonGuardian arm (SpellEffects.cpp:2248-2251)
+		radius := float32(0)
+		if v, ok, rerr := s.Data.SpellRadius(eff.RadiusIndex, uint32(lvl)); rerr == nil && ok {
+			radius = v
 		}
-		switch props.Title {
-		case summonTitlePet, summonTitleGuardian, summonTitleMinion, summonTitleGuardian2:
-			continue // SummonGuardian arms (SpellEffects.cpp:2255-2259)
-		case summonTitleLightwell, summonTitleMinipet, summonTitleVehicle, summonTitleVehicle2:
-			continue // lightwell/minipet/vehicle arms unmodeled
+		// spawnOne mirrors one Map::SummonCreature / caster->SummonCreature
+		// spawn: the timed/dead-despawn choice follows TempSummon::InitStats
+		// (TemporarySummon.cpp:180-186, MANUAL becomes timed when the spell
+		// duration is positive, dead-despawn otherwise), the funnel stamps
+		// the creator (OwnerGUID), and the tail writes the
+		// ExecuteLogEffectSummonObject SMSG_SPELLLOGEXECUTE entry.
+		spawnOne := func(x, y, z float32) *creatureMotion {
+			summonType := uint8(tempSummonDeadDespawn)
+			var despawnMs uint32
+			if duration > 0 {
+				summonType = uint8(tempSummonTimedDespawn)
+				despawnMs = uint32(duration)
+			}
+			summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, x, y, z, m.Orientation, summonType, despawnMs)
+			if summoned == nil {
+				return nil
+			}
+			log := protocol.NewBuffer(32)
+			log.WritePackedGUID(m.GUID)
+			log.WriteU32(spell.ID)
+			log.WriteU32(1)
+			log.WriteU32(spellEffectSummon)
+			log.WriteU32(1)
+			log.WritePackedGUID(summoned.GUID)
+			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+			return summoned
 		}
-		// Default/TOTEM leg: timed when the spell duration is positive,
-		// dead-despawn otherwise (SpellEffects.cpp:2319-2341; the Totem's
-		// m_duration expiry is the timed twin — a duration-0 Totem
-		// unsummons on its first C++ Update, unmodeled here).
-		summonType := uint8(tempSummonDeadDespawn)
-		var despawnMs uint32
-		if duration > 0 {
-			summonType = uint8(tempSummonTimedDespawn)
-			despawnMs = uint32(duration)
-		}
-		x, y, z := m.X, m.Y, m.Z
-		if hasDest {
-			x, y, z = dx, dy, dz
-		}
-		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, x, y, z, m.Orientation, summonType, despawnMs)
-		if summoned == nil {
-			continue
-		}
-		// Minion::InitStats (TemporarySummon.cpp:341-360) stamps the Totem's
-		// creator and faction from its owner unconditionally, so the TOTEM
-		// arm takes the ALLY faction stamp whatever the properties Control
-		// is; the GUID register makes the summon visible to the
-		// isTotemGUID gates. TotemAI pulses, the Mana Tide (16190) health
-		// arm, and the effect-damage health arm have no model on this path.
-		if props.Control == summonCategoryAlly || props.Title == summonTitleTotem {
+		// stampOwnerFaction mirrors the Minion::InitStats creator/faction
+		// legs (TemporarySummon.cpp:341-360) shared by the Guardian, Puppet,
+		// Minion and Totem masks: creator and faction both come from the
+		// owner. The funnel already stamps OwnerGUID; this adds Faction.
+		stampOwnerFaction := func(summoned *creatureMotion) {
 			s.motionMu.Lock()
 			summoned.OwnerGUID = m.GUID
 			summoned.Faction = m.Faction
 			s.motionMu.Unlock()
 		}
-		if props.Title == summonTitleTotem {
-			s.registerCreatureTotemGUID(summoned.GUID)
+		// randomPoint mirrors WorldObject::GetRandomPoint (Object.cpp:1422):
+		// uniform angle, distance folded from two uniforms (a negative
+		// distance is direction-equivalent); the ground-height fold has no
+		// Go model, so z stays at the center's height.
+		randomPoint := func(cx, cy, cz float32, dist float32) (float32, float32, float32) {
+			if dist <= 0 {
+				return cx, cy, cz
+			}
+			angle := rand.Float32() * 2 * float32(math.Pi)
+			nd := rand.Float32() + rand.Float32()
+			if nd > 1 {
+				nd -= 2
+			}
+			d := dist * nd
+			return cx + d*float32(math.Cos(float64(angle))), cy + d*float32(math.Sin(float64(angle))), cz
 		}
-		log := protocol.NewBuffer(32)
-		log.WritePackedGUID(m.GUID)
-		log.WriteU32(spell.ID)
-		log.WriteU32(1)
-		log.WriteU32(spellEffectSummon)
-		log.WriteU32(1)
-		log.WritePackedGUID(summoned.GUID)
-		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+		// summonGuardian mirrors Spell::SummonGuardian (SpellEffects.cpp:5461):
+		// numSummons spawns at the dest (later ones randomized within 5.0),
+		// each with the owner faction; a failed spawn ends the loop like
+		// C++'s early return. InitStatsForLevel (caster-level stats), the
+		// MINION-mask follow angle, the 27893 mirror-image display arm
+		// (player visible-item model), and summon-slot replacement
+		// (TempSummon::InitStats slot leg) stay out.
+		summonGuardian := func() {
+			for count := uint32(0); count < numSummons; count++ {
+				x, y, z := baseX, baseY, baseZ
+				if count > 0 {
+					x, y, z = randomPoint(baseX, baseY, baseZ, 5.0)
+				}
+				summoned := spawnOne(x, y, z)
+				if summoned == nil {
+					break
+				}
+				stampOwnerFaction(summoned)
+			}
+		}
+		switch props.Control {
+		case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+			// Flags&512 is checked before the title switch in C++
+			// (SpellEffects.cpp:2259-2262), so a flagged vehicle-title
+			// summon is a guardian, not a vehicle.
+			if props.Flags&512 != 0 {
+				summonGuardian()
+				continue
+			}
+			switch props.Title {
+			case summonTitlePet, summonTitleGuardian, summonTitleMinion, summonTitleGuardian2:
+				summonGuardian()
+			case summonTitleVehicle, summonTitleVehicle2:
+				// Vehicle-title arm (SpellEffects.cpp:2273-2278): a plain
+				// Map summon that forces nobody to enter. TempSummon::InitStats
+				// takes the properties faction when set; the vehicle-kit
+				// owner-faction sub-leg has no IsVehicle query at this site.
+				if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil && props.Faction != 0 {
+					s.motionMu.Lock()
+					summoned.Faction = props.Faction
+					s.motionMu.Unlock()
+				}
+			case summonTitleLightwell, summonTitleTotem:
+				// Lightwell/totem arm (SpellEffects.cpp:2280-2301): Map summon
+				// under the Totem mask, so Minion::InitStats stamps owner
+				// creator/faction; the totem title keeps the Go totem-GUID
+				// registration, the lightwell title does not (its charge
+				// mechanic has no model here). The health arm takes the
+				// effect value, or 10% of caster max health for Mana Tide
+				// (16190); the IsTotem gate only guards that arm, never
+				// the spawn itself.
+				if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil {
+					stampOwnerFaction(summoned)
+					if props.Title == summonTitleTotem {
+						s.registerCreatureTotemGUID(summoned.GUID)
+					}
+					damage := value
+					if spell.ID == 16190 {
+						damage = int32(m.MaxHealth) * 10 / 100
+					}
+					if damage > 0 {
+						s.motionMu.Lock()
+						summoned.MaxHealth = uint32(damage)
+						summoned.Health = uint32(damage)
+						s.motionMu.Unlock()
+					}
+				}
+			case summonTitleMinipet:
+				// Minipet arm (SpellEffects.cpp:2303-2315): Map summon under
+				// the Minion mask, so the owner faction stamp applies; the
+				// template level already matches SelectLevel, and the
+				// npcflag stamp rides the spawn stats. ImmuneToAll stays out
+				// (no immunity model on motions).
+				if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil {
+					stampOwnerFaction(summoned)
+				}
+			default:
+				// Default leg (SpellEffects.cpp:2319-2341): numSummons
+				// spawns, later ones randomized within the effect radius;
+				// the ALLY owner/faction stamp (2333-2337) only.
+				for count := uint32(0); count < numSummons; count++ {
+					x, y, z := baseX, baseY, baseZ
+					if count > 0 {
+						x, y, z = randomPoint(baseX, baseY, baseZ, radius)
+					}
+					summoned := spawnOne(x, y, z)
+					if summoned == nil {
+						continue
+					}
+					if props.Control == summonCategoryAlly {
+						stampOwnerFaction(summoned)
+					}
+				}
+			}
+		case summonCategoryPet:
+			summonGuardian()
+		case summonCategoryPuppet:
+			// Puppet arm (SpellEffects.cpp:2353-2359): single Map summon
+			// under the Puppet/Minion mask, so the owner faction stamp
+			// applies; Puppet::InitStats also sets level to the owner's
+			// level and REACT_PASSIVE — only the react leg is modelable
+			// (no level-stat recompute on motions). The possess charm
+			// (Puppet::InitSummon SetCharmedBy POSSESS) stays out: no
+			// charm model, and the Puppet ctor debug-asserts a player owner.
+			if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil {
+				stampOwnerFaction(summoned)
+				s.motionMu.Lock()
+				summoned.ReactStateKnown = true
+				summoned.ReactState = creatureReactPassive
+				s.motionMu.Unlock()
+			}
+		case summonCategoryVehicle:
+			// Vehicle-control arm (SpellEffects.cpp:2361-2400): single Map
+			// summon; the faction override runs only when the summon IsVehicle
+			// (kit query here), taking the properties faction else the
+			// caster faction — the Minion owner stamp already yields the
+			// caster faction, so only the properties-faction leg is added.
+			// The ride cast (VEHICLE_SPELL_RIDE_HARDCODED 46598 or the
+			// CalcValue-derived CONTROL_VEHICLE spell, TRIGGERED_FULL_MASK)
+			// stays out: CONTROL_VEHICLE aura handling is session-gated
+			// (spells.go:27802), so a creature caster boards nothing.
+			if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil {
+				faction := m.Faction
+				if s.getVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID) != nil && props.Faction != 0 {
+					faction = props.Faction
+				}
+				s.motionMu.Lock()
+				summoned.Faction = faction
+				s.motionMu.Unlock()
+			}
+		default:
+			// Unknown control: Map::SummonCreature returns null (Object.cpp
+			// default arm) — no spawn.
+		}
 	}
 }
 
