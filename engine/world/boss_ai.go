@@ -2544,6 +2544,9 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	s.grantChannelDeathItems(ctx, deathAuras, tm.Level, true, tm.TapPlayerGUID, tm.TapGroupID)
 	s.clearCreatureAurasOnDeath(deathKey)
 	s.removeThreatVictimFromAllLists(tm.Map, tm.InstanceID, tm.GUID)
+	// Unit::setDeathState (Unit.cpp:8901-8911) clears — the funnel leg,
+	// fired here because the no-owner arm skips onCreatureKilled.
+	s.clearCreatureDeathState(tm)
 	// Unit::Kill's KilledUnit branch arm (Unit.cpp:11385-11387): a
 	// non-pet creature attacker fires only the branch arm — the pet-arm
 	// double dispatch is pet-specific.

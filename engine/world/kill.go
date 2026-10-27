@@ -1255,6 +1255,29 @@ func (s *Server) recordCreatureKillLoot(victim, killer *creatureMotion) {
 	s.lootMu.Unlock()
 }
 
+// clearCreatureDeathState is the Unit::setDeathState (Unit.cpp:8901-8911)
+// leg for the no-funnel death chains: setDeathState runs CombatStop,
+// which clears the visual target (AttackStop -> Creature::SetTarget,
+// Unit.cpp:5774/Creature.cpp:2094) and the combo-point holders
+// (ClearComboPointHolders), and the AttackStop reset (Unit.cpp:5783)
+// drops the once-per-engagement assistance latch with its pending
+// delayed assist — the funnel's kill.go:699-704 and :776-779 twins.
+// C++ runs setDeathState ahead of KilledUnit/JustDied (Unit.cpp:11320
+// vs :11324-11387), so callers place this after the threat-victim
+// drop and before the event-3/4 hooks, matching the funnel's
+// pre-hook visual/combo position.
+func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
+	if s == nil || dead == nil {
+		return
+	}
+	s.clearCreatureVisualTarget(dead)
+	s.clearComboPointHolders(dead.GUID)
+	dead.AlreadyCallAssistance = false
+	dead.AssistAt = time.Time{}
+	dead.AssistVictim = 0
+	dead.Assistants = nil
+}
+
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):
 // Eluna::OnPVPKill (PlayerHooks.cpp:155-161), (event, killer, killed), void
 // (CallAllFunctions). Unit::Kill tail (Unit.cpp:11466-11480): attacker and

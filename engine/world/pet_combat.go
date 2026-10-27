@@ -1750,6 +1750,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// drop must run here — otherwise the dead creature stays a
 				// victim in every other table on the map/instance.
 				s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, targetGUID)
+				// Unit::setDeathState (Unit.cpp:8901-8911) clears — the funnel leg,
+				// fired here because this branch skips onCreatureKilled.
+				s.clearCreatureDeathState(victim)
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				// BossAI::_JustDied (ScriptedCreature.cpp:512-518): this

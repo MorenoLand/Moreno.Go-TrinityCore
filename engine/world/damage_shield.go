@@ -527,6 +527,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			s.grantChannelDeathItems(ctx, deathAuras, m.Level, true, m.TapPlayerGUID, m.TapGroupID)
 			s.clearCreatureAurasOnDeath(key)
 			s.removeThreatVictimFromAllLists(key.Map, key.InstanceID, key.GUID)
+			// Unit::setDeathState (Unit.cpp:8901-8911) clears — the funnel leg,
+			// fired here because the attackerSess == nil arm skips onCreatureKilled.
+			s.clearCreatureDeathState(m)
 			if attackerMotion != nil {
 				if attackerMotion.OwnerGUID != 0 {
 					s.fireCreatureTargetDied(ctx, attackerMotion, s.luaMotionCreature(m))

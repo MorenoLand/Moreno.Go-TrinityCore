@@ -1823,6 +1823,9 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		s.grantChannelDeathItems(ctx, deathAuras, uint32(victimLevel), true, live.TapPlayerGUID, live.TapGroupID)
 		s.clearCreatureAurasOnDeath(victimKey)
 		s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, victimGUID)
+		// Unit::setDeathState (Unit.cpp:8901-8911) clears — the funnel leg,
+		// fired here because this path skips onCreatureKilled.
+		s.clearCreatureDeathState(live)
 		// KilledUnit branch arm, plus the pet-arm double dispatch
 		// for a player-owned caster (the session funnel's rule).
 		if motion.OwnerGUID != 0 {
@@ -3023,6 +3026,9 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			s.grantChannelDeathItems(ctx, deathAuras, motion.Level, true, live.TapPlayerGUID, live.TapGroupID)
 			s.clearCreatureAurasOnDeath(motionKey)
 			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+			// Unit::setDeathState (Unit.cpp:8901-8911) clears — the funnel leg,
+			// fired here because the uncredited trip skips onCreatureKilled.
+			s.clearCreatureDeathState(live)
 			if motion.OwnerGUID != 0 {
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
 			}
