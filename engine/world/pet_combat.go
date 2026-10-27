@@ -3978,6 +3978,39 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	missedTarget := func(guid uint64) bool {
 		return petMissVerdicts[guid] != protocol.SpellMissNone
 	}
+	// Spell::HandleLaunchPhase (Spell.cpp:3465, ahead of SendSpellGo at
+	// 3468) for a pet caster: the LAUNCH arms, placed ahead of the GO
+	// packet like the inline pre-pass (creaturemotion.go) — the twin
+	// runs them after its packet, but C++ launches before GO, and the
+	// verdicts above are all computed pre-packet, so the pre-packet
+	// position is available here. Interrupt 68 (LAUNCH_TARGET,
+	// SpellEffects.cpp:3511) + charge 96 (LAUNCH_TARGET movement; its
+	// HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH,
+	// :4528) ride their twins. The reflected map mirrors the inline
+	// launch map: reflectedSet keys at None, trip statuses overriding
+	// — a clean reflect retargets charge to the pet, a bounced reflect
+	// skips, and interrupt skips every reflected target (its twin
+	// never retargets: pet/creature victims carry no in-flight
+	// casts). Previously a pet-cast spell carrying any of these
+	// effects interrupted, charged or moved nothing server-side
+	// (non-pet creature casts ride the twin).
+	launchReflected := make(map[uint64]uint8, len(reflectedSet))
+	for guid := range reflectedSet {
+		launchReflected[guid] = protocol.SpellMissNone
+	}
+	for _, trip := range reflectTrips {
+		launchReflected[trip.victimGUID] = trip.status
+	}
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectInterruptCast:
+			s.server.creatureEffectInterruptCast(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectCharge:
+			s.server.creatureEffectCharge(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectChargeDest:
+			s.server.creatureEffectChargeDest(ctx, motion, hasDest, dx, dy, dz)
+		}
+	}
 	stamp := gameTimeMS()
 	castFlags := uint32(spellCastFlagGo)
 	if triggered && castCount == 0 {
@@ -4130,6 +4163,30 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			launchTarget.UnitGUID = motion.GUID
 		}
 		castTriggered(launchTarget)
+	}
+	// Spell::EffectForceCast (SpellEffects.cpp:1048) on the pet path,
+	// same dispatch-ahead-of-damage position as the twin and inline
+	// blocks: the HIT_TARGET arm, one force-cast per hit target — the
+	// hit TARGET casts the triggered spell on the pet (unitTarget->
+	// CastSpell(m_caster, ...)), via the twin, which carries the 140
+	// damage specials, the 72298 self-cast, the 141 base-point
+	// override and the 52463/52349 self-cast legs. The reflected map
+	// mirrors the insta-kill arm below (trips only: every reflected
+	// GUID rides a trip, so the map covers reflectedSet). A pet target
+	// rides the twin's creature-motion leg (castCreatureSpellInternal)
+	// — the same routing a wild caster force-casting a pet takes;
+	// re-routing a forced pet cast onto the pet path is out of this
+	// strip's scope. Previously a pet-cast spell carrying effect
+	// 140/141/160 force-cast nothing server-side.
+	forceReflected := make(map[uint64]uint8, len(reflectTrips))
+	for _, trip := range reflectTrips {
+		forceReflected[trip.victimGUID] = trip.status
+	}
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
+			s.server.creatureEffectForceCast(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, forceReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
 	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
