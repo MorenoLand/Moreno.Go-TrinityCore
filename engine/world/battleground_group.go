@@ -54,7 +54,7 @@ func (s *session) setBGGroupStash(g, cur *groupState) {
 // 0. Loot stays GROUP_LOOT via Create's !isLFGGroup arm (Group.cpp:175).
 // PlayerAddedToBGCheckIfBGIsRunning (Battleground.cpp:1720) has no Go model:
 // there is no live BG status machine, so the STATUS_WAIT_LEAVE PvP-log arm
-// stays unported.
+// reads the per-map Winner state instead (bgEndedWinner, battleground_scores.go).
 func (s *Server) addOrSetPlayerToCorrectBGGroup(sess *session) {
 	if s == nil || sess == nil || sess.player == nil {
 		return

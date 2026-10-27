@@ -75,6 +75,7 @@ type wsgBattlegroundState struct {
 	AllianceScore       uint32
 	HordeScore          uint32
 	MaxScore            uint32
+	Winner              int8 // -1 = ongoing, 0 = Alliance, 1 = Horde, 2 = draw; set by endWSGVictory/endWSGTie, read by the MSG_PVP_LOG_DATA ended block (battleground_scores.go)
 	AllianceFlagState   uint32
 	HordeFlagState      uint32
 	AllianceCarrierGUID uint64
@@ -137,6 +138,7 @@ func (s *Server) getOrCreateWSGState(mapID uint32) *wsgBattlegroundState {
 			AllianceScore:     0,
 			HordeScore:        0,
 			MaxScore:          3,
+			Winner:            -1,
 			AllianceFlagState: WSGFlagStateOnBase,
 			HordeFlagState:    WSGFlagStateOnBase,
 		}
@@ -790,6 +792,7 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	// already stripped by the capturing arm's removal (BattlegroundWS.cpp:303-306,
 	// 320-323); only the stage bookkeeping needs clearing here.
 	wsg.StalemateStage = 0
+	wsg.Winner = int8(winningTeam)
 	teamName := "Alliance"
 	if winningTeam == 1 {
 		teamName = "Horde"
@@ -859,6 +862,7 @@ func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
 	s.stopWSGMatchTimers(wsg)
 	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 0)
 	wsg.StalemateStage = 0
+	wsg.Winner = 2
 	s.rewardBGEndHonor(mapID, 0, 2)
 	s.rewardBGEndHonor(mapID, 1, 2)
 }

@@ -2300,9 +2300,9 @@ func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
 	// queues, whose entry still carries BATTLEGROUND_RB (32) rather than the
 	// instance's concrete type. An unresolvable type sends nothing: C++
 	// always has a concrete subclass block, so no faithful packet exists.
-	// The ended block always writes 0 (buildNonArenaPvPLogDataPacket): Go
-	// has no live non-arena BG status machine, so the STATUS_WAIT_LEAVE
-	// winner arm stays unported (see battleground_group.go).
+	// The ended block comes from buildNonArenaPvPLogDataPacket's bgEndedWinner
+	// (per-map Winner state): Go has no live non-arena BG status machine, so
+	// a Winner >= 0 state is the STATUS_WAIT_LEAVE signal.
 	if s.server == nil {
 		return true
 	}

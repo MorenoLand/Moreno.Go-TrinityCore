@@ -254,6 +254,102 @@ func bgScoreTypeHasObjectives(bgTypeID uint32) bool {
 	}
 }
 
+// bgEndedWinner reports the STATUS_WAIT_LEAVE arm of BuildPvPLogDataPacket
+// (Battleground.cpp:1214-1219) for one non-arena instance. Go has no live BG
+// status machine, so a per-map Winner >= 0 is the ended signal: every Go end
+// path sets it exactly when C++ EndBattleground sets the winner and leaves
+// STATUS_IN_PROGRESS (endAV, the AB/EOTS resource-max arms, endIC, endSA,
+// endWSGVictory/endWSGTie). The winner byte is PvPTeamId
+// (SharedDefines.h:3499-3501: Horde 0, Alliance 1, Neutral 2), the reverse of
+// Go's internal 0 = Alliance, 1 = Horde, with 2 = draw/neutral on both sides.
+// The peek creates no state: a map with no state row never armed one, so its
+// match is still in progress. Per-map states are never reset (the same
+// staleness the Winner >= 0 handler gates already carry), so a second match
+// on the same map inherits the ended flag until a state reset lands; that
+// reset is a separate unit, not smuggled in here. The winner is resolved
+// before the score snapshot below, so no state mu is ever held across the
+// objectsMu snapshot.
+func (s *Server) bgEndedWinner(mapID, bgTypeID uint32) (bool, uint8) {
+	if s == nil {
+		return false, 0
+	}
+	var winner int8 = -1
+	switch bgTypeID {
+	case 1: // AV: state map guarded by objectsMu, Winner by the state mu
+		s.objectsMu.RLock()
+		state := s.avState[mapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	case 2: // WS
+		s.wsgMu.Lock()
+		state := s.wsgState[mapID]
+		s.wsgMu.Unlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	case 3: // AB
+		s.abMu.Lock()
+		state := s.abState[mapID]
+		s.abMu.Unlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	case 7: // EY
+		s.eotsMu.Lock()
+		state := s.eotsState[mapID]
+		s.eotsMu.Unlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	case 9: // SA
+		s.saMu.Lock()
+		state := s.saState[mapID]
+		s.saMu.Unlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	case 30: // IC
+		s.icMu.Lock()
+		state := s.icState[mapID]
+		s.icMu.Unlock()
+		if state == nil {
+			return false, 0
+		}
+		state.mu.Lock()
+		winner = state.Winner
+		state.mu.Unlock()
+	default:
+		return false, 0
+	}
+	if winner < 0 {
+		return false, 0
+	}
+	if winner == 0 {
+		return true, 1 // Go Alliance -> PvPTeamId Alliance
+	}
+	if winner == 1 {
+		return true, 0 // Go Horde -> PvPTeamId Horde
+	}
+	return true, 2 // draw/neutral
+}
+
 // buildNonArenaPvPLogDataPacket ports Battleground::BuildPvPLogDataPacket
 // (Battleground.cpp:1196-1221) for the non-arena arm: type byte 0, the
 // ended/winner block, the row count, then one BattlegroundScore::AppendToPacket
@@ -262,11 +358,10 @@ func bgScoreTypeHasObjectives(bgTypeID uint32) bool {
 // objectives block). Rows sort by GUID ascending: C++ PlayerScores is
 // std::map<uint32, BattlegroundScore*> (Battleground.h:339), keyed by GUID
 // counter, and Go GUIDs share the counter in their low bits. The ended block
-// always writes 0: Go has no live non-arena BG status machine (see the
-// STATUS_WAIT_LEAVE note in battleground_group.go), and a handler-path
-// request during STATUS_IN_PROGRESS also serializes 0 in C++; the
-// WAIT_LEAVE winner arm stays unported. An unknown bgTypeID returns nil:
-// C++ always has a concrete subclass block, so no faithful packet exists.
+// is bgEndedWinner above: a handler-path request during STATUS_IN_PROGRESS
+// serializes 0 in C++ too, so only a Winner >= 0 state writes the 1 + winner
+// bytes. An unknown bgTypeID returns nil: C++ always has a concrete subclass
+// block, so no faithful packet exists.
 func (s *Server) buildNonArenaPvPLogDataPacket(mapID, instanceID, bgTypeID uint32) []byte {
 	if !bgScoreTypeHasObjectives(bgTypeID) {
 		return nil
@@ -278,9 +373,15 @@ func (s *Server) buildNonArenaPvPLogDataPacket(mapID, instanceID, bgTypeID uint3
 	}
 	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
 
-	buf := protocol.NewBuffer(2 + 4 + len(guids)*40)
+	ended, winner := s.bgEndedWinner(mapID, bgTypeID)
+	buf := protocol.NewBuffer(3 + 4 + len(guids)*40)
 	buf.WriteU8(0) // type: battleground
-	buf.WriteU8(0) // bg not ended (no live status machine; see above)
+	if ended {
+		buf.WriteU8(1) // bg ended
+		buf.WriteU8(winner)
+	} else {
+		buf.WriteU8(0) // bg not ended
+	}
 	buf.WriteU32(uint32(len(guids)))
 	for _, guid := range guids {
 		score := table[guid]
