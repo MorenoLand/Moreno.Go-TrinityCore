@@ -399,6 +399,7 @@ const (
 	spellEffectCharge                  = 96  // SPELL_EFFECT_CHARGE (SharedDefines.h:907)
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
+	spellEffectApplyGlyph              = 74  // SPELL_EFFECT_APPLY_GLYPH (SharedDefines.h:885)
 	spellEffectSummonChangeItem        = 34  // SPELL_EFFECT_SUMMON_CHANGE_ITEM (SharedDefines.h:845; EffectSummonChangeItem, SpellEffects.cpp:2061)
 	spellEffectTransmitted             = 50  // SPELL_EFFECT_TRANS_DOOR (SharedDefines.h:861; EffectTransmitted, SpellEffects.cpp:4927)
 	spellEffectInstaKill               = 1   // SPELL_EFFECT_INSTAKILL (SharedDefines.h:812; EffectInstaKill, SpellEffects.cpp:274)
@@ -17347,9 +17348,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// routing those through handleSummonPet would mint a permanent
 			// character_pet row (the client arm's reason). The client
 			// post-loop totem legs (summonTotem / summonSessionNoSlotTotem)
-			// have no triggered-path twin, so a triggered TOTEM-title
-			// summon still summons nothing; that leg needs a once-per-cast
-			// home, not a per-effect arm, and stays a residual.
+			// have their triggered-path twin in this function's post-loop
+			// totem block below, so TOTEM titles stay out here to avoid
+			// double-summoning.
 			if eff.MiscValue != 0 {
 				summonTitle := uint32(0)
 				summonPropsKnown := true
@@ -17380,6 +17381,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue)); guid != 0 {
 				s.sendSummonObjectLog(spellID, eff.Effect, guid)
 			}
+		}
+		if eff.Effect == spellEffectApplyGlyph {
+			// Spell::EffectApplyGlyph (SpellEffects.cpp:4018) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target, and
+			// reads no item target: the glyph index comes only from
+			// CastItemUseSpell (Player.cpp:8280), so a triggered cast
+			// carries the Spell ctor default 0 (Spell.cpp:603) — slot 0,
+			// never the session's sticky targetGlyphSlot from the last
+			// item use. The client arm's helper, with castID 0 like
+			// every triggered cast here.
+			s.applyGlyph(ctx, castID, spell, 0, uint16(eff.MiscValue))
 		}
 		if eff.Effect == spellEffectSummonObjectSlot1 || eff.Effect == spellEffectSummonObjectSlot2 || eff.Effect == spellEffectSummonObjectSlot3 || eff.Effect == spellEffectSummonObjectSlot4 {
 			// Spell::EffectSummonObject (SpellEffects.cpp:4215) runs once at
@@ -18218,6 +18230,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// HIT_TARGET per unit target: the client arm's helper over
 				// the single miss-filtered target.
 				s.handleEffectSkinning(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectOpenLock {
+				// Spell::EffectOpenLock (SpellEffects.cpp:1948) runs at
+				// HIT_TARGET: the GO arm fires on a gameobject target, the
+				// item arm on an item target. This path never carries an
+				// item target, so only the GO arm can fire here: a GO GUID
+				// reaching the effect loop via GO-area, GO-cone, or
+				// GO-nearby selection. Unit targets fall through the
+				// helper's own GO gate. castItem is the !m_CastItem
+				// skill-up gate (SpellEffects.cpp:2039): a triggered cast
+				// from an item grows no lockpicking skill.
+				s.handleEffectOpenLock(ctx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: effectTarget}, spell, eff, castItemGUID != 0)
 			} else if eff.Effect == spellEffectRedirectThreat {
 				// Spell::EffectRedirectThreat (SpellEffects.cpp:5411) runs
 				// at HIT_TARGET per unit target: the client arm's helper
