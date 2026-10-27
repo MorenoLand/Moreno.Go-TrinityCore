@@ -12476,9 +12476,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// instant damage spell, not channeled, so the IsChanneled() half of
 	// this arm never fires for them in C++; the launch leg's Volley
 	// exemption (Spell.cpp:7706-7708) covers REQ_AMMO tick spells instead
-	// (e.g. Explosive Shot ticks). Go's channelTick applies tick damage
-	// directly with no per-tick casts, so the same two-ammo-per-channel
-	// total holds.
+	// (e.g. Explosive Shot ticks). Go's channelTick takes no per-tick
+	// ammo either, so the same two-ammo-per-channel total holds.
 	// Spell::handle_immediate tail (Spell.cpp:3616-3623): TakeCastItem at
 	// 3619 runs ahead of the Volley tail TakeAmmo at 3622-3623 — the charge
 	// is spent here after the finish-phase legs, then the tail ammo, in C++
@@ -34049,8 +34048,16 @@ func (s *session) channelTick() {
 	s.castMu.Lock()
 	channel.Executing = true
 	s.castMu.Unlock()
-	// Channeled ticks re-hit the effect value per tick: C++ re-rolls
-	// CalculateDamage per (effect, target) on each tick, not the flat base.
+	// Spell::update (Spell.cpp:3844-3879): the SPELL_STATE_CASTING leg
+	// never re-fires spell effects - it only revalidates the channeled
+	// target list and runs the channel timer out. A direct effect fires
+	// exactly once, at handle_immediate's DoProcessTargetContainer
+	// (Spell.cpp:3554-3567, 3607), which finishSpellCast's applyEffects
+	// already ran; per-tick delivery for aura spells is the aura's own
+	// periodic tick, not this function. So no damage leg belongs here:
+	// effects 2/17 would double-deliver the cast-time hit, effect 87
+	// (gameobject damage) never targets a unit, and effect 108
+	// (dispel mechanic) is already handled at cast time by applyEffects.
 	var channelCasterLevel uint32
 	if s.player != nil {
 		channelCasterLevel = uint32(s.player.Level)
@@ -34064,10 +34071,6 @@ func (s *session) channelTick() {
 			continue
 		}
 		switch effect.Effect {
-		case 2, 87, 108, 17: // damage effects tick on the target
-			if targetGUID != 0 && targetGUID != s.playerGUID {
-				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
-			}
 		case 10, 136:
 			if targetGUID != 0 && targetGUID != s.playerGUID {
 				if s.server != nil {
