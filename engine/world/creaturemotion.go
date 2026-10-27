@@ -3839,7 +3839,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AI spell carrying a trigger effect previously
 			// triggered nothing server-side (non-victim casts ride
 			// castCreatureSpellInternal, which already runs this
-			// pre-pass).
+			// pre-pass). Interrupt 68 (LAUNCH_TARGET) + charge 96 (LAUNCH_TARGET movement; its HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH) ride the same pre-pass via their twins.
 			if inlineSpellKnown {
 				launchReflected := make(map[uint64]uint8, len(reflectedSet))
 				for guid := range reflectedSet {
@@ -3857,6 +3857,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					switch inlineSpell.Effects[i].Effect {
 					case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
 						s.creatureEffectTriggerSpell(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], spellTarget.UnitGUID, hitTargets, launchReflected, evadedSet, immuneSet, missSet)
+					case spellEffectInterruptCast:
+						s.creatureEffectInterruptCast(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, missSet)
+					case spellEffectCharge:
+						s.creatureEffectCharge(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, missSet)
+					case spellEffectChargeDest:
+						s.creatureEffectChargeDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 					}
 				}
 			}
@@ -4046,6 +4052,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectRemoveAura(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					case spellEffectModifyThreatPercent:
 						s.creatureEffectModifyThreatPercent(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
+						s.creatureEffectForceCast(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
+						s.creatureEffectTriggerMissile(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], spellTarget.UnitGUID, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					}
+				}
+				// Spell::EffectActivateObject (SpellEffects.cpp:3938) + EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) + EffectGameObjectSetDestructionState (:5450) on the inline path, same dispatch-ahead-of-damage position: the GO arms over the GO GUIDs in hitTargets (the nearby-entry GO pick joins hitTargets ahead of dispatch; a wire GO GUID rides the same filter), mirroring the twin's GO block. Unit GUIDs in hitTargets take no leg in the twins.
+				for i := range inlineSpell.Effects {
+					switch inlineSpell.Effects[i].Effect {
+					case spellEffectActivateObject:
+						s.creatureEffectActivateObject(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
+					case spellEffectGameObjectDamage:
+						s.creatureEffectGameObjectDamage(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], hitTargets)
+					case spellEffectGameObjectRepair:
+						s.creatureEffectGameObjectRepair(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], hitTargets)
+					case spellEffectGameObjectSetDestructionState:
+						s.creatureEffectGameObjectSetDestructionState(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
 					}
 				}
 			}
