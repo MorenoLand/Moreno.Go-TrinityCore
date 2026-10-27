@@ -194,6 +194,17 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	for _, object := range objects {
 		caster := s.findSessionByGUID(object.CasterGUID)
 		if caster == nil || caster.player == nil || caster.player.Map != object.Map || caster.player.InstanceID != object.InstanceID {
+			// Creature-caster dynobj (creatureEffectPersistentAreaAura):
+			// no player session exists by construction, so the session
+			// gate above would despawn the object on its first pass.
+			// A live creature motion on the object's map/instance keeps
+			// it for its duration; the session target-map pass below is
+			// skipped for it (cast-time application covers the initial
+			// targets, documented at creatureEffectPersistentAreaAura).
+			// A vanished caster still despawns, as before.
+			if s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID) != nil {
+				continue
+			}
 			s.despawnDynamicSpellObject(object.GUID)
 			continue
 		}

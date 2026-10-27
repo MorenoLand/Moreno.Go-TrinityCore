@@ -355,3 +355,181 @@ func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spe
 	}
 	return targets
 }
+
+// creatureGOAreaRadius mirrors spellGOAreaRadius for a creature caster:
+// max CalcRadius over the matched effects at the caster's level, with the
+// Spell.cpp:1281 range fallback (GetMaxRange split by isHarmfulSpell). No
+// SPELLMOD_RADIUS fold: a creature caster carries no spellmod owner session
+// to fold through, so the raw DBC radius stands.
+func (s *Server) creatureGOAreaRadius(m *creatureMotion, spell wotlk.Spell, effectMask uint32) float64 {
+	radius := float64(0)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 || effectMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, casterLevel(m)); err == nil && ok {
+			if float64(value) > radius {
+				radius = float64(value)
+			}
+		}
+	}
+	if radius <= 0 {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			radius = float64(rangeEntry.MaxHostile)
+			if !isHarmfulSpell(spell) {
+				radius = float64(rangeEntry.MaxFriendly)
+			}
+		}
+	}
+	return radius
+}
+
+// creatureGOAreaDestCenter resolves the DEST-area center for a creature
+// caster: the cast's resolved destination when one exists, else the
+// explicit unit target's position (CheckDst, Spell.cpp:1258), else the
+// caster position (the session helper's caster fallback).
+func (s *Server) creatureGOAreaDestCenter(m *creatureMotion, hasDest bool, destX, destY, destZ float32, targetGUID uint64) (float32, float32, float32) {
+	if hasDest {
+		return destX, destY, destZ
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.Map == m.Map && ts.player.InstanceID == m.InstanceID {
+		return ts.player.X, ts.player.Y, ts.player.Z
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		return tm.X, tm.Y, tm.Z
+	}
+	return m.X, m.Y, m.Z
+}
+
+// creatureGOAreaTargets ports spellGOAreaTargets (Spell::SelectImplicitAreaTargets,
+// Spell.cpp:1227, + SearchAreaTargets, Spell.cpp:1881) for a creature caster:
+// TARGET_GAMEOBJECT_SRC_AREA (51) / TARGET_GAMEOBJECT_DEST_AREA (52), per-effect
+// legs unioned, each gated on its own ImplicitTargetConditions, scanned per leg
+// around the leg's own center (the session scan centers on the caster, which
+// would miss DEST-area matches far from the caster). The MaxTargets cap is the
+// DBC value alone: a creature caster has no total-aura-modifier helper for the
+// MOD_MAX_AFFECTED_TARGETS fold.
+func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hasDest bool, destX, destY, destZ float32, targetGUID uint64) []uint64 {
+	if s == nil || m == nil || s.Data == nil {
+		return nil
+	}
+	if spellSearchPlayersOnly(spell) {
+		return nil
+	}
+	legs := make([]goAreaLeg, 0)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		var legTarget uint32
+		switch {
+		case eff.ImplicitTargetA == implicitTargetGOSrcArea || eff.ImplicitTargetA == implicitTargetGODestArea:
+			legTarget = eff.ImplicitTargetA
+		case (eff.ImplicitTargetB == implicitTargetGOSrcArea || eff.ImplicitTargetB == implicitTargetGODestArea) && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA):
+			legTarget = eff.ImplicitTargetB
+		default:
+			continue
+		}
+		radius := s.creatureGOAreaRadius(m, spell, 1<<uint(i))
+		if radius <= 0 {
+			continue
+		}
+		condRows := s.loadImplicitTargetConditionRows(ctx, spellID, 1<<uint(i))
+		_, _, allowGO := implicitTargetEntryObjectMask(condRows, false, false, true)
+		if !allowGO {
+			continue
+		}
+		leg := goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows}
+		if legTarget == implicitTargetGODestArea {
+			leg.cx, leg.cy, leg.cz = s.creatureGOAreaDestCenter(m, hasDest, destX, destY, destZ, targetGUID)
+		}
+		legs = append(legs, leg)
+	}
+	if len(legs) == 0 {
+		return nil
+	}
+	targets := make([]uint64, 0)
+	seen := make(map[uint64]struct{})
+	for _, leg := range legs {
+		s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, leg.cx, leg.cy, float32(leg.radius), func(g nearbyGameObject) {
+			if distance3D(g.x, g.y, g.z, leg.cx, leg.cy, leg.cz) > leg.radius || !implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
+				return
+			}
+			if _, ok := seen[g.guid]; ok {
+				return
+			}
+			seen[g.guid] = struct{}{}
+			targets = append(targets, g.guid)
+		})
+	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(targets)) > maxTargets {
+		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
+		targets = targets[:maxTargets]
+	}
+	return targets
+}
+
+// creatureGOConeTargets ports spellGOConeTargets (Spell::SelectImplicitConeTargets,
+// Spell.cpp:1176) for a creature caster: TARGET_GAMEOBJECT_CONE (108), front cone
+// at M_PI/2 (WorldObjectSpellConeTargetCheck, Spell.cpp:8432), CU_CONE_BACK when
+// SpellVisual[0] == 3879 (SpellMgr.cpp:2840), per-effect legs unioned on their own
+// ImplicitTargetConditions, DBC MaxTargets cap alone as in creatureGOAreaTargets.
+func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32) []uint64 {
+	if s == nil || m == nil || s.Data == nil {
+		return nil
+	}
+	if spellSearchPlayersOnly(spell) {
+		return nil
+	}
+	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
+	legs := make([]goAreaLeg, 0)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		selects := eff.ImplicitTargetA == implicitTargetGOCone ||
+			(eff.ImplicitTargetB == implicitTargetGOCone && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA))
+		if !selects {
+			continue
+		}
+		radius := s.creatureGOAreaRadius(m, spell, 1<<uint(i))
+		if radius <= 0 {
+			continue
+		}
+		condRows := s.loadImplicitTargetConditionRows(ctx, spellID, 1<<uint(i))
+		_, _, allowGO := implicitTargetEntryObjectMask(condRows, false, false, true)
+		if !allowGO {
+			continue
+		}
+		legs = append(legs, goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows})
+	}
+	if len(legs) == 0 {
+		return nil
+	}
+	targets := make([]uint64, 0)
+	seen := make(map[uint64]struct{})
+	for _, leg := range legs {
+		s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, m.X, m.Y, float32(leg.radius), func(g nearbyGameObject) {
+			if backCone {
+				if hasInArc(m.Orientation, m.X, m.Y, g.x, g.y, 2*math.Pi-math.Pi/2) {
+					return
+				}
+			} else if !hasInArc(m.Orientation, m.X, m.Y, g.x, g.y, math.Pi/2) {
+				return
+			}
+			if distance3D(g.x, g.y, g.z, m.X, m.Y, m.Z) > leg.radius || !implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
+				return
+			}
+			if _, ok := seen[g.guid]; ok {
+				return
+			}
+			seen[g.guid] = struct{}{}
+			targets = append(targets, g.guid)
+		})
+	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(targets)) > maxTargets {
+		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
+		targets = targets[:maxTargets]
+	}
+	return targets
+}

@@ -1656,6 +1656,36 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				}
 			}
 		}
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) + SelectImplicitConeTargets (Spell.cpp:1176) for a creature
+		// caster: GO-area (51/52) and GO-cone (108) legs join the hit list like the unit area legs above — previously
+		// a creature-cast GO-area/cone spell selected no GO targets on this path, so its GO arms (86-89) never fired.
+		// Area/cone selection never chains, so the chain arm below still anchors on the nearby pick alone.
+		if isGOAreaSpell(spellInfo) || isGOConeSpell(spellInfo) {
+			seenGO := make(map[uint64]struct{}, len(hitTargets))
+			for _, guid := range hitTargets {
+				seenGO[guid] = struct{}{}
+			}
+			appendGOGUID := func(guid uint64) {
+				if guid == 0 {
+					return
+				}
+				if _, dup := seenGO[guid]; dup {
+					return
+				}
+				seenGO[guid] = struct{}{}
+				hitTargets = append(hitTargets, guid)
+			}
+			if isGOAreaSpell(spellInfo) {
+				for _, goGUID := range s.creatureGOAreaTargets(ctx, m, spellInfo, spellID, hasDest, destX, destY, destZ, targetGUID) {
+					appendGOGUID(goGUID)
+				}
+			}
+			if isGOConeSpell(spellInfo) {
+				for _, goGUID := range s.creatureGOConeTargets(ctx, m, spellInfo, spellID) {
+					appendGOGUID(goGUID)
+				}
+			}
+		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
 		// SelectTargets removal leg (Spell.cpp:807-830) for a creature
@@ -1937,6 +1967,13 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectInstaKill(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
+	}
+	// Spell::EffectPersistentAA (SpellEffects.cpp:1738-1760) for a creature
+	// caster: the HIT arm, once per cast — the helper itself keeps only the
+	// LAST persistent-area-aura effect (C++ returns early on earlier ones).
+	// Gated on spellKnown like the tail.
+	if spellKnown {
+		s.creatureEffectPersistentAreaAura(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 	}
 	// Spell::EffectSummonType (SpellEffects.cpp:2194-2440) for a creature
 	// caster: the HIT-mode arm spawning SPELL_EFFECT_SUMMON creature
@@ -6164,6 +6201,123 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid)
+	}
+}
+
+// creatureEffectPersistentAreaAura mirrors Spell::EffectPersistentAA
+// (SpellEffects.cpp:1738-1760) for a creature caster: the last 27 effect
+// spawns a dynamic spell object at the cast's resolved destination (the
+// caster position when the spell carries no dest-family target), with the
+// DBC duration and radius at the caster's level. The session helper's
+// SPELLMOD_DURATION fold has no creature twin (no spellmod owner session),
+// so the raw DBC duration stands. The dynobj target-map pass is
+// session-rooted (caster session + session area sweeps) and has no creature
+// twin, so the aura is applied here to the units in radius at cast time —
+// players through applyAuraFromCaster, creatures through the Server twin —
+// gated on the spell-level friendly/enemy split (isFriendlyAreaSpell) like
+// the session dynobj pass's enemy/friendly branch. Documented residuals:
+// newcomers after the cast miss the aura, and leavers keep it to its own
+// duration expiry (the dynobj despawn strip only removes
+// PersistentAreaAura-flagged applications, which these cast-time applies
+// are not); the object itself persists for its duration through the
+// creature-caster keepalive in updateDynamicSpellAuras.
+func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, destX, destY, destZ float32) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	var persistent wotlk.SpellEffect
+	found := false
+	for _, effect := range spell.Effects {
+		if effect.Effect == spellEffectPersistentAreaAura {
+			persistent, found = effect, true
+		}
+	}
+	if !found || spell.DurationIndex == 0 {
+		return
+	}
+	durationMs, durationFound, err := s.Data.SpellDuration(spell.DurationIndex, casterLevel(m))
+	if err != nil || !durationFound || durationMs <= 0 {
+		return
+	}
+	radius, radiusFound, err := s.Data.SpellRadius(persistent.RadiusIndex, casterLevel(m))
+	if err != nil || !radiusFound || radius <= 0 {
+		return
+	}
+	cx, cy, cz := m.X, m.Y, m.Z
+	if hasDest {
+		cx, cy, cz = destX, destY, destZ
+	}
+	auraEffect := persistent
+	auraEffectIndex := -1
+	for i, effect := range spell.Effects {
+		if effect.Effect == spellEffectApplyAura && effect.Aura != 0 {
+			auraEffect = effect
+			auraEffectIndex = i
+			break
+		}
+	}
+	periodMs := auraEffect.AuraPeriod
+	if periodMs == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 8 || auraEffect.Aura == 23 || auraEffect.Aura == 24 || auraEffect.Aura == 89) {
+		periodMs = 3000
+	}
+	amount := uint32(0)
+	if auraEffect.BasePoints >= 0 {
+		amount = uint32(auraEffect.BasePoints)
+	}
+	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
+		amount = uint32(10 + int(m.Level)*2)
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	now := time.Now()
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: now.Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: now}
+	s.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
+	friendly := isFriendlyAreaSpell(spell)
+	inRadius := func(x, y, z float32) bool {
+		return distance3D(x, y, z, cx, cy, cz) <= float64(radius)
+	}
+	s.sessionsMu.RLock()
+	var playerTargets []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.player != nil && sess.player.Map == m.Map && sess.player.InstanceID == m.InstanceID {
+			playerTargets = append(playerTargets, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, vs := range playerTargets {
+		if vs.player == nil || vs.inFlight || !inRadius(vs.player.X, vs.player.Y, vs.player.Z) {
+			continue
+		}
+		if friendly != s.creatureFriendlyToTarget(m, vs.playerGUID) {
+			continue
+		}
+		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+			continue
+		}
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level))
+	}
+	type creatureTarget struct {
+		guid    uint64
+		x, y, z float32
+	}
+	s.motionMu.Lock()
+	var creatureTargets []creatureTarget
+	for _, tm := range s.motionMapLocked(m.Map, m.InstanceID) {
+		if tm != nil {
+			creatureTargets = append(creatureTargets, creatureTarget{guid: tm.GUID, x: tm.X, y: tm.Y, z: tm.Z})
+		}
+	}
+	s.motionMu.Unlock()
+	for _, tm := range creatureTargets {
+		if !inRadius(tm.x, tm.y, tm.z) {
+			continue
+		}
+		if friendly != s.creatureFriendlyToTarget(m, tm.guid) {
+			continue
+		}
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid)
 	}
 }
 
