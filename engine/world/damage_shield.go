@@ -484,6 +484,40 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		// are gated on attackerSess == nil like the stamp below, and
 		// the respawn legs mirror the boss_ai no-owner path.
 		if attackerSess == nil {
+			// Unit::Kill's KILL/KILLED/DEATH proc legs (Unit.cpp:11257-11279)
+			// fire before the strip, while the victim's auras are still
+			// present — the boss_ai no-owner precedent: KILL on the
+			// attacker's auras (no bearer when the attacker motion is
+			// gone), KILLED on the victim's, DEATH on the victim's;
+			// the KILL/KILLED legs gate on the victim not being a
+			// critter, DEATH is unconditional. The pet/totem-owner
+			// arm (Unit.cpp:11257-11263) stays vacuous here, as on
+			// the insta path.
+			if m.CreatureType != creatureTypeCritter {
+				if attackerMotion != nil {
+					s.fireCreatureMeleeAuraProcs(ctx, attackerMotion, m.GUID, procEventInfo{
+						typeMask:       procFlagKill,
+						spellTypeMask:  procSpellTypeMaskAll,
+						spellPhaseMask: procSpellPhaseNone,
+						hitMask:        procHitNone,
+						actorGUID:      attackerMotion.GUID,
+					})
+				}
+				s.fireCreatureMeleeAuraProcs(ctx, m, attackerGUID, procEventInfo{
+					typeMask:       procFlagKilled,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      m.GUID,
+				})
+			}
+			s.fireCreatureMeleeAuraProcs(ctx, m, m.GUID, procEventInfo{
+				typeMask:       procFlagDeath,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      m.GUID,
+			})
 			s.auraMu.Lock()
 			var deathAuras []*activeAura
 			for _, aura := range s.activeCreatureAuras[key] {

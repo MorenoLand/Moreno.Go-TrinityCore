@@ -1783,6 +1783,37 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// calls Kill before ProcSkillsAndAuras) and the pet branch.
 		// The channel-death-item leg rides ahead of the strip, as on
 		// the boss_ai/pet no-funnel paths.
+		// Unit::Kill's KILL/KILLED/DEATH proc legs (Unit.cpp:11257-11279)
+		// fire before the strip, while the victim's auras are still
+		// present — the boss_ai no-owner precedent: KILL on the
+		// caster's auras, KILLED on the victim's, DEATH on the
+		// victim's; the KILL/KILLED legs gate on the victim not
+		// being a critter, DEATH is unconditional. The pet/totem-
+		// owner arm (Unit.cpp:11257-11263) stays vacuous here, as
+		// on the insta path (no Go owner-motion proc bearer).
+		if live.CreatureType != creatureTypeCritter {
+			s.fireCreatureMeleeAuraProcs(ctx, motion, victimGUID, procEventInfo{
+				typeMask:       procFlagKill,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      motion.GUID,
+			})
+			s.fireCreatureMeleeAuraProcs(ctx, live, motion.GUID, procEventInfo{
+				typeMask:       procFlagKilled,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      live.GUID,
+			})
+		}
+		s.fireCreatureMeleeAuraProcs(ctx, live, victimGUID, procEventInfo{
+			typeMask:       procFlagDeath,
+			spellTypeMask:  procSpellTypeMaskAll,
+			spellPhaseMask: procSpellPhaseNone,
+			hitMask:        procHitNone,
+			actorGUID:      live.GUID,
+		})
 		s.auraMu.Lock()
 		var deathAuras []*activeAura
 		for _, aura := range s.activeCreatureAuras[victimKey] {
@@ -2941,6 +2972,38 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 		// assumes (C++ strips the caster's auras in Unit::Kill before
 		// DoDamageAndTriggers runs).
 		if reflector.killCredit == nil {
+			// Unit::Kill's KILL/KILLED/DEATH proc legs (Unit.cpp:11257-11279)
+			// fire before the strip, while the caster's auras are still
+			// present — the boss_ai no-owner precedent, with attacker
+			// and victim both the caster here: KILL on the caster's
+			// auras, KILLED on the caster's, DEATH on the caster's;
+			// the KILL/KILLED legs gate on the victim not being a
+			// critter, DEATH is unconditional. The pet/totem-owner
+			// arm (Unit.cpp:11257-11263) stays vacuous here, as on
+			// the insta path.
+			if live.CreatureType != creatureTypeCritter {
+				s.fireCreatureMeleeAuraProcs(ctx, motion, guid, procEventInfo{
+					typeMask:       procFlagKill,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      motion.GUID,
+				})
+				s.fireCreatureMeleeAuraProcs(ctx, live, motion.GUID, procEventInfo{
+					typeMask:       procFlagKilled,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      live.GUID,
+				})
+			}
+			s.fireCreatureMeleeAuraProcs(ctx, live, guid, procEventInfo{
+				typeMask:       procFlagDeath,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      live.GUID,
+			})
 			s.auraMu.Lock()
 			var deathAuras []*activeAura
 			for _, aura := range s.activeCreatureAuras[motionKey] {
