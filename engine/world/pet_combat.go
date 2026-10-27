@@ -4232,6 +4232,119 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectSanctuary(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
+	// Spell::EffectQuestComplete (SpellEffects.cpp:4371) +
+	// EffectQuestClear (:4611) + EffectQuestFail (:5283) +
+	// EffectQuestStart (:5294) + EffectReputation (:4349) +
+	// EffectAddHonor (:2661) + EffectKillCreditPersonal (:5253) +
+	// EffectKillCredit (:5264) + EffectSkillStep (:2637) +
+	// EffectEnvironmentalDMG (:306) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
+	// with the launch reflected map. The quest/reputation/kill-credit/
+	// skill-step legs run on the player hit target's own session via
+	// the helpers. Previously a pet-cast spell carrying any of these
+	// effects completed, failed, started, credited, honored or
+	// skilled nothing server-side (non-pet creature casts ride the
+	// twin).
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
+			s.server.creatureEffectQuest(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectReputation:
+			s.server.creatureEffectReputation(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectAddHonor:
+			s.server.creatureEffectAddHonor(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectKillCredit, spellEffectKillCreditGroup:
+			s.server.creatureEffectKillCredit(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectSkillStep:
+			s.server.creatureEffectSkillStep(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectEnvironmentalDamage:
+			s.server.creatureEffectEnvironmentalDamage(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
+	// Spell::EffectCreateItem (SpellEffects.cpp:1679) + EffectCreateItem2
+	// (:1688) + EffectLearnSpell (:2406) + EffectPlaySound (:5578) +
+	// EffectPlayMusic (:5537) + EffectSendTaxi (:4656) +
+	// EffectDiscoverTaxi (:5390) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
+	// with the launch reflected map. Previously a pet-cast spell
+	// carrying any of these effects created, taught, sounded or
+	// taxied nothing server-side (non-pet creature casts ride the
+	// twin).
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectCreateItem, spellEffectCreateItem2:
+			s.server.creatureEffectCreateItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectLearnSpell:
+			s.server.creatureEffectLearnSpell(ctx, motion, spell.ID, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectPlaySound, spellEffectPlayMusic:
+			s.server.creatureEffectPlaySoundMusic(motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectSendTaxi, spellEffectDiscoverTaxi:
+			s.server.creatureEffectTaxi(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
+	// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) +
+	// EffectDismissPet (:4201) + EffectInebriate (:4143) +
+	// EffectRenamePet (:5525) + EffectActivateSpec (:5567) +
+	// EffectDurabilityDamage (:4857) + EffectDurabilityDamagePCT
+	// (:4886) + EffectBind + EffectEnchantHeldItem +
+	// EffectUnlearnSpecialization + EffectCreateRandomItem +
+	// EffectUntrainTalents + EffectTalentSpecCount on the pet path,
+	// same dispatch-ahead-of-damage position as the twin and inline
+	// blocks: all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
+	// twins, with the launch reflected map; force-deselect 93 rides
+	// the caster leg in the same loop (HANDLE_HIT, once per effect),
+	// like the twin. Previously a pet-cast spell carrying any of these
+	// effects dismissed, inebriated, renamed, specced, bound,
+	// enchanted, untrained or deselected nothing server-side
+	// (non-pet creature casts ride the twin).
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectLearnPetSpell:
+			s.server.creatureEffectLearnPetSpell(ctx, motion, spell.ID, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectDismissPet:
+			s.server.creatureEffectDismissPet(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectInebriate:
+			s.server.creatureEffectInebriate(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectAllowRenamePet:
+			s.server.creatureEffectAllowRenamePet(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectTalentSpecSelect:
+			s.server.creatureEffectTalentSpecSelect(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
+			s.server.creatureEffectDurabilityDamage(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectBind:
+			s.server.creatureEffectBind(ctx, motion, spell.Effects[i], hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectEnchantHeldItem:
+			s.server.creatureEffectEnchantHeldItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectUnlearnSpecialization:
+			s.server.creatureEffectUnlearnSpecialization(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectCreateRandomItem:
+			s.server.creatureEffectCreateRandomItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectUntrainTalents:
+			s.server.creatureEffectUntrainTalents(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectTalentSpecCount:
+			s.server.creatureEffectTalentSpecCount(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectForceDeselect:
+			s.server.creatureEffectForceDeselect(ctx, motion)
+		}
+	}
+	// Spell::EffectScriptEffect (SpellEffects.cpp:3604) on the pet
+	// path, same dispatch-ahead-of-damage position as the twin and
+	// inline blocks: the HIT_TARGET arm riding its twin, with the
+	// launch reflected map. Expected inert for real pet casts: the
+	// twin's three arms are spell-ID-gated to boss/NPC spells
+	// (Onyxia 22539-series, Brutallus 45141/45151, Coyote/Blood
+	// Parrot 52173/60243) no pet spellbook carries, and the
+	// ScriptsStart tail has no Go SpellScript bridge — the call is
+	// the harmless mirror of the twin, covering only the
+	// pathological case of a pet somehow carrying one of these IDs.
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectScriptEffect:
+			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
