@@ -1099,18 +1099,21 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		s.server.clearCreatureAurasOnDeath(key)
 	}
 
+	// Unit::Kill battleground tail (Unit.cpp:11446): player && InBattleground.
+	// bgData.InstanceID is the Go mirror (Player.h:1906: bgInstanceID != 0);
+	// map presence alone is not the gate (see handleNoFunnelBattlegroundKill).
 	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)
-	if s.server != nil && s.player.Map == 30 {
+	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 30 {
 		s.server.handleAVCreatureKilled(s, creatureEntry)
 	}
 
 	// Strand of the Ancients (Map 607) creature kills (Demolishers)
-	if s.server != nil && s.player.Map == 607 {
+	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 607 {
 		s.server.handleSACreatureKilled(s, creatureEntry)
 	}
 
 	// Isle of Conquest (Map 628) creature kills (Bosses & Vehicles)
-	if s.server != nil && s.player.Map == 628 {
+	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 628 {
 		s.server.handleICCreatureKilled(s, creatureEntry)
 	}
 
@@ -1433,9 +1436,17 @@ func (s *Server) creditNoFunnelKillingBlow(killer *creatureMotion) {
 // override HandleKillUnit in C++ (Battleground.h:428 base is empty;
 // WSG, AB, and EOTS have no override), so the dispatch mirrors the
 // funnel's three maps and the per-BG handlers re-gate on the session
-// map. C++ gates on player->InBattleground() where Go's dispatch gates
-// on map presence - the funnel's existing delta, shared here rather
-// than fixed one-sided on these chains.
+// map. Both dispatch sites gate on bgData.InstanceID != 0, the direct
+// InBattleground mirror (Player.h:1906: bgInstanceID != 0). The queue
+// check (sessionInBattlegroundType, Status InProgress) is NOT used:
+// C++'s GetBattleground() nil arm reduces to GetBattlegroundId() == 0
+// (Player.cpp: GetBattleground), i.e. the same instance id, and queue
+// status is player queue bookkeeping, not the BG instance's status
+// (AV/IC gate on that separately via Winner; SA has no status gate in
+// C++). Map presence alone would fire for a player standing on a BG
+// map with no BG instance (GM teleport / post-leave), where C++ fires
+// nothing; the manager-lookup-miss half of GetBattleground() has no Go
+// equivalent (per-map state is getOrCreate), recorded as residual.
 func (s *Server) handleNoFunnelBattlegroundKill(victim, killer *creatureMotion) {
 	if s == nil || victim == nil || killer == nil {
 		return
@@ -1446,6 +1457,9 @@ func (s *Server) handleNoFunnelBattlegroundKill(victim, killer *creatureMotion) 
 	}
 	player := s.findSessionByGUID(guid)
 	if player == nil || player.player == nil {
+		return
+	}
+	if player.bgData.InstanceID == 0 {
 		return
 	}
 	switch player.player.Map {
