@@ -1171,6 +1171,18 @@ func spellFirstEffectTargetsUnitPet(spell wotlk.Spell) bool {
 }
 
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
+	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil)
+}
+
+// castCreatureSpellInternalWithBasePoints is castCreatureSpellInternal
+// with a SpellValue base-point override: when basePoints is non-nil the
+// triggered spell's effects take the override values (Spell::SetSpellValue,
+// Spell.cpp:7871-7877, via the player path's CalcBaseValue convention:
+// flat effects take the value, rolled effects take value-1 so the nested
+// CalcValue re-roll lands on it). The store builds a fresh Spell per
+// lookup, so patching the local copy never touches shared DBC data.
+// Callers pass nil for a plain cast.
+func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool, basePoints []int32) {
 	if s == nil || m == nil || spellID == 0 {
 		return
 	}
@@ -1193,6 +1205,17 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if s != nil && s.Data != nil {
 		if si, found, err := s.Data.Spell(spellID); err == nil && found {
 			spellInfo, spellKnown = si, true
+		}
+	}
+	if basePoints != nil && spellKnown {
+		for i, bp := range basePoints {
+			if i < len(spellInfo.Effects) {
+				if spellInfo.Effects[i].DieSides == 0 {
+					spellInfo.Effects[i].BasePoints = bp
+				} else {
+					spellInfo.Effects[i].BasePoints = bp - 1
+				}
+			}
 		}
 	}
 	sendGoPacket := true
@@ -1939,6 +1962,27 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectTriggerSpell (SpellEffects.cpp:823) + EffectCharge
+	// (:4493) + EffectChargeDest (:4528) for a creature caster: the
+	// LAUNCH pre-pass. C++ runs HandleLaunchPhase before the hit phase
+	// (Spell.cpp:7687), so the trigger-spell LAUNCH_TARGET/LAUNCH arms
+	// and the charge LAUNCH_TARGET/LAUNCH movement legs land before every
+	// HIT/HIT_TARGET arm below; the interrupt arm above is the other
+	// launch-phase member. The trigger cases move here from the
+	// effect-grouped block below and the charge legs from the movement
+	// block, unchanged. Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
+				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectCharge:
+				s.creatureEffectCharge(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectChargeDest:
+				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
+			}
+		}
+	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
 	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
 	// (not per hit target), spawning the effect's MiscValue gameobject
@@ -2161,28 +2205,25 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
-	// Spell::EffectTriggerSpell (SpellEffects.cpp:823) + EffectForceCast
-	// (SpellEffects.cpp:1048) for a creature caster: the trigger arms
-	// (LAUNCH_TARGET per target plus once-per-cast LAUNCH, in
-	// creatureEffectTriggerSpell) and the force-cast HIT_TARGET arm,
-	// grouped with the other effect-grouped arms above. Gated on
-	// spellKnown like the tail.
+	// Spell::EffectForceCast (SpellEffects.cpp:1048) for a creature
+	// caster: the force-cast HIT_TARGET arm, grouped with the other
+	// effect-grouped arms above. The trigger-spell LAUNCH arms ride the
+	// pre-pass above, not this block. Gated on spellKnown like the tail.
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
-			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
-				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
 				s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
 	// Spell::EffectLeap (SpellEffects.cpp:4334) + EffectTeleUnitsFaceCaster
-	// (:2618) + EffectCharge (:4493) + EffectChargeDest (:4528) +
-	// EffectPullTowards (:4667) + EffectPullTowardsDest (:4697) +
+	// (:2618) + EffectPullTowards (:4667) + EffectPullTowardsDest (:4697) +
 	// EffectDistract (:2547) + EffectSanctuary (:3757) for a creature
 	// caster: the movement arms, grouped with the other effect-grouped
-	// arms above. Gated on spellKnown like the tail. EffectLeapBack
+	// arms above. The EffectCharge (:4493) and EffectChargeDest (:4528)
+	// LAUNCH legs ride the pre-pass above. Gated on spellKnown like the
+	// tail. EffectLeapBack
 	// (:4593) stays out: its target jumps via the unbridged JumpTo
 	// spline and its only portable leg (the caster fall-information
 	// reset) is player-caster-only, like the jump 41/42 no-ops.
@@ -2193,10 +2234,6 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectLeap(ctx, m, hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTeleportUnitsFaceCaster:
 				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
-			case spellEffectCharge:
-				s.creatureEffectCharge(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
-			case spellEffectChargeDest:
-				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
 			case spellEffectPullTowards:
 				s.creatureEffectPullTowards(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowardsDest:
@@ -4474,13 +4511,12 @@ func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creat
 // player hit targets (creatureEffectSpellDamage, creatureEffectApplyAura,
 // creatureEffectHeal and friends), so no separate player arm is needed.
 // The LAUNCH arms run before SendSpellGo in C++ (HandleLaunchPhase,
-// Spell.cpp:7687); Go's creature dispatch groups every arm after the GO
-// packet, so the triggered cast lands after the sibling hit arms — the
-// same documented phase approximation the other grouped arms carry. The
-// TRIGGER_SPELL_WITH_VALUE base-point override (989-992) has no bridge:
-// castCreatureSpellInternal carries no base-point override, so 142 casts
-// ride DBC base points and the override stays a documented residual,
-// like the power-burn damage leg. The self-trigger guard
+// Spell.cpp:7687); Go's creature dispatch runs its LAUNCH pre-pass ahead of the HIT arms
+// (the GO packet itself still precedes both, a client-visual-only deviation).
+// The TRIGGER_SPELL_WITH_VALUE base-point override (989-992) rides
+// castCreatureSpellInternalWithBasePoints: all triggered effects take the
+// 142 effect's CalcValue, like the player path's base-point direct cast.
+// The self-trigger guard
 // (TriggerSpell == spellID) is the Go-only recursion guard the player
 // path carries; the unknown-triggered-spell gate keeps a stub cast from
 // sending a GO packet for a spell with no effects.
@@ -4517,6 +4553,11 @@ func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMoti
 	if launchTarget == 0 {
 		launchTarget = m.GUID
 	}
+	if eff.Effect == spellEffectTriggerSpellWithValue {
+		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
+		return
+	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
 }
 
@@ -4533,10 +4574,10 @@ func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMoti
 // target casts Lesser Invisibility (7870) on itself, then returns.
 // Replenish Life (34756) and Replenish Mana (33394) cannot target the
 // caster, and the target casts the triggered spell on itself with the
-// computed base point — but only player targets have a base-point
-// override bridge (the target session's direct cast); a creature target
-// has none on this path, so its Replenish arm returns without casting
-// rather than firing a wrong-value heal.
+// computed base point: player targets via the session's base-point
+// direct cast, creature targets via castCreatureSpellInternalWithBasePoints
+// on the target motion (max-health-derived BP0 for Life, the flat effect
+// value for Mana).
 func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, targetGUID uint64) {
 	if s == nil || m == nil || s.Data == nil || targetGUID == 0 {
 		return
@@ -4576,6 +4617,9 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 				}
 				bp0 := int32(0.01 * float64(maxHealth) * float64(eff.BasePoints))
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, []int32{bp0}, 0)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
+				bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(eff.BasePoints))
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, []int32{bp0})
 			}
 			return
 		case triggerReplenishManaSpell:
@@ -4587,6 +4631,8 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 			}
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, []int32{eff.BasePoints}, 0)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, []int32{eff.BasePoints})
 			}
 			return
 		case triggerDemonicEmpowerSuccub:
@@ -4601,6 +4647,11 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 			}
 			return
 		}
+	}
+	if eff.Effect == spellEffectTriggerSpellWithValue {
+		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, []int32{damage, damage, damage})
+		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
 }
@@ -4657,12 +4708,12 @@ func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion) {
 // damage-valued aura from the target and still force-cast below; Hide
 // In Mine Car (52463) and Overtake (52349) are a non-triggered self-cast
 // with SPELLVALUE_BASE_POINT0 set — the player target rides the
-// session's base-point direct cast, while a creature target has no
-// base-point bridge on this path and stays out. Malleable Goo Summon
+// session's base-point direct cast, while a creature target rides
+// castCreatureSpellInternalWithBasePoints with BP0 set. Malleable Goo Summon
 // (72298) is a self-cast by the target instead. The
 // FORCE_CAST_WITH_VALUE (141) base-point override (1102-1104) rides the
-// session's base-point cast for player targets; creature targets cast
-// without it — the same documented residual as the 142 arm above.
+// session's base-point cast for player targets; creature targets ride
+// castCreatureSpellInternalWithBasePoints with all three base points set.
 // FORCE_CAST_2 (160) shares the plain arm: C++ gives it no value leg.
 func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil || s.Data == nil {
@@ -4696,6 +4747,8 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 			case 52463, 52349:
 				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 					ts.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, guid, uint32(damage))
+				} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+					s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, tm.GUID, true, []int32{damage})
 				}
 				continue
 			}
@@ -4712,7 +4765,7 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{damage, damage, damage})
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-				s.castCreatureSpellInternal(ctx, tm, eff.TriggerSpell, m.GUID, true)
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, []int32{damage, damage, damage})
 			}
 			continue
 		}
@@ -5850,9 +5903,9 @@ func (s *Server) creatureEffectTaxi(ctx context.Context, m *creatureMotion, eff 
 // target (then the per-target leg owns it). Both legs cast through
 // castCreatureSpellInternal with the creature as origin; the
 // self-trigger guard matches the trigger-spell arm (a synchronous
-// self-cast would recurse). Residuals: the 148 with-value base-point
-// override has no bridge on this path (castCreatureSpellInternal
-// carries no base-point parameter, same as the 142 residual); the
+// self-cast would recurse). The 148 with-value base-point override rides
+// castCreatureSpellInternalWithBasePoints (all triggered effects take the
+// 148 effect's CalcValue, same as the 142 arm); the
 // explicit-dest leg rides the internal dest resolution for
 // dest-family triggered spells, and the caster-unit leg is the
 // launchTarget fallback below.
@@ -5879,7 +5932,12 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 				}
 				guid = m.GUID
 			}
-			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
+			if eff.Effect == spellEffectTriggerMissileWithValue {
+				damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, []int32{damage, damage, damage})
+			} else {
+				s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
+			}
 		}
 	}
 	if needsCaster && spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0 {
@@ -5888,6 +5946,11 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 	launchTarget := castTargetGUID
 	if launchTarget == 0 {
 		launchTarget = m.GUID
+	}
+	if eff.Effect == spellEffectTriggerMissileWithValue {
+		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
+		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
 }
@@ -6236,6 +6299,15 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		return
 	}
 	durationMs, durationFound, err := s.Data.SpellDuration(spell.DurationIndex, casterLevel(m))
+	// Aura::CalcMaxDuration (SpellAuras.cpp:871-886) folds
+	// SPELLMOD_DURATION into the DBC duration via GetSpellModOwner
+	// (Object.cpp:2246-2268) — the pet/totem owner's session, nil for
+	// wild casters, mirroring the player path's fold. A non-positive
+	// result expires the aura immediately in C++; the spawn below
+	// skips non-positive durations, the same no-patch outcome.
+	if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+		durationMs = modOwner.applySpellMod(spell, spellModDuration, durationMs)
+	}
 	if err != nil || !durationFound || durationMs <= 0 {
 		return
 	}
@@ -7630,8 +7702,15 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {
 				// HandleProcTriggerSpellWithValueAuraProc passes the
 				// triggering effect's own amount (SpellAuraEffects.cpp:5726-5728)
-				// as SPELLVALUE_BASE_POINT0. castCreatureSpellInternal has
-				// no base-point override, so this leg stays unbridged.
+				// as SPELLVALUE_BASE_POINT0, via
+				// castCreatureSpellInternalWithBasePoints. The amount
+				// read mirrors the damage-proc helper's per-effect
+				// amount (Amounts[i], falling back to Amount).
+				bp0 := aura.Amount
+				if i >= 0 && i < len(aura.Amounts) && aura.Amounts[i] > 0 {
+					bp0 = uint32(aura.Amounts[i])
+				}
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, triggerTargetGUID, true, []int32{int32(bp0)})
 				continue
 			}
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the

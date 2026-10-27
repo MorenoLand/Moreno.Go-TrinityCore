@@ -198,11 +198,11 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			// no player session exists by construction, so the session
 			// gate above would despawn the object on its first pass.
 			// A live creature motion on the object's map/instance keeps
-			// it for its duration; the session target-map pass below is
-			// skipped for it (cast-time application covers the initial
-			// targets, documented at creatureEffectPersistentAreaAura).
-			// A vanished caster still despawns, as before.
-			if s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID) != nil {
+			// it for its duration and runs the creature target-map pass
+			// (newcomers gain the aura, leavers lose it); a vanished
+			// caster still despawns, as before.
+			if caster := s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID); caster != nil {
+				s.updateCreatureDynobjTargetMap(ctx, object, caster)
 				continue
 			}
 			s.despawnDynamicSpellObject(object.GUID)
@@ -259,6 +259,119 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			object.AuraHolders[targetGUID] = struct{}{}
 		}
 	}
+}
+
+// updateCreatureDynobjTargetMap runs the 500ms target-map pass for a
+// creature-caster dynobj (creatureEffectPersistentAreaAura): newcomers
+// inside the radius gain the aura, leavers lose it (Aura::UpdateTargetMap,
+// SpellAuras.cpp:643-767), mirroring the session pass above. Cast-time
+// applications are not seeded into AuraHolders, so a holder already
+// carrying the aura is adopted into the map without re-applying (a
+// re-apply would refresh its duration every pass); a holder in the map
+// whose aura is gone is applied fresh. The gates mirror the cast-time
+// loop: in-flight players skip, the dead gate rides the spell's passive /
+// CAN_TARGET_DEAD flags, and creature targets ride
+// serverApplyAuraToCreatureTarget's own dead/evade gates.
+func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dynamicSpellObjectState, caster *creatureMotion) {
+	if s == nil || object == nil || caster == nil {
+		return
+	}
+	spell := object.SpellData
+	spellID := uint32(object.SpellID)
+	friendly := isFriendlyAreaSpell(spell)
+	inRadius := make(map[uint64]struct{})
+	playerTargets := make(map[uint64]*session)
+	s.sessionsMu.RLock()
+	var players []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.player != nil && sess.player.Map == object.Map && sess.player.InstanceID == object.InstanceID {
+			players = append(players, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, vs := range players {
+		if vs.player == nil || vs.inFlight {
+			continue
+		}
+		if distance3D(vs.player.X, vs.player.Y, vs.player.Z, object.X, object.Y, object.Z) > float64(object.Radius) {
+			continue
+		}
+		if friendly != s.creatureFriendlyToTarget(caster, vs.playerGUID) {
+			continue
+		}
+		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+			continue
+		}
+		inRadius[vs.playerGUID] = struct{}{}
+		playerTargets[vs.playerGUID] = vs
+	}
+	type creatureTarget struct {
+		guid    uint64
+		x, y, z float32
+	}
+	s.motionMu.Lock()
+	var creatureTargets []creatureTarget
+	for _, tm := range s.motionMapLocked(object.Map, object.InstanceID) {
+		if tm != nil {
+			creatureTargets = append(creatureTargets, creatureTarget{guid: tm.GUID, x: tm.X, y: tm.Y, z: tm.Z})
+		}
+	}
+	s.motionMu.Unlock()
+	for _, tm := range creatureTargets {
+		if distance3D(tm.x, tm.y, tm.z, object.X, object.Y, object.Z) > float64(object.Radius) {
+			continue
+		}
+		if friendly != s.creatureFriendlyToTarget(caster, tm.guid) {
+			continue
+		}
+		inRadius[tm.guid] = struct{}{}
+	}
+	for holderGUID := range object.AuraHolders {
+		if _, ok := inRadius[holderGUID]; ok {
+			continue
+		}
+		s.expireDynobjHolderAura(object, holderGUID, spellID)
+		delete(object.AuraHolders, holderGUID)
+	}
+	if object.AuraHolders == nil {
+		object.AuraHolders = make(map[uint64]struct{})
+	}
+	for guid := range inRadius {
+		if _, ok := object.AuraHolders[guid]; ok {
+			continue
+		}
+		if s.creatureDynobjAuraPresent(object, guid) {
+			object.AuraHolders[guid] = struct{}{}
+			continue
+		}
+		if vs, ok := playerTargets[guid]; ok && vs != nil {
+			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level))
+		} else {
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid)
+		}
+		object.AuraHolders[guid] = struct{}{}
+	}
+}
+
+// creatureDynobjAuraPresent reports whether guid already carries the
+// dynobj's aura from this caster — the map-membership check the
+// target-map pass needs when AuraHolders was not seeded at cast time.
+func (s *Server) creatureDynobjAuraPresent(object *dynamicSpellObjectState, guid uint64) bool {
+	if s == nil || object == nil || guid == 0 {
+		return false
+	}
+	spellID := uint32(object.SpellID)
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		aura := ts.activeAuras[spellID]
+		ts.castMu.Unlock()
+		return aura != nil && !aura.Stopped && aura.CasterGUID == object.CasterGUID && aura.PersistentAreaAura
+	}
+	key := creatureAuraKey{Map: object.Map, InstanceID: object.InstanceID, GUID: guid}
+	s.auraMu.Lock()
+	aura := s.activeCreatureAuras[key][spellID]
+	s.auraMu.Unlock()
+	return aura != nil && !aura.Stopped && aura.CasterGUID == object.CasterGUID && aura.PersistentAreaAura
 }
 
 // expireDynobjHolderAura removes a persistent-area aura from a holder that
