@@ -3860,7 +3860,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// and the explicit object target (Spell.cpp:1575); the twin (boss_ai.go)
 	// and the inline path (creaturemotion.go) already jump, but the pet path
 	// never did, so a pet chain spell hit the wire target only. Anchor is
-	// targetGUID: the nearby pick when a nearby leg ran, else the wire target.
+	// the winning effect's own primary (player convention, 09ec730a): a
+	// TARGET-object winner anchors on target.UnitGUID — the post-redirect wire
+	// target, which the nearby block never rewrites even as it moves targetGUID
+	// to the pick — while a NEARBY winner keeps targetGUID.
 	// The owner session is the spell-mod owner for pets (C++ GetSpellModOwner),
 	// so the SPELLMOD_JUMP_TARGETS fold runs here where the twin passes nil.
 	// Jumps join hitTargets ahead of the reflect/miss verdicts below so each
@@ -3872,7 +3875,24 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if targetGUID != 0 {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 			chainEffectMask = effectMask
-			for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, targetGUID, jumps, isChainHeal, checkType, effectMask) {
+			anchor := targetGUID
+			winTarget := uint32(0)
+			for i, eff := range spell.Effects {
+				if effectMask == 1<<uint(i) {
+					winTarget = eff.ImplicitTargetA
+					if !chainSelectionEligibleTarget(winTarget) {
+						winTarget = eff.ImplicitTargetB
+					}
+					break
+				}
+			}
+			switch winTarget {
+			case 6, 21, 25, 35, 45, 57, 90, 95:
+				if target.UnitGUID != 0 {
+					anchor = target.UnitGUID
+				}
+			}
+			for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, anchor, jumps, isChainHeal, checkType, effectMask) {
 				if jumpGUID == 0 {
 					continue
 				}

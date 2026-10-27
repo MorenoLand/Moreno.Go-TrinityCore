@@ -4222,15 +4222,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// creature caster: chain jumps join the hit list like the cone leg
 				// above - the castCreatureSpellInternal twin already jumps, so a
 				// victim-targeted AI chain spell previously hit the wire victim (plus
-				// area legs) and never jumped. Anchor is hitTargets[0]: the nearby
-				// pick when a nearby leg ran, else the wire victim. Jump targets join
+				// area legs) and never jumped. Anchor is the winning effect's own
+				// primary (player convention, 09ec730a): a TARGET-object winner
+				// anchors on spellTarget.UnitGUID — the post-redirect wire victim,
+				// which the nearby rebuild never rewrites even as hitTargets[0]
+				// becomes the pick — while a NEARBY winner keeps hitTargets[0]. Jump targets join
 				// the area legs like the cone leg so they roll reflect/miss verdicts
 				// and take the damage/dispatch legs below; a static-spawn jump rides
 				// the packet only. Dedupe against hitTargets: a jump already selected
 				// by an area leg would otherwise double-hit.
 				if len(hitTargets) > 0 {
 					if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, inlineSpell); jumps > 0 {
-						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, hitTargets[0], jumps, isChainHeal, checkType, effectMask) {
+						anchor := hitTargets[0]
+						winTarget := uint32(0)
+						for i, eff := range inlineSpell.Effects {
+							if effectMask == 1<<uint(i) {
+								winTarget = eff.ImplicitTargetA
+								if !chainSelectionEligibleTarget(winTarget) {
+									winTarget = eff.ImplicitTargetB
+								}
+								break
+							}
+						}
+						switch winTarget {
+						case 6, 21, 25, 35, 45, 57, 90, 95:
+							if spellTarget.UnitGUID != 0 {
+								anchor = spellTarget.UnitGUID
+							}
+						}
+						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {
 							if jumpGUID == 0 {
 								continue
 							}

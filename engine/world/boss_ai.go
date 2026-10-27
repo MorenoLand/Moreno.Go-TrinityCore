@@ -1861,10 +1861,31 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// target of a 77 effect), and C++ folds it into that unit's
 		// single m_UniqueTargetInfo entry — appending it twice here
 		// would double-list it in the GO packet and double-fire the
-		// per-hit legs below.
+		// per-hit legs below. Anchor is the winning effect's own primary
+		// (player plain/triggered convention, 09ec730a): a TARGET-object
+		// winning effect anchors on spellTarget.UnitGUID — the post-redirect
+		// wire target, which the nearby block above never rewrites even as it
+		// moves targetGUID to the pick — while a NEARBY winner keeps targetGUID.
 		if spellKnown && targetGUID != 0 {
 			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
-				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask) {
+				anchor := targetGUID
+				winTarget := uint32(0)
+				for i, eff := range spellInfo.Effects {
+					if effectMask == 1<<uint(i) {
+						winTarget = eff.ImplicitTargetA
+						if !chainSelectionEligibleTarget(winTarget) {
+							winTarget = eff.ImplicitTargetB
+						}
+						break
+					}
+				}
+				switch winTarget {
+				case 6, 21, 25, 35, 45, 57, 90, 95:
+					if spellTarget.UnitGUID != 0 {
+						anchor = spellTarget.UnitGUID
+					}
+				}
+				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {
 					if jumpGUID == 0 {
 						continue
 					}
