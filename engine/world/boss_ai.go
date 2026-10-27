@@ -2067,8 +2067,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			s.creatureEffectHealthLeech(ctx, m, spellInfo, leechDealt)
 		}
 	}
-	// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectEnergize
-	// (SpellEffects.cpp:1775) for a creature caster: the HIT_TARGET
+	// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectHealPct (:1477)
+	// + EffectEnergize (SpellEffects.cpp:1775) + EffectEnergizePct
+	// (:1847) for a creature caster: the HIT_TARGET
 	// arms, player and creature hit targets alike, grouped with the
 	// other effect-grouped arms above. Gated on spellKnown like the
 	// tail.
@@ -2077,8 +2078,31 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectHeal:
 				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectHealPct:
+				s.creatureEffectHealPct(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnergize:
 				s.creatureEffectEnergize(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectEnergizePct:
+				s.creatureEffectEnergizePct(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectPowerDrain (SpellEffects.cpp:1265) + EffectPowerBurn
+	// (SpellEffects.cpp:1352) for a creature caster: the HIT_TARGET arms,
+	// grouped with the other effect-grouped arms above. The burn damage
+	// leg (drained x value multiplier into TargetInfo.Damage,
+	// Spell.cpp:2522-2547) has no amount-based damage applier on this
+	// path — the damage arms are effect-value-driven — so it stays a
+	// documented residual; the power take, the Mana Burn cap, the caster
+	// gain, and the take-target-power log land here. Gated on spellKnown
+	// like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectPowerDrain:
+				s.creatureEffectPowerDrain(ctx, m, spellInfo, spellInfo.Effects[i], i, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectPowerBurn:
+				s.creatureEffectPowerBurn(ctx, m, spellInfo, spellInfo.Effects[i], i, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3410,6 +3434,26 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 
 // creatureEffectHeal mirrors Spell::EffectHeal (SpellEffects.cpp:1393)
 // for a creature caster: the HIT_TARGET arm, player and creature hit
+// targets alike (shared delivery in creatureEffectHealCommon).
+func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false)
+}
+
+// creatureEffectHealPct mirrors Spell::EffectHealPct (SpellEffects.cpp:1477)
+// for a creature caster: the HIT_TARGET arm, player and creature hit
+// targets alike. The effect value is a percentage of the TARGET's max
+// health (Unit::CountPctFromMaxHealth), not a flat amount; the
+// Death Pact, Vessel of the Naaru, and Swiftmend arms live in EffectHeal
+// only, and the Grievous Bite removal lives in EffectHeal only (the
+// client path's 10/136 comment) — none of them runs here. Otherwise the
+// delivery is the shared creatureEffectHealCommon body.
+func (s *Server) creatureEffectHealPct(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true)
+}
+
+// creatureEffectHealCommon is the shared HIT_TARGET heal delivery for
+// EffectHeal (SpellEffects.cpp:1393) and, in pctMode, EffectHealPct
+// for a creature caster: the HIT_TARGET arm, player and creature hit
 // targets alike. The base value is the effect's CalcValueForLevel at
 // the caster's level; the Death Pact arm replaces it with a percentage
 // of the caster's max health, the Vessel of the Naaru arm adds the
@@ -3422,7 +3466,7 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 // the capped health gain, the heal log, and the Grievous Bite removal
 // run in C++ order. Chain falloff has no model on this path (the cast
 // carries no chain-jump index), so the chain multiplier is 1.
-func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool) {
 	if s == nil || m == nil {
 		return
 	}
@@ -3430,10 +3474,10 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 	if base < 0 {
 		return
 	}
-	if spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
+	if !pctMode && spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
 		base = int32(uint64(m.MaxHealth) * uint64(base) / 100)
 	}
-	if spell.ID == 45064 {
+	if !pctMode && spell.ID == 45064 {
 		casterKey := creatureAuraKeyForMotion(m)
 		s.auraMu.Lock()
 		var holyEnergy uint32
@@ -3446,7 +3490,7 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 			s.removeCreatureAura(casterKey, 45062)
 		}
 	}
-	swiftmend := spell.TargetAuraState == auraStateSwiftmend
+	swiftmend := !pctMode && spell.TargetAuraState == auraStateSwiftmend
 	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
 	casterKey := creatureAuraKeyForMotion(m)
 	for _, guid := range hitTargets {
@@ -3459,8 +3503,6 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 			}
 			guid = m.GUID
 		}
-		heal := uint32(base)
-		doneBonus := true
 		var vs *session
 		var tm *creatureMotion
 		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
@@ -3476,6 +3518,22 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 		} else {
 			continue
 		}
+		var heal uint32
+		if pctMode {
+			var maxHealth uint32
+			if vs != nil {
+				maxHealth = vs.player.MaxHealth
+			} else {
+				maxHealth = tm.MaxHealth
+			}
+			if maxHealth == 0 {
+				continue
+			}
+			heal = uint32(uint64(maxHealth) * uint64(base) / 100)
+		} else {
+			heal = uint32(base)
+		}
+		doneBonus := true
 		if swiftmend {
 			if vs != nil {
 				if vs.targetHasAuraState(ctx, guid, auraStateSwiftmend, spell) {
@@ -3592,11 +3650,13 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, true)
 		}
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, vs)
-		if vs != nil {
-			vs.removeGrievousBiteIfFullyHealed(guid)
-		} else if tm != nil && tm.MaxHealth > 0 {
-			if live := s.findCreatureMotion(m.Map, m.InstanceID, guid); live != nil && live.Health >= live.MaxHealth {
-				s.removeCreatureAura(creatureAuraKeyForMotion(live), 48920)
+		if !pctMode {
+			if vs != nil {
+				vs.removeGrievousBiteIfFullyHealed(guid)
+			} else if tm != nil && tm.MaxHealth > 0 {
+				if live := s.findCreatureMotion(m.Map, m.InstanceID, guid); live != nil && live.Health >= live.MaxHealth {
+					s.removeCreatureAura(creatureAuraKeyForMotion(live), 48920)
+				}
 			}
 		}
 	}
@@ -3604,6 +3664,28 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 
 // creatureEffectEnergize mirrors Spell::EffectEnergize
 // (SpellEffects.cpp:1775) for a creature caster: the HIT_TARGET arm,
+// player and creature hit targets alike (shared delivery in
+// creatureEffectEnergizeCommon).
+func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectEnergizeCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false)
+}
+
+// creatureEffectEnergizePct mirrors Spell::EffectEnergizePct
+// (SpellEffects.cpp:1847) for a creature caster: the HIT_TARGET arm,
+// player and creature hit targets alike. The effect value is a
+// percentage of the TARGET's max power for the MiscValue power; the
+// per-spell level adjustments and the percentage-of-create-mana specials
+// live in EffectEnergize only, and the player power-type gate carries no
+// potion-family exemption (C++ :1866-1867 names ATTR7 only, unlike the
+// EffectEnergize gate). Otherwise the delivery is the shared
+// creatureEffectEnergizeCommon body.
+func (s *Server) creatureEffectEnergizePct(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectEnergizeCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true)
+}
+
+// creatureEffectEnergizeCommon is the shared HIT_TARGET energize delivery
+// for EffectEnergize (SpellEffects.cpp:1775) and, in pctMode,
+// EffectEnergizePct, for a creature caster: the HIT_TARGET arm,
 // player and creature hit targets alike. The per-spell level
 // adjustments ride the caster's level (Restore Energy, Blood Fury,
 // Burst of Energy); the percentage-of-create-mana specials
@@ -3617,7 +3699,7 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 // ATTR7_CAN_RESTORE_SECONDARY_POWER; creature targets skip that
 // gate. The log and the assist-threat tail ride
 // distributeHealingThreat, like the session twin's energizeBySpellTail.
-func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool) {
 	if s == nil || m == nil {
 		return
 	}
@@ -3644,7 +3726,11 @@ func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, 
 			if vs.player.Health == 0 || vs.player.MaxPowers[uint32(power)] == 0 {
 				continue
 			}
-			if playerPowerType(vs.player) != uint8(power) && spell.SpellFamilyName != spellFamilyPotion && spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower == 0 {
+			secondaryOK := spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower != 0
+			if !pctMode && spell.SpellFamilyName == spellFamilyPotion {
+				secondaryOK = true
+			}
+			if playerPowerType(vs.player) != uint8(power) && !secondaryOK {
 				continue
 			}
 		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {
@@ -3655,25 +3741,7 @@ func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, 
 		} else {
 			continue
 		}
-		switch spell.ID {
-		case 9512, 24571, 24532:
-			var lvlBase, mult int32
-			switch spell.ID {
-			case 9512:
-				lvlBase, mult = 40, 2
-			case 24571:
-				lvlBase, mult = 60, 10
-			default:
-				lvlBase, mult = 60, 4
-			}
-			if diff := int32(m.Level) - lvlBase; diff > 0 {
-				amount -= mult * diff
-			}
-		case 31930, 63375, 68082:
-			if vs != nil {
-				amount = int32(int64(energizeCreateMana(vs)) * int64(amount) / 100)
-			}
-		case 48542:
+		if pctMode {
 			var maxPower uint32
 			if vs != nil {
 				maxPower = vs.player.MaxPowers[uint32(power)]
@@ -3681,9 +3749,37 @@ func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, 
 				maxPower = tm.MaxPowers[uint32(power)]
 			}
 			amount = int32(int64(maxPower) * int64(amount) / 100)
-		case 71132:
-			if vs != nil {
-				amount = int32(int64(energizeCreateMana(vs)) / 100)
+		} else {
+			switch spell.ID {
+			case 9512, 24571, 24532:
+				var lvlBase, mult int32
+				switch spell.ID {
+				case 9512:
+					lvlBase, mult = 40, 2
+				case 24571:
+					lvlBase, mult = 60, 10
+				default:
+					lvlBase, mult = 60, 4
+				}
+				if diff := int32(m.Level) - lvlBase; diff > 0 {
+					amount -= mult * diff
+				}
+			case 31930, 63375, 68082:
+				if vs != nil {
+					amount = int32(int64(energizeCreateMana(vs)) * int64(amount) / 100)
+				}
+			case 48542:
+				var maxPower uint32
+				if vs != nil {
+					maxPower = vs.player.MaxPowers[uint32(power)]
+				} else {
+					maxPower = tm.MaxPowers[uint32(power)]
+				}
+				amount = int32(int64(maxPower) * int64(amount) / 100)
+			case 71132:
+				if vs != nil {
+					amount = int32(int64(energizeCreateMana(vs)) / 100)
+				}
 			}
 		}
 		if amount < 0 {
@@ -3738,6 +3834,205 @@ func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, 
 			s.distributeHealingThreat(ctx, m.GUID, guid, uint32(amount), true, spell.ID)
 		}
 	}
+}
+
+// creatureEffectPowerDrain mirrors Spell::EffectPowerDrain
+// (SpellEffects.cpp:1265) for a creature caster: the HIT_TARGET arm,
+// player and creature hit targets alike (shared take core in
+// creatureEffectPowerTake). The npcbot Obsidian Destroyer leg is vacuous
+// (no npcbot model); the Done bonus has no creature-side model (see the
+// creatureProcTriggerDamageAuraProc comment), so the amount starts at
+// the Taken leg like the damage pipeline.
+func (s *Server) creatureEffectPowerDrain(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectPowerTake(ctx, m, spell, eff, effIndex, hitTargets, reflected, evaded, immune, missed, true)
+}
+
+// creatureEffectPowerBurn mirrors Spell::EffectPowerBurn
+// (SpellEffects.cpp:1352) for a creature caster: the HIT_TARGET arm,
+// player and creature hit targets alike (shared take core in
+// creatureEffectPowerTake). The Mana Burn (8129) percent/cap arm is
+// burn-only. The damage leg — drained x the effect VALUE multiplier
+// (not the damage multiplier, SpellEffects.cpp:1382) into
+// TargetInfo.Damage — has no amount-based damage applier on this path
+// and stays a documented residual; the power take and the log land here.
+func (s *Server) creatureEffectPowerBurn(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectPowerTake(ctx, m, spell, eff, effIndex, hitTargets, reflected, evaded, immune, missed, false)
+}
+
+// creatureEffectPowerTake is the shared HIT_TARGET power-take core for
+// EffectPowerDrain (SpellEffects.cpp:1265) and EffectPowerBurn (:1352):
+// an alive unit whose power type matches the MiscValue power loses up to
+// the take amount (drain: effect value through the Taken leg, then the
+// mana resilience slice; burn: the Mana Burn percent/cap arm, then the
+// same slice), the drain restores the taken power to the caster scaled
+// by the effect value multiplier (never on a self drain), and the
+// take-target-power log fires past the gates even for a zero take (the
+// session arms' convention). Gate failures log nothing.
+func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, drain bool) {
+	if s == nil || m == nil {
+		return
+	}
+	power := eff.MiscValue
+	if power < 0 || power >= 7 {
+		return
+	}
+	powerType := uint32(power)
+	schoolMask := uint32(1)
+	if spell.SchoolMask != 0 {
+		schoolMask = spell.SchoolMask
+	}
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	effectID := uint32(spellEffectPowerBurn)
+	if drain {
+		effectID = uint32(spellEffectPowerDrain)
+	}
+	var logEntries []takeTargetPowerEntry
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		var vs *session
+		var tm *creatureMotion
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			vs = ts
+			if vs.player.Health == 0 || playerPowerType(vs.player) != uint8(powerType) || vs.player.MaxPowers[powerType] == 0 {
+				continue
+			}
+		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {
+			tm = mv
+			if tm.Health == 0 || tm.PowerType != powerType || tm.MaxPowers[powerType] == 0 {
+				continue
+			}
+		} else {
+			continue
+		}
+		base := eff.CalcValueForLevel(spell, casterLevel(m))
+		if base < 0 {
+			continue
+		}
+		var current, maxPower uint32
+		if vs != nil {
+			current = vs.player.Powers[powerType]
+			maxPower = vs.player.MaxPowers[powerType]
+		} else {
+			current = tm.Powers[powerType]
+			maxPower = tm.MaxPowers[powerType]
+		}
+		var take int64
+		if drain {
+			taken := uint32(base)
+			if vs != nil {
+				taken = spellDamageBonusTaken(taken, spell, schoolMask, vs, nil, 1.0)
+			} else {
+				taken = creatureSpellDamageBonusTaken(s, taken, spell, schoolMask, creatureAuraKeyForMotion(tm), nil, 1.0)
+			}
+			take = int64(taken)
+			if powerType == 0 && vs != nil {
+				take -= int64(drainManaResilienceReduction(vs, uint32(take)))
+			}
+		} else {
+			take = int64(base)
+			if spell.ID == 8129 {
+				take = int64(maxPower) * int64(base) / 100
+				if cap := int64(m.MaxPowers[powerType]) * int64(base) * 2 / 100; take > cap {
+					take = cap
+				}
+			}
+			if powerType == 0 && vs != nil {
+				take -= int64(drainManaResilienceReduction(vs, uint32(take)))
+			}
+		}
+		if take < 0 {
+			take = 0
+		}
+		drained := uint32(0)
+		if take > 0 && current > 0 {
+			drained = uint32(take)
+			if uint64(drained) > uint64(current) {
+				drained = current
+			}
+			next := current - drained
+			if vs != nil {
+				vs.player.Powers[powerType] = next
+				packet := protocol.NewBuffer(13)
+				packet.WritePackedGUID(vs.playerGUID)
+				packet.WriteU8(uint8(powerType))
+				packet.WriteU32(next)
+				_ = vs.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
+			} else {
+				s.motionMu.Lock()
+				live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+				if live != nil {
+					live.Powers[powerType] = next
+					if powerType == 0 {
+						live.Mana = next
+					} else if powerType == 4 {
+						live.Happiness = next
+					}
+				}
+				s.motionMu.Unlock()
+				s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): next})
+			}
+		}
+		gainMultiplier := float32(0)
+		if drain && guid != m.GUID {
+			gainMultiplier = calcValueMultiplier(spell, effIndex, modOwner)
+			if drained > 0 {
+				gain := int32(effectValueMultiplied(drained, gainMultiplier))
+				if gain > 0 {
+					s.motionMu.Lock()
+					live := s.findCreatureMotionLocked(m.Map, m.InstanceID, m.GUID)
+					var next uint32
+					changed := false
+					if live != nil && live.Health > 0 {
+						next = live.Powers[powerType] + uint32(gain)
+						if next > live.MaxPowers[powerType] {
+							next = live.MaxPowers[powerType]
+						}
+						if next != live.Powers[powerType] {
+							live.Powers[powerType] = next
+							if powerType == 0 {
+								live.Mana = next
+							} else if powerType == 4 {
+								live.Happiness = next
+							}
+							changed = true
+						}
+					}
+					s.motionMu.Unlock()
+					if changed {
+						s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, m.GUID, map[int]uint32{unitFieldPower1 + int(powerType): next})
+						logPkt := buildSpellEnergizeLog(m.GUID, m.GUID, spell.ID, powerType, gain)
+						s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, nil)
+						s.distributeHealingThreat(ctx, m.GUID, m.GUID, uint32(gain), true, spell.ID)
+					}
+				}
+			}
+		}
+		logEntries = append(logEntries, takeTargetPowerEntry{targetGUID: guid, powerTaken: drained, powerType: powerType, gainMultiplier: gainMultiplier})
+	}
+	if len(logEntries) == 0 {
+		return
+	}
+	log := protocol.NewBuffer(64)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spell.ID)
+	log.WriteU32(1)
+	log.WriteU32(effectID)
+	log.WriteU32(uint32(len(logEntries)))
+	for _, t := range logEntries {
+		log.WritePackedGUID(t.targetGUID)
+		log.WriteU32(t.powerTaken)
+		log.WriteU32(t.powerType)
+		log.WriteF32(t.gainMultiplier)
+	}
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
 }
 
 // creatureInstaKillVictim runs the creature-victim legs of a creature
