@@ -10129,6 +10129,78 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+	// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
+	// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a
+	// sibling effect is area, list, or nearby: the object arm runs regardless
+	// of ChainTarget (SelectImplicitChainTargets, Spell.cpp:1582, no-ops at
+	// ChainTarget 1 after the AddUnitTarget). Every chain block above requires
+	// jumps > 0, so a ChainTarget-1 plain effect's primary was dropped by the
+	// list branch from the GO packet, the initial-threat and AOE-cap divisors
+	// (both read the whole unique list), the break-aura leg, and the
+	// per-effect fan-out below, which all iterate hitTargets. The rejoin
+	// mirrors the chain blocks' wire arms exactly (AddUnitTarget, Spell.cpp:2095:
+	// one merged entry, one verdict roll): a primary already in the list keeps
+	// the list roll's verdict, a primary already carrying a miss entry keeps
+	// it (a chain block rolled it), and a fresh primary rolls the wire arms,
+	// with a clean reflect recording index 0 like the chain primary. No falloff
+	// index is recorded: ChainTarget 1 has no jumps, so the falloff reads 0.
+	// GO wire primaries stay out: the wire-GO block below rejoins them under
+	// its explicit-mask gate.
+	if (areaSpell || friendlyListSpell || friendlyNearbySpell || hostileNearbySpell || entryNearbySpell || goNearbyEntrySpell) && spellHasTargetObjectEffect(spell) {
+		anchor := target.UnitGUID
+		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+			primaryInList := false
+			for _, guid := range hitTargets {
+				if guid == anchor {
+					primaryInList = true
+					break
+				}
+			}
+			primaryVerdicted := false
+			for _, miss := range missStatus {
+				if miss.TargetGUID == anchor {
+					primaryVerdicted = true
+					break
+				}
+			}
+			if !primaryInList && !primaryVerdicted {
+				var primarySess *session
+				if s.server != nil {
+					primarySess = s.server.findSessionByGUID(anchor)
+				}
+				var primaryFaction uint32
+				if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
+					primaryFaction = tgt.Faction
+				}
+				if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+				} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+				} else if primarySess != nil && spellHasOnlyDamageEffects(spell) && primarySess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+				} else if primarySess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, anchor), spell, spell.SchoolMask) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+				} else if missInfo := s.spellTargetMissResult(ctx, anchor, spell); missInfo != protocol.SpellMissNone {
+					entry := protocol.SpellMissStatus{TargetGUID: anchor, Reason: missInfo}
+					if missInfo == protocol.SpellMissReflect {
+						entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+						if entry.ReflectStatus == protocol.SpellMissNone {
+							reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+						}
+					}
+					missStatus = append(missStatus, entry)
+				} else if primarySess != nil && s.spellTargetFullyEffectImmune(spell, primarySess) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+				} else if primarySess == nil && s.creatureTargetFullyEffectImmune(ctx, anchor, spell, s, primaryFaction) {
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+				} else {
+					hitTargets = append(hitTargets, anchor)
+				}
+			}
+		}
+	}
+
 	// Spell::prepare (Spell.cpp:3040-3056) fills m_auraScaleMask for
 	// player-cast, non-passive, SpellLevel-carrying, non-channeled,
 	// non-triggered buff spells; the AddUnitTarget min-level arm
