@@ -1642,10 +1642,99 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// STATUS_IN_PROGRESS leg (BattleGroundHandler.cpp:468-482): the slot data
 		// C++ keeps across the port — SetBattlegroundId (instance) and SetBGTeam
 		// (ginfo.Team) — then the BuildBattlegroundStatusPacket. The
-		// RemovePlayerAtLeave leg and the SendToBattleground teleport
-		// (BattleGroundHandler.cpp:472-486) have no Go world model: there is no
-		// BattlegroundMgr / live Battleground instance to port the player into, so
-		// the port itself is documented no-bridge rather than stubbed.
+		// SendToBattleground teleport (BattleGroundHandler.cpp:472-486) has no Go
+		// world model: there is no BattlegroundMgr / live Battleground instance
+		// to port the player into, so the port itself is documented no-bridge
+		// rather than stubbed. The RemovePlayerAtLeave leg (BattleGroundHandler.cpp:
+		// 476-479) IS ported below, as the BG-jump arm.
+		//
+		// BG-jump (BattleGroundHandler.cpp:476-479): when the player is already
+		// inside a battleground (GetBattleground() != null) and accepts another
+		// invite, C++ runs currentBg->RemovePlayerAtLeave(guid, false, true) on
+		// the OLD battleground before SetBattlegroundId switches to the new one.
+		// Transport=false is the whole point: no TeleportToBGEntryPoint, and the
+		// immediate SendToBattleground carries the player to the new BG instead.
+		// RemovePlayerAtLeave is NOT LeaveBattleground, so no deserter is cast
+		// or tracked here — that is why jumping "shouldn't add deserter debuff"
+		// (BattleGroundHandler.cpp:477). A WaitJoin old slot is not a jump: the
+		// player is invited but not yet in that BG (GetBattleground() is null),
+		// so only InProgress and WaitLeave old slots are removed; WaitLeave
+		// counts because the ended match still holds the player until the
+		// auto-remove runs. The internal arms run here, before the overwrite
+		// below (the raid removal reads the old bgData instance), while the
+		// old STATUS_NONE packets go out after the new IN_PROGRESS packet,
+		// matching the C++ packet order. Stay-outs: ScheduleQueueUpdate /
+		// AddToBGFreeSlotQueue (sim pops are timer-driven, no scheduler),
+		// the PlayerLeft team packet (Go has no SendPacketToTeam twin;
+		// broadcastToMap would leak it to the enemy team), and the
+		// empty-BG state delete (the player.Map-based emptiness proxy cannot
+		// prove the old map empty, so deleting would drop a live match).
+		type bgJumpOldSlot struct {
+			index      int
+			instanceID uint32
+			mapID      uint32
+		}
+		var jumpOld []bgJumpOldSlot
+		for i := range s.bgQueues {
+			if i == slot {
+				continue
+			}
+			e := &s.bgQueues[i]
+			if !e.Active || e.InstanceID == 0 || (e.Status != BGStatusInProgress && e.Status != BGStatusWaitLeave) {
+				continue
+			}
+			jumpOld = append(jumpOld, bgJumpOldSlot{index: i, instanceID: e.InstanceID, mapID: e.MapID})
+		}
+		if len(jumpOld) > 0 {
+			// Battleground::RemovePlayer (Battleground.cpp:894-900) subclass
+			// arms, via the same per-map leave funnel handleLeaveBattlefield
+			// uses; they key off player.Map and no-op for a jumper who never
+			// landed on the old BG map, exactly as the leave path does.
+			s.server.handleWSGPlayerLeave(s)
+			s.server.handleEOTSPlayerLeave(s)
+			s.server.handleSAPlayerLeave(s)
+			s.server.handleICPlayerLeave(s)
+			s.server.handleAVPlayerLeave(s)
+			s.server.handleArenaPlayerLeave(s)
+			s.server.handleWGPlayerLeave(s)
+			// Battleground::RemovePlayerAtLeave (Battleground.cpp:840):
+			// drop the resurrect-queue entry and SPELL_WAITING_FOR_RESURRECT.
+			if s.server != nil {
+				s.server.spiritWaveMu.Lock()
+				_, queued := s.server.spiritReviveQueue[s.playerGUID]
+				if queued {
+					delete(s.server.spiritReviveQueue, s.playerGUID)
+				}
+				s.server.spiritWaveMu.Unlock()
+				if queued {
+					s.removeAura(2584)
+				}
+			}
+			// Battleground.cpp:826-828: spirit-of-redemption shapeshift strip.
+			// The SPELL_AURA_MOUNTED strip (Battleground.cpp:830) is deliberately
+			// not mirrored, as in handleLeaveBattlefield: C++ restores the mount
+			// via DELAYED_BG_MOUNT_RESTORE, which has no Go twin.
+			if s.hasAuraType(spellAuraSpiritOfRedemption) {
+				s.removeAurasByType(spellAuraModShapeshift)
+			}
+			// Battleground.cpp:894-900: drop the player from the old BG raid
+			// and restore the original group. Reads the still-old bgData, so
+			// it must run before the overwrite below; the new raid arm then
+			// stashes the restored group instead of the old raid.
+			s.server.removePlayerFromBGRaid(s)
+			for _, old := range jumpOld {
+				// Battleground.cpp:833-837: delete the old score row, keyed
+				// the same way handleLeaveBattlefield keys it.
+				s.server.deleteBGScoreRow(s.player.Map, old.instanceID, s.playerGUID)
+				// Battleground.cpp:918-921: reset BG-map achievement criteria
+				// for the OLD map, which the slot still carries.
+				if old.mapID != 0 {
+					s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, old.mapID)
+				}
+				s.bgQueues[old.index].Active = false
+				s.bgQueues[old.index].Status = BGStatusNone
+			}
+		}
 		team := teamForRace(s.player.Race)
 		entry.Status = BGStatusInProgress
 		entry.StartTime = time.Now()
@@ -1673,6 +1762,14 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// status machine), so only the group arm is wired here.
 		s.server.addOrSetPlayerToCorrectBGGroup(s)
 		s.sendBattlefieldStatus(uint8(slot))
+		// RemovePlayerAtLeave's SendPacket=true arm (Battleground.cpp:886-891):
+		// the old slot's STATUS_NONE packet, after the new IN_PROGRESS packet
+		// above — the C++ packet order (BattleGroundHandler.cpp:468 then :478).
+		// The slots were already deactivated above, so this writes the
+		// STATUS_NONE form (slot + uint64 0).
+		for _, old := range jumpOld {
+			s.sendBattlefieldStatus(uint8(old.index))
+		}
 		s.debug("battlefield port accept", "account", s.accountName, "bg", bgTypeID, "instance", entry.InstanceID)
 		// Arena::AddPlayer (Arena.cpp:74): on the port accept, admit the
 		// player into the arena state the pop created. entry.ArenaFaction
