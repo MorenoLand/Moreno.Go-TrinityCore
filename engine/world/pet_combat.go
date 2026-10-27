@@ -3307,6 +3307,70 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureDispelPreCast(motion, spell, targetGUID, triggered) {
 		return true
 	}
+	// Player-gated cases of the Spell::CheckCast per-effect switch
+	// (Spell.cpp:5565-5804), the twin of the creature path: LEARN_SPELL,
+	// LEARN_PET_SPELL, APPLY_GLYPH, FEED_PET and SKINNING all fail for
+	// a non-player caster, and OPEN_LOCK fails when its TargetA is a
+	// gameobject or gameobject item. Placed after the dispel arm and
+	// before the summon arm, matching C++ case order.
+	if !s.server.creaturePlayerOnlyEffectPreCast(motion, spell, targetGUID) {
+		return true
+	}
+	// Summon-family arms (Spell.cpp:5805-5946), same twin: SUMMON_PLAYER /
+	// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
+	// needs a player target without an existing pet; SUMMON /
+	// SUMMON_PET fizzle while the caster has a charmed unit, their
+	// GetPetGUID legs staying vacuous (no pet-slot model). No IsTriggered
+	// gate guards the summon block in C++, so these legs run for
+	// triggered casts too. Placed after the dispel arm and before the
+	// steal arm, matching C++ CheckCast case order.
+	if !s.server.creatureSummonPreCast(motion, spell, targetGUID) {
+		return true
+	}
+	// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm (Spell.cpp:5957-5984),
+	// same twin: a target carrying no stealable aura fizzles. No
+	// !IsTriggered() gate, so it runs for triggered casts too. Placed
+	// after the summon arm, matching C++ CheckCast order.
+	if !s.server.creatureStealPreCast(motion, spell, targetGUID) {
+		return true
+	}
+	// Root gates of the Spell::CheckCast per-effect switch, same twin:
+	// CHARGE, LEAP_BACK and JUMP/JUMP_DEST fail while the caster is
+	// rooted; the CHARGE leg alone skips on triggered casts (passed
+	// through, per TRIGGERED_IGNORE_CASTER_AURAS). Placed after the
+	// steal arm, ahead of the aura arms below.
+	if !s.server.creatureRootedEffectPreCast(motion, spell, triggered) {
+		return true
+	}
+	// Aura-name cases of the Spell::CheckCast switch
+	// (Spell.cpp:6046-6121), same twin shape: MOD_POSSESS_PET fails for
+	// a non-player caster, MOD_POSSESS / MOD_CHARM / AOE_CHARM run the
+	// caster charmer/charmed-unit gates plus the target mounted/charmer /
+	// owner-player/level gates (vehicle leg stays out: no vehicle-kit
+	// model on motions), and RANGED_ATTACK_POWER_ATTACKER_BONUS fails
+	// with no unit target or a target friendly to the caster. Placed
+	// after the effect-switch arms, matching C++ loop order, ahead of
+	// the stealth-break arm.
+	if !s.server.creaturePossessPetAuraPreCast(motion, spell) {
+		return true
+	}
+	if !s.server.creatureCharmPreCast(motion, spell, targetGUID) {
+		return true
+	}
+	if !s.server.creatureRangedAPBonusPreCast(motion, spell, targetGUID) {
+		return true
+	}
+	// Spell::CheckCast aura-bounced tail (Spell.cpp:6155-6162), same
+	// twin: a spell whose every effect is an aura effect, not targeting
+	// an area, fizzles when the unit target already carries a strictly
+	// more powerful aura of the same type under an EXCLUSIVE_HIGHEST
+	// spell-group stack rule. Placed after the aura-name arms,
+	// matching C++ loop order, ahead of the stealth-break arm. This is
+	// distinct from the _cast DR recheck below (Unit::HasStrongerAuraWithDR),
+	// which the pet path already runs.
+	if !s.server.creatureAuraBouncedPreCast(motion, spell, targetGUID) {
+		return true
+	}
 	// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
 	// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered pet
 	// cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,
