@@ -3448,10 +3448,12 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	}
 	// Spell::CheckCast (Spell.cpp:5177-5179): the death-state arm opens
 	// CheckCast, ahead of every tail leg — a caster that is dead when the
-	// tail runs fails SPELL_FAILED_CASTER_DEAD. (The passive/triggered
-	// exemption has no pet-path trigger source: the triggered leg already
-	// passed the aura gate above, and Go carries no SPELL_ATTR0_CASTABLE_WHILE_DEAD.)
-	if deathGate && motion.Health == 0 {
+	// tail runs fails SPELL_FAILED_CASTER_DEAD unless the spell is
+	// passive or castable while dead (the twin's exemptions, boss_ai.go).
+	// The triggered leg here is the periodic-trigger-from-client aura leg
+	// (PetHandler.cpp:791-796), i.e. triggered-by-aura, so C++'s
+	// triggered non-aura exemption does not apply to it.
+	if deathGate && motion.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
 	}

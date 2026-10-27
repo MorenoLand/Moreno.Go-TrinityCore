@@ -3167,7 +3167,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if targetGUID == 0 {
 		targetGUID = motion.GUID
 	}
-	// Spell::CheckCast gates (Spell.cpp:5247-5496) for a pet caster: the
+	// Spell::CheckCast gates (Spell.cpp:5177-5496) for a pet caster: the
 	// pet is a creatureMotion, so the creature-caster twins apply unchanged
 	// (boss_ai.go). C++ relative order: the shapeshift leg (5247), the
 	// SPELL_AURA_BLOCK_SPELL_FAMILY leg (5277-5278) and the caster-state
@@ -3182,6 +3182,33 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (TRIGGERED_IGNORE_SHAPESHIFT / TRIGGERED_IGNORE_CASTER_AURASTATE);
 	// conditions, behind/facing, LOS, focus and range run for triggered
 	// casts too, like C++ (no triggered exemption).
+	// Spell::CheckCast head arms (Spell.cpp:5177-5232), the twin of the
+	// creature path (boss_ai.go), ahead of the shapeshift leg in C++
+	// order: the death arm (5177, non-triggered only with the twin's
+	// passive/castable-while-dead exemptions — Go's triggered flag cannot
+	// split aura-triggered casts, so triggered casts keep the permissive
+	// reading), the spell-history/cooldown arm (5207-5221, category
+	// ignored for triggered casts via the twin's ignore flag), the
+	// cheat-spell arm (5225, no triggered exemption) and the GCD arm
+	// (5231, non-triggered only — Go's triggered models
+	// TRIGGERED_IGNORE_GCD). The client gauntlets (pets.go) and the
+	// autocast pre-filter already run the death/cooldown/GCD arms on
+	// their paths, but the autocast pick and the triggered-spell
+	// recursion below reach here with no gauntlet, and no gauntlet runs
+	// the cheat arm at all — so these are the shared backstop, and a
+	// failing gate fizzles before takePetSpellPower like the rest.
+	if !triggered && motion.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
+		return true
+	}
+	if !s.server.creatureSpellHistoryReady(motion, spell, triggered) {
+		return true
+	}
+	if !s.server.creatureCheatSpellPreCast(motion, spell) {
+		return true
+	}
+	if !triggered && s.server.petGlobalCooldownActive(motion, spell, time.Now()) {
+		return true
+	}
 	if !triggered {
 		if !s.server.checkCreatureSpellShapeshift(motion, spell) {
 			return true
