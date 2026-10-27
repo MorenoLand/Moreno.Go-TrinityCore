@@ -926,10 +926,10 @@ func (s *Server) handleAVPlayerDeath(sess *session) {
 // handleAVCreatureKilled handles General, Captain, and Mine Boss kills in AV.
 // Reference: BattlegroundAV::HandleKillUnit (BattlegroundAV.cpp:83-158).
 func (s *Server) handleAVCreatureKilled(sess *session, creatureEntry uint32) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != AVMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != AVMapID && !sess.hasActiveBGMap(AVMapID)) {
 		return
 	}
-	av := s.getOrCreateAVState(sess.player.Map)
+	av := s.getOrCreateAVState(AVMapID)
 	if av == nil {
 		return
 	}

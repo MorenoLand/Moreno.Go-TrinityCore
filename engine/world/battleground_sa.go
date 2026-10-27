@@ -792,10 +792,10 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 // handleSACreatureKilled tracks Demolisher kills and marks AllVehiclesAlive false.
 // Reference: BattlegroundSA::HandleKillUnit (BattlegroundSA.cpp:641-648).
 func (s *Server) handleSACreatureKilled(sess *session, creatureEntry uint32) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != SAMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != SAMapID && !sess.hasActiveBGMap(SAMapID)) {
 		return
 	}
-	sa := s.getOrCreateSAState(sess.player.Map)
+	sa := s.getOrCreateSAState(SAMapID)
 	if sa == nil {
 		return
 	}

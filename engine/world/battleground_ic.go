@@ -842,10 +842,10 @@ func (s *Server) handleICPlayerDeath(sess *session) {
 // handleICCreatureKilled handles Boss kills (Halford Wyrmbane & Overlord Agmar) and vehicle destruction.
 // Reference: BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:382-403).
 func (s *Server) handleICCreatureKilled(sess *session, creatureEntry uint32) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != ICMapID && !sess.hasActiveBGMap(ICMapID)) {
 		return
 	}
-	ic := s.getOrCreateICState(sess.player.Map)
+	ic := s.getOrCreateICState(ICMapID)
 	if ic == nil {
 		return
 	}

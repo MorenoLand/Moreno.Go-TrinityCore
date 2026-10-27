@@ -1103,17 +1103,17 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// bgData.InstanceID is the Go mirror (Player.h:1906: bgInstanceID != 0);
 	// map presence alone is not the gate (see handleNoFunnelBattlegroundKill).
 	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)
-	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 30 {
+	if s.server != nil && s.bgData.InstanceID != 0 && (s.player.Map == 30 || s.hasActiveBGMap(30)) {
 		s.server.handleAVCreatureKilled(s, creatureEntry)
 	}
 
 	// Strand of the Ancients (Map 607) creature kills (Demolishers)
-	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 607 {
+	if s.server != nil && s.bgData.InstanceID != 0 && (s.player.Map == 607 || s.hasActiveBGMap(607)) {
 		s.server.handleSACreatureKilled(s, creatureEntry)
 	}
 
 	// Isle of Conquest (Map 628) creature kills (Bosses & Vehicles)
-	if s.server != nil && s.bgData.InstanceID != 0 && s.player.Map == 628 {
+	if s.server != nil && s.bgData.InstanceID != 0 && (s.player.Map == 628 || s.hasActiveBGMap(628)) {
 		s.server.handleICCreatureKilled(s, creatureEntry)
 	}
 
@@ -1462,12 +1462,16 @@ func (s *Server) handleNoFunnelBattlegroundKill(victim, killer *creatureMotion) 
 	if player.bgData.InstanceID == 0 {
 		return
 	}
-	switch player.player.Map {
-	case AVMapID:
+	// Independent ifs, not a switch: C++ dispatches on the killer's
+	// battleground, and a slot holder's victim entry is BG-specific,
+	// so each handler's own entry switch makes cross-firing inert.
+	if player.player.Map == AVMapID || player.hasActiveBGMap(AVMapID) {
 		s.handleAVCreatureKilled(player, victim.Entry)
-	case SAMapID:
+	}
+	if player.player.Map == SAMapID || player.hasActiveBGMap(SAMapID) {
 		s.handleSACreatureKilled(player, victim.Entry)
-	case ICMapID:
+	}
+	if player.player.Map == ICMapID || player.hasActiveBGMap(ICMapID) {
 		s.handleICCreatureKilled(player, victim.Entry)
 	}
 }
