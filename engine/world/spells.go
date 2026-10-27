@@ -17381,6 +17381,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// at SPELL_EFFECT_HANDLE_HIT on the caster.
 			s.handleEffectDestroyAllTotems(ctx, spell, eff)
 		}
+		if eff.Effect == spellEffectChargeDest {
+			// Spell::EffectChargeDest (SpellEffects.cpp:4528) runs once at
+			// SPELL_EFFECT_HANDLE_LAUNCH on the caster, never per target —
+			// placing it in the per-target loop below would re-charge the
+			// caster once per target. The helper gates on the DestLocation
+			// flag, which this path sets only via the implicit dest
+			// resolution (spells.go:16692); a triggered charge-dest spell
+			// with no dest-family implicit target charges nowhere, same
+			// as C++'s !HasDst arm. The LOS collision clamp stays
+			// unbridged per the helper's note.
+			s.handleEffectChargeDest(ctx, spellTarget)
+		}
 		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
 			// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) runs at
 			// HIT_TARGET per unit target; the once-per-effect shape here
@@ -17768,6 +17780,36 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// HIT_TARGET per player unit target, with the Burn Body
 				// (42793) entry fallback inside the helper.
 				s.handleEffectKillCreditGroup(ctx, effectTarget, spellID, eff.MiscValue)
+			} else if eff.Effect == spellEffectLeap {
+				// Spell::EffectLeap (SpellEffects.cpp:4334) runs at
+				// HIT_TARGET per unit target: the leapt unit teleports to
+				// the spell destination. The client arm's helper over the
+				// single miss-filtered target; its DestLocation gate is
+				// C++'s !HasDst return, and this path's dest arrives only
+				// via the implicit dest resolution (spells.go:16692), so
+				// a triggered leap with no dest-family implicit target
+				// moves nothing.
+				s.handleEffectLeap(ctx, effectTarget, spellTarget)
+			} else if eff.Effect == spellEffectTeleportUnitsFaceCaster {
+				// Spell::EffectTeleUnitsFaceCaster (SpellEffects.cpp:2618)
+				// runs at HIT_TARGET per unit target: the target teleports
+				// to the caster's close point facing the caster. The client
+				// arm's helper over the single miss-filtered target (its
+				// in-flight gate and radius legs ride along).
+				s.handleEffectTeleUnitsFaceCaster(ctx, effectTarget, eff)
+			} else if eff.Effect == spellEffectLeapBack {
+				// Spell::EffectLeapBack (SpellEffects.cpp:4593) runs at
+				// LAUNCH_TARGET per unit target; like the charge and
+				// interrupt arms above, the LAUNCH leg has no separate
+				// launch-phase home on this path, so it rides the
+				// miss-filtered target list. The JumpTo spline has no Go
+				// model (documented no-bridge, boss_ai.go), but the
+				// fall-information leg ports: the player caster's fall
+				// info resets (0, caster Z), idempotent across targets,
+				// mirroring the client arm's has-unit-target gate.
+				if s.player != nil {
+					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+				}
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
