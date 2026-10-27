@@ -15,11 +15,12 @@ package world
 // sWorld->SendWorldText analog) all exist; wired in battleground.go for both
 // the solo and group rated-join paths. The 718/719 enUS texts are recalled
 // from TDB (unseeded in-tree — verify when trinity_string is seeded).
-// PORTED (solo only): the rated-exit world announce
+// PORTED: the rated-exit world announce
 // (BattlegroundQueue.cpp:360-362) — the solo ginfo empties when the leaver
 // goes, so handleBattlefieldPort's leave-queue arm announces for
-// !ArenaGroupJoin entries; the group last-leaver detection needs the shared
-// m_QueuedGroups container and stays unported.
+// !ArenaGroupJoin entries, and the group last-leaver detection rides the
+// leave-arm roster scan (uninvited groups) and the arena expire-arm roster
+// scan (invited groups, same-pop instance id) in battleground.go.
 // NOT ported (unported dependencies): the m_QueuedGroups push
 // (BattlegroundQueue.cpp:198) and the queue-status announce
 // (BattlegroundQueue.cpp:201-235 — CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE/_PLAYERONLY):

@@ -813,9 +813,33 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 			}
 			// BGQueueRemoveEvent::Execute (BattlegroundQueue.cpp:1090) calls RemovePlayer on
 			// invite expiry, and RemovePlayer fires the rated-exit world announce when the group
-			// empties (BattlegroundQueue.cpp:357-362). Solo joins empty their group here; group
-			// last-leaver detection needs the shared queue container (leave-arm convention).
-			announceExit := !exp.ArenaGroupJoin && exp.IsRated && exp.ArenaType != 0 && exp.ArenaTeamID != 0 && s.server.Config.ArenaQueueAnnouncerEnable
+			// empties (BattlegroundQueue.cpp:357-362). Solo joins empty their group here; a group
+			// join empties when no other member still holds this pop's WaitJoin slot — accepted
+			// members already left the queue group at port accept (BattleGroundHandler.cpp:474),
+			// expired/left/offline members hold no slot, and the shared pop instance id separates
+			// this group pop from a member's later re-queue (leave-arm roster-scan convention).
+			groupEmptied := !exp.ArenaGroupJoin
+			if exp.ArenaGroupJoin {
+				groupEmptied = true
+				if grp := s.server.findGroupByID(s.groupID); grp != nil {
+					for _, m := range grp.Members {
+						if m.GUID == s.playerGUID {
+							continue
+						}
+						member := s.server.findSessionByGUID(m.GUID)
+						if member == nil || !member.playerLoaded || member.player == nil {
+							continue
+						}
+						for i := range member.bgQueues {
+							e := &member.bgQueues[i]
+							if e.Active && e.IsArena && e.IsRated && e.ArenaGroupJoin && e.Status == BGStatusWaitJoin && e.ArenaType == exp.ArenaType && e.ArenaTeamID == exp.ArenaTeamID && e.InstanceID == exp.InstanceID {
+								groupEmptied = false
+							}
+						}
+					}
+				}
+			}
+			announceExit := groupEmptied && exp.IsRated && exp.ArenaType != 0 && exp.ArenaTeamID != 0 && s.server.Config.ArenaQueueAnnouncerEnable
 			teamID, teamRating, arenaType := exp.ArenaTeamID, exp.ArenaTeamRating, exp.ArenaType
 			s.bgQueues[slot] = bgQueueEntry{}
 			s.sendBattlefieldStatus(uint8(slot))
