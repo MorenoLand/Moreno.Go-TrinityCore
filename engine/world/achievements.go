@@ -1704,20 +1704,16 @@ func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
 }
 
 // creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / WIN_RATED_ARENA
-// at arena end: every player on the arena map gains play credit and winners
-// gain the win. Killing-blow criteria are NOT credited here — C++ has no
-// arena-end GET_KILLING_BLOWS leg; the per-kill Unit::Kill leg
+// at arena end: the arena-end criteria arms iterate GetPlayers()
+// (Arena.cpp:265-282), the roster, not the map — a sim-accepted roster
+// member holds no arena map yet, so the old map scan missed their play/win
+// credit while crediting map bystanders (and resetting their no-lose
+// criteria) who never played. Killing-blow criteria are NOT credited here —
+// C++ has no arena-end GET_KILLING_BLOWS leg; the per-kill Unit::Kill leg
 // (creditKillingBlowCriteria) is the only source.
-func (s *Server) creditArenaParticipants(mapID uint32, winners map[uint64]struct{}) {
-	s.sessionsMu.RLock()
-	var participants []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
-			participants = append(participants, sess)
-		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range participants {
+func (s *Server) creditArenaParticipants(arena *arenaBattlegroundState, winners map[uint64]struct{}) {
+	mapID := arena.MapID
+	for _, sess := range s.arenaRosterSessions(arena) {
 		sess.updateAchievementCriteria(criteriaTypePlayArena, mapID, 1)
 		if _, won := winners[sess.playerGUID]; won {
 			sess.updateAchievementCriteria(criteriaTypeWinArena, mapID, 1)

@@ -937,7 +937,7 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	}
 	mapID := arena.MapID
 	arena.mu.RUnlock()
-	s.creditArenaParticipants(mapID, winningMembers)
+	s.creditArenaParticipants(arena, winningMembers)
 
 	// Victory announcement
 	if winner == int8(ArenaTeamGold) {
@@ -1169,11 +1169,13 @@ func (s *Server) deleteArenaState(arena *arenaBattlegroundState) {
 }
 
 // awardLastManStanding grants SpellLastManStanding (26549) to the solely alive participant.
+// Arena::EndBattleground casts it over GetPlayers() (Arena.cpp:270), the roster,
+// not the map: a sim-accepted roster member holds no arena map yet, so the old
+// map gate let the sole alive participant miss the aura while a map bystander
+// on the winning team could never receive it (the roster check excluded them).
 func (s *Server) awardLastManStanding(arena *arenaBattlegroundState, team uint8) {
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID && sess.player.Health > 0 {
+	for _, sess := range s.arenaRosterSessions(arena) {
+		if sess.player.Health > 0 {
 			if arenaTeam, ok := arena.PlayerTeams[sess.playerGUID]; ok && arenaTeam == team {
 				sess.applyAura(SpellLastManStanding)
 				break
