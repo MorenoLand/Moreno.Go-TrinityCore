@@ -4065,6 +4065,72 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// above (caster position when the spell carries no dest-family
 	// target, like the twin).
 	s.server.creatureEffectPersistentAreaAura(ctx, motion, spell, hasDest, dx, dy, dz)
+
+	// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996) on the pet
+	// path, same dispatch-ahead-of-damage position as the twin and
+	// inline blocks: the HIT_TARGET per-target leg fires only when the
+	// triggered spell needs to be triggered by the caster, over
+	// hitTargets (wire + area + chain + GO picks, like the twin's list);
+	// the once-per-cast HIT leg fires unless the triggered spell needs
+	// the caster AND the effect provides a unit target. Both legs cast
+	// natively via executePetSpellWithOptions — a twin call would switch
+	// the triggered spell's execution path. The self-trigger guard
+	// matches the trigger-spell arm. The 148 with-value base-point
+	// override patches the local triggered-spell copy (Data.Spell
+	// builds a fresh Spell per lookup, like the twin's WithBasePoints
+	// variant, so no pet WithBasePoints entry point is needed): flat
+	// effects take the value, rolled effects take value-1 so the nested
+	// CalcValue re-roll lands on it. The explicit-dest leg rides the
+	// recursion's internal dest resolution for dest-family triggered
+	// spells, and the caster-unit leg is the launchTarget fallback
+	// below. Previously a pet-cast spell carrying effect 32/148
+	// triggered nothing server-side.
+	for i := range spell.Effects {
+		effect := spell.Effects[i]
+		if effect.Effect != spellEffectTriggerMissile && effect.Effect != spellEffectTriggerMissileWithValue {
+			continue
+		}
+		if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
+			continue
+		}
+		triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
+		if err != nil || !found {
+			continue
+		}
+		needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+		castTriggered := func(triggerTarget protocol.SpellTargetData) {
+			if effect.Effect == spellEffectTriggerMissileWithValue {
+				damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
+				for j, bp := range []int32{damage, damage, damage} {
+					if j < len(triggered.Effects) {
+						if triggered.Effects[j].DieSides == 0 {
+							triggered.Effects[j].BasePoints = bp
+						} else {
+							triggered.Effects[j].BasePoints = bp - 1
+						}
+					}
+				}
+			}
+			s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+		}
+		if needsCaster {
+			for _, guid := range hitTargets {
+				if rt := resolveReflectTarget(guid); rt != 0 && !immuneSet[guid] && !missedTarget(guid) {
+					triggerTarget := target
+					triggerTarget.UnitGUID = rt
+					castTriggered(triggerTarget)
+				}
+			}
+		}
+		if needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0 {
+			continue
+		}
+		launchTarget := target
+		if launchTarget.UnitGUID == 0 {
+			launchTarget.UnitGUID = motion.GUID
+		}
+		castTriggered(launchTarget)
+	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
