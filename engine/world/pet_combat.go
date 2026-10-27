@@ -4102,6 +4102,26 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	missedTarget := func(guid uint64) bool {
 		return petMissVerdicts[guid] != protocol.SpellMissNone
 	}
+	// Spell::handle_immediate channel-state arm (Spell.cpp:3569-3596),
+	// the pet twin of the castCreatureSpellInternal stamp: SendChannelStart
+	// precedes HandleLaunchPhase, so the stamp lands here, ahead of the
+	// launch arms below — a 76/106 spell triggered by this channel spell
+	// resolves against it. The pet path stamps no CastingUntil, so the
+	// window is the DBC duration from this cast alone; the channel
+	// object is the caster when the cast has a destination, else the
+	// explicit unit target (self when none was supplied).
+	if isChanneledSpell(spell) && s.server != nil && s.server.Data != nil {
+		if dur, ok, derr := s.server.Data.SpellDuration(spell.DurationIndex, 1); derr == nil && ok && dur > 0 {
+			channelObj := target.UnitGUID
+			if channelObj == 0 {
+				channelObj = targetGUID
+			}
+			if hasDest {
+				channelObj = motion.GUID
+			}
+			stampCreatureChannel(motion, spell.ID, channelObj, hasDest, dx, dy, dz, time.Now().Add(time.Duration(dur)*time.Millisecond))
+		}
+	}
 	// Spell::HandleLaunchPhase (Spell.cpp:3465, ahead of SendSpellGo at
 	// 3468) for a pet caster: the LAUNCH arms, placed ahead of the GO
 	// packet like the inline pre-pass (creaturemotion.go) — the twin

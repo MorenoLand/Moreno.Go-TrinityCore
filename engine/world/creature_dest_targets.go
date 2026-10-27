@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -13,7 +14,8 @@ import (
 // caster-dest family (SelectImplicitCasterDestTargets, Spell.cpp:1312-1424),
 // the target-dest family (SelectImplicitTargetDestTargets, 1433-1462), the
 // dest-dest family (SelectImplicitDestDestTargets, 1464-1499), and the traj
-// target (SelectImplicitTrajTargets, 1626 — seed only, see below).
+// target (SelectImplicitTrajTargets, 1626 — seed only, see below), and the
+// channel destinations (SelectImplicitChannelTargets, Spell.cpp:980-1032).
 func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {
@@ -23,6 +25,8 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 			isTargetDestTarget(eff.ImplicitTargetA) || isTargetDestTarget(eff.ImplicitTargetB) ||
 			isDestDestTarget(eff.ImplicitTargetA) || isDestDestTarget(eff.ImplicitTargetB) ||
 			eff.ImplicitTargetA == implicitTargetDestTraj || eff.ImplicitTargetB == implicitTargetDestTraj ||
+			eff.ImplicitTargetA == implicitTargetDestChannelTarget || eff.ImplicitTargetB == implicitTargetDestChannelTarget ||
+			eff.ImplicitTargetA == implicitTargetDestChannelCaster || eff.ImplicitTargetB == implicitTargetDestChannelCaster ||
 			eff.ImplicitTargetA == implicitTargetDestNearbyEntry || (eff.ImplicitTargetB == implicitTargetDestNearbyEntry && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
 			return true
 		}
@@ -54,8 +58,12 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // builds default targets), so the twin/inline wrapper passes zero and
 // keeps the seed-only behavior; only client pet casts carry speed and
 // elevation. Documented no-bridge: TARGET_DEST_CASTER_FISHING (39,
-// player bobber model); the 76/106 channel destinations (motions hold
-// channel duration but no channel target).
+// player bobber model). The 76/106 channel destinations resolve against
+// the motion's channel state (creatureChannelDest, stamped by the
+// twin/inline/pet cast paths at channel start); without a live channel
+// the arm leaves the running destination, as C++'s null-channel return
+// does, and a channel-only spell with no live channel keeps the
+// pre-change no-dest result (see the end-gate below).
 //
 // TARGET_DEST_NEARBY_ENTRY (46) resolves per effect through
 // creatureEntryNearbyDestPosition below: each effect scans with its own
@@ -131,6 +139,13 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 	scannedEff := -1
 	var nearbyX, nearbyY, nearbyZ float32
 	nearbyFound := false
+	// otherDest marks a non-channel dest arm having run (any outcome —
+	// the existing seed fallback for an unresolvable target-dest arm
+	// included); channelResolved marks a channel arm having actually
+	// set the destination. A spell carrying only channel targets with no
+	// live channel must keep the pre-change no-dest result, so the
+	// end-gate below returns false unless either flag is set.
+	otherDest, channelResolved := false, false
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -138,8 +153,10 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 		for slotIndex, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			switch {
 			case isCasterDestTarget(targetType):
+				otherDest = true
 				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, modRadius)
 			case isTargetDestTarget(targetType):
+				otherDest = true
 				// C++ asserts a non-null object target here
 				// (Spell.cpp:1434); without a resolvable unit target Go
 				// keeps the current destination, the same fallback the
@@ -149,10 +166,12 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 				}
 				x, y, z = resolveTargetDestPosition(s.Data, targetType, eff.RadiusIndex, unitX, unitY, unitZ, unitO)
 			case isDestDestTarget(targetType):
+				otherDest = true
 				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, modRadius); changed {
 					x, y, z = nx, ny, nz
 				}
 			case targetType == implicitTargetDestTraj:
+				otherDest = true
 				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626) runs
 				// in per-effect order like the other dest arms, shortening
 				// the running destination to the first missile-body
@@ -165,7 +184,23 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 				if nx, ny, nz, changed := s.resolveTrajDestinationForCaster(ctx, trajCasterFromMotion(m), spell, eff, traj.Speed, traj.Elevation, srcX, srcY, srcZ, x, y, z); changed {
 					x, y, z = nx, ny, nz
 				}
+			case targetType == implicitTargetDestChannelTarget:
+				// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032)
+				// for 76: the channeled spell's own destination first,
+				// else the channel-object target's position. Without a
+				// live channel C++ logs and sets nothing, so the running
+				// destination stands and channelResolved stays false.
+				if cx, cy, cz, ok := s.creatureChannelDest(ctx, m); ok {
+					x, y, z, channelResolved = cx, cy, cz, true
+				}
+			case targetType == implicitTargetDestChannelCaster:
+				// Spell.cpp:1025: the channeled spell's caster position,
+				// which for a creature cast is the motion itself.
+				if s.creatureChannelLive(m) {
+					x, y, z, channelResolved = m.X, m.Y, m.Z, true
+				}
 			case targetType == implicitTargetDestNearbyEntry:
+				otherDest = true
 				// A B-slot 46 behind a NEARBY/CONE/AREA A slot never selects
 				// (Spell.cpp:866-900 processed-slot rule); without this guard
 				// the arm re-scanned and could fail a cast C++ never fails.
@@ -184,7 +219,72 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 			}
 		}
 	}
+	if !otherDest && !channelResolved {
+		return 0, 0, 0, false, false
+	}
 	return x, y, z, true, false
+}
+
+// creatureChannelLive reports whether the motion holds a live channeled
+// spell (Spell::SelectImplicitChannelTargets, Spell.cpp:985-991: the null
+// gate is m_originalCaster->GetCurrentSpell(CURRENT_CHANNELED_SPELL)).
+// Go creature casts always have originalCaster == caster, so the
+// motion's own channel state is the right anchor; a cross-caster channel
+// (an aura on another unit triggering the spell) has no Go model, the
+// same limitation as the player path's session-anchored channel.
+func (s *Server) creatureChannelLive(m *creatureMotion) bool {
+	return m != nil && m.ChannelSpellID != 0 && time.Now().Before(m.ChannelUntil)
+}
+
+// creatureChannelDest resolves the 76 arm of
+// Spell::SelectImplicitChannelTargets (Spell.cpp:1005-1021): the channeled
+// spell's own destination when it has one, else the channel-object
+// target's position (units via the threat-position lookup, static
+// gameobjects via their DB row, the player channel twin's legs). ok is
+// false with no live channel, no channel target, or an unresolvable one.
+func (s *Server) creatureChannelDest(ctx context.Context, m *creatureMotion) (float32, float32, float32, bool) {
+	if !s.creatureChannelLive(m) {
+		return 0, 0, 0, false
+	}
+	if m.ChannelHasDest {
+		return m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ, true
+	}
+	if m.ChannelTargetGUID == 0 {
+		return 0, 0, 0, false
+	}
+	if m.ChannelTargetGUID == m.GUID {
+		return m.X, m.Y, m.Z, true
+	}
+	if ux, uy, uz, _, _, found := s.aiThreatUnitPos(m, m.ChannelTargetGUID, nil, true); found {
+		return ux, uy, uz, true
+	}
+	if uint16(m.ChannelTargetGUID>>48) == 0xF110 && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var goMap int64
+		var gx, gy, gz float64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM gameobject WHERE guid = ?", uint32(m.ChannelTargetGUID&0xFFFFFF)).Scan(&goMap, &gx, &gy, &gz); err == nil && uint32(goMap) == m.Map {
+			return float32(gx), float32(gy), float32(gz), true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+// stampCreatureChannel records a successfully cast channeled spell's
+// channel state on the motion (Spell::SendChannelStart, Spell.cpp:4669-
+// 4690: the channel object is the caster when the channel spell has a
+// destination, else its object target). Callers pass the final resolved
+// destination and the channel expiry; an infinite (-1) duration stamps
+// nothing, since the caller never computes an expiry for it. Triggered
+// channel casts stamp too (Unit::CastSpell arms CURRENT_CHANNELED_SPELL
+// with no triggered gate, per the twin's channel comment).
+func stampCreatureChannel(m *creatureMotion, spellID uint32, channelTargetGUID uint64, hasDest bool, destX, destY, destZ float32, until time.Time) {
+	if m == nil || spellID == 0 || until.IsZero() {
+		return
+	}
+	m.ChannelSpellID = spellID
+	m.ChannelTargetGUID = channelTargetGUID
+	m.ChannelHasDest = hasDest
+	m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = destX, destY, destZ
+	m.ChannelUntil = until
 }
 
 // creatureDestTargetOrientation returns the orientation of the explicit

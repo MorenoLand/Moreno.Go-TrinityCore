@@ -256,7 +256,28 @@ type creatureMotion struct {
 	// Health==0 gate never reaches. No SMSG_SPELL_START is modeled — Go
 	// creature casts stay packet-only SPELL_GO; this field is the
 	// scheduling gate only.
-	CastingUntil              time.Time
+	CastingUntil time.Time
+	// ChannelSpellID/ChannelTargetGUID/ChannelHasDest/ChannelDest*/ChannelUntil
+	// carry the creature's live channeled spell (Spell::SendChannelStart,
+	// Spell.cpp:4669-4690): the channel spell id, its channel object (the
+	// caster when the channel spell has a destination, else its object
+	// target, else the single nearby pick), the channel spell's resolved
+	// destination, and the channel expiry (cast time + DBC duration, the
+	// same window CastingUntil carries for channeled casts). A later cast
+	// carrying a 76/106 channel-dest target resolves against this state in
+	// resolveCreatureSpellDestination; an expired or absent channel leaves
+	// the arm unresolved, as C++'s null GetCurrentSpell does. No
+	// channel-interrupt model exists (a cast that should interrupt the
+	// channel leaves the state until ChannelUntil, the same standing gap
+	// as the infinite-duration stamp), and the SendChannelStart packet
+	// itself is not sent on this path.
+	ChannelSpellID            uint32
+	ChannelTargetGUID         uint64
+	ChannelHasDest            bool
+	ChannelDestX              float32
+	ChannelDestY              float32
+	ChannelDestZ              float32
+	ChannelUntil              time.Time
 	SpellCooldowns            map[uint32]time.Time
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32
@@ -4381,6 +4402,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if inlineSpellKnown {
 				takeCreatureSpellPower(inlineSpell, motion, inlinePowerCost)
 				s.recordCreatureSpellCooldown(motion, inlineSpell)
+			}
+			// Spell::handle_immediate channel-state arm (Spell.cpp:3569-
+			// 3596), the inline twin of the castCreatureSpellInternal
+			// stamp in boss_ai.go: SendChannelStart precedes the
+			// launch legs, so the stamp lands here, ahead of the
+			// trigger pre-pass below — a 76/106 spell triggered by
+			// this channel spell resolves against it. spellTarget
+			// carries the final resolved destination (set at the
+			// initial resolution, re-set/cleared by the redirect
+			// arms, untouched by the area legs), and its wire target
+			// is the channel object unless the spell has a
+			// destination, in which case C++ uses the caster.
+			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); isChanneledSpell(dueSpell) && s != nil && s.Data != nil {
+				if dur, ok, derr := s.Data.SpellDuration(dueSpell.DurationIndex, 1); derr == nil && ok && dur > 0 {
+					channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond)
+					channelObj := spellTarget.UnitGUID
+					channelHasDest := spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0
+					if channelHasDest {
+						channelObj = motion.GUID
+					}
+					stampCreatureChannel(motion, dueSpell.ID, channelObj, channelHasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, channelUntil)
+				}
 			}
 			// Spell::EffectTriggerSpell (SpellEffects.cpp:823) on the
 			// inline path, the LAUNCH pre-pass: C++ runs

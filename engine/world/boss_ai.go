@@ -1956,9 +1956,28 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// the creature path.
 		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
 			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
-				if channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond); channelUntil.After(m.CastingUntil) {
+				channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond)
+				if channelUntil.After(m.CastingUntil) {
 					m.CastingUntil = channelUntil
 				}
+				// Spell::handle_immediate arms the channel before the
+				// launch legs below (Spell.cpp:3569-3596 precedes
+				// HandleLaunchPhase at 3465 in cast order), so the
+				// stamp lands here, ahead of the GO packet and the
+				// trigger legs: a 76/106 spell triggered by this
+				// channel spell resolves against it. The channel
+				// object follows SendChannelStart (Spell.cpp:4669):
+				// the caster when the channel spell has a
+				// destination, else its object target (the wire
+				// target, post-redirect), else the nearby pick.
+				channelObj := spellTarget.UnitGUID
+				if channelObj == 0 {
+					channelObj = targetGUID
+				}
+				if hasDest {
+					channelObj = m.GUID
+				}
+				stampCreatureChannel(m, spellInfo.ID, channelObj, hasDest, destX, destY, destZ, channelUntil)
 			}
 		}
 		// Spell::SendSpellGo cast flags (Spell.cpp:4283-4330) for creature
