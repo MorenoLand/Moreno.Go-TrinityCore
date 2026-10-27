@@ -2509,12 +2509,63 @@ func bgMaxLevelForMap(s *Server, mapID uint32) uint32 {
 	return 80
 }
 
+// bgRewardTargets returns the live roster for a BG map: worldReady sessions
+// holding an entered (InProgress or WaitLeave) non-arena slot for the map,
+// the Go form of iterating a C++ instance's m_Players (Battleground.cpp:619-657).
+// Slot-keyed, not player.Map-keyed: the port teleport is no-bridge, so a
+// genuine sim participant never stands on the BG map and the old map gate
+// missed them while crediting on-map bystanders. End arms flip slots to
+// WaitLeave before rewarding, so WaitLeave is included; a previous match's
+// WaitLeave stayers on the same map are the standing successor-conflation
+// residual, same as the sweep's holder definition (battleground.go:2930).
+func (s *Server) bgRewardTargets(mapID uint32) []*session {
+	if s == nil || mapID == 0 {
+		return nil
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		entered := false
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+				entered = true
+				break
+			}
+		}
+		if !entered {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	return targets
+}
+
+// bgEnteredSlotMap returns the map of sess's entered (InProgress) non-arena
+// slot, if any: the match the session is actually playing, as opposed to
+// the map it stands on (the port teleport is no-bridge, so the two differ
+// for every sim participant).
+func bgEnteredSlotMap(sess *session) (uint32, bool) {
+	if sess == nil {
+		return 0, false
+	}
+	for i := range sess.bgQueues {
+		if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.Status == BGStatusInProgress {
+			return e.MapID, true
+		}
+	}
+	return 0, false
+}
+
 // rewardBGEndHonor mirrors Battleground::RewardHonorToTeam (Battleground.cpp:633)
 // fed by GetBonusHonorFromKill (Battleground.cpp:806): ceil(min(maxLevel,80)*1.55*kills)
-// honor to every worldReady session on the BG map on the given team (0 Alliance,
-// 1 Horde). C++ iterates the live instance's m_Players; Go's ambient BG model
-// treats all worldReady sessions on the map as participants, the same proxy
-// creditBattlegroundWin uses (achievements.go:1455). The per-session call is
+// honor to every entered-slot holder for the BG map on the given team
+// (0 Alliance, 1 Horde), via bgRewardTargets: C++ iterates the live
+// instance's m_Players, and Go's slot roster is that membership proxy, the
+// same one creditBattlegroundWin uses (achievements.go:1455). The per-session call is
 // rewardHonorPoints == Player::RewardHonor(nullptr, 1, honor), the same tail
 // Battleground::UpdatePlayerScore reaches for SCORE_BONUS_HONOR (Battleground.cpp:1231).
 func (s *Server) rewardBGEndHonor(mapID, team uint32, kills uint32) {
@@ -2525,38 +2576,26 @@ func (s *Server) rewardBGEndHonor(mapID, team uint32, kills uint32) {
 	if honor == 0 {
 		return
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
-			targets = append(targets, sess)
+	for _, sess := range s.bgRewardTargets(mapID) {
+		if teamForRace(sess.player.Race) == team {
+			sess.rewardHonorPoints(context.Background(), honor)
 		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
-		sess.rewardHonorPoints(context.Background(), honor)
 	}
 }
 
 // rewardBGEndReputation mirrors Battleground::RewardReputationToTeam's standing arm
-// (Battleground.cpp:640): rep standing to every worldReady session on the BG map
-// on the given team (0 Alliance, 1 Horde). C++ adds the SPELL_AURA_MOD_REPUTATION_GAIN
+// (Battleground.cpp:640): rep standing to every entered-slot holder for the BG map
+// on the given team (0 Alliance, 1 Horde), via bgRewardTargets. C++ adds the SPELL_AURA_MOD_REPUTATION_GAIN
 // and SPELL_AURA_MOD_FACTION_REPUTATION_GAIN aura modifiers first; Go applies the
 // same fold inside giveReputation (reputationGainPctMod).
 func (s *Server) rewardBGEndReputation(mapID, team uint32, factionID uint32, rep uint32) {
 	if s == nil || factionID == 0 || rep == 0 {
 		return
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && teamForRace(sess.player.Race) == team {
-			targets = append(targets, sess)
+	for _, sess := range s.bgRewardTargets(mapID) {
+		if teamForRace(sess.player.Race) == team {
+			sess.giveReputation(context.Background(), factionID, int32(rep))
 		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
-		sess.giveReputation(context.Background(), factionID, int32(rep))
 	}
 }
 

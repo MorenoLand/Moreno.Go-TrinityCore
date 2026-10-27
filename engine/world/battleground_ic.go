@@ -885,7 +885,7 @@ func (s *Server) handleICCreatureKilled(sess *session, creatureEntry uint32) {
 
 // grantICWinnerHonor mirrors the RewardHonorToTeam(WINNER_HONOR_AMOUNT, team)
 // arm of BattlegroundIC::HandleKillUnit (BattlegroundIC.cpp:385-396): 500 raw
-// honor to every worldReady session on the IoC map on the winning team, ahead
+// honor to every entered-slot holder for the IoC map on the winning team, ahead
 // of the end-battleground arm (== C++ arm order). rewardBGEndHonor derives
 // honor from kill counts via GetBonusHonorFromKill, so the flat winner amount
 // goes through sess.rewardHonorPoints directly.
@@ -893,16 +893,10 @@ func (s *Server) grantICWinnerHonor(ic *icBattlegroundState, team uint32) {
 	if s == nil || ic == nil {
 		return
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID && teamForRace(sess.player.Race) == team {
-			targets = append(targets, sess)
+	for _, sess := range s.bgRewardTargets(ic.MapID) {
+		if teamForRace(sess.player.Race) == team {
+			sess.rewardHonorPoints(context.Background(), ICWinnerHonorAmount)
 		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
-		sess.rewardHonorPoints(context.Background(), ICWinnerHonorAmount)
 	}
 }
 
@@ -1013,16 +1007,10 @@ func (s *Server) grantICTeamHonor(ic *icBattlegroundState, team uint32, honor ui
 	if s == nil || ic == nil || honor == 0 {
 		return
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID && teamForRace(sess.player.Race) == team {
-			targets = append(targets, sess)
+	for _, sess := range s.bgRewardTargets(ic.MapID) {
+		if teamForRace(sess.player.Race) == team {
+			sess.rewardHonorPoints(context.Background(), honor)
 		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
-		sess.rewardHonorPoints(context.Background(), honor)
 	}
 }
 
@@ -1042,15 +1030,7 @@ func (s *Server) syncICNodeAuraTeam(ic *icBattlegroundState, nodeID uint8, team 
 	default:
 		return
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == ic.MapID {
-			targets = append(targets, sess)
-		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
+	for _, sess := range s.bgRewardTargets(ic.MapID) {
 		if teamForRace(sess.player.Race) == team {
 			sess.applyAura(spellID)
 		} else {

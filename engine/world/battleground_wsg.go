@@ -229,8 +229,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// — the tiebreak source for the 27-minute timeout end.
 				wsg.LastFlagCaptureTeam = 0
 
-				s.rewardBGEndReputation(sess.player.Map, 0, WSGFactionSilverwingSentinels, WSGReputationCapture)
-				s.rewardBGEndHonor(sess.player.Map, 0, 2)
+				if rewardMap, ok := bgEnteredSlotMap(sess); ok {
+					s.rewardBGEndReputation(rewardMap, 0, WSGFactionSilverwingSentinels, WSGReputationCapture)
+					s.rewardBGEndHonor(rewardMap, 0, 2)
+				}
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceCaptures, wsg.AllianceScore)
 				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
@@ -294,8 +296,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// (BattlegroundWS.cpp:352): SetLastFlagCapture(player->GetTeam()).
 				wsg.LastFlagCaptureTeam = 1
 
-				s.rewardBGEndReputation(sess.player.Map, 1, WSGFactionWarsongOutriders, WSGReputationCapture)
-				s.rewardBGEndHonor(sess.player.Map, 1, 2)
+				if rewardMap, ok := bgEnteredSlotMap(sess); ok {
+					s.rewardBGEndReputation(rewardMap, 1, WSGFactionWarsongOutriders, WSGReputationCapture)
+					s.rewardBGEndHonor(rewardMap, 1, 2)
+				}
 
 				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeCaptures, wsg.HordeScore)
 				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
@@ -824,15 +828,15 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	wsg.StalemateStage = 0
 	wsg.Winner = int8(winningTeam)
 	wsg.EndedAt = time.Now()
-	s.markBGSlotsWaitLeave(mapID)
+	s.markBGSlotsWaitLeave(WSGMapID)
 	teamName := "Alliance"
 	if winningTeam == 1 {
 		teamName = "Horde"
 	}
 	s.broadcastBattlegroundMessage(mapID, "The "+teamName+" wins!")
-	s.rewardBGEndHonor(mapID, winningTeam, 1)
-	s.rewardBGEndHonor(mapID, 0, 2)
-	s.rewardBGEndHonor(mapID, 1, 2)
+	s.rewardBGEndHonor(WSGMapID, winningTeam, 1)
+	s.rewardBGEndHonor(WSGMapID, 0, 2)
+	s.rewardBGEndHonor(WSGMapID, 1, 2)
 }
 
 // stopWSGMatchTimers stops every armed WSG timer under the caller's wsg.mu.
@@ -896,9 +900,9 @@ func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
 	wsg.StalemateStage = 0
 	wsg.Winner = 2
 	wsg.EndedAt = time.Now()
-	s.markBGSlotsWaitLeave(mapID)
-	s.rewardBGEndHonor(mapID, 0, 2)
-	s.rewardBGEndHonor(mapID, 1, 2)
+	s.markBGSlotsWaitLeave(WSGMapID)
+	s.rewardBGEndHonor(WSGMapID, 0, 2)
+	s.rewardBGEndHonor(WSGMapID, 1, 2)
 }
 
 // armWSGMatchTimer starts the 25-minute match clock on the first flag
