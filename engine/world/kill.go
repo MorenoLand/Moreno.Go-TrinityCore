@@ -791,20 +791,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// bridge: Go casts every template spell through the same
 			// combat-tick rotation. Packet-only via castCreatureSpell (no
 			// damage application on this path).
-			if len(motion.Spells) == 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-				motion.Spells = s.server.loadCreatureSpells(ctx, motion.Entry)
+			killerGUID := s.playerGUID
+			if killer != nil && killer.GUID != 0 {
+				killerGUID = killer.GUID
 			}
-			if len(motion.Spells) > 0 && s.server.Data != nil {
-				killerGUID := s.playerGUID
-				if killer != nil && killer.GUID != 0 {
-					killerGUID = killer.GUID
-				}
-				for _, spellID := range motion.Spells {
-					if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.Attributes&spellAttr0CastableWhileDead != 0 {
-						s.server.castCreatureSpellTriggered(ctx, motion, spellID, killerGUID)
-					}
-				}
-			}
+			s.server.fireCreatureDeathCast(ctx, motion, killerGUID)
 			// GuardAI::JustDied (GuardAI.cpp:72-76) ->
 			// Creature::SendZoneUnderAttackMessage (Creature.cpp:2706-2712):
 			// a guard slain by a player broadcasts SMSG_ZONE_UNDER_ATTACK
@@ -1137,6 +1128,30 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	if s.server != nil {
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.checkDeadTempSummon(ctx, motion, now)
+		}
+	}
+}
+
+// fireCreatureDeathCast is the CombatAI::JustDied AICOND_DIE leg
+// (CombatAI.cpp:68-73; the condition itself is UnitAI::FillAISpellInfo,
+// UnitAI.cpp:196: a template spell is AICOND_DIE exactly when it carries
+// SPELL_ATTR0_CASTABLE_WHILE_DEAD). The dead creature casts those
+// template spells at the killer, triggered, packet-only — no damage
+// application, as on the funnel path. The funnel path and every
+// no-funnel death chain share it so the leg cannot drift between
+// paths again.
+func (s *Server) fireCreatureDeathCast(ctx context.Context, dead *creatureMotion, killerGUID uint64) {
+	if s == nil || dead == nil {
+		return
+	}
+	if len(dead.Spells) == 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
+		dead.Spells = s.loadCreatureSpells(ctx, dead.Entry)
+	}
+	if len(dead.Spells) > 0 && s.Data != nil {
+		for _, spellID := range dead.Spells {
+			if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found && spellInfo.Attributes&spellAttr0CastableWhileDead != 0 {
+				s.castCreatureSpellTriggered(ctx, dead, spellID, killerGUID)
+			}
 		}
 	}
 }

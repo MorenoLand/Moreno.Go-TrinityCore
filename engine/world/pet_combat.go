@@ -1771,6 +1771,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				if victim.BossAI != nil {
 					victim.BossAI.OnDied(ctx, s, victim)
 				}
+				// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE death cast
+				// at the pet killer — the funnel leg, fired here because this
+				// branch skips onCreatureKilled.
+				s.fireCreatureDeathCast(ctx, victim, motion.GUID)
 				// Creature::RemoveCorpse schedules the respawn for every death
 				// (boss_ai.go precedent: the owner path gets it from
 				// onCreatureKilled); placed ahead of the dead-leg stamp, so the

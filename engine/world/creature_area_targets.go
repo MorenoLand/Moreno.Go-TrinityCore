@@ -1833,6 +1833,10 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		if live.BossAI != nil {
 			live.BossAI.OnDied(ctx, s, live)
 		}
+		// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE
+		// death cast at the caster killer — the funnel leg, fired
+		// here because this path skips onCreatureKilled.
+		s.fireCreatureDeathCast(ctx, live, motion.GUID)
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -3021,6 +3025,11 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)
 			}
+			// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE
+			// death cast — the killer attribution follows this path's
+			// event-4 killer (the motion itself on the self-trip; the
+			// reflector GUID is not plumbed into the trip core).
+			s.fireCreatureDeathCast(ctx, live, motion.GUID)
 		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})

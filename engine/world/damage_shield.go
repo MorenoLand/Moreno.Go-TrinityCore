@@ -537,6 +537,16 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			if m.BossAI != nil {
 				m.BossAI.OnDied(ctx, s, m)
 			}
+			// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE death
+			// cast at the attacker killer — the funnel leg, fired here
+			// because the attackerSess == nil arm skips onCreatureKilled.
+			// A gone attacker motion leaves killerGUID 0, matching the
+			// event-4 twin's nil killer on this path.
+			killerGUID := uint64(0)
+			if attackerMotion != nil {
+				killerGUID = attackerMotion.GUID
+			}
+			s.fireCreatureDeathCast(ctx, m, killerGUID)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1

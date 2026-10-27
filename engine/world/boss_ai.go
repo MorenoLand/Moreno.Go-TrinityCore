@@ -2556,6 +2556,10 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	if tm.BossAI != nil {
 		tm.BossAI.OnDied(ctx, s, tm)
 	}
+	// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE death
+	// cast at the attacker killer — the funnel leg, fired here
+	// because the no-owner arm skips onCreatureKilled.
+	s.fireCreatureDeathCast(ctx, tm, m.GUID)
 	// Creature::RemoveCorpse schedules the respawn for every death; the
 	// owner path gets it from onCreatureKilled.
 	if tm.InstanceID == 0 {
