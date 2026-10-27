@@ -1342,7 +1342,12 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	var ok bool
 	if loc, found := s.server.closestRepopGraveyard(s.player.X, s.player.Y, s.player.Z, repopMap, team); found {
 		grave, ok = loc, true
-	} else {
+	} else if !hasBGClosestGraveyardOverride(repopMap) {
+		// Player.cpp:5127-5134: a battleground member's grave comes from
+		// bg->GetClosestGraveyard alone, with no generic fallback, so an
+		// override miss stays put (Player.cpp:5141-5152) instead of
+		// falling through to the ObjectMgr lookup; only a map with no
+		// override reaches the generic leg.
 		grave, ok = s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, repopMap, s.player.Zone, team)
 	}
 	if ok {
@@ -1415,8 +1420,9 @@ func playerTeam(race uint8) uint32 {
 // comes from that battleground's GetClosestGraveyard override, never the
 // generic zone lookup. It is deliberately separate from closestGraveyard (the
 // ObjectMgr generic path the spirit-healer and corpse-query legs use), so the
-// BG overrides do not leak into those legs. A false return falls through to
-// closestGraveyard, now the pure generic zone lookup with no BG dispatch.
+// BG overrides do not leak into those legs. A false return on an override map
+// stays put (Player.cpp:5141-5152: no grave, no generic fallback); only a map
+// with no override falls through to closestGraveyard.
 func (s *Server) closestRepopGraveyard(x, y, z float32, mapID, team uint32) (wotlk.WorldSafeLoc, bool) {
 	switch mapID {
 	case ICMapID:
@@ -1433,6 +1439,19 @@ func (s *Server) closestRepopGraveyard(x, y, z float32, mapID, team uint32) (wot
 		return s.closestEYGraveyard(x, y, z, team)
 	default:
 		return wotlk.WorldSafeLoc{}, false
+	}
+}
+
+// hasBGClosestGraveyardOverride reports whether mapID is one of the six
+// battleground maps with a GetClosestGraveyard override (AV/WS/AB/EY/IC/SA);
+// arena maps use the base Battleground::GetClosestGraveyard generic leg
+// (Battleground.cpp:1777-1779) and have no override.
+func hasBGClosestGraveyardOverride(mapID uint32) bool {
+	switch mapID {
+	case ICMapID, SAMapID, AVMapID, WSGMapID, ABMapID, EOTSMapID:
+		return true
+	default:
+		return false
 	}
 }
 
