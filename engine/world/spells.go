@@ -17329,6 +17329,118 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				s.handleEffectHealthLeech(ctx, spell, spellID, effectGUIDs, effectIndex, eff)
 			}
 		}
+		if eff.Effect == spellEffectSummon {
+			// Spell::EffectSummonType (SpellEffects.cpp:2194) runs at
+			// SPELL_EFFECT_HANDLE_HIT (Spell.cpp:3722-3730, _handle_immediate_phase):
+			// once per effect, never per target — placing it in the
+			// per-target loop below would summon once per target. Mirrors
+			// the client path's case-28 arm: a zero entry returns silently
+			// (:2199-2200), a missing SummonProperties.dbc row logs and
+			// returns (:2202-2208), and TOTEM/LIGHTWELL titles stay out —
+			// routing those through handleSummonPet would mint a permanent
+			// character_pet row (the client arm's reason). The client
+			// post-loop totem legs (summonTotem / summonSessionNoSlotTotem)
+			// have no triggered-path twin, so a triggered TOTEM-title
+			// summon still summons nothing; that leg needs a once-per-cast
+			// home, not a per-effect arm, and stays a residual.
+			if eff.MiscValue != 0 {
+				summonTitle := uint32(0)
+				summonPropsKnown := true
+				if s.server != nil && s.server.Data != nil {
+					if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
+						if !found {
+							s.debug("EffectSummonType: unhandled summon type", "miscValueB", eff.MiscValueB)
+							summonPropsKnown = false
+						} else {
+							summonTitle = props.Title
+						}
+					}
+				}
+				if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
+					if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue)); guid != 0 {
+						s.sendSummonObjectLog(spellID, eff.Effect, guid)
+					}
+				}
+			}
+		}
+		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
+			// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) runs at
+			// HIT_TARGET per unit target; the once-per-effect shape here
+			// is the two helpers' split (caster leg + unit-target leg),
+			// not one teleport per target — the helpers already iterate
+			// the target list once. Branches mirror the client arm's dest
+			// resolution in order: homebind (8690/556), TARGET_DEST_DB
+			// row, then the resolved spell dest. The resolved-dest leg
+			// carries no map (Go's dest model has no map field), so it
+			// takes C++'s MAPID_INVALID branch (SpellEffects.cpp:1216-1218):
+			// the unit's own map, i.e. a near teleport per target with
+			// the target's own orientation (the zero-orientation
+			// substitute, :1222 — the resolver drops dest orientation).
+			// No dest at all (no DB row, no DestLocation flag) is C++'s
+			// HasDst log-error return: nothing teleports. The caster leg
+			// is guarded on the caster being a unit target, unlike the
+			// client arm's unconditional leg — a triggered caster is not
+			// necessarily a target of its own effect.
+			teleGUIDs := make([]uint64, 0, len(effectTargets))
+			teleCasterTarget := false
+			for _, et := range effectTargets {
+				teleGUIDs = append(teleGUIDs, et.guid)
+				if et.guid == s.playerGUID {
+					teleCasterTarget = true
+				}
+			}
+			teleportCasterAndUnits := func(mapID uint32, x, y, z, ori float32) {
+				if teleCasterTarget {
+					s.teleportSpellEffectCaster(mapID, x, y, z, ori)
+				}
+				s.teleportEffectUnitTargets(teleGUIDs, mapID, x, y, z, ori)
+			}
+			if spellID == 8690 || spellID == 556 {
+				hbMap, hbX, hbY, hbZ := s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ
+				if hbX == 0 && hbY == 0 && hbZ == 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+					_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
+				}
+				// No completedCast on this path, so the live orientation
+				// stands in for the client arm's selection-time snapshot
+				// (instant casts: selection and effect coincide).
+				teleportCasterAndUnits(hbMap, hbX, hbY, hbZ, s.player.Orientation)
+			} else if x, y, z, ori, mapID, ok := s.spellTargetPositionDest(ctx, spell, spellID, uint32(effectIndex)); ok {
+				teleportCasterAndUnits(mapID, x, y, z, ori)
+			} else if spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+				dx, dy, dz := spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z
+				if teleCasterTarget {
+					s.teleportSpellEffectCaster(s.player.Map, dx, dy, dz, s.player.Orientation)
+				}
+				for _, teleGUID := range teleGUIDs {
+					if teleGUID == 0 || teleGUID == s.playerGUID {
+						continue
+					}
+					if targetSess := s.server.findSessionByGUID(teleGUID); targetSess != nil && targetSess.player != nil {
+						if targetSess.inFlight {
+							continue
+						}
+						targetSess.nearTeleportMove(dx, dy, dz, targetSess.player.Orientation)
+						continue
+					}
+					if uint16(teleGUID>>48) != 0xF130 {
+						continue
+					}
+					motion := s.findCreatureMotion(teleGUID)
+					if motion == nil {
+						continue
+					}
+					s.server.motionMu.Lock()
+					motion.X, motion.Y, motion.Z = dx, dy, dz
+					instMap, instanceID := motion.Map, motion.InstanceID
+					s.server.motionMu.Unlock()
+					s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, teleGUID, dx, dy, dz)
+				}
+			}
+		}
+		// The power-drain log batches per effect (C++ logs per effect via
+		// SendLogExecute, Spell.cpp:4523-4564); the arm below appends and
+		// the flush lands after the per-target loop.
+		var powerDrainLog []takeTargetPowerEntry
 		for _, et := range effectTargets {
 			effectTarget, jumpIndex := et.guid, et.jumpIndex
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
@@ -17477,6 +17589,44 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if len(burnLog) > 0 {
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerBurn), burnLog)
 				}
+			} else if eff.Effect == spellEffectPowerDrain {
+				// Spell::EffectPowerDrain (SpellEffects.cpp:1265-1307),
+				// decomposed from the client arm's per-target loop: the drain
+				// amount carries the SpellDamageBonusDone leg (Unit.cpp:6598-6736)
+				// and the SpellDamageBonusTaken leg (Unit.cpp:7052-7131) before
+				// the resilience slice, which rides inside applySpellPowerBurn
+				// for mana (SpellEffects.cpp:1285-1287); the Mana Burn cap is
+				// burn-only and stays off (manaBurnCap=false). The gates are
+				// spellPowerBurnGatesPass (alive + power-type match + MiscValue
+				// range, :1274-1282); damage<0 drains nothing. The caster
+				// regains the drained power scaled by the effect value
+				// multiplier, never from a self drain (:1301). The effect loop
+				// only runs on the spell loaded at the cast head, so the
+				// Done leg's spellKnown is structural here.
+				baseAmount := eff.CalcValueForLevel(spell, casterLevel)
+				if baseAmount >= 0 && s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
+					drainSchool := uint32(1)
+					if spell.SchoolMask != 0 {
+						drainSchool = spell.SchoolMask
+					}
+					amount := s.spellDamageBonusDone(ctx, spell, true, uint32(baseAmount), effectTarget, effectIndex, false, 1)
+					if s.server != nil {
+						if victimSess := s.server.findSessionByGUID(effectTarget); victimSess != nil && victimSess.player != nil {
+							amount = spellDamageBonusTaken(amount, spell, drainSchool, victimSess, s, 1.0)
+						} else if target, ok := s.getCombatTarget(ctx, effectTarget); ok {
+							amount = creatureSpellDamageBonusTaken(s.server, amount, spell, drainSchool, creatureAuraKeyForTarget(target), s, 1.0)
+						}
+					}
+					drained := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, int32(amount), spellID, false)
+					gainMultiplier := float32(0)
+					if effectTarget != s.playerGUID {
+						gain := int32(effectValueMultiplied(drained, calcValueMultiplier(spell, effectIndex, s)))
+						s.applySpellEnergize(ctx, s.playerGUID, eff.MiscValue, gain)
+						s.energizeBySpellTail(ctx, spell, spellID, s.playerGUID, eff.MiscValue, gain)
+						gainMultiplier = calcValueMultiplier(spell, effectIndex, s)
+					}
+					powerDrainLog = append(powerDrainLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: drained, powerType: uint32(eff.MiscValue), gainMultiplier: gainMultiplier})
+				}
 			} else if eff.Effect == spellEffectTriggerSpell || eff.Effect == spellEffectTriggerSpellWithValue {
 				// Spell::EffectTriggerSpell SPELL_EFFECT_HANDLE_LAUNCH_
 				// TARGET (SpellEffects.cpp:961-966): the per-target leg fires
@@ -17538,7 +17688,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// runs at HIT_TARGET per unit target; same dropped
 				// class as the dispel arm above.
 				s.handleEffectDispelMechanic(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectCharge {
+				// Spell::EffectCharge (SpellEffects.cpp:4493): the LAUNCH_TARGET
+				// leg moves the caster to the target's contact point and the
+				// HIT_TARGET leg makes a non-positive charge spell attack the
+				// target — both ride handleEffectCharge, the client arm's
+				// helper (near-teleport bridge for the MoveCharge spline,
+				// startAttackOn for the Attack leg). The LAUNCH_TARGET leg has
+				// no separate launch-phase home on this path, so it rides the
+				// miss-filtered target list like the other arms: a missed
+				// charge target moves nothing. Per target, so a multi-target
+				// charge moves once per target with the last winning, like
+				// C++'s per-TargetInfo launch handling.
+				s.handleEffectCharge(ctx, effectTarget, spell)
 			}
+		}
+		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
+			s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), powerDrainLog)
 		}
 	}
 
