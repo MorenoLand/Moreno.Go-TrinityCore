@@ -196,7 +196,15 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 // branch of teleportTo (commands.go) without its combat, selection, pet,
 // and zone side effects, for spell effects that reposition the caster
 // without a full teleport (e.g. Spell::EffectCharge).
-func (s *session) nearTeleportMove(x, y, z, orientation float32) {
+// keepTransport carries the C++ transport arm: true is Unit::NearTeleportTo
+// (Unit.cpp:13338, TELE_TO_NOT_LEAVE_TRANSPORT — the passenger stays and
+// the packet carries the destination's recomputed transport offset, as in
+// SendTeleportPacket) and the spline arms that never call TeleportTo at
+// all (MoveCharge, JumpTo), so they never detach either; false is a plain
+// Player::TeleportTo (ScriptedAI::DoTeleportPlayer, NOT_LEAVE_COMBAT only),
+// which removes the passenger ahead of the branch (Player.cpp:1711-1716).
+// An unresolvable transport falls back to detaching, as in teleportToOptions.
+func (s *session) nearTeleportMove(x, y, z, orientation float32, keepTransport bool) {
 	if s == nil || s.player == nil {
 		return
 	}
@@ -212,6 +220,17 @@ func (s *session) nearTeleportMove(x, y, z, orientation float32) {
 	movement.HasPitch = movement.Flags&(movementSwimming|movementFlying) != 0 || movement.Flags2&movement2Pitch != 0
 	movement.Flags &^= movementOnTransport
 	movement.Transport = nil
+	if keepTransport && s.player.TransportGUID != 0 && s.server != nil {
+		if spawn, attached := s.server.transportSpawnForGUID(s.player.TransportGUID); attached {
+			movement.Flags |= movementOnTransport
+			if movement.Transport == nil {
+				movement.Transport = &transportMovement{}
+			}
+			movement.Transport.GUID = s.player.TransportGUID
+			movement.Transport.Seat = s.player.TransportSeat
+			movement.Transport.X, movement.Transport.Y, movement.Transport.Z, movement.Transport.Orientation = CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, x, y, z, orientation)
+		}
+	}
 	s.nearTeleportPending = true
 	s.nearTeleportDest = nearTeleportDestination{X: x, Y: y, Z: z, Orientation: orientation, Movement: movement}
 	selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)

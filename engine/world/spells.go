@@ -18617,7 +18617,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						if targetSess.inFlight {
 							continue
 						}
-						targetSess.nearTeleportMove(dx, dy, dz, targetSess.player.Orientation)
+						targetSess.nearTeleportMove(dx, dy, dz, targetSess.player.Orientation, true)
 						continue
 					}
 					if uint16(teleGUID>>48) != 0xF130 {
@@ -39245,7 +39245,7 @@ func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spe
 	destX := target.X + reach*float32(math.Cos(angle))
 	destY := target.Y + reach*float32(math.Sin(angle))
 	facing := float32(math.Atan2(float64(target.Y-destY), float64(target.X-destX)))
-	s.nearTeleportMove(destX, destY, target.Z, facing)
+	s.nearTeleportMove(destX, destY, target.Z, facing, true)
 	if !spellIsPositive(spell) && target.Health != 0 {
 		s.startAttackOn(ctx, targetGUID)
 	}
@@ -39269,7 +39269,7 @@ func (s *session) handleEffectLeap(ctx context.Context, targetGUID uint64, targe
 	if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
 		return
 	}
-	targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation)
+	targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation, true)
 }
 
 // teleportEffectUnitTargets is the Spell::EffectTeleportUnits
@@ -39294,7 +39294,7 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 				continue
 			}
 			if targetSess.player.Map == mapID {
-				targetSess.nearTeleportMove(x, y, z, ori)
+				targetSess.nearTeleportMove(x, y, z, ori, true)
 			} else {
 				targetSess.teleportTo(mapID, x, y, z, ori)
 			}
@@ -39352,7 +39352,7 @@ func (s *session) teleportSpellEffectCaster(mapID uint32, x, y, z, ori float32) 
 		if s.server != nil && !s.validTrinityMapLocation(mapID, x, y, z, ori) {
 			return
 		}
-		s.nearTeleportMove(x, y, z, ori)
+		s.nearTeleportMove(x, y, z, ori, true)
 		s.isFalling = false
 		s.isMoving = false
 		return
@@ -39398,6 +39398,7 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 		s.player.Y+dist*float32(math.Sin(float64(s.player.Orientation))),
 		s.player.Z,
 		-s.player.Orientation,
+		true,
 	)
 }
 
@@ -39701,7 +39702,7 @@ func (s *session) handleEffectPullTowards(hitTargets []uint64) {
 		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
 			continue
 		}
-		targetSess.nearTeleportMove(landX, landY, targetSess.player.Z, targetSess.player.Orientation)
+		targetSess.nearTeleportMove(landX, landY, targetSess.player.Z, targetSess.player.Orientation, true)
 	}
 }
 
@@ -39731,7 +39732,7 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 		if dx*dx+dy*dy+dz*dz < 0.001*0.001 {
 			continue
 		}
-		targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation)
+		targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation, true)
 	}
 }
 
@@ -39995,7 +39996,7 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		return
 	}
-	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation)
+	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation, true)
 }
 
 // handleEffectKnockBack mirrors Spell::EffectKnockBack (SpellEffects.cpp:4552-4592),
@@ -40513,6 +40514,7 @@ func (s *session) handleEffectStuck(ctx context.Context) {
 		s.player.Y+5*float32(math.Sin(angle)),
 		s.player.Z,
 		s.player.Orientation,
+		true,
 	)
 }
 

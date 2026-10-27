@@ -3723,7 +3723,7 @@ func (s *Server) creatureEffectTeleportUnits(ctx context.Context, m *creatureMot
 				continue
 			}
 			if ts.player.Map == m.Map {
-				ts.nearTeleportMove(dx, dy, dz, ts.player.Orientation)
+				ts.nearTeleportMove(dx, dy, dz, ts.player.Orientation, true)
 			} else {
 				ts.teleportTo(ts.player.Map, dx, dy, dz, ts.player.Orientation)
 			}
@@ -5317,7 +5317,11 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 // teleport-units arm); creature targets ride the teleport arm's
 // position-set + monster-move-stop broadcast. setOri false keeps the
 // target's orientation (leap, pull); true sets it (tele-face-caster).
-func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, ori float32, setOri bool) {
+// keepTransport rides nearTeleportMove's arm: all four current effects
+// (leap, tele-face-caster, pull, pull-dest) are NearTeleportTo or spline
+// arms that never call TeleportTo, so they never detach; a future
+// plain-TeleportTo analog must pass false.
+func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, ori float32, setOri, keepTransport bool) {
 	if s == nil || m == nil || guid == 0 {
 		return
 	}
@@ -5329,7 +5333,7 @@ func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, o
 		if setOri {
 			o = ori
 		}
-		ts.nearTeleportMove(x, y, z, o)
+		ts.nearTeleportMove(x, y, z, o, keepTransport)
 		return
 	}
 	s.motionMu.Lock()
@@ -5396,7 +5400,7 @@ func (s *Server) creatureEffectLeap(ctx context.Context, m *creatureMotion, hasD
 			}
 			guid = m.GUID
 		}
-		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false)
+		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false, true)
 	}
 }
 
@@ -5440,7 +5444,7 @@ func (s *Server) creatureEffectTeleUnitsFaceCaster(ctx context.Context, m *creat
 		dist := m.combatReachOrDefault() + dis + targetReach
 		fx := m.X + dist*float32(math.Cos(float64(m.Orientation)))
 		fy := m.Y + dist*float32(math.Sin(float64(m.Orientation)))
-		s.creatureMoveTargetTo(m, guid, fx, fy, m.Z, -m.Orientation, true)
+		s.creatureMoveTargetTo(m, guid, fx, fy, m.Z, -m.Orientation, true, true)
 	}
 }
 
@@ -5541,7 +5545,7 @@ func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotio
 		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
 			continue
 		}
-		s.creatureMoveTargetTo(m, guid, landX, landY, tz, 0, false)
+		s.creatureMoveTargetTo(m, guid, landX, landY, tz, 0, false, true)
 	}
 }
 
@@ -5575,7 +5579,7 @@ func (s *Server) creatureEffectPullTowardsDest(ctx context.Context, m *creatureM
 		if ddx*ddx+ddy*ddy+ddz*ddz < 0.001*0.001 {
 			continue
 		}
-		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false)
+		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false, true)
 	}
 }
 

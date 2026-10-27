@@ -831,7 +831,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			}
 			position[index] = value
 		}
-		s.nearTeleportMove(position[0], position[1], position[2], position[3])
+		s.nearTeleportMove(position[0], position[1], position[2], position[3], false)
 		return nil, nil
 	}
 	methods["Mute"] = func(_ context.Context, args []any) ([]any, error) {
