@@ -678,6 +678,15 @@ func (s *Server) getWSGFlagCarriers(mapID uint32) []*session {
 	return carriers
 }
 
+// broadcastWorldState sends a world state update to a BG map's roster, not
+// to the map's players: C++ UpdateWorldState sends via SendPacketToAll over
+// m_Players (Battleground.cpp:659-664, :568-571), and the port teleport is
+// no-bridge, so a genuine sim participant never stands on the BG map while
+// an on-map bystander holds no roster slot. The audience is bgRewardTargets
+// (entered InProgress or WaitLeave slots): end arms flip slots to WaitLeave
+// before the final worldstate sends, same as the end-honor roster.
+// broadcastToMap itself stays map-keyed: gameobject/GO-command broadcasts
+// genuinely address whoever stands on the map.
 func (s *Server) broadcastWorldState(mapID uint32, variableID, value uint32) {
 	if s == nil {
 		return
@@ -685,7 +694,9 @@ func (s *Server) broadcastWorldState(mapID uint32, variableID, value uint32) {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU32(variableID)
 	buf.WriteU32(value)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_UPDATE_WORLD_STATE), buf.Bytes())
+	for _, target := range s.bgRewardTargets(mapID) {
+		_ = target.write(uint16(protocol.OpcodeSMSG_UPDATE_WORLD_STATE), buf.Bytes(), true)
+	}
 }
 
 // updateInstanceWorldState is the instance-scoped twin of broadcastWorldState:
@@ -727,12 +738,24 @@ func (s *Server) wsgUpdateFlagState(mapID uint32, team uint32, value uint32) {
 	}
 }
 
+// broadcastBattlegroundMessage sends a system chat message to a BG map's
+// roster, not to the map's players: C++ BG announcements reach m_Players
+// via SendPacketToAll (Battleground.cpp:568-571), and the port teleport is
+// no-bridge, so off-map sim participants missed every capture/victory/draw
+// message while on-map bystanders received them. The audience is
+// bgRewardTargets (entered InProgress or WaitLeave slots): every end arm
+// flips slots to WaitLeave before its victory/draw message, so the end
+// messages reach the finished match's players. A previous match's WaitLeave
+// stayers on the same map are the standing successor-conflation residual,
+// same as the reward roster.
 func (s *Server) broadcastBattlegroundMessage(mapID uint32, message string) {
 	if s == nil {
 		return
 	}
 	payload := protocol.BuildChatMessageWithOptions(chatSystem, 0, 0, 0, message, "", false, "", 0)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload)
+	for _, target := range s.bgRewardTargets(mapID) {
+		_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+	}
 }
 
 // sendWSGInitWorldStatesTo serializes the live WSG world states into

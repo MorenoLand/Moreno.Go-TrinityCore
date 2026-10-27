@@ -929,23 +929,26 @@ func (s *Server) closestSAGraveyard(x, y, z float32, team uint32) (wotlk.WorldSa
 	return wotlk.WorldSafeLoc{}, false
 }
 
+// updateSAWorldState sends a SotA world state update to the map's roster
+// (bgRewardTargets), not to the map's players: C++ UpdateWorldState sends
+// via SendPacketToAll over m_Players (Battleground.cpp:659-664, :568-571).
+// The end arm flips slots to WaitLeave before its final timer-off send,
+// so WaitLeave is included, same as the end-honor roster.
 func (s *Server) updateSAWorldState(mapID, variableID, value uint32) {
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
-			sess.sendWorldState(variableID, value)
-		}
+	for _, sess := range s.bgRewardTargets(mapID) {
+		sess.sendWorldState(variableID, value)
 	}
 }
 
+// sendSAAllWorldStates sends the live SotA world states to the map's
+// roster (bgRewardTargets), not to the map's players: same m_Players rule
+// as updateSAWorldState above.
 func (s *Server) sendSAAllWorldStates(sa *saBattlegroundState) {
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == sa.MapID {
-			s.sendSAInitialWorldStatesToSession(sa, sess)
-		}
+	if s == nil || sa == nil {
+		return
+	}
+	for _, sess := range s.bgRewardTargets(sa.MapID) {
+		s.sendSAInitialWorldStatesToSession(sa, sess)
 	}
 }
 

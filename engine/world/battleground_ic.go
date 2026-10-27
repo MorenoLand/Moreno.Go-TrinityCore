@@ -1150,13 +1150,12 @@ func (s *Server) sendICNodeWorldState(ic *icBattlegroundState, nodeID uint8) {
 	}
 }
 
+// updateICWorldState sends an IoC world state update to the map's roster
+// (bgRewardTargets), not to the map's players: C++ UpdateWorldState sends
+// via SendPacketToAll over m_Players (Battleground.cpp:659-664, :568-571).
 func (s *Server) updateICWorldState(mapID, variableID, value uint32) {
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
-			sess.sendWorldState(variableID, value)
-		}
+	for _, sess := range s.bgRewardTargets(mapID) {
+		sess.sendWorldState(variableID, value)
 	}
 }
 
