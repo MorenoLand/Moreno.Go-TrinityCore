@@ -400,6 +400,7 @@ const (
 	spellEffectSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	spellEffectOpenLock                = 33  // SPELL_EFFECT_OPEN_LOCK (SharedDefines.h:844)
 	spellEffectApplyGlyph              = 74  // SPELL_EFFECT_APPLY_GLYPH (SharedDefines.h:885)
+	spellEffectFeedPet                 = 101 // SPELL_EFFECT_FEED_PET (SharedDefines.h:912)
 	spellEffectSummonChangeItem        = 34  // SPELL_EFFECT_SUMMON_CHANGE_ITEM (SharedDefines.h:845; EffectSummonChangeItem, SpellEffects.cpp:2061)
 	spellEffectTransmitted             = 50  // SPELL_EFFECT_TRANS_DOOR (SharedDefines.h:861; EffectTransmitted, SpellEffects.cpp:4927)
 	spellEffectInstaKill               = 1   // SPELL_EFFECT_INSTAKILL (SharedDefines.h:812; EffectInstaKill, SpellEffects.cpp:274)

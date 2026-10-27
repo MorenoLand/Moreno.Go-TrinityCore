@@ -8244,6 +8244,108 @@ func (s *Server) creatureStealPreCast(m *creatureMotion, spell wotlk.Spell, targ
 	return true
 }
 
+// creaturePlayerOnlyEffectPreCast mirrors the player-gated cases of the
+// Spell::CheckCast per-effect switch (Spell.cpp:5565-5804) for a creature
+// caster: LEARN_SPELL, LEARN_PET_SPELL, APPLY_GLYPH, FEED_PET and SKINNING
+// all fail for a non-player caster, and OPEN_LOCK fails when its TargetA is
+// a gameobject or a gameobject item. The inline cast always carries a unit
+// target, so the LEARN_PET_SPELL arm's unit-target condition is met by
+// construction; the helper still takes targetGUID so the arm keeps its C++
+// shape (no unit target, no check).
+func (s *Server) creaturePlayerOnlyEffectPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if m == nil {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectLearnSpell, spellEffectApplyGlyph, spellEffectFeedPet, spellEffectSkinning:
+			return false
+		case spellEffectLearnPetSpell:
+			if targetGUID != 0 {
+				return false
+			}
+		case spellEffectOpenLock:
+			if eff.ImplicitTargetA == implicitTargetGameObjectTarget || eff.ImplicitTargetA == implicitTargetGameObjectItemTarget {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// creatureRootedEffectPreCast mirrors the root gates of the Spell::CheckCast
+// per-effect switch for a creature caster: CHARGE (Spell.cpp:5684-5688,
+// gated by TRIGGERED_IGNORE_CASTER_AURAS - the inline cast is non-triggered,
+// so the gate applies), LEAP_BACK (:5994-6002, creature casters fail silent)
+// and JUMP/JUMP_DEST (:6004-6012). The Warbringer leg of CHARGE is vacuous
+// (no script-override model) and the explicit-target path legs have no
+// pathfinder model - the unit-LOS gate above already covers the LOS term.
+// A motion counts as rooted when its script root override is set or a
+// MOD_ROOT aura is live on it.
+func (s *Server) creatureRootedEffectPreCast(m *creatureMotion, spell wotlk.Spell) bool {
+	if m == nil {
+		return true
+	}
+	hasRootEffect := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectCharge || eff.Effect == spellEffectLeapBack || eff.Effect == spellEffectJump || eff.Effect == spellEffectJumpDest {
+			hasRootEffect = true
+			break
+		}
+	}
+	if !hasRootEffect {
+		return true
+	}
+	if m.ScriptRooted || len(s.creatureCasterAuraEffectsByType(m, spellAuraModRoot)) > 0 {
+		return false
+	}
+	return true
+}
+
+// creaturePossessPetAuraPreCast mirrors the SPELL_AURA_MOD_POSSESS_PET case
+// of the Spell::CheckCast aura-name switch (Spell.cpp:6046-6054) for a
+// creature caster: the arm fails for a non-player caster before ever
+// reaching the pet checks.
+func (s *Server) creaturePossessPetAuraPreCast(m *creatureMotion, spell wotlk.Spell) bool {
+	if m == nil {
+		return true
+	}
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraModPossessPet {
+			return false
+		}
+	}
+	return true
+}
+
+// creatureRangedAPBonusPreCast mirrors the
+// SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS case of the Spell::CheckCast
+// aura-name switch (Spell.cpp:6112-6121) for a creature caster: no unit
+// target fails, and a target friendly to the caster fails; unresolvable
+// GUIDs pass, matching the session twin's read of the arm.
+func (s *Server) creatureRangedAPBonusPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if m == nil {
+		return true
+	}
+	matched := false
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraRangedAttackPowerAttackerBonus {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return true
+	}
+	if targetGUID == 0 {
+		return false
+	}
+	if s.creatureFriendlyToTarget(m, targetGUID) {
+		return false
+	}
+	return true
+}
+
 // unitHasStealableAura scans the target's auras the way the CheckCast steal
 // arm scans Unit::GetVisibleAuras(): positive auras only, dispel-mask match,
 // skipping passive auras and SPELL_ATTR4_NOT_STEALABLE spells — the

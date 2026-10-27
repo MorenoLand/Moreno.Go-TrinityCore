@@ -3537,6 +3537,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Player-gated cases of the Spell::CheckCast per-effect switch
+					// (Spell.cpp:5565-5804), same twin shape: LEARN_SPELL,
+					// LEARN_PET_SPELL, APPLY_GLYPH, FEED_PET and SKINNING all fail
+					// for a non-player caster, and OPEN_LOCK fails when its
+					// TargetA is a gameobject or gameobject item. Placed after the
+					// dispel arm and before the summon arm, matching C++ case order.
+					if !s.creaturePlayerOnlyEffectPreCast(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// Summon-family arms (Spell.cpp:5805-5946), same twin: SUMMON_PLAYER /
 					// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
 					// needs a player target without an existing pet. Placed after the
@@ -3549,6 +3559,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// twin: a wire victim carrying no stealable aura fizzles. Placed
 					// after the summon arm, matching C++ CheckCast order.
 					if !s.creatureStealPreCast(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Root gates of the Spell::CheckCast per-effect switch, same twin
+					// shape: CHARGE (Spell.cpp:5684-5688), LEAP_BACK (:5994-6002)
+					// and JUMP/JUMP_DEST (:6004-6012) all fail while the caster is
+					// rooted. C++ case order puts CHARGE ahead of the summon arm;
+					// every CheckCast block here is a pure predicate, so one root
+					// block after steal yields the same fizzle verdict. Placed
+					// after the steal arm, ahead of the aura arms below.
+					if !s.creatureRootedEffectPreCast(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Aura-name cases of the Spell::CheckCast switch (Spell.cpp:6046-6121),
+					// same twin shape: MOD_POSSESS_PET fails for a non-player caster,
+					// and RANGED_ATTACK_POWER_ATTACKER_BONUS fails with no unit target
+					// or a target friendly to the caster. Placed after the effect
+					// switch arms, matching C++ loop order, ahead of the
+					// stealth-break arm below.
+					if !s.creaturePossessPetAuraPreCast(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					if !s.creatureRangedAPBonusPreCast(motion, spellInfo, target.GUID) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
