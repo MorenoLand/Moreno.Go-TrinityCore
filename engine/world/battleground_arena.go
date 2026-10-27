@@ -588,7 +588,7 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 	}
 	arena.mu.Unlock()
 
-	s.sendArenaInitialWorldStates(sess)
+	s.sendArenaInitialWorldStates(sess, arena)
 }
 
 // resetPlayerPowers restores max health/mana and clears rage/runic power.
@@ -605,12 +605,13 @@ func (s *Server) resetPlayerPowers(sess *session) {
 }
 
 // sendArenaInitialWorldStates broadcasts initial alive counts and map display world states.
-func (s *Server) sendArenaInitialWorldStates(sess *session) {
-	if s == nil || sess == nil || sess.player == nil {
-		return
-	}
-	arena := s.findArenaState(sess.player.Map, 0)
-	if arena == nil {
+// The arena is the one addPlayerToArena just admitted this session to, not a
+// standing-map lookup: the sim port is no-bridge, so the admittee stands off
+// the arena map and a map lookup returns nil, sending no initial states at
+// all. C++ sends these on map entry via Arena::FillInitialWorldStates
+// (Arena.cpp:106-111) to the entering player, whatever map they came from.
+func (s *Server) sendArenaInitialWorldStates(sess *session, arena *arenaBattlegroundState) {
+	if s == nil || sess == nil || sess.player == nil || arena == nil {
 		return
 	}
 
@@ -657,11 +658,16 @@ func (s *Server) updateArenaWorldState(arena *arenaBattlegroundState, variableID
 
 // handleArenaPlayerDeath processes player deaths inside an arena match.
 func (s *Server) handleArenaPlayerDeath(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || !IsArenaMap(sess.player.Map) {
+	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
 
-	arena := s.findArenaState(sess.player.Map, 0)
+	// Arena::HandleKillPlayer (Arena.cpp:118-126) gates only on
+	// STATUS_IN_PROGRESS, never on the victim's map: the victim is in
+	// m_Players by construction. The death caller (death.go) already runs
+	// off-map, so the old standing-map gate dropped every sim roster
+	// death: no alive decrement, no world-state update, no win check.
+	arena := s.findArenaStateForPlayer(sess.playerGUID)
 	if arena == nil {
 		return
 	}
@@ -707,11 +713,17 @@ func (s *Server) handleArenaPlayerDeath(sess *session) {
 
 // handleArenaPlayerLeave processes a player leaving an arena map or disconnecting.
 func (s *Server) handleArenaPlayerLeave(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || !IsArenaMap(sess.player.Map) {
+	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
 
-	arena := s.findArenaState(sess.player.Map, 0)
+	// Arena::RemovePlayer (Arena.cpp:97-104) gates only on
+	// STATUS_WAIT_LEAVE, never on the leaver's map: the leaver is in
+	// m_Players by construction. The leave funnel (handleLeaveBattlefield)
+	// runs off-map in the sim, so the old standing-map gate left the
+	// leaver in PlayerTeams/Scores with a stale alive count, unstripped
+	// flag/preparation auras, and no win check.
+	arena := s.findArenaStateForPlayer(sess.playerGUID)
 	if arena == nil {
 		return
 	}

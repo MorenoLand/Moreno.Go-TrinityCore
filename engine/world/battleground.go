@@ -1724,8 +1724,9 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		if len(jumpOld) > 0 {
 			// Battleground::RemovePlayer (Battleground.cpp:894-900) subclass
 			// arms, via the same per-map leave funnel handleLeaveBattlefield
-			// uses; they key off player.Map and no-op for a jumper who never
-			// landed on the old BG map, exactly as the leave path does.
+			// uses; the non-arena arms key off player.Map and no-op for a
+			// jumper who never landed on the old BG map, exactly as the
+			// leave path does, while the arena arm is roster-keyed.
 			s.server.handleWSGPlayerLeave(s)
 			s.server.handleEOTSPlayerLeave(s)
 			s.server.handleSAPlayerLeave(s)
