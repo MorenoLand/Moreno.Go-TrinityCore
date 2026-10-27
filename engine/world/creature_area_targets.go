@@ -1852,6 +1852,9 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// Unit::Kill dungeon instance-binding block (Unit.cpp:11404-11425) — the funnel leg,
 		// fired here because this path skips onCreatureKilled.
 		s.bindInstanceOnNoFunnelKill(ctx, live, motion)
+		// Unit::Kill killing-blow achievement leg (Unit.cpp:11293-11297) — the funnel leg,
+		// fired here because this path skips onCreatureKilled.
+		s.creditNoFunnelKillingBlow(motion)
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -3061,6 +3064,9 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			// Unit::Kill dungeon instance-binding block (Unit.cpp:11404-11425) — the funnel leg,
 			// fired here because this path skips onCreatureKilled.
 			s.bindInstanceOnNoFunnelKill(ctx, live, motion)
+			// Unit::Kill killing-blow achievement leg (Unit.cpp:11293-11297) — the funnel leg,
+			// fired here because the uncredited trip skips onCreatureKilled.
+			s.creditNoFunnelKillingBlow(motion)
 		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})

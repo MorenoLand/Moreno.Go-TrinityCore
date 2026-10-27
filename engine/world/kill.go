@@ -1390,6 +1390,37 @@ func (s *Server) bindInstanceOnNoFunnelKill(ctx context.Context, victim, killer 
 	s.permBindAllPlayers(ctx, victim.Map, victim.InstanceID, difficulty)
 }
 
+// creditNoFunnelKillingBlow is the Unit::Kill killing-blow achievement
+// leg (Unit.cpp:11293-11297) for the no-funnel death chains:
+// UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS)
+// fires on every kill for the attacker's charmer/owner player
+// (attacker->GetCharmerOrOwnerPlayerOrPlayerItself, Object.cpp:2226-2232),
+// for creature victims as well as player victims. Unlike the reward leg
+// the victim's tapper plays no part, and unlike the bind leg there is no
+// attacker == victim suicide arm: a wild killer credits nobody, and an
+// owner-gone killer credits nobody (C++ ObjectAccessor::GetPlayer returns
+// nil offline). Resolution is C++-exact (Unit.h:1170: IsCharmed ?
+// GetCharmerGUID() : GetOwnerGUID()); the victim is a creature motion,
+// so the session method takes nil, the funnel's convention (kill.go:975).
+// C++ runs the leg before setDeathState so criteria_data aura rules can
+// still read the victim's auras; Go's credit reads no victim state, and
+// the funnel itself credits after its death-state clears, so the tail
+// placement after bindInstanceOnNoFunnelKill is behavior-identical.
+func (s *Server) creditNoFunnelKillingBlow(killer *creatureMotion) {
+	if s == nil || killer == nil {
+		return
+	}
+	guid := killer.OwnerGUID
+	if killer.Charmed {
+		guid = killer.CharmerGUID
+	}
+	player := s.findSessionByGUID(guid)
+	if player == nil || player.player == nil {
+		return
+	}
+	player.creditKillingBlowCriteria(nil)
+}
+
 // clearCreatureDeathState is the Unit::setDeathState (Unit.cpp:8901-8911)
 // leg for the no-funnel death chains: setDeathState runs CombatStop,
 // which clears the visual target (AttackStop -> Creature::SetTarget,
