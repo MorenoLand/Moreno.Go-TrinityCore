@@ -17101,6 +17101,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// missing, and the per-target loop below misfired its logic per
 		// target. The helper self-gates on the needs-caster rule (969).
 		s.triggerLaunchSpellEffectIndex(ctx, spell, spellID, spellTarget, eff)
+		if eff.Effect == spellEffectActivateRune {
+			// Spell::EffectActivateRune (SpellEffects.cpp:5318) runs at
+			// SPELL_EFFECT_HANDLE_LAUNCH — the client launch block's
+			// per-index arm, mirrored here so a triggered rune spell
+			// activates runes instead of falling through.
+			s.handleEffectActivateRune(spell, eff, effectIndex)
+		}
 		// Spell::SelectEffectTypeImplicitTargets special case (Spell.cpp:1708-1746):
 		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
 		// caster's *selection*, never the wire target, and run once per effect.
@@ -17462,6 +17469,25 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (gameobjects.go), with this path's spellTarget for the dest leg;
 			// its radius/random-range residual rides along unchanged.
 			s.handleEffectTransmitted(ctx, spellTarget, spell, eff)
+		}
+		if eff.Effect == spellEffectSummonChangeItem {
+			// Spell::EffectSummonChangeItem (SpellEffects.cpp:2061) runs
+			// once at SPELL_EFFECT_HANDLE_HIT on the caster — the
+			// client arm's helper, with this path's castItemGUID.
+			s.handleEffectSummonChangeItem(ctx, castItemGUID, spell, eff)
+		}
+		if eff.Effect == spellEffectTriggerRitualOfSummoning {
+			// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106)
+			// runs once at SPELL_EFFECT_HANDLE_HIT on the caster — the
+			// client arm's helper.
+			s.handleEffectTriggerRitualOfSummoning(ctx, eff)
+		}
+		if eff.Effect == spellEffectCreateManaGem {
+			// Spell::EffectRechargeManaGem (SpellEffects.cpp:5665) runs at
+			// HIT_TARGET per player target on the caster's own gem —
+			// the recharge is idempotent, so the client arm's
+			// once-per-effect call is outcome-identical here.
+			s.handleEffectRechargeManaGem(ctx, spell)
 		}
 		if eff.Effect == spellEffectActivateObject || eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
 			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
@@ -18144,6 +18170,36 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// helper over the single miss-filtered target (same raw
 				// 126 as the client arm, which defines no constant).
 				s.handleEffectSpellsteal(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectCreateRandomItem {
+				// Spell::EffectCreateRandomItem (SpellEffects.cpp:1713) runs
+				// at HIT_TARGET per player target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectCreateRandomItem(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectPickpocket {
+				// Spell::EffectPickPocket (SpellEffects.cpp:2563) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target.
+				s.handleEffectPickpocket(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectSkinning {
+				// Spell::EffectSkinning (SpellEffects.cpp:4465) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target.
+				s.handleEffectSkinning(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectRedirectThreat {
+				// Spell::EffectRedirectThreat (SpellEffects.cpp:5411) runs
+				// at HIT_TARGET per unit target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectRedirectThreat(spell, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectUnlearnSpecialization {
+				// Spell::EffectUnlearnSpecialization (SpellEffects.cpp:1249)
+				// runs at HIT_TARGET per player target: the client arm's
+				// helper over the single miss-filtered target.
+				s.handleEffectUnlearnSpecialization(ctx, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectAllowRenamePet {
+				// Spell::EffectRenamePet (SpellEffects.cpp:5525) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target.
+				s.handleEffectAllowRenamePet(ctx, []uint64{effectTarget})
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
