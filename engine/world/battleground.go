@@ -1602,12 +1602,21 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		return true
 	}
 
+	// C++ removes the player from the queue on accept (bgQueue.RemovePlayer,
+	// BattleGroundHandler.cpp:471), so a later accept for the same invite finds
+	// no GroupQueueInfo and is answered with silence. Go keeps the slot for
+	// status packets, so Status==WaitJoin is the fresh-transition test: the
+	// invite fire leaves WaitQueue slots only, and an accept arriving on an
+	// already-InProgress or WaitLeave slot is a duplicate packet, never a new
+	// instance. Only a fresh transition may mutate slot state below.
+	freshPort := entry.Status == BGStatusWaitJoin
+
 	// Deserter demotion (BattleGroundHandler.cpp:429-439 — action==1 &&
 	// ginfo.ArenaType==0 && _player->IsDeserter() == HasAura(26013) (Player.h:1913)
 	// → BuildGroupJoinedBattlegroundPacket ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS
 	// and the accept demotes to leave; the shared leave arm below then clears the
 	// slot, exactly as the C++ else branch does).
-	if action == 1 && !entry.IsArena && s.hasAura(deserterSpellBG) {
+	if action == 1 && freshPort && !entry.IsArena && s.hasAura(deserterSpellBG) {
 		buf := protocol.NewBuffer(4)
 		buf.WriteI32(groupJoinBattlegroundDeserters)
 		_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_JOINED_BATTLEGROUND), buf.Bytes(), true)
@@ -1620,7 +1629,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// leave. C++ reads bg->GetMaxLevel(), the LIVE instance's max level, so a
 	// resolved random queue gates on the resolved type's template, not the
 	// queued RB template; a missing row leaves the demote unevaluated.
-	if action == 1 && !entry.IsArena && s.player != nil {
+	if action == 1 && freshPort && !entry.IsArena && s.player != nil {
 		gateType := bgTypeID
 		if entry.ResolvedBgTypeID != 0 {
 			gateType = entry.ResolvedBgTypeID
@@ -1649,8 +1658,9 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		}
 
 		// !_player->IsAlive() → ResurrectPlayer(1.0f) + SpawnCorpseBones()
-		// (BattleGroundHandler.cpp:461-465).
-		if s.isDeadOrGhost() {
+		// (BattleGroundHandler.cpp:461-465). Fresh transitions only: a
+		// duplicate accept after dying inside the BG must not resurrect.
+		if freshPort && s.isDeadOrGhost() {
 			s.resurrectPlayer(ctx, 1.0)
 			s.spawnCorpseBones(ctx)
 		}
@@ -1762,15 +1772,16 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			}
 		}
 		team := teamForRace(s.player.Race)
-		// Only the genuine invite-to-port transition moves a clock: the
+		// Only the genuine invite-to-port transition moves slot state: the
 		// invite fire leaves WaitQueue slots only, so an accept arriving
 		// on an already-InProgress slot is a duplicate packet, never a
 		// new instance, and C++ never moves m_StartTime on port. A
-		// re-accept must not reset the slot's elapsed or re-arm the
-		// map clock (which a restored InProgress slot also relies on).
-		freshPort := entry.Status == BGStatusWaitJoin
-		entry.Status = BGStatusInProgress
+		// re-accept must not reset the slot's elapsed, re-arm the map
+		// clock (which a restored InProgress slot also relies on), or
+		// flip a WaitLeave slot back to InProgress (which would deny a
+		// combat leave the ended match's WaitLeave slot still allows).
 		if freshPort {
+			entry.Status = BGStatusInProgress
 			entry.StartTime = time.Now()
 		}
 		// The in-progress packet carries the live instance's map
@@ -1821,7 +1832,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// (getOrCreateArenaState is idempotent).
 		if entry.IsArena {
 			arena := s.server.getOrCreateArenaState(entry.MapID, entry.InstanceID, entry.ArenaType, entry.IsRated)
-			s.server.addPlayerToArena(s, entry.ArenaFaction, arena)
+			s.server.addPlayerToArena(s, entry.ArenaFaction, arena, freshPort)
 		}
 	} else {
 		// Arena leave gate (BattleGroundHandler.cpp:493-494): leaving an arena past

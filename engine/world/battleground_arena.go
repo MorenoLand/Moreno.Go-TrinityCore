@@ -467,7 +467,7 @@ func (s *Server) arenaRosterSessions(arena *arenaBattlegroundState) []*session {
 }
 
 // addPlayerToArena admits a player into the arena, sets preparation auras, flags, and sends initial world states.
-func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBattlegroundState) {
+func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBattlegroundState, freshPort bool) {
 	if s == nil || sess == nil || sess.player == nil || arena == nil {
 		return
 	}
@@ -518,10 +518,14 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 		}
 	}
 
-	// In preparation phase, apply Arena Preparation aura and reset powers
+	// In preparation phase, apply Arena Preparation aura and reset powers.
+	// The power reset runs on the fresh transition only: a duplicate
+	// accept mid-preparation must not refill spent health and mana.
 	if arena.Status == ArenaStatusWaitJoin {
 		sess.applyAura(SpellArenaPreparation)
-		s.resetPlayerPowers(sess)
+		if freshPort {
+			s.resetPlayerPowers(sess)
+		}
 	}
 
 	// Set queue entry state on this arena's own slot (arenaMatchQueueSlot):
