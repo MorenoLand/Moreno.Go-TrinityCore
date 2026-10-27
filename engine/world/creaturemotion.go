@@ -3578,7 +3578,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// every CheckCast block here is a pure predicate, so one root
 					// block after steal yields the same fizzle verdict. Placed
 					// after the steal arm, ahead of the aura arms below.
-					if !s.creatureRootedEffectPreCast(motion, spellInfo) {
+					if !s.creatureRootedEffectPreCast(motion, spellInfo, false) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}

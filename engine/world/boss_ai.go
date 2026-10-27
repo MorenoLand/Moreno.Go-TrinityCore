@@ -1226,6 +1226,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	var immuneTargets map[uint64]bool
 	var missTargets map[uint64]uint8
 	if spellKnown {
+		// Spell::CheckCast death-state arm (Spell.cpp:5177-5178): a dead
+		// caster fails unless the spell is passive, castable while dead,
+		// or triggered outside an aura. Go's triggered flag cannot tell
+		// aura-triggered casts apart (the AICOND_DIE death cast rides
+		// castCreatureSpellTriggered), so the gate runs for non-triggered
+		// casts only; triggered casts keep the permissive reading.
+		if !triggered && m.Health == 0 && spellInfo.Attributes&spellAttr0Passive == 0 && spellInfo.Attributes&spellAttr0CastableWhileDead == 0 {
+			return
+		}
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 		// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211): a
 		// creature whose spell history still holds the spell — or, for
@@ -1235,6 +1244,24 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// Spell.cpp:7506-7509), so it sits ahead of the !triggered block,
 		// matching C++ order (5207 precedes the shapeshift block at 5247).
 		if !s.creatureSpellHistoryReady(m, spellInfo, triggered) {
+			return
+		}
+		// Spell::CheckCast cheat-spell arm (Spell.cpp:5223-5227), the twin
+		// of the inline gate: an ATTR7_IS_CHEAT_SPELL spell fizzles unless
+		// the caster carries UNIT_FLAG2_ALLOW_CHEAT_SPELLS. Runs for
+		// triggered casts too (no C++ triggered exemption); placed after
+		// the cooldown arm, matching C++ order.
+		if !s.creatureCheatSpellPreCast(m, spellInfo) {
+			return
+		}
+		// Spell::CheckCast global-cooldown arm (Spell.cpp:5231-5232): a
+		// caster still inside its global cooldown fizzles. The motion GCD
+		// bank is written only by the commanded-pet triggerPetGlobalCooldown
+		// (pet_cooldowns.go), so this fires only for a pet motion that
+		// cast through the pet path first; Go's triggered flag models the
+		// full triggered mask including TRIGGERED_IGNORE_GCD, so triggered
+		// casts skip the arm.
+		if !triggered && s.petGlobalCooldownActive(m, spellInfo, now) {
 			return
 		}
 		// Spell::CheckPower (Spell.cpp:5502) + Spell::TakePower
@@ -1430,6 +1457,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		if !s.creatureDispelPreCast(m, spellInfo, targetGUID, triggered) {
 			return
 		}
+		// Player-gated cases of the Spell::CheckCast per-effect switch
+		// (Spell.cpp:5565-5804), the twin of the inline gate: LEARN_SPELL,
+		// LEARN_PET_SPELL, APPLY_GLYPH, FEED_PET and SKINNING all fail for
+		// a non-player caster, and OPEN_LOCK fails when its TargetA is a
+		// gameobject or gameobject item. Placed after the dispel arm and
+		// before the summon arm, matching C++ case order.
+		if !s.creaturePlayerOnlyEffectPreCast(m, spellInfo, targetGUID) {
+			return
+		}
 		// Summon-family arms (Spell.cpp:5805-5946): SUMMON_PLAYER /
 		// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
 		// needs a player target without an existing pet. The SUMMON /
@@ -1446,6 +1482,43 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// switch 5617+ -> SendSpellCooldown at 3463): a failed CheckCast
 		// never starts a cooldown and never arms cast state.
 		if !s.creatureStealPreCast(m, spellInfo, targetGUID) {
+			return
+		}
+		// Root gates of the Spell::CheckCast per-effect switch, the twin of
+		// the inline gate: CHARGE, LEAP_BACK and JUMP/JUMP_DEST fail while
+		// the caster is rooted. Placed after the steal arm, ahead of the
+		// aura arms below, matching the inline relative order (every
+		// CheckCast block here is a pure predicate, so the verdict is the
+		// same as C++ case order).
+		if !s.creatureRootedEffectPreCast(m, spellInfo, triggered) {
+			return
+		}
+		// Aura-name cases of the Spell::CheckCast switch
+		// (Spell.cpp:6046-6121), the twin of the inline gates:
+		// MOD_POSSESS_PET fails for a non-player caster, MOD_POSSESS /
+		// MOD_CHARM / AOE_CHARM run the caster charmer/charmed-unit gates
+		// plus the wire-target mounted/charmer/owner-player/level gates
+		// (vehicle leg stays out: no vehicle-kit model on motions), and
+		// RANGED_ATTACK_POWER_ATTACKER_BONUS fails with no unit target or
+		// a target friendly to the caster. Placed after the effect-switch
+		// arms, matching C++ loop order, ahead of the stealth-break arm.
+		if !s.creaturePossessPetAuraPreCast(m, spellInfo) {
+			return
+		}
+		if !s.creatureCharmPreCast(m, spellInfo, targetGUID) {
+			return
+		}
+		if !s.creatureRangedAPBonusPreCast(m, spellInfo, targetGUID) {
+			return
+		}
+		// Spell::CheckCast aura-bounced tail (Spell.cpp:6155-6162), the
+		// server-side twin of the session checkAuraBouncedCast: a spell
+		// whose every effect is an aura effect, not targeting an area,
+		// fizzles when the unit target already carries a strictly more
+		// powerful aura of the same type under an EXCLUSIVE_HIGHEST
+		// spell-group stack rule. Placed after the aura-name arms,
+		// matching C++ loop order, ahead of the stealth-break arm.
+		if !s.creatureAuraBouncedPreCast(m, spellInfo, targetGUID) {
 			return
 		}
 		// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
@@ -8275,25 +8348,35 @@ func (s *Server) creaturePlayerOnlyEffectPreCast(m *creatureMotion, spell wotlk.
 
 // creatureRootedEffectPreCast mirrors the root gates of the Spell::CheckCast
 // per-effect switch for a creature caster: CHARGE (Spell.cpp:5684-5688,
-// gated by TRIGGERED_IGNORE_CASTER_AURAS - the inline cast is non-triggered,
-// so the gate applies), LEAP_BACK (:5994-6002, creature casters fail silent)
+// gated by TRIGGERED_IGNORE_CASTER_AURAS - a triggered caller passes
+// triggered=true and skips the CHARGE leg only), LEAP_BACK (:5994-6002,
+// creature casters fail silent)
 // and JUMP/JUMP_DEST (:6004-6012). The Warbringer leg of CHARGE is vacuous
 // (no script-override model) and the explicit-target path legs have no
 // pathfinder model - the unit-LOS gate above already covers the LOS term.
 // A motion counts as rooted when its script root override is set or a
 // MOD_ROOT aura is live on it.
-func (s *Server) creatureRootedEffectPreCast(m *creatureMotion, spell wotlk.Spell) bool {
+func (s *Server) creatureRootedEffectPreCast(m *creatureMotion, spell wotlk.Spell, triggered bool) bool {
 	if m == nil {
 		return true
 	}
-	hasRootEffect := false
+	hasRootEffect, hasNonChargeRootEffect := false, false
 	for _, eff := range spell.Effects {
 		if eff.Effect == spellEffectCharge || eff.Effect == spellEffectLeapBack || eff.Effect == spellEffectJump || eff.Effect == spellEffectJumpDest {
 			hasRootEffect = true
-			break
+			if eff.Effect != spellEffectCharge {
+				hasNonChargeRootEffect = true
+			}
 		}
 	}
 	if !hasRootEffect {
+		return true
+	}
+	// CHARGE alone is gated by TRIGGERED_IGNORE_CASTER_AURAS
+	// (Spell.cpp:5684-5688), which Go's triggered flag models, so a
+	// triggered cast carrying only CHARGE skips the gate; LEAP_BACK and
+	// JUMP/JUMP_DEST carry no triggered exemption.
+	if triggered && !hasNonChargeRootEffect {
 		return true
 	}
 	if m.ScriptRooted || len(s.creatureCasterAuraEffectsByType(m, spellAuraModRoot)) > 0 {
@@ -8462,6 +8545,148 @@ func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targ
 		}
 	}
 	return true
+}
+
+// creatureAuraBouncedPreCast mirrors the AURA_BOUNCED recheck at the end of
+// the per-effect loop in Spell::CheckCast (Spell.cpp:6155-6162) for a
+// creature caster, the server-side twin of the session
+// checkAuraBouncedCast: for a spell whose every effect is an aura effect
+// (any non-aura effect sets nonAuraEffectMask and disables the recheck)
+// and which does not target an area, each aura effect fizzles when the
+// unit target already carries a strictly more powerful aura of the same
+// aura type under an EXCLUSIVE_HIGHEST spell-group stack rule
+// (Unit::IsHighestExclusiveAuraEffect, Unit.cpp:14001-14036, with
+// removeOtherAuraApplications=false at CheckCast). The new effect value
+// is CalcValueForLevel at the caster motion's level, folded through the
+// spellmod owner session when one resolves (nil for wild casters, the
+// same shape as the 27 spellmod-duration fold). Player targets read
+// from the target session's activeAuras; creature targets read from the
+// server's activeCreatureAuras keyed by the target motion; unresolvable
+// GUIDs pass, matching the session twin.
+func (s *Server) creatureAuraBouncedPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 {
+		return true
+	}
+	var approximateMask, nonAuraMask uint8
+	for i, eff := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		switch {
+		case spellEffectIsAuraEffect(eff):
+			approximateMask |= 1 << uint(i)
+		case eff.Effect != 0:
+			nonAuraMask |= 1 << uint(i)
+		}
+	}
+	if nonAuraMask != 0 {
+		return true
+	}
+	if spellInfoTargetsArea(spell) {
+		return true
+	}
+	var candidates []creatureBounceCandidate
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		auras := make(map[uint32]*activeAura, len(ts.activeAuras))
+		for id, aura := range ts.activeAuras {
+			auras[id] = aura
+		}
+		ts.castMu.Unlock()
+		candidates = creatureBounceCandidatesFromAuras(auras, s)
+	} else {
+		tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+		if tm == nil {
+			return true
+		}
+		s.auraMu.Lock()
+		auras := make(map[uint32]*activeAura, len(s.activeCreatureAuras[creatureAuraKeyForMotion(tm)]))
+		for id, aura := range s.activeCreatureAuras[creatureAuraKeyForMotion(tm)] {
+			auras[id] = aura
+		}
+		s.auraMu.Unlock()
+		candidates = creatureBounceCandidatesFromAuras(auras, s)
+	}
+	if len(candidates) == 0 {
+		return true
+	}
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	newFirst := s.spellFirstRank(spell.ID)
+	newBits := int64(popcount8(approximateMask))
+	for i, eff := range spell.Effects {
+		if i >= 8 {
+			break
+		}
+		if approximateMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		value := eff.CalcValueForLevel(spell, uint32(m.Level))
+		if modOwner != nil {
+			value = modOwner.applySpellMod(spell, spellModAllEffects, value)
+			switch i {
+			case 0:
+				value = modOwner.applySpellMod(spell, spellModEffect1, value)
+			case 1:
+				value = modOwner.applySpellMod(spell, spellModEffect2, value)
+			case 2:
+				value = modOwner.applySpellMod(spell, spellModEffect3, value)
+			}
+		}
+		newAbs := absAuraAmount(value)
+		for _, cand := range candidates {
+			if cand.auraType != eff.Aura {
+				continue
+			}
+			if s.spellGroupStackRule(newFirst, s.spellFirstRank(cand.spellID)) != spellGroupStackRuleExclusiveHighest {
+				continue
+			}
+			diff := newAbs - absAuraAmount(cand.amount)
+			if diff == 0 {
+				diff = newBits - int64(popcount8(cand.effectMask))
+			}
+			if diff < 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// creatureBounceCandidate is one existing aura effect on the bounce
+// target, flattened per effect index the way targetAuraEffectsByType
+// flattens them for the session path, plus the effect's aura type so one
+// scan serves every effect of the new spell.
+type creatureBounceCandidate struct {
+	spellID    uint32
+	amount     int32
+	effectMask uint8
+	auraType   uint32
+}
+
+// creatureBounceCandidatesFromAuras flattens a copied aura map into
+// per-effect bounce candidates: per-effect aura types resolve from the
+// DBC spell row, falling back to the record's single AuraType when the
+// row is missing, matching the grouped model in targetAuraEffectsByType.
+func creatureBounceCandidatesFromAuras(auras map[uint32]*activeAura, s *Server) []creatureBounceCandidate {
+	var out []creatureBounceCandidate
+	for id, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if s != nil && s.Data != nil {
+				if sp, found, err := s.Data.Spell(id); err == nil && found && i < len(sp.Effects) {
+					t = sp.Effects[i].Aura
+				}
+			}
+			out = append(out, creatureBounceCandidate{spellID: id, amount: aura.Amounts[i], effectMask: aura.EffectMask, auraType: t})
+		}
+	}
+	return out
 }
 
 // unitHasStealableAura scans the target's auras the way the CheckCast steal
