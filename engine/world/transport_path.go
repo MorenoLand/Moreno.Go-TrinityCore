@@ -161,6 +161,23 @@ func transportPointMap(point wotlk.TaxiSplinePoint) uint32 {
 	return uint32(point.MapID)
 }
 
+func transportPathMapsUsed(points []wotlk.TaxiSplinePoint) map[uint32]struct{} {
+	maps := make(map[uint32]struct{})
+	mapChange := false
+	for index, point := range points {
+		if mapChange {
+			mapChange = false
+			continue
+		}
+		if index+1 < len(points) && (point.Flags&1 != 0 || point.MapID != points[index+1].MapID) {
+			mapChange = true
+			continue
+		}
+		maps[transportPointMap(point)] = struct{}{}
+	}
+	return maps
+}
+
 func transportImportantFrame(point wotlk.TaxiSplinePoint) bool {
 	return point.Flags == 2 || point.ArrivalEventID != 0 || point.DepartureEventID != 0
 }

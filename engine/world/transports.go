@@ -66,6 +66,24 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 		if size <= 0 {
 			size = 1
 		}
+		// C++ SpawnContinentTransports skips templates whose path stays on a
+		// single instanceable map (GeneratePath mapsUsed/inInstance,
+		// TransportMgr.cpp); those are created per instance instead. A map
+		// lookup failure leaves the row loaded, as before.
+		instanceOnly := false
+		if mapsUsed := transportPathMapsUsed(points); len(mapsUsed) == 1 {
+			for mapID := range mapsUsed {
+				if mapEntry, found, err := s.Data.Map(mapID); err == nil && found && mapEntry.InstanceType != 0 {
+					instanceOnly = true
+				}
+			}
+		}
+		if instanceOnly {
+			if s.Logger != nil {
+				s.Logger.Warn("continent transport skipped: instance transport", "entry", entry, "path", pathID)
+			}
+			continue
+		}
 		mapID, x, y, z, orientation := path.Position(0)
 		state := uint8(1)
 		if canBeStopped != 0 {
