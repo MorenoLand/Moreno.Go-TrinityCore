@@ -17053,7 +17053,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// aura/trigger callers leave it for the fallback legs), so only the
 	// non-zero unresolvable case cancels.
 	if targetGUID != 0 {
-		if _, ok := s.getCombatTarget(ctx, targetGUID); !ok {
+		if uint16(targetGUID>>48) == 0xF110 {
+			// Spell::_cast (Spell.cpp:3288-3300): UpdatePointers resolves a live
+			// gameobject target, so a GO wire target is not a lost target; the
+			// unit-only combat-target lookup below (players, creature motions,
+			// creature DB rows) cannot resolve it, so a GO wire target resolves
+			// through the GO anchor lookup instead (live dynamic state first,
+			// static row on map match, the chain-anchor convention). An
+			// unresolvable GO still cancels, like C++'s lost-object arm.
+			if s.server == nil {
+				s.debug("triggered cast cancelled", "account", s.accountName, "spell", spellID, "reason", "lost explicit target")
+				return
+			}
+			if _, _, _, ok := s.server.gameObjectAnchorPosition(ctx, targetGUID, s.player.Map, s.player.InstanceID); !ok {
+				s.debug("triggered cast cancelled", "account", s.accountName, "spell", spellID, "reason", "lost explicit target")
+				return
+			}
+		} else if _, ok := s.getCombatTarget(ctx, targetGUID); !ok {
 			s.debug("triggered cast cancelled", "account", s.accountName, "spell", spellID, "reason", "lost explicit target")
 			return
 		}
@@ -17160,7 +17176,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// here (targetGUID), ahead of SelectSpellTargets redirect arms below.
 	// The DefenseType gate is the DmgClass convention (SpellInfo.cpp:856);
 	// triggerPetOwnerAttacked already drops the self-target case.
-	if spell.DefenseType != spellDamageClassNone && targetGUID != 0 && s.server != nil && s.player != nil {
+	if spell.DefenseType != spellDamageClassNone && targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && s.server != nil && s.player != nil {
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
 	}
 	hitTargets := []uint64{targetGUID}
@@ -17337,6 +17353,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if wireGUID := spellTarget.UnitGUID; wireGUID != 0 && uint16(wireGUID>>48) != 0xF110 && spellHasTargetObjectEffect(spell) {
 		plainObjectPrimary = wireGUID
 	}
+	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575) adds the explicit
+	// gameobject target via AddGOTarget instead (23 TARGET_GAMEOBJECT_TARGET /
+	// 26 TARGET_GAMEOBJECT_ITEM_TARGET, SpellInfo.cpp:243/246), so a GO wire
+	// primary takes the GO arm, never the unit rejoin above. The gate is the
+	// InitExplicitTargets mask arm (Spell.cpp:668-678), the same helper the
+	// client path's wire-GO block uses: a GO wire target the spell's explicit
+	// mask does not need never reaches the GO container. The AddGOTarget
+	// destructible-type effect filter has no flat-list equivalent and stays
+	// unmodeled, as for the GO-nearby picks.
+	plainGOPrimary := uint64(0)
+	if wireGUID := spellTarget.UnitGUID; wireGUID != 0 && uint16(wireGUID>>48) == 0xF110 && spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+		plainGOPrimary = wireGUID
+	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
 	// casts too — SelectSpellTargets carries no IsTriggered gate, so the
 	// area family replaces the wire-only hit list with the area search,
@@ -17399,6 +17428,43 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
 			hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
 			selectionTargets = hitTargets
+		}
+	}
+	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575) holds the wire GO
+	// in the separate m_UniqueGOTargetInfo, so the area/cone switch above —
+	// which replaces only the unit list — never drops it in C++; on this flat
+	// path the switch (and the nearby arm, whose switch skip leaves the nearby
+	// list in place) replaced the whole list, dropping the wire GO from the
+	// channeled check, the roll list, the GO packet, and the effect fan-out.
+	// It rejoins hitTargets (channeled check + roll base below) and
+	// selectionTargets (the fan-out seed) deduped; the selectionTargets copy is
+	// rebuilt so the append cannot overwrite the chain-jump tail it aliases in
+	// the non-area case. GO targets never roll SpellHitResult in C++ and the
+	// roll below reports NONE for a GO GUID, so no verdict arm runs for it;
+	// the AOE cap divisor counts the unit list only and stays unchanged.
+	if plainGOPrimary != 0 {
+		seenGO := false
+		for _, guid := range hitTargets {
+			if guid == plainGOPrimary {
+				seenGO = true
+				break
+			}
+		}
+		if !seenGO {
+			hitTargets = append(hitTargets, plainGOPrimary)
+		}
+		seenGO = false
+		for _, guid := range selectionTargets {
+			if guid == plainGOPrimary {
+				seenGO = true
+				break
+			}
+		}
+		if !seenGO {
+			grown := make([]uint64, 0, len(selectionTargets)+1)
+			grown = append(grown, selectionTargets...)
+			grown = append(grown, plainGOPrimary)
+			selectionTargets = grown
 		}
 	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
