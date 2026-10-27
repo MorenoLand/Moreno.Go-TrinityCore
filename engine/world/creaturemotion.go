@@ -3392,6 +3392,52 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							hitTargets = append(hitTargets, entryCreatureGUID)
 						}
 					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): friendly-area
+					// legs join the same area-hit slices like the enemy/entry legs above -
+					// the castCreatureSpellInternal twin (boss_ai.go) already fans out ally
+					// hits, so a victim-targeted AI heal/buff previously reached the wire
+					// victim (plus entry matches) and missed every other ally in the area.
+					// Dedupe against hitTargets: an ally already selected by the entry leg
+					// would otherwise double-hit in the area damage/dispatch loops below.
+					if hasFriendlyAreaEffect(spellInfo) {
+						allyOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+						allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, motion, spellInfo, target, allyOwner, destX, destY, destZ, hasDest)
+						for _, allyHit := range allyPlayers {
+							if allyHit == nil || allyHit.GUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == allyHit.GUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaHits = append(areaHits, allyHit)
+							hitTargets = append(hitTargets, allyHit.GUID)
+						}
+						allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, motion, spellInfo, target, allyOwner, destX, destY, destZ, hasDest)
+						for _, allyCreatureGUID := range allyCreatures {
+							if allyCreatureGUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == allyCreatureGUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaCreatureHits = append(areaCreatureHits, allyCreatureGUID)
+							hitTargets = append(hitTargets, allyCreatureGUID)
+						}
+					}
 				}
 			}
 			// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a
@@ -3695,6 +3741,58 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if isGOConeSpell(inlineSpell) {
 						for _, goGUID := range s.creatureGOConeTargets(ctx, motion, inlineSpell, spellID) {
 							appendInlineGOGUID(goGUID)
+						}
+					}
+				}
+				// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) for a
+				// creature caster: chain jumps join the hit list like the cone leg
+				// above - the castCreatureSpellInternal twin already jumps, so a
+				// victim-targeted AI chain spell previously hit the wire victim (plus
+				// area legs) and never jumped. Anchor is hitTargets[0]: the nearby
+				// pick when a nearby leg ran, else the wire victim. Jump targets join
+				// the area legs like the cone leg so they roll reflect/miss verdicts
+				// and take the damage/dispatch legs below; a static-spawn jump rides
+				// the packet only. Dedupe against hitTargets: a jump already selected
+				// by an area leg would otherwise double-hit.
+				if len(hitTargets) > 0 {
+					if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, inlineSpell); jumps > 0 {
+						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, hitTargets[0], jumps, isChainHeal, checkType, effectMask) {
+							if jumpGUID == 0 {
+								continue
+							}
+							alreadyHit := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == jumpGUID {
+									alreadyHit = true
+									break
+								}
+							}
+							if alreadyHit {
+								continue
+							}
+							playerJoined := false
+							for i := range players {
+								if players[i].GUID == jumpGUID {
+									areaHits = append(areaHits, &players[i])
+									playerJoined = true
+									break
+								}
+							}
+							if !playerJoined {
+								if pickSess := s.findSessionByGUID(jumpGUID); pickSess != nil && pickSess.player != nil {
+									p := pickSess.player
+									areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+									playerJoined = true
+								}
+							}
+							if playerJoined {
+								hitTargets = append(hitTargets, jumpGUID)
+							} else if s.findCreatureMotion(motion.Map, motion.InstanceID, jumpGUID) != nil {
+								areaCreatureHits = append(areaCreatureHits, jumpGUID)
+								hitTargets = append(hitTargets, jumpGUID)
+							} else {
+								hitTargets = append(hitTargets, jumpGUID)
+							}
 						}
 					}
 				}
