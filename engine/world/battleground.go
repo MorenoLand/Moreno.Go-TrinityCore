@@ -2055,6 +2055,34 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			return
 		}
 	}
+	// Non-arena twin of the arena gate above (Player.cpp:17591-17637):
+	// GetBattleground(instance) must exist, and a WaitLeave match
+	// RemovePlayerAtLeave's the relogger. Go has no per-map roster, so
+	// the peek below is the existence gate: a nil per-map state means
+	// the match was deleted on empty or never survived a restart, and a
+	// Winner>=0 state is the STATUS_WAIT_LEAVE form (markBGSlotsWaitLeave
+	// is the EndBattleground status flip). Either way the slot is not
+	// recreated; the ended leg also drops the score row, the
+	// RemovePlayerAtLeave player/score-map arm, before the clear and
+	// entry-point relocate. A nil state gets no score delete: C++ runs
+	// RemovePlayerAtLeave only when the battleground was found. The
+	// peek never creates a state, so it cannot resurrect a deleted
+	// match. Residual: per-map states carry no instance id or roster,
+	// so a stale InstanceID from a prior match on the same map still
+	// restores into a running successor match (the conflation
+	// deleteBattlegroundStateOnEmpty already documents).
+	if !isArena && s.server != nil {
+		exists, ended := s.server.peekNonArenaBGState(state.Map)
+		if !exists || ended {
+			if ended {
+				s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
+			}
+			s.bgData.InstanceID = 0
+			s.bgData.Team = 0
+			s.relocateLoginToBGEntryPoint()
+			return
+		}
+	}
 	for index := range s.bgQueues {
 		if s.bgQueues[index].Active {
 			continue
@@ -2085,6 +2113,90 @@ func (s *session) relocateLoginToBGEntryPoint() {
 	s.player.Y = s.bgData.JoinY
 	s.player.Z = s.bgData.JoinZ
 	s.player.Orientation = s.bgData.JoinO
+}
+
+// peekNonArenaBGState peeks the per-map battleground state for the six
+// non-arena maps without creating one, following bgAutoRemoveRemaining's
+// peek pattern (AV under objectsMu, the rest under their own registry
+// mu). It reports whether a state exists and whether it has ended
+// (Winner>=0, the STATUS_WAIT_LEAVE form, regardless of the EndedAt
+// stamp, which only times the auto-remove). No registry or state mu is
+// held on return.
+func (s *Server) peekNonArenaBGState(mapID uint32) (exists, ended bool) {
+	if s == nil {
+		return false, false
+	}
+	winner := func(w int8) (bool, bool) { return true, w >= 0 }
+	switch mapID {
+	case WSGMapID:
+		s.wsgMu.RLock()
+		state := s.wsgState[mapID]
+		s.wsgMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	case ABMapID:
+		s.abMu.RLock()
+		state := s.abState[mapID]
+		s.abMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	case AVMapID:
+		s.objectsMu.RLock()
+		state := s.avState[mapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	case EOTSMapID:
+		s.eotsMu.RLock()
+		state := s.eotsState[mapID]
+		s.eotsMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	case SAMapID:
+		s.saMu.RLock()
+		state := s.saState[mapID]
+		s.saMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	case ICMapID:
+		s.icMu.RLock()
+		state := s.icState[mapID]
+		s.icMu.RUnlock()
+		if state == nil {
+			return false, false
+		}
+		state.mu.Lock()
+		w := state.Winner
+		state.mu.Unlock()
+		return winner(w)
+	default:
+		return false, false
+	}
 }
 
 func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
