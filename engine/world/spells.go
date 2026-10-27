@@ -17363,6 +17363,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 			}
 		}
+		if eff.Effect == spellEffectSummonObjectSlot1 || eff.Effect == spellEffectSummonObjectSlot2 || eff.Effect == spellEffectSummonObjectSlot3 || eff.Effect == spellEffectSummonObjectSlot4 {
+			// Spell::EffectSummonObject (SpellEffects.cpp:4215) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target — the
+			// client arm's helper, with this path's spellTarget (dest, or
+			// the close-point fallback inside the helper).
+			s.handleEffectSummonObject(ctx, spell, eff, spellTarget)
+		}
+		if eff.Effect == spellEffectSummonObjectWild {
+			// Spell::EffectSummonObjectWild (SpellEffects.cpp:3552) runs once
+			// at SPELL_EFFECT_HANDLE_HIT on the caster; same shape as the
+			// slot arm above.
+			s.handleEffectSummonObjectWild(ctx, spell, eff, spellTarget)
+		}
+		if eff.Effect == spellEffectDestroyAllTotems {
+			// Spell::EffectDestroyAllTotems (SpellEffects.cpp:4820) runs once
+			// at SPELL_EFFECT_HANDLE_HIT on the caster.
+			s.handleEffectDestroyAllTotems(ctx, spell, eff)
+		}
 		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
 			// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) runs at
 			// HIT_TARGET per unit target; the once-per-effect shape here
@@ -17701,10 +17719,42 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// charge moves once per target with the last winning, like
 				// C++'s per-TargetInfo launch handling.
 				s.handleEffectCharge(ctx, effectTarget, spell)
+			} else if eff.Effect == spellEffectRemoveAura {
+				// Spell::EffectRemoveAura (SpellEffects.cpp:5611) runs at
+				// HIT_TARGET per unit target: RemoveAurasDueToSpell
+				// (TriggerSpell) on the target — the client arm's helper.
+				s.removeTargetAura(ctx, effectTarget, eff.TriggerSpell)
+			} else if eff.Effect == spellEffectInterruptCast {
+				// Spell::EffectInterruptCast (SpellEffects.cpp:3511) runs at
+				// LAUNCH_TARGET per unit target; like the charge arm above,
+				// the LAUNCH leg has no separate launch-phase home on this
+				// path, so it rides the miss-filtered target list. The
+				// helper covers player targets only, same as the client
+				// arm (creature casts have no interrupt model here).
+				s.handleEffectInterruptCast(ctx, effectTarget, spell, eff)
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
 			s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), powerDrainLog)
+		}
+	}
+
+	// The client path's post-loop totem legs (spells.go:12128): C++
+	// EffectSummonType's TOTEM arm (SpellEffects.cpp:2319-2342) runs at
+	// HIT, but the triggered 28 arm above skips TOTEM titles (routing
+	// them through handleSummonPet would mint a character_pet row), so a
+	// triggered totem spell summoned nothing. Once per cast, not per
+	// effect — the slotted leg is spell-ID-keyed and the no-slot leg is
+	// effect-keyed, both already excluding the 28 arm's titles, so
+	// nothing double-summons. Totemic Recall rides the same post-loop
+	// block on the client path (spell-ID leg, not effect 110).
+	if isTotemSpell(spellID) {
+		s.summonTotem(ctx, spellID)
+	} else if spellID == 36936 { // Totemic Recall
+		s.destroyAllTotems()
+	} else if effs := s.sessionNoSlotTotemEffects(spell); len(effs) > 0 {
+		for _, eff := range effs {
+			s.summonSessionNoSlotTotem(ctx, spell, eff)
 		}
 	}
 
