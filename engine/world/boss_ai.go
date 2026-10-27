@@ -1902,6 +1902,36 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+		// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
+		// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a
+		// sibling effect is nearby: the object arm runs regardless of ChainTarget
+		// (SelectImplicitChainTargets, Spell.cpp:1582, no-ops at ChainTarget 1
+		// after the AddUnitTarget, and excludes the primary from its candidates
+		// at higher ChainTarget). The nearby block above nils hitTargets and
+		// replaces it with the picks, so a plain or chain TARGET-object
+		// primary was dropped from the GO packet and the per-hit legs below,
+		// which all iterate hitTargets; area/cone/channel legs only append, so
+		// they never drop it. The rejoin mirrors the player-path port
+		// (30260b42): a primary already in the list keeps its place (it equals
+		// a pick or an area re-add), otherwise it joins ahead of the verdict
+		// loop below and rolls immune/evade/reflect/miss/IMMUNE2 like any
+		// implicit target. GO wire primaries stay out (AddGOTarget arm).
+		if (isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) || isHostileNearbySpell(spellInfo) || isFriendlyNearbySpell(spellInfo)) && spellHasTargetObjectEffect(spellInfo) {
+			anchor := spellTarget.UnitGUID
+			if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+				primaryInList := false
+				for _, guid := range hitTargets {
+					if guid == anchor {
+						primaryInList = true
+						break
+					}
+				}
+				if !primaryInList {
+					hitTargets = append(hitTargets, anchor)
+				}
+			}
+		}
 		// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 		// this path: a hit target whose reflect roll succeeds leaves the
 		// hit list and becomes a REFLECT miss in the GO packet below

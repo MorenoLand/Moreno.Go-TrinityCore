@@ -3935,6 +3935,35 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+	// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
+	// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a
+	// sibling effect is nearby: the object arm runs regardless of ChainTarget
+	// (SelectImplicitChainTargets, Spell.cpp:1582, no-ops at ChainTarget 1
+	// after the AddUnitTarget, and excludes the primary from its candidates
+	// at higher ChainTarget). The nearby block above nils hitTargets and
+	// replaces it with the picks, with no area-leg rescue on this path, so
+	// a plain or chain TARGET-object primary was dropped from the GO packet,
+	// the verdicts, and the per-hit legs below, which all iterate hitTargets.
+	// The rejoin mirrors the twin port: a primary already in the list keeps
+	// its place (it equals a pick), otherwise it joins ahead of the
+	// aura-scaling arm and the verdict passes below and rolls like any
+	// implicit target. GO wire primaries stay out (AddGOTarget arm).
+	if (isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) || isHostileNearbySpell(spell) || isFriendlyNearbySpell(spell)) && spellHasTargetObjectEffect(spell) {
+		anchor := target.UnitGUID
+		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+			primaryInList := false
+			for _, guid := range hitTargets {
+				if guid == anchor {
+					primaryInList = true
+					break
+				}
+			}
+			if !primaryInList {
+				hitTargets = append(hitTargets, anchor)
+			}
+		}
+	}
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on

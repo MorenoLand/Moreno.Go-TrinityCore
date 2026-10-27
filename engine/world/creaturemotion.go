@@ -4334,6 +4334,55 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+			// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
+			// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a
+			// sibling effect is nearby: the object arm runs regardless of ChainTarget
+			// (SelectImplicitChainTargets, Spell.cpp:1582, no-ops at ChainTarget 1
+			// after the AddUnitTarget, and excludes the primary from its candidates
+			// at higher ChainTarget). The nearby rebuild above drops the wire
+			// victim from hitTargets (the area re-sweep re-admits it only for
+			// area-enemy/entry-area spells), so a plain or chain TARGET-object
+			// primary was dropped from the GO packet, the verdicts, and the
+			// per-hit legs below. The rejoin follows the channel leg above:
+			// the primary joins hitTargets and the leg list the verdicts and
+			// damage legs iterate (areaHits for a player, areaCreatureHits for
+			// a live motion; a static spawn rides the packet only). Dedup
+			// against hitTargets covers the re-sweep (it appends to both lists).
+			// GO wire primaries stay out (AddGOTarget arm).
+			if inlineSpellKnown && (isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) || isFriendlyNearbySpell(inlineSpell)) && spellHasTargetObjectEffect(inlineSpell) {
+				anchor := spellTarget.UnitGUID
+				if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+					primaryInList := false
+					for _, guid := range hitTargets {
+						if guid == anchor {
+							primaryInList = true
+							break
+						}
+					}
+					if !primaryInList {
+						hitTargets = append(hitTargets, anchor)
+						playerJoined := false
+						for i := range players {
+							if players[i].GUID == anchor {
+								areaHits = append(areaHits, &players[i])
+								playerJoined = true
+								break
+							}
+						}
+						if !playerJoined {
+							if pickSess := s.findSessionByGUID(anchor); pickSess != nil && pickSess.player != nil {
+								p := pickSess.player
+								areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+								playerJoined = true
+							}
+						}
+						if !playerJoined && s.findCreatureMotion(motion.Map, motion.InstanceID, anchor) != nil {
+							areaCreatureHits = append(areaCreatureHits, anchor)
+						}
+					}
+				}
+			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 			// the inline path: a victim whose reflect roll succeeds becomes a
 			// REFLECT miss and the spell returns to the motion
