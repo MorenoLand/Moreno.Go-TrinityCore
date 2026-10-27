@@ -2290,6 +2290,12 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectEnchantHeldItem(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectUnlearnSpecialization:
 				s.creatureEffectUnlearnSpecialization(ctx, m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectCreateRandomItem:
+				s.creatureEffectCreateRandomItem(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectUntrainTalents:
+				s.creatureEffectUntrainTalents(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectTalentSpecCount:
+				s.creatureEffectTalentSpecCount(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
 			}
@@ -5906,6 +5912,82 @@ func (s *Server) creatureEffectTalentSpecSelect(ctx context.Context, m *creature
 			continue
 		}
 		targetSess.activateSpec(ctx, uint8(eff.CalcValueForLevel(spell, uint32(m.Level))-1))
+	}
+}
+
+// creatureEffectCreateRandomItem mirrors Spell::EffectCreateRandomItem
+// (SpellEffects.cpp:1713) for a creature caster: the HIT_TARGET arm.
+// Each player hit target rolls spell_loot_template through its own
+// session's helper, the create-item arm's shape; creature targets have
+// no session and roll nothing, matching the C++ TYPEID_PLAYER gate.
+func (s *Server) creatureEffectCreateRandomItem(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.handleEffectCreateRandomItem(ctx, guid, spell, eff)
+		}
+	}
+}
+
+// creatureEffectUntrainTalents mirrors Spell::EffectUntrainTalents
+// (SpellEffects.cpp:2606) for a creature caster: the HIT_TARGET arm.
+// The C++ gate admits only non-player casters (the trainer NPC), which
+// this path satisfies by construction; each player hit target gets the
+// talent-wipe-confirm prompt from its own session, the gossip arm's
+// packet, carrying the creature's GUID as the trainer.
+func (s *Server) creatureEffectUntrainTalents(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.sendTalentWipeConfirm(m.GUID)
+		}
+	}
+}
+
+// creatureEffectTalentSpecCount mirrors Spell::EffectSpecCount
+// (SpellEffects.cpp:5556) for a creature caster: the HIT_TARGET arm.
+// Each player hit target's spec count becomes the effect's damage value
+// at the caster's level through its own session's helper; creature
+// targets have no spec count, matching the C++ TYPEID_PLAYER gate.
+func (s *Server) creatureEffectTalentSpecCount(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.updateSpecCount(ctx, uint8(eff.CalcValueForLevel(spell, uint32(m.Level))))
+		}
 	}
 }
 

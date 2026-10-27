@@ -541,17 +541,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			if !s.sendGossipComplete() {
 				return true
 			}
-			wipeBuf := protocol.NewBuffer(12)
-			wipeBuf.WriteU64(guid)
-			// Player::SendTalentWipeConfirm (Player.cpp:9605): the prompt shows
-			// the same escalating ResetTalentsCost the confirm handler charges,
-			// zeroed by the NoResetTalentsCost custom switch (Player.cpp:9607).
-			wipeCost := s.resetTalentsCost()
-			if s.server.Config.NoResetTalentsCost {
-				wipeCost = 0
-			}
-			wipeBuf.WriteU32(wipeCost)
-			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
+			if !s.sendTalentWipeConfirm(guid) {
 				return true
 			}
 		} else if item.Action == 1 || item.Action == 20 { // GOSSIP_OPTION_GOSSIP / GOSSIP_OPTION_DUALSPEC_INFO

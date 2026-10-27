@@ -34309,6 +34309,38 @@ func (s *session) grantSecondSpec(ctx context.Context) {
 	_ = s.sendTalentsInfo(false)
 }
 
+// updateSpecCount mirrors Player::UpdateSpecCount (Player.cpp:26245) for a
+// creature-cast SPELL_EFFECT_TALENT_SPEC_COUNT arm: the count is the
+// effect's damage value. Same-count is a no-op; an active spec at or
+// above the new count activates spec 0 first; growing copies the action
+// buttons to spec 1 (the grantSecondSpec shape); shrinking drops every
+// action button except the active spec's; the count persists and the
+// talent frame refreshes. grantSecondSpec stays the player-cast post-arm
+// for 63624/63680.
+func (s *session) updateSpecCount(ctx context.Context, count uint8) {
+	if s == nil || s.player == nil {
+		return
+	}
+	curCount := s.player.TalentGroupsCount
+	if curCount == count {
+		return
+	}
+	if s.player.ActiveTalentGroup >= count {
+		s.activateSpec(ctx, 0)
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		if count > curCount {
+			_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) SELECT guid, 1, button, action, type FROM character_action WHERE guid = ? AND spec = ?", s.playerGUID, s.player.ActiveTalentGroup)
+		} else {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_action WHERE guid = ? AND spec != ?", s.playerGUID, s.player.ActiveTalentGroup)
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET talentGroupsCount = ? WHERE guid = ?", count, s.playerGUID)
+	}
+	s.player.TalentGroupsCount = count
+	_ = s.sendTalentsInfo(false)
+}
+
 // activateSpec mirrors Player::ActivateSpec (Player.cpp:26292).
 func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 	if s.player == nil || targetSpec >= s.player.TalentGroupsCount || targetSpec == s.player.ActiveTalentGroup {

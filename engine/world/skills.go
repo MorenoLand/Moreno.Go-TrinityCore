@@ -474,6 +474,24 @@ const (
 // resetTalentsCost mirrors Player::ResetTalentsCost (Player.cpp:3957): the
 // first reset costs 1 gold, then 5, then 10, afterwards increments of 5 gold
 // up to a 50 gold cap, decaying 5 gold per month down to a 10 gold floor.
+// sendTalentWipeConfirm mirrors Player::SendTalentWipeConfirm
+// (Player.cpp:9605): the prompt carries the trainer GUID and the same
+// escalating ResetTalentsCost the confirm handler charges, zeroed by the
+// NoResetTalentsCost custom switch (Player.cpp:9607).
+func (s *session) sendTalentWipeConfirm(casterGUID uint64) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	wipeBuf := protocol.NewBuffer(12)
+	wipeBuf.WriteU64(casterGUID)
+	wipeCost := s.resetTalentsCost()
+	if s.server != nil && s.server.Config.NoResetTalentsCost {
+		wipeCost = 0
+	}
+	wipeBuf.WriteU32(wipeCost)
+	return s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true) == nil
+}
+
 func (s *session) resetTalentsCost() uint32 {
 	if s.player == nil {
 		return goldUnit
