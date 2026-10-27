@@ -17381,6 +17381,42 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					healAmount = 100
 				}
 				s.executeSpellHeal(ctx, effectTarget, spellID, healAmount, effectIndex, inheritCritBase, chainMult, jumpIndex)
+			} else if eff.Effect == spellEffectHealPct { // SPELL_EFFECT_HEAL_PCT
+				// Spell::EffectHealPct (SpellEffects.cpp:1477-1492): the
+				// effect value is a percentage of the TARGET's max health
+				// (Unit::CountPctFromMaxHealth), not a flat amount. The
+				// damage<0 and !IsAlive gates land via the pct>0 check
+				// and effectTargetMaxHealth (0 for dead or unresolvable
+				// targets, same as the client path's 136 arm); the
+				// Done/Taken bonus legs ride executeSpellHeal, same as
+				// the effect-10 arm above. Without this arm a triggered
+				// 136 spell healed nothing at all — 136 appeared in this
+				// dispatch only in the friendly fan-out condition.
+				pct := eff.CalcValueForLevel(spell, casterLevel)
+				if pct <= 0 {
+					continue
+				}
+				maxHealth := s.effectTargetMaxHealth(ctx, effectTarget)
+				if maxHealth == 0 {
+					continue
+				}
+				healAmount := uint32(uint64(maxHealth) * uint64(pct) / 100)
+				s.executeSpellHeal(ctx, effectTarget, spellID, healAmount, effectIndex, inheritCritBase, chainMult, jumpIndex)
+			} else if eff.Effect == spellEffectHealMechanical { // SPELL_EFFECT_HEAL_MECHANICAL
+				// Spell::EffectHealMechanical (SpellEffects.cpp:1495-1510):
+				// the flat effect value with the standard Done/Taken
+				// bonus legs (executeSpellHeal, same as the effect-10
+				// arm); damage<0 heals nothing and the !IsAlive gate
+				// rides effectTargetMaxHealth, same as the client
+				// path's 75 arm. Same missing-arm class as 136 above.
+				mechValue := eff.CalcValueForLevel(spell, casterLevel)
+				if mechValue < 0 {
+					continue
+				}
+				if s.effectTargetMaxHealth(ctx, effectTarget) == 0 {
+					continue
+				}
+				s.executeSpellHeal(ctx, effectTarget, spellID, uint32(mechValue), effectIndex, inheritCritBase, chainMult, jumpIndex)
 			} else if eff.Effect == spellEffectEnergize {
 				// Spell::EffectEnergize per-target legs (power-type gate,
 				// per-spell adjustments) ride energizeEffectTarget on the
