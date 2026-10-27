@@ -2399,13 +2399,32 @@ func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time)
 // for it, so the default applies unconditionally.
 const bgPrematureFinishTime = 5 * time.Minute
 
-// bgPrematureMinPlayers stands in for battleground_template.MinPlayersPerTeam
-// (BattlegroundMgr.cpp:505: copied onto the instance at creation). Go does
-// not ingest battleground_template (battleground_mgr.go documents the gap),
-// so the premature trigger uses this table until template rows land; replace
-// it with the loaded value then. AV's 20 is the documented minimum; the
-// others are the shipped-template values.
-func bgPrematureMinPlayers(mapID uint32) int {
+// bgPrematureMinPlayers returns the battleground_template MinPlayersPerTeam
+// for mapID: Battleground::GetMinPlayersPerTeam (Battleground.cpp:208),
+// copied onto the instance at creation (BattlegroundMgr.cpp:505), read from
+// the template store loadBattlegroundTemplates fills. While the table is
+// unseeded (this repo's world.sql) or holds no row for the type, the
+// shipped-template fallback below applies.
+func (s *Server) bgPrematureMinPlayers(mapID uint32) int {
+	if s != nil {
+		s.loadBattlegroundTemplates(context.Background())
+		if bgTypeID, _, _, ok := battlegroundTypeForMap(mapID); ok {
+			s.bgTemplatesMu.Lock()
+			tmpl := s.bgTemplates[bgTypeID]
+			s.bgTemplatesMu.Unlock()
+			if tmpl != nil {
+				return int(tmpl.minPlayersPerTeam)
+			}
+		}
+	}
+	return bgPrematureMinPlayersFallback(mapID)
+}
+
+// bgPrematureMinPlayersFallback is the shipped-template MinPlayersPerTeam
+// table, used only while battleground_template has no row for the type.
+// AV's 20 is the documented minimum; the others are the shipped-template
+// values; SA/IC are the least certain and the first a seeded table corrects.
+func bgPrematureMinPlayersFallback(mapID uint32) int {
 	switch mapID {
 	case AVMapID:
 		return 20
@@ -2633,7 +2652,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		wsg.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(WSGMapID)
-			min := bgPrematureMinPlayers(WSGMapID)
+			min := s.bgPrematureMinPlayers(WSGMapID)
 			wsg.mu.Lock()
 			if wsg.Winner < 0 {
 				expired, msg := prematureCountdownStep(&wsg.PrematureCountDown, &wsg.PrematureTimerMs, diffMs, ally < min || horde < min)
@@ -2664,7 +2683,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		ab.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(ABMapID)
-			min := bgPrematureMinPlayers(ABMapID)
+			min := s.bgPrematureMinPlayers(ABMapID)
 			ab.mu.Lock()
 			if ab.Winner < 0 {
 				expired, msg := prematureCountdownStep(&ab.PrematureCountDown, &ab.PrematureTimerMs, diffMs, ally < min || horde < min)
@@ -2695,7 +2714,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		av.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(AVMapID)
-			min := bgPrematureMinPlayers(AVMapID)
+			min := s.bgPrematureMinPlayers(AVMapID)
 			av.mu.Lock()
 			if av.Winner < 0 {
 				expired, msg := prematureCountdownStep(&av.PrematureCountDown, &av.PrematureTimerMs, diffMs, ally < min || horde < min)
@@ -2726,7 +2745,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		eots.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(EOTSMapID)
-			min := bgPrematureMinPlayers(EOTSMapID)
+			min := s.bgPrematureMinPlayers(EOTSMapID)
 			eots.mu.Lock()
 			if eots.Winner < 0 {
 				expired, msg := prematureCountdownStep(&eots.PrematureCountDown, &eots.PrematureTimerMs, diffMs, ally < min || horde < min)
@@ -2758,7 +2777,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		sa.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(SAMapID)
-			min := bgPrematureMinPlayers(SAMapID)
+			min := s.bgPrematureMinPlayers(SAMapID)
 			sa.mu.Lock()
 			if sa.Winner < 0 && (sa.Status == SAStatusRoundOne || sa.Status == SAStatusRoundTwo) {
 				expired, msg := prematureCountdownStep(&sa.PrematureCountDown, &sa.PrematureTimerMs, diffMs, ally < min || horde < min)
@@ -2783,7 +2802,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		ic.mu.Unlock()
 		if !ended {
 			ally, horde := s.bgRosterCounts(ICMapID)
-			min := bgPrematureMinPlayers(ICMapID)
+			min := s.bgPrematureMinPlayers(ICMapID)
 			ic.mu.Lock()
 			if ic.Winner < 0 {
 				expired, msg := prematureCountdownStep(&ic.PrematureCountDown, &ic.PrematureTimerMs, diffMs, ally < min || horde < min)

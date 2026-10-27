@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"sort"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -111,17 +112,19 @@ func buildPlayerJoinedBattlegroundPacket(guid uint64) []byte {
 //
 // NOT ported: the GetBattlegroundTemplate registry lookup and template-copy
 // switch (BattlegroundMgr.cpp:355-408); GetRandomBG (BattlegroundMgr.cpp:968-
-// 990 — weighted pick over the BattlemasterEntry MapID list, same missing
-// registry; the weighted-pick kernel itself is ported below); the Set*/Reset
-// wiring chain (BattlegroundMgr.cpp:417-422); LoadBattlegroundTemplates
-// (BattlegroundMgr.cpp:518-571 — battleground_template DB rows with DisableMgr
-// and BattlemasterList.dbc gating, min/max player and level validation,
-// per-type constructor switch) and the CreateBattleground template-init
-// wiring (BattlegroundMgr.cpp:444-503 — map id, locale name, start
-// positions, level range, script id). Go has no battleground template store
-// and no battleground_template/DBC ingestion path; the template registry is
-// a standalone future project, and GetRandomBG needs it for its MapID/Weight
-// inputs.
+// 990 — weighted pick over the BattlemasterEntry MapID list; the
+// weighted-pick kernel itself is ported below and Weight now loads with the
+// template store, but the MapID list still needs the BattlemasterEntry
+// record); the Set*/Reset wiring chain (BattlegroundMgr.cpp:417-422); the
+// start-location and script-id arms of LoadBattlegroundTemplates
+// (BattlegroundMgr.cpp:518-571 — AllianceStartLoc/HordeStartLoc resolved
+// through WorldSafeLocs.dbc, ScriptName through the script registry) and
+// the CreateBattleground template-init wiring (BattlegroundMgr.cpp:444-503
+// — map id, locale name, start positions, level range, script id). The
+// row-read, gating, and validation arms of LoadBattlegroundTemplates are
+// ported below as loadBattlegroundTemplates; the per-map registry
+// (_battlegroundMapTemplates) has no Go twin, battlegroundTypeForMap covers
+// the map->type direction instead.
 
 // arenaMaxPlayersPerTeam is the Go form of the arena max-players arm of
 // BattlegroundMgr::CreateNewBattleground (BattlegroundMgr.cpp:424-438):
@@ -155,6 +158,7 @@ func bgInstanceIsRandom(resolvedBgTypeID, originalBgTypeID uint32, isArena bool)
 // caller supplies the uniform [0,1) roll, matching the seeded
 // RandomEngine draw in C++. BattlegroundMgr::GetRandomBG uses it over the
 // BattlemasterEntry MapID list with each candidate's Weight.
+
 func weightedRandomIndex(weights []float64, roll float64) int {
 	sum := 0.0
 	for _, w := range weights {
@@ -168,4 +172,94 @@ func weightedRandomIndex(weights []float64, roll float64) int {
 		}
 	}
 	return len(weights) - 1
+}
+
+// bgTemplate is the Go form of BattlegroundTemplate (BattlegroundMgr.h):
+// the battleground_template row fields Go consumes. StartLocation,
+// MaxStartDistSq, and ScriptId are not stored: they feed only
+// CreateBattleground's instance wiring (BattlegroundMgr.cpp:444-503),
+// which has no Go twin yet; the BattlemasterEntry pointer is replaced by
+// the BattlemasterList.dbc gate in the loader plus battlegroundTypeForMap
+// for the map->type direction.
+type bgTemplate struct {
+	id                uint32
+	minPlayersPerTeam uint32
+	maxPlayersPerTeam uint32
+	minLevel          uint8
+	maxLevel          uint8
+	weight            uint8
+}
+
+// loadBattlegroundTemplates mirrors BattlegroundMgr::LoadBattlegroundTemplates
+// (BattlegroundMgr.cpp:518-571): one load, keyed by bg type id, clearing
+// and refilling the store as C++ does. Rows are skipped exactly as in C++:
+// DisableMgr-disabled types, types with no BattlemasterList.dbc entry,
+// MaxPlayersPerTeam == 0 or MinPlayersPerTeam > MaxPlayersPerTeam, and
+// MinLevel == 0 or MaxLevel == 0 or MinLevel > MaxLevel. A nil world DB
+// leaves the store unloaded so a later caller retries; a query failure
+// loads an empty store, the C++ empty-table shape.
+func (s *Server) loadBattlegroundTemplates(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.bgTemplatesMu.Lock()
+	defer s.bgTemplatesMu.Unlock()
+	if s.bgTemplatesLoaded {
+		return
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	s.bgTemplatesLoaded = true
+	templates := make(map[uint32]*bgTemplate)
+	s.bgTemplates = templates
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT ID, MinPlayersPerTeam, MaxPlayersPerTeam, MinLvl, MaxLvl, Weight FROM battleground_template`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, minPlayers, maxPlayers, minLvl, maxLvl, weight uint32
+		if err := rows.Scan(&id, &minPlayers, &maxPlayers, &minLvl, &maxLvl, &weight); err != nil {
+			continue
+		}
+		var one int
+		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 1 FROM disables WHERE sourceType = ? AND entry = ?`, disableTypeBattleground, id).Scan(&one); err == nil {
+			continue
+		}
+		if !s.battlegroundTemplateHasBattlemasterEntry(id) {
+			continue
+		}
+		if maxPlayers == 0 || minPlayers > maxPlayers {
+			if s.Logger != nil {
+				s.Logger.Error("skipping battleground_template row with bad player counts", "id", id, "minPlayersPerTeam", minPlayers, "maxPlayersPerTeam", maxPlayers)
+			}
+			continue
+		}
+		if minLvl == 0 || maxLvl == 0 || minLvl > maxLvl {
+			if s.Logger != nil {
+				s.Logger.Error("skipping battleground_template row with bad level range", "id", id, "minLevel", minLvl, "maxLevel", maxLvl)
+			}
+			continue
+		}
+		templates[id] = &bgTemplate{id: id, minPlayersPerTeam: minPlayers, maxPlayersPerTeam: maxPlayers, minLevel: uint8(minLvl), maxLevel: uint8(maxLvl), weight: uint8(weight)}
+	}
+}
+
+// battlegroundTemplateHasBattlemasterEntry mirrors the BattlemasterList.dbc
+// gate of LoadBattlegroundTemplates (BattlegroundMgr.cpp:535-541): a row
+// whose type has no BattlemasterList entry is not created. It shares the
+// battlemasterBGType lookup shape (BattlemasterList file + Find), without
+// the battlemaster_entry table hop, since the template row already carries
+// the type id.
+func (s *Server) battlegroundTemplateHasBattlemasterEntry(bgTypeID uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
+	file, err := s.Data.File("BattlemasterList")
+	if err != nil {
+		return false
+	}
+	_, found := file.Find(bgTypeID)
+	return found
 }

@@ -153,6 +153,9 @@ type Server struct {
 	icMu                      sync.RWMutex
 	icState                   map[uint32]*icBattlegroundState
 	bgScores                  map[bgScoreKey]map[uint64]*bgPlayerScore // per-instance PlayerScores (battleground_scores.go), guarded by objectsMu
+	bgTemplatesMu             sync.Mutex
+	bgTemplates               map[uint32]*bgTemplate // _battlegroundTemplates by type id (battleground_mgr.go), guarded by bgTemplatesMu
+	bgTemplatesLoaded         bool
 	arenaMu                   sync.RWMutex
 	arenaState                map[uint32]*arenaBattlegroundState
 	arenaTickLast             time.Time
@@ -827,6 +830,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadVehicleAccessories(ctx)
 	s.loadContinentTransports(ctx)
 	s.loadWorldStates(ctx)
+	s.loadBattlegroundTemplates(ctx)
 	s.initializeMailState(ctx)
 	s.seedItemGUID(ctx)
 	s.loadStoredContainerLoot(ctx)
