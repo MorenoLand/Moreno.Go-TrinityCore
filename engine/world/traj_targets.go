@@ -24,6 +24,34 @@ const (
 	creatureTypeFlagCanCollideWithMissiles uint32 = 0x00080000
 )
 
+// trajCaster anchors a trajectory sweep on one caster, player or creature:
+// the missile corridor, the candidate sort, and the shortened destination
+// all read the caster's position and orientation (Spell.cpp:1635-1701),
+// while the source position (the parabola origin) may differ when the
+// client supplied a source location. The session player helper below is
+// one construction of this type; creature casters build it from motion.
+type trajCaster struct {
+	GUID        uint64
+	X, Y, Z     float32
+	Orientation float32
+	Map         uint32
+	InstanceID  uint32
+}
+
+func trajCasterFromMotion(m *creatureMotion) trajCaster {
+	if m == nil {
+		return trajCaster{}
+	}
+	return trajCaster{GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, Orientation: m.Orientation, Map: m.Map, InstanceID: m.InstanceID}
+}
+
+func trajCasterFromSessionPlayer(s *session) trajCaster {
+	if s == nil || s.player == nil {
+		return trajCaster{}
+	}
+	return trajCaster{GUID: s.playerGUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, Orientation: s.player.Orientation, Map: s.player.Map, InstanceID: s.player.InstanceID}
+}
+
 // spellHasTrajTarget reports whether any active effect carries the
 // trajectory implicit target (TARGET_SELECT_CATEGORY_TRAJ, Spell.cpp:918).
 func spellHasTrajTarget(spell wotlk.Spell) bool {
@@ -62,9 +90,9 @@ type trajCandidate struct {
 // trajCollideFlags returns the creature_template type_flags for the given
 // entries in one query, so the missile-collision loop can skip creatures
 // that cannot collide with missiles.
-func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[uint32]uint32 {
+func (s *Server) trajCollideFlags(ctx context.Context, entries []uint32) map[uint32]uint32 {
 	flags := make(map[uint32]uint32)
-	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || len(entries) == 0 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || len(entries) == 0 {
 		return flags
 	}
 	seen := make(map[uint32]struct{}, len(entries))
@@ -88,7 +116,7 @@ func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[ui
 		placeholders[i] = "?"
 		args[i] = entry
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT entry, COALESCE(type_flags, 0) FROM creature_template WHERE entry IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT entry, COALESCE(type_flags, 0) FROM creature_template WHERE entry IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	if err != nil {
 		return flags
 	}
@@ -115,10 +143,10 @@ func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[ui
 // target's 2D distance from the spell source position (Spell.cpp:8460).
 // Go has no full SpellInfo::CheckTarget, so the gate is the standing
 // unit-validity approximation: alive and not combat-disabled.
-func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, srcY float32, dist2d float32) []trajCandidate {
+func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster, spell wotlk.Spell, srcX, srcY float32, dist2d float32) []trajCandidate {
 	candidates := make([]trajCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	ori := float64(s.player.Orientation)
+	ori := float64(caster.Orientation)
 	// The trajectory search runs under GRID_MAP_TYPE_MASK_ALL in C++
 	// (Spell.cpp:1643), but the per-candidate SpellInfo::CheckTarget gate
 	// (implicit, Spell.cpp:8316 -> SpellInfo.cpp:1654-1662/1712-1713) still
@@ -126,13 +154,13 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 	// non-ghost candidates for ONLY_TARGET_GHOSTS spells.
 	playersOnly := spellSearchPlayersOnly(spell)
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z, combatReach float32, unitFlags, flagsExtra, health uint32, entry uint32, isPlayer bool) {
-		if guid == 0 || guid == s.playerGUID {
+		if guid == 0 || guid == caster.GUID {
 			return
 		}
 		if !isPlayer && playersOnly {
 			return
 		}
-		if mapID != s.player.Map || instanceID != s.player.InstanceID || health == 0 {
+		if mapID != caster.Map || instanceID != caster.InstanceID || health == 0 {
 			return
 		}
 		// WorldObjectSpellTrajTargetCheck (Spell.cpp:8455-8462) runs every
@@ -163,8 +191,8 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 		// The HasInLine corridor (Spell.cpp:8458 → Position.cpp:139) is
 		// caster-anchored: the arc test and the lateral offset both use the
 		// caster's position, not the spell source position.
-		cdx, cdy := float64(x-s.player.X), float64(y-s.player.Y)
-		if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi) {
+		cdx, cdy := float64(x-caster.X), float64(y-caster.Y)
+		if !hasInArc(caster.Orientation, caster.X, caster.Y, x, y, math.Pi) {
 			return
 		}
 		relAngle := math.Atan2(cdy, cdx) - ori
@@ -175,22 +203,22 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 		seen[guid] = struct{}{}
 		candidates = append(candidates, trajCandidate{guid: guid, x: x, y: y, z: z, combatReach: combatReach, entry: entry, isPlayer: isPlayer})
 	}
-	s.server.motionMu.Lock()
-	motionMap := s.server.motionMapLocked(s.player.Map, s.player.InstanceID)
+	s.motionMu.Lock()
+	motionMap := s.motionMapLocked(caster.Map, caster.InstanceID)
 	motions := make([]*creatureMotion, 0, len(motionMap))
 	for _, motion := range motionMap {
 		if motion != nil {
 			motions = append(motions, motion)
 		}
 	}
-	s.server.motionMu.Unlock()
+	s.motionMu.Unlock()
 	motionGUIDs := make(map[uint64]struct{}, len(motions))
 	for _, motion := range motions {
 		motionGUIDs[motion.GUID] = struct{}{}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.CombatReach, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.Entry, false)
 	}
-	s.server.sessionsMu.RLock()
-	for targetSession := range s.server.sessions {
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
@@ -203,9 +231,9 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 		}
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.CombatReach, targetSession.player.UnitFlags, 0, targetSession.player.Health, 0, true)
 	}
-	s.server.sessionsMu.RUnlock()
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, s.player.Map, float64(srcX-dist2d), float64(srcX+dist2d), float64(srcY-dist2d), float64(srcY+dist2d))
+	s.sessionsMu.RUnlock()
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, caster.Map, float64(srcX-dist2d), float64(srcX+dist2d), float64(srcY-dist2d), float64(srcY+dist2d))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -218,8 +246,8 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 				if _, hasMotion := motionGUIDs[guid]; hasMotion {
 					continue
 				}
-				stats := s.server.loadCreatureStats(ctx, uint32(entry))
-				accept(guid, uint32(mapID), s.player.InstanceID, float32(x), float32(y), float32(z), stats.CombatReach, uint32(unitFlags), uint32(flagsExtra), uint32(health), uint32(entry), false)
+				stats := s.loadCreatureStats(ctx, uint32(entry))
+				accept(guid, uint32(mapID), caster.InstanceID, float32(x), float32(y), float32(z), stats.CombatReach, uint32(unitFlags), uint32(flagsExtra), uint32(health), uint32(entry), false)
 			}
 		}
 	}
@@ -233,32 +261,28 @@ func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, s
 // callers keep the previous destination otherwise (C++ only calls ModDst
 // when dist2d > bestDist). Like the C++ dispatch (Spell.cpp:918-923), the
 // source defaults to the caster position (CheckDst covers the destination).
-func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, target protocol.SpellTargetData, dx, dy, dz float32) (float32, float32, float32, bool) {
-	if target.TrajSpeed == 0 {
+func (s *Server) resolveTrajDestinationForCaster(ctx context.Context, caster trajCaster, spell wotlk.Spell, eff wotlk.SpellEffect, trajSpeed, trajElevation, sx, sy, sz, dx, dy, dz float32) (float32, float32, float32, bool) {
+	if trajSpeed == 0 {
 		return dx, dy, dz, false
-	}
-	sx, sy, sz := s.player.X, s.player.Y, s.player.Z
-	if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
-		sx, sy, sz = target.Source.X, target.Source.Y, target.Source.Z
 	}
 	ddx, ddy := float64(dx-sx), float64(dy-sy)
 	dist2d := float32(math.Sqrt(ddx*ddx + ddy*ddy))
 	if dist2d == 0 {
 		return dx, dy, dz, false
 	}
-	b := float32(math.Tan(float64(target.TrajElevation)))
+	b := float32(math.Tan(float64(trajElevation)))
 	a := (dz - sz - dist2d*b) / (dist2d * dist2d)
 	if a > -0.0001 {
 		a = 0
 	}
-	bestDist := spellMaxHostileRange(s.server.Data, spell)
+	bestDist := spellMaxHostileRange(s.Data, spell)
 	if eff.TriggerSpell != 0 {
 		// "We should check if triggered spell has greater range (which is
 		// true in many cases, and initial spell has too short max range)"
 		// (Spell.cpp:1651-1655); the range entry fix in SpellMgr.cpp:4933
 		// is subsumed by the max() term here.
-		if trigger, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found {
-			triggerMax := spellMaxHostileRange(s.server.Data, trigger)
+		if trigger, found, err := s.Data.Spell(eff.TriggerSpell); err == nil && found {
+			triggerMax := spellMaxHostileRange(s.Data, trigger)
 			if triggerMax > bestDist {
 				bestDist = triggerMax
 			}
@@ -274,17 +298,17 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 			}
 		}
 	}
-	candidates := s.trajCandidates(ctx, spell, sx, sy, dist2d)
+	candidates := s.trajCandidatesForCaster(ctx, caster, spell, sx, sy, dist2d)
 	collideFlags := s.trajCollideFlags(ctx, trajCandidateEntries(candidates))
 	// targets.sort(Trinity::ObjectDistanceOrderPred(m_caster)) (Spell.cpp:1644):
 	// Object::GetDistanceOrder takes is3D = true by default (Object.cpp:1306),
 	// so the sort key is the 3D squared distance from the caster — not 2D.
 	sort.Slice(candidates, func(i, j int) bool {
-		di := (candidates[i].x-s.player.X)*(candidates[i].x-s.player.X) + (candidates[i].y-s.player.Y)*(candidates[i].y-s.player.Y) + (candidates[i].z-s.player.Z)*(candidates[i].z-s.player.Z)
-		dj := (candidates[j].x-s.player.X)*(candidates[j].x-s.player.X) + (candidates[j].y-s.player.Y)*(candidates[j].y-s.player.Y) + (candidates[j].z-s.player.Z)*(candidates[j].z-s.player.Z)
+		di := (candidates[i].x-caster.X)*(candidates[i].x-caster.X) + (candidates[i].y-caster.Y)*(candidates[i].y-caster.Y) + (candidates[i].z-caster.Z)*(candidates[i].z-caster.Z)
+		dj := (candidates[j].x-caster.X)*(candidates[j].x-caster.X) + (candidates[j].y-caster.Y)*(candidates[j].y-caster.Y) + (candidates[j].z-caster.Z)*(candidates[j].z-caster.Z)
 		return di < dj
 	})
-	ori := float64(s.player.Orientation)
+	ori := float64(caster.Orientation)
 	for _, c := range candidates {
 		if !c.isPlayer {
 			// Creatures without CREATURE_TYPE_FLAG_CAN_COLLIDE_WITH_MISSILES
@@ -321,6 +345,33 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 		return nx, ny, nz, true
 	}
 	return dx, dy, dz, false
+}
+
+// Session wrappers over the Server trajectory core: the player caster
+// construction preserves the pre-existing player-path behavior exactly.
+func (s *session) trajCollideFlags(ctx context.Context, entries []uint32) map[uint32]uint32 {
+	if s == nil || s.server == nil {
+		return map[uint32]uint32{}
+	}
+	return s.server.trajCollideFlags(ctx, entries)
+}
+
+func (s *session) trajCandidates(ctx context.Context, spell wotlk.Spell, srcX, srcY float32, dist2d float32) []trajCandidate {
+	if s == nil || s.server == nil || s.player == nil {
+		return nil
+	}
+	return s.server.trajCandidatesForCaster(ctx, trajCasterFromSessionPlayer(s), spell, srcX, srcY, dist2d)
+}
+
+func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, target protocol.SpellTargetData, dx, dy, dz float32) (float32, float32, float32, bool) {
+	if s == nil || s.server == nil || s.player == nil {
+		return dx, dy, dz, false
+	}
+	sx, sy, sz := s.player.X, s.player.Y, s.player.Z
+	if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
+		sx, sy, sz = target.Source.X, target.Source.Y, target.Source.Z
+	}
+	return s.server.resolveTrajDestinationForCaster(ctx, trajCasterFromSessionPlayer(s), spell, eff, target.TrajSpeed, target.TrajElevation, sx, sy, sz, dx, dy, dz)
 }
 
 // trajCandidateEntries collects the creature entries needing type_flags

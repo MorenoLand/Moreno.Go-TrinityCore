@@ -3250,9 +3250,41 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 	return false
 }
 
+// petDestTrajOptions builds the creature-destination trajectory input for
+// a pet cast from its client target: speed/elevation plus the client
+// source and destination when the packet carried them. Triggered casts
+// have already had those fields stripped at the top of
+// executePetSpellWithOptions, so they resolve with zero input.
+func petDestTrajOptions(motion *creatureMotion, target protocol.SpellTargetData) creatureDestTraj {
+	opts := creatureDestTraj{Speed: target.TrajSpeed, Elevation: target.TrajElevation}
+	if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
+		opts.HasSrc = true
+		opts.SrcX, opts.SrcY, opts.SrcZ = target.Source.X, target.Source.Y, target.Source.Z
+	}
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		opts.HasSeed = true
+		opts.SeedX, opts.SeedY, opts.SeedZ = target.Destination.X, target.Destination.Y, target.Destination.Z
+	}
+	return opts
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
+	}
+	// Triggered pet spells are built from the explicit unit target only:
+	// C++ EffectTriggerSpell casts the triggered spell without the parent
+	// packet's trajectory or destination, so the parent target copy that
+	// trigger recursion passes in must not seed the dest-family arms or
+	// the traj arm. Client-originated casts keep their fields (the
+	// aura-triggered client cast in pets.go arrives here with triggered
+	// set, so it keeps today's seed-only behavior for traj).
+	if triggered {
+		target.TrajSpeed = 0
+		target.TrajElevation = 0
+		target.Flags &^= protocol.SpellTargetFlagDestLocation | protocol.SpellTargetFlagSourceLocation
+		target.Destination = protocol.SpellTargetLocation{}
+		target.Source = protocol.SpellTargetLocation{}
 	}
 	targetGUID := target.UnitGUID
 	explicitUnitTarget := targetGUID != 0
@@ -3347,7 +3379,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::SelectSpellTargets (Spell.cpp:3410) runs ahead of CheckCast in
 	// C++'s Spell::prepare, so the dest-family resolution lands before the
 	// LOS gates here; the same values feed the GO packet write below.
-	dx, dy, dz, hasDest, destFailed := s.server.resolveCreatureSpellDestination(ctx, motion, spell, targetGUID)
+	dx, dy, dz, hasDest, destFailed := s.server.resolveCreatureSpellDestinationWithTraj(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
 	if destFailed {
 		return true
 	}
@@ -3576,7 +3608,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		targetGUID = redirectGUID
 		target.UnitGUID = redirectGUID
 		var destFailed bool
-		dx, dy, dz, hasDest, destFailed = s.server.resolveCreatureSpellDestination(ctx, motion, spell, targetGUID)
+		dx, dy, dz, hasDest, destFailed = s.server.resolveCreatureSpellDestinationWithTraj(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
 		if destFailed {
 			return true
 		}

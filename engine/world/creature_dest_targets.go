@@ -47,12 +47,15 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // ok is false when the spell carries no bridgeable dest-family target;
 // destFailed is true when a 46 arm found no match.
 //
-// Documented no-bridge: TARGET_DEST_TRAJ (89) beyond the seed —
-// SelectImplicitTrajTargets early-returns on m_speed == 0 (Spell.cpp:1628)
-// and creature AI casts never set a trajectory (Unit::CastSpell builds
-// default targets); TARGET_DEST_CASTER_FISHING (39, player bobber model);
-// the 76/106 channel destinations (motions hold channel duration but no
-// channel target).
+// TARGET_DEST_TRAJ (89) runs through the shared Server trajectory core
+// when the caller supplies one (resolveCreatureSpellDestinationWithTraj):
+// SelectImplicitTrajTargets early-returns on m_speed == 0 (Spell.h:198,
+// HasTraj), and creature AI casts never set a trajectory (Unit::CastSpell
+// builds default targets), so the twin/inline wrapper passes zero and
+// keeps the seed-only behavior; only client pet casts carry speed and
+// elevation. Documented no-bridge: TARGET_DEST_CASTER_FISHING (39,
+// player bobber model); the 76/106 channel destinations (motions hold
+// channel duration but no channel target).
 //
 // TARGET_DEST_NEARBY_ENTRY (46) resolves per effect through
 // creatureEntryNearbyDestPosition below: each effect scans with its own
@@ -62,7 +65,26 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // the destFailed return so call sites abort before the GO packet — not
 // the seed-dest fallback the target-dest arms use without a resolvable
 // unit target.
+// creatureDestTraj carries the trajectory input for one creature cast:
+// the client packet's speed/elevation (SpellCastTargets m_speed /
+// m_elevation), an optional client source location, and an optional
+// destination seed. The seed defaults to the caster position (CheckDst,
+// Spell.cpp:6523); a client pet cast seeds it from the client destination
+// instead, since C++ InitExplicitTargets installs the client destination
+// before the implicit arms run.
+type creatureDestTraj struct {
+	Speed, Elevation    float32
+	HasSrc              bool
+	SrcX, SrcY, SrcZ    float32
+	HasSeed             bool
+	SeedX, SeedY, SeedZ float32
+}
+
 func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {
+	return s.resolveCreatureSpellDestinationWithTraj(ctx, m, spell, targetGUID, creatureDestTraj{})
+}
+
+func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64, traj creatureDestTraj) (float32, float32, float32, bool, bool) {
 	if s == nil || m == nil {
 		return 0, 0, 0, false, false
 	}
@@ -70,6 +92,9 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 		return 0, 0, 0, false, false
 	}
 	x, y, z := m.X, m.Y, m.Z
+	if traj.HasSeed {
+		x, y, z = traj.SeedX, traj.SeedY, traj.SeedZ
+	}
 	combatReach := m.CombatReach
 	if combatReach <= 0 {
 		combatReach = 1.5
@@ -125,6 +150,19 @@ func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatur
 				x, y, z = resolveTargetDestPosition(s.Data, targetType, eff.RadiusIndex, unitX, unitY, unitZ, unitO)
 			case isDestDestTarget(targetType):
 				if nx, ny, nz, changed := resolveDestDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, x, y, z, m.Orientation, modRadius); changed {
+					x, y, z = nx, ny, nz
+				}
+			case targetType == implicitTargetDestTraj:
+				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626) runs
+				// in per-effect order like the other dest arms, shortening
+				// the running destination to the first missile-body
+				// collision; the core early-returns on speed 0, so the
+				// twin/inline zero input keeps the seed untouched.
+				srcX, srcY, srcZ := m.X, m.Y, m.Z
+				if traj.HasSrc {
+					srcX, srcY, srcZ = traj.SrcX, traj.SrcY, traj.SrcZ
+				}
+				if nx, ny, nz, changed := s.resolveTrajDestinationForCaster(ctx, trajCasterFromMotion(m), spell, eff, traj.Speed, traj.Elevation, srcX, srcY, srcZ, x, y, z); changed {
 					x, y, z = nx, ny, nz
 				}
 			case targetType == implicitTargetDestNearbyEntry:
