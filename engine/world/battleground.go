@@ -337,7 +337,12 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	// never stored in the queue entry (AddGroup sets IsInvitedToBGInstanceGUID
 	// to 0, BattlegroundQueue.cpp:143), so it is read for alignment only and
 	// the entry below stores 0 until the simulate invite fire sets the
-	// invited instance id.
+	// invited instance id. The join-time WAIT_QUEUE packet's live client
+	// id (builder, BattlegroundMgr.cpp:209) needs the bgDataStore lookup
+	// Go has no twin of (battleground_mgr.go header), and Go's own
+	// battlefield list advertises 0 active instances — so 0, the
+	// template fallback for an unresolvable id, stands for the join
+	// packet; echoing the raw packet id would invent a live instance.
 	if _, err := r.ReadU32(); err != nil {
 		return true
 	}
@@ -615,6 +620,16 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// live BG world backs it — the port itself stays no-bridge,
 		// battleground.go handleBattlefieldPort).
 		e.InstanceID = instanceID
+		// BattlegroundMgr::CreateClientVisibleInstanceId
+		// (BattlegroundMgr.cpp:325-348): the live instance's
+		// display-only client id, claimed at pop time under the queued
+		// type and the player's bracket — the unix-time internal id
+		// above is not a client id and must never reach the wire.
+		bracketID := uint8(0)
+		if idx := bgBracketIndex(uint32(s.player.Level)); idx >= 0 {
+			bracketID = uint8(idx)
+		}
+		e.ClientInstanceID = s.server.claimBGClientInstanceID(bgTypeID, bracketID, instanceID)
 		// The invite dialog carries the live instance's map
 		// (Battleground::GetMapId): the resolved type for a random queue,
 		// the queued type otherwise — an unresolved random queue keeps
@@ -1770,7 +1785,11 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	minLvl, maxLvl := bgTemplateLevels(s.server, entry.BgTypeID)
 	buf.WriteU8(minLvl)
 	buf.WriteU8(maxLvl)
-	buf.WriteU32(entry.InstanceID)
+	// BattlegroundMgr::BuildBattlegroundStatusPacket (BattlegroundMgr.cpp:209)
+	// writes bg->GetClientInstanceID(), not GetInstanceID(): a queued
+	// slot has none claimed yet (0, the template value); a WaitJoin or
+	// InProgress slot carries the fire-claimed id; arenas carry 0.
+	buf.WriteU32(entry.ClientInstanceID)
 	if entry.Status == BGStatusWaitQueue {
 		// The queued packet is built from the BG template
 		// (BattleGroundHandler.cpp:580-588), and templates are never rated —
@@ -1834,6 +1853,9 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// bgData.Team is the teamForRace id (0 alliance / 1 horde); the status
 		// packet's arena-faction byte is the C++ wire value (1 alliance /
 		// 0 horde, Player::SetBGTeam).
+		// ClientInstanceID stays 0 here: character_battleground_data
+		// persists only the internal id, and C++ re-reads the client id
+		// from the live battleground object, which has no Go twin.
 		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: 1 - uint8(s.bgData.Team)}
 		return
 	}

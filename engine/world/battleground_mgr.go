@@ -77,6 +77,46 @@ func claimClientVisibleInstanceID(used []uint32, isArena bool) (uint32, []uint32
 	return lastID, out
 }
 
+// bgClientIDKey is the Go form of the (bgTypeId, bracket) key of
+// BattlegroundMgr::m_ClientBattlegroundIds (BattlegroundMgr.cpp:325):
+// client-visible ids are unique per battleground type and bracket.
+type bgClientIDKey struct {
+	bgTypeID  uint32
+	bracketID uint8
+}
+
+// claimBGClientInstanceID is the Go form of
+// BattlegroundMgr::CreateClientVisibleInstanceId
+// (BattlegroundMgr.cpp:325-348) for the simulated queue pop: the
+// claimed id is stored per (queued type, bracket) via
+// claimClientVisibleInstanceID, and the sim-internal-id share map
+// returns the same id to every member of one group pop. Arenas never
+// claim (CreateClientVisibleInstanceId returns 0 for arena types);
+// the caller passes the queued type, not a random-BG resolution,
+// matching CreateNewBattleground's originalBgTypeId argument.
+func (s *Server) claimBGClientInstanceID(bgTypeID uint32, bracketID uint8, instanceID uint32) uint32 {
+	if s == nil || instanceID == 0 {
+		return 0
+	}
+	s.bgClientIDsMu.Lock()
+	defer s.bgClientIDsMu.Unlock()
+	if id, ok := s.bgClientIDByInstance[instanceID]; ok {
+		return id
+	}
+	key := bgClientIDKey{bgTypeID: bgTypeID, bracketID: bracketID}
+	used := s.bgClientIDs[key]
+	id, used := claimClientVisibleInstanceID(used, false)
+	if s.bgClientIDs == nil {
+		s.bgClientIDs = make(map[bgClientIDKey][]uint32)
+	}
+	s.bgClientIDs[key] = used
+	if s.bgClientIDByInstance == nil {
+		s.bgClientIDByInstance = make(map[uint32]uint32)
+	}
+	s.bgClientIDByInstance[instanceID] = id
+	return id
+}
+
 // buildPlayerLeftBattlegroundPacket is the Go form of
 // BattlegroundMgr::BuildPlayerLeftBattlegroundPacket
 // (BattlegroundMgr.cpp:247-251): SMSG_BATTLEGROUND_PLAYER_LEFT carrying the

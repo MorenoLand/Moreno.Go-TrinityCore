@@ -90,6 +90,18 @@ type Server struct {
 	// SMSG_BATTLEFIELD_STATUS average-wait field (BattlegroundQueue.cpp:266).
 	bgWaitMu    sync.Mutex
 	bgWaitTimes map[bgWaitKey]*bgQueueWaitRing
+	// bgClientIDsMu/bgClientIDs/bgClientIDByInstance mirror BattlegroundMgr's
+	// m_ClientBattlegroundIds (BattlegroundMgr.cpp:325-348): claimed
+	// client-visible instance ids per battleground type and bracket, plus
+	// the sim-internal-id -> client-id share map that keeps one group pop
+	// on the one client id of its single battleground (C++ invites the
+	// group to the one battleground CreateNewBattleground returns). Ids
+	// are never released: C++ frees them only when the battleground
+	// object is deleted, and the sim has no battleground lifecycle past
+	// the invite dialog.
+	bgClientIDsMu        sync.Mutex
+	bgClientIDs          map[bgClientIDKey][]uint32
+	bgClientIDByInstance map[uint32]uint32
 	// spellBonusOnce/spellBonus mirror SpellMgr::mSpellBonusMap
 	// (SpellMgr.cpp:1888): spell_bonus_data rows cached on first use by
 	// Server.spellBonusData, for the damage-done coefficient leg.
@@ -727,6 +739,7 @@ type bgQueueEntry struct {
 	BgTypeID         uint32
 	ResolvedBgTypeID uint32 // random-BG resolution: SetRandomTypeID (BattlegroundMgr.cpp:421), 0 = unresolved or non-random
 	InstanceID       uint32
+	ClientInstanceID uint32 // client-visible id: Battleground::GetClientInstanceID (BattlegroundMgr.cpp:325-348, display-only); InstanceID is GetInstanceID, the invited/internal id (BattlegroundQueue.cpp:442). The status packet carries this field, never InstanceID.
 	JoinTime         time.Time
 	Status           uint32
 	ArenaType        uint8
