@@ -316,6 +316,18 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 		return
 	}
 	if spawn.TransportGUID != 0 {
+		// Transport passengers keep frame-computed positions (the tick
+		// relocates them from the current frame, fresher than the motion
+		// record), but health/flags/faction must still come from the live
+		// motion: the streaming paths otherwise build create blocks from
+		// static spawn health, so a killed passenger reappears alive to
+		// every late observer. C++ keeps the corpse in _staticPassengers
+		// until RemoveCorpse (Transport.cpp RemovePassenger, Object.cpp
+		// removal arm), sliding at health 0; buildCreatureUpdate forces
+		// the lootable flag when Health == 0.
+		if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
+			spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+		}
 		return
 	}
 	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {

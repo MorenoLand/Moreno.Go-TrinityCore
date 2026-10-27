@@ -528,6 +528,7 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		stats := s.loadCreatureStats(ctx, passenger.Entry)
 		passenger.BoundingRadius, passenger.CombatReach, passenger.MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		passenger.Health = creatureSpawnHealth(passenger.RegenerateHealth, passenger.Health, stats.MaxHealth)
+		s.applyCreatureMotionToSpawn(*observer.player, &passenger)
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, passenger, observer))
 	}
 	for _, passenger := range transport.passengerObjects() {
@@ -605,6 +606,7 @@ func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, sta
 		stats := s.loadCreatureStats(ctx, passenger.Entry)
 		passenger.BoundingRadius, passenger.CombatReach, passenger.MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		passenger.Health = creatureSpawnHealth(passenger.RegenerateHealth, passenger.Health, stats.MaxHealth)
+		s.applyCreatureMotionToSpawn(state, &passenger)
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, passenger, observer))
 	}
 	for _, passenger := range transport.passengerObjects() {
