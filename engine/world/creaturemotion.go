@@ -4349,7 +4349,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// damage legs iterate (areaHits for a player, areaCreatureHits for
 			// a live motion; a static spawn rides the packet only). Dedup
 			// against hitTargets covers the re-sweep (it appends to both lists).
-			// GO wire primaries stay out (AddGOTarget arm).
+			// A GO wire primary joins hitTargets only under the AddGOTarget arm (Spell.cpp:2193),
+			// deduped (C++ merges the effect mask on a duplicate): it takes no leg list, like a
+			// GO-nearby pick — the verdicts and damage legs below iterate the leg lists only, so it
+			// rides the packet untouched and never rolls.
 			if inlineSpellKnown && (isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) || isFriendlyNearbySpell(inlineSpell)) && spellHasTargetObjectEffect(inlineSpell) {
 				anchor := spellTarget.UnitGUID
 				if anchor != 0 && uint16(anchor>>48) != 0xF110 {
@@ -4380,6 +4383,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						if !playerJoined && s.findCreatureMotion(motion.Map, motion.InstanceID, anchor) != nil {
 							areaCreatureHits = append(areaCreatureHits, anchor)
 						}
+					}
+				}
+				if anchor != 0 && uint16(anchor>>48) == 0xF110 {
+					goInList := false
+					for _, guid := range hitTargets {
+						if guid == anchor {
+							goInList = true
+							break
+						}
+					}
+					if !goInList {
+						hitTargets = append(hitTargets, anchor)
 					}
 				}
 			}

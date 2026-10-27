@@ -3948,7 +3948,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// The rejoin mirrors the twin port: a primary already in the list keeps
 	// its place (it equals a pick), otherwise it joins ahead of the
 	// aura-scaling arm and the verdict passes below and rolls like any
-	// implicit target. GO wire primaries stay out (AddGOTarget arm).
+	// implicit target. A GO wire primary joins hitTargets the same way under the AddGOTarget arm
+	// (Spell.cpp:2193), deduped (C++ merges the effect mask on a duplicate): it rides the
+	// aura-scaling and verdict passes like a GO-nearby pick, which resolve no session or motion
+	// for it, and lands in the GO packet.
 	if (isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) || isHostileNearbySpell(spell) || isFriendlyNearbySpell(spell)) && spellHasTargetObjectEffect(spell) {
 		anchor := target.UnitGUID
 		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
@@ -3960,6 +3963,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				}
 			}
 			if !primaryInList {
+				hitTargets = append(hitTargets, anchor)
+			}
+		}
+		if anchor != 0 && uint16(anchor>>48) == 0xF110 {
+			goInList := false
+			for _, guid := range hitTargets {
+				if guid == anchor {
+					goInList = true
+					break
+				}
+			}
+			if !goInList {
 				hitTargets = append(hitTargets, anchor)
 			}
 		}

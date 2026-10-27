@@ -1916,7 +1916,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// (30260b42): a primary already in the list keeps its place (it equals
 		// a pick or an area re-add), otherwise it joins ahead of the verdict
 		// loop below and rolls immune/evade/reflect/miss/IMMUNE2 like any
-		// implicit target. GO wire primaries stay out (AddGOTarget arm).
+		// implicit target. A GO wire primary joins hitTargets the same way under the AddGOTarget arm
+		// (Spell.cpp:2193): deduped against hitTargets (C++ merges the effect mask on a duplicate,
+		// never double-lists), riding the verdict loop inertly like a GO-nearby pick — GO targets never
+		// roll SpellHitResult in C++ — and landing in the GO packet.
 		if (isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) || isHostileNearbySpell(spellInfo) || isFriendlyNearbySpell(spellInfo)) && spellHasTargetObjectEffect(spellInfo) {
 			anchor := spellTarget.UnitGUID
 			if anchor != 0 && uint16(anchor>>48) != 0xF110 {
@@ -1928,6 +1931,18 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					}
 				}
 				if !primaryInList {
+					hitTargets = append(hitTargets, anchor)
+				}
+			}
+			if anchor != 0 && uint16(anchor>>48) == 0xF110 {
+				goInList := false
+				for _, guid := range hitTargets {
+					if guid == anchor {
+						goInList = true
+						break
+					}
+				}
+				if !goInList {
 					hitTargets = append(hitTargets, anchor)
 				}
 			}
