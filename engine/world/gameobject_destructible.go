@@ -331,6 +331,67 @@ func spellGameObjectTargetGUID(target protocol.SpellTargetData) uint64 {
 	return 0
 }
 
+// spellOnlyGameObjectDamageEffects reports whether every real effect of the
+// spell is a gameobject-damage-family effect (87/88/89): C++ AddGOTarget
+// (Spell.cpp:2193) strips exactly those bits from a non-destructible GO's
+// mask, so for such a spell no non-destructible GO survives into
+// m_UniqueGOTargetInfo — and UpdateSpellCastDataTargets (Spell.cpp:4512)
+// writes only that list into the packet's HitTargets. Effect 0 is not a
+// real effect (SpellEffectInfo::IsEffect, SpellInfo.cpp:360).
+func spellOnlyGameObjectDamageEffects(spell wotlk.Spell) bool {
+	found := false
+	for i := range spell.Effects {
+		eff := spell.Effects[i].Effect
+		if eff == 0 {
+			continue
+		}
+		if eff != spellEffectGameObjectDamage && eff != spellEffectGameObjectRepair && eff != spellEffectGameObjectSetDestructionState {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// gameObjectIsDestructibleBuilding is the type-only half of the AddGOTarget
+// gate (Spell.cpp:2193): the live dynamic type, else the static template
+// type. It deliberately does NOT reuse destructibleHealthFor, which also
+// requires a health model — a destructible building with no health record
+// still survives the mask strip in C++.
+func (s *Server) gameObjectIsDestructibleBuilding(ctx context.Context, mapID, instanceID uint32, goGUID uint64) bool {
+	if s == nil || goGUID == 0 {
+		return false
+	}
+	if dyn := s.gameObjectState(mapID, instanceID, goGUID); dyn != nil {
+		return dyn.Type == GameObjectTypeDestructibleBuilding
+	}
+	_, ok := s.destructibleBuildingTemplate(ctx, uint32(goGUID>>24)&0xFFFFFF)
+	return ok
+}
+
+// filterNonDestructibleGOPacketTargets drops non-destructible-building GO
+// GUIDs from a spell GO packet's hit list for damage-family-only spells,
+// mirroring the AddGOTarget mask strip (Spell.cpp:2193): such GOs never
+// reach m_UniqueGOTargetInfo, so UpdateSpellCastDataTargets (Spell.cpp:4512)
+// never writes them into HitTargets. Every other spell passes through
+// untouched, and the effect legs keep their own sink gate
+// (modifyDestructibleHealth / setDestructibleBuildingState no-op on a
+// non-destructible GO), so only the packet list is filtered here — never
+// hitTargets itself. The wire GO's packet target field is untouched.
+func (s *Server) filterNonDestructibleGOPacketTargets(ctx context.Context, mapID, instanceID uint32, spell wotlk.Spell, hits []uint64) []uint64 {
+	if s == nil || !spellOnlyGameObjectDamageEffects(spell) {
+		return hits
+	}
+	out := make([]uint64, 0, len(hits))
+	for _, guid := range hits {
+		if guid != 0 && uint16(guid>>48) == 0xF110 && !s.gameObjectIsDestructibleBuilding(ctx, mapID, instanceID, guid) {
+			continue
+		}
+		out = append(out, guid)
+	}
+	return out
+}
+
 // spellEffectGOTargets mirrors the Spell::GOTargetInfo::DoTargetSpellHit
 // iteration (Spell.cpp:2663): HandleEffects runs once per gameobject target
 // — the explicit wire target plus every implicit GO target riding hitTargets

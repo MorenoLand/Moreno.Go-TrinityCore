@@ -10625,6 +10625,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			packetHitTargets = append(packetHitTargets, guid)
 		}
 	}
+	// AddGOTarget mask strip (Spell.cpp:2193): a damage-family-only spell
+	// never lists a non-destructible GO in the packet HitTargets.
+	packetHitTargets = s.server.filterNonDestructibleGOPacketTargets(ctx, s.player.Map, s.player.InstanceID, spell, packetHitTargets)
 	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
@@ -17687,6 +17690,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		goHitTargets = append(goHitTargets, guid)
 	}
 	goTarget := spellGoPacketTarget(spell, spellTarget)
+	// AddGOTarget mask strip (Spell.cpp:2193), triggered-path twin of the
+	// finishSpellCast filter.
+	goHitTargets = s.server.filterNonDestructibleGOPacketTargets(ctx, s.player.Map, s.player.InstanceID, spell, goHitTargets)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
 		var goExtras protocol.SpellGoTrailerExtras
 		if castFlags&protocol.SpellCastFlagAmmo != 0 {

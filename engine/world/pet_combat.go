@@ -4268,6 +4268,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// rest of _cast still runs below — cooldown, spell_linked, procs —
 	// like the twin.
 	if !triggered || spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
+		// AddGOTarget mask strip (Spell.cpp:2193), pet-path twin of the
+		// player-path filter.
+		packetHits = s.server.filterNonDestructibleGOPacketTargets(ctx, motion.Map, motion.InstanceID, spell, packetHits)
 		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 			return false

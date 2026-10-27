@@ -4596,6 +4596,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// AddGOTarget mask strip (Spell.cpp:2193), inline-path twin of the
+			// player-path filter.
+			packetHits = s.filterNonDestructibleGOPacketTargets(ctx, motion.Map, motion.InstanceID, inlineSpell, packetHits)
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)

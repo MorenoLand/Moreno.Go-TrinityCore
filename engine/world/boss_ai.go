@@ -2153,6 +2153,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				packetHits = append(packetHits, guid)
 			}
 		}
+		// AddGOTarget mask strip (Spell.cpp:2193), twin-path twin of the
+		// player-path filter.
+		packetHits = s.filterNonDestructibleGOPacketTargets(ctx, m.Map, m.InstanceID, spellInfo, packetHits)
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
