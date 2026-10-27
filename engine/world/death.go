@@ -675,12 +675,31 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		s.resetAchievementCriteriaByCondition(criteriaConditionNoDeath, 0)
 	}
 	if s.server != nil {
-		s.server.handleWSGPlayerDeath(s)
-		s.server.handleEOTSPlayerDeath(s)
-		s.server.handleAVPlayerDeath(s)
-		s.server.handleSAPlayerDeath(s)
-		s.server.handleICPlayerDeath(s)
-		s.server.handleArenaPlayerDeath(s)
+		// Unit::Kill battleground tail (Unit.cpp:11446-11455): bg
+		// HandleKillPlayer runs only for a killer-side player who is
+		// InBattleground (Player.h:1906: bgInstanceID != 0) with a live
+		// battleground — the victim-map dispatch below used to fire on
+		// any death on a BG map, so a wild-creature or environment kill
+		// of a BG-map player decremented AV/IC reinforcements and
+		// dropped WSG/EOTS flags where C++ fires nothing (player is
+		// nil), and a killer with no BG instance (GM-teleported pair
+		// on a BG map) fired the same arms. Suicide is NOT excluded:
+		// the tail gates on player only, so a self-kill still runs
+		// HandleKillPlayer. SA has no C++ override (base scores only,
+		// unmodeled in Go), so its no-op call rides the same gate.
+		// The manager-lookup-miss half of GetBattleground() has no Go
+		// equivalent (per-map state is getOrCreate), the HandleKillUnit
+		// residual. WG is NOT gated here: Battlefield HandleKill is
+		// the separate player && attacker != victim arm and its handler
+		// already nil-gates the killer.
+		if killer != nil && killer.bgData.InstanceID != 0 {
+			s.server.handleWSGPlayerDeath(s)
+			s.server.handleEOTSPlayerDeath(s)
+			s.server.handleAVPlayerDeath(s)
+			s.server.handleSAPlayerDeath(s)
+			s.server.handleICPlayerDeath(s)
+			s.server.handleArenaPlayerDeath(s)
+		}
 		s.server.handleWGPlayerDeath(s, killer)
 	}
 	// Unit::Kill proc legs (Unit.cpp:11257-11272) and the per-kill
