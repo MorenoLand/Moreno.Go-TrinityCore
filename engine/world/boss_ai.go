@@ -2169,6 +2169,50 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectQuestComplete (SpellEffects.cpp:4371) +
+	// EffectQuestClear (:4611) + EffectQuestFail (:5283) +
+	// EffectQuestStart (:5294) + EffectReputation (:4349) +
+	// EffectAddHonor (:2661) + EffectKillCreditPersonal (:5253) +
+	// EffectKillCredit (:5264) + EffectSkillStep (:2637) +
+	// EffectEnvironmentalDMG (:306) for a creature caster: the
+	// HIT_TARGET arms, grouped with the other effect-grouped arms
+	// above. The quest/reputation/kill-credit/skill-step legs run on
+	// the player hit target's own session (the helpers resolve the
+	// target themselves); the honor leg is a creature-caster twin of
+	// the session helper because that helper reads the caster's level
+	// for the rolled damage, and a creature cast carries no cast item,
+	// so only the non-item leg fires. Stay-outs, all verified against
+	// the C++ bodies this tick: dummy 3 (the pet-aura leg is
+	// player-caster-only and the remaining leg is the ScriptsStart
+	// script-executor call, which has no Go model); tame 55
+	// (hunter-class gate plus CreateTamedPetFrom/SetMinion/talent
+	// init, unmodeled for creature casters); summon-pet 56 (the
+	// owner-player and totem-owner legs need a player owner, and the
+	// ownerless leg is the properties-67 SummonGuardian arm that
+	// creatureEffectSummonType already skips as unmodeled); skill 118
+	// (the C++ body is a log line only); GO arms 86-89 (they need a
+	// gameObjTarget, and this path's spellTarget is unit-wire only);
+	// the totem family rides the creatureEffectSummonType TOTEM leg
+	// already (totem pulses stay out, as documented there). Gated on
+	// spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
+				s.creatureEffectQuest(ctx, m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectReputation:
+				s.creatureEffectReputation(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectAddHonor:
+				s.creatureEffectAddHonor(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectKillCredit, spellEffectKillCreditGroup:
+				s.creatureEffectKillCredit(ctx, m, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectSkillStep:
+				s.creatureEffectSkillStep(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectEnvironmentalDamage:
+				s.creatureEffectEnvironmentalDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -4888,6 +4932,278 @@ func (s *Server) creatureEffectSanctuary(ctx context.Context, m *creatureMotion,
 		mapID, instanceID := motion.Map, motion.InstanceID
 		s.motionMu.Unlock()
 		s.zeroThreatOnAllLists(mapID, instanceID, guid)
+	}
+}
+
+// creatureEffectQuest mirrors Spell::EffectQuestComplete
+// (SpellEffects.cpp:4371), EffectQuestClear (:4611), EffectQuestFail
+// (:5283) and EffectQuestStart (:5294) for a creature caster: the
+// HIT_TARGET arms, each running on the player hit target's own
+// session (the helpers resolve the target themselves, so the
+// receiver session here is only a vehicle). Non-player targets fall
+// through the C++ ToPlayer gates via the session lookup.
+func (s *Server) creatureEffectQuest(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectQuestComplete:
+			if eff.MiscValue != 0 {
+				targetSess.completeQuestFromSpell(ctx, uint32(eff.MiscValue))
+			}
+		case spellEffectQuestClear:
+			targetSess.handleEffectQuestClear(ctx, eff, []uint64{guid})
+		case spellEffectQuestFail:
+			targetSess.handleEffectQuestFail(ctx, eff, []uint64{guid})
+		case spellEffectQuestStart:
+			targetSess.handleEffectQuestStart(ctx, eff, []uint64{guid})
+		}
+	}
+}
+
+// creatureEffectReputation mirrors Spell::EffectReputation
+// (SpellEffects.cpp:4349) for a creature caster: the HIT_TARGET arm,
+// running on the player hit target's own session with the rolled
+// damage at the caster's level (the session helper's faction-entry
+// gate is twinned here against the Faction file, since the helper
+// itself is a session method).
+func (s *Server) creatureEffectReputation(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || eff.MiscValue == 0 {
+		return
+	}
+	if s.Data != nil {
+		if file, err := s.Data.File("Faction"); err == nil && file != nil {
+			if _, ok := file.Find(uint32(eff.MiscValue)); !ok {
+				return
+			}
+		}
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, uint32(m.Level)))
+	}
+}
+
+// creatureEffectAddHonor mirrors Spell::EffectAddHonor
+// (SpellEffects.cpp:2661) for a creature caster: the HIT_TARGET arm.
+// It is a creature-caster twin of the session helper rather than a
+// call to it, because that helper reads the rolled damage at the
+// receiver's (caster's) level — on this path the caster is the
+// creature, so the damage rolls at m.Level. A creature cast carries
+// no cast item, so only the non-item leg fires (damage/10 item leg
+// stays out); the damage<=50 ceil formula and the flat leg match
+// the helper exactly, as does the zero-honor fields-only tail.
+func (s *Server) creatureEffectAddHonor(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		var honor uint32
+		switch {
+		case damage <= 50:
+			if damage > 0 {
+				honor = uint32(math.Ceil(float64(float32(targetSess.player.Level) * 1.55 * float32(damage))))
+			}
+		default:
+			if damage > 0 {
+				honor = uint32(damage)
+			}
+		}
+		if honor == 0 {
+			targetSess.updateHonorFields()
+			continue
+		}
+		targetSess.rewardHonorPoints(ctx, honor)
+	}
+}
+
+// creatureEffectKillCredit mirrors Spell::EffectKillCreditPersonal
+// (SpellEffects.cpp:5253) and EffectKillCredit (:5264) for a
+// creature caster: the HIT_TARGET arms, each running on the player
+// hit target's own session, which is also the group-credit anchor
+// (the helpers resolve the target to the receiver session itself).
+func (s *Server) creatureEffectKillCredit(ctx context.Context, m *creatureMotion, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectKillCredit:
+			targetSess.handleEffectKillCredit(ctx, guid, eff.MiscValue)
+		case spellEffectKillCreditGroup:
+			targetSess.handleEffectKillCreditGroup(ctx, guid, spellID, eff.MiscValue)
+		}
+	}
+}
+
+// creatureEffectSkillStep mirrors Spell::EffectLearnSkill
+// (SpellEffects.cpp:2637) for a creature caster: the HIT_TARGET arm,
+// running on the player hit target's own session with the rolled
+// damage at the caster's level. The C++ player-only gate rides the
+// session lookup, and the damage<0 gate rides the helper.
+func (s *Server) creatureEffectSkillStep(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.applySkillStepEffect(ctx, spell, eff, uint32(m.Level), guid)
+	}
+}
+
+// creatureEffectEnvironmentalDamage mirrors Spell::EffectEnvironmentalDMG
+// (SpellEffects.cpp:306) for a creature caster: the HIT_TARGET arm.
+// Player hit targets ride their own session's environmentalDamage
+// with the rolled damage at the caster's level; creature hit targets
+// ride the session helper's creature leg, adapted to a creature
+// caster (resist at m.Level, no caster spell-mod or penetration
+// legs, the caster's own GUID on the log, broadcast to the caster's
+// visible set). Like C++ and the session helper, the creature leg
+// sends only the non-melee damage log — no health lands, because
+// EffectEnvironmentalDMG never calls DealDamage for unit targets.
+func (s *Server) creatureEffectEnvironmentalDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	damage := uint32(eff.CalcValueForLevel(spell, uint32(m.Level)))
+	schoolMask := uint8(spell.SchoolMask)
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.environmentalDamage(ctx, damageFire, damage)
+			continue
+		}
+		if uint16(guid>>48) != 0xF130 {
+			continue
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil {
+			s.motionMu.Unlock()
+			continue
+		}
+		alive := motion.Health > 0
+		victimHealth := motion.Health
+		resistances := motion.Resistances
+		level := motion.Level
+		victimArmor := motion.Armor
+		key := creatureAuraKeyForMotion(motion)
+		s.motionMu.Unlock()
+		if !alive {
+			continue
+		}
+		var resisted uint32
+		if schoolMask > 1 {
+			resistances = s.petFoldedResistances(key, resistances)
+			isHybrid := spell.SchoolMask&1 != 0 && spell.SchoolMask&0x7E != 0
+			hybridArmorReduced := uint32(0)
+			if isHybrid {
+				hybridArmorReduced = calcArmorReducedDamage(float64(victimArmor), uint8(m.Level), uint8(level), damage, 0)
+			}
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(m.Level), uint8(level), true, false, 0, spellResistInput{
+				ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+				binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+				hybrid:             isHybrid,
+				hybridArmorReduced: hybridArmorReduced,
+			})
+		}
+		var absorbed uint32
+		bypass := absorbIgnoreBypass(damage, 0)
+		var soakable uint32
+		if resisted+bypass < damage {
+			soakable = damage - resisted - bypass
+		}
+		absorbed, _ = s.applyCreatureAbsorptionShields(key, soakable, schoolMask)
+		remaining := damage
+		if resisted+absorbed < remaining {
+			remaining -= resisted + absorbed
+		} else {
+			remaining = 0
+		}
+		if remaining > 0 {
+			preSplit := remaining
+			remaining = s.splitDamageToCaster(ctx, guid, false, key, m.GUID, remaining, uint32(schoolMask))
+			absorbed += preSplit - remaining
+		}
+		overkill := uint32(0)
+		if remaining > victimHealth {
+			overkill = remaining - victimHealth
+		}
+		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spellID, remaining, overkill, schoolMask, absorbed, resisted, 0)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	}
 }
 
