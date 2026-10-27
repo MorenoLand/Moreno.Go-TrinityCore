@@ -257,6 +257,13 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		// deserter-track arm still fires (Player.cpp:22499). The
 		// CONFIG_BATTLEGROUND_CAST_DESERTER spell cast (Player.cpp:22479) and
 		// the DELAYED_SPELL_CAST_DESERTER schedule have no Go twin.
+		// Resolve the arena roster BEFORE the leave arm below: the leave
+		// funnel deletes the PlayerTeams entry, and C++ gates this arm on
+		// the map being left (mEntry), not on surviving BG membership.
+		var leavingArena *arenaBattlegroundState
+		if s.server != nil {
+			leavingArena = s.server.findArenaStateForPlayer(s.playerGUID)
+		}
 		if bgMap := s.activeBattlegroundMap(); s.bgData.InstanceID != 0 && bgMap != 0 && bgMap != mapID {
 			s.handleLeaveBattlefield(context.Background(), nil, false, true)
 		}
@@ -265,8 +272,11 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		// filter, Player.cpp:3942-3955), except for game masters. The
 		// RemoveArenaAuras twin stays a standing no-bridge: its aura
 		// positivity / spell-attribute filter (Unit.cpp:4329-4343) has no Go
-		// model.
-		if IsArenaMap(s.player.Map) && !sessionIsGameMaster(s) {
+		// model. A sim roster member stands off the arena map (no-bridge
+		// port), so the map leg alone misses them: the roster leg is the
+		// admitted-player analog of mEntry, destination-guarded so a
+		// teleport onto the match map itself does not reset.
+		if (IsArenaMap(s.player.Map) || (leavingArena != nil && leavingArena.MapID != mapID)) && !sessionIsGameMaster(s) {
 			s.removeArenaSpellCooldowns()
 		}
 	}

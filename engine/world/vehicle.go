@@ -1289,7 +1289,7 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 	if err != nil || vehGUID == 0 {
 		return true
 	}
-	if s.server == nil || IsArenaMap(s.player.Map) {
+	if s.server == nil || IsArenaMap(s.player.Map) || s.server.findArenaStateForPlayer(s.playerGUID) != nil {
 		return true
 	}
 	target := s.server.findSessionByGUID(vehGUID)
