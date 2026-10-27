@@ -9716,8 +9716,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the list leg is shadowed), and its chain anchor is the same wire unit
 	// target — while the friendly-list block requires !areaSpell and the plain
 	// block requires !friendlyListSpell, so the combined shape lost chain to
-	// both gates. A GO wire target still resolves no anchor here (unit-only
-	// anchor resolution, the GO-wire census); only a unit wire target chains.
+	// both gates. A GO wire target anchors at its position via
+	// gameObjectAnchorPosition (live state, else the static DB row); an
+	// unresolvable GO anchor chains nothing and takes no unit verdict roll.
 	// Jumps already in the area list are skipped with no falloff index (the
 	// twin/triggered dedupe convention); the flat list over-hits the
 	// primary with the area effect, the standing mixed-effect approximation.
@@ -9738,6 +9739,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				anchor = target.UnitGUID
 			}
+			anchorIsGO := anchor != 0 && uint16(anchor>>48) == 0xF110
+			if anchorIsGO {
+				// A gameobject wire target anchors chain jumps at its position
+				// (Spell.cpp:1575 -> 1891, via gameObjectAnchorPosition); an
+				// unresolvable one chains nothing, so it never takes the unit
+				// verdict arms below — C++ keeps gameobject targets in
+				// m_UniqueGOTargetInfo with no miss roll (AddGOTarget,
+				// Spell.cpp:2193).
+				if _, _, _, ok := s.server.gameObjectAnchorPosition(ctx, anchor, s.player.Map, s.player.InstanceID); !ok {
+					anchor = 0
+				}
+			}
 			if anchor != 0 {
 				primaryInList := false
 				for _, guid := range hitTargets {
@@ -9746,7 +9759,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						break
 					}
 				}
-				if !primaryInList {
+				if !primaryInList && anchorIsGO {
+					// No unit verdict roll for a gameobject primary
+					// (m_UniqueGOTargetInfo, Spell.cpp:2193); it joins the flat
+					// hit list so the chain effect's gameobject legs see it,
+					// the same flat-list approximation the unit primary
+					// already takes with the sibling area/list effect.
+					hitTargets = append(hitTargets, anchor)
+				}
+				if !primaryInList && !anchorIsGO {
 					var primarySess *session
 					if s.server != nil {
 						primarySess = s.server.findSessionByGUID(anchor)
@@ -9825,7 +9846,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// own nearby pick, which no list branch selects — that shape stays out
 	// (nearby pick helpers are spell-wide/first-effect-scoped, the
 	// area+nearby census). GO-area/cone lists stay out too: their hitTargets
-	// hold gameobject GUIDs and the GO-wire anchor needs its own census.
+	// hold gameobject GUIDs and no chain block runs for them — but a wire
+	// GO anchor on a friendly-list spell now resolves like the area block's.
 	// A primary already in the list keeps the list roll's verdict (C++ merges
 	// it into one m_UniqueTargetInfo entry; list members roll reflect via
 	// rollAreaTargetReflect above); otherwise it rolls the wire arms
@@ -9851,6 +9873,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				anchor = target.UnitGUID
 			}
+			anchorIsGO := anchor != 0 && uint16(anchor>>48) == 0xF110
+			if anchorIsGO {
+				// A gameobject wire target anchors chain jumps at its position
+				// (Spell.cpp:1575 -> 1891, via gameObjectAnchorPosition); an
+				// unresolvable one chains nothing, so it never takes the unit
+				// verdict arms below — C++ keeps gameobject targets in
+				// m_UniqueGOTargetInfo with no miss roll (AddGOTarget,
+				// Spell.cpp:2193).
+				if _, _, _, ok := s.server.gameObjectAnchorPosition(ctx, anchor, s.player.Map, s.player.InstanceID); !ok {
+					anchor = 0
+				}
+			}
 			if anchor != 0 {
 				primaryInList := false
 				for _, guid := range hitTargets {
@@ -9859,7 +9893,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						break
 					}
 				}
-				if !primaryInList {
+				if !primaryInList && anchorIsGO {
+					// No unit verdict roll for a gameobject primary
+					// (m_UniqueGOTargetInfo, Spell.cpp:2193); it joins the flat
+					// hit list so the chain effect's gameobject legs see it,
+					// the same flat-list approximation the unit primary
+					// already takes with the sibling area/list effect.
+					hitTargets = append(hitTargets, anchor)
+				}
+				if !primaryInList && !anchorIsGO {
 					var primarySess *session
 					if s.server != nil {
 						primarySess = s.server.findSessionByGUID(anchor)

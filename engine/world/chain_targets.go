@@ -131,6 +131,38 @@ type chainCandidate struct {
 	reach   float32 // combat reach: IsWithinDist adds both ends' reaches (Object.cpp:1147)
 }
 
+// gameObjectAnchorPosition resolves a gameobject GUID to a chain-anchor
+// position: Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575)
+// chains from the explicit object target whatever its type, so a
+// gameobject wire target anchors SearchChainTargets (Spell.cpp:1891) at
+// the gameobject's position while the jumps themselves stay units
+// (SelectImplicitChainTargets adds only ToUnit results, Spell.cpp:1622).
+// A live dynamic state (summoned gameobjects, materialized static spawns)
+// wins over the static DB row, which carries no instance; a gameobject
+// with neither stays unresolvable and chains nothing. Gameobjects carry
+// no combat reach (GameObject::Create never sets one), so callers use a
+// synthetic anchor reach of 0 — C++ IsWithinDist (Object.cpp:1171) then
+// measures from the gameobject's center plus the jump candidate's reach.
+func (s *Server) gameObjectAnchorPosition(ctx context.Context, guid uint64, mapID, instanceID uint32) (x, y, z float32, ok bool) {
+	if s == nil || uint16(guid>>48) != 0xF110 {
+		return 0, 0, 0, false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if st := s.gameObjectState(mapID, instanceID, guid); st != nil {
+		return st.X, st.Y, st.Z, true
+	}
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var goMap int64
+		var gx, gy, gz float64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM gameobject WHERE guid = ?", uint32(guid&0xFFFFFF)).Scan(&goMap, &gx, &gy, &gz); err == nil && uint32(goMap) == mapID {
+			return float32(gx), float32(gy), float32(gz), true
+		}
+	}
+	return 0, 0, 0, false
+}
+
 // spellSearchChainTargets ports Spell::SearchChainTargets (Spell.cpp:1891).
 // Starting from the primary target, it finds up to jumps additional units the
 // spell jumps to, in jump order. Chain Heal picks the highest HP deficit within
@@ -142,6 +174,17 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 		return nil
 	}
 	primary, ok := s.getCombatTarget(ctx, primaryTargetGUID)
+	if !ok {
+		// A gameobject primary anchors the search at its position
+		// (Spell.cpp:1575 -> 1891); unit-only resolution dropped every
+		// jump for such spells. The synthetic anchor carries no combat
+		// reach and no health — the search reads only its position,
+		// map/instance, and reach.
+		if gx, gy, gz, goOK := s.server.gameObjectAnchorPosition(ctx, primaryTargetGUID, s.player.Map, s.player.InstanceID); goOK {
+			primary = combatTarget{GUID: primaryTargetGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: gx, Y: gy, Z: gz}
+			ok = true
+		}
+	}
 	if !ok {
 		return nil
 	}
@@ -435,6 +478,14 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 		return nil
 	}
 	primary, ok := s.combatTargetByGUID(ctx, m.Map, m.InstanceID, primaryTargetGUID)
+	if !ok {
+		// Gameobject primary, same as the session twin: the search
+		// anchors at the gameobject's position with zero reach.
+		if gx, gy, gz, goOK := s.gameObjectAnchorPosition(ctx, primaryTargetGUID, m.Map, m.InstanceID); goOK {
+			primary = combatTarget{GUID: primaryTargetGUID, Map: m.Map, InstanceID: m.InstanceID, X: gx, Y: gy, Z: gz}
+			ok = true
+		}
+	}
 	if !ok {
 		return nil
 	}
