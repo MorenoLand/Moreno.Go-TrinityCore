@@ -4055,6 +4055,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
 		}
 	}
+	// Spell::EffectPersistentAreaAura (SpellEffects.cpp:1738) on the
+	// pet path, same dispatch-ahead-of-damage position as the twin and
+	// inline blocks: the HIT arm, once per cast — the helper itself
+	// keeps only the last 27 effect, matching C++'s early return on
+	// earlier ones. Previously a pet-cast spell carrying effect 27
+	// spawned no dynobj server-side (non-pet creature casts ride the
+	// twin). The center reads back out of the resolved destination
+	// above (caster position when the spell carries no dest-family
+	// target, like the twin).
+	s.server.creatureEffectPersistentAreaAura(ctx, motion, spell, hasDest, dx, dy, dz)
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
