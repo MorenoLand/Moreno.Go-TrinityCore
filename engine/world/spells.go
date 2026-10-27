@@ -17162,9 +17162,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// A missed jump rolls like any target below (jumps join triggeredRollTargets
 	// deduped against the area list) and rides the GO miss trailer.
 	chainJumpGUIDs := []uint64{}
+	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575) adds the
+	// explicit unit target itself via AddUnitTarget ahead of the chain
+	// search, so a mixed area+chain spell's wire unit primary is a merged
+	// m_UniqueTargetInfo entry even when the area switch below replaces
+	// hitTargets. It rejoins the roll list, the chain-effect fan-out, the
+	// aura-break pass, and the AOE cap below. A gameobject anchor takes
+	// the AddGOTarget arm instead, so only unit primaries rejoin; the
+	// GO-primary case stays out.
+	chainUnitPrimary := uint64(0)
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)
 		hitTargets = append(hitTargets, chainJumpGUIDs...)
+		if uint16(targetGUID>>48) != 0xF110 {
+			chainUnitPrimary = targetGUID
+		}
 	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
 	// casts too — SelectSpellTargets carries no IsTriggered gate, so the
@@ -17357,6 +17369,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, jumpGUID)
 		}
 	}
+	// The wire unit primary rejoins the same way: the area/cone switch
+	// replaced hitTargets, dropping it from the roll list and the GO
+	// packet even though C++ holds it as a merged entry (Spell.cpp:1575,
+	// AddUnitTarget merge at :2117). Dedup keeps the already-listed
+	// cases (non-area spells, nearby picks, primaries inside the area
+	// list) unchanged, and the threat leg below reads the rejoined list.
+	if chainUnitPrimary != 0 {
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[chainUnitPrimary]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, chainUnitPrimary)
+		}
+	}
 	for _, guid := range triggeredRollTargets {
 		if guid == 0 || guid == s.playerGUID {
 			continue
@@ -17511,6 +17538,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		s.breakHitBySpellAuras(ctx, spell, jumpGUID)
+	}
+	// The rejoined primary breaks auras like any merged entry
+	// (PreprocessTarget runs per m_UniqueTargetInfo entry, Spell.cpp:2334);
+	// a primary already in the selection list breaks once, via that list.
+	if chainUnitPrimary != 0 {
+		if _, dup := selectionSet[chainUnitPrimary]; !dup {
+			if _, missed := triggeredMiss[chainUnitPrimary]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, chainUnitPrimary)
+			}
+		}
 	}
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
@@ -17724,6 +17761,35 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
+		// The wire unit primary threads into every chain-eligible effect
+		// with jumpIndex 0 (unscaled, like a seed entry): C++ adds it with
+		// the effect's own mask (Spell.cpp:1575), independent of the jump
+		// search gate, so it threads even for effects whose own
+		// ChainTarget is 1 and even when the shared search found no jumps.
+		// Dedup vs the seed keeps primaries already in the area/friendly
+		// list single-listed; miss handling mirrors the jumps above.
+		if chainUnitPrimary != 0 && (chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
+			if _, dup := seedSet[chainUnitPrimary]; !dup {
+				target := chainUnitPrimary
+				reflected := false
+				take := true
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+						reflected = true
+						target = s.playerGUID
+					} else {
+						take = false
+					}
+				}
+				if take {
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, reflected: reflected})
+				}
+			}
+		}
 		// Spell::DoEffectOnLaunchTarget AOE legs (Spell.cpp:7749-7758) run
 		// per effect for area-targeting damage effects: the victim's
 		// Unit::CalculateAOEAvoidance product per target, and for player
@@ -17731,8 +17797,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// whole unique target list, hits and misses). targetAmount is
 		// m_UniqueTargetInfo.size(): Spell::AddUnitTarget (Spell.cpp:2189)
 		// has exactly one emplace_back per target, so the unique union of
-		// hitTargets and chainJumpGUIDs — reflectors included — is the
-		// complete count. A clean reflect does NOT add a second entry.
+		// hitTargets, chainJumpGUIDs, and the rejoined wire primary —
+		// reflectors included — is the complete count. A clean reflect
+		// does NOT add a second entry.
 		areaDmgEffect := eff.Effect == 2 && (spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect))
 		aoeCapDivisor := 0
 		if areaDmgEffect {
@@ -17761,6 +17828,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 				counted[guid] = struct{}{}
 				aoeCapDivisor++
+			}
+			// The rejoined primary counts too: targetAmount is the whole
+			// m_UniqueTargetInfo size (Spell.cpp:7755), and the primary is
+			// a merged entry (Spell.cpp:1575), not a jump.
+			if chainUnitPrimary != 0 && chainUnitPrimary != s.playerGUID {
+				if _, dup := counted[chainUnitPrimary]; !dup {
+					counted[chainUnitPrimary] = struct{}{}
+					aoeCapDivisor++
+				}
 			}
 			if aoeCapDivisor <= 10 {
 				aoeCapDivisor = 0
