@@ -2030,6 +2030,37 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectApplyAura (SpellEffects.cpp:1233) for a creature
+	// caster: the HIT arm, player hit targets only — creature hit
+	// targets stay out (applyAuraToTarget's creature branch rides a
+	// session receiver, and this path has none). Placed with the other
+	// effect-grouped arms above (C++ runs effects in index order;
+	// documented approximation); a spell's aura record is applied once
+	// per cast, not once per effect-6 effect. Gated on spellKnown like
+	// the tail.
+	if spellKnown {
+		s.creatureEffectApplyAura(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+	}
+	// Spell::EffectSchoolDMG (SpellEffects.cpp:322) + EffectWeaponDmg
+	// (SpellEffects.cpp:3171) for a creature caster: the damage arms,
+	// player hit targets only — creature hit targets stay out (the
+	// creature-victim damage pipeline is fused with the hook/trigger
+	// legs this path already fires below, so porting it wholesale would
+	// double-fire them). The victim-targeted combat-tick spells never
+	// reach this arm (stepCreatureMotion's inline branch deals their
+	// damage); this arm covers the casts that branch skips: non-victim
+	// combat spells, Lua CastSpell, boss-AI direct casts, and
+	// trigger/spell_linked casts, which previously dealt nothing here.
+	// EffectHealthLeech (SpellEffects.cpp:1513) rides the damage arm's
+	// actually-lost total. Placed after the aura arm (C++ applies aura
+	// effects before DoDamageAndTriggers deals the damage) and ahead of
+	// the linked tail, matching the other effect-grouped arms above.
+	// Gated on spellKnown like the tail.
+	if spellKnown {
+		if leechDealt := s.creatureEffectSpellDamage(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets); spellHasEffect(spellInfo, spellEffectHealthLeech) && leechDealt > 0 {
+			s.creatureEffectHealthLeech(ctx, m, spellInfo, leechDealt)
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -3370,6 +3401,337 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 // runs, including the no-owner KILL/KILLED/DEATH proc loops
 // (Unit.cpp:11257-11279) ahead of the death-aura strip. The OwnerAttackedBy
 // signal (Unit.cpp:728-733) fires after the motion unlock below.
+// creatureEffectApplyAura mirrors Spell::EffectApplyAura
+// (SpellEffects.cpp:1233) for a creature caster: the HIT arm applying the
+// cast spell's aura record to each player hit target through the target
+// session's caster-attributed apply path (the totem-passive precedent),
+// with the DBC duration at the caster's level (petAuraDuration's lookup).
+// Dead targets are skipped unless the spell is passive or carries
+// ATTR2_CAN_TARGET_DEAD, mirroring the Unit::AddAura dead-target gate
+// (Unit.cpp:12274) the player path's creature branch carries. Creature
+// hit targets stay out: applyAuraToTarget's creature branch rides a
+// session receiver this path has none of. A landed reflect retargets to
+// the caster, which resolves to no session and is skipped the same way.
+func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	hasAura := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectApplyAura {
+			hasAura = true
+			break
+		}
+	}
+	if !hasAura {
+		return
+	}
+	var durationMs uint32
+	if s.Data != nil && spell.DurationIndex > 0 {
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, casterLevel(m)); derr == nil && ok && dur > 0 {
+			durationMs = uint32(dur)
+		}
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		vs := s.findSessionByGUID(guid)
+		if vs == nil || vs.player == nil {
+			continue
+		}
+		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+			continue
+		}
+		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level))
+	}
+}
+
+// creatureEffectSpellDamage mirrors Spell::EffectSchoolDMG
+// (SpellEffects.cpp:322) + EffectWeaponDmg (SpellEffects.cpp:3171) for a
+// creature caster: the damage arms, player hit targets only. The base
+// damage is creatureSpellDamage's sum over the 2/17/31/58/121 effects
+// (the inline victim-spell path's grouping), and each victim runs that
+// path's mitigation pipeline — taken pct, physical armor, owner-only
+// crit, block, resilience, AutoBalance, resist, absorb — followed by the
+// split/share, duel, kill, rage, durability, pushback, log, combat-flag,
+// pet-defensive, and taken-proc legs of Unit::DealDamage /
+// TargetInfo::DoDamageAndTriggers. The legs this path already fires at
+// cast completion are deliberately NOT repeated here: the stand-up arm,
+// the ev14/ev15 hooks, the per-hit trigger consumer, and the spell_linked
+// type-0 tail all run below, so repeating them would double-fire. The
+// return value is the EffectHealthLeech basis: post-absorb damage the
+// victims actually lost, overkill excluded, god-cheat and immune hits
+// contributing nothing. A spell the inline path already covers never
+// reaches this arm, so no victim takes the damage twice.
+func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) uint32 {
+	if s == nil || m == nil {
+		return 0
+	}
+	baseDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	if !found {
+		return 0
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	var leechTotal uint32
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		vs := s.findSessionByGUID(guid)
+		if vs == nil || vs.player == nil {
+			continue
+		}
+		if vs.player.Health == 0 || vs.isDeadOrGhost() {
+			continue
+		}
+		damage := baseDamage
+		damageImmune := false
+		if damage > 0 {
+			damageImmune = vs.isImmuneToDamageSpell(spell, uint32(schoolMask))
+		}
+		if damageImmune {
+			damage = 0
+		}
+		var absorbed, resisted, blocked uint32
+		fullBlock := false
+		isCrit := false
+		hitInfo := uint32(0)
+		takenBlockRan := false
+		if damage > 0 && !damageImmune {
+			takenBlockRan = true
+			damage = spellDamageBonusTaken(damage, spell, uint32(schoolMask), vs, nil, 1.0)
+			isHybridSpell := spell.SchoolMask&spellSchoolMaskNormal != 0 && spell.SchoolMask&0x7E != 0
+			if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 &&
+				!isHybridSpell && spell.Attributes&spellAttr0CUIgnoreArmor == 0 {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), spell, true)
+				damage = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
+			}
+			if damage > 0 {
+				if owner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); owner != nil {
+					chance := s.creatureSpellCritChanceDone(creatureAuraKeyForMotion(m), m.FlagsExtra&0x20000 != 0, schoolMask, spell, true)
+					if owner.player != nil {
+						chance = float64(owner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+					}
+					chance = s.creatureSpellCritChanceTaken(chance, vs, creatureAuraKey{}, true, m.GUID, m.Level, uint32(vs.player.Level), schoolMask, spell, s.creatureCasterCanApplyResilience(m))
+					isCrit = chance > 0 && rand.Float64() < chance
+					if isCrit {
+						mask, _ := vs.targetCreatureTypeMask(ctx, guid)
+						if spell.DefenseType == spellDamageClassMagic {
+							damage = s.creatureSpellCriticalDamageBonus(creatureAuraKeyForMotion(m), uint32(schoolMask), damage, mask, spell, owner)
+						} else {
+							damage = s.creatureSpellWeaponCritDamageBonus(creatureAuraKeyForMotion(m), creatureAuraKey{}, vs, true, uint32(schoolMask), damage, spell, mask, owner)
+						}
+						hitInfo = 0x02
+					}
+				}
+			}
+			if damage > 0 {
+				victimTarget := combatTarget{
+					GUID:        guid,
+					X:           vs.player.X,
+					Y:           vs.player.Y,
+					Orientation: vs.player.Orientation,
+					Level:       vs.player.Level,
+					Armor:       vs.player.Armor,
+				}
+				if b, ok := s.spellTakenBlockAmountFrom(victimTarget, true, vs, spell, damage, uint8(maxUint32(m.Level, 1)), m.X, m.Y); ok {
+					blocked = b
+					damage -= b
+					fullBlock = blocked > 0 && damage == 0
+				}
+			}
+			if damage > 0 && s.creatureCasterCanApplyResilience(m) {
+				resilCR := uint8(CombatRatingCritTakenSpell)
+				if spell.DefenseType != spellDamageClassMagic {
+					if spellWeaponAttackType(spell) == protocol.RangedAttack {
+						resilCR = CombatRatingCritTakenRanged
+					} else {
+						resilCR = CombatRatingCritTakenMelee
+					}
+				}
+				vs.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+			}
+			damage = s.autoBalanceModifyDealDamage(m, vs, damage)
+			preResistDmg := damage
+			if damage > 0 && schoolMask > 1 {
+				mask123 := uint32(schoolMask)
+				if mask123&0x7E != 0 {
+					mask123 &^= 1
+				}
+				var targetResistMod int32
+				for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, mask123) {
+					targetResistMod += amount
+				}
+				hybridArmorReduced := uint32(0)
+				if isHybridSpell {
+					armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), spell, true)
+					hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
+				}
+				resisted, damage = calcMagicSpellResistance(damage, schoolMask, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, 0, spellResistInput{
+					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+					hybrid:             isHybridSpell,
+					hybridArmorReduced: hybridArmorReduced,
+					targetResistMod:    targetResistMod,
+				})
+			}
+			if damage > 0 {
+				bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(m), uint32(schoolMask), spell.ID))
+				pool := damage
+				if bypass > pool {
+					pool = 0
+				} else {
+					pool -= bypass
+				}
+				absorbed, damage = vs.applyAbsorptionShields(pool, schoolMask)
+				damage += bypass
+			}
+		}
+		if !takenBlockRan && !damageImmune {
+			damage = s.autoBalanceModifyDealDamage(m, vs, damage)
+		}
+		overkill := uint32(0)
+		leechDealt := uint32(0)
+		if !damageImmune {
+			godNegated := vs.godCheatActive()
+			if !godNegated {
+				leechDealt = damage
+				if leechDealt > vs.player.Health {
+					leechDealt = vs.player.Health
+				}
+			}
+			if !godNegated && damage > 0 {
+				damage = s.splitDamageToCaster(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
+			}
+			if !godNegated && damage > 0 {
+				vs.splitShareDamagePct(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
+			}
+			vs.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+			victimHealth := vs.player.Health
+			if !godNegated && duelDefeatOnDamage(vs, vs.controllingPlayerGUID(m.GUID), damage, victimHealth) {
+				// Duel defeat consumed the hit — loser at 1 HP, duel complete.
+			} else if !godNegated && damage >= victimHealth {
+				overkill = damage - victimHealth
+				vs.player.Health = 0
+				var creatureKiller *session
+				if m.OwnerGUID != 0 {
+					creatureKiller = s.findSessionByGUID(m.OwnerGUID)
+				}
+				vs.killPlayer(ctx, creatureKiller, false, true)
+				s.fireCreatureTargetDied(ctx, m, vs.luaPlayer())
+				s.fireKilledByCreatureHook(ctx, m, vs)
+				if m.BossAI != nil {
+					m.BossAI.OnKillPlayer(ctx, s, m, guid)
+				}
+				s.fireCreatureMeleeAuraProcs(ctx, m, guid, procEventInfo{
+					typeMask:       procFlagKill,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      m.GUID,
+				})
+			} else if !godNegated {
+				vs.player.Health -= damage
+				vs.grantRageFromDamageTaken(ctx, damage)
+				vs.rollDurabilityLossOnHit(ctx, damage)
+				pushesBack := spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 &&
+					spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
+				if damage > 0 && pushesBack {
+					vs.delayCurrentCast()
+					vs.delayCurrentChannel()
+				}
+				vs.procSpellDirectDamageAuras(spell.ID)
+			}
+			vs.lastCombatTime = time.Now()
+			if vs.player.UnitFlags&unitFlagInCombat == 0 {
+				vs.player.UnitFlags |= unitFlagInCombat
+			}
+		}
+		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
+		_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
+		vs.sendPlayerUpdate()
+		if s != nil {
+			s.triggerPetDefensive(ctx, vs.player.Map, vs.player.InstanceID, guid, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
+		}
+		if vs.procDeep == 0 {
+			vs.procSpellHitTakenAuraTriggers(ctx, m.GUID, spell.ID, true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0, blocked > 0, fullBlock)
+		}
+		leechTotal += leechDealt
+	}
+	return leechTotal
+}
+
+// creatureEffectHealthLeech mirrors Spell::EffectHealthLeech
+// (SpellEffects.cpp:1513) for a creature caster: the caster heals for
+// the damage its spell actually dealt (the damage arm's total) times the
+// effect's CalcValueMultiplier, then the SpellHealingBonusDone/Taken
+// self folds, the heal-absorb leg, and the AutoBalance scale — the
+// inline victim-spell path's tail, with the caster motion's own aura
+// store as both done and taken sides. A dead caster heals nothing: the
+// health gain gates on the live motion still being above zero.
+func (s *Server) creatureEffectHealthLeech(ctx context.Context, m *creatureMotion, spell wotlk.Spell, leechDealt uint32) {
+	if s == nil || m == nil || leechDealt == 0 {
+		return
+	}
+	leechIdx := -1
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect == spellEffectHealthLeech {
+			leechIdx = i
+			break
+		}
+	}
+	if leechIdx < 0 {
+		return
+	}
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	multiplier := calcValueMultiplier(spell, leechIdx, modOwner)
+	heal := effectValueMultiplied(leechDealt, multiplier)
+	if heal == 0 {
+		return
+	}
+	heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, creatureAuraKeyForMotion(m), spell))
+	if modOwner != nil {
+		if sm := modOwner.applySpellMod(spell, uint8(spellModDamage), int32(heal)); sm > 0 {
+			heal = uint32(sm)
+		} else {
+			heal = 0
+		}
+	}
+	if heal == 0 {
+		return
+	}
+	heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(m), m.GUID, spell, true, heal, false)
+	leechHeal := s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(m), uint32(spell.SchoolMask), heal)
+	scaledHeal := heal - leechHeal
+	scaledHeal = s.autoBalanceModifyDealDamageOnMap(m, m.Map, scaledHeal)
+	fireDealHealAIHooks(ctx, s, m, m, m.GUID, m.GUID, &scaledHeal)
+	s.motionMu.Lock()
+	if live := s.findCreatureMotionLocked(m.Map, m.InstanceID, m.GUID); live != nil && live.Health > 0 {
+		live.Health += scaledHeal
+		if live.MaxHealth > 0 && live.Health > live.MaxHealth {
+			live.Health = live.MaxHealth
+		}
+	}
+	s.motionMu.Unlock()
+}
+
 func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion, guid uint64) {
 	if s == nil || m == nil || guid == 0 {
 		return
