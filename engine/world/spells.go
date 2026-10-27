@@ -9966,10 +9966,51 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+	// chain effect anchors on ITS OWN primary, not on the flat list's first
+	// target: a TARGET-object chain effect (6/21/25/35/45/57/90/95) anchors
+	// on the wire target (SelectImplicitTargetObjectTargets, Spell.cpp:1575),
+	// while a NEARBY chain effect anchors on its nearby pick (SelectImplicitNearbyTargets,
+	// Spell.cpp:1173). The plain block used targetGUID — hitTargets[0], the
+	// nearby pick once a nearby branch ran — for both, so a nearby+TARGET-object-chain
+	// spell searched its jumps around the nearby pick instead of the wire target.
+	// The wire primary itself needs no rejoin here: the plain-primary block below
+	// rejoins it (30260b42). A NEARBY chain effect's pick needs no rejoin either:
+	// it is hitTargets[0] at chain time and stays in the list. Jumps are deduped
+	// against hitTargets (twin/area convention, Spell.cpp:2117 merged entry): the
+	// search excludes only the anchor, so a wire-anchored jump may land on the
+	// nearby pick, which C++ folds into its single entry rather than double-listing.
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
+			anchor := targetGUID
+			winTarget := uint32(0)
+			for i, eff := range spell.Effects {
+				if effectMask == 1<<uint(i) {
+					winTarget = eff.ImplicitTargetA
+					if !chainSelectionEligibleTarget(winTarget) {
+						winTarget = eff.ImplicitTargetB
+					}
+					break
+				}
+			}
+			switch winTarget {
+			case 6, 21, 25, 35, 45, 57, 90, 95:
+				if target.UnitGUID != 0 {
+					anchor = target.UnitGUID
+				}
+			}
 			jump := 0
-			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask) {
+			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {
+				alreadyListed := false
+				for _, guid := range hitTargets {
+					if guid == extraGUID {
+						alreadyListed = true
+						break
+					}
+				}
+				if alreadyListed {
+					continue
+				}
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
 					entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
 					if missInfo == protocol.SpellMissReflect {
@@ -17225,8 +17266,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs the
 	// chain leg (Spell.cpp:1575 -> SelectImplicitChainTargets, 1582-1624) for
 	// triggered casts too — SelectSpellTargets carries no IsTriggered gate on
-	// it. The explicit object target (targetGUID here, post-redirect) seeds
-	// the search; chainSpellJumps encodes the maxTargets > 1 gate plus the
+	// it. The chain anchor seeds the search (per-effect rule in the block below);
+	// chainSpellJumps encodes the maxTargets > 1 gate plus the
 	// call-site eligibility (NEARBY-category or TARGET-reference unit implicit
 	// targets, Spell.cpp:1173/1575). The jumps join the SMSG_SPELL_GO hit list
 	// and the initial-threat target set like C++'s m_UniqueTargetInfo; the
@@ -17242,12 +17283,35 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// aura-break pass, and the AOE cap below. A gameobject anchor takes
 	// the AddGOTarget arm instead, so only unit primaries rejoin; the
 	// GO-primary case stays out.
+	// Same per-effect anchor rule as the client plain block above: a
+	// TARGET-object chain effect anchors on the wire target (spellTarget.UnitGUID,
+	// post-redirect — targetGUID was overwritten by the nearby pick above, or by
+	// the caster-object pick), while a NEARBY chain effect anchors on that pick
+	// (targetGUID). A NEARBY chain effect's pick needs no rejoin: it is already
+	// hitTargets[0] and the area switch below is skipped when nearbySelected.
 	chainUnitPrimary := uint64(0)
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
-		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, targetGUID, jumps, isChainHeal, checkType, effectMask)
+		anchor := targetGUID
+		winTarget := uint32(0)
+		for i, eff := range spell.Effects {
+			if effectMask == 1<<uint(i) {
+				winTarget = eff.ImplicitTargetA
+				if !chainSelectionEligibleTarget(winTarget) {
+					winTarget = eff.ImplicitTargetB
+				}
+				break
+			}
+		}
+		switch winTarget {
+		case 6, 21, 25, 35, 45, 57, 90, 95:
+			if spellTarget.UnitGUID != 0 {
+				anchor = spellTarget.UnitGUID
+			}
+		}
+		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, isChainHeal, checkType, effectMask)
 		hitTargets = append(hitTargets, chainJumpGUIDs...)
-		if uint16(targetGUID>>48) != 0xF110 {
-			chainUnitPrimary = targetGUID
+		if uint16(anchor>>48) != 0xF110 {
+			chainUnitPrimary = anchor
 		}
 	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) adds
@@ -17261,9 +17325,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// area-category effects, whose targets are not the wire target).
 	// A gameobject wire target takes the AddGOTarget arm instead and
 	// stays out, like the chain primary.
+	// The plain-object primary is the wire target, not targetGUID: the nearby
+	// arm above (and the caster-object arm before it) overwrote targetGUID with
+	// its pick, so a nearby+TARGET-object triggered spell previously threaded
+	// the nearby pick into TARGET-object effects and never rejoined the wire
+	// primary. spellTarget.UnitGUID still carries the post-redirect wire target
+	// (the nearby/caster arms never rewrite spellTarget). In the common
+	// no-nearby/no-caster case targetGUID already equaled it, so behavior there
+	// is unchanged.
 	plainObjectPrimary := uint64(0)
-	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && spellHasTargetObjectEffect(spell) {
-		plainObjectPrimary = targetGUID
+	if wireGUID := spellTarget.UnitGUID; wireGUID != 0 && uint16(wireGUID>>48) != 0xF110 && spellHasTargetObjectEffect(spell) {
+		plainObjectPrimary = wireGUID
 	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs on triggered
 	// casts too — SelectSpellTargets carries no IsTriggered gate, so the
