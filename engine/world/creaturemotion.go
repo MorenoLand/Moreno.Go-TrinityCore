@@ -3352,6 +3352,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
 			var inlineSpell wotlk.Spell
 			inlineSpellKnown := false
+			var inlinePowerCost int32
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 					inlineSpell, inlineSpellKnown = spellInfo, true
@@ -3370,6 +3371,42 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if hasDest {
 						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
 						spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
+					}
+					// Spell::CheckCast unit-cooldown arm (Spell.cpp:5207-5211), the inline twin of
+					// the castCreatureSpellInternal arm: the wire victim cast fizzles while the
+					// motion's spell history still holds the spell or (non-triggered, so the
+					// category counts) its DBC category. The inline cast is a UnitAI::DoCastVictim
+					// (UnitAI.cpp:173-176 -> CastSpell with default args), so no triggered exemption
+					// applies. Placed ahead of CheckExplicitTarget, matching C++ order.
+					if !s.creatureSpellHistoryReady(motion, spellInfo, false) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast shapeshift leg (Spell.cpp:5247-5277) and
+					// SPELL_AURA_BLOCK_SPELL_FAMILY leg (Spell.cpp:5277-5278), same twin:
+					// both run for non-triggered casts only, ahead of the caster-state block.
+					if !s.checkCreatureSpellShapeshift(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					if !s.checkCreatureSpellFamilyBlocked(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast caster-state block (Spell.cpp:5298-5314), same twin:
+					// CasterAuraState / CasterAuraSpell gates plus the in-combat arm, all
+					// non-triggered only, ahead of the conditions block.
+					if !s.checkCreatureSpellCasterState(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast conditions block (Spell.cpp:5337-5348), same twin:
+					// CONDITION_SOURCE_TYPE_SPELL rows with the caster as target 0 and the wire
+					// victim as target 1; no triggered exemption in C++. Ahead of
+					// CheckExplicitTarget, matching C++ order.
+					if !s.checkCreatureSpellCastConditions(ctx, motion, spellID, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
 					}
 					// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811),
 					// the inline twin of the castCreatureSpellInternal arm: the
@@ -3436,6 +3473,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// no guardian pet, and the npcbot arm has no Go model. Placed after
 					// the LOS arms, matching C++ order.
 					if spellFirstEffectTargetsUnitPet(spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckPower (Spell.cpp:5502), the inline twin of the
+					// castCreatureSpellInternal arm: a creature that cannot afford the spell
+					// fizzles — no packet, no effects, no drain. The cost is stashed for the
+					// TakePower arm below; a fizzle here never drains, matching C++. Placed
+					// after the pet arm, matching C++ order (pet 5410, range already ran as
+					// the victim range gate, power 5502); the CheckCasterAuras gate at 5509
+					// is a later census unit.
+					inlinePowerCost = s.creatureSpellPowerCost(spellInfo, motion)
+					if !checkCreatureSpellPower(spellInfo, motion, inlinePowerCost) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
@@ -4175,6 +4224,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if status, ok := reflectStatus[guid]; ok {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
 				}
+			}
+			// Spell::TakePower (Spell.cpp:3449-3456) + Spell::SendSpellCooldown
+			// (Spell.cpp:3463), the inline twin of the castCreatureSpellInternal arm:
+			// the stashed CheckPower cost drains after selection and the spell-history
+			// cooldown starts, both ahead of the LAUNCH pre-pass below (3465) and the
+			// GO packet — a failed CheckCast above never drains or records, matching C++.
+			if inlineSpellKnown {
+				takeCreatureSpellPower(inlineSpell, motion, inlinePowerCost)
+				s.recordCreatureSpellCooldown(motion, inlineSpell)
 			}
 			// Spell::EffectTriggerSpell (SpellEffects.cpp:823) on the
 			// inline path, the LAUNCH pre-pass: C++ runs
