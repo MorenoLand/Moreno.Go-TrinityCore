@@ -2570,6 +2570,9 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
 	// for this no-funnel chain - see recordCreatureKillLoot.
 	s.recordCreatureKillLoot(tm, m)
+	// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
+	// fired here because the no-owner arm skips onCreatureKilled.
+	s.grantCreatureKillReward(ctx, tm, m)
 	// Creature::RemoveCorpse schedules the respawn for every death; the
 	// owner path gets it from onCreatureKilled.
 	if tm.InstanceID == 0 {

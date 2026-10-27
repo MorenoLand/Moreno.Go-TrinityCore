@@ -1786,6 +1786,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
 				// for this no-funnel chain - see recordCreatureKillLoot.
 				s.recordCreatureKillLoot(victim, motion)
+				// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
+				// fired here because this branch skips onCreatureKilled.
+				s.grantCreatureKillReward(ctx, victim, motion)
 				// Creature::RemoveCorpse schedules the respawn for every death
 				// (boss_ai.go precedent: the owner path gets it from
 				// onCreatureKilled); placed ahead of the dead-leg stamp, so the

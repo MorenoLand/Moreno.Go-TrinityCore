@@ -1255,6 +1255,73 @@ func (s *Server) recordCreatureKillLoot(victim, killer *creatureMotion) {
 	s.lootMu.Unlock()
 }
 
+// grantCreatureKillReward is the Unit::Kill reward leg (Unit.cpp:11199-11267)
+// for the no-funnel death chains. The block is NOT player-killer-gated:
+// `player` starts as the killer's charmer/owner player
+// (attacker->GetCharmerOrOwnerPlayerOrPlayerItself, Object.cpp:2226-2232)
+// and is overwritten by the corpse's loot recipient when one exists, so a
+// wild creature's killing blow still rewards an online tapper, and a
+// player-owned killer still rewards its online owner. A wild killer with
+// no online tapper or owner resolves to nil and rewards nothing. The
+// gates are the funnel's: the damage requirement
+// (IsDamageEnoughForLootingAndReward) and the player-owned-pet-victim
+// exploit arm (Unit.cpp:11199-11204) — the latter also suppresses the
+// PARTYKILLLOG, which the funnel never needs to gate because pet victims
+// never reach it. The group-looter election stays lazy at loot-open
+// (loot.go), as in the funnel; the off-map recipient group-member
+// fallback (Unit.cpp:11182-11195) is not modeled, as in the loot leg.
+// Placed after recordCreatureKillLoot at each site: the loot leg already
+// resolved the same owner, and on the denial path the damage gate below
+// returns before the cleared tap can fall back to the killer's owner.
+func (s *Server) grantCreatureKillReward(ctx context.Context, victim, killer *creatureMotion) {
+	if s == nil || victim == nil {
+		return
+	}
+	if victim.FlagsExtra&creatureFlagExtraNoPlayerDamageReq == 0 && victim.PlayerDamageReq != 0 {
+		return
+	}
+	if victim.PetType != 0 && victim.OwnerGUID != 0 {
+		return
+	}
+	var player *session
+	if victim.TapPlayerGUID != 0 {
+		player = s.findSessionByGUID(victim.TapPlayerGUID)
+	}
+	if player == nil && killer != nil && killer.OwnerGUID != 0 {
+		player = s.findSessionByGUID(killer.OwnerGUID)
+	}
+	if player == nil || player.player == nil {
+		return
+	}
+	killLog := protocol.NewBuffer(16)
+	killLog.WriteU64(player.playerGUID)
+	killLog.WriteU64(victim.GUID)
+	if player.groupID != 0 {
+		s.broadcastToGroup(player.groupID, uint16(protocol.OpcodeSMSG_PARTYKILLLOG), killLog.Bytes())
+	} else {
+		_ = player.write(uint16(protocol.OpcodeSMSG_PARTYKILLLOG), killLog.Bytes(), true)
+		noLooter := protocol.NewBuffer(10)
+		noLooter.WriteU64(victim.GUID)
+		noLooter.WriteU8(0)
+		noLooter.WriteU8(0)
+		_ = player.write(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), true)
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), player)
+	}
+	creatureEntry := uint32((victim.GUID >> 24) & 0xFFFFFF)
+	mobLevel := uint32(victim.Level)
+	if mobLevel == 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var fallbackLevel int64
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&fallbackLevel)
+		if fallbackLevel > 0 {
+			mobLevel = uint32(fallbackLevel)
+		}
+	}
+	if mobLevel == 0 {
+		mobLevel = 1
+	}
+	player.rewardCreatureKillXP(ctx, combatTarget{GUID: victim.GUID, Map: victim.Map, InstanceID: victim.InstanceID, X: victim.X, Y: victim.Y, Z: victim.Z, CombatReach: victim.CombatReach}, creatureEntry, mobLevel)
+}
+
 // clearCreatureDeathState is the Unit::setDeathState (Unit.cpp:8901-8911)
 // leg for the no-funnel death chains: setDeathState runs CombatStop,
 // which clears the visual target (AttackStop -> Creature::SetTarget,

@@ -1846,6 +1846,9 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
 		// for this no-funnel chain - see recordCreatureKillLoot.
 		s.recordCreatureKillLoot(live, motion)
+		// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
+		// fired here because this path skips onCreatureKilled.
+		s.grantCreatureKillReward(ctx, live, motion)
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -3049,6 +3052,9 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
 			// for this no-funnel chain - see recordCreatureKillLoot.
 			s.recordCreatureKillLoot(live, motion)
+			// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
+			// fired here because the uncredited trip skips onCreatureKilled.
+			s.grantCreatureKillReward(ctx, live, motion)
 		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})

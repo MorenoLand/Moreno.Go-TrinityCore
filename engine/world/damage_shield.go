@@ -557,6 +557,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
 			// for this no-funnel chain - see recordCreatureKillLoot.
 			s.recordCreatureKillLoot(m, attackerMotion)
+			// Unit::Kill reward leg (Unit.cpp:11199-11267) — the funnel leg,
+			// fired here because the attackerSess == nil arm skips onCreatureKilled.
+			s.grantCreatureKillReward(ctx, m, attackerMotion)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1
