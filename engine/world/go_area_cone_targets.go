@@ -438,11 +438,22 @@ func (s *Server) creatureGOAreaDestCenter(m *creatureMotion, hasDest bool, destX
 // DBC value alone: a creature caster has no total-aura-modifier helper for the
 // MOD_MAX_AFFECTED_TARGETS fold.
 func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hasDest bool, destX, destY, destZ float32, targetGUID uint64) []uint64 {
+	targets, _ := s.creatureGOAreaTargetsWithMasks(ctx, m, spell, spellID, hasDest, destX, destY, destZ, targetGUID)
+	return targets
+}
+
+// creatureGOAreaTargetsWithMasks is the threaded-mask twin of
+// creatureGOAreaTargets: the same per-effect legs, but each match also
+// records the leg effect's bit (Spell.cpp:2193), so a GUID matched by
+// several legs carries the union of exactly those legs' bits. GUIDs
+// dropped by the MaxTargets cap keep a mask entry but are never
+// consulted, since the fan-out and packet filter iterate the capped list.
+func (s *Server) creatureGOAreaTargetsWithMasks(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hasDest bool, destX, destY, destZ float32, targetGUID uint64) ([]uint64, map[uint64]uint32) {
 	if s == nil || m == nil || s.Data == nil {
-		return nil
+		return nil, nil
 	}
 	if spellSearchPlayersOnly(spell) {
-		return nil
+		return nil, nil
 	}
 	legs := make([]goAreaLeg, 0)
 	for i, eff := range spell.Effects {
@@ -474,15 +485,17 @@ func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, s
 		legs = append(legs, leg)
 	}
 	if len(legs) == 0 {
-		return nil
+		return nil, nil
 	}
 	targets := make([]uint64, 0)
+	masks := make(map[uint64]uint32)
 	seen := make(map[uint64]struct{})
 	for _, leg := range legs {
 		s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, leg.cx, leg.cy, float32(leg.radius), func(g nearbyGameObject) {
 			if distance3D(g.x, g.y, g.z, leg.cx, leg.cy, leg.cz) > leg.radius || !implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
 				return
 			}
+			masks[g.guid] |= 1 << uint(leg.effIndex)
 			if _, ok := seen[g.guid]; ok {
 				return
 			}
@@ -494,7 +507,7 @@ func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, s
 		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
 		targets = targets[:maxTargets]
 	}
-	return targets
+	return targets, masks
 }
 
 // creatureGOConeTargets ports spellGOConeTargets (Spell::SelectImplicitConeTargets,
@@ -503,11 +516,19 @@ func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, s
 // SpellVisual[0] == 3879 (SpellMgr.cpp:2840), per-effect legs unioned on their own
 // ImplicitTargetConditions, DBC MaxTargets cap alone as in creatureGOAreaTargets.
 func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32) []uint64 {
+	targets, _ := s.creatureGOConeTargetsWithMasks(ctx, m, spell, spellID)
+	return targets
+}
+
+// creatureGOConeTargetsWithMasks is the threaded-mask twin of
+// creatureGOConeTargets, as creatureGOAreaTargetsWithMasks is of
+// creatureGOAreaTargets: each matching leg contributes its own effect's bit.
+func (s *Server) creatureGOConeTargetsWithMasks(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32) ([]uint64, map[uint64]uint32) {
 	if s == nil || m == nil || s.Data == nil {
-		return nil
+		return nil, nil
 	}
 	if spellSearchPlayersOnly(spell) {
-		return nil
+		return nil, nil
 	}
 	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	legs := make([]goAreaLeg, 0)
@@ -532,9 +553,10 @@ func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, s
 		legs = append(legs, goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows, effIndex: i})
 	}
 	if len(legs) == 0 {
-		return nil
+		return nil, nil
 	}
 	targets := make([]uint64, 0)
+	masks := make(map[uint64]uint32)
 	seen := make(map[uint64]struct{})
 	for _, leg := range legs {
 		s.scanNearbyGameObjectsAtServer(ctx, m.Map, m.InstanceID, m.X, m.Y, float32(leg.radius), func(g nearbyGameObject) {
@@ -548,6 +570,7 @@ func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, s
 			if distance3D(g.x, g.y, g.z, m.X, m.Y, m.Z) > leg.radius || !implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
 				return
 			}
+			masks[g.guid] |= 1 << uint(leg.effIndex)
 			if _, ok := seen[g.guid]; ok {
 				return
 			}
@@ -559,5 +582,5 @@ func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, s
 		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
 		targets = targets[:maxTargets]
 	}
-	return targets
+	return targets, masks
 }

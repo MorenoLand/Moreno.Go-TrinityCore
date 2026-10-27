@@ -3618,6 +3618,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		return true
 	}
 	hitTargets := []uint64{targetGUID}
+	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask), threaded from the selection legs below.
+	goEffectMasks := make(map[uint64]uint32)
+	noteGOEffectMask := func(guid uint64, mask uint32) {
+		if guid != 0 && mask != 0 {
+			goEffectMasks[guid] |= mask
+		}
+	}
+	wireGOMask := spellGOWireEffectMask(spell)
+	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
+	if uint16(targetGUID>>48) == 0xF110 {
+		noteGOEffectMask(targetGUID, wireGOMask)
+	}
 	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): pet casts run the
 	// full target selection in C++ — an area AoE applies to every enemy unit
 	// in the area, not just the wire target. The motion-anchored twin
@@ -3762,6 +3774,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		if isGONearbyEntrySpell(spell) {
 			hitTargets = append(hitTargets, goPick)
+			noteGOEffectMask(goPick, nearbyGOMask)
 		}
 		for _, areaHit := range areaHits {
 			hitTargets = append(hitTargets, areaHit.GUID)
@@ -3845,13 +3858,21 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			hitTargets = append(hitTargets, goGUID)
 		}
 		if isGOAreaSpell(spell) {
-			for _, goGUID := range s.server.creatureGOAreaTargets(ctx, motion, spell, spell.ID, hasDest, dx, dy, dz, targetGUID) {
+			areaTargets, areaMasks := s.server.creatureGOAreaTargetsWithMasks(ctx, motion, spell, spell.ID, hasDest, dx, dy, dz, targetGUID)
+			for _, goGUID := range areaTargets {
 				appendPetGOGUID(goGUID)
+			}
+			for guid, mask := range areaMasks {
+				noteGOEffectMask(guid, mask)
 			}
 		}
 		if isGOConeSpell(spell) {
-			for _, goGUID := range s.server.creatureGOConeTargets(ctx, motion, spell, spell.ID) {
+			coneTargets, coneMasks := s.server.creatureGOConeTargetsWithMasks(ctx, motion, spell, spell.ID)
+			for _, goGUID := range coneTargets {
 				appendPetGOGUID(goGUID)
+			}
+			for guid, mask := range coneMasks {
+				noteGOEffectMask(guid, mask)
 			}
 		}
 	}
@@ -3976,6 +3997,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			if !goInList {
 				hitTargets = append(hitTargets, anchor)
+				noteGOEffectMask(anchor, wireGOMask)
 			}
 		}
 	}
@@ -4270,7 +4292,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !triggered || spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
 		// Per-effect GO mask (Spell.cpp:2193, :4512), pet-path twin of the
 		// player-path filter.
-		packetHits = s.server.filterGOPacketTargetsByEffectMask(ctx, motion.Map, motion.InstanceID, spell, target, packetHits)
+		packetHits = s.server.filterGOPacketTargetsByEffectMaskWithMasks(ctx, motion.Map, motion.InstanceID, spell, target, packetHits, goEffectMasks)
 		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 			return false
@@ -4291,13 +4313,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectActivateObject:
-			s.server.creatureEffectActivateObject(ctx, motion, target, spell.Effects[i], hitTargets)
+			s.server.creatureEffectActivateObjectMasked(ctx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
 		case spellEffectGameObjectDamage:
-			s.server.creatureEffectGameObjectDamage(ctx, motion, spell, spell.ID, target, spell.Effects[i], hitTargets)
+			s.server.creatureEffectGameObjectDamageMasked(ctx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
 		case spellEffectGameObjectRepair:
-			s.server.creatureEffectGameObjectRepair(ctx, motion, spell, spell.ID, target, spell.Effects[i], hitTargets)
+			s.server.creatureEffectGameObjectRepairMasked(ctx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
 		case spellEffectGameObjectSetDestructionState:
-			s.server.creatureEffectGameObjectSetDestructionState(ctx, motion, target, spell.Effects[i], hitTargets)
+			s.server.creatureEffectGameObjectSetDestructionStateMasked(ctx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
 		}
 	}
 	// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject

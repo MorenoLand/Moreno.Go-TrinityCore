@@ -3358,6 +3358,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			castID := uint8(1)
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
+			// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask), threaded from the selection legs below.
+			goEffectMasks := make(map[uint64]uint32)
+			noteGOEffectMask := func(guid uint64, mask uint32) {
+				if guid != 0 && mask != 0 {
+					goEffectMasks[guid] |= mask
+				}
+			}
+			var wireGOMask, nearbyGOMask uint32
 			var areaHits []*playerPos
 			var areaCreatureHits []uint64
 			// areaVictim is the area-selection anchor: the wire victim, or the
@@ -3377,6 +3385,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 					inlineSpell, inlineSpellKnown = spellInfo, true
+					wireGOMask = spellGOWireEffectMask(spellInfo)
+					nearbyGOMask = spellGOListArmEffectMask(spellInfo, implicitTargetGONearbyEntry)
 					spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
 					// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410,
 					// ahead of the GO send): the inline path skips target
@@ -4029,6 +4039,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if isFriendlyNearbySpell(inlineSpell) && friendlyPick != nearby && !friendlyJoinedLegs {
 						hitTargets = append(hitTargets, friendlyPick)
 					}
+					if isGONearbyEntrySpell(inlineSpell) {
+						noteGOEffectMask(goPick, nearbyGOMask)
+					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) post-nearby
 					// re-sweep, the inline twin of the castCreatureSpellInternal
 					// order: C++ runs nearby (1036) ahead of area (1227), so the
@@ -4208,13 +4221,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						hitTargets = append(hitTargets, goGUID)
 					}
 					if isGOAreaSpell(inlineSpell) {
-						for _, goGUID := range s.creatureGOAreaTargets(ctx, motion, inlineSpell, spellID, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, target.GUID) {
+						areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasks(ctx, motion, inlineSpell, spellID, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, target.GUID)
+						for _, goGUID := range areaTargets {
 							appendInlineGOGUID(goGUID)
+						}
+						for guid, mask := range areaMasks {
+							noteGOEffectMask(guid, mask)
 						}
 					}
 					if isGOConeSpell(inlineSpell) {
-						for _, goGUID := range s.creatureGOConeTargets(ctx, motion, inlineSpell, spellID) {
+						coneTargets, coneMasks := s.creatureGOConeTargetsWithMasks(ctx, motion, inlineSpell, spellID)
+						for _, goGUID := range coneTargets {
 							appendInlineGOGUID(goGUID)
+						}
+						for guid, mask := range coneMasks {
+							noteGOEffectMask(guid, mask)
 						}
 					}
 				}
@@ -4395,6 +4416,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					if !goInList {
 						hitTargets = append(hitTargets, anchor)
+						noteGOEffectMask(anchor, wireGOMask)
 					}
 				}
 			}
@@ -4598,7 +4620,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			// Per-effect GO mask (Spell.cpp:2193, :4512), inline-path twin of
 			// the player-path filter.
-			packetHits = s.filterGOPacketTargetsByEffectMask(ctx, motion.Map, motion.InstanceID, inlineSpell, spellTarget, packetHits)
+			packetHits = s.filterGOPacketTargetsByEffectMaskWithMasks(ctx, motion.Map, motion.InstanceID, inlineSpell, spellTarget, packetHits, goEffectMasks)
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
@@ -4867,13 +4889,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				for i := range inlineSpell.Effects {
 					switch inlineSpell.Effects[i].Effect {
 					case spellEffectActivateObject:
-						s.creatureEffectActivateObject(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
+						s.creatureEffectActivateObjectMasked(ctx, motion, spellTarget, inlineSpell.Effects[i], i, hitTargets, goEffectMasks)
 					case spellEffectGameObjectDamage:
-						s.creatureEffectGameObjectDamage(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], hitTargets)
+						s.creatureEffectGameObjectDamageMasked(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], i, hitTargets, goEffectMasks)
 					case spellEffectGameObjectRepair:
-						s.creatureEffectGameObjectRepair(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], hitTargets)
+						s.creatureEffectGameObjectRepairMasked(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], i, hitTargets, goEffectMasks)
 					case spellEffectGameObjectSetDestructionState:
-						s.creatureEffectGameObjectSetDestructionState(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
+						s.creatureEffectGameObjectSetDestructionStateMasked(ctx, motion, spellTarget, inlineSpell.Effects[i], i, hitTargets, goEffectMasks)
 					}
 				}
 				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) + EffectTriggerRitualOfSummoning (:1106) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).

@@ -1191,6 +1191,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	castFlags := uint32(spellCastFlagGo)
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
+	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask), threaded from the selection legs below.
+	goEffectMasks := make(map[uint64]uint32)
+	noteGOEffectMask := func(guid uint64, mask uint32) {
+		if guid != 0 && mask != 0 {
+			goEffectMasks[guid] |= mask
+		}
+	}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
 	// The resolved dest-family destination: evaluated ahead of the LOS
 	// gates below and reused for the GO packet write, so the dest-LOS arm
@@ -1598,6 +1605,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				return
 			}
 		}
+		wireGOMask := spellGOWireEffectMask(spellInfo)
+		nearbyGOMask := spellGOListArmEffectMask(spellInfo, implicitTargetGONearbyEntry)
+		for _, guid := range hitTargets {
+			if uint16(guid>>48) == 0xF110 {
+				noteGOEffectMask(guid, wireGOMask)
+			}
+		}
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a
 		// creature caster: TARGET_UNIT_NEARBY_ENTRY (38) /
 		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) / TARGET_UNIT_NEARBY_ENEMY (2) /
@@ -1654,6 +1668,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 			if isGONearbyEntrySpell(spellInfo) {
 				hitTargets = append(hitTargets, goPick)
+				noteGOEffectMask(goPick, nearbyGOMask)
 				if !isEntryNearbySpell(spellInfo) && !isHostileNearbySpell(spellInfo) && !isFriendlyNearbySpell(spellInfo) {
 					targetGUID = goPick
 				}
@@ -1773,13 +1788,21 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				hitTargets = append(hitTargets, guid)
 			}
 			if isGOAreaSpell(spellInfo) {
-				for _, goGUID := range s.creatureGOAreaTargets(ctx, m, spellInfo, spellID, hasDest, destX, destY, destZ, targetGUID) {
+				areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasks(ctx, m, spellInfo, spellID, hasDest, destX, destY, destZ, targetGUID)
+				for _, goGUID := range areaTargets {
 					appendGOGUID(goGUID)
+				}
+				for guid, mask := range areaMasks {
+					noteGOEffectMask(guid, mask)
 				}
 			}
 			if isGOConeSpell(spellInfo) {
-				for _, goGUID := range s.creatureGOConeTargets(ctx, m, spellInfo, spellID) {
+				coneTargets, coneMasks := s.creatureGOConeTargetsWithMasks(ctx, m, spellInfo, spellID)
+				for _, goGUID := range coneTargets {
 					appendGOGUID(goGUID)
+				}
+				for guid, mask := range coneMasks {
+					noteGOEffectMask(guid, mask)
 				}
 			}
 		}
@@ -1944,6 +1967,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 				if !goInList {
 					hitTargets = append(hitTargets, anchor)
+					noteGOEffectMask(anchor, wireGOMask)
 				}
 			}
 		}
@@ -2155,7 +2179,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 		// Per-effect GO mask (Spell.cpp:2193, :4512), twin-path twin of the
 		// player-path filter.
-		packetHits = s.filterGOPacketTargetsByEffectMask(ctx, m.Map, m.InstanceID, spellInfo, spellTarget, packetHits)
+		packetHits = s.filterGOPacketTargetsByEffectMaskWithMasks(ctx, m.Map, m.InstanceID, spellInfo, spellTarget, packetHits, goEffectMasks)
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
@@ -2652,13 +2676,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectActivateObject:
-				s.creatureEffectActivateObject(ctx, m, spellTarget, spellInfo.Effects[i], hitTargets)
+				s.creatureEffectActivateObjectMasked(ctx, m, spellTarget, spellInfo.Effects[i], i, hitTargets, goEffectMasks)
 			case spellEffectGameObjectDamage:
-				s.creatureEffectGameObjectDamage(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], hitTargets)
+				s.creatureEffectGameObjectDamageMasked(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], i, hitTargets, goEffectMasks)
 			case spellEffectGameObjectRepair:
-				s.creatureEffectGameObjectRepair(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], hitTargets)
+				s.creatureEffectGameObjectRepairMasked(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], i, hitTargets, goEffectMasks)
 			case spellEffectGameObjectSetDestructionState:
-				s.creatureEffectGameObjectSetDestructionState(ctx, m, spellTarget, spellInfo.Effects[i], hitTargets)
+				s.creatureEffectGameObjectSetDestructionStateMasked(ctx, m, spellTarget, spellInfo.Effects[i], i, hitTargets, goEffectMasks)
 			}
 		}
 	}
@@ -5894,6 +5918,45 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 // precedent) and stays out for wild casters (Use needs a player for
 // gossip/menus). ToggleOpen, Creation, SetTapList and None have no C++
 // arm and stay no-ops, like the session twin.
+func (s *Server) creatureEffectActivateObjectMasked(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, masks map[uint64]uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	action := uint32(eff.MiscValue)
+	for _, goGUID := range goMaskedTargetsForEffect(masks, spellTarget, hitTargets, effIndex, eff) {
+		switch {
+		case action >= goActionAnimateCustom0 && action <= goActionAnimateCustom3:
+			s.broadcastGameObjectCustomAnimInInstance(m.Map, m.InstanceID, goGUID, action-goActionAnimateCustom0)
+		case action == goActionDisturb || action == goActionOpen:
+			if owner := s.creatureCasterOwnerSession(m); owner != nil {
+				owner.activateGameObjectUse(ctx, goGUID)
+			}
+		case action == goActionOpenAndUnlock:
+			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, false, 0)
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, false)
+		case action == goActionUnlock:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, false)
+		case action == goActionLock:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, true)
+		case action == goActionClose || action == goActionRebuild:
+			s.resetDoorOrButton(m.Map, m.InstanceID, goGUID)
+		case action == goActionDespawn:
+			s.despawnDynamicGameObjectInInstance(m.Map, m.InstanceID, goGUID)
+		case action == goActionMakeInert:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagNotSelectable, true)
+		case action == goActionMakeActive:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagNotSelectable, false)
+		case action == goActionCloseAndLock:
+			s.resetDoorOrButton(m.Map, m.InstanceID, goGUID)
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, true)
+		case action == goActionDestroy:
+			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, true, 0)
+		case action >= goActionUseArtKit0 && action <= goActionUseArtKit3:
+			s.creatureActivateObjectArtKit(ctx, m, goGUID, action-goActionUseArtKit0)
+		}
+	}
+}
+
 func (s *Server) creatureEffectActivateObject(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || m == nil {
 		return
@@ -5985,6 +6048,23 @@ func (s *Server) creatureEffectGameObjectDamage(ctx context.Context, m *creature
 	}
 }
 
+func (s *Server) creatureEffectGameObjectDamageMasked(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, masks map[uint64]uint32) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	for _, goGUID := range goMaskedTargetsForEffect(masks, spellTarget, hitTargets, effIndex, eff) {
+		if faction, ok := s.gameObjectTargetFaction(ctx, m.Map, m.InstanceID, goGUID); ok && faction != 0 {
+			targetTpl, targetOK, _ := s.Data.FactionTemplate(faction)
+			casterTpl, casterOK, _ := s.Data.FactionTemplate(m.Faction)
+			if targetOK && (!casterOK || factionTemplateFriendlyTo(casterTpl, targetTpl)) {
+				continue
+			}
+		}
+		damage := eff.CalcValueForLevel(spell, m.Level)
+		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, -damage, m.GUID, spellID, nil)
+	}
+}
+
 // creatureEffectGameObjectRepair mirrors Spell::EffectGameObjectRepair
 // (SpellEffects.cpp:5439) for a creature caster: the HIT_TARGET arm over
 // the GO GUIDs in the hit list, no faction gate, value at the caster's
@@ -5994,6 +6074,16 @@ func (s *Server) creatureEffectGameObjectRepair(ctx context.Context, m *creature
 		return
 	}
 	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
+		damage := eff.CalcValueForLevel(spell, m.Level)
+		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, damage, m.GUID, spellID, nil)
+	}
+}
+
+func (s *Server) creatureEffectGameObjectRepairMasked(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, masks map[uint64]uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, goGUID := range goMaskedTargetsForEffect(masks, spellTarget, hitTargets, effIndex, eff) {
 		damage := eff.CalcValueForLevel(spell, m.Level)
 		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, damage, m.GUID, spellID, nil)
 	}
@@ -6012,6 +6102,19 @@ func (s *Server) creatureEffectGameObjectSetDestructionState(ctx context.Context
 		return
 	}
 	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
+		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
+	}
+}
+
+func (s *Server) creatureEffectGameObjectSetDestructionStateMasked(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, masks map[uint64]uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	state := uint8(eff.MiscValue)
+	if state > goDestructibleRebuilding {
+		return
+	}
+	for _, goGUID := range goMaskedTargetsForEffect(masks, spellTarget, hitTargets, effIndex, eff) {
 		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
 	}
 }
