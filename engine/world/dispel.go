@@ -1434,8 +1434,14 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				casterSess := s.backlashCasterSession(cand.CasterGUID)
 				if petCaster != nil && casterSess == s {
 					s.executePetSpellDamage(ctx, petCaster, dispellerGUID, 31117, backlashDamage, 0, true, 0, protocol.SpellMissNone, false)
-				} else {
+				} else if s.server != nil && s.server.findSessionByGUID(cand.CasterGUID) != nil {
 					casterSess.executeSpellDamage(ctx, dispellerGUID, 31117, backlashDamage, 0)
+				} else {
+					// Creature-caster or offline-caster backlash: the
+					// fallback session is the dispeller, not the C++
+					// attacker, so the proxy route suppresses
+					// player-attacker score credit.
+					s.executeProxySpellDamage(ctx, dispellerGUID, 31117, backlashDamage, 0)
 				}
 
 				silenceSpell := wotlk.Spell{
@@ -1470,8 +1476,14 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				casterSess := s.backlashCasterSession(cand.CasterGUID)
 				if petCaster != nil && casterSess == s {
 					s.executePetSpellDamage(ctx, petCaster, targetGUID, 64085, backlashDamage, 0, true, 0, protocol.SpellMissNone, false)
-				} else {
+				} else if s.server != nil && s.server.findSessionByGUID(cand.CasterGUID) != nil {
 					casterSess.executeSpellDamage(ctx, targetGUID, 64085, backlashDamage, 0)
+				} else {
+					// Creature-caster or offline-caster backlash: the
+					// fallback session is the dispeller, not the C++
+					// attacker, so the proxy route suppresses
+					// player-attacker score credit.
+					s.executeProxySpellDamage(ctx, targetGUID, 64085, backlashDamage, 0)
 				}
 			}
 

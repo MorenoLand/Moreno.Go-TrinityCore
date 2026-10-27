@@ -10835,7 +10835,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if aoeCapDivisor > 0 && targetDamage > 0 {
 							targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 						}
-						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected)
+						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected, false)
 					}
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
@@ -10861,7 +10861,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							reflectedDamage = uint32(float64(reflectedDamage) * avoid)
 						}
 					}
-					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true)
+					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true, false)
 				}
 				// Spell::AddUnitTarget per-target reflect (Spell.cpp:2152,
 				// 2174-2188): each AoE-selected target that reflected cleanly
@@ -10878,7 +10878,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							aoeReflectedDamage = uint32(float64(aoeReflectedDamage) * avoid)
 						}
 					}
-					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true)
+					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true, false)
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				// Spell::EffectHeal (SpellEffects.cpp:1399): the damage<0
@@ -14238,7 +14238,17 @@ func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell
 }
 
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
-	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false, false)
+	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false, false, false)
+}
+
+// executeProxySpellDamage runs the spell-damage pipeline for a cast whose
+// C++ attacker is not the session player — totem pulses (the totem is the
+// attacker, TotemAI) and creature/offline-caster dispel backlash (the
+// fallback session is the dispeller, not the attacker) — so the
+// DealDamage player-attacker score arm stays silent while the damage,
+// procs, and logs run exactly as a direct cast.
+func (s *session) executeProxySpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
+	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, false, false, true)
 }
 
 // executeSpellDamageNoCrit mirrors the SpellDamageBonusDone
@@ -14246,7 +14256,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 // executeSpellDamage for the SPELL_AURA_PROC_TRIGGER_DAMAGE (43) arm, which
 // never rolls hit or crit (SpellAuraEffects.cpp:5738-5762).
 func (s *session) executeSpellDamageNoCrit(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int) uint32 {
-	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, true, false)
+	return s.executeSpellDamageWithFlags(ctx, targetGUID, spellID, damage, effIndex, true, false, false)
 }
 
 // executeSpellDamageWithFlags is the executeSpellDamage pipeline
@@ -14256,7 +14266,7 @@ func (s *session) executeSpellDamageNoCrit(ctx context.Context, targetGUID uint6
 // (AuraEffect::HandleProcTriggerDamageAuraProc, SpellAuraEffects.cpp:5738-5762)
 // goes straight from SpellDamageBonusDone into the damage pipeline — never a
 // hit roll, never a crit roll — so procDamage skips both.
-func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int, procDamage, reflected bool) uint32 {
+func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, effIndex int, procDamage, reflected, proxyCaster bool) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -14287,12 +14297,12 @@ func (s *session) executeSpellDamageWithFlags(ctx context.Context, targetGUID ui
 	}
 
 	if procDamage {
-		return s.executeDirectSpellDamageNoCrit(ctx, targetGUID, spellID, damage, schoolMask)
+		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false, 0, proxyCaster)
 	}
 	if reflected {
-		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, true, 0)
+		return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, true, 0, proxyCaster)
 	}
-	return s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false, 0, proxyCaster)
 }
 
 func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64, spellID uint32) {
@@ -14324,11 +14334,11 @@ func (s *session) executeSpellInstantKill(ctx context.Context, targetGUID uint64
 	if s.server != nil {
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
-	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false, 0)
+	s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, target.Health, 1, true, false, false, 0, false)
 }
 
 func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false, 0)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, false, false, 0, false)
 }
 
 // executeDirectSpellDamageNoCrit runs the direct-spell-damage pipeline with
@@ -14339,7 +14349,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 // straight into CalculateSpellDamageTaken and the damage log — never a miss,
 // never a crit.
 func (s *session) executeDirectSpellDamageNoCrit(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) uint32 {
-	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false, 0)
+	return s.executeDirectSpellDamageWithFlags(ctx, targetGUID, spellID, damage, schoolMask, false, true, false, 0, false)
 }
 
 // spellMechanicMask mirrors TrinityCore SpellInfo::GetAllEffectsMechanicMask
@@ -15365,7 +15375,7 @@ func (s *session) spellDamagePushesBack(spellID uint32, victimGUID uint64) bool 
 	return spell.AttributesEx3&spellAttr3TreatAsPeriodic == 0 && spell.AttributesEx7&spellAttr7NoPushbackOnDamage == 0
 }
 
-func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill, procDamage, reflected bool, inheritCritBase float64) uint32 {
+func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8, instantKill, procDamage, reflected bool, inheritCritBase float64, proxyCaster bool) uint32 {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
@@ -15791,6 +15801,18 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	}
 	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damageDone)
 	s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
+	// Unit::DealDamage (Unit.cpp:855-877): the BG/arena damage score
+	// arm fires only for a true player attacker on a player victim —
+	// attacker != victim and attacker->ToPlayer() non-nil. The session
+	// here is the C++ attacker except on proxy-routed casts (totem
+	// pulses, creature-caster dispel backlash), where the totem or
+	// creature is the attacker and ToPlayer() is nil, so no credit.
+	// The score takes the post-split damage, uncapped like the melee
+	// leg; only the achievement caps at pre-damage health.
+	if isPlayerVictim && !proxyCaster && s.playerGUID != targetGUID && damage > 0 && s.server != nil {
+		s.server.updateArenaDamageScore(s, damage)
+		s.server.addBGScore(s, func(score *bgPlayerScore) { score.DamageDone += damage })
+	}
 
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2524-2530): the
 	// IsImmunedToDamage arm zeroes the damage and sends NO damage-log
@@ -17325,7 +17347,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if areaDmgEffect && aoeCapDivisor > 0 && targetDamage > 0 {
 					targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 				}
-				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase)
+				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false)
 			} else if eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura) { // SPELL_EFFECT_APPLY_AURA
 				// Spell::EffectPersistentAA (SpellEffects.cpp:1729) runs in
 				// SPELL_EFFECT_HANDLE_HIT mode — once per effect, never per
@@ -29020,6 +29042,19 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 	// Unit::DealDamage (Unit.cpp:766-788): SPELL_AURA_SHARE_DAMAGE_PCT.
 	if !godNegated && dmg > 0 {
 		ts.splitShareDamagePct(context.Background(), ts.playerGUID, true, creatureAuraKey{}, aura.CasterGUID, dmg, aura.SchoolMask)
+	}
+	// Unit::DealDamage (Unit.cpp:855-877) on a periodic tick: the
+	// BG/arena damage score arm fires only when the aura caster IS a
+	// player unit. findSessionByGUID resolves player GUIDs only, so
+	// pet/totem/creature-caster ticks resolve nil and credit nothing,
+	// matching attacker->ToPlayer(); attacker != victim gates self-DoTs.
+	// The share leg above copies damage, it does not reduce it, so the
+	// post-split tick damage is the DealDamage value, as in the direct leg.
+	if !godNegated && dmg > 0 && ts.server != nil {
+		if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && aura.CasterGUID != ts.playerGUID {
+			ts.server.updateArenaDamageScore(casterSess, dmg)
+			ts.server.addBGScore(casterSess, func(score *bgPlayerScore) { score.DamageDone += dmg })
+		}
 	}
 	// Duel defeat (Unit.cpp:825-853, 957-973): the tick's attacker is the aura
 	// caster — via GetControllingPlayer, the caster itself or its owner for

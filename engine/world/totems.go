@@ -1326,7 +1326,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 					continue
 				}
-				s.executeSpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0)
+				s.executeProxySpellDamage(ctx, m.GUID, def.PulseSpell, dmg, 0) // Totem is the C++ attacker, not the owner: no player-attacker score credit.
 			}
 			// Enemy-player leg: the same area aura reaches hostile
 			// sessions in radius (Cell::VisitAllObjects visits players
@@ -1348,7 +1348,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				}
 				s.server.sessionsMu.RUnlock()
 				for _, guid := range sessionVictims {
-					s.executeSpellDamage(ctx, guid, def.PulseSpell, dmg, 0)
+					s.executeProxySpellDamage(ctx, guid, def.PulseSpell, dmg, 0) // Totem is the C++ attacker, not the owner: no player-attacker score credit.
 				}
 			}
 		}
@@ -1464,7 +1464,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			totem.mu.Unlock()
 
 			if victimGUID != 0 {
-				s.executeSpellDamage(ctx, victimGUID, def.PulseSpell, uint32(60), 0)
+				s.executeProxySpellDamage(ctx, victimGUID, def.PulseSpell, uint32(60), 0) // Totem is the C++ attacker, not the owner: no player-attacker score credit.
 			}
 		}
 
