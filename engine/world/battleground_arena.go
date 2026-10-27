@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -433,6 +434,37 @@ func (s *Server) findArenaState(mapID, instanceID uint32) *arenaBattlegroundStat
 	return nil
 }
 
+// arenaRosterSessions resolves the arena's PlayerTeams roster to online
+// sessions, in GUID order (C++ m_Players is an ordered map). C++ _GetPlayer
+// skips offline members (Battleground.cpp:724, :465, BroadcastWorker), so
+// members with no worldReady session are omitted, not synthesized.
+func (s *Server) arenaRosterSessions(arena *arenaBattlegroundState) []*session {
+	if s == nil || arena == nil {
+		return nil
+	}
+	arena.mu.RLock()
+	guids := make([]uint64, 0, len(arena.PlayerTeams))
+	for guid := range arena.PlayerTeams {
+		guids = append(guids, guid)
+	}
+	arena.mu.RUnlock()
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	inRoster := make(map[uint64]struct{}, len(guids))
+	for _, guid := range guids {
+		inRoster[guid] = struct{}{}
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	sessions := make([]*session, 0, len(guids))
+	for sess := range s.sessions {
+		if _, ok := inRoster[sess.playerGUID]; ok && sess.worldReady.Load() && sess.player != nil {
+			sessions = append(sessions, sess)
+		}
+	}
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].playerGUID < sessions[j].playerGUID })
+	return sessions
+}
+
 // addPlayerToArena admits a player into the arena, sets preparation auras, flags, and sends initial world states.
 func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBattlegroundState) {
 	if s == nil || sess == nil || sess.player == nil || arena == nil {
@@ -747,44 +779,41 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 	}
 	arena.mu.Unlock()
 
-	s.broadcastArenaStartText(arena.MapID, ArenaTextStartBattleHasBegun, "The arena battle has begun!")
+	s.broadcastArenaStartTextToRoster(arena, ArenaTextStartBattleHasBegun, "The arena battle has begun!")
 
-	// Process all players in the arena
-	s.sessionsMu.RLock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
-			sess.removeAura(SpellArenaPreparation)
-			s.resetPlayerPowers(sess)
+	// The start-event-4 arm iterates GetPlayers() (Battleground.cpp:465),
+	// the roster, not the map: a sim-accepted player holds no arena map yet.
+	for _, sess := range s.arenaRosterSessions(arena) {
+		sess.removeAura(SpellArenaPreparation)
+		s.resetPlayerPowers(sess)
 
-			// Remove short-duration positive buffs (<= 30s)
-			// Remove Warlock Demonic Circle if on Dalaran Sewers
-			if arena.MapID == ArenaMapDalaranSewers {
-				sess.removeAura(SpellWarlDemonicCircle)
-			}
+		// Remove short-duration positive buffs (<= 30s)
+		// Remove Warlock Demonic Circle if on Dalaran Sewers
+		if arena.MapID == ArenaMapDalaranSewers {
+			sess.removeAura(SpellWarlDemonicCircle)
+		}
 
-			// Update queue status on this arena's own slot (arenaMatchQueueSlot),
-			// not the first active arena slot, which may belong to another
-			// arena type the player also holds.
-			if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
-				// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
-				// (BattlegroundQueue.cpp:242): the arena match start is the
-				// invite point for arena queues. C++ keys arenas by the
-				// rated flag (BattlegroundQueue.cpp:251-253): rated ->
-				// TEAM_HORDE, else TEAM_ALLIANCE.
-				if sess.bgQueues[idx].Status == BGStatusWaitQueue && !sess.bgQueues[idx].JoinTime.IsZero() {
-					teamIdx := uint8(0)
-					if sess.bgQueues[idx].IsRated {
-						teamIdx = 1
-					}
-					s.recordBGQueueWait(sess.bgQueues[idx].BgTypeID, teamIdx, uint32(time.Since(sess.bgQueues[idx].JoinTime).Milliseconds()))
+		// Update queue status on this arena's own slot (arenaMatchQueueSlot),
+		// not the first active arena slot, which may belong to another
+		// arena type the player also holds.
+		if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+			// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+			// (BattlegroundQueue.cpp:242): the arena match start is the
+			// invite point for arena queues. C++ keys arenas by the
+			// rated flag (BattlegroundQueue.cpp:251-253): rated ->
+			// TEAM_HORDE, else TEAM_ALLIANCE.
+			if sess.bgQueues[idx].Status == BGStatusWaitQueue && !sess.bgQueues[idx].JoinTime.IsZero() {
+				teamIdx := uint8(0)
+				if sess.bgQueues[idx].IsRated {
+					teamIdx = 1
 				}
-				sess.bgQueues[idx].Status = BGStatusInProgress
-				sess.bgQueues[idx].StartTime = arena.MatchStartTime
-				sess.sendBattlefieldStatus(uint8(idx))
+				s.recordBGQueueWait(sess.bgQueues[idx].BgTypeID, teamIdx, uint32(time.Since(sess.bgQueues[idx].JoinTime).Milliseconds()))
 			}
+			sess.bgQueues[idx].Status = BGStatusInProgress
+			sess.bgQueues[idx].StartTime = arena.MatchStartTime
+			sess.sendBattlefieldStatus(uint8(idx))
 		}
 	}
-	s.sessionsMu.RUnlock()
 }
 
 // endArena handles match conclusion, rating settlement, achievements, and PVP log data dispatch.
@@ -830,11 +859,11 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 
 	// Victory announcement
 	if winner == int8(ArenaTeamGold) {
-		s.broadcastArenaMessage(arena.MapID, fmt.Sprintf("%s is victorious!", arena.GoldTeamName))
+		s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s is victorious!", arena.GoldTeamName))
 	} else if winner == int8(ArenaTeamGreen) {
-		s.broadcastArenaMessage(arena.MapID, fmt.Sprintf("%s is victorious!", arena.GreenTeamName))
+		s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s is victorious!", arena.GreenTeamName))
 	} else {
-		s.broadcastArenaMessage(arena.MapID, "The arena match ended in a draw!")
+		s.broadcastArenaMessageToRoster(arena, "The arena match ended in a draw!")
 	}
 
 	// Rated rating calculation and DB settlement
@@ -886,47 +915,45 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	// Build and dispatch MSG_PVP_LOG_DATA to all players in the match
 	logData := s.buildArenaPvPLogDataPacket(arena)
 	ctx := context.Background()
-	s.sessionsMu.RLock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
-			// Battleground::EndBattleground per-player arms (Battleground.cpp:728-802):
-			// remove spirit of redemption (the reference removes the linked
-			// SPELL_AURA_MOD_SHAPESHIFT auras, Battleground.cpp:732-734).
-			if sess.hasAuraType(spellAuraSpiritOfRedemption) {
-				sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
-			}
-			// ResurrectPlayer(1.0f) + SpawnCorpseBones for the dead
-			// (Battleground.cpp:736-739); the living CombatStop() arm has no Go
-			// model (no combat-stop API in engine/world), no-bridge.
-			if sess.player.Health == 0 {
-				sess.resurrectPlayer(ctx, 1.0)
-				sess.spawnCorpseBones(ctx)
-			}
-			s.resetPlayerPowers(sess)                      // ResetAllPowers (Battleground.cpp:791)
-			sess.sendClientControl(sess.playerGUID, false) // BlockMovement (Battleground.cpp:808-812)
-			// The honor-bonus / arena-point reward arms (Battleground.cpp:742-786)
-			// are gated by IsRandom() || BattlegroundMgr::IsBGWeekend(GetTypeID());
-			// arenas are never random and no arena type is a BG weekend, so the
-			// gate is false here: no bonus honor, no arena points, and the
-			// random-winner flag is never set at arena end. Rated vs skirmish is
-			// decided by the Arena::EndBattleground isRated() arm above.
-			if _, won := winningMembers[sess.playerGUID]; won {
-				sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG (Battleground.cpp:788)
-			}
-			sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND (Battleground.cpp:802)
+	// EndBattleground iterates m_Players (Battleground.cpp:724), the roster,
+	// not the map: a sim-accepted player holds no arena map yet.
+	for _, sess := range s.arenaRosterSessions(arena) {
+		// Battleground::EndBattleground per-player arms (Battleground.cpp:728-802):
+		// remove spirit of redemption (the reference removes the linked
+		// SPELL_AURA_MOD_SHAPESHIFT auras, Battleground.cpp:732-734).
+		if sess.hasAuraType(spellAuraSpiritOfRedemption) {
+			sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
+		}
+		// ResurrectPlayer(1.0f) + SpawnCorpseBones for the dead
+		// (Battleground.cpp:736-739); the living CombatStop() arm has no Go
+		// model (no combat-stop API in engine/world), no-bridge.
+		if sess.player.Health == 0 {
+			sess.resurrectPlayer(ctx, 1.0)
+			sess.spawnCorpseBones(ctx)
+		}
+		s.resetPlayerPowers(sess)                      // ResetAllPowers (Battleground.cpp:791)
+		sess.sendClientControl(sess.playerGUID, false) // BlockMovement (Battleground.cpp:808-812)
+		// The honor-bonus / arena-point reward arms (Battleground.cpp:742-786)
+		// are gated by IsRandom() || BattlegroundMgr::IsBGWeekend(GetTypeID());
+		// arenas are never random and no arena type is a BG weekend, so the
+		// gate is false here: no bonus honor, no arena points, and the
+		// random-winner flag is never set at arena end. Rated vs skirmish is
+		// decided by the Arena::EndBattleground isRated() arm above.
+		if _, won := winningMembers[sess.playerGUID]; won {
+			sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG (Battleground.cpp:788)
+		}
+		sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND (Battleground.cpp:802)
 
-			_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
+		_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
 
-			// Update queue entry on this arena's own slot (arenaMatchQueueSlot),
-			// not the first active arena slot, which may belong to another
-			// arena type the player also holds.
-			if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
-				sess.bgQueues[idx].Status = BGStatusWaitLeave
-				sess.sendBattlefieldStatus(uint8(idx))
-			}
+		// Update queue entry on this arena's own slot (arenaMatchQueueSlot),
+		// not the first active arena slot, which may belong to another
+		// arena type the player also holds.
+		if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+			sess.bgQueues[idx].Status = BGStatusWaitLeave
+			sess.sendBattlefieldStatus(uint8(idx))
 		}
 	}
-	s.sessionsMu.RUnlock()
 }
 
 // processArenaLeave ports Battleground::_ProcessLeave (Battleground.cpp:506-528):
@@ -1211,12 +1238,10 @@ func (s *Server) broadcastArenaMessage(mapID uint32, msg string) {
 	}
 }
 
-// broadcastArenaStartText resolves an arena start broadcast_text ID from the
-// world DB (falling back to the hardcoded English text when the row is
-// missing) and broadcasts it to every player on the arena map. C++ sends
-// these IDs via Battleground::SendBroadcastText (Arena.h:25-28, Arena.cpp:68-71,
-// CHAT_MSG_BG_SYSTEM_NEUTRAL).
-func (s *Server) broadcastArenaStartText(mapID, textID uint32, fallback string) {
+// resolveArenaStartText resolves an arena start broadcast_text ID from the
+// world DB, falling back to the hardcoded English text when the row is
+// missing (Battleground::SendBroadcastText, Arena.h:25-28, Arena.cpp:68-71).
+func (s *Server) resolveArenaStartText(textID uint32, fallback string) string {
 	text := fallback
 	if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 		var dbText string
@@ -1224,7 +1249,35 @@ func (s *Server) broadcastArenaStartText(mapID, textID uint32, fallback string) 
 			text = dbText
 		}
 	}
-	s.broadcastArenaMessage(mapID, text)
+	return text
+}
+
+// broadcastArenaStartText broadcasts a resolved arena start text to every
+// player on the arena map.
+func (s *Server) broadcastArenaStartText(mapID, textID uint32, fallback string) {
+	s.broadcastArenaMessage(mapID, s.resolveArenaStartText(textID, fallback))
+}
+
+// broadcastArenaMessageToRoster sends a system chat message to the arena's
+// roster only. C++ SendBroadcastText runs BroadcastWorker over m_Players
+// (Battleground.cpp:592-602), not over the map's players.
+func (s *Server) broadcastArenaMessageToRoster(arena *arenaBattlegroundState, msg string) {
+	if s == nil || arena == nil {
+		return
+	}
+	for _, sess := range s.arenaRosterSessions(arena) {
+		sess.sendSystemMessage(msg)
+	}
+}
+
+// broadcastArenaStartTextToRoster resolves an arena start broadcast_text ID
+// and sends it to the roster only, the roster-keyed form of
+// broadcastArenaStartText.
+func (s *Server) broadcastArenaStartTextToRoster(arena *arenaBattlegroundState, textID uint32, fallback string) {
+	if s == nil || arena == nil {
+		return
+	}
+	s.broadcastArenaMessageToRoster(arena, s.resolveArenaStartText(textID, fallback))
 }
 
 // handleArenaAreaTrigger dispatches arena map-script area triggers for an
@@ -1305,13 +1358,13 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 
 		if remaining <= 60*time.Second && remaining > 30*time.Second && !arena.AnnouncedOneMinute {
 			arena.AnnouncedOneMinute = true
-			s.broadcastArenaStartText(arena.MapID, ArenaTextStartOneMinute, "One minute until the arena battle begins!")
+			s.broadcastArenaStartTextToRoster(arena, ArenaTextStartOneMinute, "One minute until the arena battle begins!")
 		} else if remaining <= 30*time.Second && remaining > 15*time.Second && !arena.AnnouncedThirtySeconds {
 			arena.AnnouncedThirtySeconds = true
-			s.broadcastArenaStartText(arena.MapID, ArenaTextStartThirtySeconds, "Thirty seconds until the arena battle begins!")
+			s.broadcastArenaStartTextToRoster(arena, ArenaTextStartThirtySeconds, "Thirty seconds until the arena battle begins!")
 		} else if remaining <= 15*time.Second && remaining > 0 && !arena.AnnouncedFifteenSeconds {
 			arena.AnnouncedFifteenSeconds = true
-			s.broadcastArenaStartText(arena.MapID, ArenaTextStartFifteenSeconds, "Fifteen seconds until the arena battle begins!")
+			s.broadcastArenaStartTextToRoster(arena, ArenaTextStartFifteenSeconds, "Fifteen seconds until the arena battle begins!")
 		} else if remaining <= 0 {
 			s.startArenaMatch(arena)
 		}
