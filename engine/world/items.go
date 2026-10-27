@@ -5778,6 +5778,13 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		// default arm's personal FillLoot(item_loot_template) — the
 		// disenchant/prospect/mill arms never apply here (Go has no
 		// EffectDisenchant/EffectProspecting/EffectMilling handlers).
+		// Player.cpp:8526-8527 - SendLoot releases the previously open loot
+		// before opening a new one, unconditionally and for item targets
+		// too; the creature open path already does this, the item path
+		// did not, orphaning the previous window's release cleanup.
+		if prev := s.activeLoot; prev != nil {
+			s.doLootRelease(prev)
+		}
 		var lootSource *sql.DB
 		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 			lootSource = s.server.WorldStore.DB
@@ -5829,14 +5836,22 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			s.server.markContainerLootGenerated(uint64(itemGUID))
 			loot.addViewer(s)
 
+			// Player.cpp:8683-8710 + LootHandler.cpp:340-347: even an empty
+			// roll opens a real window (SendLoot sets the loot GUID and sends
+			// SMSG_LOOT_RESPONSE), and closing it destroys the container
+			// (Loot::isLooted: gold == 0 && unlootedCount == 0). Registering
+			// only non-empty loot left the empty window without an activeLoot,
+			// so CMSG_LOOT_RELEASE no-op'd, the container survived, and a
+			// reopen re-rolled fresh loot until something dropped. The empty
+			// window still answers with the default empty response below.
+			s.server.lootMu.Lock()
+			if s.server.creatureLoot == nil {
+				s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
+			}
+			s.server.creatureLoot[loot.objectKey()] = loot
+			s.server.lootMu.Unlock()
+			s.activeLoot = loot
 			if len(loot.Items) > 0 || len(loot.QuestItems) > 0 || loot.Money > 0 {
-				s.server.lootMu.Lock()
-				if s.server.creatureLoot == nil {
-					s.server.creatureLoot = make(map[lootObjectKey]*activeLootState)
-				}
-				s.server.creatureLoot[loot.objectKey()] = loot
-				s.server.lootMu.Unlock()
-				s.activeLoot = loot
 				return s.sendLootResponse(ctx, loot) == nil
 			}
 		}
