@@ -1988,6 +1988,48 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectDispel (SpellEffects.cpp:2429) + EffectDispelMechanic
+	// (SpellEffects.cpp:4733) for a creature caster: the HIT_TARGET arms,
+	// grouped with the other effect-grouped arms above (C++ runs effects
+	// in index order; documented approximation). Gated on spellKnown like
+	// the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectDispel:
+				s.creatureEffectDispel(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectDispelMechanic:
+				s.creatureEffectDispelMechanic(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectKnockBack (SpellEffects.cpp:4552) for a creature caster:
+	// the HIT_TARGET arm, grouped with the other effect-grouped arms
+	// above. The 144 dest leg rides the cast's resolved destination like
+	// the TeleportUnits arm above. Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectKnockBack, spellEffectKnockBackDest:
+				s.creatureEffectKnockBack(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectResurrect (SpellEffects.cpp:4270) + EffectResurrectNew
+	// (SpellEffects.cpp:246) for a creature caster: the HIT_TARGET arms,
+	// grouped with the other effect-grouped arms above. Self-resurrect
+	// (94) and resurrect-pet (109) are player-caster-only in C++ and stay
+	// out. Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectResurrect:
+				s.creatureEffectResurrect(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectResurrectNew:
+				s.creatureEffectResurrectNew(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -2815,6 +2857,502 @@ func (s *Server) creatureEffectTeleportUnits(ctx context.Context, m *creatureMot
 		mapID, instanceID := motion.Map, motion.InstanceID
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, dx, dy, dz)
+	}
+}
+
+// creatureCasterOwnerSession resolves the affecting-player session for a
+// creature caster: the charmer/owner player session when one is online,
+// else nil. It mirrors the explicitAttacker resolution in
+// castCreatureSpellInternal (charm owner first, then owner) and the
+// GetAffectingPlayer twin the C++ arms use for their player-only legs.
+func (s *Server) creatureCasterOwnerSession(m *creatureMotion) *session {
+	if s == nil || m == nil {
+		return nil
+	}
+	if m.CharmOwnerGUID != 0 {
+		if os := s.findSessionByGUID(m.CharmOwnerGUID); os != nil && os.player != nil {
+			return os
+		}
+	}
+	if m.OwnerGUID != 0 {
+		if os := s.findSessionByGUID(m.OwnerGUID); os != nil && os.player != nil {
+			return os
+		}
+	}
+	return nil
+}
+
+// creatureEffectDispel mirrors Spell::EffectDispel (SpellEffects.cpp:2429)
+// for a creature caster: the HIT_TARGET arm stripping up to damage
+// dispellable auras from each hit target. With an owner/charm player
+// session the arm delegates to the session twin's dispelEffectAsCaster
+// (the pet-caster precedent, backlash and Devour Magic tails included);
+// a wild caster dispels player targets through the Server core below.
+// Wild-caster creature targets stay out: their charge/stack removal rides
+// the session-bound dispelCreatureAura helpers, which have no Server
+// twin. The corpse-target arm has no Go model on either path.
+func (s *Server) creatureEffectDispel(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		isReflected := false
+		if status, isRefl := reflected[guid]; isRefl {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+			isReflected = true
+		}
+		if os := s.creatureCasterOwnerSession(m); os != nil {
+			os.dispelEffectAsCaster(ctx, m.GUID, guid, spell, eff, m, isReflected)
+			continue
+		}
+		s.creatureDispelPlayerTarget(m, spell, eff, guid, isReflected)
+	}
+}
+
+// creatureDispelPlayerTarget runs the wild-caster half of EffectDispel
+// against a player hit target: the candidate scan mirrors
+// getDispellableAuraListForPlayer with the creature's faction
+// friendliness in place of the caster session's (Unit.cpp:4608-4612),
+// and the roll loop mirrors dispelEffectAsCaster's (random pick, charge
+// decrement via dispelPlayerAuraCharge, deduped success list). The
+// Unstable Affliction / Vampiric Touch backlash and Devour Magic tails
+// stay out: both route through an aura-caster or dispeller session,
+// which a wild creature caster has none of.
+func (s *Server) creatureDispelPlayerTarget(m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64, isReflected bool) {
+	if s == nil || m == nil {
+		return
+	}
+	targetSess := s.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return
+	}
+	dispelMask := getDispelMask(uint32(eff.MiscValue))
+	isFriendly := s.creatureFriendlyToTarget(m, targetGUID)
+	targetSess.castMu.Lock()
+	if dispelMask&(1<<DispelDisease) != 0 && targetSess.hasAura(spellUnholyBlight) {
+		dispelMask &^= (1 << DispelDisease)
+	}
+	offensive := !isFriendly
+	resistTotal := int32(0)
+	if offensive {
+		resistTotal = targetSess.dispelResistTotalLocked()
+	}
+	var candidates []dispelCandidate
+	var candAuras []*activeAura
+	for spellID, aura := range targetSess.activeAuras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.PersistentAreaAura && aura.CasterGUID != targetSess.playerGUID {
+			continue
+		}
+		var sp wotlk.Spell
+		var found bool
+		if s.Data != nil {
+			sp, found, _ = s.Data.Spell(spellID)
+		}
+		if found && sp.Attributes&spellAttributePassive != 0 {
+			continue
+		}
+		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
+			continue
+		}
+		dispelType := aura.DispelType
+		if dispelType == 0 && found {
+			dispelType = sp.DispelType
+		}
+		if (getDispelMask(dispelType) & dispelMask) == 0 {
+			continue
+		}
+		if isReflected != (isFriendly == aura.Positive) {
+			continue
+		}
+		candidates = append(candidates, dispelCandidate{
+			SpellID:    spellID,
+			DispelType: dispelType,
+			Mechanic:   aura.Mechanic,
+			AuraType:   aura.AuraType,
+			Slot:       aura.Slot,
+			Positive:   aura.Positive,
+			DurationMs: aura.DurationMs,
+			PeriodMs:   aura.PeriodMs,
+			Amount:     aura.Amount,
+			CasterGUID: aura.CasterGUID,
+			Amounts:    aura.Amounts,
+			SchoolMask: aura.SchoolMask,
+		})
+		candAuras = append(candAuras, aura)
+	}
+	mapID, instanceID := targetSess.player.Map, targetSess.player.InstanceID
+	targetSess.castMu.Unlock()
+	kept := candidates[:0]
+	for i := range candidates {
+		chance := s.auraDispelChance(mapID, instanceID, candAuras[i], resistTotal, offensive)
+		if chance <= 0 {
+			continue
+		}
+		candidates[i].Chance = chance
+		kept = append(kept, candidates[i])
+	}
+	candidates = kept
+	if len(candidates) == 0 {
+		return
+	}
+	maxDispelled := int(eff.CalcValueForLevel(spell, uint32(m.Level)))
+	var successList []uint32
+	var failList []uint32
+	for count := 0; count < maxDispelled && len(candidates) > 0; count++ {
+		idx := rand.Intn(len(candidates))
+		cand := candidates[idx]
+		if int32(rand.Intn(100)) < cand.Chance {
+			alreadyLogged := false
+			for _, logged := range successList {
+				if logged == cand.SpellID {
+					alreadyLogged = true
+					break
+				}
+			}
+			if !alreadyLogged {
+				successList = append(successList, cand.SpellID)
+			}
+			if fullyRemoved := targetSess.dispelPlayerAuraCharge(cand.SpellID); fullyRemoved {
+				candidates[idx] = candidates[len(candidates)-1]
+				candidates = candidates[:len(candidates)-1]
+			}
+		} else {
+			failList = append(failList, cand.SpellID)
+		}
+	}
+	if len(failList) > 0 {
+		failPkt := buildDispelFailed(m.GUID, targetGUID, spell.ID, failList)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	}
+	if len(successList) > 0 {
+		logPkt := buildSpellDispelLog(targetGUID, m.GUID, spell.ID, successList)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	}
+}
+
+// creatureEffectDispelMechanic mirrors Spell::EffectDispelMechanic
+// (SpellEffects.cpp:4733) for a creature caster: the HIT_TARGET arm
+// stripping mechanic-matching auras from each hit target on a per-aura
+// CalcDispelChance roll. Owned/charmed casters delegate to the session
+// twin; wild casters run the player-target leg below, and wild-caster
+// creature targets stay out for the same session-bound removal reason as
+// the dispel arm above.
+func (s *Server) creatureEffectDispelMechanic(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	mechanic := uint32(eff.MiscValue)
+	if mechanic == 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isRefl := reflected[guid]; isRefl {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if os := s.creatureCasterOwnerSession(m); os != nil {
+			os.handleEffectDispelMechanic(ctx, guid, spell, eff)
+			continue
+		}
+		s.creatureDispelMechanicPlayerTarget(m, eff, guid)
+	}
+}
+
+// creatureDispelMechanicPlayerTarget runs the wild-caster half of
+// EffectDispelMechanic against a player hit target, mirroring the player
+// leg of the session twin with the creature's faction friendliness.
+func (s *Server) creatureDispelMechanicPlayerTarget(m *creatureMotion, eff wotlk.SpellEffect, targetGUID uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	mechanic := uint32(eff.MiscValue)
+	if mechanic == 0 {
+		return
+	}
+	targetSess := s.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		return
+	}
+	offensive := !s.creatureFriendlyToTarget(m, targetGUID)
+	targetSess.castMu.Lock()
+	resistTotal := int32(0)
+	if offensive {
+		resistTotal = targetSess.dispelResistTotalLocked()
+	}
+	var matched []*activeAura
+	for _, aura := range targetSess.activeAuras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.PersistentAreaAura && aura.CasterGUID != targetSess.playerGUID {
+			continue
+		}
+		matchesMechanic := (targetSess.auraSpellMechanicMask(aura) & (uint32(1) << mechanic)) != 0
+		if !matchesMechanic {
+			switch mechanic {
+			case 1:
+				matchesMechanic = aura.AuraType == 6
+			case 2:
+				matchesMechanic = aura.AuraType == 5
+			case 5:
+				matchesMechanic = aura.AuraType == 7
+			case 7:
+				matchesMechanic = aura.AuraType == 15
+			case 9:
+				matchesMechanic = aura.AuraType == 14
+			case 11:
+				matchesMechanic = aura.AuraType == 130 || aura.AuraType == 31
+			case 12:
+				matchesMechanic = aura.AuraType == 12
+			case 15:
+				matchesMechanic = aura.AuraType == 3 && aura.SchoolMask == 1
+			}
+		}
+		if matchesMechanic {
+			matched = append(matched, aura)
+		}
+	}
+	mapID, instanceID := targetSess.player.Map, targetSess.player.InstanceID
+	targetSess.castMu.Unlock()
+	var toRemove []uint32
+	for _, aura := range matched {
+		if int32(rand.Intn(100)) < s.auraDispelChance(mapID, instanceID, aura, resistTotal, offensive) {
+			toRemove = append(toRemove, aura.SpellID)
+		}
+	}
+	for _, spID := range toRemove {
+		targetSess.dispelPlayerAura(spID)
+	}
+}
+
+// creatureEffectKnockBack mirrors Spell::EffectKnockBack
+// (SpellEffects.cpp:4552) for a creature caster: the HIT_TARGET arm
+// knocking each hit target away from the caster (effect 98) or from the
+// spell destination (effect 144, HasDst-gated like the session twin).
+// Player targets take the full session-twin legs: the root/stun gate,
+// the non-melee interrupt legs, and the SMSG_MOVE_KNOCK_BACK packet
+// (plus the flying re-enable leg). Creature-motion targets stay out:
+// KnockbackFrom drives a movement generator Go has no model for, and an
+// instant relocation would misread as a teleport; the world-boss /
+// dungeon-boss gate (which C++ applies only when the caster has an
+// affecting player) is therefore vacuous on the legs that do run, but it
+// is still evaluated for the record on the skipped creature leg.
+func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = dz
+	speedXY := float32(eff.MiscValue) * 0.1
+	speedZ := float32(eff.CalcValueForLevel(spell, uint32(m.Level))) * 0.1
+	if speedXY < 0.01 && speedZ < 0.01 {
+		return
+	}
+	var fromX, fromY float64
+	if eff.Effect == spellEffectKnockBackDest {
+		if !hasDest {
+			return
+		}
+		fromX, fromY = float64(dx), float64(dy)
+	} else {
+		fromX, fromY = float64(m.X), float64(m.Y)
+	}
+	affectingPlayer := s.creatureCasterOwnerSession(m) != nil
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isRefl := reflected[guid]; isRefl {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			if affectingPlayer {
+				if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+					if tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.autoBalanceIsDungeonBoss(ctx, tm.Entry) {
+						continue
+					}
+				}
+			}
+			continue
+		}
+		if targetSess.rooted || targetSess.hasAuraType(spellAuraModStun) {
+			continue
+		}
+		targetSess.castMu.Lock()
+		cast := targetSess.activeCast
+		if cast != nil && cast.Executing {
+			cast = nil
+		}
+		if cast != nil {
+			if cast.Timer != nil {
+				cast.Timer.Stop()
+			}
+			cast.Cancelled = true
+			targetSess.activeCast = nil
+		}
+		targetSess.castMu.Unlock()
+		if cast != nil {
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(cast.CastID, cast.SpellID, spellFailedInterrupted), true)
+			targetSess.sendInterrupted(cast.CastID, cast.SpellID, 0)
+		}
+		targetSess.interruptCurrentChannel()
+		targetSess.cancelAutoRepeatOnInterrupt()
+		ddx := float64(targetSess.player.X) - fromX
+		ddy := float64(targetSess.player.Y) - fromY
+		var vcos, vsin float64
+		if math.Abs(ddx) < 0.001 && math.Abs(ddy) < 0.001 {
+			angle := rand.Float64() * 2 * math.Pi
+			vcos, vsin = math.Cos(angle), math.Sin(angle)
+		} else {
+			dist := math.Hypot(ddx, ddy)
+			vcos, vsin = ddx/dist, ddy/dist
+		}
+		packet := protocol.NewBuffer(32)
+		packet.WritePackedGUID(guid)
+		packet.WriteU32(0)
+		packet.WriteF32(float32(vcos))
+		packet.WriteF32(float32(vsin))
+		packet.WriteF32(speedXY)
+		packet.WriteF32(-speedZ)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+		if targetSess.hasAuraType(spellAuraFly) || targetSess.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+			fly := protocol.NewBuffer(packedGUIDSize(guid) + 4)
+			fly.WritePackedGUID(guid)
+			fly.WriteU32(0)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+		}
+	}
+}
+
+// creatureResurrectLog writes the SMSG_SPELLLOGEXECUTE resurrect log for
+// a creature caster: the target session gets the direct write and the
+// caster's visibility set gets the broadcast, mirroring the session
+// twin's sendResurrectLog shape (which hardcodes the resurrect effect id
+// for both the 18 and the 113 paths).
+func (s *Server) creatureResurrectLog(m *creatureMotion, spellID uint32, targetGUID uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectResurrect)
+	log.WriteU32(1)
+	log.WritePackedGUID(targetGUID)
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	}
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+}
+
+// creatureEffectResurrect mirrors Spell::EffectResurrect
+// (SpellEffects.cpp:4270) for a creature caster: the HIT_TARGET arm
+// sending a resurrect request to each dead player hit target, with
+// health/mana as pcts of the target's maxima from the rolled damage.
+// Non-player targets fall through the C++ ToPlayer gate, and the
+// corpse-target arm has no Go model on either path. Self-resurrect (94)
+// and resurrect-pet (109) are player-caster-only in C++ and stay out.
+func (s *Server) creatureEffectResurrect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isRefl := reflected[guid]; isRefl {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if !targetSess.isDeadOrGhost() || targetSess.resurrection != nil {
+			continue
+		}
+		healthPct := eff.CalcValueForLevel(spell, uint32(m.Level))
+		if healthPct < 1 {
+			healthPct = 1
+		}
+		if healthPct > 100 {
+			healthPct = 100
+		}
+		maxHealth := targetSess.player.MaxHealth
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		health := uint32(int64(maxHealth) * int64(healthPct) / 100)
+		maxMana := targetSess.player.MaxPowers[0]
+		mana := uint32(int64(maxMana) * int64(healthPct) / 100)
+		targetSess.setResurrectRequestData(m.GUID, m.Map, m.X, m.Y, m.Z, health, mana, 0)
+		targetSess.sendResurrectRequest(m.GUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
+		s.creatureResurrectLog(m, spell.ID, guid)
+	}
+}
+
+// creatureEffectResurrectNew mirrors Spell::EffectResurrectNew
+// (SpellEffects.cpp:246) for a creature caster: the HIT_TARGET arm
+// sending a resurrect request to each dead player hit target, with the
+// rolled damage as flat health and MiscValue as mana. The self-cast arm
+// is vacuous here (C++ ToPlayer on the caster fails for a creature), as
+// are the 94/109 family arms noted on the resurrect arm above.
+func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	health := uint32(1)
+	if eff.BasePoints >= 0 {
+		health = uint32(eff.CalcValueForLevel(spell, uint32(m.Level)))
+	}
+	mana := uint32(0)
+	if eff.MiscValue > 0 {
+		mana = uint32(eff.MiscValue)
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isRefl := reflected[guid]; isRefl {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		if !targetSess.isDeadOrGhost() || targetSess.resurrection != nil {
+			continue
+		}
+		targetSess.setResurrectRequestData(m.GUID, m.Map, m.X, m.Y, m.Z, health, mana, 0)
+		targetSess.sendResurrectRequest(m.GUID, "", false, spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0)
+		s.creatureResurrectLog(m, spell.ID, guid)
 	}
 }
 
