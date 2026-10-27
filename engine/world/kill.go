@@ -1887,9 +1887,16 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()
+			broadcastMap := respawn.Map
+			if motion == nil {
+				if revived, revivedMap := s.reviveTransportPassengerRespawn(ctx, respawn); revived != nil {
+					motion = revived
+					broadcastMap = revivedMap
+				}
+			}
 			s.reseatRespawnedEntry(ctx, motion, respawn.Entry)
-			s.clearLootState(respawn.Map, 0, rawGUID)
-			s.broadcastCreatureValuesUpdateInInstance(respawn.Map, 0, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
+			s.clearLootState(broadcastMap, 0, rawGUID)
+			s.broadcastCreatureValuesUpdateInInstance(broadcastMap, 0, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
 			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
 			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216).
 			if motion != nil {

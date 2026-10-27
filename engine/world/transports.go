@@ -177,7 +177,11 @@ func (s *Server) loadTransportPassengers(ctx context.Context, transport *contine
 	now := time.Now()
 	s.motionMu.Lock()
 	for guid, respawn := range s.creatureRespawns {
-		if respawn.Map == transport.Spawn.Map && respawn.InstanceID == 0 && respawn.At.After(now) {
+		// scheduleCreatureRespawn stores the DB map, which for a transport
+		// passenger is the template transport-map id (TransportMapID),
+		// not the continent map the transport currently sails on
+		// (Spawn.Map); gating on Spawn.Map could never fire.
+		if respawn.Map == transport.TransportMapID && respawn.InstanceID == 0 && respawn.At.After(now) {
 			respawning[guid] = struct{}{}
 		}
 	}
@@ -279,6 +283,58 @@ func (s *Server) reloadTransportPassengers(ctx context.Context, guid uint32) ([]
 	passengers := current.passengerCreatures()
 	s.transportMu.Unlock()
 	return passengers, true
+}
+
+// reviveTransportPassengerRespawn revives a transport passenger whose respawn
+// came due: scheduleCreatureRespawn stores the DB map (the template
+// transport-map id), but the passenger motion lives on the transport's
+// current continent map, so the direct lookup in processCreatureRespawns
+// misses and the motion would stay dead until the next map change. A live
+// dead motion is revived in place (its position stays under
+// relocateTransportCreatureMotions: the respawn coordinates are
+// transport-frame offsets, not world coordinates); a missing motion means
+// a map-change reload skipped the passenger while respawning, so the
+// passengers reload and the next tick re-materializes it.
+func (s *Server) reviveTransportPassengerRespawn(ctx context.Context, respawn creatureRespawn) (*creatureMotion, uint32) {
+	if s == nil || respawn.GUID == 0 || respawn.Entry == 0 || respawn.Map == 0 {
+		return nil, 0
+	}
+	rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
+	s.transportMu.Lock()
+	var transport *continentTransport
+	for _, candidate := range s.transports {
+		if candidate != nil && candidate.TransportMapID == respawn.Map {
+			transport = candidate
+			break
+		}
+	}
+	s.transportMu.Unlock()
+	if transport == nil {
+		return nil, 0
+	}
+	s.motionMu.Lock()
+	if m := s.findCreatureMotionLocked(transport.Spawn.Map, 0, rawGUID); m != nil {
+		m.Health = respawn.Health
+		m.MaxHealth = respawn.Health
+		m.BaseMaxHealth = respawn.Health
+		m.InCombat, m.TargetGUID, m.Moving = false, 0, false
+		m.Looted = false
+		m.TapPlayerGUID, m.TapGroupID = 0, 0
+		m.PlayerDamageReq = respawn.Health / 2
+		s.motionMu.Unlock()
+		return m, transport.Spawn.Map
+	}
+	s.motionMu.Unlock()
+	if passengers, ok := s.reloadTransportPassengers(ctx, transport.Spawn.GUID); ok {
+		s.relocateTransportCreatureMotions(ctx, passengers)
+		s.motionMu.Lock()
+		m := s.findCreatureMotionLocked(transport.Spawn.Map, 0, rawGUID)
+		s.motionMu.Unlock()
+		if m != nil {
+			return m, transport.Spawn.Map
+		}
+	}
+	return nil, 0
 }
 
 func (t *continentTransport) updatePosition() {
