@@ -12101,7 +12101,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (rawItemGUID/itemEntry from handleUseItem), so an item
 				// cast marks the spell item-based and skips the
 				// lockpicking skill-up.
-				s.handleEffectOpenLock(effCtx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
+				// Spell::EffectOpenLock (SpellEffects.cpp:1948) runs at HIT_TARGET per
+				// gameobject target (DoProcessTargetContainer, Spell.cpp:3554), so a
+				// list-slot OPEN_LOCK effect (nearby 40, area 51/52, cone 108 arms,
+				// Spell.cpp:1036/1227/1176) opens each of its masked list picks, not
+				// just the wire target: the masked iteration returns the wire GO for
+				// object-slot and EXPLICIT-fallback effects unchanged, and the list
+				// picks only for the effects whose arm recorded them.
+				for _, goGUID := range goMaskedTargetsForEffect(goEffectMasks, target, hitTargets, effectIndex, eff) {
+					s.handleEffectOpenLock(effCtx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: goGUID}, spell, eff, castItemGUID != 0 || castItemEntry != 0)
+				}
 			case spellEffectEnchantItem: // 53: SPELL_EFFECT_ENCHANT_ITEM
 				// The cast item's entry gates the skill-up arm
 				// (SpellEffects.cpp:2733: m_CastItem with
