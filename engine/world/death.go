@@ -685,14 +685,28 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		// nil), and a killer with no BG instance (GM-teleported pair
 		// on a BG map) fired the same arms. Suicide is NOT excluded:
 		// the tail gates on player only, so a self-kill still runs
-		// HandleKillPlayer. SA has no C++ override (base scores only,
-		// unmodeled in Go), so its no-op call rides the same gate.
+		// HandleKillPlayer. SA has no C++ override, so its call now
+		// carries only the base score leg below.
 		// The manager-lookup-miss half of GetBattleground() has no Go
 		// equivalent (per-map state is getOrCreate), the HandleKillUnit
 		// residual. WG is NOT gated here: Battlefield HandleKill is
 		// the separate player && attacker != victim arm and its handler
 		// already nil-gates the killer.
 		if killer != nil && killer.bgData.InstanceID != 0 {
+			if !IsArenaMap(s.player.Map) {
+				// Base Battleground::HandleKillPlayer leg
+				// (Battleground.cpp:1662-1694): victim deaths, killer
+				// honorable kills + killing blows, same-team
+				// at-distance honorable kills — battleground_scores.go.
+				// Arena matches keep their own ArenaPlayerScore table
+				// and their packet serializes killing blows only, so
+				// the base deaths/honorable-kills rows stay out here.
+				s.server.recordBGKillPlayerScores(s, killer)
+				// Battleground.cpp:1690-1691: non-arena victims take
+				// UNIT_FLAG_SKINNABLE so the insignia can be removed;
+				// buildPlayerRepop already clears it at repop.
+				s.player.UnitFlags |= unitFlagSkinnable
+			}
 			s.server.handleWSGPlayerDeath(s)
 			s.server.handleEOTSPlayerDeath(s)
 			s.server.handleAVPlayerDeath(s)

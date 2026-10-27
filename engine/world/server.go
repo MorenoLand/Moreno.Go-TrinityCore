@@ -152,6 +152,7 @@ type Server struct {
 	saState                   map[uint32]*saBattlegroundState
 	icMu                      sync.RWMutex
 	icState                   map[uint32]*icBattlegroundState
+	bgScores                  map[bgScoreKey]map[uint64]*bgPlayerScore // per-instance PlayerScores (battleground_scores.go), guarded by objectsMu
 	arenaMu                   sync.RWMutex
 	arenaState                map[uint32]*arenaBattlegroundState
 	arenaTickLast             time.Time
