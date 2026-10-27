@@ -669,6 +669,144 @@ func (s *session) meleeHitRedirectGUID(ctx context.Context, victimGUID uint64) (
 	return 0, false
 }
 
+// serverVictimHitTriggerAuras is the Server-level twin of
+// victimHitTriggerAuras (Unit.cpp:6351): the victim's
+// SPELL_AURA_ADD_CASTER_HIT_TRIGGER (111) aura effects, player victim via
+// the session's activeAuras, creature victim via the server's
+// activeCreatureAuras keyed by the caster's map/instance plus the victim
+// GUID — the same key the session twin builds from the attacker's
+// player state.
+func (s *Server) serverVictimHitTriggerAuras(m *creatureMotion, victimGUID uint64) []hitTriggerAura {
+	var out []hitTriggerAura
+	collect := func(spellID uint32, aura *activeAura, owner *session, key creatureAuraKey, isCreature bool) {
+		if aura == nil || aura.Stopped || aura.CasterGUID == 0 {
+			return
+		}
+		for i := 0; i < 3; i++ {
+			if aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			t := aura.AuraType
+			if sp, found, _ := s.Data.Spell(spellID); found && i < len(sp.Effects) {
+				t = sp.Effects[i].Aura
+			}
+			if t != spellAuraAddCasterHitTrigger {
+				continue
+			}
+			out = append(out, hitTriggerAura{spellID: spellID, chance: aura.Amounts[i], magnet: aura.CasterGUID, aura: aura, owner: owner, creaKey: key, isCreature: isCreature})
+		}
+	}
+	if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.player != nil {
+		vs.castMu.Lock()
+		for id, aura := range vs.activeAuras {
+			collect(id, aura, vs, creatureAuraKey{}, false)
+		}
+		vs.castMu.Unlock()
+	} else if m != nil {
+		key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: victimGUID}
+		s.auraMu.Lock()
+		for id, aura := range s.activeCreatureAuras[key] {
+			collect(id, aura, nil, key, true)
+		}
+		s.auraMu.Unlock()
+	}
+	return out
+}
+
+// dropHitTriggerCharge on the Server mirrors the session twin's
+// DropCharge(AURA_REMOVE_BY_EXPIRE) arm (Unit.cpp:6359) without an
+// attacker session: one charge is consumed and the aura is removed at
+// zero charges. The removals lock internally, so the charge decrement
+// runs under the map lock first and removal after release.
+func (s *Server) dropHitTriggerCharge(ht hitTriggerAura) {
+	if ht.isCreature {
+		s.auraMu.Lock()
+		remove := false
+		if mm := s.activeCreatureAuras[ht.creaKey]; mm != nil {
+			if a, ok := mm[ht.spellID]; ok && a == ht.aura && !a.Stopped {
+				if a.RemainingCharges > 0 {
+					a.RemainingCharges--
+				}
+				remove = a.RemainingCharges == 0
+			}
+		}
+		s.auraMu.Unlock()
+		if remove {
+			s.removeCreatureAura(ht.creaKey, ht.spellID)
+		}
+		return
+	}
+	vs := ht.owner
+	if vs == nil {
+		return
+	}
+	vs.castMu.Lock()
+	remove := false
+	if a, ok := vs.activeAuras[ht.spellID]; ok && a == ht.aura && !a.Stopped {
+		if a.RemainingCharges > 0 {
+			a.RemainingCharges--
+		}
+		remove = a.RemainingCharges == 0
+	}
+	vs.castMu.Unlock()
+	if remove {
+		vs.removeAura(ht.spellID)
+	}
+}
+
+// creatureMeleeHitRedirect mirrors the SPELL_DAMAGE_CLASS_MELEE/RANGED arm
+// of Spell::SelectExplicitTargets (Spell.cpp:743-748) via
+// Unit::GetMeleeHitRedirectTarget (Unit.cpp:6349-6363) for a creature
+// caster: a MELEE/RANGED spell with an explicit unit target — the shared
+// head gate (mask ENEMY, or plain UNIT with an unfriendly target) —
+// redirects onto the victim's SPELL_AURA_ADD_CASTER_HIT_TRIGGER (111)
+// magnet when the magnet is a valid attack target, within LOS of the
+// caster, and passes CheckExplicitTarget and CheckTarget for this spell,
+// with the roll_chance_i(amount) roll consuming one charge on success.
+// The auto-attack arm (Unit.cpp:2156) is bridged separately at
+// meleeHitRedirectGUID; the player-cast arm at finishSpellCast.
+func (s *Server) creatureMeleeHitRedirect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, attacker *session, victimGUID uint64) (uint64, bool) {
+	if s == nil || m == nil || victimGUID == 0 {
+		return 0, false
+	}
+	if spell.DefenseType != spellDamageClassMelee && spell.DefenseType != spellDamageClassRanged {
+		return 0, false
+	}
+	explicitMask := spellExplicitUnitTargetMask(spell)
+	if explicitMask&targetFlagUnitEnemy == 0 {
+		if explicitMask&targetFlagUnit == 0 || s.creatureFriendlyToTarget(m, victimGUID) {
+			return 0, false
+		}
+	}
+	for _, ht := range s.serverVictimHitTriggerAuras(m, victimGUID) {
+		if ht.magnet == 0 || ht.magnet == victimGUID || ht.magnet == m.GUID {
+			continue
+		}
+		if !s.creatureExplicitAttackPasses(m, attacker, ht.magnet) {
+			continue
+		}
+		mx, my, mz, _, _, found := s.aiThreatUnitPos(m, ht.magnet, nil, true)
+		if !found {
+			continue
+		}
+		if !s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, mx, my, mz) {
+			continue
+		}
+		if !s.checkCreatureExplicitTargetFaction(m, attacker, spell, ht.magnet) {
+			continue
+		}
+		if !s.checkCreatureSpellCheckTarget(ctx, m, spell, ht.magnet) {
+			continue
+		}
+		if ht.chance <= 0 || rand.IntN(100) >= int(ht.chance) {
+			continue
+		}
+		s.dropHitTriggerCharge(ht)
+		return ht.magnet, true
+	}
+	return 0, false
+}
+
 // swingBlockValue folds the victim-side inputs of the MELEE_HIT_BLOCK arm of
 // Unit::CalculateMeleeDamage (Unit.cpp:1340-1376): the victim's shield block
 // value — Player::GetShieldBlockValue (Player.cpp:5426-5430) for player

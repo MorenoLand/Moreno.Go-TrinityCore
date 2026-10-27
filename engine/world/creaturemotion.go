@@ -3371,6 +3371,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
 						spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
 					}
+					// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811),
+					// the inline twin of the castCreatureSpellInternal arm: the
+					// enemy/ally/party/raid/minipet/passenger verdict on the wire victim.
+					// C++ relative order: CheckExplicitTarget (5365) ahead of CheckTarget
+					// (5372), so this sits before the CheckTarget gate below. The
+					// affecting player is the charm/owner session when one resolves, else
+					// nil (wild caster) — the same resolution as the twin.
+					var explicitAttacker *session
+					if os := s.findSessionByGUID(motion.CharmOwnerGUID); motion.CharmOwnerGUID != 0 && os != nil {
+						explicitAttacker = os
+					} else if os := s.findSessionByGUID(motion.OwnerGUID); motion.OwnerGUID != 0 && os != nil {
+						explicitAttacker = os
+					}
+					if target.GUID != 0 && !s.checkCreatureExplicitTargetFaction(motion, explicitAttacker, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// SpellInfo::CheckTarget (Spell.cpp:5372), the inline twin of
 					// the castCreatureSpellInternal arm: a wire victim failing any
 					// CheckTarget gate (dead without a dead-target allowance,
@@ -3437,6 +3454,40 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						areaVictim = &playerPos{GUID: redirectGUID}
 						nearbyReplacesWireVictim = true
 						areaCreatureHits = append(areaCreatureHits, redirectGUID)
+						var redirectDestFailed bool
+						destX, destY, destZ, hasDest, redirectDestFailed = s.resolveCreatureSpellDestination(ctx, motion, spellInfo, redirectGUID)
+						if redirectDestFailed {
+							s.rearmAISpell(motion, dueSpell, spellID, now)
+							return
+						}
+						if hasDest {
+							spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+							spellTarget.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
+						} else {
+							spellTarget.Flags &^= protocol.SpellTargetFlagDestLocation
+							spellTarget.Destination = protocol.SpellTargetLocation{}
+						}
+					}
+					// Spell::SelectExplicitTargets melee/ranged-redirect arm (Spell.cpp:743-748),
+					// the inline twin of the finishSpellCast arm: a MELEE/RANGED-damage-class
+					// spell with an explicit unit target redirects through the victim's
+					// SPELL_AURA_ADD_CASTER_HIT_TRIGGER (111) magnet (Unit::GetMeleeHitRedirectTarget,
+					// Unit.cpp:6349-6363). C++ runs it inside SelectSpellTargets (3410), after
+					// the CheckCast revalidation — the same position as the magic arm above.
+					// The magnet joins the per-hit legs like the magic arm's totem, split by
+					// kind: a player magnet joins areaHits, a creature magnet joins
+					// areaCreatureHits; the wire victim takes no player leg below.
+					if redirectGUID, ok := s.creatureMeleeHitRedirect(ctx, motion, spellInfo, explicitAttacker, target.GUID); ok {
+						spellTarget.UnitGUID = redirectGUID
+						hitTargets = []uint64{redirectGUID}
+						areaVictim = &playerPos{GUID: redirectGUID}
+						nearbyReplacesWireVictim = true
+						if ms := s.findSessionByGUID(redirectGUID); ms != nil && ms.player != nil {
+							p := ms.player
+							areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: ms.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: ms.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: ms.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: ms})
+						} else {
+							areaCreatureHits = append(areaCreatureHits, redirectGUID)
+						}
 						var redirectDestFailed bool
 						destX, destY, destZ, hasDest, redirectDestFailed = s.resolveCreatureSpellDestination(ctx, motion, spellInfo, redirectGUID)
 						if redirectDestFailed {
