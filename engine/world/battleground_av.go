@@ -394,6 +394,66 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 	return state
 }
 
+// resetAVStateForNewMatch is the Go form of the CreateNewBattleground +
+// ResetBGSubclass pair (BattlegroundMgr.cpp:412,
+// BattlegroundAV.cpp:1479-1505) for the successor-reuse case: C++ hands every
+// match a fresh BG object, while Go reuses one per-map state, so a successor
+// match arriving in the previous match's WaitLeave window inherits the ended
+// fields instead - Winner >= 0 gates every node/creature-kill arm,
+// reinforcements and node owners from the old match, dead captains, and
+// quest counters. Runs at formation (first fresh accept, see
+// rearmNonArenaBGMatchStartTimeOnFirstAccept), never at the end arms. The
+// caller's av.mu is held, as with endAV. Banner GUIDs are dynamic (spawned
+// by updateAVNodeBanner on capture), so the ended match's banners despawn;
+// node owners, banner entries, and mine owners are the creation values.
+func (s *Server) resetAVStateForNewMatch(av *avBattlegroundState) {
+	for i := range av.Nodes {
+		if av.Nodes[i].CaptureTimer != nil {
+			av.Nodes[i].CaptureTimer.Stop()
+			av.Nodes[i].CaptureTimer = nil
+		}
+		if av.Nodes[i].BannerGUID != 0 {
+			s.despawnDynamicGameObject(av.Nodes[i].BannerGUID)
+		}
+		initOwner := getAVNodeInitialOwner(uint32(i))
+		bannerEntry := AVObjectBannerA
+		if initOwner == AVTeamHorde {
+			bannerEntry = AVObjectBannerH
+		} else if initOwner == AVTeamNeutral {
+			bannerEntry = AVObjectBannerSnowfall
+		}
+		av.Nodes[i] = avNodeState{
+			NodeID:      uint32(i),
+			IsTower:     uint32(i) >= AVNodeDunBaldarSouth,
+			Owner:       initOwner,
+			State:       AVNodeStateControlled,
+			PrevOwner:   AVTeamNeutral,
+			TotalOwner:  initOwner,
+			BannerEntry: bannerEntry,
+			X:           av.Nodes[i].X,
+			Y:           av.Nodes[i].Y,
+			Z:           av.Nodes[i].Z,
+		}
+	}
+	for i := range av.Mines {
+		av.Mines[i].Owner = AVTeamNeutral
+		av.Mines[i].ReclaimTimerMs = 0
+		av.Mines[i].LastTick = time.Time{}
+	}
+	av.AllianceReinforcements = AVMaxReinforcements
+	av.HordeReinforcements = AVMaxReinforcements
+	av.AllianceCaptainAlive = true
+	av.HordeCaptainAlive = true
+	av.CaptainBuffTimerMs = [2]int64{120000 + int64(rand.Intn(5))*60, 120000 + int64(rand.Intn(5))*60}
+	av.InformedNearVictory = [2]bool{}
+	av.QuestStatus = [2][9]uint32{}
+	av.MineTickElapsedMs = 0
+	av.Winner = -1
+	av.EndedAt = time.Time{}
+	av.PrematureCountDown = false
+	av.PrematureTimerMs = 0
+}
+
 // deleteAVState removes the per-map AV state once no BG player remains on
 // the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
 // av.mu before the delete so no armed callback fires on the orphan; the

@@ -2261,7 +2261,11 @@ func (s *Server) peekNonArenaBGMatchStartTime(mapID uint32) time.Time {
 // participant is another session holding an InProgress slot for this map
 // (MapID-keyed, so a random queue resolved to this map counts); WaitLeave
 // holders do not block the re-arm, and the accepting session is excluded.
-// Only a pre-existing state is re-armed — never created — so the normal flow
+// A pre-existing ENDED state (Winner >= 0) is first reset to its creation
+// values (resetAB/AV/EOTS/SA/ICStateForNewMatch, the Go form of C++
+// CreateNewBattleground + Reset): without the reset the successor would
+// inherit the ended Winner gate, scores, and node/tower/flag state. Only a
+// pre-existing state is re-armed — never created — so the normal flow
 // (state created by the first entrant's map entry or first interaction) and
 // the premature-countdown tick's state set are untouched. WSG is excluded:
 // its clock arms lazily at the first flag interaction, so a bystander-created
@@ -2306,6 +2310,9 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 			return
 		}
 		state.mu.Lock()
+		if state.Winner >= 0 {
+			s.resetABStateForNewMatch(state)
+		}
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	case AVMapID:
@@ -2316,6 +2323,9 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 			return
 		}
 		state.mu.Lock()
+		if state.Winner >= 0 {
+			s.resetAVStateForNewMatch(state)
+		}
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	case EOTSMapID:
@@ -2326,6 +2336,9 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 			return
 		}
 		state.mu.Lock()
+		if state.Winner >= 0 {
+			s.resetEOTSStateForNewMatch(state)
+		}
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	case SAMapID:
@@ -2336,6 +2349,9 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 			return
 		}
 		state.mu.Lock()
+		if state.Winner >= 0 {
+			s.resetSAStateForNewMatch(state)
+		}
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	case ICMapID:
@@ -2346,6 +2362,9 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 			return
 		}
 		state.mu.Lock()
+		if state.Winner >= 0 {
+			s.resetICStateForNewMatch(state)
+		}
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	}

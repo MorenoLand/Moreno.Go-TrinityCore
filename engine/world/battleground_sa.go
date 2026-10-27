@@ -250,6 +250,43 @@ func (s *Server) getOrCreateSAState(mapID uint32) *saBattlegroundState {
 	return state
 }
 
+// resetSAStateForNewMatch is the Go form of the CreateNewBattleground +
+// Reset() pair (BattlegroundMgr.cpp:412, BattlegroundSA.cpp:75-91) for the
+// successor-reuse case: C++ hands every match a fresh BG object, while Go
+// reuses one per-map state, so a successor match arriving in the previous
+// match's WaitLeave window inherits the ended fields instead - Winner >= 0
+// and Status Finished gate every gate/flag arm, and gates, graveyards,
+// round scores, and demolisher state are the old match's. Runs at formation
+// (first fresh accept, see rearmNonArenaBGMatchStartTimeOnFirstAccept), never
+// at the end arms. The caller's sa.mu is held. Attackers are re-randomized
+// before resetObjects, as C++ Reset picks them with urand and ResetObjs keys
+// graveyards off them; round-two transitions reuse resetObjects without
+// touching the match-level fields reset here.
+func (s *Server) resetSAStateForNewMatch(sa *saBattlegroundState) {
+	attackers := SATeamAlliance
+	if rand.Intn(2) == 1 {
+		attackers = SATeamHorde
+	}
+	sa.Attackers = attackers
+	sa.Status = SAStatusWarmup
+	sa.TotalTime = 0
+	sa.EndRoundTimer = SARoundLength
+	sa.TimerEnabled = false
+	sa.RoundScores = [2]saRoundScore{}
+	sa.DemolishersAlive = [2]bool{true, true}
+	sa.GateDestroyed = false
+	sa.Winner = -1
+	sa.EndedAt = time.Time{}
+	sa.PrematureCountDown = false
+	sa.PrematureTimerMs = 0
+	sa.DemolishersDestroyed = make(map[uint64]uint32)
+	sa.GatesDestroyed = make(map[uint64]uint32)
+	sa.RoundTwoWarnTimer = 0
+	sa.RoundTwoWarned = false
+	sa.RoundTwoHalfMinWarned = false
+	sa.resetObjects()
+}
+
 // deleteSAState removes the per-map SA state once no BG player remains on
 // the map (deleteBattlegroundStateOnEmpty). SA drives its timers from the
 // world tick (updateSABattles snapshots the registry each second), so

@@ -477,6 +477,44 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 	return state
 }
 
+// resetICStateForNewMatch is the Go form of the CreateNewBattleground +
+// Battleground::Reset pair (BattlegroundMgr.cpp:412,
+// Battleground.cpp:935-938) for the successor-reuse case: C++ hands every
+// match a fresh BG object, while Go reuses one per-map state, so a successor
+// match arriving in the previous match's WaitLeave window inherits the ended
+// fields instead - Winner >= 0 gates every node/gate arm, and reinforcements,
+// bosses, gates, and nodes are the old match's. Runs at formation (first
+// fresh accept, see rearmNonArenaBGMatchStartTimeOnFirstAccept), never at
+// the end arms. The caller's ic.mu is held. IC nodes and gates carry no
+// dynamic GUIDs (banners are entry constants), so initNodes plus the gate
+// loop restore the creation values with nothing to despawn.
+func (s *Server) resetICStateForNewMatch(ic *icBattlegroundState) {
+	for i := range ic.Nodes {
+		if ic.Nodes[i].CaptureTimer != nil {
+			ic.Nodes[i].CaptureTimer.Stop()
+			ic.Nodes[i].CaptureTimer = nil
+		}
+	}
+	ic.initNodes()
+	for i := 0; i < ICMaxGates; i++ {
+		ic.Gates[i] = icGateState{
+			State:     ICGateOK,
+			Health:    ICGateDefaultMaxHealth,
+			MaxHealth: ICGateDefaultMaxHealth,
+		}
+	}
+	ic.AllianceReinforcements = ICMaxReinforcements
+	ic.HordeReinforcements = ICMaxReinforcements
+	ic.AllianceBossAlive = true
+	ic.HordeBossAlive = true
+	ic.VehiclesDestroyed = make(map[uint64]uint32)
+	ic.ResourceAccumMs = 0
+	ic.Winner = -1
+	ic.EndedAt = time.Time{}
+	ic.PrematureCountDown = false
+	ic.PrematureTimerMs = 0
+}
+
 // deleteICState removes the per-map IoC state once no BG player remains on
 // the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
 // ic.mu before the delete so no armed callback fires on the orphan; the

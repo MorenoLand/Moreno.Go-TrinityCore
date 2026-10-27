@@ -317,6 +317,52 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 	return state
 }
 
+// resetABStateForNewMatch is the Go form of the CreateNewBattleground +
+// Reset() pair (BattlegroundMgr.cpp:412, BattlegroundAB.cpp:591-620,
+// Battleground.cpp:935-938) for the successor-reuse case: C++ hands every
+// match a fresh BG object, while Go reuses one per-map state, so a successor
+// match arriving in the previous match's WaitLeave window inherits the ended
+// fields instead - Winner >= 0 gates every node click and the score tick,
+// resources and base counts from the old match, and the one-way 500-point
+// disadvantage latches C++ clears only in Reset. Runs at formation (first
+// fresh accept, see rearmNonArenaBGMatchStartTimeOnFirstAccept), never at
+// the end arms - C++ EndBattleground leaves the dead instance's fields as
+// they were. The caller's ab.mu is held, as with stopABNodeCaptureTimers.
+// Banner GUIDs are dynamic (spawned by updateABNodeBanner on capture), so
+// the ended match's banners despawn like a fresh instance's absent ones;
+// coords and the neutral BannerEntry are the creation values.
+func (s *Server) resetABStateForNewMatch(ab *abBattlegroundState) {
+	s.stopABNodeCaptureTimers(ab)
+	for i := range ab.Nodes {
+		if ab.Nodes[i].BannerGUID != 0 {
+			s.despawnDynamicGameObject(ab.Nodes[i].BannerGUID)
+		}
+		ab.Nodes[i] = abNodeState{
+			NodeID:      uint32(i),
+			State:       ABNodeStateNeutral,
+			PrevState:   ABNodeStateNeutral,
+			BannerEntry: getABBannerEntry(uint32(i), ABNodeStateNeutral),
+			X:           ab.Nodes[i].X,
+			Y:           ab.Nodes[i].Y,
+			Z:           ab.Nodes[i].Z,
+		}
+	}
+	ab.AllianceResources = 0
+	ab.HordeResources = 0
+	ab.AllianceBasesCount = 0
+	ab.HordeBasesCount = 0
+	ab.Winner = -1
+	ab.EndedAt = time.Time{}
+	ab.PrematureCountDown = false
+	ab.PrematureTimerMs = 0
+	ab.AllianceAccumMs = 0
+	ab.HordeAccumMs = 0
+	ab.HonorTicsAccum = [2]uint32{}
+	ab.RepTicsAccum = [2]uint32{}
+	ab.NearVictoryAnnounced = false
+	ab.Scores500Disadvantage = [2]bool{}
+}
+
 // deleteABState removes the per-map AB state once no BG player remains on
 // the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
 // ab.mu before the delete so no armed callback fires on the orphan; the

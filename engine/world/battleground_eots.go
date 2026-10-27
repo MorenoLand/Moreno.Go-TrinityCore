@@ -280,6 +280,65 @@ func (s *Server) getOrCreateEOTSState(mapID uint32) *eotsBattlegroundState {
 	return state
 }
 
+// resetEOTSStateForNewMatch is the Go form of the CreateNewBattleground +
+// Reset() pair (BattlegroundMgr.cpp:412, BattlegroundEY.cpp:533-560,
+// Battleground.cpp:935-938) for the successor-reuse case: C++ hands every
+// match a fresh BG object, while Go reuses one per-map state, so a successor
+// match arriving in the previous match's WaitLeave window inherits the ended
+// fields instead - Winner >= 0 gates every tower click and the resource
+// tick, tower owners and resources from the old match, and a flag stuck
+// OnPlayer/OnGround (the end arm stops the flag timers but never respawns
+// it). Runs at formation (first fresh accept, see
+// rearmNonArenaBGMatchStartTimeOnFirstAccept), never at the end arms. The
+// caller's eots.mu is held. Tower banner GUIDs are dynamic (spawned on
+// capture), so the ended match's banners despawn; the center flag is a
+// static object, so it is unhidden like WSG's base flags, and a dropped
+// flag despawns since a successor spawns its own on drop.
+func (s *Server) resetEOTSStateForNewMatch(eots *eotsBattlegroundState) {
+	if eots.FlagRespawnTimer != nil {
+		eots.FlagRespawnTimer.Stop()
+		eots.FlagRespawnTimer = nil
+	}
+	if eots.FlagReturnTimer != nil {
+		eots.FlagReturnTimer.Stop()
+		eots.FlagReturnTimer = nil
+	}
+	for i := range eots.Towers {
+		if eots.Towers[i].BannerGUID != 0 {
+			s.despawnDynamicGameObject(eots.Towers[i].BannerGUID)
+		}
+		eots.Towers[i] = eotsTowerState{
+			TowerID:     uint32(i),
+			State:       EOTSTowerStateNeutral,
+			BannerEntry: getEOTSBannerEntry(uint32(i), EOTSTowerStateNeutral),
+			X:           eots.Towers[i].X,
+			Y:           eots.Towers[i].Y,
+			Z:           eots.Towers[i].Z,
+		}
+	}
+	eots.AllianceResources = 0
+	eots.HordeResources = 0
+	eots.AllianceTowersCount = 0
+	eots.HordeTowersCount = 0
+	eots.FlagState = EOTSFlagStateAtCenter
+	eots.FlagCarrierGUID = 0
+	if eots.FlagCenterGUID != 0 {
+		s.setGameObjectHidden(eots.FlagCenterGUID, false)
+	}
+	if eots.FlagDroppedGUID != 0 {
+		s.despawnDynamicGameObject(eots.FlagDroppedGUID)
+		eots.FlagDroppedGUID = 0
+	}
+	eots.PointTickAccumMs = 0
+	eots.HonorTicsAccum = [2]uint32{}
+	eots.Winner = -1
+	eots.EndedAt = time.Time{}
+	eots.PrematureCountDown = false
+	eots.PrematureTimerMs = 0
+	eots.AllianceAccumMs = 0
+	eots.HordeAccumMs = 0
+}
+
 // deleteEOTSState removes the per-map EotS state once no BG player remains
 // on the map (deleteBattlegroundStateOnEmpty). The flag respawn/return
 // timers stop under eots.mu before the delete so no armed callback fires
