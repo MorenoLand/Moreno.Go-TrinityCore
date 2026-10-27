@@ -17437,6 +17437,32 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// the client arm's helper.
 			s.handleEffectCastButtons(ctx, eff)
 		}
+		if eff.Effect == spellEffectProficiency {
+			// Spell::EffectProficiency (SpellEffects.cpp:2172) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper.
+			s.handleEffectProficiency(spell, eff)
+		}
+		if eff.Effect == spellEffectStuck {
+			// Spell::EffectStuck (SpellEffects.cpp:3876) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper;
+			// its in-flight, dead-repop, hearthstone, and near-teleport legs
+			// ride along. The CONFIG_CAST_UNSTUCK gate has no Go
+			// world-config model (same precedent as the client arm).
+			s.handleEffectStuck(ctx)
+		}
+		if eff.Effect == spellEffectAddFarsight {
+			// Spell::EffectAddFarsight (SpellEffects.cpp:2580) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper,
+			// with this path's spellTarget (dest, or no-op without one).
+			s.handleEffectAddFarsight(ctx, spell, eff, spellTarget)
+		}
+		if eff.Effect == spellEffectTransmitted {
+			// Spell::EffectTransmitted (SpellEffects.cpp:4927) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper
+			// (gameobjects.go), with this path's spellTarget for the dest leg;
+			// its radius/random-range residual rides along unchanged.
+			s.handleEffectTransmitted(ctx, spellTarget, spell, eff)
+		}
 		if eff.Effect == spellEffectActivateObject || eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
 			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
 			// EffectGameObjectDamage/Repair/SetDestructionState
@@ -18107,6 +18133,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// runs at HIT_TARGET per player target: the client arm's
 				// helper over the single miss-filtered target.
 				s.handleEffectEnchantHeldItem(ctx, spell, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectSkillStep {
+				// Spell::EffectSkillStep (SpellEffects.cpp:2644) runs at
+				// HIT_TARGET per unit target: the client arm's helper over
+				// the single miss-filtered target.
+				s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
+			} else if eff.Effect == 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
+				// Spell::EffectStealBeneficialBuff (SpellEffects.cpp:5150)
+				// runs at HIT_TARGET per unit target: the client arm's
+				// helper over the single miss-filtered target (same raw
+				// 126 as the client arm, which defines no constant).
+				s.handleEffectSpellsteal(ctx, effectTarget, spell, eff)
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
