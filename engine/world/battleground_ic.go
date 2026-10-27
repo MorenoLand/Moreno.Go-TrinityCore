@@ -1126,7 +1126,7 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 }
 
 func (s *Server) handleICPlayerLeave(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != ICMapID {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != ICMapID && !sess.hasActiveBGMap(ICMapID)) {
 		return
 	}
 	// BattlegroundIC::RemovePlayer (BattlegroundIC.cpp:261-268) strips the

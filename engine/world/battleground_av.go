@@ -1115,8 +1115,12 @@ func (s *Server) handleAVPlayerLeave(sess *session) {
 	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
+	resolvedMap := sess.player.Map
+	if resolvedMap != AVMapID && sess.hasActiveBGMap(AVMapID) {
+		resolvedMap = AVMapID
+	}
 	s.avMu.RLock()
-	av := s.avState[sess.player.Map]
+	av := s.avState[resolvedMap]
 	s.avMu.RUnlock()
 	if av == nil {
 		return

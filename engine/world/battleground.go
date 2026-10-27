@@ -1727,8 +1727,8 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			// uses; the non-arena arms key off player.Map and no-op for a
 			// jumper who never landed on the old BG map, exactly as the
 			// leave path does, while the arena arm is roster-keyed.
-			s.server.handleWSGPlayerLeave(s)
-			s.server.handleEOTSPlayerLeave(s)
+			s.server.handleWSGPlayerLeave(s, s.player.Map)
+			s.server.handleEOTSPlayerLeave(s, s.player.Map)
 			s.server.handleSAPlayerLeave(s)
 			s.server.handleICPlayerLeave(s)
 			s.server.handleAVPlayerLeave(s)
@@ -2561,6 +2561,24 @@ func bgEnteredSlotMap(sess *session) (uint32, bool) {
 	return 0, false
 }
 
+// hasActiveBGMap reports whether sess holds an active, non-arena queue
+// entry for mapID in an in-progress or wait-leave state: the Go form of
+// C++ GetBattleground() membership (Battleground.cpp gates RemovePlayer
+// arms on the player's battleground, never on the standing map). Unlike
+// bgEnteredSlotMap it includes WaitLeave, since leave arms run for ended
+// matches too; the predicate matches bgRewardTargets' roster test.
+func (sess *session) hasActiveBGMap(mapID uint32) bool {
+	if sess == nil {
+		return false
+	}
+	for i := range sess.bgQueues {
+		if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+			return true
+		}
+	}
+	return false
+}
+
 // rewardBGEndHonor mirrors Battleground::RewardHonorToTeam (Battleground.cpp:633)
 // fed by GetBonusHonorFromKill (Battleground.cpp:806): ceil(min(maxLevel,80)*1.55*kills)
 // honor to every entered-slot holder for the BG map on the given team
@@ -2849,8 +2867,8 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		}
 	}
 	if s.server != nil {
-		s.server.handleWSGPlayerLeave(s)
-		s.server.handleEOTSPlayerLeave(s)
+		s.server.handleWSGPlayerLeave(s, s.player.Map)
+		s.server.handleEOTSPlayerLeave(s, s.player.Map)
 		s.server.handleSAPlayerLeave(s)
 		s.server.handleICPlayerLeave(s)
 		s.server.handleAVPlayerLeave(s)

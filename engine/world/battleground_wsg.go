@@ -448,12 +448,16 @@ func (s *Server) startWSGFlagRespawnTimer(wsg *wsgBattlegroundState, mapID uint3
 	}
 }
 
-func (s *Server) handleWSGPlayerDeath(sess *session) {
+func (s *Server) handleWSGPlayerDeath(sess *session, bgMapID uint32) {
 	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
+	mapID := bgMapID
+	if mapID == 0 {
+		mapID = sess.player.Map
+	}
 	s.wsgMu.RLock()
-	wsg := s.wsgState[sess.player.Map]
+	wsg := s.wsgState[mapID]
 	s.wsgMu.RUnlock()
 	if wsg == nil {
 		return
@@ -462,7 +466,7 @@ func (s *Server) handleWSGPlayerDeath(sess *session) {
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
 
-	s.dropWSGCarriedFlag(wsg, sess, sess.player.Map, sess.player.X, sess.player.Y, sess.player.Z)
+	s.dropWSGCarriedFlag(wsg, sess, mapID, sess.player.X, sess.player.Y, sess.player.Z)
 }
 
 // dropWSGCarriedFlag drops the Warsong flag carried by sess, mirroring
@@ -593,12 +597,44 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 	s.refreshWSGStalemate(wsg, mapID)
 }
 
-func (s *Server) handleWSGPlayerLeave(sess *session) {
+// carriedWSGMap returns the WSG map on which guid carries a flag, or 0.
+// VehicleJoinEvent::Execute (Vehicle.cpp:846-848) gates the flag drop on
+// player->GetBattleground(), never on the player's map, so a sim flag
+// carrier standing off the BG map must still resolve its BG state here.
+func (s *Server) carriedWSGMap(guid uint64) uint32 {
+	if s == nil || guid == 0 {
+		return 0
+	}
+	s.wsgMu.RLock()
+	snapshot := make(map[uint32]*wsgBattlegroundState, len(s.wsgState))
+	for mapID, wsg := range s.wsgState {
+		snapshot[mapID] = wsg
+	}
+	s.wsgMu.RUnlock()
+	for mapID, wsg := range snapshot {
+		if wsg == nil {
+			continue
+		}
+		wsg.mu.Lock()
+		carries := wsg.AllianceCarrierGUID == guid || wsg.HordeCarrierGUID == guid
+		wsg.mu.Unlock()
+		if carries {
+			return mapID
+		}
+	}
+	return 0
+}
+
+func (s *Server) handleWSGPlayerLeave(sess *session, bgMapID uint32) {
 	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
+	mapID := bgMapID
+	if mapID == 0 {
+		mapID = sess.player.Map
+	}
 	s.wsgMu.RLock()
-	wsg := s.wsgState[sess.player.Map]
+	wsg := s.wsgState[mapID]
 	s.wsgMu.RUnlock()
 	if wsg == nil {
 		return
@@ -607,7 +643,6 @@ func (s *Server) handleWSGPlayerLeave(sess *session) {
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
 
-	mapID := sess.player.Map
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)

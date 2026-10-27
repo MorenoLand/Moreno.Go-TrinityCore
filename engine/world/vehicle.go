@@ -895,10 +895,15 @@ func (s *session) dropBattlegroundFlagIfCarried() {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
-	if s.player.Map == WSGMapID {
-		s.server.handleWSGPlayerLeave(s)
+	if wsgMap := s.server.carriedWSGMap(s.playerGUID); wsgMap != 0 {
+		s.server.handleWSGPlayerLeave(s, wsgMap)
+	} else if s.player.Map == WSGMapID {
+		s.server.handleWSGPlayerLeave(s, WSGMapID)
+	}
+	if eotsMap := s.server.carriedEOTSMap(s.playerGUID); eotsMap != 0 {
+		s.server.handleEOTSPlayerLeave(s, eotsMap)
 	} else if s.player.Map == EOTSMapID {
-		s.server.handleEOTSPlayerLeave(s)
+		s.server.handleEOTSPlayerLeave(s, EOTSMapID)
 	}
 }
 

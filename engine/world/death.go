@@ -707,8 +707,16 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 				// buildPlayerRepop already clears it at repop.
 				s.player.UnitFlags |= unitFlagSkinnable
 			}
-			s.server.handleWSGPlayerDeath(s)
-			s.server.handleEOTSPlayerDeath(s)
+			wsgMap := s.server.carriedWSGMap(s.playerGUID)
+			if wsgMap == 0 {
+				wsgMap = s.player.Map
+			}
+			s.server.handleWSGPlayerDeath(s, wsgMap)
+			eotsMap := s.server.carriedEOTSMap(s.playerGUID)
+			if eotsMap == 0 {
+				eotsMap = s.player.Map
+			}
+			s.server.handleEOTSPlayerDeath(s, eotsMap)
 			s.server.handleAVPlayerDeath(s)
 			s.server.handleSAPlayerDeath(s)
 			s.server.handleICPlayerDeath(s)

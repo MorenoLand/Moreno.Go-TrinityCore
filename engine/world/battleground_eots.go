@@ -458,12 +458,19 @@ func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, tea
 }
 
 // handleEOTSPlayerDeath drops the flag if the dying player is carrying it.
-func (s *Server) handleEOTSPlayerDeath(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != EOTSMapID {
+func (s *Server) handleEOTSPlayerDeath(sess *session, bgMapID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	mapID := bgMapID
+	if mapID == 0 {
+		mapID = sess.player.Map
+	}
+	if mapID != EOTSMapID {
 		return
 	}
 	s.eotsMu.RLock()
-	eots := s.eotsState[sess.player.Map]
+	eots := s.eotsState[mapID]
 	s.eotsMu.RUnlock()
 	if eots == nil {
 		return
@@ -477,13 +484,48 @@ func (s *Server) handleEOTSPlayerDeath(sess *session) {
 	}
 }
 
+// carriedEOTSMap returns the EOTS map on which guid carries the flag, or 0.
+// VehicleJoinEvent::Execute (Vehicle.cpp:846-848) gates the flag drop on
+// player->GetBattleground(), never on the player's map, so a sim flag
+// carrier standing off the BG map must still resolve its BG state here.
+func (s *Server) carriedEOTSMap(guid uint64) uint32 {
+	if s == nil || guid == 0 {
+		return 0
+	}
+	s.eotsMu.RLock()
+	snapshot := make(map[uint32]*eotsBattlegroundState, len(s.eotsState))
+	for mapID, eots := range s.eotsState {
+		snapshot[mapID] = eots
+	}
+	s.eotsMu.RUnlock()
+	for mapID, eots := range snapshot {
+		if eots == nil {
+			continue
+		}
+		eots.mu.Lock()
+		carries := eots.FlagCarrierGUID == guid
+		eots.mu.Unlock()
+		if carries {
+			return mapID
+		}
+	}
+	return 0
+}
+
 // handleEOTSPlayerLeave drops the flag if a leaving player is carrying it.
-func (s *Server) handleEOTSPlayerLeave(sess *session) {
-	if s == nil || sess == nil || sess.player == nil || sess.player.Map != EOTSMapID {
+func (s *Server) handleEOTSPlayerLeave(sess *session, bgMapID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	mapID := bgMapID
+	if mapID == 0 {
+		mapID = sess.player.Map
+	}
+	if mapID != EOTSMapID {
 		return
 	}
 	s.eotsMu.RLock()
-	eots := s.eotsState[sess.player.Map]
+	eots := s.eotsState[mapID]
 	s.eotsMu.RUnlock()
 	if eots == nil {
 		return
