@@ -40,6 +40,10 @@ const (
 
 	WSGFlagRespawnTime = 23 * time.Second // BG_WS_FLAG_RESPAWN_TIME (BattlegroundWS.h:27)
 	WSGFlagDropTime    = 10 * time.Second // BG_WS_FLAG_DROP_TIME (BattlegroundWS.h:28)
+	// wsgStartDelay is the Go form of the non-arena start delay
+	// (Battleground.cpp:124: BG_START_DELAY_2M, Battleground.h:160): the
+	// doors-open STATUS_IN_PROGRESS transition the grave gate keys on.
+	wsgStartDelay = 2 * time.Minute
 
 	WSGSpellSilverwingFlagPicked uint32 = 61265 // BG_WS_SPELL_SILVERWING_FLAG_PICKED (fake spell, timed-achievement event)
 	WSGSpellWarsongFlagPicked    uint32 = 61266 // BG_WS_SPELL_WARSONG_FLAG_PICKED
@@ -116,6 +120,14 @@ type wsgBattlegroundState struct {
 	// on the first flag interaction of the match.
 	MatchStartTime   time.Time
 	MatchMinuteTimer *time.Timer
+	// Started is the grave gate's STATUS_IN_PROGRESS proxy (see
+	// closestWSGraveyard): false through the preparation phase, flipped by
+	// the start-delay timer armed at the first port accept, and never set
+	// on an ended match (Winner >= 0 dominates the gate). A pristine state
+	// starts false via getOrCreateWSGState, so a successor match re-created
+	// after delete starts pre-start again.
+	Started    bool
+	StartTimer *time.Timer
 }
 
 // closestWSGraveyard mirrors BattlegroundWS::GetClosestGraveyard
@@ -123,8 +135,9 @@ type wsgBattlegroundState struct {
 // graveyard, any other status the flagroom graveyard, so a player dying in the
 // preparation phase cannot teleport outside the flagroom and run while the
 // doors are closed. Go has no STATUS_WAIT_JOIN to STATUS_IN_PROGRESS
-// transition for WSG, so Winner == -1 (ongoing) stands in for in-progress and
-// Winner >= 0 (ended, including draws) for the flagroom leg. A false return
+// transition, so the gate is Winner < 0 (ongoing, not ended) AND Started (the
+// start-delay timer fired): a pre-start death gets the flagroom grave, an
+// ended match (Winner >= 0, including draws) likewise. A false return
 // lets the generic zone path run (C++ always returns an entry; Go falls back
 // when the DBC row is missing).
 func (s *Server) closestWSGraveyard(team uint32) (wotlk.WorldSafeLoc, bool) {
@@ -136,7 +149,7 @@ func (s *Server) closestWSGraveyard(team uint32) (wotlk.WorldSafeLoc, bool) {
 		return wotlk.WorldSafeLoc{}, false
 	}
 	wsg.mu.Lock()
-	inProgress := wsg.Winner < 0
+	inProgress := wsg.Winner < 0 && wsg.Started
 	wsg.mu.Unlock()
 	var id uint32
 	if team == teamAlliance {
@@ -949,11 +962,12 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 // here or it would unhide the flag and broadcast "The flags were placed!" into
 // the finished battle.
 func (s *Server) stopWSGMatchTimers(wsg *wsgBattlegroundState) {
-	for _, timer := range [6]**time.Timer{
+	for _, timer := range [7]**time.Timer{
 		&wsg.AllianceWaitRespawnTimer, &wsg.HordeWaitRespawnTimer,
 		&wsg.AllianceReturnTimer, &wsg.HordeReturnTimer,
 		&wsg.StalemateTimer,
 		&wsg.MatchMinuteTimer,
+		&wsg.StartTimer,
 	} {
 		if *timer != nil {
 			(*timer).Stop()
@@ -1020,6 +1034,65 @@ func (s *Server) armWSGMatchTimer(wsg *wsgBattlegroundState, mapID uint32) {
 	s.broadcastWorldState(mapID, WSWorldStateTimer, 25)
 	wsg.MatchMinuteTimer = time.AfterFunc(time.Minute, func() {
 		s.wsgMatchMinute(wsg, mapID, 1)
+	})
+}
+
+// armWSGStartDelayOnFirstAccept arms the Go form of the C++ start-delay
+// countdown (Battleground.cpp:124-127, :425: 2 minutes for non-arena
+// battlegrounds; :453-454: doors open and STATUS_IN_PROGRESS at expiry) for
+// the grave gate's Started proxy. Go has no match-formation event and no
+// status field, so the first port accept stands for formation: no death can
+// reach the WSG grave gate before accept (the repopMap remap requires an
+// InProgress slot, and slots only become InProgress at accept), so the
+// accept-latency skew against formation time is unreachable by the gate.
+// WaitLeave holders do not block the arm (same rule as
+// rearmNonArenaBGMatchStartTimeOnFirstAccept): a successor match arriving in
+// the previous match's WaitLeave window arms its own timer. Idempotent under
+// wsg.mu: a second accept while the timer is armed or Started is set is a
+// no-op. The callback only flips Started on a still-ongoing match, so a timer
+// that fires against an end arm holding wsg.mu can never mark an ended match
+// started; stopWSGMatchTimers cancels the timer on end and delete.
+func (s *Server) armWSGStartDelayOnFirstAccept(accepting *session, mapID uint32) {
+	if s == nil || accepting == nil || mapID != WSGMapID {
+		return
+	}
+	s.sessionsMu.RLock()
+	fresh := true
+	for sess := range s.sessions {
+		if sess == accepting {
+			continue
+		}
+		for i := range sess.bgQueues {
+			e := &sess.bgQueues[i]
+			if e.Active && !e.IsArena && e.Status == BGStatusInProgress && e.MapID == mapID {
+				fresh = false
+				break
+			}
+		}
+		if !fresh {
+			break
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if !fresh {
+		return
+	}
+	wsg := s.getOrCreateWSGState(mapID)
+	if wsg == nil {
+		return
+	}
+	wsg.mu.Lock()
+	defer wsg.mu.Unlock()
+	if wsg.Started || wsg.StartTimer != nil {
+		return
+	}
+	wsg.StartTimer = time.AfterFunc(wsgStartDelay, func() {
+		wsg.mu.Lock()
+		defer wsg.mu.Unlock()
+		wsg.StartTimer = nil
+		if wsg.Winner < 0 {
+			wsg.Started = true
+		}
 	})
 }
 

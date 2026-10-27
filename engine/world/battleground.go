@@ -1802,6 +1802,9 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// match's restored slots. Arenas keep their startArenaMatch arming.
 		if !entry.IsArena && freshPort {
 			s.server.rearmNonArenaBGMatchStartTimeOnFirstAccept(s, entry.MapID)
+			// WSG's own start-delay countdown for the grave gate's Started
+			// proxy (armWSGStartDelayOnFirstAccept no-ops off the WSG map).
+			s.server.armWSGStartDelayOnFirstAccept(s, entry.MapID)
 		}
 		// C++ SetBGTeam(team) stores arenaFaction = team == ALLIANCE ? 1 : 0
 		// (Player.cpp:22458-22461); teamForRace is 0 alliance / 1 horde, so the
