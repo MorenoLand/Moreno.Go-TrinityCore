@@ -3960,6 +3960,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				s.applyInlineCreatureReflectReturnTrip(ctx, motion, trip.guid, inlineSpell, damage, schoolMask, target.Sess)
 			}
+			// Spell::_cast spell_linked tail (Spell.cpp:3503-3512) +
+			// "Handle procs on cast" tail (:3525-3545), the inline-path
+			// twin of the castCreatureSpellInternal tail: type-0 rows fire
+			// once per cast on the spell's explicit unit target
+			// (spellTarget.UnitGUID, the wire victim — the nearby pick
+			// never rewrites the packet target), after every hit leg
+			// and reflect return trip; the modOwner arm between them is
+			// vacuous on this path like the twin's. The cast is a
+			// non-triggered UnitAI::DoCast, so the proc leg runs
+			// untriggered. Gated on inlineSpellKnown like the twin.
+			if inlineSpellKnown {
+				s.fireCreatureSpellLinkedTriggers(ctx, motion, spellID, spellTarget.UnitGUID)
+				s.fireCreatureCastPhaseAuraProcs(ctx, motion, spellID, false)
+			}
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges

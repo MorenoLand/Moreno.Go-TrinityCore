@@ -1472,10 +1472,9 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// its own casts).
 			s.fireCreatureHitTriggers(ctx, motion, spellInfo, spellID, []uint64{p.GUID})
 			// Spell::_cast spell_linked tail (Spell.cpp:3503-3512):
-			// type-0 rows fire at cast completion; the inline path
-			// has no _cast, so the tail runs here after the per-hit
-			// consumer, matching C++ relative order.
-			s.fireCreatureSpellLinkedTriggers(ctx, motion, spellID, p.GUID)
+			// type-0 rows fire once per cast at cast completion, not
+			// per hit target — the once-per-cast call rides the
+			// creaturemotion.go cast tail, after every hit leg.
 			// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553) for a
 			// creature caster: the caster heals for the damage the target
 			// actually lost (leechDealt above) times the effect's
