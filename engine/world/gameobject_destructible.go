@@ -331,26 +331,148 @@ func spellGameObjectTargetGUID(target protocol.SpellTargetData) uint64 {
 	return 0
 }
 
-// spellOnlyGameObjectDamageEffects reports whether every real effect of the
-// spell is a gameobject-damage-family effect (87/88/89): C++ AddGOTarget
-// (Spell.cpp:2193) strips exactly those bits from a non-destructible GO's
-// mask, so for such a spell no non-destructible GO survives into
-// m_UniqueGOTargetInfo — and UpdateSpellCastDataTargets (Spell.cpp:4512)
-// writes only that list into the packet's HitTargets. Effect 0 is not a
-// real effect (SpellEffectInfo::IsEffect, SpellInfo.cpp:360).
-func spellOnlyGameObjectDamageEffects(spell wotlk.Spell) bool {
-	found := false
-	for i := range spell.Effects {
-		eff := spell.Effects[i].Effect
-		if eff == 0 {
+// spellEffectGOTargetKinds classifies an effect's gameobject implicit
+// targets (SpellInfo.cpp:216-340 data table) into the two AddGOTarget
+// selection families: object targets (23 TARGET_GAMEOBJECT_TARGET, 26
+// TARGET_GAMEOBJECT_ITEM_TARGET — DEFAULT category, the explicit wire
+// target via SelectImplicitTargetObjectTargets, Spell.cpp:1558) and list
+// targets (40 NEARBY_ENTRY, 51 SRC_AREA, 52 DEST_AREA, 108 CONE —
+// NEARBY/AREA/CONE categories, whose picks ride hitTargets).
+func spellEffectGOTargetKinds(eff wotlk.SpellEffect) (object, list bool) {
+	for _, tgt := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+		switch tgt {
+		case 23, 26:
+			object = true
+		case 40, 51, 52, 108:
+			list = true
+		}
+	}
+	return object, list
+}
+
+// spellEffectGOExplicitFallback reports whether an effect with no
+// gameobject implicit target still takes the explicit GO target: the
+// EFFECT_IMPLICIT_TARGET_EXPLICIT arm (Spell.cpp:1709) adds it when the
+// effect's implicit targets leave the GO bit missing
+// (GetMissingTargetMask, SpellInfo.cpp:581). Only the GOBJ/GOBJ_ITEM
+// used-type effects carry that bit: open-lock 33 and activate-object /
+// damage-family 86/87/88/89 (SpellInfo.cpp:651,704-707).
+func spellEffectGOExplicitFallback(eff uint32) bool {
+	switch eff {
+	case spellEffectOpenLock, spellEffectActivateObject, spellEffectGameObjectDamage, spellEffectGameObjectRepair, spellEffectGameObjectSetDestructionState:
+		return true
+	}
+	return false
+}
+
+// spellEffectGOTargetsForEffect mirrors the per-effect mask of
+// Spell::GOTargetInfo (Spell.cpp:2193, DoProcessTargetContainer :3554):
+// DoTargetSpellHit runs for an effect only when the target's EffectMask
+// holds that effect's bit, and each selection arm adds only its own
+// effects' bits — so an object-target effect fires on the wire GO only,
+// a list-target effect on the list picks only, and an effect with no GO
+// implicit target on the wire GO via the EXPLICIT fallback. A mixed
+// object+list effect takes the union, as C++ runs both arms. This replaces
+// the flat list: previously every GO effect fired on every GO in
+// hitTargets, so an area damage effect damaged the wire-only door and an
+// activate-object effect opened every GO in the area list.
+func spellEffectGOTargetsForEffect(target protocol.SpellTargetData, hitTargets []uint64, eff wotlk.SpellEffect) []uint64 {
+	var out []uint64
+	seen := make(map[uint64]struct{})
+	add := func(guid uint64) {
+		if guid == 0 {
+			return
+		}
+		if _, ok := seen[guid]; ok {
+			return
+		}
+		seen[guid] = struct{}{}
+		out = append(out, guid)
+	}
+	object, list := spellEffectGOTargetKinds(eff)
+	wire := spellGameObjectTargetGUID(target)
+	if object || (!object && !list && spellEffectGOExplicitFallback(eff.Effect)) {
+		add(wire)
+	}
+	if list {
+		for _, guid := range hitTargets {
+			if uint16(guid>>48) == 0xF110 {
+				add(guid)
+			}
+		}
+	}
+	return out
+}
+
+// spellEffectGOTargetMember reports whether a GO belongs to one effect's
+// AddGOTarget mask: object-category membership is the wire GO, list
+// membership is a GO in the hit list, and a no-GO-target EXPLICIT effect
+// claims the wire GO via the fallback.
+func spellEffectGOTargetMember(eff wotlk.SpellEffect, goGUID, wire uint64, hitGOs map[uint64]struct{}) bool {
+	object, list := spellEffectGOTargetKinds(eff)
+	if object {
+		return goGUID == wire
+	}
+	if list {
+		_, ok := hitGOs[goGUID]
+		return ok
+	}
+	return goGUID == wire && spellEffectGOExplicitFallback(eff.Effect)
+}
+
+// filterGOPacketTargetsByEffectMask mirrors UpdateSpellCastDataTargets
+// (Spell.cpp:4512), which writes only m_UniqueGOTargetInfo into
+// HitTargets: a GO survives into the packet only if some real effect's
+// mask holds it, and a non-destructible GO survives only via a
+// non-damage-family effect (AddGOTarget, Spell.cpp:2193, strips
+// damage-family bits from its mask). This generalizes the old
+// damage-family-only filter to mixed spells: a non-destructible GO
+// selected only by damage-family arms drops from the packet even when the
+// spell also carries other effects, while a GO claimed by any non-damage
+// effect stays. Unit GUIDs pass through, and the wire GO's packet target
+// field is untouched. Effect 0 is not a real effect
+// (SpellEffectInfo::IsEffect, SpellInfo.cpp:360).
+func (s *Server) filterGOPacketTargetsByEffectMask(ctx context.Context, mapID, instanceID uint32, spell wotlk.Spell, target protocol.SpellTargetData, hits []uint64) []uint64 {
+	if s == nil {
+		return hits
+	}
+	wire := spellGameObjectTargetGUID(target)
+	hitGOs := make(map[uint64]struct{})
+	for _, guid := range hits {
+		if uint16(guid>>48) == 0xF110 {
+			hitGOs[guid] = struct{}{}
+		}
+	}
+	out := make([]uint64, 0, len(hits))
+	for _, guid := range hits {
+		if guid == 0 || uint16(guid>>48) != 0xF110 {
+			out = append(out, guid)
 			continue
 		}
-		if eff != spellEffectGameObjectDamage && eff != spellEffectGameObjectRepair && eff != spellEffectGameObjectSetDestructionState {
-			return false
+		keep := false
+		for i := range spell.Effects {
+			eff := spell.Effects[i]
+			if eff.Effect == 0 {
+				continue
+			}
+			if !spellEffectGOTargetMember(eff, guid, wire, hitGOs) {
+				continue
+			}
+			if eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
+				if s.gameObjectIsDestructibleBuilding(ctx, mapID, instanceID, guid) {
+					keep = true
+					break
+				}
+				continue
+			}
+			keep = true
+			break
 		}
-		found = true
+		if keep {
+			out = append(out, guid)
+		}
 	}
-	return found
+	return out
 }
 
 // gameObjectIsDestructibleBuilding is the type-only half of the AddGOTarget
@@ -367,57 +489,6 @@ func (s *Server) gameObjectIsDestructibleBuilding(ctx context.Context, mapID, in
 	}
 	_, ok := s.destructibleBuildingTemplate(ctx, uint32(goGUID>>24)&0xFFFFFF)
 	return ok
-}
-
-// filterNonDestructibleGOPacketTargets drops non-destructible-building GO
-// GUIDs from a spell GO packet's hit list for damage-family-only spells,
-// mirroring the AddGOTarget mask strip (Spell.cpp:2193): such GOs never
-// reach m_UniqueGOTargetInfo, so UpdateSpellCastDataTargets (Spell.cpp:4512)
-// never writes them into HitTargets. Every other spell passes through
-// untouched, and the effect legs keep their own sink gate
-// (modifyDestructibleHealth / setDestructibleBuildingState no-op on a
-// non-destructible GO), so only the packet list is filtered here — never
-// hitTargets itself. The wire GO's packet target field is untouched.
-func (s *Server) filterNonDestructibleGOPacketTargets(ctx context.Context, mapID, instanceID uint32, spell wotlk.Spell, hits []uint64) []uint64 {
-	if s == nil || !spellOnlyGameObjectDamageEffects(spell) {
-		return hits
-	}
-	out := make([]uint64, 0, len(hits))
-	for _, guid := range hits {
-		if guid != 0 && uint16(guid>>48) == 0xF110 && !s.gameObjectIsDestructibleBuilding(ctx, mapID, instanceID, guid) {
-			continue
-		}
-		out = append(out, guid)
-	}
-	return out
-}
-
-// spellEffectGOTargets mirrors the Spell::GOTargetInfo::DoTargetSpellHit
-// iteration (Spell.cpp:2663): HandleEffects runs once per gameobject target
-// — the explicit wire target plus every implicit GO target riding hitTargets
-// (TARGET_GAMEOBJECT_NEARBY_ENTRY / SRC_AREA / CONE selections land there;
-// Go previously had no consumer for them downstream). Deduped on GUID so an
-// explicit GO target that also sits in hitTargets is hit once.
-func spellEffectGOTargets(target protocol.SpellTargetData, hitTargets []uint64) []uint64 {
-	var out []uint64
-	seen := make(map[uint64]struct{})
-	add := func(guid uint64) {
-		if guid == 0 {
-			return
-		}
-		if _, ok := seen[guid]; ok {
-			return
-		}
-		seen[guid] = struct{}{}
-		out = append(out, guid)
-	}
-	add(spellGameObjectTargetGUID(target))
-	for _, guid := range hitTargets {
-		if uint16(guid>>48) == 0xF110 {
-			add(guid)
-		}
-	}
-	return out
 }
 
 // handleEffectGameObjectDamageGO is the per-gameobject core of
@@ -454,7 +525,7 @@ func (s *session) handleEffectGameObjectDamageGO(ctx context.Context, spellID ui
 // gameobject target: the friendly-faction gate (Wintergrasp walls, Ulduar
 // storm beacons) then ModifyHealth(-damage, caster, spellId).
 func (s *session) handleEffectGameObjectDamage(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
-	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(target, hitTargets, eff) {
 		s.handleEffectGameObjectDamageGO(ctx, spellID, eff, goGUID)
 	}
 }
@@ -484,7 +555,7 @@ func (s *session) handleEffectGameObjectRepairGO(ctx context.Context, spellID ui
 // (SpellEffects.cpp:5439), which runs at SPELL_EFFECT_HANDLE_HIT_TARGET per
 // gameobject target: ModifyHealth(+damage, caster), no faction gate.
 func (s *session) handleEffectGameObjectRepair(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
-	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(target, hitTargets, eff) {
 		s.handleEffectGameObjectRepairGO(ctx, spellID, eff, goGUID)
 	}
 }
@@ -516,7 +587,7 @@ func (s *session) handleEffectGameObjectSetDestructionStateGO(ctx context.Contex
 // runs at SPELL_EFFECT_HANDLE_HIT_TARGET per gameobject target:
 // SetDestructibleState(MiscValue, caster, true).
 func (s *session) handleEffectGameObjectSetDestructionState(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
-	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(target, hitTargets, eff) {
 		s.handleEffectGameObjectSetDestructionStateGO(ctx, eff, goGUID)
 	}
 }

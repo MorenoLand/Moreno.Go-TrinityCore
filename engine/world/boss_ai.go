@@ -2153,9 +2153,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				packetHits = append(packetHits, guid)
 			}
 		}
-		// AddGOTarget mask strip (Spell.cpp:2193), twin-path twin of the
+		// Per-effect GO mask (Spell.cpp:2193, :4512), twin-path twin of the
 		// player-path filter.
-		packetHits = s.filterNonDestructibleGOPacketTargets(ctx, m.Map, m.InstanceID, spellInfo, packetHits)
+		packetHits = s.filterGOPacketTargetsByEffectMask(ctx, m.Map, m.InstanceID, spellInfo, spellTarget, packetHits)
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
@@ -5899,7 +5899,7 @@ func (s *Server) creatureEffectActivateObject(ctx context.Context, m *creatureMo
 		return
 	}
 	action := uint32(eff.MiscValue)
-	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
 		switch {
 		case action >= goActionAnimateCustom0 && action <= goActionAnimateCustom3:
 			s.broadcastGameObjectCustomAnimInInstance(m.Map, m.InstanceID, goGUID, action-goActionAnimateCustom0)
@@ -5972,7 +5972,7 @@ func (s *Server) creatureEffectGameObjectDamage(ctx context.Context, m *creature
 	if s == nil || m == nil || s.Data == nil {
 		return
 	}
-	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
 		if faction, ok := s.gameObjectTargetFaction(ctx, m.Map, m.InstanceID, goGUID); ok && faction != 0 {
 			targetTpl, targetOK, _ := s.Data.FactionTemplate(faction)
 			casterTpl, casterOK, _ := s.Data.FactionTemplate(m.Faction)
@@ -5993,7 +5993,7 @@ func (s *Server) creatureEffectGameObjectRepair(ctx context.Context, m *creature
 	if s == nil || m == nil {
 		return
 	}
-	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
 		damage := eff.CalcValueForLevel(spell, m.Level)
 		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, damage, m.GUID, spellID, nil)
 	}
@@ -6011,7 +6011,7 @@ func (s *Server) creatureEffectGameObjectSetDestructionState(ctx context.Context
 	if state > goDestructibleRebuilding {
 		return
 	}
-	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
 		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
 	}
 }

@@ -10625,9 +10625,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			packetHitTargets = append(packetHitTargets, guid)
 		}
 	}
-	// AddGOTarget mask strip (Spell.cpp:2193): a damage-family-only spell
-	// never lists a non-destructible GO in the packet HitTargets.
-	packetHitTargets = s.server.filterNonDestructibleGOPacketTargets(ctx, s.player.Map, s.player.InstanceID, spell, packetHitTargets)
+	// Per-effect GO mask (Spell.cpp:2193, :4512): a GO reaches the packet
+	// HitTargets only via some real effect's mask, and a non-destructible
+	// GO only via a non-damage-family effect.
+	packetHitTargets = s.server.filterGOPacketTargetsByEffectMask(ctx, s.player.Map, s.player.InstanceID, spell, target, packetHitTargets)
 	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
@@ -17690,9 +17691,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		goHitTargets = append(goHitTargets, guid)
 	}
 	goTarget := spellGoPacketTarget(spell, spellTarget)
-	// AddGOTarget mask strip (Spell.cpp:2193), triggered-path twin of the
-	// finishSpellCast filter.
-	goHitTargets = s.server.filterNonDestructibleGOPacketTargets(ctx, s.player.Map, s.player.InstanceID, spell, goHitTargets)
+	// Per-effect GO mask (Spell.cpp:2193, :4512), triggered-path twin of
+	// the finishSpellCast filter.
+	goHitTargets = s.server.filterGOPacketTargetsByEffectMask(ctx, s.player.Map, s.player.InstanceID, spell, spellTarget, goHitTargets)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
 		var goExtras protocol.SpellGoTrailerExtras
 		if castFlags&protocol.SpellCastFlagAmmo != 0 {
@@ -40964,7 +40965,7 @@ func (s *session) handleEffectActivateObjectGO(ctx context.Context, goGUID uint6
 // GameObjectData.h:675).
 func (s *session) handleEffectActivateObject(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
 	action := uint32(eff.MiscValue)
-	for _, goGUID := range spellEffectGOTargets(target, hitTargets) {
+	for _, goGUID := range spellEffectGOTargetsForEffect(target, hitTargets, eff) {
 		s.handleEffectActivateObjectGO(ctx, goGUID, action)
 	}
 }
