@@ -4271,6 +4271,49 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a
+			// creature caster: TARGET_UNIT_CHANNEL_TARGET (77) adds the live
+			// channel's object unit, independent of the wire victim — the
+			// twin's leg (boss_ai.go) with the inline join pattern. The
+			// inline per-hit legs iterate areaHits / areaCreatureHits,
+			// not hitTargets, so the channel target joins those lists
+			// too, on the cone leg's pattern: a player joins areaHits
+			// (tick slice, else a session fallback), a live motion
+			// joins areaCreatureHits, and a static spawn rides the
+			// packet only. Runs after every selection leg above so no
+			// rebuild drops it, and ahead of the verdicts below.
+			if inlineSpellKnown && !isChanneledSpell(inlineSpell) && spellHasUnitChannelTarget(inlineSpell) {
+				if channelGUID, ok := s.creatureChannelUnitTarget(motion); ok {
+					alreadyHit := false
+					for _, hitGUID := range hitTargets {
+						if hitGUID == channelGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if !alreadyHit {
+						hitTargets = append(hitTargets, channelGUID)
+						playerJoined := false
+						for i := range players {
+							if players[i].GUID == channelGUID {
+								areaHits = append(areaHits, &players[i])
+								playerJoined = true
+								break
+							}
+						}
+						if !playerJoined {
+							if pickSess := s.findSessionByGUID(channelGUID); pickSess != nil && pickSess.player != nil {
+								p := pickSess.player
+								areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+								playerJoined = true
+							}
+						}
+						if !playerJoined && s.findCreatureMotion(motion.Map, motion.InstanceID, channelGUID) != nil {
+							areaCreatureHits = append(areaCreatureHits, channelGUID)
+						}
+					}
+				}
+			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 			// the inline path: a victim whose reflect roll succeeds becomes a
 			// REFLECT miss and the spell returns to the motion

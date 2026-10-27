@@ -16,8 +16,10 @@ const (
 )
 
 // spellHasChannelDestTarget reports whether any effect carries a channel-dest
-// implicit target (76/106). The unit value (77) is already resolved through
-// the channelTargetForSpell / periodicTriggerTarget path.
+// implicit target (76/106). The unit value (77) is not a dest target: on the
+// player path it routes through channelTargetForSpell / periodicTriggerTarget,
+// and on the creature paths it resolves via creatureChannelUnitTarget
+// (creature_dest_targets.go) in the twin, inline, and pet hit lists.
 func spellHasChannelDestTarget(spell wotlk.Spell) bool {
 	for _, eff := range spell.Effects {
 		if eff.Effect == 0 {

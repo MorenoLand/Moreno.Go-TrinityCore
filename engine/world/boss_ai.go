@@ -1783,6 +1783,35 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a
+		// creature caster: TARGET_UNIT_CHANNEL_TARGET (77) adds the live
+		// channel's object unit to the hit list, independent of the wire
+		// target — C++ selects it from the original caster's channel
+		// object, not from the explicit target, so a cast whose wire
+		// target differs from the channel target (target switch, self
+		// cast, or no explicit target) previously missed it entirely,
+		// and a mixed-effect spell never selected it at all. The
+		// channel-target-for-spell claim in channel_targets.go covers
+		// only the player session's periodic-trigger routing, not this
+		// path. Runs after the nearby replacement above so it is not
+		// wiped by it, and ahead of aura scaling and the verdicts below
+		// so the channel target rolls its own verdict like any implicit
+		// target. Deduped against the wire/area/cone legs (AddUnitTarget,
+		// Spell.cpp:2152).
+		if !isChanneledSpell(spellInfo) && spellHasUnitChannelTarget(spellInfo) {
+			if channelGUID, ok := s.creatureChannelUnitTarget(m); ok {
+				alreadyHit := false
+				for _, guid := range hitTargets {
+					if guid == channelGUID {
+						alreadyHit = true
+						break
+					}
+				}
+				if !alreadyHit {
+					hitTargets = append(hitTargets, channelGUID)
+				}
+			}
+		}
 		// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the
 		// AddUnitTarget min-level arm (Spell.cpp:2115-2150) + the
 		// SelectTargets removal leg (Spell.cpp:807-830) for a creature

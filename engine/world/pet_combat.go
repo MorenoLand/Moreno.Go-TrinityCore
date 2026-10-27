@@ -3891,6 +3891,30 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a pet
+	// caster: TARGET_UNIT_CHANNEL_TARGET (77) adds the live channel's
+	// object unit to the hit list, independent of the wire target — the
+	// twin's leg (boss_ai.go). Runs after the chain leg above so no
+	// rebuild drops it, and ahead of aura scaling and the verdicts below
+	// so the channel target rolls its own verdict. petChannelHitGUID
+	// carries it to the damage leg below: the wire leg there covers
+	// targetGUID only and the area legs cover area-selected enemies only.
+	var petChannelHitGUID uint64
+	if !isChanneledSpell(spell) && spellHasUnitChannelTarget(spell) {
+		if channelGUID, ok := s.server.creatureChannelUnitTarget(motion); ok {
+			alreadyHit := false
+			for _, guid := range hitTargets {
+				if guid == channelGUID {
+					alreadyHit = true
+					break
+				}
+			}
+			if !alreadyHit {
+				hitTargets = append(hitTargets, channelGUID)
+				petChannelHitGUID = channelGUID
+			}
+		}
+	}
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
@@ -4697,6 +4721,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			missVerdict, hasMissVerdict := petMissVerdicts[targetGUID]
 			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+		}
+		// The 77 channel target takes its own damage hit on the same
+		// shape: the wire leg above covers targetGUID only and the area
+		// legs below cover area-selected enemies only, so a channel
+		// target that is neither would otherwise take the dispatch legs
+		// (hitTargets) but no damage. Already in hitTargets, so its
+		// verdicts ran with the rest.
+		if petChannelHitGUID != 0 {
+			if rt := resolveReflectTarget(petChannelHitGUID); rt != 0 {
+				reflectorGUID := uint64(0)
+				if reflectedSet[petChannelHitGUID] {
+					reflectorGUID = petChannelHitGUID
+				}
+				missVerdict, hasMissVerdict := petMissVerdicts[petChannelHitGUID]
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+			}
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
 		// enemy takes its own hit — the per-target miss roll, resistance,

@@ -268,6 +268,39 @@ func (s *Server) creatureChannelDest(ctx context.Context, m *creatureMotion) (fl
 	return 0, 0, 0, false
 }
 
+// spellHasUnitChannelTarget reports whether any active effect carries a
+// TARGET_UNIT_CHANNEL_TARGET (77) implicit target on either slot.
+func spellHasUnitChannelTarget(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == implicitTargetUnitChannelTarget || eff.ImplicitTargetB == implicitTargetUnitChannelTarget {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureChannelUnitTarget returns the motion's live channel-object GUID
+// for the 77 arm of Spell::SelectImplicitChannelTargets (Spell.cpp:996-1004):
+// the unit resolved from the original caster's channel object, added only
+// while a live channel exists (creatureChannelLive). A gameobject channel
+// object is excluded (C++ GetUnit returns null for it). Callers gate on the
+// spell carrying a 77 target and on the spell not itself being channeled:
+// a channeled spell's own 77 effects resolve against its own channel
+// object, which is not stamped until after selection, so a previous
+// channel's target would fabricate one.
+func (s *Server) creatureChannelUnitTarget(m *creatureMotion) (uint64, bool) {
+	if !s.creatureChannelLive(m) || m.ChannelTargetGUID == 0 {
+		return 0, false
+	}
+	if uint16(m.ChannelTargetGUID>>48) == 0xF110 {
+		return 0, false
+	}
+	return m.ChannelTargetGUID, true
+}
+
 // stampCreatureChannel records a successfully cast channeled spell's
 // channel state on the motion (Spell::SendChannelStart, Spell.cpp:4669-
 // 4690: the channel object is the caster when the channel spell has a
