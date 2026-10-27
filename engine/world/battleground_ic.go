@@ -905,12 +905,15 @@ func (s *Server) grantICWinnerHonor(ic *icBattlegroundState, team uint32) {
 // quarry/refinery buffs (SPELL_QUARRY=68720 / SPELL_OIL_REFINERY=68719) when
 // the player's team controls that node (== C++ nodeState == controlled-for-team
 // gate). Called from the resurrect choke point, same class as the
-// death.go closestGraveyard IoC dispatch.
+// death.go closestGraveyard IoC dispatch. Player.cpp:4722-4725 dispatches
+// HandlePlayerResurrect on the player's battleground (InBattleground gate),
+// never on the standing map, so the guard takes the membership leg like
+// handleICPlayerDeath and the state resolves on ICMapID.
 func (s *Server) applyICNodeAuras(sess *session) {
-	if s == nil || sess == nil || sess.player == nil {
+	if s == nil || sess == nil || sess.player == nil || (sess.player.Map != ICMapID && !sess.hasActiveBGMap(ICMapID)) {
 		return
 	}
-	ic := s.getOrCreateICState(sess.player.Map)
+	ic := s.getOrCreateICState(ICMapID)
 	if ic == nil {
 		return
 	}

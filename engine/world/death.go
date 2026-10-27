@@ -1317,7 +1317,19 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 		s.spawnCorpseBones(ctx)
 	}
 
-	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
+	// Player.cpp:5127-5128 (RepopAtGraveyard): a battleground member's grave
+	// comes from bg->GetClosestGraveyard, never the standing map, so an
+	// off-map roster member repops to the IC/SA node grave; a standing IC/SA
+	// map keeps its own dispatch.
+	repopMap := s.player.Map
+	if repopMap != ICMapID && repopMap != SAMapID {
+		if s.hasActiveBGMap(ICMapID) {
+			repopMap = ICMapID
+		} else if s.hasActiveBGMap(SAMapID) {
+			repopMap = SAMapID
+		}
+	}
+	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, repopMap, s.player.Zone, playerTeam(s.player.Race))
 	if ok {
 		if s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation) {
 			if shouldResurrect {
@@ -1974,7 +1986,7 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
-	if s.player.Map == ICMapID && s.server != nil {
+	if s.server != nil && (s.player.Map == ICMapID || s.hasActiveBGMap(ICMapID)) {
 		s.server.applyICNodeAuras(s)
 	}
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
