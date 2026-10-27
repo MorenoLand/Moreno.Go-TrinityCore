@@ -1109,6 +1109,27 @@ func (s *Server) removeArenaPlayerAtLeave(ctx context.Context, arena *arenaBattl
 			sess.bgQueues[idx] = bgQueueEntry{}
 			sess.sendBattlefieldStatus(uint8(idx))
 		}
+		// Battleground::RemovePlayerAtLeave trailing arms
+		// (Battleground.cpp:894-920), which the voluntary-leave funnel
+		// already runs but the timer sweep skipped: drop the player
+		// from the team's BG raid (reads bgData, so it runs before
+		// the zeroing below), clear the battleground id and team, and
+		// reset the BG-map achievement criteria. Without these a
+		// timer-swept player kept a stale in-BG id (death/group/guild/
+		// LFG gates key off bgData.InstanceID), stayed in the BG raid,
+		// and kept BG-map criteria after teleporting to the entry point.
+		s.removePlayerFromBGRaid(sess)
+		sess.bgData.InstanceID = 0
+		sess.bgData.Team = 0
+		sess.resetAchievementCriteriaByCondition(criteriaConditionBGMap, arena.MapID)
+		// The team flag and preparation auras addPlayerToArena applies
+		// are stripped on the funnel path (handleArenaPlayerLeave); the
+		// timer sweep left them on through the entry-point teleport.
+		sess.removeAura(SpellAllianceGoldFlag)
+		sess.removeAura(SpellAllianceGreenFlag)
+		sess.removeAura(SpellHordeGoldFlag)
+		sess.removeAura(SpellHordeGreenFlag)
+		sess.removeAura(SpellArenaPreparation)
 		// Transport=true arm (Battleground.cpp:925-927):
 		// Player::TeleportToBGEntryPoint.
 		if sess.bgData.JoinMap != 0 {
