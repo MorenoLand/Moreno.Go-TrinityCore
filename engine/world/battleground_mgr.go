@@ -183,8 +183,10 @@ func weightedRandomIndex(weights []float64, roll float64) int {
 // and weightedRandomIndex picks over the candidates. No template, no DBC
 // entry, or no candidate returns BATTLEGROUND_TYPE_NONE. The caller
 // supplies the uniform [0,1) roll, the weightedRandomIndex convention.
-// CreateNewBattleground has no Go twin yet, so no live caller exists;
-// the simulated RB queue pop still maps type 32 to map 0.
+// CreateNewBattleground has no Go twin yet; the simulated RB queue pop
+// is the live caller (resolveRandomBGType, battleground.go), resolving
+// the queued type at pop-arm time and carrying the resolved type on the
+// queue slot for the invite dialog and the port accept.
 func (s *Server) getRandomBG(ctx context.Context, bgTypeID uint32, roll float64) uint32 {
 	if s == nil || s.bgTemplateForType(ctx, bgTypeID) == nil {
 		return battlegroundTypeNone

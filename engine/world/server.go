@@ -723,20 +723,21 @@ func (s *Server) playerSessionForGUID(guid uint64) *session {
 }
 
 type bgQueueEntry struct {
-	Active          bool
-	BgTypeID        uint32
-	InstanceID      uint32
-	JoinTime        time.Time
-	Status          uint32
-	ArenaType       uint8
-	IsArena         bool
-	IsRated         bool
-	ArenaFaction    uint8
-	ArenaTeamID     uint32 // rated arena team id (GroupQueueInfo::ArenaTeamId)
-	ArenaTeamRating uint32 // join-time team rating, clamped to >= 1 (BattleGroundHandler.cpp:721-722)
-	ArenaGroupJoin  bool   // entry was queued by the group join path (ginfo group, not a 1-player solo ginfo)
-	MapID           uint32
-	StartTime       time.Time
+	Active           bool
+	BgTypeID         uint32
+	ResolvedBgTypeID uint32 // random-BG resolution: SetRandomTypeID (BattlegroundMgr.cpp:421), 0 = unresolved or non-random
+	InstanceID       uint32
+	JoinTime         time.Time
+	Status           uint32
+	ArenaType        uint8
+	IsArena          bool
+	IsRated          bool
+	ArenaFaction     uint8
+	ArenaTeamID      uint32 // rated arena team id (GroupQueueInfo::ArenaTeamId)
+	ArenaTeamRating  uint32 // join-time team rating, clamped to >= 1 (BattleGroundHandler.cpp:721-722)
+	ArenaGroupJoin   bool   // entry was queued by the group join path (ginfo group, not a 1-player solo ginfo)
+	MapID            uint32
+	StartTime        time.Time
 }
 
 type battlegroundLoginData struct {

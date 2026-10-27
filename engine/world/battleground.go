@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -547,11 +548,32 @@ const bgInviteAcceptWindow = 60 * time.Second
 // invite dialog this long after the pop if the player still hasn't responded.
 const bgInvitationRemindTime = 20 * time.Second
 
+// resolveRandomBGType is the Go form of the GetRandomBG call in
+// BattlegroundMgr::CreateNewBattleground (BattlegroundMgr.cpp:353): the
+// queued random type resolves to one concrete battleground, or
+// BATTLEGROUND_TYPE_NONE (0) when no template/DBC/candidate exists —
+// 0 doubles as the entry's unresolved marker, so the pop falls back to
+// the queued type's map. The roll is the weightedRandomIndex convention
+// (getRandomBG, battleground_mgr.go).
+func (s *session) resolveRandomBGType() uint32 {
+	if s == nil || s.server == nil {
+		return battlegroundTypeNone
+	}
+	return s.server.getRandomBG(context.Background(), battlegroundRB, rand.Float64())
+}
+
 // simulateBGQueueInvite arms the queue-pop simulation for one queued slot:
 // after bgSimulatedInviteDelay the entry flips to STATUS_WAIT_JOIN with the
 // given instance id (0 → a fresh synthetic id is minted at fire time) and
 // the client gets the invite via SMSG_BATTLEFIELD_STATUS. The join-time
 // guard drops the invite if the slot was left or reused meanwhile.
+// A random-BG slot resolves here, at arm time, not at fire time: the
+// group-join path arms one pop per member for a single shared instance,
+// and C++ invites the whole group to the one battleground
+// CreateNewBattleground returns — per-member fire-time rolls would split
+// the group across maps. A pre-set ResolvedBgTypeID (the group-shared
+// pick) wins over a fresh roll; a template/DBC reload inside the 15s sim
+// window is the accepted delta against C++'s pop-time resolution.
 func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID uint32) {
 	if s == nil || slot < 0 || slot >= len(s.bgQueues) {
 		return
@@ -561,6 +583,9 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		return
 	}
 	bgTypeID := entry.BgTypeID
+	if entry.ResolvedBgTypeID == 0 && bgTypeID == battlegroundRB {
+		entry.ResolvedBgTypeID = s.resolveRandomBGType()
+	}
 	time.AfterFunc(bgSimulatedInviteDelay, func() {
 		if s == nil || !s.playerLoaded || s.player == nil {
 			return
@@ -580,7 +605,15 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// live BG world backs it — the port itself stays no-bridge,
 		// battleground.go handleBattlefieldPort).
 		e.InstanceID = instanceID
-		e.MapID = battlegroundMapForType(bgTypeID)
+		// The invite dialog carries the live instance's map
+		// (Battleground::GetMapId): the resolved type for a random queue,
+		// the queued type otherwise — an unresolved random queue keeps
+		// the old map-0 behavior (battlegroundMapForType has no RB row).
+		if e.ResolvedBgTypeID != 0 {
+			e.MapID = battlegroundMapForType(e.ResolvedBgTypeID)
+		} else {
+			e.MapID = battlegroundMapForType(bgTypeID)
+		}
 		e.Status = BGStatusWaitJoin
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("simulated battleground invite", "account", s.accountName, "bg", bgTypeID, "slot", slot, "instance", instanceID)
@@ -831,7 +864,13 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 	// GetAverageQueueWaitTime; Go keeps no queue wait stats, so sendBattlefieldStatus answers
 	// the hardcoded average — same documented delta as the solo arm.
 	// One shared synthetic instance id for the simulated pop, like the
-	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID.
+	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID — and one
+	// shared random-BG resolution for the same reason: C++ invites the
+	// group to the single battleground CreateNewBattleground returns.
+	sharedResolved := uint32(0)
+	if bgTypeID == battlegroundRB {
+		sharedResolved = s.resolveRandomBGType()
+	}
 	simInstanceID := uint32(time.Now().Unix())
 	for _, member := range members {
 		slot := memberFreeBGQueueIndex(member)
@@ -839,7 +878,7 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 			continue
 		}
 		joinTime := time.Now()
-		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: instanceID, JoinTime: joinTime, Status: BGStatusWaitQueue}
+		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, ResolvedBgTypeID: sharedResolved, InstanceID: instanceID, JoinTime: joinTime, Status: BGStatusWaitQueue}
 		member.sendBattlefieldStatus(uint8(slot))
 		// No live matchmaker: simulate the queue pop (see simulateBGQueueInvite).
 		member.simulateBGQueueInvite(slot, joinTime, simInstanceID)
@@ -1486,11 +1525,15 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 
 	// Level gate (BattleGroundHandler.cpp:441-448): a player who leveled past the
 	// battleground's max level while queued does not port — the accept demotes to
-	// leave. MaxLvl comes from the loaded template store (the Go mirror of the
-	// BG template's GetMaxLevel, same store bgAccessByLevel reads); a missing
-	// row leaves the demote unevaluated.
+	// leave. C++ reads bg->GetMaxLevel(), the LIVE instance's max level, so a
+	// resolved random queue gates on the resolved type's template, not the
+	// queued RB template; a missing row leaves the demote unevaluated.
 	if action == 1 && !entry.IsArena && s.player != nil {
-		if tmpl := s.server.bgTemplateForType(ctx, bgTypeID); tmpl != nil && uint32(s.player.Level) > uint32(tmpl.maxLevel) {
+		gateType := bgTypeID
+		if entry.ResolvedBgTypeID != 0 {
+			gateType = entry.ResolvedBgTypeID
+		}
+		if tmpl := s.server.bgTemplateForType(ctx, gateType); tmpl != nil && uint32(s.player.Level) > uint32(tmpl.maxLevel) {
 			s.debug("battlefield port accept demoted to leave: level above bg max", "account", s.accountName, "bg", bgTypeID)
 			action = 0
 		}
@@ -1543,7 +1586,17 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		team := teamForRace(s.player.Race)
 		entry.Status = BGStatusInProgress
 		entry.StartTime = time.Now()
-		entry.MapID = battlegroundMapForType(bgTypeID)
+		// The in-progress packet carries the live instance's map
+		// (Battleground::GetMapId, BattleGroundHandler.cpp:468): the
+		// resolved type for a random queue, else the queued type — the
+		// pop-time MapID is not trusted here, matching the C++ arm that
+		// rebuilds the packet from the instance, and keeping
+		// activeBattlegroundMap on the real map after accept.
+		if entry.ResolvedBgTypeID != 0 {
+			entry.MapID = battlegroundMapForType(entry.ResolvedBgTypeID)
+		} else {
+			entry.MapID = battlegroundMapForType(bgTypeID)
+		}
 		// C++ SetBGTeam(team) stores arenaFaction = team == ALLIANCE ? 1 : 0
 		// (Player.cpp:22458-22461); teamForRace is 0 alliance / 1 horde, so the
 		// wire byte is inverted here.
