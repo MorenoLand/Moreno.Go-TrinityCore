@@ -9230,6 +9230,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// and chain-jump expansion the same way area spells do (Spell.cpp:1227
 	// area selection never calls SelectImplicitChainTargets).
 	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell || goAreaSpell || goConeSpell
+	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask)
+	// threaded from the selection legs below: each GO GUID maps to the
+	// union of exactly the arms that selected it (nearby 40, area 51/52,
+	// cone 108, wire object 23/26 plus the EXPLICIT fallback), replacing
+	// the category approximation at the packet filter and the effect
+	// fan-out below. A GUID the legs never record keeps no entry; the
+	// masked consumers fall back to the category membership for it.
+	goEffectMasks := make(map[uint64]uint32)
+	noteGOEffectMask := func(guid uint64, mask uint32) {
+		if guid != 0 && mask != 0 {
+			goEffectMasks[guid] |= mask
+		}
+	}
+	wireGOMask := spellGOWireEffectMask(spell)
+	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 		// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
@@ -9270,6 +9285,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if goNearbyEntrySpell {
 				if goNearby, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
 					hitTargets = append(hitTargets, goNearby)
+					noteGOEffectMask(goNearby, nearbyGOMask)
 				} else {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby gameobject target")
@@ -9310,6 +9326,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// list; Go has no gameobject-effect consumer downstream.
 		if nearby, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
 			hitTargets = []uint64{nearby}
+			noteGOEffectMask(nearby, nearbyGOMask)
 		} else {
 			// Spell.cpp:1111: no target found ->
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -9328,12 +9345,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// area never fails the cast. The GO guids flow through hitTargets
 		// like C++'s AddGOTarget list; Go has no gameobject-effect
 		// consumer downstream.
-		hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, target)
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
+		hitTargets = areaTargets
+		for guid, mask := range areaMasks {
+			noteGOEffectMask(guid, mask)
+		}
 	} else if goConeSpell {
 		// Spell::SelectImplicitConeTargets (Spell.cpp:1176):
 		// TARGET_GAMEOBJECT_CONE (108) — every gameobject in the caster's
 		// front cone becomes a target; an empty cone never fails the cast.
-		hitTargets = s.spellGOConeTargets(ctx, spell, spellID)
+		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
+		hitTargets = coneTargets
+		for guid, mask := range coneMasks {
+			noteGOEffectMask(guid, mask)
+		}
 	} else if friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) with LAST (37)
 		// or TARGET (61) reference: area around the last/explicit target.
@@ -9766,6 +9791,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// the same flat-list approximation the unit primary
 					// already takes with the sibling area/list effect.
 					hitTargets = append(hitTargets, anchor)
+					noteGOEffectMask(anchor, wireGOMask)
 				}
 				if !primaryInList && !anchorIsGO {
 					var primarySess *session
@@ -9900,6 +9926,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// the same flat-list approximation the unit primary
 					// already takes with the sibling area/list effect.
 					hitTargets = append(hitTargets, anchor)
+					noteGOEffectMask(anchor, wireGOMask)
 				}
 				if !primaryInList && !anchorIsGO {
 					var primarySess *session
@@ -10100,6 +10127,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// the same flat-list approximation the unit primary
 					// already takes with the sibling area/list effect.
 					hitTargets = append(hitTargets, anchor)
+					noteGOEffectMask(anchor, wireGOMask)
 				}
 				if !primaryInList && !anchorIsGO {
 					var primarySess *session
@@ -10292,6 +10320,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if !seenGO {
 			hitTargets = append(hitTargets, wireGO)
+			noteGOEffectMask(wireGO, wireGOMask)
 		}
 	}
 
@@ -10628,7 +10657,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Per-effect GO mask (Spell.cpp:2193, :4512): a GO reaches the packet
 	// HitTargets only via some real effect's mask, and a non-destructible
 	// GO only via a non-damage-family effect.
-	packetHitTargets = s.server.filterGOPacketTargetsByEffectMask(ctx, s.player.Map, s.player.InstanceID, spell, target, packetHitTargets)
+	packetHitTargets = s.server.filterGOPacketTargetsByEffectMaskWithMasks(ctx, s.player.Map, s.player.InstanceID, spell, target, packetHitTargets, goEffectMasks)
 	goPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true)
 	if s.server != nil {
@@ -12325,26 +12354,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (GameObjectActions, GameObjectData.h:675). The wire GO
 				// target plus every implicit GO target in hitTargets is
 				// served, matching the per-GO HandleEffects iteration.
-				s.handleEffectActivateObject(effCtx, eff, target, hitTargets)
+				s.handleEffectActivateObjectMasked(effCtx, eff, effectIndex, target, hitTargets, goEffectMasks)
 			case spellEffectGameObjectDamage: // 87: SPELL_EFFECT_GAMEOBJECT_DAMAGE (EffectGameObjectDamage, SpellEffects.cpp:5424)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
 				// Spell.cpp:2663): the friendly-faction gate, then
 				// ModifyHealth(-damage, caster, spellId). Every GO in the
 				// target container is served, not just the wire target.
-				s.handleEffectGameObjectDamage(effCtx, spellID, eff, target, hitTargets)
+				s.handleEffectGameObjectDamageMasked(effCtx, spellID, eff, effectIndex, target, hitTargets, goEffectMasks)
 			case spellEffectGameObjectRepair: // 88: SPELL_EFFECT_GAMEOBJECT_REPAIR (EffectGameObjectRepair, SpellEffects.cpp:5439)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
 				// Spell.cpp:2663): ModifyHealth(+damage, caster), no
 				// faction gate. Every GO in the target container is served.
-				s.handleEffectGameObjectRepair(effCtx, spellID, eff, target, hitTargets)
+				s.handleEffectGameObjectRepairMasked(effCtx, spellID, eff, effectIndex, target, hitTargets, goEffectMasks)
 			case spellEffectGameObjectSetDestructionState: // 89: SPELL_EFFECT_GAMEOBJECT_SET_DESTRUCTION_STATE (EffectGameObjectSetDestructionState, SpellEffects.cpp:5450)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
 				// Spell.cpp:2663): SetDestructibleState(MiscValue, caster,
 				// true). Every GO in the target container is served.
-				s.handleEffectGameObjectSetDestructionState(effCtx, eff, target, hitTargets)
+				s.handleEffectGameObjectSetDestructionStateMasked(effCtx, eff, effectIndex, target, hitTargets, goEffectMasks)
 			case spellEffectEnchantHeldItem: // 92: SPELL_EFFECT_ENCHANT_HELD_ITEM (EffectEnchantHeldItem, SpellEffects.cpp:4078)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: the target's equipped main-hand weapon gains the

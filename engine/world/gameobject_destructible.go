@@ -420,6 +420,183 @@ func spellEffectGOTargetMember(eff wotlk.SpellEffect, goGUID, wire uint64, hitGO
 	return goGUID == wire && spellEffectGOExplicitFallback(eff.Effect)
 }
 
+// spellGOListArmEffectMask returns the bitmask of real effects whose
+// selecting slot is the given list target (40 nearby, 51/52 area, 108
+// cone): slot A selects, slot B selects only when the first slot did not
+// consume the effect's processed slot (Spell.cpp:866-900, via
+// implicitTargetSecondSlotSkipped). This is one arm's AddGOTarget
+// effectMask: C++ batches identical-target effects into a single arm
+// (Spell.cpp:881-897), and a pick of that arm carries the batch's bits —
+// never a sibling arm's bits, which the category filter granted (an area
+// pick took a nearby effect, a wire rejoin rode list legs).
+func spellGOListArmEffectMask(spell wotlk.Spell, target uint32) uint32 {
+	var mask uint32
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == target || (eff.ImplicitTargetB == target && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, target)) {
+			mask |= 1 << uint(i)
+		}
+	}
+	return mask
+}
+
+// spellGOWireEffectMask returns the bitmask of real effects claiming the
+// explicit GO wire target: the object arms (23/26, DEFAULT category, so
+// both slots run) plus the EXPLICIT fallback for effects with no GO
+// implicit target at all (Spell.cpp:1709 arm, GOBJ/GOBJ_ITEM used-type
+// effects 33/86/87/88/89). An effect with a list slot but no object slot
+// claims no wire bit: its arm selects list picks only.
+func spellGOWireEffectMask(spell wotlk.Spell) uint32 {
+	var mask uint32
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		object, list := spellEffectGOTargetKinds(eff)
+		if object || (!list && spellEffectGOExplicitFallback(eff.Effect)) {
+			mask |= 1 << uint(i)
+		}
+	}
+	return mask
+}
+
+// goMaskedTargetsForEffect returns one effect's GO targets from the
+// threaded per-arm mask map built at selection time (finishSpellCast):
+// a GO belongs to the effect iff the mask recorded for it holds the
+// effect's bit — the exact AddGOTarget EffectMask (Spell.cpp:2193).
+// A GUID absent from the map (an append site the threading does not
+// cover) falls back to the category membership, so an uninstrumented
+// append keeps the old behavior instead of dropping from the fan-out.
+// A nil map delegates wholesale to the category filter, which is what
+// the twin/inline/pet/triggered paths still use.
+func goMaskedTargetsForEffect(masks map[uint64]uint32, target protocol.SpellTargetData, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) []uint64 {
+	if masks == nil {
+		return spellEffectGOTargetsForEffect(target, hitTargets, eff)
+	}
+	wire := spellGameObjectTargetGUID(target)
+	hitGOs := make(map[uint64]struct{})
+	for _, guid := range hitTargets {
+		if uint16(guid>>48) == 0xF110 {
+			hitGOs[guid] = struct{}{}
+		}
+	}
+	member := func(guid uint64) bool {
+		if m, ok := masks[guid]; ok {
+			return m&(1<<uint(effIndex)) != 0
+		}
+		return spellEffectGOTargetMember(eff, guid, wire, hitGOs)
+	}
+	var out []uint64
+	seen := make(map[uint64]struct{})
+	add := func(guid uint64) {
+		if guid == 0 {
+			return
+		}
+		if _, ok := seen[guid]; ok {
+			return
+		}
+		seen[guid] = struct{}{}
+		out = append(out, guid)
+	}
+	if member(wire) {
+		add(wire)
+	}
+	for _, guid := range hitTargets {
+		if uint16(guid>>48) == 0xF110 && member(guid) {
+			add(guid)
+		}
+	}
+	return out
+}
+
+// filterGOPacketTargetsByEffectMaskWithMasks is the threaded-mask twin of
+// filterGOPacketTargetsByEffectMask: a GO survives into the packet iff
+// some real effect's recorded per-arm mask holds it (a GUID absent from
+// the map falls back to the category membership), with the same
+// non-destructible damage-family strip. A nil map delegates to the
+// category filter.
+func (s *Server) filterGOPacketTargetsByEffectMaskWithMasks(ctx context.Context, mapID, instanceID uint32, spell wotlk.Spell, target protocol.SpellTargetData, hits []uint64, masks map[uint64]uint32) []uint64 {
+	if masks == nil {
+		return s.filterGOPacketTargetsByEffectMask(ctx, mapID, instanceID, spell, target, hits)
+	}
+	if s == nil {
+		return hits
+	}
+	wire := spellGameObjectTargetGUID(target)
+	hitGOs := make(map[uint64]struct{})
+	for _, guid := range hits {
+		if uint16(guid>>48) == 0xF110 {
+			hitGOs[guid] = struct{}{}
+		}
+	}
+	out := make([]uint64, 0, len(hits))
+	for _, guid := range hits {
+		if guid == 0 || uint16(guid>>48) != 0xF110 {
+			out = append(out, guid)
+			continue
+		}
+		keep := false
+		for i := range spell.Effects {
+			eff := spell.Effects[i]
+			if eff.Effect == 0 {
+				continue
+			}
+			if m, ok := masks[guid]; ok {
+				if m&(1<<uint(i)) == 0 {
+					continue
+				}
+			} else if !spellEffectGOTargetMember(eff, guid, wire, hitGOs) {
+				continue
+			}
+			if eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
+				if s.gameObjectIsDestructibleBuilding(ctx, mapID, instanceID, guid) {
+					keep = true
+					break
+				}
+				continue
+			}
+			keep = true
+			break
+		}
+		if keep {
+			out = append(out, guid)
+		}
+	}
+	return out
+}
+
+// The Masked fan-out variants below are the client-path (finishSpellCast)
+// twins of the plain handlers: they iterate the threaded per-arm mask
+// instead of the category filter, so an area-arm pick no longer takes a
+// nearby-arm effect. The twin/inline/pet/triggered paths keep the plain
+// handlers and their category filter until their own legs are threaded.
+func (s *session) handleEffectGameObjectDamageMasked(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effIndex int, target protocol.SpellTargetData, hitTargets []uint64, masks map[uint64]uint32) {
+	for _, goGUID := range goMaskedTargetsForEffect(masks, target, hitTargets, effIndex, eff) {
+		s.handleEffectGameObjectDamageGO(ctx, spellID, eff, goGUID)
+	}
+}
+
+func (s *session) handleEffectGameObjectRepairMasked(ctx context.Context, spellID uint32, eff wotlk.SpellEffect, effIndex int, target protocol.SpellTargetData, hitTargets []uint64, masks map[uint64]uint32) {
+	for _, goGUID := range goMaskedTargetsForEffect(masks, target, hitTargets, effIndex, eff) {
+		s.handleEffectGameObjectRepairGO(ctx, spellID, eff, goGUID)
+	}
+}
+
+func (s *session) handleEffectGameObjectSetDestructionStateMasked(ctx context.Context, eff wotlk.SpellEffect, effIndex int, target protocol.SpellTargetData, hitTargets []uint64, masks map[uint64]uint32) {
+	for _, goGUID := range goMaskedTargetsForEffect(masks, target, hitTargets, effIndex, eff) {
+		s.handleEffectGameObjectSetDestructionStateGO(ctx, eff, goGUID)
+	}
+}
+
+func (s *session) handleEffectActivateObjectMasked(ctx context.Context, eff wotlk.SpellEffect, effIndex int, target protocol.SpellTargetData, hitTargets []uint64, masks map[uint64]uint32) {
+	action := uint32(eff.MiscValue)
+	for _, goGUID := range goMaskedTargetsForEffect(masks, target, hitTargets, effIndex, eff) {
+		s.handleEffectActivateObjectGO(ctx, goGUID, action)
+	}
+}
+
 // filterGOPacketTargetsByEffectMask mirrors UpdateSpellCastDataTargets
 // (Spell.cpp:4512), which writes only m_UniqueGOTargetInfo into
 // HitTargets: a GO survives into the packet only if some real effect's

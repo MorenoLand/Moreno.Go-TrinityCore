@@ -51,6 +51,11 @@ type goAreaLeg struct {
 	cx, cy, cz float32
 	radius     float64
 	condRows   []conditionRow
+	// effIndex is the selecting effect: a match on this leg carries only
+	// this effect's AddGOTarget bit (Spell.cpp:2193), so the masked
+	// variants can thread the exact per-arm mask instead of the
+	// category approximation.
+	effIndex int
 }
 
 // branch (see the checkpoint audit for this run): both dispatch to
@@ -154,14 +159,26 @@ func (s *session) spellGOAreaRadius(spell wotlk.Spell, effectMask uint32) float6
 // RandomResize). An empty area list adds no targets and never fails the
 // cast — area selection has no BAD_IMPLICIT_TARGETS gate.
 func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) []uint64 {
+	targets, _ := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
+	return targets
+}
+
+// spellGOAreaTargetsWithMasks is the threaded-mask twin of
+// spellGOAreaTargets: the same per-effect legs, but each match also
+// records the leg effect's bit, so a GUID matched by several legs carries
+// the union of exactly those legs' bits (C++ AddGOTarget merges masks on
+// dup, Spell.cpp:2225). GUIDs dropped by the MaxTargets cap keep a mask
+// entry but are never consulted, since the fan-out and packet filter
+// iterate the capped list.
+func (s *session) spellGOAreaTargetsWithMasks(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) ([]uint64, map[uint64]uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
-		return nil
+		return nil, nil
 	}
 	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
 	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
 	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
 	if spellSearchPlayersOnly(spell) {
-		return nil
+		return nil, nil
 	}
 	// Per-effect legs (Spell.cpp:1227: SelectImplicitAreaTargets runs per
 	// effect with that effect's own ImplicitTargetConditions, and each
@@ -209,7 +226,7 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 		if !allowGO {
 			continue
 		}
-		leg := goAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: radius, condRows: condRows}
+		leg := goAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: radius, condRows: condRows, effIndex: i}
 		if legTarget == implicitTargetGODestArea {
 			leg.cx, leg.cy, leg.cz = destX, destY, destZ
 		}
@@ -219,24 +236,26 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 		}
 	}
 	if len(legs) == 0 {
-		return nil
+		return nil, nil
 	}
 	targets := make([]uint64, 0)
+	masks := make(map[uint64]uint32)
 	seen := make(map[uint64]struct{})
 	s.scanNearbyGameObjects(ctx, float32(maxRadius), func(g nearbyGameObject) {
 		// GameObject::IsInRange (GameObject.cpp:2105) without the
 		// display-info dimension term: 3D distance from the leg's center.
-		// A match on any leg joins the list (per-effect selections union).
-		matched := false
+		// A match on any leg joins the list (per-effect selections union),
+		// and each matching leg contributes its own effect's bit.
+		var matchMask uint32
 		for _, leg := range legs {
 			if distance3D(g.x, g.y, g.z, leg.cx, leg.cy, leg.cz) <= leg.radius && implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
-				matched = true
-				break
+				matchMask |= 1 << uint(leg.effIndex)
 			}
 		}
-		if !matched {
+		if matchMask == 0 {
 			return
 		}
+		masks[g.guid] |= matchMask
 		if _, ok := seen[g.guid]; ok {
 			return
 		}
@@ -253,7 +272,7 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 			targets = targets[:maxTargets]
 		}
 	}
-	return targets
+	return targets, masks
 }
 
 // spellGOConeTargets ports Spell::SelectImplicitConeTargets (Spell.cpp:1176)
@@ -272,14 +291,22 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 // spellGOAreaTargets, per effect and unioned across the effect legs. Every match is kept (no nearest-shrink); the
 // MaxTargets cap mirrors the cone path (Spell.cpp:1212).
 func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spellID uint32) []uint64 {
+	targets, _ := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
+	return targets
+}
+
+// spellGOConeTargetsWithMasks is the threaded-mask twin of
+// spellGOConeTargets, as spellGOAreaTargetsWithMasks is of
+// spellGOAreaTargets: each matching leg contributes its own effect's bit.
+func (s *session) spellGOConeTargetsWithMasks(ctx context.Context, spell wotlk.Spell, spellID uint32) ([]uint64, map[uint64]uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
-		return nil
+		return nil, nil
 	}
 	// Spell::GetSearcherTypeMask (Spell.cpp:1809-1842): the GOBJ base mask
 	// narrows to zero under SPELL_ATTR3_ONLY_TARGET_PLAYERS /
 	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, so the search contributes nothing.
 	if spellSearchPlayersOnly(spell) {
-		return nil
+		return nil, nil
 	}
 	// Per-effect legs, as in spellGOAreaTargets: SelectImplicitConeTargets
 	// (Spell.cpp:1176) runs per effect with that effect's own
@@ -309,15 +336,16 @@ func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spe
 		if !allowGO {
 			continue
 		}
-		legs = append(legs, goAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: radius, condRows: condRows})
+		legs = append(legs, goAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: radius, condRows: condRows, effIndex: i})
 		if radius > maxRadius {
 			maxRadius = radius
 		}
 	}
 	if len(legs) == 0 {
-		return nil
+		return nil, nil
 	}
 	targets := make([]uint64, 0)
+	masks := make(map[uint64]uint32)
 	seen := make(map[uint64]struct{})
 	s.scanNearbyGameObjects(ctx, float32(maxRadius), func(g nearbyGameObject) {
 		if backCone {
@@ -330,16 +358,16 @@ func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spe
 			// WorldObject::isInFront (Object.cpp:1412): HasInArc(pi/2).
 			return
 		}
-		matched := false
+		var matchMask uint32
 		for _, leg := range legs {
 			if distance3D(g.x, g.y, g.z, s.player.X, s.player.Y, s.player.Z) <= leg.radius && implicitEntryGOConditionsMet(leg.condRows, g.entry, g.spawnLow) {
-				matched = true
-				break
+				matchMask |= 1 << uint(leg.effIndex)
 			}
 		}
-		if !matched {
+		if matchMask == 0 {
 			return
 		}
+		masks[g.guid] |= matchMask
 		if _, ok := seen[g.guid]; ok {
 			return
 		}
@@ -353,7 +381,7 @@ func (s *session) spellGOConeTargets(ctx context.Context, spell wotlk.Spell, spe
 			targets = targets[:maxTargets]
 		}
 	}
-	return targets
+	return targets, masks
 }
 
 // creatureGOAreaRadius mirrors spellGOAreaRadius for a creature caster:
@@ -439,7 +467,7 @@ func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, s
 		if !allowGO {
 			continue
 		}
-		leg := goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows}
+		leg := goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows, effIndex: i}
 		if legTarget == implicitTargetGODestArea {
 			leg.cx, leg.cy, leg.cz = s.creatureGOAreaDestCenter(m, hasDest, destX, destY, destZ, targetGUID)
 		}
@@ -501,7 +529,7 @@ func (s *Server) creatureGOConeTargets(ctx context.Context, m *creatureMotion, s
 		if !allowGO {
 			continue
 		}
-		legs = append(legs, goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows})
+		legs = append(legs, goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows, effIndex: i})
 	}
 	if len(legs) == 0 {
 		return nil
