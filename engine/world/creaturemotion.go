@@ -278,6 +278,7 @@ type creatureMotion struct {
 	EncounterInstanceID uint32
 
 	OwnerGUID      uint64
+	ObjectSlots    [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
 	CharmerGUID    uint64
 	Charmed        bool
 	CharmUnitFlags uint32

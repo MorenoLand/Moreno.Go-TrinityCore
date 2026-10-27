@@ -1946,6 +1946,21 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	if spellKnown {
 		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 	}
+	// Spell::EffectSummonObject (SpellEffects.cpp:4215) + EffectSummonObjectWild
+	// (SpellEffects.cpp:3552) for a creature caster: the HIT arms, once per
+	// cast on the caster like the Transmitted leg above (C++ runs effects
+	// in index order; documented approximation). Gated on spellKnown like
+	// the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+				s.creatureEffectSummonObject(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ)
+			case spellEffectSummonObjectWild:
+				s.creatureEffectSummonObjectWild(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ)
+			}
+		}
+	}
 	// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt
 	// (SpellEffects.cpp:3131) for a creature caster: the HIT_TARGET arms,
 	// grouped with the other effect-grouped arms above (C++ runs effects
@@ -1958,6 +1973,18 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectThreat(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectAttackMe:
 				s.creatureEffectTaunt(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) for a creature
+	// caster: the HIT_TARGET arm, grouped with the other effect-grouped
+	// arms above (C++ runs effects in index order; documented
+	// approximation). Gated on spellKnown like the tail; a cast with no
+	// resolved destination is C++'s HasDst log-error return inside the arm.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == spellEffectTeleportUnits {
+				s.creatureEffectTeleportUnits(ctx, m, hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -2595,6 +2622,199 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		log.WriteU32(1)
 		log.WritePackedGUID(summoned.GUID)
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	}
+}
+
+// creatureEffectSummonObject mirrors Spell::EffectSummonObject
+// (SpellEffects.cpp:4215) for a creature caster: the HIT arm for effects
+// 104-107 (SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4). The slot's previous game
+// object is despawned first (the recast arm nulls its spell id when the
+// same spell recasts, so despawn doesn't strip the spell's auras), then a
+// fresh GO (effect MiscValue entry) spawns at the cast's dest position — or
+// a close point in front of the caster when no dest is present — with the
+// caster's faction, the spell's duration and spell id, and the slot takes
+// the new GUID. The template lookup is the Go equivalent of
+// GameObject::Create failing on an unknown entry; the GO model carries no
+// level field, so the C++ GAMEOBJECT_LEVEL stamp has no twin. The spawn
+// log follows the Transmitted-leg format.
+func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	slot := int(eff.Effect - spellEffectSummonObjectSlot1)
+	if slot < 0 || slot >= len(m.ObjectSlots) {
+		return
+	}
+	entry := uint32(0)
+	if eff.MiscValue > 0 {
+		entry = uint32(eff.MiscValue)
+	}
+	if entry == 0 {
+		return
+	}
+	if oldGUID := m.ObjectSlots[slot]; oldGUID != 0 {
+		s.objectsMu.Lock()
+		if st := s.gameObjectStateLocked(m.Map, m.InstanceID, oldGUID); st != nil && st.SpellID == spell.ID {
+			st.SpellID = 0
+		}
+		s.objectsMu.Unlock()
+		s.despawnDynamicGameObjectInInstance(m.Map, m.InstanceID, oldGUID)
+		m.ObjectSlots[slot] = 0
+	}
+	tmpl, err := gobjectTemplateByEntry(ctx, s.WorldStore.DB, entry)
+	if err != nil || tmpl == nil {
+		return
+	}
+	x, y, z := m.X, m.Y, m.Z
+	if hasDest {
+		x, y, z = dx, dy, dz
+	} else {
+		// WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS)
+		// (Object.cpp:3307, ObjectDefines.h:39): 0.389 in front of the caster.
+		x = m.X + 0.389*float32(math.Cos(float64(m.Orientation)))
+		y = m.Y + 0.389*float32(math.Sin(float64(m.Orientation)))
+		z = m.Z
+	}
+	lowGUID := s.nextDynamicGameObjectLowGUID()
+	newGUID := gameObjectGUID(lowGUID, entry)
+	size := tmpl.size
+	if size <= 0 {
+		size = 1.0
+	}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: m.GUID, SpellID: spell.ID, Map: m.Map, InstanceID: m.InstanceID, X: x, Y: y, Z: z, Orientation: m.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, Faction: m.Faction, PhaseMask: m.PhaseMask, IsRuntimeSpawn: true}
+	if spell.DurationIndex > 0 && s.Data != nil {
+		lvl := m.Level
+		if lvl == 0 {
+			lvl = 80
+		}
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(dur)*time.Millisecond, func() {
+				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+	}
+	s.spawnDynamicGameObject(dyn)
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spell.ID)
+	log.WriteU32(1)
+	log.WriteU32(eff.Effect)
+	log.WriteU32(1)
+	log.WritePackedGUID(newGUID)
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	m.ObjectSlots[slot] = newGUID
+}
+
+// creatureEffectSummonObjectWild mirrors Spell::EffectSummonObjectWild
+// (SpellEffects.cpp:3552) for a creature caster: the HIT arm for effect 76
+// (SPELL_EFFECT_SUMMON_OBJECT_WILD). A wild (ownerless) game object spawns
+// at the cast's dest position — or a close point in front of the caster
+// when no dest is present — for the spell's duration. C++ anchors the
+// position and orientation on focusObject when one exists; the creature
+// path carries no focusObject model, so the caster anchors both. The
+// FLAGDROP leg is vacuous (a creature caster is never a battleground
+// player) and the linked-trap leg has no Go trap model (gameobjects.go),
+// matching the Transmitted arm's omission.
+func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	entry := uint32(0)
+	if eff.MiscValue > 0 {
+		entry = uint32(eff.MiscValue)
+	}
+	if entry == 0 {
+		return
+	}
+	tmpl, err := gobjectTemplateByEntry(ctx, s.WorldStore.DB, entry)
+	if err != nil || tmpl == nil {
+		return
+	}
+	x, y, z := m.X, m.Y, m.Z
+	if hasDest {
+		x, y, z = dx, dy, dz
+	} else {
+		x = m.X + 0.389*float32(math.Cos(float64(m.Orientation)))
+		y = m.Y + 0.389*float32(math.Sin(float64(m.Orientation)))
+		z = m.Z
+	}
+	lowGUID := s.nextDynamicGameObjectLowGUID()
+	newGUID := gameObjectGUID(lowGUID, entry)
+	size := tmpl.size
+	if size <= 0 {
+		size = 1.0
+	}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, SpellID: spell.ID, Map: m.Map, InstanceID: m.InstanceID, X: x, Y: y, Z: z, Orientation: m.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: m.PhaseMask, IsRuntimeSpawn: true}
+	if spell.DurationIndex > 0 && s.Data != nil {
+		lvl := m.Level
+		if lvl == 0 {
+			lvl = 80
+		}
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(dur)*time.Millisecond, func() {
+				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+	}
+	s.spawnDynamicGameObject(dyn)
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spell.ID)
+	log.WriteU32(1)
+	log.WriteU32(eff.Effect)
+	log.WriteU32(1)
+	log.WritePackedGUID(newGUID)
+	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+}
+
+// creatureEffectTeleportUnits mirrors Spell::EffectTeleportUnits
+// (SpellEffects.cpp:1199) for a creature caster: the HIT_TARGET arm. A
+// cast with no resolved destination is C++'s HasDst log-error return —
+// nothing teleports. The in-flight gate skips flying players; creature
+// targets carry no flight state on this path, so that gate is vacuous for
+// them. The resolved dest carries no map (the C++ MAPID_INVALID branch,
+// SpellEffects.cpp:1216-1218) and no orientation (the zero-orientation
+// substitute, :1222), so every target lands on its own map at the
+// resolved position with its own orientation: a same-map near teleport
+// (Unit::NearTeleportTo, Unit.cpp:13332) and a cross-map player far
+// teleport (Player::TeleportTo, :1227-1228); a cross-map creature is the
+// C++ error skip, which the instance-scoped motion lookup enforces.
+func (s *Server) creatureEffectTeleportUnits(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			if ts.inFlight {
+				continue
+			}
+			if ts.player.Map == m.Map {
+				ts.nearTeleportMove(dx, dy, dz, ts.player.Orientation)
+			} else {
+				ts.teleportTo(ts.player.Map, dx, dy, dz, ts.player.Orientation)
+			}
+			continue
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil {
+			s.motionMu.Unlock()
+			continue
+		}
+		motion.X, motion.Y, motion.Z = dx, dy, dz
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, dx, dy, dz)
 	}
 }
 
