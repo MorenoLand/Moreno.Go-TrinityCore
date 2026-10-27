@@ -2911,7 +2911,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 // instance id — so a GM-teleported bystander on the map without an
 // instance never blocks the delete, and an invited-but-not-entered player
 // does not hold it open (C++ counts invited players; Go has no invited
-// count, so that narrow window is a known delta). The per-map state model
+// count, so that narrow window is a known delta). The count is slot-keyed, not player.Map-keyed: sim participants never stand on the BG map, so map presence let one leaver delete an ended state before the auto-remove sweep reached its off-map stayers, and let an unrelated leaver delete a live successor's state mid-match. The per-map state model
 // conflates concurrent instances on one map, so the count does too. A
 // state deleted here is recreated pristine by the next getOrCreate, which
 // is the CreateBattleground + Reset() pair (BattlegroundMgr.cpp:412).
@@ -2922,10 +2922,17 @@ func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
 	s.sessionsMu.RLock()
 	remaining := false
 	for sess := range s.sessions {
-		if sess == leaver {
+		if sess == leaver || sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
 			continue
 		}
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && sess.bgData.InstanceID != 0 {
+		holder := false
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+				holder = true
+				break
+			}
+		}
+		if holder {
 			remaining = true
 			break
 		}
@@ -3047,7 +3054,7 @@ func (s *Server) bgAutoRemoveRemaining(mapID uint32) uint32 {
 // (Player.cpp:22475-22499) casts deserter and tracks desertion only while
 // the BG is STATUS_IN_PROGRESS or STATUS_WAIT_JOIN, so without this flip a
 // player who stays to the end and then leaves — voluntarily or by the
-// auto-remove below — would wrongly take deserter. Slots match by their own MapID (set at invite fire, accept, or restore), so a merely-queued slot for another BG (MapID 0 or another map) is untouched: flipping it would strand that queue, since invite fire requires WaitQueue. Called from each
+// auto-remove below — would wrongly take deserter. The flip is slot-keyed, not player.Map-keyed: the port teleport is no-bridge, so a genuine sim participant never lands on the BG map and the old map gate left their slot InProgress past the end (blocking re-queue through the join dup-block and keeping deserter exposure). C++ iterates m_Players here, so only Status InProgress slots flip — an invited-but-not-entered WaitJoin slot is not in m_Players, and a slot already WaitLeave stays put. A merely-queued slot for another BG (MapID 0 or another map) is untouched: flipping it would strand that queue, since invite fire requires WaitQueue. Called from each
 // per-map end arm with that map's state mu held; it takes no BG mu, only
 // sessionsMu, following the endArena slot-flip precedent. No status packet
 // is sent here: the end arms broadcast the result already, and the leave
@@ -3059,11 +3066,11 @@ func (s *Server) markBGSlotsWaitLeave(mapID uint32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.bgData.InstanceID == 0 {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
 			continue
 		}
 		for i := range sess.bgQueues {
-			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && e.Status == BGStatusInProgress {
 				e.Status = BGStatusWaitLeave
 			}
 		}
@@ -3083,6 +3090,7 @@ func (s *Server) markBGSlotsWaitLeave(mapID uint32) {
 // runs on the world tick's 1s cadence beside the other per-map battle
 // ticks. A Winner>=0 state with a zero EndedAt (an end arm added without
 // the stamp) is treated as due rather than left to persist indefinitely.
+// Stayers are selected by a WaitLeave slot for a due map, not by player.Map: C++ _ProcessLeave iterates m_Players, and a sim participant never stands on the BG map. InProgress slots are deliberately not swept: a live successor reusing the conflated per-map state holds InProgress slots, and only the end flip above may move InProgress to WaitLeave.
 // The AV peek uses objectsMu, the creation lock, per the deleteAVState
 // comment; the other maps peek under their own registry mu. No registry
 // or state mu is held while the leave funnel runs.
@@ -3154,10 +3162,15 @@ func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time)
 	s.sessionsMu.RLock()
 	stayers := make([]*session, 0)
 	for sess := range s.sessions {
-		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 || !due[sess.player.Map] {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
 			continue
 		}
-		stayers = append(stayers, sess)
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.Status == BGStatusWaitLeave && due[e.MapID] {
+				stayers = append(stayers, sess)
+				break
+			}
+		}
 	}
 	s.sessionsMu.RUnlock()
 	for _, sess := range stayers {
@@ -3214,8 +3227,11 @@ func bgPrematureMinPlayersFallback(mapID uint32) int {
 
 // bgRosterCounts counts live BG participants on mapID per team, the Go form
 // of Battleground::GetPlayersCountByTeam (Battleground.cpp:208, 347): a
-// worldReady session on the map with a live BG instance id, split by race
-// team (teamForRace, as rewardBGEndHonor does). Invited-but-not-entered
+// worldReady session holding an entered slot for the map, split by race
+// team (teamForRace, as rewardBGEndHonor does). Slot-keyed, not
+// player.Map-keyed: the port teleport is no-bridge, so sim participants
+// never stand on the map and the old map gate counted every live match as
+// 0/0, arming the premature countdown from the start. Invited-but-not-entered
 // players are not counted — Go has no invited count, the same narrow window
 // the last-leave delete already carries.
 func (s *Server) bgRosterCounts(mapID uint32) (ally, horde int) {
@@ -3225,7 +3241,17 @@ func (s *Server) bgRosterCounts(mapID uint32) (ally, horde int) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.bgData.InstanceID == 0 {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		entered := false
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && e.Status == BGStatusInProgress {
+				entered = true
+				break
+			}
+		}
+		if !entered {
 			continue
 		}
 		if teamForRace(sess.player.Race) == 0 {
