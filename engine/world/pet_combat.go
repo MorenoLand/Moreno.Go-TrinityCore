@@ -3158,6 +3158,98 @@ func (s *session) healVictimModHealing(ctx context.Context, victimGUID uint64, s
 	return 0
 }
 
+// petTriggerSpellSpecialCase mirrors the 64-only LAUNCH_TARGET
+// special-cases switch of Spell::EffectTriggerSpell (SpellEffects.cpp:838-966)
+// for a pet caster, following the twin's creatureTriggerSpellLaunchTarget
+// arms. It returns true when the trigger is fully handled for this target
+// (Sayge skip, Brittle/Mercurial stack, Demonic Empowerment strip, or a
+// Replenish leg), so the caller skips the plain triggered cast for that
+// target; it returns false when the plain leg must still run (a
+// non-special trigger, a Replenish trigger from another parent, and Mirror
+// Image, whose glyph leg falls through to the normal cast). The switch
+// runs only for effect 64, never for 142. No pet spellbook carries any of
+// these parents (Sayge fortune spells are Darkmoon NPC spells, Mirror
+// Image and Demonic Empowerment are player spells, Brittle/Mercurial are
+// item spells, Replenish parents are creature/quest spells), so every leg
+// here is currently inert on the pet path — the mirror exists so the pet
+// path stays C++-exact if a pet spellbook ever gains one. Pet-cast legs
+// recurse natively via executePetSpellWithOptions (a twin call would switch
+// the triggered spell's execution path); target-cast legs (Demonic
+// Empowerment invisibility, Replenish self-cast) ride the twin/session
+// helpers, the same routing the force-cast leg uses for pet targets.
+func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatureMotion, spellID uint32, effect wotlk.SpellEffect, targetGUID uint64) bool {
+	if s == nil || s.server == nil || motion == nil || targetGUID == 0 {
+		return false
+	}
+	switch effect.TriggerSpell {
+	case triggerSaygesDarkFortune:
+		return true
+	case triggerMirrorImageSpell:
+		if s.server.creatureHasAura(motion, spellGlyphOfMirrorImage) {
+			if copies, found, err := s.server.Data.Spell(spellMirrorImageCopies); err == nil && found {
+				s.executePetSpellWithOptions(ctx, motion, copies, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: motion.GUID}, true)
+			}
+		}
+		return false
+	case triggerBrittleArmorSpell, triggerMercurialShieldSpell:
+		auraSpellID := uint32(spellBrittleArmorAura)
+		if effect.TriggerSpell == triggerMercurialShieldSpell {
+			auraSpellID = spellMercurialShieldAura
+		}
+		auraSpell, found, err := s.server.Data.Spell(auraSpellID)
+		if err != nil || !found {
+			return true
+		}
+		for i := uint32(0); i < auraSpell.StackAmount; i++ {
+			s.executePetSpellWithOptions(ctx, motion, auraSpell, 0, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}, true)
+		}
+		return true
+	case triggerReplenishLifeSpell:
+		if spellID != spellReplenishLife {
+			return false
+		}
+		if targetGUID == motion.GUID {
+			return true
+		}
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if ts.player.MaxHealth == 0 {
+				return true
+			}
+			bp0 := int32(0.01 * float64(ts.player.MaxHealth) * float64(effect.BasePoints))
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, []int32{bp0}, 0)
+		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
+			bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(effect.BasePoints))
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, []int32{bp0})
+		}
+		return true
+	case triggerReplenishManaSpell:
+		if spellID != spellReplenishMana {
+			return false
+		}
+		if targetGUID == motion.GUID {
+			return true
+		}
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, []int32{effect.BasePoints}, 0)
+		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, []int32{effect.BasePoints})
+		}
+		return true
+	case triggerDemonicEmpowerSuccub:
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			ts.removeTargetMovementImpairingAuras(ctx, targetGUID)
+			ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStalked)
+			ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStun)
+			ts.castSpellDirect(ctx, spellLesserInvisibility, targetGUID)
+		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
+			s.server.removeCreatureMovementImpairingAuras(tm)
+			s.server.castCreatureSpellInternal(ctx, tm, spellLesserInvisibility, tm.GUID, true)
+		}
+		return true
+	}
+	return false
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -4752,7 +4844,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// touches no shared record): flat effects take the value,
 				// rolled effects take value-1 so the nested CalcValue
 				// re-roll lands on it. The C++ special-cases switch is
-				// 64-only, so 142 rides the plain legs below like 64.
+				// 64-only, so 142 rides the plain legs below like 64, and
+				// each 64 leg below consults petTriggerSpellSpecialCase
+				// before the plain cast.
 				if effect.Effect == spellEffectTriggerSpellWithValue {
 					damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
 					for j, bp := range []int32{damage, damage, damage} {
@@ -4779,14 +4873,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					if reflectedSet[target.UnitGUID] {
 						triggerTarget.UnitGUID = motion.GUID
 					}
-					s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+					if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+						// handled by the 64-only special-cases switch; no plain leg for this target
+					} else {
+						s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+					}
 				}
 				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 					areaTrigger := func(origGUID uint64) {
 						if rt := resolveReflectTarget(origGUID); rt != 0 && !immuneSet[origGUID] && !missedTarget(origGUID) {
 							triggerTarget := target
 							triggerTarget.UnitGUID = rt
-							s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+								// handled by the 64-only special-cases switch; no plain leg for this target
+							} else {
+								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							}
 						}
 					}
 					for _, areaHit := range areaHits {
@@ -4802,7 +4904,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 							if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
 								triggerTarget := target
 								triggerTarget.UnitGUID = rt
-								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+									// handled by the 64-only special-cases switch; no plain leg for this target
+								} else {
+									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+								}
 							}
 						}
 					}
@@ -4811,7 +4917,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 							if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
 								triggerTarget := target
 								triggerTarget.UnitGUID = rt
-								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+									// handled by the 64-only special-cases switch; no plain leg for this target
+								} else {
+									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+								}
 							}
 						}
 					}
@@ -4821,7 +4931,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
 							triggerTarget := target
 							triggerTarget.UnitGUID = rt
-							s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+								// handled by the 64-only special-cases switch; no plain leg for this target
+							} else {
+								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							}
 						}
 					}
 				}
