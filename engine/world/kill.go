@@ -1183,6 +1183,78 @@ func (s *Server) fireGuardDeathBroadcast(dead, killer *creatureMotion) {
 	}
 }
 
+// recordCreatureKillLoot is the Unit::Kill loot leg (Unit.cpp:11169-11267)
+// for the no-funnel death chains: creature loot is filled at kill time,
+// never at loot-open (Player.cpp:8805, "for creature, loot is filled
+// when creature is killed"), and only inside the reward block - an
+// online player must own the kill, either as the corpse's tapper or as
+// the killer's charmer/owner player (Creature::GetLootRecipient uses
+// FindConnectedPlayer, Creature.cpp:1314-1319, so an offline tapper or
+// owner counts for nothing). Go fills lazily at open, so the kill-time
+// legs are the stale-loot clear plus the owner/denial record the funnel
+// writes: a cleared pickpocket window must not survive into the corpse
+// window, a tapper/owner-owned corpse fills for its owner at open, and
+// a player-less corpse records an explicit denial (the funnel's
+// damage-requirement denial arm, including the TAPPED|LOOTABLE flag
+// clear and re-broadcast) instead of defaulting to allowed. The damage
+// requirement is the funnel's own gate (NO_PLAYER_DAMAGE_REQ flag or a
+// zero requirement). The group-member fallback for an off-map recipient
+// (Unit.cpp:11182-11195) is not modeled, as in the funnel. XP,
+// party-kill and group-looter election stay funnel-only.
+func (s *Server) recordCreatureKillLoot(victim, killer *creatureMotion) {
+	if s == nil || victim == nil {
+		return
+	}
+	targetGUID := victim.GUID
+	guid := uint32(targetGUID & 0x00FFFFFF)
+	entry := uint32((targetGUID >> 24) & 0xFFFFFF)
+	standardGUID := creatureWorldGUID(guid, entry)
+	s.clearLootState(victim.Map, victim.InstanceID, targetGUID, standardGUID)
+	s.motionMu.Lock()
+	victim.Looted = false
+	s.motionMu.Unlock()
+	damageReqMet := true
+	if victim.FlagsExtra&creatureFlagExtraNoPlayerDamageReq == 0 && victim.PlayerDamageReq != 0 {
+		damageReqMet = false
+	}
+	var ownerGUID, ownerGroup uint64
+	if victim.TapPlayerGUID != 0 {
+		if tap := s.findSessionByGUID(victim.TapPlayerGUID); tap != nil && tap.player != nil {
+			ownerGUID, ownerGroup = victim.TapPlayerGUID, victim.TapGroupID
+		}
+	}
+	if ownerGUID == 0 && killer != nil && killer.OwnerGUID != 0 {
+		if own := s.findSessionByGUID(killer.OwnerGUID); own != nil && own.player != nil {
+			ownerGUID, ownerGroup = own.playerGUID, own.groupID
+		}
+	}
+	if !damageReqMet || ownerGUID == 0 {
+		s.motionMu.Lock()
+		victim.TapPlayerGUID, victim.TapGroupID = 0, 0
+		victim.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+		flags := victim.DynamicFlags
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(victim.Map, victim.InstanceID, targetGUID, map[int]uint32{unitFieldDynamicFlags: flags})
+		s.lootMu.Lock()
+		if s.creatureLootOwners == nil {
+			s.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+		}
+		denied := lootOwnerState{}
+		s.creatureLootOwners[lootObjectKey{MapID: victim.Map, InstanceID: victim.InstanceID, GUID: targetGUID}] = denied
+		s.creatureLootOwners[lootObjectKey{MapID: victim.Map, InstanceID: victim.InstanceID, GUID: standardGUID}] = denied
+		s.lootMu.Unlock()
+		return
+	}
+	s.lootMu.Lock()
+	if s.creatureLootOwners == nil {
+		s.creatureLootOwners = make(map[lootObjectKey]lootOwnerState)
+	}
+	owner := lootOwnerState{PlayerGUID: ownerGUID, GroupID: ownerGroup}
+	s.creatureLootOwners[lootObjectKey{MapID: victim.Map, InstanceID: victim.InstanceID, GUID: targetGUID}] = owner
+	s.creatureLootOwners[lootObjectKey{MapID: victim.Map, InstanceID: victim.InstanceID, GUID: standardGUID}] = owner
+	s.lootMu.Unlock()
+}
+
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):
 // Eluna::OnPVPKill (PlayerHooks.cpp:155-161), (event, killer, killed), void
 // (CallAllFunctions). Unit::Kill tail (Unit.cpp:11466-11480): attacker and

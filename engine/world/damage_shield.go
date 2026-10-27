@@ -551,6 +551,9 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			// leg, resolved through the attacker motion's charmer/owner
 			// player — a gone attacker motion broadcasts nothing.
 			s.fireGuardDeathBroadcast(m, attackerMotion)
+			// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
+			// for this no-funnel chain - see recordCreatureKillLoot.
+			s.recordCreatureKillLoot(m, attackerMotion)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1

@@ -2564,6 +2564,9 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// leg, resolved here through the attacker motion's charmer/owner
 	// player — the funnel gate, on a path with no session in hand.
 	s.fireGuardDeathBroadcast(tm, m)
+	// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
+	// for this no-funnel chain - see recordCreatureKillLoot.
+	s.recordCreatureKillLoot(tm, m)
 	// Creature::RemoveCorpse schedules the respawn for every death; the
 	// owner path gets it from onCreatureKilled.
 	if tm.InstanceID == 0 {

@@ -1840,6 +1840,9 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
 		// leg, resolved through the caster motion's charmer/owner player.
 		s.fireGuardDeathBroadcast(live, motion)
+		// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
+		// for this no-funnel chain - see recordCreatureKillLoot.
+		s.recordCreatureKillLoot(live, motion)
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -3037,6 +3040,9 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			// leg — the killer here is the motion itself, so a
 			// player-owned reflector-victim resolves via its owner.
 			s.fireGuardDeathBroadcast(live, motion)
+			// Unit::Kill loot leg (Unit.cpp:11169-11267): kill-time loot state
+			// for this no-funnel chain - see recordCreatureKillLoot.
+			s.recordCreatureKillLoot(live, motion)
 		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})
