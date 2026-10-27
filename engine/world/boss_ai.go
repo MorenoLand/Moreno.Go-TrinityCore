@@ -2138,6 +2138,37 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectLeap (SpellEffects.cpp:4334) + EffectTeleUnitsFaceCaster
+	// (:2618) + EffectCharge (:4493) + EffectChargeDest (:4528) +
+	// EffectPullTowards (:4667) + EffectPullTowardsDest (:4697) +
+	// EffectDistract (:2547) + EffectSanctuary (:3757) for a creature
+	// caster: the movement arms, grouped with the other effect-grouped
+	// arms above. Gated on spellKnown like the tail. EffectLeapBack
+	// (:4593) stays out: its target jumps via the unbridged JumpTo
+	// spline and its only portable leg (the caster fall-information
+	// reset) is player-caster-only, like the jump 41/42 no-ops.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectLeap:
+				s.creatureEffectLeap(ctx, m, hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectTeleportUnitsFaceCaster:
+				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectCharge:
+				s.creatureEffectCharge(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectChargeDest:
+				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
+			case spellEffectPullTowards:
+				s.creatureEffectPullTowards(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectPullTowardsDest:
+				s.creatureEffectPullTowardsDest(ctx, m, hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectDistract:
+				s.creatureEffectDistract(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectSanctuary:
+				s.creatureEffectSanctuary(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -4484,6 +4515,379 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 		} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 			s.castCreatureSpellInternal(ctx, tm, eff.TriggerSpell, m.GUID, true)
 		}
+	}
+}
+
+// creatureMoveTargetTo moves a hit target of a creature cast to a point:
+// player targets ride nearTeleportMove (in-flight players skip, like the
+// teleport-units arm); creature targets ride the teleport arm's
+// position-set + monster-move-stop broadcast. setOri false keeps the
+// target's orientation (leap, pull); true sets it (tele-face-caster).
+func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, ori float32, setOri bool) {
+	if s == nil || m == nil || guid == 0 {
+		return
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		if ts.inFlight {
+			return
+		}
+		o := ts.player.Orientation
+		if setOri {
+			o = ori
+		}
+		ts.nearTeleportMove(x, y, z, o)
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+	if motion == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.X, motion.Y, motion.Z = x, y, z
+	if setOri {
+		motion.Orientation = ori
+	}
+	mapID, instanceID := motion.Map, motion.InstanceID
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+}
+
+// creatureTargetPosition returns a hit target's position and combat reach
+// for the caster-relative movement arms (charge, pull-towards): player
+// targets from the session, creature targets from the motion. The last
+// result is false when the GUID resolves to neither.
+func (s *Server) creatureTargetPosition(m *creatureMotion, guid uint64) (x, y, z, reach float32, ok bool) {
+	if s == nil || m == nil || guid == 0 {
+		return 0, 0, 0, 0, false
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		reach = ts.player.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return ts.player.X, ts.player.Y, ts.player.Z, reach, true
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+	if motion == nil {
+		s.motionMu.Unlock()
+		return 0, 0, 0, 0, false
+	}
+	x, y, z, reach = motion.X, motion.Y, motion.Z, motion.combatReachOrDefault()
+	s.motionMu.Unlock()
+	return x, y, z, reach, true
+}
+
+// creatureEffectLeap mirrors Spell::EffectLeap (SpellEffects.cpp:4334) for
+// a creature caster: the HIT_TARGET arm teleporting each hit target to
+// the cast's resolved destination. The HasDst gate is the cast's resolved
+// destination (the teleport-units arm's gate); the dest orientation is
+// uncarried on this path (protocol.SpellTargetLocation has X/Y/Z only),
+// so targets keep their orientation like the player leap helper.
+// In-flight players skip per C++ IsInFlight; creature targets carry no
+// flight state, so that gate is vacuous for them.
+func (s *Server) creatureEffectLeap(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false)
+	}
+}
+
+// creatureEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster
+// (SpellEffects.cpp:2618) for a creature caster: the HIT_TARGET arm
+// teleporting each hit target to the caster's close point (caster reach +
+// effect radius + target reach along the caster's orientation, at the
+// caster's z) facing away from the caster (-caster orientation). The
+// in-flight gate rides inside creatureMoveTargetTo for player targets;
+// creature targets carry no flight state.
+func (s *Server) creatureEffectTeleUnitsFaceCaster(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	_ = ctx
+	dis := float32(0)
+	if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(m.Level)); err == nil && ok {
+		dis = value
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		var targetReach float32
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			targetReach = ts.player.CombatReach
+			if targetReach <= 0 {
+				targetReach = 1.5
+			}
+		} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			targetReach = tm.combatReachOrDefault()
+		} else {
+			continue
+		}
+		dist := m.combatReachOrDefault() + dis + targetReach
+		fx := m.X + dist*float32(math.Cos(float64(m.Orientation)))
+		fy := m.Y + dist*float32(math.Sin(float64(m.Orientation)))
+		s.creatureMoveTargetTo(m, guid, fx, fy, m.Z, -m.Orientation, true)
+	}
+}
+
+// creatureEffectCharge mirrors Spell::EffectCharge (SpellEffects.cpp:4493)
+// for a creature caster: the LAUNCH_TARGET movement leg only. The
+// HIT_TARGET attack leg is player-caster-only in C++
+// (m_caster->GetTypeId() == TYPEID_PLAYER), so a creature caster never
+// attacks off a charge, and the fall-information leg is player-caster-only
+// too. The caster moves to the target's first-collision position (target
+// reach along the target-to-caster line, the player helper's geometry);
+// the pre-generated path and the MoveCharge spline have no Go model, so
+// the position snaps like the teleport arm. A reflected target retargets
+// to the caster, whose own first-collision position is the mechanical
+// C++ outcome.
+func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tx, ty, tz, reach, ok := s.creatureTargetPosition(m, guid)
+		if !ok {
+			continue
+		}
+		angle := math.Atan2(float64(m.Y-ty), float64(m.X-tx))
+		destX := tx + reach*float32(math.Cos(angle))
+		destY := ty + reach*float32(math.Sin(angle))
+		facing := float32(math.Atan2(float64(ty-destY), float64(tx-destX)))
+		s.motionMu.Lock()
+		m.X, m.Y, m.Z = destX, destY, tz
+		m.Orientation = facing
+		mapID, instanceID := m.Map, m.InstanceID
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, destX, destY, tz)
+	}
+}
+
+// creatureEffectChargeDest mirrors Spell::EffectChargeDest
+// (SpellEffects.cpp:4528) for a creature caster: the LAUNCH once-per-effect
+// caster arm moving the caster to the cast's resolved destination. The
+// IsWithinLOS first-collision clamp has no Go model on this path, so the
+// raw dest lands; the MoveCharge spline is unbridged, so the position
+// snaps like the teleport arm.
+func (s *Server) creatureEffectChargeDest(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	s.motionMu.Lock()
+	m.X, m.Y, m.Z = dx, dy, dz
+	mapID, instanceID := m.Map, m.InstanceID
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, dx, dy, dz)
+}
+
+// creatureEffectPullTowards mirrors Spell::EffectPullTowards
+// (SpellEffects.cpp:4667) for a creature caster: the HIT_TARGET arm pulling
+// each hit target to the caster's first-collision position (caster reach
+// along the caster-to-target line). The JumpTo spline speeds have no Go
+// model, so the target snaps like the teleport arm, keeping its z and
+// orientation like the player helper; the <0.001 distance early-out is
+// C++-exact.
+func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	reach := m.combatReachOrDefault()
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tx, ty, tz, _, ok := s.creatureTargetPosition(m, guid)
+		if !ok {
+			continue
+		}
+		angle := math.Atan2(float64(ty-m.Y), float64(tx-m.X))
+		landX := m.X + reach*float32(math.Cos(angle))
+		landY := m.Y + reach*float32(math.Sin(angle))
+		lx := tx - landX
+		ly := ty - landY
+		lz := tz - m.Z
+		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
+			continue
+		}
+		s.creatureMoveTargetTo(m, guid, landX, landY, tz, 0, false)
+	}
+}
+
+// creatureEffectPullTowardsDest mirrors Spell::EffectPullTowardsDest
+// (SpellEffects.cpp:4697) for a creature caster: the HIT_TARGET arm pulling
+// each hit target to the cast's resolved destination, with the <0.001
+// distance early-out. The JumpTo spline speeds have no Go model, so the
+// target snaps like the teleport arm, keeping its orientation.
+func (s *Server) creatureEffectPullTowardsDest(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tx, ty, tz, _, ok := s.creatureTargetPosition(m, guid)
+		if !ok {
+			continue
+		}
+		ddx := tx - dx
+		ddy := ty - dy
+		ddz := tz - dz
+		if ddx*ddx+ddy*ddy+ddz*ddz < 0.001*0.001 {
+			continue
+		}
+		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false)
+	}
+}
+
+// creatureEffectDistract mirrors Spell::EffectDistract (SpellEffects.cpp:2547)
+// for a creature caster: the HIT_TARGET arm turning each unengaged,
+// non-confused/stunned/fleeing creature hit target to face the cast's
+// resolved destination for the rolled damage in milliseconds. Player hit
+// targets have no distract model on this path (the player helper serves
+// creature motions only), so the motion lookup skips them. The
+// in-place turn rides the monster-move packet like the player helper.
+func (s *Server) creatureEffectDistract(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	duration := eff.CalcValueForLevel(spell, uint32(m.Level))
+	if duration <= 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil || motion.InCombat {
+			s.motionMu.Unlock()
+			continue
+		}
+		key := creatureAuraKeyForMotion(motion)
+		s.motionMu.Unlock()
+		if s.creatureHasControlLossAura(key) {
+			continue
+		}
+		s.motionMu.Lock()
+		motion = s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil || motion.InCombat {
+			s.motionMu.Unlock()
+			continue
+		}
+		angle := float32(math.Atan2(float64(dy)-float64(motion.Y), float64(dx)-float64(motion.X)))
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		motion.Orientation = angle
+		motion.DistractedUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
+		motion.Moving = false
+		mapID, instanceID, mguid, mx, my, mz := motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveInInstance(mapID, instanceID, mguid, mx, my, mz, mx, my, mz, 1000, false, angle, true)
+	}
+}
+
+// creatureEffectSanctuary mirrors Spell::EffectSanctuary
+// (SpellEffects.cpp:3757) for a creature caster: the HIT_TARGET arm. The
+// sanctuary timestamp lands on every unit target unconditionally; player
+// targets outside dungeons stop all PvE combat (with the evade tail),
+// while dungeon players and creature targets have their threat zeroed
+// on every enemy threat list carrying them. The threat-zero rides the
+// target's own map/instance.
+func (s *Server) creatureEffectSanctuary(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			ts.player.LastSanctuaryTime = gameTimeMS()
+			isDungeon := false
+			if s.Data != nil {
+				if entry, found, err := s.Data.Map(ts.player.Map); err == nil && found {
+					isDungeon = entry.IsDungeon()
+				}
+			}
+			if !isDungeon {
+				ts.stopPlayerCombat()
+				s.evadeCreaturesTargeting(ctx, ts.player.Map, ts.player.InstanceID, guid)
+				continue
+			}
+			s.zeroThreatOnAllLists(ts.player.Map, ts.player.InstanceID, guid)
+			continue
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil {
+			s.motionMu.Unlock()
+			continue
+		}
+		motion.LastSanctuaryTime = gameTimeMS()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		s.zeroThreatOnAllLists(mapID, instanceID, guid)
 	}
 }
 
