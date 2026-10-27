@@ -2298,6 +2298,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectTalentSpecCount(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
+			case spellEffectScriptEffect:
+				s.creatureEffectScriptEffect(ctx, m, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -5204,6 +5206,80 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 	s.motionMu.Unlock()
 	for _, st := range stopped {
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), nil)
+	}
+}
+
+// creatureEffectScriptEffect mirrors the SPELLFAMILY_GENERIC arms of
+// Spell::EffectScriptEffect (SpellEffects.cpp:3604) for a creature caster:
+// the HIT_TARGET arm. Onyxia Shadow Flame (22539, 22972, 22975-22985)
+// hits a living target without the Onyxia Scale Cloak aura (22683) with
+// triggered Shadow Flame (22682); Brutallus Burn (45141/45151) makes a
+// player target at or beyond the effect radius without the Burn aura
+// (46394) self-cast triggered 46394; Coyote Spirit / Blood Parrot
+// despawns (52173/60243) unsummon a temp-summon creature target. The
+// remaining generic arms stay out: Mug Transformation (41931) and the
+// Wintergrasp RP-GG arms (57347/57349) gate on a player caster, Scarlet
+// ghoul summons (51904) need a position cast, Grab Crate (62482) needs a
+// vehicle model, and the sSpellScripts tail has no Go SpellScript bridge
+// (same stay-outs as the session twin).
+func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMotion, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		switch spellID {
+		case 22539, 22972, 22975, 22976, 22977, 22978, 22979, 22980, 22981, 22982, 22983, 22984, 22985:
+			alive := false
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				alive = !ts.isDeadOrGhost()
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				alive = tm.Health > 0
+			} else {
+				continue
+			}
+			if !alive || s.creatureSpellTargetHasAura(m, guid, 22683) {
+				continue
+			}
+			s.castCreatureSpellInternal(ctx, m, 22682, guid, true)
+		case 45141, 45151:
+			ts := s.findSessionByGUID(guid)
+			if ts == nil || ts.player == nil || guid == m.GUID {
+				continue
+			}
+			radius := float32(0)
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(m.Level)); err == nil && ok {
+				radius = value
+			}
+			if distance3D(ts.player.X, ts.player.Y, ts.player.Z, m.X, m.Y, m.Z) < float64(radius) {
+				continue
+			}
+			if s.creatureSpellTargetHasAura(m, guid, 46394) {
+				continue
+			}
+			ts.castSpellDirect(ctx, 46394, guid)
+		case 52173, 60243:
+			tm := s.findCreatureMotion(m.Map, m.InstanceID, guid)
+			if tm == nil || !tm.IsTempSummon || guid == m.GUID {
+				continue
+			}
+			s.motionMu.Lock()
+			delete(s.motionMapLocked(m.Map, m.InstanceID), guid)
+			s.motionMu.Unlock()
+			destroyBuf := protocol.NewBuffer(9)
+			destroyBuf.WriteU64(guid)
+			destroyBuf.WriteU8(0)
+			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+		}
 	}
 }
 
