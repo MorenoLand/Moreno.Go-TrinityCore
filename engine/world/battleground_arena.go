@@ -285,6 +285,7 @@ func isArenaGameObject(entry uint32) bool {
 type ArenaPlayerScore struct {
 	GUID         uint64
 	TeamID       uint8 // 0: Green, 1: Gold
+	CountedAlive bool
 	KillingBlows uint32
 	DamageDone   uint32
 	HealingDone  uint32
@@ -478,8 +479,9 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 
 	if _, exists := arena.Scores[guid]; !exists {
 		arena.Scores[guid] = &ArenaPlayerScore{
-			GUID:   guid,
-			TeamID: arenaTeam,
+			GUID:         guid,
+			TeamID:       arenaTeam,
+			CountedAlive: true,
 		}
 		if arenaTeam == ArenaTeamGold {
 			arena.GoldAlive++
@@ -635,6 +637,13 @@ func (s *Server) handleArenaPlayerDeath(sess *session) {
 			arena.GreenAlive--
 		}
 	}
+	// C++ GetAlivePlayersCountByTeam (Battleground.cpp:1737) counts live
+	// players still in m_Players, so a death already removed this player
+	// from the alive count; clear the flag so the leave arm below does
+	// not decrement a second time.
+	if sc, ok := arena.Scores[sess.playerGUID]; ok {
+		sc.CountedAlive = false
+	}
 	greenAlive := arena.GreenAlive
 	goldAlive := arena.GoldAlive
 	arena.mu.Unlock()
@@ -659,14 +668,22 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 
 	arena.mu.Lock()
 	team, exists := arena.PlayerTeams[sess.playerGUID]
-	if exists && arena.Status == ArenaStatusInProgress {
-		if team == ArenaTeamGold {
-			if arena.GoldAlive > 0 {
-				arena.GoldAlive--
-			}
-		} else {
-			if arena.GreenAlive > 0 {
-				arena.GreenAlive--
+	status := arena.Status
+	// C++ GetAlivePlayersCountByTeam (Battleground.cpp:1737) counts live
+	// players still in m_Players: a leaver already dead (death arm cleared
+	// CountedAlive) changes nothing on erase, and a leaver whose death
+	// arm never ran (no killer) is still counted, so the flag, not
+	// liveness at leave time, decides the decrement.
+	if exists && status == ArenaStatusInProgress {
+		if sc, ok := arena.Scores[sess.playerGUID]; ok && sc.CountedAlive {
+			if team == ArenaTeamGold {
+				if arena.GoldAlive > 0 {
+					arena.GoldAlive--
+				}
+			} else {
+				if arena.GreenAlive > 0 {
+					arena.GreenAlive--
+				}
 			}
 		}
 	}
@@ -685,8 +702,15 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 	sess.removeAura(SpellHordeGreenFlag)
 	sess.removeAura(SpellArenaPreparation)
 
-	s.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGreen, greenAlive)
-	s.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGold, goldAlive)
+	// Broadcast after the erase, to the remaining roster only: C++
+	// RemovePlayerAtLeave erases m_Players before the subclass
+	// RemovePlayer arm broadcasts (Battleground.cpp:826-828, :868).
+	// Arena::RemovePlayer (Arena.cpp:97-101) early-returns on
+	// STATUS_WAIT_LEAVE, so no broadcast fires once the match ended.
+	if status != ArenaStatusWaitLeave {
+		s.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGreen, greenAlive)
+		s.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGold, goldAlive)
+	}
 
 	s.checkArenaWinConditions(arena)
 }
@@ -1314,12 +1338,6 @@ func (s *Server) resolveArenaStartText(textID uint32, fallback string) string {
 	return text
 }
 
-// broadcastArenaStartText broadcasts a resolved arena start text to every
-// player on the arena map.
-func (s *Server) broadcastArenaStartText(mapID, textID uint32, fallback string) {
-	s.broadcastArenaMessage(mapID, s.resolveArenaStartText(textID, fallback))
-}
-
 // broadcastArenaMessageToRoster sends a system chat message to the arena's
 // roster only. C++ SendBroadcastText runs BroadcastWorker over m_Players
 // (Battleground.cpp:592-602), not over the map's players.
@@ -1333,8 +1351,7 @@ func (s *Server) broadcastArenaMessageToRoster(arena *arenaBattlegroundState, ms
 }
 
 // broadcastArenaStartTextToRoster resolves an arena start broadcast_text ID
-// and sends it to the roster only, the roster-keyed form of
-// broadcastArenaStartText.
+// and sends it to the roster only.
 func (s *Server) broadcastArenaStartTextToRoster(arena *arenaBattlegroundState, textID uint32, fallback string) {
 	if s == nil || arena == nil {
 		return
