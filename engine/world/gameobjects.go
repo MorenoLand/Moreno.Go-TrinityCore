@@ -964,7 +964,9 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 		tpl := s.loadGameObjectTemplateData(ctx, entry)
 		// C++ keeps combat/pet state with TELE_TO_NOT_LEAVE_* flags; Go's
 		// teleportTo stops combat and may unsummon the pet (documented).
-		s.teleportTo(goState.Map, goState.X, goState.Y, goState.Z, goState.Orientation)
+		// The transport arm is faithful: GameObject.cpp:2061 carries
+		// TELE_TO_NOT_LEAVE_TRANSPORT.
+		s.teleportToStayOnTransport(goState.Map, goState.X, goState.Y, goState.Z, goState.Orientation, true)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ENABLE_BARBER_SHOP), nil, true)
 		// UNIT_STAND_STATE_SIT_LOW_CHAIR (4) + chairheight (data0).
 		s.player.StandState = 4 + uint8(tpl[0])
@@ -1490,7 +1492,9 @@ func (s *session) useGameObjectChair(ctx context.Context, goState *dynamicGameOb
 	if !foundFree {
 		return
 	}
-	s.teleportTo(goState.Map, nearestX, nearestY, goState.Z, goState.Orientation)
+	// GameObject.cpp:1624: the chair-slot teleport carries
+	// TELE_TO_NOT_LEAVE_TRANSPORT.
+	s.teleportToStayOnTransport(goState.Map, nearestX, nearestY, goState.Z, goState.Orientation, true)
 	s.player.StandState = 4 + uint8(height) // UNIT_STAND_STATE_SIT_LOW_CHAIR + height
 	s.sendPlayerUpdate()
 }

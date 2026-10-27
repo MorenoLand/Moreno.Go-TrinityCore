@@ -4230,6 +4230,31 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 		x, y, z, orientation = s.nearTeleportDest.X, s.nearTeleportDest.Y, s.nearTeleportDest.Z, s.nearTeleportDest.Orientation
 	}
 	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", x, y, z, orientation, s.player.Map, s.player.Zone, s.player.GUID)
+	if err != nil {
+		return err
+	}
+	// CHAR_UPD_CHARACTER_POSITION zeroes the transport columns, so a
+	// fallback save during a transport pending — or a plain logout on a
+	// transport — would strand the player transportless at world
+	// coordinates while the transport sails on. During a near-teleport
+	// pending the destination is authoritative (a transportless dest
+	// means the zeroed columns are already correct, mirroring the ack);
+	// otherwise the live attachment is restored.
+	var transGUID uint64
+	var transX, transY, transZ, transO float32
+	if s.nearTeleportPending {
+		if s.nearTeleportDest.Movement.Flags&movementOnTransport == 0 || s.nearTeleportDest.Movement.Transport == nil {
+			return nil
+		}
+		transGUID = s.nearTeleportDest.Movement.Transport.GUID
+		transX, transY, transZ, transO = s.nearTeleportDest.Movement.Transport.X, s.nearTeleportDest.Movement.Transport.Y, s.nearTeleportDest.Movement.Transport.Z, s.nearTeleportDest.Movement.Transport.Orientation
+	} else if s.player.TransportGUID != 0 {
+		transGUID = s.player.TransportGUID
+		transX, transY, transZ, transO = s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO
+	} else {
+		return nil
+	}
+	_, err = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET trans_x = ?, trans_y = ?, trans_z = ?, trans_o = ?, transguid = ? WHERE guid = ?", transX, transY, transZ, transO, transGUID&0xFFFFFFFF, s.player.GUID)
 	return err
 }
 

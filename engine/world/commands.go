@@ -300,13 +300,17 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	}
 	movement := s.movementInfoForCreate(*s.player)
 	s.stopPlayerCombat()
-	// Player::TeleportTo (Player.cpp:1711-1716): a far teleport leaves the
-	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT. Detaching before the
+	// Player::TeleportTo (Player.cpp:1711-1716): a teleport leaves the
+	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT — the detach arm sits
+	// ahead of the same-map/far branch, so a same-map teleport drops a
+	// transport passenger at the destination instead of gluing them to
+	// the transport at a recomputed offset. Detaching before the
 	// snapshot keeps TRANSFER_PENDING / NEW_WORLD faithful to C++'s
 	// post-detach GetTransport() checks, and a stale TransportGUID can no
 	// longer keep the old map's transport relocating the player after
 	// arrival (broadcastTransportMovement).
-	if !sameMap && !stayOnTransport {
+	hadTransport := s.player.TransportGUID != 0
+	if !stayOnTransport {
 		s.player.TransportGUID = 0
 		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
 		s.player.TransportSeat = 0
@@ -428,6 +432,15 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 			mapID, x, y, z, orientation, s.playerGUID)
+		// The initiation write persists the destination; when the
+		// teleport detached a transport, the origin transport row must
+		// not survive it, or a crash mid-pending would respawn the
+		// player back on the transport at stale offsets instead of at
+		// the destination.
+		if hadTransport && s.player.TransportGUID == 0 {
+			_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET trans_x = 0, trans_y = 0, trans_z = 0, trans_o = 0, transguid = 0 WHERE guid = ?",
+				s.playerGUID)
+		}
 	}
 	if sameMap {
 		s.lastFallZ = s.player.Z

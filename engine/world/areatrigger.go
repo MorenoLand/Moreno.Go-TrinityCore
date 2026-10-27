@@ -190,7 +190,11 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
-		s.teleportTo(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri))
+		// MiscHandler.cpp:790: the areatrigger target teleport carries
+		// TELE_TO_NOT_LEAVE_TRANSPORT, so a passenger keeps the transport
+		// across the trigger (the LFG battleground redirect above is the
+		// plain TeleportToBGEntryPoint leg and stays a plain teleport).
+		s.teleportToStayOnTransport(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri), true)
 		return true
 	}
 
