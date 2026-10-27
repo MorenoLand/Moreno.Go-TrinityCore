@@ -1762,8 +1762,17 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			}
 		}
 		team := teamForRace(s.player.Race)
+		// Only the genuine invite-to-port transition moves a clock: the
+		// invite fire leaves WaitQueue slots only, so an accept arriving
+		// on an already-InProgress slot is a duplicate packet, never a
+		// new instance, and C++ never moves m_StartTime on port. A
+		// re-accept must not reset the slot's elapsed or re-arm the
+		// map clock (which a restored InProgress slot also relies on).
+		freshPort := entry.Status == BGStatusWaitJoin
 		entry.Status = BGStatusInProgress
-		entry.StartTime = time.Now()
+		if freshPort {
+			entry.StartTime = time.Now()
+		}
 		// The in-progress packet carries the live instance's map
 		// (Battleground::GetMapId, BattleGroundHandler.cpp:468): the
 		// resolved type for a random queue, else the queued type — the
@@ -1779,7 +1788,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// clock (see rearmNonArenaBGMatchStartTimeOnFirstAccept): a state
 		// created outside a match must not hand its stale clock to this
 		// match's restored slots. Arenas keep their startArenaMatch arming.
-		if !entry.IsArena {
+		if !entry.IsArena && freshPort {
 			s.server.rearmNonArenaBGMatchStartTimeOnFirstAccept(s, entry.MapID)
 		}
 		// C++ SetBGTeam(team) stores arenaFaction = team == ALLIANCE ? 1 : 0
