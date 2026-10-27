@@ -1775,6 +1775,13 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		} else {
 			entry.MapID = battlegroundMapForType(bgTypeID)
 		}
+		// First participant of a fresh match re-arms a pre-existing map's
+		// clock (see rearmNonArenaBGMatchStartTimeOnFirstAccept): a state
+		// created outside a match must not hand its stale clock to this
+		// match's restored slots. Arenas keep their startArenaMatch arming.
+		if !entry.IsArena {
+			s.server.rearmNonArenaBGMatchStartTimeOnFirstAccept(s, entry.MapID)
+		}
 		// C++ SetBGTeam(team) stores arenaFaction = team == ALLIANCE ? 1 : 0
 		// (Player.cpp:22458-22461); teamForRace is 0 alliance / 1 horde, so the
 		// wire byte is inverted here.
@@ -2215,6 +2222,108 @@ func (s *Server) peekNonArenaBGMatchStartTime(mapID uint32) time.Time {
 		return state.MatchStartTime
 	default:
 		return time.Time{}
+	}
+}
+
+// rearmNonArenaBGMatchStartTimeOnFirstAccept re-arms the per-map match clock
+// when the accepting player is the first live participant of a fresh match.
+// Go has no StartBattleground transition, so creation-time arming stands for
+// interaction-driven flows — but a state created outside a match hands its
+// stale clock to the new match's restored slots: a GM-teleported bystander
+// (InstanceID 0) standing on the map when match players arrive, a successor
+// match arriving during the previous match's WaitLeave window, or an earlier
+// match's state never deleted because its players never stood on the map
+// (deleteBattlegroundStateOnEmpty only runs on a map leaver). A live
+// participant is another session holding an InProgress slot for this map
+// (MapID-keyed, so a random queue resolved to this map counts); WaitLeave
+// holders do not block the re-arm, and the accepting session is excluded.
+// Only a pre-existing state is re-armed — never created — so the normal flow
+// (state created by the first entrant's map entry or first interaction) and
+// the premature-countdown tick's state set are untouched. WSG is excluded:
+// its clock arms lazily at the first flag interaction, so a bystander-created
+// WSG state carries a zero clock until a real interaction arms it.
+func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, mapID uint32) {
+	if s == nil || accepting == nil {
+		return
+	}
+	switch mapID {
+	case ABMapID, AVMapID, EOTSMapID, SAMapID, ICMapID:
+	default:
+		return
+	}
+	s.sessionsMu.RLock()
+	fresh := true
+	for sess := range s.sessions {
+		if sess == accepting {
+			continue
+		}
+		for i := range sess.bgQueues {
+			e := &sess.bgQueues[i]
+			if e.Active && !e.IsArena && e.Status == BGStatusInProgress && e.MapID == mapID {
+				fresh = false
+				break
+			}
+		}
+		if !fresh {
+			break
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if !fresh {
+		return
+	}
+	now := time.Now()
+	switch mapID {
+	case ABMapID:
+		s.abMu.RLock()
+		state := s.abState[mapID]
+		s.abMu.RUnlock()
+		if state == nil {
+			return
+		}
+		state.mu.Lock()
+		state.MatchStartTime = now
+		state.mu.Unlock()
+	case AVMapID:
+		s.objectsMu.RLock()
+		state := s.avState[mapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return
+		}
+		state.mu.Lock()
+		state.MatchStartTime = now
+		state.mu.Unlock()
+	case EOTSMapID:
+		s.eotsMu.RLock()
+		state := s.eotsState[mapID]
+		s.eotsMu.RUnlock()
+		if state == nil {
+			return
+		}
+		state.mu.Lock()
+		state.MatchStartTime = now
+		state.mu.Unlock()
+	case SAMapID:
+		s.saMu.RLock()
+		state := s.saState[mapID]
+		s.saMu.RUnlock()
+		if state == nil {
+			return
+		}
+		state.mu.Lock()
+		state.MatchStartTime = now
+		state.mu.Unlock()
+	case ICMapID:
+		s.icMu.RLock()
+		state := s.icState[mapID]
+		s.icMu.RUnlock()
+		if state == nil {
+			return
+		}
+		state.mu.Lock()
+		state.MatchStartTime = now
+		state.mu.Unlock()
 	}
 }
 
