@@ -1468,9 +1468,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 		// Summon-family arms (Spell.cpp:5805-5946): SUMMON_PLAYER /
 		// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
-		// needs a player target without an existing pet. The SUMMON /
-		// SUMMON_PET pet+charm gates are vacuous for creature casters (no
-		// pet-ownership or charm model). Placed after the dispel arm and
+		// needs a player target without an existing pet; SUMMON /
+		// SUMMON_PET fizzle while the caster has a charmed unit (reverse
+		// CharmerGUID scan), their GetPetGUID legs staying vacuous (no
+		// pet-slot model). Placed after the dispel arm and
 		// before the steal arm, matching C++ CheckCast case order.
 		if !s.creatureSummonPreCast(m, spellInfo, targetGUID) {
 			return
@@ -8253,19 +8254,34 @@ func (s *Server) inheritCreatureHitTriggerAuraDuration(ctx context.Context, cast
 }
 
 // creatureSummonPreCast mirrors the summon-family arms of Spell::CheckCast
-// for a creature caster (Spell.cpp:5805-5946). The SUMMON pet/charm gates
-// (5820-5823) and the whole SUMMON_PET arm (5839-5904) read the caster's
-// owned-pet and charm GUIDs — Go's creature motions carry no pet-ownership
-// or charm model (creatureMotion.PetID marks the motion as being a pet), so
-// GetPetGUID()/GetCharmedGUID() are always zero here and C++ can never fire
-// those arms for a creature caster: vacuous, structurally exact. The
-// player-only arms are real fizzles:
+// for a creature caster (Spell.cpp:5805-5946). The GetPetGUID legs stay
+// vacuous: Go's creature motions carry no pet-slot model
+// (creatureMotion.PetID marks the motion as being a pet), and a reverse
+// OwnerGUID scan would conflate summoned minions/guardians (OwnerGUID =
+// summoner) and charmed victims (OwnerGUID = charmer) with the pet slot,
+// so it cannot stand in for m_petGuid. The GetCharmedGUID legs are real
+// since creatureHasCharmedUnit supplies the reverse CharmerGUID scan:
+//   - SPELL_EFFECT_SUMMON (5805): SUMMON_CATEGORY_PET falls through to
+//     the PUPPET charm leg, and SUMMON_CATEGORY_PUPPET checks charm
+//     directly; other controls pass, and a missing SummonProperties row
+//     passes like C++'s `if (!SummonProperties) break`.
+//   - SPELL_EFFECT_SUMMON_PET (5839): the non-player GetPetGUID arm
+//     fizzles unless the spell carries SPELL_ATTR1_DISMISS_PET (vacuous
+//     above); the GetCharmedGUID arm fizzles regardless of DISMISS_PET.
+//     The player-only stable legs and the strict-cast pet self-stun
+//     (32752) stay out for a creature caster.
 //   - SPELL_EFFECT_SUMMON_PLAYER (5905) and SPELL_EFFECT_SUMMON_RAF_FRIEND
 //     (5935): a non-player caster fails with SPELL_FAILED_BAD_TARGETS.
 //   - SPELL_EFFECT_CREATE_TAMED_PET (5825): a non-player unit target fails
 //     with SPELL_FAILED_BAD_TARGETS; a target that already has a pet fails
 //     with SPELL_FAILED_ALREADY_HAVE_SUMMON unless the spell carries
 //     SPELL_ATTR1_DISMISS_PET.
+//
+// Residual: a player charmed by the caster carries no motion, so the
+// reverse scan misses that GetCharmedGUID leg (player targets carry no
+// charm model); the charm arm's own GetPetGUID leg shares the vacuous
+// standing above. No IsTriggered gate guards the summon block in C++,
+// so these legs run for triggered casts too.
 //
 // Creature casts have no failure-packet path, so the SPELL_FAILED_* codes
 // are internal only — false means fizzle.
@@ -8277,6 +8293,28 @@ func (s *Server) creatureSummonPreCast(m *creatureMotion, spell wotlk.Spell, tar
 		switch eff.Effect {
 		case spellEffectSummonPlayer, spellEffectSummonRafFriend:
 			return false
+		case spellEffectSummon:
+			if s == nil || s.Data == nil {
+				continue
+			}
+			props, found, err := s.Data.SummonProperties(uint32(eff.MiscValueB))
+			if err != nil || !found {
+				continue
+			}
+			switch props.Control {
+			case summonCategoryPet:
+				// GetPetGUID leg vacuous (no pet-slot model, see
+				// header); C++ falls through to the charm leg.
+				fallthrough
+			case summonCategoryPuppet:
+				if s.creatureHasCharmedUnit(m) {
+					return false
+				}
+			}
+		case spellEffectSummonPet:
+			if s.creatureHasCharmedUnit(m) {
+				return false
+			}
 		case spellEffectCreateTamedPet:
 			if targetGUID == 0 {
 				continue

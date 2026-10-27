@@ -3558,7 +3558,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					// Summon-family arms (Spell.cpp:5805-5946), same twin: SUMMON_PLAYER /
 					// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
-					// needs a player target without an existing pet. Placed after the
+					// needs a player target without an existing pet; SUMMON /
+					// SUMMON_PET fizzle while the caster has a charmed unit, their
+					// GetPetGUID legs staying vacuous. Placed after the
 					// dispel arm and before the steal arm, matching C++ case order.
 					if !s.creatureSummonPreCast(motion, spellInfo, target.GUID) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
