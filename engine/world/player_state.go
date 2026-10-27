@@ -151,6 +151,7 @@ const (
 	unitFlagNotAttackable1                 uint32 = 0x00000080 // UNIT_FLAG_NOT_ATTACKABLE_1 (UnitDefines.h:131)
 	unitFlagUnk29                          uint32 = 0x20000000 // UNIT_FLAG_UNK_29 (UnitDefines.h:153)
 	unitFlag2FeignDeath                    uint32 = 0x00000001 // UNIT_FLAG2_FEIGN_DEATH (UnitDefines.h:161)
+	unitFlag2AllowCheatSpells              uint32 = 0x00040000 // UNIT_FLAG2_ALLOW_CHEAT_SPELLS (UnitDefines.h:178)
 	unitFlagLooting                        uint32 = 0x00000400 // UNIT_FLAG_LOOTING (UnitDefines.h:134)
 	unitFlagPreparation                    uint32 = 0x00000020 // UNIT_FLAG_PREPARATION (UnitDefines.h:129)
 )

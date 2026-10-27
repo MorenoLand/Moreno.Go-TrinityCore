@@ -8346,6 +8346,124 @@ func (s *Server) creatureRangedAPBonusPreCast(m *creatureMotion, spell wotlk.Spe
 	return true
 }
 
+// creatureCheatSpellPreCast mirrors the SPELL_ATTR7_IS_CHEAT_SPELL arm of
+// Spell::CheckCast (Spell.cpp:5223-5227) for a creature caster: a cheat spell
+// fails unless the caster carries UNIT_FIELD_FLAGS_2
+// UNIT_FLAG2_ALLOW_CHEAT_SPELLS (UnitDefines.h:178) — set in C++ only by
+// Player::SetGameMaster(true) (Player.cpp:2446), so no creature-side setter
+// exists, but the motion's UnitFlags2 field carries whatever the spawn stamped.
+// Placed after the cooldown arm, before the shapeshift arm, matching C++ order.
+func (s *Server) creatureCheatSpellPreCast(m *creatureMotion, spell wotlk.Spell) bool {
+	if m == nil {
+		return true
+	}
+	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 && m.UnitFlags2&unitFlag2AllowCheatSpells == 0 {
+		return false
+	}
+	return true
+}
+
+// creatureHasCharmedUnit bridges Unit::GetCharmedGUID() for the CheckCast
+// charm arm (Spell.cpp:6060-6061) for a creature caster: any creature motion
+// on the caster's map/instance whose CharmerGUID is the caster counts as a
+// charmed unit, matching the session twin's casterHasCharmedCreature scan.
+func (s *Server) creatureHasCharmedUnit(m *creatureMotion) bool {
+	if s == nil || m == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, other := range s.motionMapLocked(m.Map, m.InstanceID) {
+		if other != nil && other.CharmerGUID == m.GUID {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureCharmPreCast mirrors the SPELL_AURA_MOD_POSSESS / SPELL_AURA_MOD_CHARM /
+// SPELL_AURA_AOE_CHARM leg of the CheckCast ApplyAuraName switch
+// (Spell.cpp:6056-6087) for a creature caster, following the session twin's
+// checkCharmCast (spells.go) leg by leg. Caster side: unitCaster is the motion
+// itself (m_originalCaster is null for AI casts); GetCharmerGUID reads
+// motion.CharmerGUID — charmed motions divert to updatePetMotion ahead of the
+// spell block, so it fires only for charmed vehicles, which still run the
+// block; GetPetGUID has no motion field and is vacuous, the same standing as
+// the resurrect-pet/summon gates; GetCharmedGUID reads the reverse scan above
+// for the non-AoE auras only. Target side (the wire victim always resolves
+// here; unresolvable GUIDs skip the target gates, mirroring the session
+// twin): the vehicle leg stays out (no vehicle-kit model on motions, per the
+// session twin); mounted reads isPlayerMounted for player targets and
+// UNIT_FLAG_MOUNT on the motion for creature targets; charmer reads
+// motion.Charmed/CharmerGUID (player targets carry no charm model); owner
+// reads motion.OwnerGUID resolving to an online player session (player
+// targets have no owner); level reads CalcValueForLevel at the caster level
+// for charm-aura effects only, against the player or motion level.
+func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
+	if m == nil {
+		return true
+	}
+	matched, nonAoe := false, false
+	for _, eff := range spell.Effects {
+		switch eff.Aura {
+		case spellAuraModPossess:
+			matched, nonAoe = true, true
+		case spellAuraCharm:
+			matched, nonAoe = true, true
+		case spellAuraAoeCharm:
+			matched = true
+		}
+	}
+	if !matched {
+		return true
+	}
+	if m.CharmerGUID != 0 {
+		return false
+	}
+	if nonAoe && s.creatureHasCharmedUnit(m) {
+		return false
+	}
+	if targetGUID == 0 {
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		if ts.isPlayerMounted() {
+			return false
+		}
+		for _, eff := range spell.Effects {
+			if !charmAuraForHighLevel(eff.Aura) {
+				continue
+			}
+			if value := eff.CalcValueForLevel(spell, uint32(m.Level)); value != 0 && int32(ts.player.Level) > value {
+				return false
+			}
+		}
+		return true
+	}
+	tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if tm == nil {
+		return true
+	}
+	if tm.UnitFlags&unitFlagMount != 0 {
+		return false
+	}
+	if tm.Charmed || tm.CharmerGUID != 0 {
+		return false
+	}
+	if tm.OwnerGUID != 0 && s.findSessionByGUID(tm.OwnerGUID) != nil {
+		return false
+	}
+	for _, eff := range spell.Effects {
+		if !charmAuraForHighLevel(eff.Aura) {
+			continue
+		}
+		if value := eff.CalcValueForLevel(spell, uint32(m.Level)); value != 0 && int32(tm.Level) > value {
+			return false
+		}
+	}
+	return true
+}
+
 // unitHasStealableAura scans the target's auras the way the CheckCast steal
 // arm scans Unit::GetVisibleAuras(): positive auras only, dispel-mask match,
 // skipping passive auras and SPELL_ATTR4_NOT_STEALABLE spells — the

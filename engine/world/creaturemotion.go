@@ -3382,6 +3382,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Spell::CheckCast cheat-spell arm (Spell.cpp:5223-5227), same twin
+					// shape as the player path: an ATTR7_IS_CHEAT_SPELL spell fizzles
+					// unless the caster carries UNIT_FLAG2_ALLOW_CHEAT_SPELLS on its
+					// UnitFlags2. Placed after the cooldown arm, ahead of shapeshift,
+					// matching C++ order.
+					if !s.creatureCheatSpellPreCast(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// Spell::CheckCast shapeshift leg (Spell.cpp:5247-5277) and
 					// SPELL_AURA_BLOCK_SPELL_FAMILY leg (Spell.cpp:5277-5278), same twin:
 					// both run for non-triggered casts only, ahead of the caster-state block.
@@ -3580,6 +3589,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// switch arms, matching C++ loop order, ahead of the
 					// stealth-break arm below.
 					if !s.creaturePossessPetAuraPreCast(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// SPELL_AURA_MOD_POSSESS / SPELL_AURA_MOD_CHARM / SPELL_AURA_AOE_CHARM
+					// leg of the Spell::CheckCast aura-name switch (Spell.cpp:6056-6087),
+					// same twin shape as the session checkCharmCast: caster charmer /
+					// charmed-unit gates plus the wire-victim mounted/charmer /
+					// owner-player/level gates (vehicle leg stays out: no vehicle-kit
+					// model on motions). Placed after the possess-pet arm, ahead of the
+					// ranged-AP arm, matching C++ aura-loop order.
+					if !s.creatureCharmPreCast(motion, spellInfo, target.GUID) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
