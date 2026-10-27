@@ -11524,13 +11524,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					interruptHandled = true
 				}
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
-				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff, casterLevel)
 			case spellEffectSummonChangeItem: // 34: SPELL_EFFECT_SUMMON_CHANGE_ITEM (EffectSummonChangeItem, SpellEffects.cpp:2061)
 				s.handleEffectSummonChangeItem(effCtx, castItemGUID, spell, eff)
 			case spellEffectTransmitted: // 50: SPELL_EFFECT_TRANS_DOOR (EffectTransmitted, SpellEffects.cpp:4927)
 				s.handleEffectTransmitted(effCtx, target, spell, eff)
 			case spellEffectCreateItem2: // 157: SPELL_EFFECT_CREATE_ITEM_2 (EffectCreateItem2, SpellEffects.cpp:1688)
-				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff)
+				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff, casterLevel)
 			case spellEffectPull: // 70: SPELL_EFFECT_PULL — EffectPull calls EffectNULL (SpellEffects.cpp:2541-2545), no-op
 			case spellEffectCreateRandomItem: // 59: SPELL_EFFECT_CREATE_RANDOM_ITEM
 				s.handleEffectCreateRandomItem(effCtx, targetGUID, spell, eff)
@@ -18181,7 +18181,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// miss-filtered target (the helper falls back to the
 				// caster when the target is 0, and takes the
 				// loot-crafting arm for effect 157).
-				s.handleEffectCreateItem(ctx, effectTarget, spell, eff)
+				s.handleEffectCreateItem(ctx, effectTarget, spell, eff, casterLevel)
 			} else if eff.Effect == spellEffectScriptEffect {
 				// Spell::EffectScriptEffect (SpellEffects.cpp:3604) runs
 				// at HIT_TARGET per unit target: the client arm's helper
@@ -37826,7 +37826,7 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 	return 0, true
 }
 
-func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, casterLevel uint32) {
 	// Spell::EffectCreateItem2 (SpellEffects.cpp:1697-1711): loot-crafting
 	// spells (SpellInfo::IsLootCrafting, SpellInfo.cpp:939) roll their
 	// result from spell_loot_template via Player::AutoStoreLoot instead of
@@ -37871,11 +37871,7 @@ func (s *session) handleEffectCreateItem(ctx context.Context, targetGUID uint64,
 		return
 	}
 	// SpellEffects.cpp:1587 — num_to_add is the rolled CalculateDamage.
-	var createCasterLevel uint32
-	if s.player != nil {
-		createCasterLevel = uint32(s.player.Level)
-	}
-	count := eff.CalcValueForLevel(spell, createCasterLevel)
+	count := eff.CalcValueForLevel(spell, casterLevel)
 	if count < 1 {
 		count = 1
 	}

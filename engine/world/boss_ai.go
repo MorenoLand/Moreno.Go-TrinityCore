@@ -2213,6 +2213,34 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectCreateItem (SpellEffects.cpp:1679) + EffectCreateItem2
+	// (:1688) + EffectLearnSpell (:2406) + EffectPlaySound (:5578) +
+	// EffectPlayMusic (:5537) + EffectSendTaxi (:4656) +
+	// EffectDiscoverTaxi (:5390) + EffectTriggerMissileSpell (:996)
+	// for a creature caster: the HIT_TARGET arms, grouped with the
+	// other effect-grouped arms above. The create-item count rolls at
+	// the caster's level through the helper's casterLevel parameter;
+	// the learn-spell pet leg, the taxi path/node gates, and the sound
+	// gates ride the target-session helpers. Stay-out, verified
+	// against the C++ body this tick: duel 83 (EffectDuel requires a
+	// player caster, SpellEffects.cpp:3797-3798 — a creature-cast duel
+	// does nothing in C++). Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectCreateItem, spellEffectCreateItem2:
+				s.creatureEffectCreateItem(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectLearnSpell:
+				s.creatureEffectLearnSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectPlaySound, spellEffectPlayMusic:
+				s.creatureEffectPlaySoundMusic(m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectSendTaxi, spellEffectDiscoverTaxi:
+				s.creatureEffectTaxi(ctx, m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
+				s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -5205,6 +5233,181 @@ func (s *Server) creatureEffectEnvironmentalDamage(ctx context.Context, m *creat
 		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spellID, remaining, overkill, schoolMask, absorbed, resisted, 0)
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	}
+}
+
+// creatureEffectCreateItem mirrors Spell::EffectCreateItem
+// (SpellEffects.cpp:1679) and EffectCreateItem2 (:1688) for a creature
+// caster: the HIT_TARGET arms, running on the player hit target's own
+// session. The created count rolls at the caster's level (m.Level)
+// through the helper's casterLevel parameter; the 157 loot-crafting
+// arm and the profession skill-up ride the helper, and the 157
+// player-only gate rides the session lookup (creature hit targets
+// have no session, so they create nothing, matching C++).
+func (s *Server) creatureEffectCreateItem(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.handleEffectCreateItem(ctx, guid, spell, eff, uint32(m.Level))
+	}
+}
+
+// creatureEffectLearnSpell mirrors Spell::EffectLearnSpell
+// (SpellEffects.cpp:2406) for a creature caster: the HIT_TARGET arm.
+// Player hit targets learn through their own session at the caster's
+// level (the 483/55884 damage carve-out rides the helper); any pet
+// unit target teaches through its owner's session; other targets
+// learn nothing, matching the C++ ToPet delegation.
+func (s *Server) creatureEffectLearnSpell(ctx context.Context, m *creatureMotion, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.learnSpellEffectTarget(ctx, spellID, spell, eff, uint32(m.Level))
+			continue
+		}
+		if os := s.findSessionByPetGUID(guid); os != nil {
+			os.teachPetSpell(ctx, eff.TriggerSpell)
+		}
+	}
+}
+
+// creatureEffectPlaySoundMusic mirrors Spell::EffectPlaySound
+// (SpellEffects.cpp:5578) and EffectPlayMusic (:5537) for a creature
+// caster: the HIT_TARGET arms, each player hit target via its own
+// session's helper. The SoundEntries gate rides the helper; the
+// 58730/58600 notification leg has no lang-string model tree-wide,
+// same as the player path.
+func (s *Server) creatureEffectPlaySoundMusic(m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectPlaySound:
+			targetSess.handleEffectPlaySound(eff, []uint64{guid})
+		case spellEffectPlayMusic:
+			targetSess.handleEffectPlayMusic(eff, []uint64{guid})
+		}
+	}
+}
+
+// creatureEffectTaxi mirrors Spell::EffectSendTaxi
+// (SpellEffects.cpp:4656) and EffectDiscoverTaxi (:5390) for a
+// creature caster: the HIT_TARGET arms, each player hit target via
+// its own session's helper (the taxi-path and taxi-node gates ride
+// the helpers).
+func (s *Server) creatureEffectTaxi(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		switch eff.Effect {
+		case spellEffectSendTaxi:
+			targetSess.handleEffectSendTaxi(ctx, eff)
+		case spellEffectDiscoverTaxi:
+			targetSess.handleEffectDiscoverTaxi(ctx, eff)
+		}
+	}
+}
+
+// creatureEffectTriggerMissile mirrors Spell::EffectTriggerMissileSpell
+// (SpellEffects.cpp:996) for a creature caster. The HIT_TARGET
+// per-target leg fires only when the triggered spell needs to be
+// triggered by the caster; the once-per-cast HIT leg fires unless the
+// triggered spell needs the caster AND the effect provides a unit
+// target (then the per-target leg owns it). Both legs cast through
+// castCreatureSpellInternal with the creature as origin; the
+// self-trigger guard matches the trigger-spell arm (a synchronous
+// self-cast would recurse). Residuals: the 148 with-value base-point
+// override has no bridge on this path (castCreatureSpellInternal
+// carries no base-point parameter, same as the 142 residual); the
+// explicit-dest leg rides the internal dest resolution for
+// dest-family triggered spells, and the caster-unit leg is the
+// launchTarget fallback below.
+func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, castTargetGUID uint64, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+		return
+	}
+	triggered, found, err := s.Data.Spell(eff.TriggerSpell)
+	if err != nil || !found {
+		return
+	}
+	needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+	if needsCaster {
+		for _, guid := range hitTargets {
+			if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+				continue
+			}
+			if status, isReflected := reflected[guid]; isReflected {
+				if status != protocol.SpellMissNone {
+					continue
+				}
+				guid = m.GUID
+			}
+			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
+		}
+	}
+	if needsCaster && spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0 {
+		return
+	}
+	launchTarget := castTargetGUID
+	if launchTarget == 0 {
+		launchTarget = m.GUID
+	}
+	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
 }
 
 func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
