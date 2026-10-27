@@ -332,8 +332,13 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	if err != nil {
 		return true
 	}
-	instanceID, err := r.ReadU32()
-	if err != nil {
+	// BattleGroundHandler.cpp:85: instance id, 0 if First Available selected.
+	// C++ spends it only on resolving bg/template (Handler:114-119); it is
+	// never stored in the queue entry (AddGroup sets IsInvitedToBGInstanceGUID
+	// to 0, BattlegroundQueue.cpp:143), so it is read for alignment only and
+	// the entry below stores 0 until the simulate invite fire sets the
+	// invited instance id.
+	if _, err := r.ReadU32(); err != nil {
 		return true
 	}
 	joinAsGroup, err := r.ReadU8()
@@ -384,7 +389,7 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	// !joinAsGroup arm of HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:131-193); the
 	// group arm re-checks per member through Group::CanJoinBattlegroundQueue (Group.cpp:2024).
 	if joinAsGroup != 0 {
-		s.handleBattlemasterJoinGroup(bgTypeID, instanceID)
+		s.handleBattlemasterJoinGroup(bgTypeID)
 		return true
 	}
 
@@ -462,12 +467,17 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	}
 
 	joinTime := time.Now()
+	// InstanceID stays 0 here: BattlegroundQueue::AddGroup sets
+	// IsInvitedToBGInstanceGUID to 0 (BattlegroundQueue.cpp:143) and only
+	// InviteGroupToBG sets it, at invite time (BattlegroundQueue.cpp:438) —
+	// the simulate invite fire below is Go's InviteGroupToBG. Storing the
+	// join packet's instance id here let a pre-invite port accept pass the
+	// invited gate below, where C++ answers it with silence.
 	s.bgQueues[slot] = bgQueueEntry{
-		Active:     true,
-		BgTypeID:   bgTypeID,
-		InstanceID: instanceID,
-		JoinTime:   joinTime,
-		Status:     BGStatusWaitQueue,
+		Active:   true,
+		BgTypeID: bgTypeID,
+		JoinTime: joinTime,
+		Status:   BGStatusWaitQueue,
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
@@ -618,10 +628,11 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
 		// (BattlegroundQueue.cpp:238, called per player from InviteGroupToBG:463):
 		// the invite feeds the average-wait ring, not the port accept — the
-		// accept-time arm below can only fire for a pre-invite accept, so
-		// recording only there left the ring empty and every queued packet
-		// reporting a 0 average wait. Keyed by the queued type (RB stays 32,
-		// the queue the average is read back from), not the resolved type.
+		// accept-time arm is gone (a WaitQueue accept cannot pass the
+		// invited gate), so recording only at accept left the ring empty
+		// and every queued packet reporting a 0 average wait. Keyed by the
+		// queued type (RB stays 32, the queue the average is read back
+		// from), not the resolved type.
 		if s.server != nil && !joinTime.IsZero() {
 			s.server.recordBGQueueWait(bgTypeID, bgWaitTeamIndex(false, false, teamForRace(s.player.Race)), uint32(time.Since(joinTime).Milliseconds()))
 		}
@@ -784,7 +795,7 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 // handleBattlemasterJoinGroup processes the joinAsGroup arm of CMSG_BATTLEMASTER_JOIN.
 // Reference: WorldSession::HandleBattlemasterJoinOpcode, group branch
 // (BattleGroundHandler.cpp:212-258) and Group::CanJoinBattlegroundQueue (Group.cpp:2024).
-func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
+func (s *session) handleBattlemasterJoinGroup(bgTypeID uint32) {
 	// grp = _player->GetGroup(); no group or non-leader join: silent return == C++
 	// (BattleGroundHandler.cpp:213-217).
 	if s.groupID == 0 {
@@ -894,7 +905,10 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 			continue
 		}
 		joinTime := time.Now()
-		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, ResolvedBgTypeID: sharedResolved, InstanceID: instanceID, JoinTime: joinTime, Status: BGStatusWaitQueue}
+		// InstanceID stays 0 until the simulate invite fire: AddGroup sets
+		// IsInvitedToBGInstanceGUID to 0 (BattlegroundQueue.cpp:143), same
+		// as the solo arm above.
+		member.bgQueues[slot] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, ResolvedBgTypeID: sharedResolved, JoinTime: joinTime, Status: BGStatusWaitQueue}
 		member.sendBattlefieldStatus(uint8(slot))
 		// No live matchmaker: simulate the queue pop (see simulateBGQueueInvite).
 		member.simulateBGQueueInvite(slot, joinTime, simInstanceID)
@@ -1514,7 +1528,9 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 	// !ginfo.IsInvitedToBGInstanceGUID && action == 1 (BattleGroundHandler.cpp:396-401):
 	// a port accept with no invite instance is answered with silence. This is also the
 	// Go form of the "cheating?" IsInvitedForBattlegroundQueueType gate
-	// (BattleGroundHandler.cpp:453-454).
+	// (BattleGroundHandler.cpp:453-454). Joins store InstanceID 0 (AddGroup,
+	// BattlegroundQueue.cpp:143) and only the simulate invite fire sets it, so
+	// this gate is now exact: a pre-invite accept can no longer pass it.
 	if action != 0 && entry.InstanceID == 0 {
 		return true
 	}
@@ -1582,16 +1598,11 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		s.finishTaxiFlight()
 
 		// The invite fire in simulateBGQueueInvite/simulateArenaQueueInvite is
-		// the recording point for BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
-		// (BattlegroundQueue.cpp:238, per player from InviteGroupToBG:463); this
-		// arm only fires for an accept that arrives while still WaitQueue (a join
-		// packet that carried a non-zero instance id), and the fire closure then
-		// skips the slot as no longer WaitQueue, so no wait is double-counted.
-		// The team index follows the shared selection (BattlegroundQueue.cpp:244-254):
-		// non-arena keys by the queued player's team, arenas by the rated flag.
-		if entry.Status == BGStatusWaitQueue && !entry.JoinTime.IsZero() {
-			s.server.recordBGQueueWait(entry.BgTypeID, bgWaitTeamIndex(entry.IsArena, entry.IsRated, teamForRace(s.player.Race)), uint32(time.Since(entry.JoinTime).Milliseconds()))
-		}
+		// the sole recording point for BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+		// (BattlegroundQueue.cpp:238, per player from InviteGroupToBG:463). No
+		// accept-time arm exists: a WaitQueue accept cannot pass the invited
+		// gate above (InstanceID is 0 until the fire flips the slot to
+		// WaitJoin), so the old pre-invite-accept recording arm was dead.
 
 		// STATUS_IN_PROGRESS leg (BattleGroundHandler.cpp:468-482): the slot data
 		// C++ keeps across the port — SetBattlegroundId (instance) and SetBGTeam
