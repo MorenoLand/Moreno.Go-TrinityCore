@@ -17274,6 +17274,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// SelectImplicitNearbyTargets). The wire spellTarget keeps the
 	// caller-supplied explicit target — C++ AddUnitTarget only appends to
 	// m_UniqueTargetInfo, never rewrites m_targets.
+	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask),
+	// triggered-path twin of the finishSpellCast threading: each GO GUID
+	// maps to the union of exactly the arms that selected it (nearby 40,
+	// area 51/52, cone 108, wire object 23/26 plus the EXPLICIT fallback),
+	// replacing the category approximation at the packet filter and the
+	// effect fan-out below. A GUID the legs never record keeps no entry;
+	// the masked consumers fall back to the category membership for it.
+	goEffectMasks := make(map[uint64]uint32)
+	noteGOEffectMask := func(guid uint64, mask uint32) {
+		if guid != 0 && mask != 0 {
+			goEffectMasks[guid] |= mask
+		}
+	}
+	wireGOMask := spellGOWireEffectMask(spell)
+	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	nearbySelected := false
 	nearbyMatched := isFriendlyNearbySpell(spell) || isEntryNearbySpell(spell) || isHostileNearbySpell(spell) || isGONearbyEntrySpell(spell)
 	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) {
@@ -17291,6 +17306,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				goPick, goOK = s.spellEntryNearbyGOTarget(ctx, spell, spellID)
 				if goOK {
 					hasGoPick = true
+					noteGOEffectMask(goPick, nearbyGOMask)
 				} else {
 					ok = false
 				}
@@ -17299,6 +17315,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			nearby, ok = s.spellHostileNearbyTarget(ctx, spell)
 		case isGONearbyEntrySpell(spell):
 			nearby, ok = s.spellEntryNearbyGOTarget(ctx, spell, spellID)
+			noteGOEffectMask(nearby, nearbyGOMask)
 		}
 		if !ok {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
@@ -17453,10 +17470,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
 			selectionTargets = hitTargets
 		case isGOAreaSpell(spell):
-			hitTargets = s.spellGOAreaTargets(ctx, spell, spellID, spellTarget)
+			areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, spellTarget)
+			hitTargets = areaTargets
+			for guid, mask := range areaMasks {
+				noteGOEffectMask(guid, mask)
+			}
 			selectionTargets = hitTargets
 		case isGOConeSpell(spell):
-			hitTargets = s.spellGOConeTargets(ctx, spell, spellID)
+			coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
+			hitTargets = coneTargets
+			for guid, mask := range coneMasks {
+				noteGOEffectMask(guid, mask)
+			}
 			selectionTargets = hitTargets
 		case isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell):
 			hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, hitTargets)
@@ -17476,6 +17501,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// roll below reports NONE for a GO GUID, so no verdict arm runs for it;
 	// the AOE cap divisor counts the unit list only and stays unchanged.
 	if plainGOPrimary != 0 {
+		noteGOEffectMask(plainGOPrimary, wireGOMask)
 		seenGO := false
 		for _, guid := range hitTargets {
 			if guid == plainGOPrimary {
@@ -17722,7 +17748,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	goTarget := spellGoPacketTarget(spell, spellTarget)
 	// Per-effect GO mask (Spell.cpp:2193, :4512), triggered-path twin of
 	// the finishSpellCast filter.
-	goHitTargets = s.server.filterGOPacketTargetsByEffectMask(ctx, s.player.Map, s.player.InstanceID, spell, spellTarget, goHitTargets)
+	goHitTargets = s.server.filterGOPacketTargetsByEffectMaskWithMasks(ctx, s.player.Map, s.player.InstanceID, spell, spellTarget, goHitTargets, goEffectMasks)
 	if spell.SpellVisual[0] != 0 || spell.SpellVisual[1] != 0 || isChanneledSpell(spell) || spell.Speed > 0 {
 		var goExtras protocol.SpellGoTrailerExtras
 		if castFlags&protocol.SpellCastFlagAmmo != 0 {
@@ -18409,24 +18435,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
 			// EffectGameObjectDamage/Repair/SetDestructionState
 			// (:5424/:5439/:5450) run at SPELL_EFFECT_HANDLE_HIT_TARGET
-			// per gameobject target — the client arms' helpers, which
-			// serve the wire GO target plus every GO GUID in the
-			// target list. The triggered effect-target list carries
-			// units, so the helpers' wire-GO leg is what fires here;
-			// with no GO target they are no-ops, as before.
+			// per gameobject target — the masked client arms' helpers,
+			// which serve each GO GUID only for the effects whose
+			// selection arm recorded it; a GUID no arm recorded falls
+			// back to the category membership, as before.
 			effectGUIDs := make([]uint64, 0, len(effectTargets))
 			for _, et := range effectTargets {
 				effectGUIDs = append(effectGUIDs, et.guid)
 			}
 			switch eff.Effect {
 			case spellEffectActivateObject:
-				s.handleEffectActivateObject(ctx, eff, spellTarget, effectGUIDs)
+				s.handleEffectActivateObjectMasked(ctx, eff, effectIndex, spellTarget, effectGUIDs, goEffectMasks)
 			case spellEffectGameObjectDamage:
-				s.handleEffectGameObjectDamage(ctx, spellID, eff, spellTarget, effectGUIDs)
+				s.handleEffectGameObjectDamageMasked(ctx, spellID, eff, effectIndex, spellTarget, effectGUIDs, goEffectMasks)
 			case spellEffectGameObjectRepair:
-				s.handleEffectGameObjectRepair(ctx, spellID, eff, spellTarget, effectGUIDs)
+				s.handleEffectGameObjectRepairMasked(ctx, spellID, eff, effectIndex, spellTarget, effectGUIDs, goEffectMasks)
 			case spellEffectGameObjectSetDestructionState:
-				s.handleEffectGameObjectSetDestructionState(ctx, eff, spellTarget, effectGUIDs)
+				s.handleEffectGameObjectSetDestructionStateMasked(ctx, eff, effectIndex, spellTarget, effectGUIDs, goEffectMasks)
 			}
 		}
 		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
