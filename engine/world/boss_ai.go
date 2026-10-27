@@ -2102,6 +2102,41 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 		s.creatureEffectSummonPet(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 	}
+	// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) for a creature
+	// caster: the HIT_TARGET arm, once per hit target — the unit target
+	// must be a hunter player with no current pet, and the pet is created
+	// from the effect's MiscValue entry at the target's level
+	// (Unit::CreateTamedPetFrom, Unit.cpp:11103). Delegation goes to the
+	// TARGET's session, not the caster's owner session: handleCreateTamedPet
+	// gates on target == session player, so routing through the owner
+	// session would fail every real case (the owner already holds the
+	// casting pet — same shape as the pet path). Reflected targets take
+	// no leg: C++ retargets a reflected tame onto the caster, which fails
+	// the player gate since the twin caster is a creature, and the twin's
+	// other per-hit legs skip reflected targets the same way. A miss
+	// verdict skips like the other legs (absent reads SpellMissNone, so
+	// only recorded misses skip). Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect != spellEffectCreateTamedPet {
+				continue
+			}
+			for _, guid := range hitTargets {
+				if guid == 0 || evadedTargets[guid] || immuneTargets[guid] {
+					continue
+				}
+				if _, isReflected := reflectedTargets[guid]; isReflected {
+					continue
+				}
+				if missTargets[guid] != protocol.SpellMissNone {
+					continue
+				}
+				if ts := s.findSessionByGUID(guid); ts != nil {
+					ts.handleCreateTamedPet(ctx, spellID, guid, spellInfo.Effects[i])
+				}
+			}
+		}
+	}
 	// Spell::EffectSummonObject (SpellEffects.cpp:4215) + EffectSummonObjectWild
 	// (SpellEffects.cpp:3552) for a creature caster: the HIT arms, once per
 	// cast on the caster like the Transmitted leg above (C++ runs effects

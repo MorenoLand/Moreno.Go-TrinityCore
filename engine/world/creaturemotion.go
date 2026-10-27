@@ -4716,6 +4716,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectTransmitted(ctx, motion, spellTarget, inlineSpell, inlineSpell.Effects[i])
 					}
 				}
+				// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the
+				// inline path, same dispatch-ahead-of-damage position: the
+				// HIT_TARGET arm, once per hit target — the per-hit-target
+				// shape, not the once-per-cast summon block above (the
+				// summon-type helper keeps only the 28 effect). Delegation
+				// goes to the TARGET's session, not the caster's owner
+				// session: handleCreateTamedPet gates on target == session
+				// player (same shape as the pet path and the twin).
+				// Reflected targets take no leg: C++ retargets a reflected
+				// tame onto the caster, which fails the player gate since
+				// the inline caster is a creature, and the inline per-hit
+				// legs skip reflected victims the same way.
+				for i := range inlineSpell.Effects {
+					if inlineSpell.Effects[i].Effect != spellEffectCreateTamedPet {
+						continue
+					}
+					for _, guid := range hitTargets {
+						if guid == 0 || evadedSet[guid] || immuneSet[guid] || reflectedSet[guid] || missSet[guid] != protocol.SpellMissNone {
+							continue
+						}
+						if ts := s.findSessionByGUID(guid); ts != nil {
+							ts.handleCreateTamedPet(ctx, spellID, guid, inlineSpell.Effects[i])
+						}
+					}
+				}
 			}
 			if !nearbyReplacesWireVictim && !reflectedSet[target.GUID] && !immuneSet[target.GUID] && missSet[target.GUID] == protocol.SpellMissNone && !instaKilled[target.GUID] {
 				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
