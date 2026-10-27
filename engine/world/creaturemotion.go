@@ -3958,6 +3958,42 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// spellTarget like the GO-area twin above (the dest
 				// selection vars are block-scoped there).
 				s.creatureEffectPersistentAreaAura(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+				// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectHealPct
+				// (:1477) + EffectHealMaxHealth (:3488) + EffectHealMechanical
+				// (:1495) + EffectEnergize (:1775) + EffectEnergizePct (:1847)
+				// + EffectPowerDrain (:1265) + EffectPowerBurn (:1352) on the
+				// inline path, same dispatch-ahead-of-damage position as the
+				// aura leg above (DoTargetSpellHit per effect index,
+				// Spell.cpp:3555-3566): a victim-targeted AI spell carrying
+				// one of these effects previously healed, energized or
+				// drained nothing server-side (non-victim casts ride
+				// castCreatureSpellInternal, which already runs these arms).
+				// The twins carry the dead/reflect/evade/immune/miss gates;
+				// GO GUIDs in hitTargets take no leg in them. The burn
+				// damage leg (drained x effect-value multiplier into
+				// TargetInfo.Damage, SpellEffects.cpp:1382) stays out like
+				// the twin's: the inline damage leg below is DBC-value
+				// driven, not amount-driven.
+				for i := range inlineSpell.Effects {
+					switch inlineSpell.Effects[i].Effect {
+					case spellEffectHeal:
+						s.creatureEffectHeal(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectHealMechanical:
+						s.creatureEffectHealMechanical(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectHealMaxHealth:
+						s.creatureEffectHealMaxHealth(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectHealPct:
+						s.creatureEffectHealPct(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectEnergize:
+						s.creatureEffectEnergize(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectEnergizePct:
+						s.creatureEffectEnergizePct(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectPowerDrain:
+						s.creatureEffectPowerDrain(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectPowerBurn:
+						s.creatureEffectPowerBurn(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					}
+				}
 			}
 			if !nearbyReplacesWireVictim && !reflectedSet[target.GUID] && !immuneSet[target.GUID] && missSet[target.GUID] == protocol.SpellMissNone && !instaKilled[target.GUID] {
 				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
