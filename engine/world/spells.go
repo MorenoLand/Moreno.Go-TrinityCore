@@ -17231,8 +17231,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (Spell.cpp:7736-7744) — while a reflected jump resolves its
 			// unit to the caster (Spell.cpp:7740) and keeps its index.
 			// Same hit-counted convention as the client path (spells.go:7653).
+			// Spell::AddUnitTarget (Spell.cpp:2117) merges a unit already in
+			// m_UniqueTargetInfo instead of adding a second entry, so a jump
+			// landing on a unit the area/friendly seed list already holds
+			// takes the chaining effect once, via the seed — not twice.
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
 			jumpOrder := 0
 			for _, jumpGUID := range chainJumpGUIDs[:jumpCap] {
+				if _, dup := seedSet[jumpGUID]; dup {
+					continue
+				}
 				target := jumpGUID
 				reflected := false
 				if miss, ok := triggeredMiss[target]; ok {
