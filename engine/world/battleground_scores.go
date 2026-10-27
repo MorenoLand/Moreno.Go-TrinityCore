@@ -1,5 +1,11 @@
 package world
 
+import (
+	"sort"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
 // bgScoreKey identifies one battleground instance's score table, mirroring
 // Battleground::PlayerScores (Battleground.h), which lives on the BG instance
 // rather than on the map: the killer's bgData.InstanceID is the instance key
@@ -12,15 +18,32 @@ type bgScoreKey struct {
 	InstanceID uint32
 }
 
-// bgPlayerScore mirrors the base BattlegroundScore fields that
-// Battleground::HandleKillPlayer touches (Battleground.cpp:1662-1694):
-// SCORE_DEATHS, SCORE_HONORABLE_KILLS, SCORE_KILLING_BLOWS. BonusHonor,
-// DamageDone, and HealingDone belong to other UpdatePlayerScore callers and
-// are not modeled here yet.
+// bgPlayerScore mirrors BattlegroundScore (BattlegroundScore.h): the six base
+// fields every score row carries, plus the objectives fields of the six C++
+// subclasses (BattlegroundWS/EY/AB/IC/AV/SA headers). The fields coexist
+// union-style; only the instance's own subclass block is serialized, so a WS
+// row never emits AV fields. BonusHonor, DamageDone, and HealingDone have no
+// Go UpdatePlayerScore callers yet and serialize as zero; the objectives
+// fields likewise await their capture/assault/defend update sites.
 type bgPlayerScore struct {
 	KillingBlows   uint32
 	Deaths         uint32
 	HonorableKills uint32
+	BonusHonor     uint32
+	DamageDone     uint32
+	HealingDone    uint32
+
+	FlagCaptures         uint32 // WS + EY
+	FlagReturns          uint32 // WS
+	BasesAssaulted       uint32 // AB + IC
+	BasesDefended        uint32 // AB + IC
+	GraveyardsAssaulted  uint32 // AV
+	GraveyardsDefended   uint32 // AV
+	TowersAssaulted      uint32 // AV
+	TowersDefended       uint32 // AV
+	MinesCaptured        uint32 // AV
+	DemolishersDestroyed uint32 // SA
+	GatesDestroyed       uint32 // SA (SCORE_DESTROYED_WALL)
 }
 
 // recordBGKillPlayerScores ports the base leg of
@@ -102,10 +125,9 @@ func (s *Server) recordBGKillPlayerScores(victim, killer *session) {
 	}
 }
 
-// bgKillPlayerScores snapshots one instance's score table for a future
-// consumer (the non-arena MSG_PVP_LOG_DATA builder, which currently reports
-// no packet for lack of a score model — guild.go handlePvpLogData). The copy
-// keeps callers off the live rows.
+// bgKillPlayerScores snapshots one instance's score table for the non-arena
+// MSG_PVP_LOG_DATA builder (buildNonArenaPvPLogDataPacket). The copy keeps
+// callers off the live rows.
 func (s *Server) bgKillPlayerScores(mapID, instanceID uint32) map[uint64]bgPlayerScore {
 	if s == nil {
 		return nil
@@ -123,4 +145,85 @@ func (s *Server) bgKillPlayerScores(mapID, instanceID uint32) map[uint64]bgPlaye
 		}
 	}
 	return out
+}
+
+// bgScoreTypeHasObjectives reports whether bgTypeID names one of the six
+// C++ BattlegroundScore subclasses (BattlegroundTypeId: AV=1, WS=2, AB=3,
+// EY=7, SA=9, IC=30). Any other type has no C++ objectives block to mirror.
+func bgScoreTypeHasObjectives(bgTypeID uint32) bool {
+	switch bgTypeID {
+	case 1, 2, 3, 7, 9, 30:
+		return true
+	default:
+		return false
+	}
+}
+
+// buildNonArenaPvPLogDataPacket ports Battleground::BuildPvPLogDataPacket
+// (Battleground.cpp:1196-1221) for the non-arena arm: type byte 0, the
+// ended/winner block, the row count, then one BattlegroundScore::AppendToPacket
+// row per score (Battleground.cpp:44-55: guid, killing blows, honorable kills,
+// deaths, bonus honor, damage done, healing done, then the subclass
+// objectives block). Rows sort by GUID ascending: C++ PlayerScores is
+// std::map<uint32, BattlegroundScore*> (Battleground.h:339), keyed by GUID
+// counter, and Go GUIDs share the counter in their low bits. The ended block
+// always writes 0: Go has no live non-arena BG status machine (see the
+// STATUS_WAIT_LEAVE note in battleground_group.go), and a handler-path
+// request during STATUS_IN_PROGRESS also serializes 0 in C++; the
+// WAIT_LEAVE winner arm stays unported. An unknown bgTypeID returns nil:
+// C++ always has a concrete subclass block, so no faithful packet exists.
+func (s *Server) buildNonArenaPvPLogDataPacket(mapID, instanceID, bgTypeID uint32) []byte {
+	if !bgScoreTypeHasObjectives(bgTypeID) {
+		return nil
+	}
+	table := s.bgKillPlayerScores(mapID, instanceID)
+	guids := make([]uint64, 0, len(table))
+	for guid := range table {
+		guids = append(guids, guid)
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+
+	buf := protocol.NewBuffer(2 + 4 + len(guids)*40)
+	buf.WriteU8(0) // type: battleground
+	buf.WriteU8(0) // bg not ended (no live status machine; see above)
+	buf.WriteU32(uint32(len(guids)))
+	for _, guid := range guids {
+		score := table[guid]
+		buf.WriteU64(guid)
+		buf.WriteU32(score.KillingBlows)
+		buf.WriteU32(score.HonorableKills)
+		buf.WriteU32(score.Deaths)
+		buf.WriteU32(score.BonusHonor)
+		buf.WriteU32(score.DamageDone)
+		buf.WriteU32(score.HealingDone)
+		switch bgTypeID {
+		case 1: // AV: BattlegroundAVScore::BuildObjectivesBlock, 5 objectives
+			buf.WriteU32(5)
+			buf.WriteU32(score.GraveyardsAssaulted)
+			buf.WriteU32(score.GraveyardsDefended)
+			buf.WriteU32(score.TowersAssaulted)
+			buf.WriteU32(score.TowersDefended)
+			buf.WriteU32(score.MinesCaptured)
+		case 2: // WS: BattlegroundWGScore::BuildObjectivesBlock, 2 objectives
+			buf.WriteU32(2)
+			buf.WriteU32(score.FlagCaptures)
+			buf.WriteU32(score.FlagReturns)
+		case 3: // AB: BattlegroundABScore::BuildObjectivesBlock, 2 objectives
+			buf.WriteU32(2)
+			buf.WriteU32(score.BasesAssaulted)
+			buf.WriteU32(score.BasesDefended)
+		case 7: // EY: BattlegroundEYScore::BuildObjectivesBlock, 1 objective
+			buf.WriteU32(1)
+			buf.WriteU32(score.FlagCaptures)
+		case 9: // SA: BattlegroundSAScore::BuildObjectivesBlock, 2 objectives
+			buf.WriteU32(2)
+			buf.WriteU32(score.DemolishersDestroyed)
+			buf.WriteU32(score.GatesDestroyed)
+		case 30: // IC: BattlegroundICScore::BuildObjectivesBlock, 2 objectives
+			buf.WriteU32(2)
+			buf.WriteU32(score.BasesAssaulted)
+			buf.WriteU32(score.BasesDefended)
+		}
+	}
+	return buf.Bytes()
 }
