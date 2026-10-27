@@ -1082,6 +1082,63 @@ func (s *Server) armWSGMatchTimer(wsg *wsgBattlegroundState, mapID uint32) {
 	})
 }
 
+// resetWSGStateForNewMatch is the Go form of the CreateNewBattleground +
+// Reset() pair (BattlegroundMgr.cpp:412, BattlegroundWS.cpp:718-750,
+// Battleground.cpp:935-938): C++ hands every match a fresh BG object with
+// both flags ON_BASE, keepers and dropped GUIDs cleared, scores zeroed,
+// _lastFlagCaptureTeam and _minutesElapsed zeroed, and the debuff/drop/
+// respawn timers at zero. Go reuses one per-map state, so a successor match
+// arriving in the previous match's WaitLeave window inherits the ended
+// fields instead — flags stuck OnPlayer (carrier cleared by the gated
+// drop/leave branch) or OnGround (return timer stopped by the end arm),
+// scores and clock from the old match, and Winner >= 0, which gates every
+// flag click, the grave gate, and the lazy match clock off. A flag-only
+// reset cannot fix that: Winner and Started must go too, or the successor
+// stays dead. This runs at formation (first fresh accept, see
+// armWSGStartDelayOnFirstAccept), never at the end arms — C++ EndBattleground
+// leaves the dead instance's flags exactly as they were — and never at the
+// Started flip, which can only fire on an ongoing match. The caller's wsg.mu
+// is held, as with stopWSGMatchTimers. No worldstate is broadcast here:
+// the successor's joiners read the pristine fields from
+// sendWSGInitWorldStatesTo on entry, and the old match's WaitLeave stayers
+// keep their ended view, as in C++. Base flag GUIDs are kept (the base
+// objects are static map objects) but unhidden, since an ended match can
+// leave a picked-up base flag hidden; dropped GUIDs are dynamic and are
+// despawned, since a successor spawns its own on drop. MaxScore and MapID
+// are match constants, not Reset fields, and are kept.
+func (s *Server) resetWSGStateForNewMatch(wsg *wsgBattlegroundState) {
+	s.stopWSGMatchTimers(wsg)
+	if wsg.AllianceDroppedGUID != 0 {
+		s.despawnDynamicGameObject(wsg.AllianceDroppedGUID)
+		wsg.AllianceDroppedGUID = 0
+	}
+	if wsg.HordeDroppedGUID != 0 {
+		s.despawnDynamicGameObject(wsg.HordeDroppedGUID)
+		wsg.HordeDroppedGUID = 0
+	}
+	if wsg.AllianceBaseGUID != 0 {
+		s.setGameObjectHidden(wsg.AllianceBaseGUID, false)
+	}
+	if wsg.HordeBaseGUID != 0 {
+		s.setGameObjectHidden(wsg.HordeBaseGUID, false)
+	}
+	wsg.AllianceFlagState = WSGFlagStateOnBase
+	wsg.HordeFlagState = WSGFlagStateOnBase
+	wsg.AllianceCarrierGUID = 0
+	wsg.HordeCarrierGUID = 0
+	wsg.AllianceScore = 0
+	wsg.HordeScore = 0
+	wsg.Winner = -1
+	wsg.EndedAt = time.Time{}
+	wsg.PrematureCountDown = false
+	wsg.PrematureTimerMs = 0
+	wsg.StalemateStage = 0
+	wsg.LastFlagCaptureTeam = 0
+	wsg.MinutesElapsed = 0
+	wsg.MatchStartTime = time.Time{}
+	wsg.Started = false
+}
+
 // armWSGStartDelayOnFirstAccept arms the Go form of the C++ start-delay
 // countdown (Battleground.cpp:124-127, :425: 2 minutes for non-arena
 // battlegrounds; :453-454: doors open and STATUS_IN_PROGRESS at expiry) for
@@ -1092,7 +1149,10 @@ func (s *Server) armWSGMatchTimer(wsg *wsgBattlegroundState, mapID uint32) {
 // accept-latency skew against formation time is unreachable by the gate.
 // WaitLeave holders do not block the arm (same rule as
 // rearmNonArenaBGMatchStartTimeOnFirstAccept): a successor match arriving in
-// the previous match's WaitLeave window arms its own timer. Idempotent under
+// the previous match's WaitLeave window arms its own timer — an ended state
+// it reuses first goes through resetWSGStateForNewMatch, since the
+// Started/Winner guards below would otherwise no-op on the ended fields and
+// the successor would inherit the old flags, scores, and clock. Idempotent under
 // wsg.mu: a second accept while the timer is armed or Started is set is a
 // no-op. The callback only flips Started on a still-ongoing match, so a timer
 // that fires against an end arm holding wsg.mu can never mark an ended match
@@ -1128,6 +1188,9 @@ func (s *Server) armWSGStartDelayOnFirstAccept(accepting *session, mapID uint32)
 	}
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
+	if wsg.Winner >= 0 {
+		s.resetWSGStateForNewMatch(wsg)
+	}
 	if wsg.Started || wsg.StartTimer != nil {
 		return
 	}
