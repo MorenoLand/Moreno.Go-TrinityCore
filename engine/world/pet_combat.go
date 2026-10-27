@@ -4859,6 +4859,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 					}
 				}
+				// Spell::EffectTriggerSpell LAUNCH_TARGET/LAUNCH split (SpellEffects.cpp:823, Spell.cpp:7687): the per-target legs below are the LAUNCH_TARGET arm, so their plain cast runs only when the triggered spell needs to be triggered by the caster (SpellInfo.cpp:1052); the once-per-cast LAUNCH leg after them covers the rest. The 64-only special-cases switch still runs per target above the needsCaster gate, like C++ (the switch precedes the LAUNCH_TARGET needsCaster return).
+				needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
 				// Spell.cpp:2350 — a nulled reflect victim or an evaded wire
 				// target resolves no _spellHitTarget, so the trigger leg
 				// does not fire for it; immune and missed wire targets
@@ -4875,7 +4877,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
 						// handled by the 64-only special-cases switch; no plain leg for this target
-					} else {
+					} else if needsCaster {
 						s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 					}
 				}
@@ -4886,7 +4888,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 							triggerTarget.UnitGUID = rt
 							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
 								// handled by the 64-only special-cases switch; no plain leg for this target
-							} else {
+							} else if needsCaster {
 								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 							}
 						}
@@ -4906,7 +4908,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 								triggerTarget.UnitGUID = rt
 								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
 									// handled by the 64-only special-cases switch; no plain leg for this target
-								} else {
+								} else if needsCaster {
 									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 								}
 							}
@@ -4919,7 +4921,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 								triggerTarget.UnitGUID = rt
 								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
 									// handled by the 64-only special-cases switch; no plain leg for this target
-								} else {
+								} else if needsCaster {
 									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 								}
 							}
@@ -4933,11 +4935,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 							triggerTarget.UnitGUID = rt
 							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
 								// handled by the 64-only special-cases switch; no plain leg for this target
-							} else {
+							} else if needsCaster {
 								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 							}
 						}
 					}
+				}
+				// Spell::EffectTriggerSpell LAUNCH arm (SpellEffects.cpp:823, HandleLaunchPhase Spell.cpp:7687) on the pet path, mirroring the twin's once-per-cast leg: fires unless the per-target arm owns the effect (needs-caster plus a unit target on this effect). The LAUNCH arm never runs the 64-only special-cases switch, so this is a plain cast, and it is verdict-independent (the launch phase runs ahead of hit resolution) on the raw cast target, falling back to the caster like the twin's launchTarget; the 142 base-point patch above already landed on the local triggered copy.
+				if !(needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0) {
+					launchTarget := target
+					if launchTarget.UnitGUID == 0 {
+						launchTarget.UnitGUID = motion.GUID
+					}
+					s.executePetSpellWithOptions(ctx, motion, triggered, 0, launchTarget, true)
 				}
 			}
 		}
