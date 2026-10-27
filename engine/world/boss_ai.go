@@ -2068,7 +2068,7 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 	}
 	// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectHealPct (:1477)
-	// + EffectEnergize (SpellEffects.cpp:1775) + EffectEnergizePct
+	// + EffectHealMaxHealth (:3488) + EffectEnergize (SpellEffects.cpp:1775) + EffectEnergizePct
 	// (:1847) for a creature caster: the HIT_TARGET
 	// arms, player and creature hit targets alike, grouped with the
 	// other effect-grouped arms above. Gated on spellKnown like the
@@ -2078,6 +2078,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectHeal:
 				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectHealMaxHealth:
+				s.creatureEffectHealMaxHealth(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealPct:
 				s.creatureEffectHealPct(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnergize:
@@ -2103,6 +2105,20 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectPowerDrain(ctx, m, spellInfo, spellInfo.Effects[i], i, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPowerBurn:
 				s.creatureEffectPowerBurn(ctx, m, spellInfo, spellInfo.Effects[i], i, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectRemoveAura (SpellEffects.cpp:5611) +
+	// EffectModifyThreatPercent (SpellEffects.cpp:4915) for a creature
+	// caster: the HIT_TARGET arms, grouped with the other effect-grouped
+	// arms above. Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectRemoveAura:
+				s.creatureEffectRemoveAura(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectModifyThreatPercent:
+				s.creatureEffectModifyThreatPercent(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3436,7 +3452,7 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 // for a creature caster: the HIT_TARGET arm, player and creature hit
 // targets alike (shared delivery in creatureEffectHealCommon).
 func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
-	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false)
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, false)
 }
 
 // creatureEffectHealPct mirrors Spell::EffectHealPct (SpellEffects.cpp:1477)
@@ -3448,12 +3464,19 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 // client path's 10/136 comment) — none of them runs here. Otherwise the
 // delivery is the shared creatureEffectHealCommon body.
 func (s *Server) creatureEffectHealPct(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
-	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true)
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true, false)
 }
 
 // creatureEffectHealCommon is the shared HIT_TARGET heal delivery for
-// EffectHeal (SpellEffects.cpp:1393) and, in pctMode, EffectHealPct
-// for a creature caster: the HIT_TARGET arm, player and creature hit
+// EffectHeal (SpellEffects.cpp:1393), in pctMode EffectHealPct, and in
+// rawMode EffectHealMaxHealth (SpellEffects.cpp:3488). In rawMode the base
+// value is only the effect value's zero test (see creatureEffectHealMaxHealth),
+// the EffectHeal-only arms do not run, and the Grievous Bite removal does
+// not run, and neither Done nor Taken fold runs (the 67 body calls neither;
+// HealBySpell applies absorb only, Unit.cpp:6561); the crit, absorb,
+// AutoBalance, hook, cap, and log legs below are shared. Otherwise the
+// delivery is the EffectHeal body for a creature caster: the HIT_TARGET
+// arm, player and creature hit
 // targets alike. The base value is the effect's CalcValueForLevel at
 // the caster's level; the Death Pact arm replaces it with a percentage
 // of the caster's max health, the Vessel of the Naaru arm adds the
@@ -3466,18 +3489,18 @@ func (s *Server) creatureEffectHealPct(ctx context.Context, m *creatureMotion, s
 // the capped health gain, the heal log, and the Grievous Bite removal
 // run in C++ order. Chain falloff has no model on this path (the cast
 // carries no chain-jump index), so the chain multiplier is 1.
-func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool) {
+func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool, rawMode bool) {
 	if s == nil || m == nil {
 		return
 	}
 	base := eff.CalcValueForLevel(spell, casterLevel(m))
-	if base < 0 {
+	if base < 0 && !rawMode {
 		return
 	}
-	if !pctMode && spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
+	if !pctMode && !rawMode && spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
 		base = int32(uint64(m.MaxHealth) * uint64(base) / 100)
 	}
-	if !pctMode && spell.ID == 45064 {
+	if !pctMode && !rawMode && spell.ID == 45064 {
 		casterKey := creatureAuraKeyForMotion(m)
 		s.auraMu.Lock()
 		var holyEnergy uint32
@@ -3490,7 +3513,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			s.removeCreatureAura(casterKey, 45062)
 		}
 	}
-	swiftmend := !pctMode && spell.TargetAuraState == auraStateSwiftmend
+	swiftmend := !pctMode && !rawMode && spell.TargetAuraState == auraStateSwiftmend
 	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
 	casterKey := creatureAuraKeyForMotion(m)
 	for _, guid := range hitTargets {
@@ -3530,10 +3553,18 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 				continue
 			}
 			heal = uint32(uint64(maxHealth) * uint64(base) / 100)
+		} else if rawMode {
+			if base == 0 {
+				heal = m.MaxHealth
+			} else if vs != nil {
+				heal = vs.player.MaxHealth - vs.player.Health
+			} else {
+				heal = tm.MaxHealth - tm.Health
+			}
 		} else {
 			heal = uint32(base)
 		}
-		doneBonus := true
+		doneBonus := !rawMode
 		if swiftmend {
 			if vs != nil {
 				if vs.targetHasAuraState(ctx, guid, auraStateSwiftmend, spell) {
@@ -3589,10 +3620,12 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 		if heal == 0 {
 			continue
 		}
-		if vs != nil {
-			heal = vs.healingTakenBonus(vs, m.GUID, spell.ID, heal, false)
-		} else {
-			heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(tm), m.GUID, spell, true, heal, false)
+		if !rawMode {
+			if vs != nil {
+				heal = vs.healingTakenBonus(vs, m.GUID, spell.ID, heal, false)
+			} else {
+				heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(tm), m.GUID, spell, true, heal, false)
+			}
 		}
 		isCrit := false
 		{
@@ -3650,7 +3683,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, true)
 		}
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, vs)
-		if !pctMode {
+		if !pctMode && !rawMode {
 			if vs != nil {
 				vs.removeGrievousBiteIfFullyHealed(guid)
 			} else if tm != nil && tm.MaxHealth > 0 {
@@ -4049,6 +4082,112 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 // runs, including the no-owner KILL/KILLED/DEATH proc loops
 // (Unit.cpp:11257-11279) ahead of the death-aura strip. The OwnerAttackedBy
 // signal (Unit.cpp:728-733) fires after the motion unlock below.
+// creatureEffectHealMaxHealth mirrors Spell::EffectHealMaxHealth
+// (SpellEffects.cpp:3488) for a creature caster: the HIT_TARGET arm.
+// The amount is the effect value's zero test only: a zero effect value
+// heals for the caster's max health (Lay on Hands), any other value
+// heals the target's missing health. The Death Pact, Vessel of the
+// Naaru, and Swiftmend arms live in EffectHeal only and the Grievous
+// Bite removal lives in EffectHeal only, so none of them runs here;
+// otherwise the delivery is the shared creatureEffectHealCommon body in
+// rawMode (no Done/Taken folds, per the 67 body and HealBySpell).
+func (s *Server) creatureEffectHealMaxHealth(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, true)
+}
+
+// creatureEffectRemoveAura mirrors Spell::EffectRemoveAura
+// (SpellEffects.cpp:5611) for a creature caster: the HIT_TARGET arm
+// removing the effect's TriggerSpell auras from each hit target.
+// Player hit targets lose the aura through the target session's own
+// remove path; creature hit targets lose it from the Server twin
+// record (the store the session removeTargetAura helper clears for
+// combat targets). A landed reflect retargets to the caster like the
+// sibling arms; the C++ "specifying casterguid" note is vacuous here —
+// RemoveAurasDueToSpell removes by spell id regardless of caster, and
+// both removal paths do the same.
+func (s *Server) creatureEffectRemoveAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	_ = spell
+	if eff.TriggerSpell == 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
+			vs.removeAura(eff.TriggerSpell)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			s.removeCreatureAura(creatureAuraKeyForMotion(tm), eff.TriggerSpell)
+		}
+	}
+}
+
+// creatureEffectModifyThreatPercent mirrors Spell::EffectModifyThreatPercent
+// (SpellEffects.cpp:4915) for a creature caster: the HIT_TARGET arm
+// scaling the caster's entry in each hit target's threat list by
+// (100 + damage) / 100 (ThreatManager.h:143; a zero effect value is
+// the C++ no-op). The gates mirror the session helper
+// handleEffectModifyThreatPercent: totem targets, evading targets,
+// owned targets, and targets with no threat manager are skipped, and
+// a target with no entry for the caster is a no-op (ScaleThreat only
+// touches an existing entry). Only a victim switch broadcasts, like
+// the session helper.
+func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+	if damage == 0 {
+		return
+	}
+	factor := float32(0.01 * float64(100+damage))
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if s.isTotemGUID(guid) {
+			continue
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil || motion.Evading || motion.OwnerGUID != 0 || motion.ThreatMgr == nil {
+			s.motionMu.Unlock()
+			continue
+		}
+		tm := motion.ThreatMgr
+		s.motionMu.Unlock()
+		switched, newVictim := tm.ScaleThreat(m.GUID, factor)
+		if !switched {
+			continue
+		}
+		s.motionMu.Lock()
+		if live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid); live != nil {
+			live.TargetGUID = newVictim
+			s.broadcastHighestThreatUpdateInInstance(live.Map, live.InstanceID, live.GUID, newVictim, tm.SortedEntries())
+		}
+		s.motionMu.Unlock()
+	}
+}
+
 // creatureEffectApplyAura mirrors Spell::EffectApplyAura
 // (SpellEffects.cpp:1233) for a creature caster: the HIT arm applying the
 // cast spell's aura record to each player hit target through the target
