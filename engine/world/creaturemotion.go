@@ -4056,6 +4056,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectForceCast(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
 						s.creatureEffectTriggerMissile(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], spellTarget.UnitGUID, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectThreat:
+						s.creatureEffectThreat(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectAttackMe:
+						s.creatureEffectTaunt(ctx, motion, spellID, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectTeleportUnits:
+						s.creatureEffectTeleportUnits(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectKnockBack, spellEffectKnockBackDest:
+						s.creatureEffectKnockBack(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectResurrect:
+						s.creatureEffectResurrect(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectResurrectNew:
+						s.creatureEffectResurrectNew(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					}
 				}
 				// Spell::EffectActivateObject (SpellEffects.cpp:3938) + EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) + EffectGameObjectSetDestructionState (:5450) on the inline path, same dispatch-ahead-of-damage position: the GO arms over the GO GUIDs in hitTargets (the nearby-entry GO pick joins hitTargets ahead of dispatch; a wire GO GUID rides the same filter), mirroring the twin's GO block. Unit GUIDs in hitTargets take no leg in the twins.
