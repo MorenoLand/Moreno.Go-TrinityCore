@@ -3476,17 +3476,97 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Spell::CheckCast arena arm (Spell.cpp:5439-5447), same twin:
+					// ATTR4_NOT_USABLE_IN_ARENA, or a recovery time over 10 minutes
+					// without ATTR4_USABLE_IN_ARENA, fails on battle-arena maps.
+					// Runs for triggered casts too, so it runs on this non-triggered
+					// DoCastVictim path. Placed after the pet arm, matching C++ order.
+					recoveryTime := spellInfo.RecoveryTime
+					if spellInfo.CategoryRecoveryTime > recoveryTime {
+						recoveryTime = spellInfo.CategoryRecoveryTime
+					}
+					if spellInfo.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+						(recoveryTime > 10*60*1000 && spellInfo.AttributesEx4&spellAttr4UsableInArena == 0) {
+						if entry, found, err := s.Data.Map(motion.Map); err == nil && found && entry.IsBattleArena() {
+							s.rearmAISpell(motion, dueSpell, spellID, now)
+							return
+						}
+					}
+					// Spell::CheckCast zone arm (Spell.cpp:5448-5462), same twin:
+					// the shared motion-caster CheckLocation (AreaGroupId +
+					// NOT_IN_RAID_INSTANCE + spell_area DB leg). Placed after the
+					// arena arm, matching C++ order.
+					if !s.checkMotionSpellCheckLocation(ctx, motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::CheckCast spell-focus arm (Spell.cpp:5476-5482), same twin:
+					// a spell with RequiresSpellFocus fizzles without a matching focus
+					// object in range. Placed after the zone arm, ahead of the range
+					// gate (already ran as the victim range gate) and power, matching
+					// C++ order.
+					if !s.motionSpellFocusFound(ctx, motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// Spell::CheckPower (Spell.cpp:5502), the inline twin of the
 					// castCreatureSpellInternal arm: a creature that cannot afford the spell
 					// fizzles — no packet, no effects, no drain. The cost is stashed for the
 					// TakePower arm below; a fizzle here never drains, matching C++. Placed
 					// after the pet arm, matching C++ order (pet 5410, range already ran as
 					// the victim range gate, power 5502); the CheckCasterAuras gate at 5509
-					// is a later census unit.
+					// follows below, ahead of the dispel/summon/steal/stealth-break arms.
 					inlinePowerCost = s.creatureSpellPowerCost(spellInfo, motion)
 					if !checkCreatureSpellPower(spellInfo, motion, inlinePowerCost) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
+					}
+					// Spell::CheckCasterAuras CC-state gate (Spell.cpp:5509), same twin:
+					// after CheckPower, matching C++ order. The inline cast is
+					// non-triggered, so the twin's triggered exemption never applies.
+					if !s.checkCreatureCasterAuras(motion, spellInfo) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// SPELL_EFFECT_DISPEL arm (Spell.cpp:5517-5562), same twin: a
+					// pure-dispel spell fizzles on a wire victim with nothing
+					// dispellable. The inline cast is non-triggered, so the twin's
+					// !IsTriggered gate at 5540 never exempts it. Placed before the
+					// summon arm, matching C++ CheckCast order.
+					if !s.creatureDispelPreCast(motion, spellInfo, target.GUID, false) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Summon-family arms (Spell.cpp:5805-5946), same twin: SUMMON_PLAYER /
+					// SUMMON_RAF_FRIEND fail for non-player casters; CREATE_TAMED_PET
+					// needs a player target without an existing pet. Placed after the
+					// dispel arm and before the steal arm, matching C++ case order.
+					if !s.creatureSummonPreCast(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// SPELL_EFFECT_STEAL_BENEFICIAL_BUFF arm (Spell.cpp:5957-5984), same
+					// twin: a wire victim carrying no stealable aura fizzles. Placed
+					// after the summon arm, matching C++ CheckCast order.
+					if !s.creatureStealPreCast(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
+					// Spell::prepare stealth-break arm (Spell.cpp:3180-3191), same twin:
+					// a non-triggered cast of a stealth-breaking spell drops the
+					// caster's AURA_INTERRUPT_FLAG_CAST auras at cast start, and any
+					// unit-target effect additionally drops SPELL_ATTACK auras. The
+					// inline cast is non-triggered, so no triggered exemption applies.
+					// Placed after CheckCast (the steal arm above), ahead of the
+					// SetInFront leg below, matching the twin's relative order.
+					if spellInfo.AttributesEx&spellAttr1NotBreakStealth == 0 {
+						s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagCast)
+						for _, eff := range spellInfo.Effects {
+							if spellEffectTargetsUnit(eff.Effect) {
+								s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagSpellAttack)
+								break
+							}
+						}
 					}
 					// Spell::_cast creature SetInFront leg (Spell.cpp:3404-3409,
 					// Unit::SetInFront, Unit.cpp:13663-13667), the inline twin of
