@@ -520,6 +520,13 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 			}
 			continue
 		}
+		if s.creatureCorpseRemoved(passenger.GUID, observer.player.Map, 0) {
+			if observer.clearTransportPassengerVisible(guid, transportGUID) {
+				updates.AddOutOfRangeGUID(guid)
+				removedGUIDs = append(removedGUIDs, guid)
+			}
+			continue
+		}
 		if !observer.markTransportPassengerVisible(guid, transportGUID) {
 			continue
 		}
@@ -735,6 +742,9 @@ func (s *Server) nearbyTransportCreaturePassengers(state playerState, distance f
 		}
 		for _, passenger := range transport.passengerCreatures() {
 			if distance <= 0 || passenger.Map != state.Map || math.Hypot(float64(passenger.X-state.X), float64(passenger.Y-state.Y)) > distance {
+				continue
+			}
+			if s.creatureCorpseRemoved(passenger.GUID, state.Map, 0) {
 				continue
 			}
 			result = append(result, passenger)

@@ -141,6 +141,130 @@ type creatureRespawn struct {
 	Map        uint32
 	InstanceID uint32
 	X, Y, Z    float32
+	// CorpseRemoveAt is the Creature::Update CORPSE-branch removal time
+	// (Creature.cpp:799: m_corpseRemoveTime reached -> RemoveCorpse(false)):
+	// death + m_corpseDelay, rank-configured (Creature.cpp:1153-1165).
+	// CorpseRemoved marks the removal as applied; the record itself must
+	// survive until At, because respawn still revives from it.
+	CorpseRemoveAt time.Time
+	CorpseRemoved  bool
+}
+
+// creatureCorpseDelaySeconds maps a template rank to its corpse-decay
+// delay (Creature::LoadCreatureFromDB rank switch, Creature.cpp:1152-1165,
+// CONFIG_CORPSE_DECAY_* defaults in World.cpp:1165-1169; rank enum in
+// SharedDefines.h:2764-2769). Unknown ranks fall back to NORMAL.
+func (s *Server) creatureCorpseDelaySeconds(ctx context.Context, entry uint32) uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
+		return 60
+	}
+	var rank int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(rank, 0) FROM creature_template WHERE entry = ?", entry).Scan(&rank); err != nil {
+		return 60
+	}
+	switch rank {
+	case 1, 2, 4:
+		return 300
+	case 3:
+		return 3600
+	default:
+		return 60
+	}
+}
+
+// creatureCorpseRemoved reports whether a spawn's corpse-removal phase has
+// been applied: its respawn record exists and is flagged removed. A spawn
+// with no record (never killed, or already respawned) is not removed.
+func (s *Server) creatureCorpseRemoved(dbGUID, mapID, instanceID uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if respawn, ok := s.creatureRespawns[dbGUID]; ok && respawn.CorpseRemoved {
+		return true
+	}
+	for key, respawns := range s.instanceCreatureRespawns {
+		if key.MapID != mapID || key.InstanceID != instanceID {
+			continue
+		}
+		if respawn, ok := respawns[dbGUID]; ok && respawn.CorpseRemoved {
+			return true
+		}
+	}
+	return false
+}
+
+// corpseRemovalBroadcastMap resolves the map clients actually see a corpse
+// on. A transport passenger's respawn record stores the DB map (the
+// template transport-map id), but the motion lives on the transport's
+// current continent map (reviveTransportPassengerRespawn precedent), so
+// the destroy broadcast must go there, not to the transport-map id.
+func (s *Server) corpseRemovalBroadcastMap(respawn creatureRespawn) (uint32, uint32) {
+	if s == nil || respawn.InstanceID != 0 {
+		return respawn.Map, respawn.InstanceID
+	}
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+	for _, transport := range s.transports {
+		if transport != nil && transport.TransportMapID == respawn.Map {
+			return transport.Spawn.Map, 0
+		}
+	}
+	return respawn.Map, 0
+}
+
+// processCreatureCorpseRemovals applies the Creature::Update CORPSE branch
+// (Creature.cpp:799) to due corpses: at death + corpseDelay the corpse
+// object leaves the world (non-compat mode: AddObjectToRemoveList after
+// ai->CorpseRemoved; compat mode: DEAD + loot.clear + relocation). Go has
+// no object removal, so the sweep broadcasts SMSG_DESTROY_OBJECT (the
+// Despawn precedent), clears the loot window (the loot.clear leg), and
+// flags the record so nearby-create paths stop re-creating the corpse.
+// The motion and the respawn record are deliberately kept: respawn timing
+// is untouched (records at/past At are skipped — respawn wins when both
+// come due on the same tick) and the transport revive path still revives
+// the live motion in place at At.
+func (s *Server) processCreatureCorpseRemovals(now time.Time) {
+	if s == nil {
+		return
+	}
+	type removal struct {
+		respawn creatureRespawn
+	}
+	due := make([]removal, 0, 8)
+	s.motionMu.Lock()
+	for guid, respawn := range s.creatureRespawns {
+		if respawn.CorpseRemoved || respawn.CorpseRemoveAt.IsZero() || !now.After(respawn.CorpseRemoveAt) || !now.Before(respawn.At) {
+			continue
+		}
+		respawn.CorpseRemoved = true
+		s.creatureRespawns[guid] = respawn
+		due = append(due, removal{respawn: respawn})
+	}
+	for _, respawns := range s.instanceCreatureRespawns {
+		for guid, respawn := range respawns {
+			if respawn.CorpseRemoved || respawn.CorpseRemoveAt.IsZero() || !now.After(respawn.CorpseRemoveAt) || !now.Before(respawn.At) {
+				continue
+			}
+			respawn.CorpseRemoved = true
+			respawns[guid] = respawn
+			due = append(due, removal{respawn: respawn})
+		}
+	}
+	s.motionMu.Unlock()
+	for _, item := range due {
+		broadcastMap, instanceID := s.corpseRemovalBroadcastMap(item.respawn)
+		rawGUID := creatureWorldGUID(item.respawn.GUID, item.respawn.Entry)
+		destroyBuf := protocol.NewBuffer(9)
+		destroyBuf.WriteU64(rawGUID)
+		destroyBuf.WriteU8(0)
+		s.broadcastToInstance(broadcastMap, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+		s.clearLootState(broadcastMap, instanceID, rawGUID)
+		if broadcastMap != item.respawn.Map {
+			s.clearLootState(item.respawn.Map, instanceID, rawGUID)
+		}
+	}
 }
 
 // xpTable mirrors TDB 3.3.5a `player_xp_for_level`; preferred from the world
@@ -1750,7 +1874,7 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if s.creatureRespawns == nil {
 		s.creatureRespawns = make(map[uint32]creatureRespawn)
 	}
-	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z)}
+	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: now.Add(time.Duration(s.creatureCorpseDelaySeconds(ctx, uint32(entry))) * time.Second)}
 	s.motionMu.Unlock()
 }
 
@@ -1821,7 +1945,7 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if s.instanceCreatureRespawns[key] == nil {
 		s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
 	}
-	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z)}
+	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: now.Add(time.Duration(s.creatureCorpseDelaySeconds(ctx, uint32(spawnEntry))) * time.Second)}
 	s.motionMu.Unlock()
 }
 

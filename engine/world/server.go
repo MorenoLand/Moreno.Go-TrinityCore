@@ -1410,6 +1410,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateLFGBootVotes(now)
 			s.updateRestedBonuses(ctx, now)
 			s.processCreatureRespawns(ctx, now)
+			s.processCreatureCorpseRemovals(now)
 			s.processEvadeDespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
 			// Player::Update (Player.cpp:1096-1113): the timed-quest timers

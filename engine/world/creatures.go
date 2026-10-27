@@ -209,6 +209,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 			spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 			s.applyCreatureMotionToSpawn(state, &spawns[index])
+			if s.creatureCorpseRemoved(spawns[index].GUID, state.Map, state.InstanceID) {
+				count--
+				continue
+			}
 			if !seesHidden && s.creatureScriptHidden(state.Map, state.InstanceID, spawns[index].GUID, spawns[index].Entry) {
 				count--
 				continue
@@ -253,6 +257,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns[index].BoundingRadius, spawns[index].CombatReach, spawns[index].MaxHealth = stats.BoundingRadius, stats.CombatReach, stats.MaxHealth
 		spawns[index].Health = creatureSpawnHealth(spawns[index].RegenerateHealth, spawns[index].Health, stats.MaxHealth)
 		s.applyCreatureMotionToSpawn(state, &spawns[index])
+		if s.creatureCorpseRemoved(spawns[index].GUID, state.Map, state.InstanceID) {
+			count--
+			continue
+		}
 		if !seesHidden && s.creatureScriptHidden(state.Map, state.InstanceID, spawns[index].GUID, spawns[index].Entry) {
 			count--
 			continue
