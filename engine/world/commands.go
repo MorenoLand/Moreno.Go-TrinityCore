@@ -229,6 +229,12 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			return false
 		}
 	}
+	// Player::TeleportTo (Player.cpp:1703-1704): a teleport leaves the
+	// vehicle first — after the validity gates above (which return
+	// without exiting, as in C++) and before the transport handling
+	// below, so a vehicle passenger never arrives with a stale
+	// VehicleGUID pointing at a vehicle on the origin map.
+	s.exitVehicle(context.Background())
 	oldMap := s.player.Map
 	sameMap := oldMap == mapID
 	if !sameMap && s.server != nil && !s.canStartMapTeleport(context.Background(), mapID) {
