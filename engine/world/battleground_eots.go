@@ -371,6 +371,7 @@ func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, tea
 	// BattlegroundEY::UpdatePlayerScore(SCORE_FLAG_CAPTURES)
 	// (BattlegroundEY.cpp:825-827) -> EY_OBJECTIVE_CAPTURE_FLAG (183).
 	s.creditBGObjectiveCapture(sess.playerGUID, EOTSObjectiveCaptureFlag)
+	s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
 	sess.removeAura(EOTSSpellNetherstormFlag)
 	// Reference: BattlegroundEY::EventPlayerCapturedFlag
 	// (BattlegroundEY.cpp:784) strips ENTER_PVP_COMBAT auras on capture too.

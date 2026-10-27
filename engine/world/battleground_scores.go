@@ -24,7 +24,9 @@ type bgScoreKey struct {
 // union-style; only the instance's own subclass block is serialized, so a WS
 // row never emits AV fields. BonusHonor, DamageDone, and HealingDone have no
 // Go UpdatePlayerScore callers yet and serialize as zero; the objectives
-// fields likewise await their capture/assault/defend update sites.
+// fields are wired by addBGObjectiveScore from the per-BG handlers, except
+// AV MinesCaptured, which C++ never credits to a player
+// (BattlegroundAV::HandleKillUnit only changes the mine owner) and stays zero.
 type bgPlayerScore struct {
 	KillingBlows   uint32
 	Deaths         uint32
@@ -123,6 +125,36 @@ func (s *Server) recordBGKillPlayerScores(victim, killer *session) {
 		}
 		memberScore.HonorableKills++
 	}
+}
+
+// addBGObjectiveScore increments one objectives field of the acting player's
+// row, keyed by the player's own map + bgData.InstanceID (the per-instance
+// table the packet builder reads). C++ UpdatePlayerScore no-ops for a player
+// absent from PlayerScores (Battleground.cpp:1225-1228); Go follows the
+// recordBGKillPlayerScores getOrCreate convention instead, so an objective
+// actor with no kill/death row yet still scores — a flag capturer commonly
+// has neither. Callers hold their BG state's mu; this takes objectsMu only.
+func (s *Server) addBGObjectiveScore(sess *session, add func(*bgPlayerScore)) {
+	if s == nil || sess == nil || sess.player == nil || add == nil {
+		return
+	}
+	key := bgScoreKey{MapID: sess.player.Map, InstanceID: sess.bgData.InstanceID}
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	if s.bgScores == nil {
+		s.bgScores = make(map[bgScoreKey]map[uint64]*bgPlayerScore)
+	}
+	table := s.bgScores[key]
+	if table == nil {
+		table = make(map[uint64]*bgPlayerScore)
+		s.bgScores[key] = table
+	}
+	score := table[sess.playerGUID]
+	if score == nil {
+		score = &bgPlayerScore{}
+		table[sess.playerGUID] = score
+	}
+	add(score)
 }
 
 // bgKillPlayerScores snapshots one instance's score table for the non-arena

@@ -208,6 +208,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// then UpdatePlayerScore — this credit follows the captures
 				// worldstate broadcast, mirroring that order).
 				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
 				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
 				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
 				s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnBase)
@@ -270,6 +271,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// objective credit, after the team-score worldstate like the
 				// C++ UpdateTeamScore -> UpdatePlayerScore order.
 				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
 				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
 				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
 				s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnBase)
@@ -307,6 +309,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
 			// WS_OBJECTIVE_RETURN_FLAG.
 			s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveReturnFlag)
+			s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagReturns++ })
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was returned to its base by "+sess.player.Name+"!")
 		} else {
 			// Enemy pickup
@@ -344,6 +347,7 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// (BattlegroundWS.cpp:788-791): WS_OBJECTIVE_RETURN_FLAG objective
 			// credit for the returning player.
 			s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveReturnFlag)
+			s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagReturns++ })
 			s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was returned to its base by "+sess.player.Name+"!")
 		} else {
 			// Enemy pickup

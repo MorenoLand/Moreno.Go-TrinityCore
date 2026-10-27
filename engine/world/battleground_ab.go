@@ -335,6 +335,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 		// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
 		// (BattlegroundAB.cpp:226) -> AB_OBJECTIVE_ASSAULT_BASE.
 		s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
+		s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 
 	case ABNodeStateControlledAlliance:
 		if team == 1 { // Horde assaults Alliance-controlled node
@@ -352,6 +353,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 			// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
 			// (BattlegroundAB.cpp:297) -> AB_OBJECTIVE_ASSAULT_BASE.
 			s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
+			s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 		}
 
 	case ABNodeStateControlledHorde:
@@ -370,6 +372,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 			// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
 			// (BattlegroundAB.cpp:297) -> AB_OBJECTIVE_ASSAULT_BASE.
 			s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
+			s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 		}
 
 	case ABNodeStateContestedHorde:
@@ -390,6 +393,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_DEFENDED)
 				// (BattlegroundAB.cpp:262) -> AB_OBJECTIVE_DEFEND_BASE.
 				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveDefendBase)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesDefended++ })
 			} else {
 				// Re-contested for Alliance
 				node.State = ABNodeStateContestedAlliance
@@ -400,6 +404,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
 				// (BattlegroundAB.cpp:244) -> AB_OBJECTIVE_ASSAULT_BASE.
 				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 			}
 		}
 
@@ -421,6 +426,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_DEFENDED)
 				// (BattlegroundAB.cpp:262) -> AB_OBJECTIVE_DEFEND_BASE.
 				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveDefendBase)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesDefended++ })
 			} else {
 				// Re-contested for Horde
 				node.State = ABNodeStateContestedHorde
@@ -431,6 +437,7 @@ func (s *Server) clickABNode(ab *abBattlegroundState, nodeID uint32, sess *sessi
 				// BattlegroundAB::UpdatePlayerScore(SCORE_BASES_ASSAULTED)
 				// (BattlegroundAB.cpp:244) -> AB_OBJECTIVE_ASSAULT_BASE.
 				s.creditBGObjectiveCapture(sess.playerGUID, ABObjectiveAssaultBase)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 			}
 		}
 	}

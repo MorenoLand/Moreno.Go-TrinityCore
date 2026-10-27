@@ -445,6 +445,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.TowersAssaulted++ })
 			}
 		case AVNodeStateContestedAlliance:
 			if playerTeam == AVTeamHorde && node.PrevOwner == AVTeamHorde {
@@ -462,6 +463,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.TowersDefended++ })
 			}
 		case AVNodeStateContestedHorde:
 			if playerTeam == AVTeamAlliance && node.PrevOwner == AVTeamAlliance {
@@ -479,6 +481,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.TowersDefended++ })
 			}
 		}
 	} else {
@@ -501,6 +504,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 				s.updateAVNodeBanner(av, nodeID)
 				s.updateAVNodeWorldStates(av, nodeID)
 				s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
+				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.GraveyardsAssaulted++ })
 			}
 		case AVNodeStateContestedAlliance:
 			if playerTeam == AVTeamHorde {
@@ -523,6 +527,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
+					s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.GraveyardsDefended++ })
 				} else {
 					// Horde re-assaults. The neutral-TotalOwner leg of the
 					// guard above mirrors BattlegroundAV::EventPlayerDefendsPoint
@@ -545,6 +550,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
+					if node.TotalOwner == AVTeamNeutral {
+						s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.GraveyardsAssaulted++ })
+					}
 				}
 			}
 		case AVNodeStateContestedHorde:
@@ -568,6 +576,7 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVDefended(av.MapID, sess.accountName, nodeID, playerTeam)
+					s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.GraveyardsDefended++ })
 				} else {
 					// Alliance re-assaults. The neutral-TotalOwner leg of the
 					// guard above mirrors BattlegroundAV::EventPlayerDefendsPoint
@@ -590,6 +599,9 @@ func (s *Server) handleAVGameObjectUse(ctx context.Context, sess *session, guid 
 					s.updateAVNodeBanner(av, nodeID)
 					s.updateAVNodeWorldStates(av, nodeID)
 					s.announceAVAssault(av.MapID, sess.accountName, nodeID, playerTeam)
+					if node.TotalOwner == AVTeamNeutral {
+						s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.GraveyardsAssaulted++ })
+					}
 				}
 			}
 		}

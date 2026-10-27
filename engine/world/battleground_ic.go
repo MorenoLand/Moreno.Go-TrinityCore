@@ -628,6 +628,7 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 		// BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:475-479):
 		// UpdatePlayerScore(player, SCORE_BASES_DEFENDED, 1).
 		s.creditBGObjectiveCapture(sess.playerGUID, ICObjectiveDefendBase)
+		s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesDefended++ })
 		return
 	}
 
@@ -668,6 +669,7 @@ func (s *Server) interactWithICBanner(ic *icBattlegroundState, nodeID uint8, tea
 	// BattlegroundIC::EventPlayerClickedOnFlag (BattlegroundIC.cpp:457-464):
 	// UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1).
 	s.creditBGObjectiveCapture(sess.playerGUID, ICObjectiveAssaultBase)
+	s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.BasesAssaulted++ })
 
 	// Start 60s capture timer. The callback resolves to the ContestTeam live
 	// at fire time (see the counter-contest arm above): C++ reads

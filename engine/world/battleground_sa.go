@@ -509,6 +509,7 @@ func (s *Server) DamageGate(mapID uint32, gateID uint8, damage uint32, attacker 
 
 		if attacker != nil {
 			sa.GatesDestroyed[attacker.playerGUID]++
+			s.addBGObjectiveScore(attacker, func(score *bgPlayerScore) { score.GatesDestroyed++ })
 			// Reference: BattlegroundSA::ProcessEvent destroyed arm
 			// (BattlegroundSA.cpp:597-630): the invoker scores the wall and earns
 			// GetBonusHonorFromKill(1), except when the paired gate is already
@@ -784,6 +785,7 @@ func (s *Server) handleSACreatureKilled(sess *session, creatureEntry uint32) {
 
 	if creatureEntry == SACreatureDemolisher {
 		sa.DemolishersDestroyed[sess.playerGUID]++
+		s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.DemolishersDestroyed++ })
 		sa.DemolishersAlive[sa.Attackers] = false
 		s.broadcastBattlegroundMessage(sa.MapID, fmt.Sprintf("%s has destroyed a Demolisher!", sess.player.Name))
 	}
