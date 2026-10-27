@@ -2031,9 +2031,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		}
 	}
 	// Spell::EffectApplyAura (SpellEffects.cpp:1233) for a creature
-	// caster: the HIT arm, player hit targets only — creature hit
-	// targets stay out (applyAuraToTarget's creature branch rides a
-	// session receiver, and this path has none). Placed with the other
+	// caster: the HIT arm, player hit targets through the session
+	// apply path and creature hit targets through the owner-session
+	// delegation or the Server twin in creatureEffectApplyAura below.
+	// Placed with the other
 	// effect-grouped arms above (C++ runs effects in index order;
 	// documented approximation); a spell's aura record is applied once
 	// per cast, not once per effect-6 effect. Gated on spellKnown like
@@ -2042,23 +2043,43 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 		s.creatureEffectApplyAura(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 	}
 	// Spell::EffectSchoolDMG (SpellEffects.cpp:322) + EffectWeaponDmg
-	// (SpellEffects.cpp:3171) for a creature caster: the damage arms,
-	// player hit targets only — creature hit targets stay out (the
-	// creature-victim damage pipeline is fused with the hook/trigger
-	// legs this path already fires below, so porting it wholesale would
-	// double-fire them). The victim-targeted combat-tick spells never
+	// (SpellEffects.cpp:3171) for a creature caster: the damage arms.
+	// Player hit targets ride creatureEffectSpellDamage below;
+	// creature hit targets ride the damage-only split in
+	// creatureEffectSpellDamageCreature (the inline creature pipeline
+	// minus the legs this path already fires below: stand-up, ev14/
+	// ev15, per-hit triggers, the spell_linked type-0 tail, cast-phase
+	// procs, and the leech arm, which rides the summed total here).
+	// The victim-targeted combat-tick spells never
 	// reach this arm (stepCreatureMotion's inline branch deals their
 	// damage); this arm covers the casts that branch skips: non-victim
 	// combat spells, Lua CastSpell, boss-AI direct casts, and
 	// trigger/spell_linked casts, which previously dealt nothing here.
-	// EffectHealthLeech (SpellEffects.cpp:1513) rides the damage arm's
+	// EffectHealthLeech (SpellEffects.cpp:1513) rides the damage arms'
 	// actually-lost total. Placed after the aura arm (C++ applies aura
 	// effects before DoDamageAndTriggers deals the damage) and ahead of
 	// the linked tail, matching the other effect-grouped arms above.
 	// Gated on spellKnown like the tail.
 	if spellKnown {
-		if leechDealt := s.creatureEffectSpellDamage(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets); spellHasEffect(spellInfo, spellEffectHealthLeech) && leechDealt > 0 {
+		leechDealt := s.creatureEffectSpellDamage(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		leechDealt += s.creatureEffectSpellDamageCreature(ctx, m, spellInfo, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		if spellHasEffect(spellInfo, spellEffectHealthLeech) && leechDealt > 0 {
 			s.creatureEffectHealthLeech(ctx, m, spellInfo, leechDealt)
+		}
+	}
+	// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectEnergize
+	// (SpellEffects.cpp:1775) for a creature caster: the HIT_TARGET
+	// arms, player and creature hit targets alike, grouped with the
+	// other effect-grouped arms above. Gated on spellKnown like the
+	// tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectHeal:
+				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectEnergize:
+				s.creatureEffectEnergize(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
 		}
 	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
@@ -3387,6 +3408,338 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 	}
 }
 
+// creatureEffectHeal mirrors Spell::EffectHeal (SpellEffects.cpp:1393)
+// for a creature caster: the HIT_TARGET arm, player and creature hit
+// targets alike. The base value is the effect's CalcValueForLevel at
+// the caster's level; the Death Pact arm replaces it with a percentage
+// of the caster's max health, the Vessel of the Naaru arm adds the
+// caster's stacked Holy Energy and consumes it, and the Swiftmend arm
+// consumes the target's shortest Rejuvenation/Regrowth tick (player
+// targets through the session helpers, creature targets through the
+// live creature-aura scan) and skips the Done leg. Otherwise the Done
+// percent fold, the mod-owner's SPELLMOD_DAMAGE fold, the Taken fold,
+// the heal-absorb leg, the AutoBalance scale, the DealHeal AI hooks,
+// the capped health gain, the heal log, and the Grievous Bite removal
+// run in C++ order. Chain falloff has no model on this path (the cast
+// carries no chain-jump index), so the chain multiplier is 1.
+func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	base := eff.CalcValueForLevel(spell, casterLevel(m))
+	if base < 0 {
+		return
+	}
+	if spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
+		base = int32(uint64(m.MaxHealth) * uint64(base) / 100)
+	}
+	if spell.ID == 45064 {
+		casterKey := creatureAuraKeyForMotion(m)
+		s.auraMu.Lock()
+		var holyEnergy uint32
+		if aura := s.activeCreatureAuras[casterKey][45062]; aura != nil {
+			holyEnergy = aura.Amount
+		}
+		s.auraMu.Unlock()
+		if holyEnergy > 0 {
+			base += int32(holyEnergy)
+			s.removeCreatureAura(casterKey, 45062)
+		}
+	}
+	swiftmend := spell.TargetAuraState == auraStateSwiftmend
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	casterKey := creatureAuraKeyForMotion(m)
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		heal := uint32(base)
+		doneBonus := true
+		var vs *session
+		var tm *creatureMotion
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			vs = ts
+			if vs.player.Health == 0 {
+				continue
+			}
+		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {
+			tm = mv
+			if tm.Health == 0 {
+				continue
+			}
+		} else {
+			continue
+		}
+		if swiftmend {
+			if vs != nil {
+				if vs.targetHasAuraState(ctx, guid, auraStateSwiftmend, spell) {
+					if tick, ok := vs.swiftmendConsumedTick(ctx, guid); ok {
+						heal += tick
+						doneBonus = false
+					}
+				}
+			} else if tm != nil {
+				targetKey := creatureAuraKeyForMotion(tm)
+				s.auraMu.Lock()
+				var best *activeAura
+				for _, aura := range s.activeCreatureAuras[targetKey] {
+					if aura == nil || aura.AuraType != spellAuraPeriodicHeal {
+						continue
+					}
+					if s.Data == nil {
+						continue
+					}
+					asp, found, err := s.Data.Spell(aura.SpellID)
+					if err != nil || !found {
+						continue
+					}
+					if asp.SpellFamilyName != spellFamilyDruid || asp.SpellFamilyFlags[0]&0x50 == 0 {
+						continue
+					}
+					if best == nil || aura.RemainingMs < best.RemainingMs {
+						best = aura
+					}
+				}
+				s.auraMu.Unlock()
+				if best != nil {
+					tickCount := uint32(6)
+					if asp, found, err := s.Data.Spell(best.SpellID); err == nil && found && asp.SpellFamilyFlags[0]&0x10 != 0 {
+						tickCount = 4
+					}
+					heal += best.Amount * tickCount
+					s.removeCreatureAura(targetKey, best.SpellID)
+					doneBonus = false
+				}
+			}
+		}
+		if doneBonus {
+			heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, casterKey, spell))
+			if modOwner != nil {
+				if sm := modOwner.applySpellMod(spell, uint8(spellModDamage), int32(heal)); sm > 0 {
+					heal = uint32(sm)
+				} else {
+					heal = 0
+				}
+			}
+		}
+		if heal == 0 {
+			continue
+		}
+		if vs != nil {
+			heal = vs.healingTakenBonus(vs, m.GUID, spell.ID, heal, false)
+		} else {
+			heal = creatureHealingTakenBonus(s, creatureAuraKeyForMotion(tm), m.GUID, spell, true, heal, false)
+		}
+		isCrit := false
+		{
+			chance := s.creatureSpellCritChanceDone(casterKey, m.FlagsExtra&0x20000 != 0, uint8(spell.SchoolMask), spell, true)
+			if modOwner != nil && modOwner.player != nil {
+				chance = float64(modOwner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+			}
+			isCrit = chance > 0 && rand.Float64() < chance
+			if isCrit {
+				var nilSess *session
+				heal = nilSess.spellCriticalHealingBonus(ctx, heal, guid, spell.DefenseType, false)
+			}
+		}
+		var absorbed uint32
+		if vs != nil {
+			absorbed = vs.applyHealAbsorb(uint32(spell.SchoolMask), heal)
+		} else {
+			absorbed = s.creatureApplyHealAbsorb(creatureAuraKeyForMotion(tm), uint32(spell.SchoolMask), heal)
+		}
+		heal -= absorbed
+		heal = s.autoBalanceModifyDealDamageOnMap(m, m.Map, heal)
+		var victimMotion *creatureMotion
+		if tm != nil {
+			victimMotion = tm
+		}
+		fireDealHealAIHooks(ctx, s, victimMotion, m, m.GUID, guid, &heal)
+		overheal := uint32(0)
+		if vs != nil {
+			if uint64(vs.player.Health)+uint64(heal) > uint64(vs.player.MaxHealth) {
+				overheal = uint32(uint64(vs.player.Health) + uint64(heal) - uint64(vs.player.MaxHealth))
+			}
+			vs.player.Health += heal
+			if vs.player.Health > vs.player.MaxHealth {
+				vs.player.Health = vs.player.MaxHealth
+			}
+			vs.sendPlayerUpdate()
+		} else {
+			s.motionMu.Lock()
+			if live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid); live != nil && live.Health > 0 {
+				if uint64(live.Health)+uint64(heal) > uint64(live.MaxHealth) {
+					overheal = uint32(uint64(live.Health) + uint64(heal) - uint64(live.MaxHealth))
+				}
+				live.Health += heal
+				if live.Health > live.MaxHealth {
+					live.Health = live.MaxHealth
+				}
+			}
+			s.motionMu.Unlock()
+			if live := s.findCreatureMotion(m.Map, m.InstanceID, guid); live != nil {
+				s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldHealth: live.Health})
+			}
+		}
+		logPkt := buildSpellHealLog(guid, m.GUID, spell.ID, heal, overheal, absorbed, isCrit)
+		if vs != nil {
+			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, true)
+		}
+		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, vs)
+		if vs != nil {
+			vs.removeGrievousBiteIfFullyHealed(guid)
+		} else if tm != nil && tm.MaxHealth > 0 {
+			if live := s.findCreatureMotion(m.Map, m.InstanceID, guid); live != nil && live.Health >= live.MaxHealth {
+				s.removeCreatureAura(creatureAuraKeyForMotion(live), 48920)
+			}
+		}
+	}
+}
+
+// creatureEffectEnergize mirrors Spell::EffectEnergize
+// (SpellEffects.cpp:1775) for a creature caster: the HIT_TARGET arm,
+// player and creature hit targets alike. The per-spell level
+// adjustments ride the caster's level (Restore Energy, Blood Fury,
+// Burst of Energy); the percentage-of-create-mana specials
+// (Judgements of the Wise, Improved Stormstrike, Glyph of Seal of
+// Command, Glyph of Shadow Word: Pain) resolve create mana only for
+// player targets, and Revitalize resolves max power for both. The
+// Runic Mana Injector engineering arm is vacuous for a creature
+// caster (C++ gates it on the caster being a player). A player target
+// whose power type differs from the energized power gets nothing
+// unless the spell is potion-family or carries
+// ATTR7_CAN_RESTORE_SECONDARY_POWER; creature targets skip that
+// gate. The log and the assist-threat tail ride
+// distributeHealingThreat, like the session twin's energizeBySpellTail.
+func (s *Server) creatureEffectEnergize(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	power := eff.MiscValue
+	if power < 0 || power >= 7 {
+		return
+	}
+	base := eff.CalcValueForLevel(spell, casterLevel(m))
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		amount := base
+		var vs *session
+		var tm *creatureMotion
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			vs = ts
+			if vs.player.Health == 0 || vs.player.MaxPowers[uint32(power)] == 0 {
+				continue
+			}
+			if playerPowerType(vs.player) != uint8(power) && spell.SpellFamilyName != spellFamilyPotion && spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower == 0 {
+				continue
+			}
+		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {
+			tm = mv
+			if tm.Health == 0 || tm.MaxPowers[uint32(power)] == 0 {
+				continue
+			}
+		} else {
+			continue
+		}
+		switch spell.ID {
+		case 9512, 24571, 24532:
+			var lvlBase, mult int32
+			switch spell.ID {
+			case 9512:
+				lvlBase, mult = 40, 2
+			case 24571:
+				lvlBase, mult = 60, 10
+			default:
+				lvlBase, mult = 60, 4
+			}
+			if diff := int32(m.Level) - lvlBase; diff > 0 {
+				amount -= mult * diff
+			}
+		case 31930, 63375, 68082:
+			if vs != nil {
+				amount = int32(int64(energizeCreateMana(vs)) * int64(amount) / 100)
+			}
+		case 48542:
+			var maxPower uint32
+			if vs != nil {
+				maxPower = vs.player.MaxPowers[uint32(power)]
+			} else {
+				maxPower = tm.MaxPowers[uint32(power)]
+			}
+			amount = int32(int64(maxPower) * int64(amount) / 100)
+		case 71132:
+			if vs != nil {
+				amount = int32(int64(energizeCreateMana(vs)) / 100)
+			}
+		}
+		if amount < 0 {
+			continue
+		}
+		if vs != nil {
+			newPower := vs.player.Powers[uint32(power)] + uint32(amount)
+			if newPower > vs.player.MaxPowers[uint32(power)] {
+				newPower = vs.player.MaxPowers[uint32(power)]
+			}
+			if newPower == vs.player.Powers[uint32(power)] {
+				continue
+			}
+			vs.player.Powers[uint32(power)] = newPower
+			packet := protocol.NewBuffer(13)
+			packet.WritePackedGUID(vs.playerGUID)
+			packet.WriteU8(uint8(power))
+			packet.WriteU32(newPower)
+			_ = vs.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
+		} else {
+			s.motionMu.Lock()
+			live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+			var next uint32
+			changed := false
+			if live != nil && live.Health > 0 {
+				next = live.Powers[uint32(power)] + uint32(amount)
+				if next > live.MaxPowers[uint32(power)] {
+					next = live.MaxPowers[uint32(power)]
+				}
+				if next != live.Powers[uint32(power)] {
+					live.Powers[uint32(power)] = next
+					if power == 0 {
+						live.Mana = next
+					} else if power == 4 {
+						live.Happiness = next
+					}
+					changed = true
+				}
+			}
+			s.motionMu.Unlock()
+			if !changed {
+				continue
+			}
+			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldPower1 + int(power): next})
+		}
+		logPkt := buildSpellEnergizeLog(guid, m.GUID, spell.ID, uint32(power), amount)
+		if vs != nil {
+			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
+		}
+		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, vs)
+		if amount > 0 {
+			s.distributeHealingThreat(ctx, m.GUID, guid, uint32(amount), true, spell.ID)
+		}
+	}
+}
+
 // creatureInstaKillVictim runs the creature-victim legs of a creature
 // caster's EffectInstaKill: Unit::DealDamage with damagetype NODAMAGE
 // (Unit.cpp:696) followed by Unit::Kill (Unit.cpp:11153). Only the legs
@@ -3409,9 +3762,14 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 // Dead targets are skipped unless the spell is passive or carries
 // ATTR2_CAN_TARGET_DEAD, mirroring the Unit::AddAura dead-target gate
 // (Unit.cpp:12274) the player path's creature branch carries. Creature
-// hit targets stay out: applyAuraToTarget's creature branch rides a
-// session receiver this path has none of. A landed reflect retargets to
-// the caster, which resolves to no session and is skipped the same way.
+// hit targets ride the same branch through the caster's owner/charm
+// player session when one is online on the caster's map (the dispel
+// delegation precedent); a wild caster's creature targets ride the
+// Server twin serverApplyAuraToCreatureTarget below, which records the
+// aura with the no-stack purges, phase, spell_area, speed and taunt
+// legs. A landed reflect retargets to the caster, which resolves to no
+// session and is skipped the same way on the player leg, and to the
+// caster motion itself on the creature leg.
 func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -3450,6 +3808,246 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level))
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tm := s.findCreatureMotion(m.Map, m.InstanceID, guid)
+		if tm == nil || tm.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+			continue
+		}
+		if os := s.creatureCasterOwnerSession(m); os != nil && os.player != nil && os.player.Map == m.Map && os.player.InstanceID == m.InstanceID {
+			castMerged := make(map[uint64]struct{})
+			for i := range spell.Effects {
+				eff := spell.Effects[i]
+				if eff.Aura == 0 {
+					continue
+				}
+				amount := uint32(0)
+				if bp := eff.CalcValueForLevel(spell, casterLevel(m)); bp > 0 {
+					amount = uint32(bp)
+				}
+				os.applyAuraToTarget(ctx, guid, spell, eff, i, durationMs, eff.AuraPeriod, amount, spell.SchoolMask, castMerged, false, m.GUID, false, 0, false, nil)
+			}
+			continue
+		}
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid)
+	}
+}
+
+// serverApplyAuraToCreatureTarget is the Server twin of the
+// creature-target branch of applyAuraToTarget for a wild creature
+// caster, which has no player session to delegate through. It records
+// the aura (fresh apply with the exclusive-highest gate and the
+// no-stack purges, or the stack-merge refresh), refreshes the phase
+// override, runs the spell_area rows, the speed recompute, the pet
+// derived recomputes and the taunt leg, and arms the duration-expiry
+// timer. Stay-outs, all session-bound in the session twin: the wire
+// aura-update packet, the periodic-tick and power-upkeep timers (a
+// wild-cast DoT/HoT record lands and expires but does not tick),
+// the linked-aura apply arms, and the charm, vehicle, dummy,
+// feign-death and phase effect tails.
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64) {
+	if s == nil || m == nil || targetGUID == 0 {
+		return
+	}
+	target := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if target == nil {
+		return
+	}
+	if target.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+		return
+	}
+	if s.isCreatureEvadingInInstance(m.Map, m.InstanceID, targetGUID) {
+		return
+	}
+	targetKey := creatureAuraKeyForMotion(target)
+	stats := s.loadCreatureStats(ctx, target.Entry)
+	maxCharges := s.calcAuraMaxCharges(spell, targetKey.Map, targetKey.InstanceID, m.GUID)
+	applyResilience := s.creatureCasterCanApplyResilience(m)
+	castMerged := make(map[uint64]struct{})
+	armExpiry := func(aura *activeAura) {
+		if aura == nil || durationMs == 0 || durationMs >= 18000000 {
+			return
+		}
+		s.auraMu.Lock()
+		if cur := s.activeCreatureAuras[targetKey][spell.ID]; cur == aura {
+			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				s.removeCreatureAuraWithMode(targetKey, spell.ID, auraRemoveByExpire)
+			})
+		}
+		s.auraMu.Unlock()
+	}
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		if eff.Aura == 0 {
+			continue
+		}
+		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, s.creatureFriendlyToTarget(m, targetGUID)) {
+			continue
+		}
+		amount := uint32(0)
+		if bp := eff.CalcValueForLevel(spell, casterLevel(m)); bp > 0 {
+			amount = uint32(bp)
+		}
+		positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
+		if isAreaEnemySpell(spell) {
+			positive = false
+		}
+		s.auraMu.Lock()
+		if s.creatureAuras == nil {
+			s.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
+		}
+		if s.creatureAuras[targetKey] == nil {
+			s.creatureAuras[targetKey] = make(map[uint32]struct{})
+		}
+		s.creatureAuras[targetKey][spell.ID] = struct{}{}
+		if s.activeCreatureAuras == nil {
+			s.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
+		}
+		if s.activeCreatureAuras[targetKey] == nil {
+			s.activeCreatureAuras[targetKey] = make(map[uint32]*activeAura)
+		}
+		existing := s.activeCreatureAuras[targetKey][spell.ID]
+		if existing != nil && !existing.Stopped {
+			if _, ok := castMerged[targetGUID]; ok {
+				refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				s.auraMu.Unlock()
+				continue
+			}
+			castMerged[targetGUID] = struct{}{}
+			maxStack := int32(spell.StackAmount)
+			if maxStack == 0 {
+				maxStack = 1
+			}
+			cur := int32(existing.StackCount)
+			if cur == 0 {
+				cur = 1
+			}
+			if cur++; cur > maxStack {
+				cur = maxStack
+			}
+			stackCount := uint8(cur)
+			existing.StackCount = stackCount
+			existing.RemainingCharges = maxCharges
+			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			existing.DurationMs = durationMs
+			existing.RemainingMs = durationMs
+			existing.DurationUpdatedAt = time.Now()
+			if existing.Timer != nil {
+				existing.Timer.Stop()
+				existing.Timer = nil
+			}
+			if existing.TickTimer != nil {
+				existing.TickTimer.Stop()
+				existing.TickTimer = nil
+			}
+			stopAuraUpkeepTimer(existing)
+			s.auraMu.Unlock()
+			if eff.Aura == spellAuraModTaunt {
+				s.applyCreatureTaunt(targetKey, m.GUID, durationMs)
+			}
+			s.syncCreatureLinkedAuraStacks(spell, targetKey, m.GUID, stackCount)
+			s.applyCreatureSpellAreaRows(targetKey, spell.ID)
+			s.propagateCreatureLinkedAuraStacks(ctx, spell, targetKey, m.GUID, stackCount)
+			armExpiry(existing)
+			continue
+		}
+		if existing != nil && existing.Stopped {
+			existing.Stopped = true
+			if existing.Timer != nil {
+				existing.Timer.Stop()
+			}
+			if existing.TickTimer != nil {
+				existing.TickTimer.Stop()
+			}
+			stopAuraUpkeepTimer(existing)
+		}
+		highest := s.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.activeCreatureAuras[targetKey])
+		if highest.suppressed {
+			s.auraMu.Unlock()
+			continue
+		}
+		slot := uint8(len(s.activeCreatureAuras[targetKey]) % 64)
+		aura := &activeAura{
+			SpellID:           spell.ID,
+			DispelType:        spell.DispelType,
+			Mechanic:          spell.Mechanic,
+			AuraType:          eff.Aura,
+			EffectMask:        spellEffectMask(spell, eff),
+			CasterGUID:        m.GUID,
+			TargetGUID:        targetGUID,
+			TargetKey:         targetKey,
+			SchoolMask:        spell.SchoolMask,
+			MiscValue:         eff.MiscValue,
+			Amount:            amount,
+			DurationMs:        durationMs,
+			PeriodMs:          eff.AuraPeriod,
+			RemainingMs:       durationMs,
+			DurationUpdatedAt: time.Now(),
+			Slot:              slot,
+			Positive:          positive,
+			CasterLevel:       uint8(casterLevel(m)),
+			StoredCasterLevel: uint8(casterLevel(m)),
+			ApplyResilience:   applyResilience,
+			SingleTarget:      isSingleTargetAuraSpell(spell),
+			TriggerSpell:      eff.TriggerSpell,
+			StackAmount:       spell.StackAmount,
+			HideDuration:      spell.AttributesEx5&spellAttr5HideDuration != 0,
+			RemainingCharges:  maxCharges,
+		}
+		s.activeCreatureAuras[targetKey][spell.ID] = aura
+		s.refreshCreaturePhaseOverrideLocked(targetKey)
+		scPurge := s.registerSingleCastAura(spell, aura)
+		purge := s.rankChainNoStackPurge(spell, m.GUID, 0, s.activeCreatureAuras[targetKey])
+		purge = append(purge, s.spellGroupNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+		purge = append(purge, s.spellSpecificNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+		purge = append(purge, s.singleTargetNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+		purge = append(purge, highest.purge...)
+		s.auraMu.Unlock()
+		for _, p := range purge {
+			s.removeCreatureAura(targetKey, p.spellID)
+		}
+		for _, e := range scPurge {
+			if e.aura == nil {
+				continue
+			}
+			if e.aura.TargetKey.GUID != 0 {
+				key := e.aura.TargetKey
+				s.auraMu.Lock()
+				cur := s.activeCreatureAuras[key][e.aura.SpellID]
+				s.auraMu.Unlock()
+				if cur == e.aura {
+					s.removeCreatureAura(key, e.aura.SpellID)
+				}
+				continue
+			}
+			if e.aura.TargetGUID == 0 {
+				continue
+			}
+			if ts := s.findSessionByGUID(e.aura.TargetGUID); ts != nil {
+				ts.removeAura(e.aura.SpellID)
+			}
+		}
+		s.applyCreatureSpellAreaRows(targetKey, spell.ID)
+		if spellHasSpeedAura(spell) {
+			s.refreshCreatureRunSpeed(targetKey, targetGUID)
+		}
+		s.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
+		s.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+		s.recomputePetDamageFieldsOnAuraChange(targetKey, spell.ID)
+		s.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
+		if eff.Aura == spellAuraModTaunt {
+			s.applyCreatureTaunt(targetKey, m.GUID, durationMs)
+		}
+		armExpiry(aura)
 	}
 }
 
@@ -3672,6 +4270,328 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		}
 		if vs.procDeep == 0 {
 			vs.procSpellHitTakenAuraTriggers(ctx, m.GUID, spell.ID, true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, damage, false, false, 0, blocked > 0, fullBlock)
+		}
+		leechTotal += leechDealt
+	}
+	return leechTotal
+}
+
+// creatureEffectSpellDamageCreature is the damage-only split of the
+// inline creature-victim pipeline (applyInlineCreatureSpellHitCreature)
+// for castCreatureSpellInternal: the mitigation pipeline (taken pct,
+// armor, owner-only crit, block, resilience, AutoBalance, resist,
+// absorb), the split/share legs, the damage log, the health mutation
+// with the rage and strip legs, the taken-proc leg, and the full Kill
+// chain on lethal hits. Deliberately NOT repeated, because this path
+// fires them below: the stand-up arm, the ev14/ev15 hooks, the
+// per-hit trigger consumer, the spell_linked type-0 tail, and the
+// cast-phase procs; the leech leg rides the returned total through
+// creatureEffectHealthLeech. Reflected hits stay out, matching the
+// return-trip no-damage delta the ev14 leg documents. The leech basis
+// follows the player arm's convention (post-absorb, pre-split,
+// overkill excluded) rather than the inline path's post-split basis,
+// so the shared leech caller sees one convention.
+func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) uint32 {
+	if s == nil || m == nil {
+		return 0
+	}
+	baseDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	if !found {
+		return 0
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	ownerSess := s.creatureCasterOwnerSession(m)
+	casterKey := creatureAuraKeyForMotion(m)
+	var leechTotal uint32
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if _, isReflected := reflected[guid]; isReflected {
+			continue
+		}
+		if guid == m.GUID {
+			continue
+		}
+		victim := s.findCreatureMotion(m.Map, m.InstanceID, guid)
+		if victim == nil || victim.Health == 0 {
+			continue
+		}
+		victimKey := creatureAuraKeyForMotion(victim)
+		stats := s.loadCreatureStats(ctx, victim.Entry)
+		victimHealth := victim.Health
+		victimLevel := uint8(maxUint32(victim.Level, 1))
+		attackerLevel := uint8(maxUint32(m.Level, 1))
+		damage := baseDamage
+		var absorbed, resisted, blocked uint32
+		fullBlock := false
+		isCrit := false
+		hitInfo := uint32(0)
+		damageImmune := creatureImmuneToDamageSpell(s, victimKey, spell, uint32(schoolMask))
+		if !damageImmune {
+			if damage > 0 {
+				damage = creatureSpellDamageBonusTaken(s, damage, spell, uint32(schoolMask), victimKey, nil, 1.0)
+			}
+			isHybrid := schoolMask&spellSchoolMaskNormal != 0 && schoolMask&0x7E != 0
+			if damage > 0 && schoolMask&spellSchoolMaskNormal != 0 && !isHybrid && spell.Attributes&spellAttr0CUIgnoreArmor == 0 {
+				armor := s.creatureIgnoreTargetResistArmorForSpell(casterKey, s.liveCreatureArmor(victimKey, victim, float64(stats.Armor)), spell, true)
+				damage = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
+			}
+			if damage > 0 {
+				if owner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); owner != nil {
+					chance := s.creatureSpellCritChanceDone(casterKey, m.FlagsExtra&0x20000 != 0, schoolMask, spell, true)
+					if owner.player != nil {
+						chance = float64(owner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+					}
+					chance = s.creatureSpellCritChanceTaken(chance, nil, victimKey, false, m.GUID, m.Level, uint32(victimLevel), schoolMask, spell, s.creatureCasterCanApplyResilience(m))
+					isCrit = chance > 0 && rand.Float64() < chance
+					if isCrit {
+						var mask uint32
+						if ownerSess != nil {
+							mask, _ = ownerSess.targetCreatureTypeMask(ctx, guid)
+						}
+						if spell.DefenseType == spellDamageClassMagic {
+							damage = s.creatureSpellCriticalDamageBonus(casterKey, uint32(schoolMask), damage, mask, spell, owner)
+						} else {
+							damage = s.creatureSpellWeaponCritDamageBonus(casterKey, victimKey, nil, false, uint32(schoolMask), damage, spell, mask, owner)
+						}
+						hitInfo = 0x02
+					}
+				}
+			}
+			if damage > 0 {
+				victimTarget := combatTarget{
+					GUID:        guid,
+					Map:         m.Map,
+					InstanceID:  m.InstanceID,
+					X:           victim.X,
+					Y:           victim.Y,
+					Orientation: victim.Orientation,
+					Level:       victimLevel,
+				}
+				if b, ok := s.spellTakenBlockAmountFrom(victimTarget, false, nil, spell, damage, attackerLevel, m.X, m.Y); ok {
+					blocked = b
+					damage -= b
+					fullBlock = blocked > 0 && damage == 0
+				}
+			}
+			if damage > 0 {
+				resilCR := uint8(CombatRatingCritTakenSpell)
+				if spell.DefenseType != spellDamageClassMagic {
+					if spellWeaponAttackType(spell) == protocol.RangedAttack {
+						resilCR = CombatRatingCritTakenRanged
+					} else {
+						resilCR = CombatRatingCritTakenMelee
+					}
+				}
+				if s.creatureVictimTakesResilience(victim) && s.creatureCasterCanApplyResilience(m) {
+					if ownerSess := s.ownerPlayerSessionOfMotion(victim); ownerSess != nil {
+						ownerSess.applyResilienceToDamage(true, &damage, isCrit, resilCR)
+					}
+				}
+			}
+			damage = s.autoBalanceModifyDealDamageOnMap(m, m.Map, damage)
+			preResistDmg := damage
+			if damage > 0 && schoolMask > 1 {
+				mask123 := uint32(schoolMask)
+				if mask123&0x7E != 0 {
+					mask123 &^= 1
+				}
+				var targetResistMod int32
+				for _, amount := range s.creatureAuraTypeAmountsByMiscMask(casterKey, spellAuraModTargetResistance, mask123) {
+					targetResistMod += amount
+				}
+				hybridArmorReduced := uint32(0)
+				if isHybrid {
+					armor := s.creatureIgnoreTargetResistArmorForSpell(casterKey, s.liveCreatureArmor(victimKey, victim, float64(stats.Armor)), spell, true)
+					hybridArmorReduced = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
+				}
+				resistances := s.petFoldedResistances(victimKey, stats.Resistances)
+				resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, 0, spellResistInput{
+					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+					hybrid:             isHybrid,
+					hybridArmorReduced: hybridArmorReduced,
+					targetResistMod:    targetResistMod,
+				})
+			}
+			if damage > 0 {
+				bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(casterKey, uint32(schoolMask), spell.ID))
+				pool := damage
+				if bypass > pool {
+					pool = 0
+				} else {
+					pool -= bypass
+				}
+				absorbed, damage = s.applyCreatureAbsorptionShields(victimKey, pool, schoolMask)
+				damage += bypass
+			}
+		} else {
+			damage = 0
+		}
+		leechDealt := uint32(0)
+		if !damageImmune {
+			leechDealt = damage
+			if leechDealt > victimHealth {
+				leechDealt = victimHealth
+			}
+		}
+		if damage > 0 {
+			damage = s.splitDamageToCaster(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))
+		}
+		if damage > 0 && ownerSess != nil {
+			ownerSess.splitShareDamagePct(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))
+		}
+		logDamage := damage
+		overkill := uint32(0)
+		killed := false
+		var newHealth, maxHealth uint32
+		var liveX, liveY, liveZ float32
+		var liveFlags uint32
+		var rageNext uint32
+		var rageChanged bool
+		var live *creatureMotion
+		s.motionMu.Lock()
+		if mv := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid); mv != nil && mv.Health > 0 {
+			live = mv
+			if live.BossAI == nil {
+				live.BossAI = getBossAIForCreature(live, live.ScriptName)
+			}
+			fireDealDamageAIHooks(ctx, s, live, m, m.GUID, guid, &damage)
+			maxHealth = live.MaxHealth
+			if damage >= live.Health {
+				overkill = damage - live.Health
+				live.Health = 0
+				live.DynamicFlags |= unitDynFlagLootable
+				live.InCombat = false
+				live.TargetGUID = 0
+				live.Moving = false
+				if live.ThreatMgr != nil {
+					live.ThreatMgr.ClearThreat()
+				}
+				killed = true
+			} else {
+				live.Health -= damage
+				if next, changed := s.addCreatureRageLocked(live, live.Level, damage+absorbed); changed {
+					rageNext, rageChanged = next, true
+				}
+			}
+			newHealth = live.Health
+			liveX, liveY, liveZ = live.X, live.Y, live.Z
+			liveFlags = live.DynamicFlags
+		}
+		s.motionMu.Unlock()
+		if live == nil {
+			continue
+		}
+		if !damageImmune {
+			logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
+			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+		}
+		if killed {
+			s.procCreatureLethalDamageAuras(victimKey, spell.ID, damage, maxHealth)
+			s.stopCreatureMotionInInstance(m.Map, m.InstanceID, guid, liveX, liveY, liveZ)
+			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
+			s.broadcastThreatClearInInstance(m.Map, m.InstanceID, guid)
+			if live.CreatureType != creatureTypeCritter {
+				s.fireCreatureMeleeAuraProcs(ctx, m, guid, procEventInfo{
+					typeMask:       procFlagKill,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      m.GUID,
+				})
+				s.fireCreatureMeleeAuraProcs(ctx, live, m.GUID, procEventInfo{
+					typeMask:       procFlagKilled,
+					spellTypeMask:  procSpellTypeMaskAll,
+					spellPhaseMask: procSpellPhaseNone,
+					hitMask:        procHitNone,
+					actorGUID:      live.GUID,
+				})
+			}
+			s.fireCreatureMeleeAuraProcs(ctx, live, guid, procEventInfo{
+				typeMask:       procFlagDeath,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      live.GUID,
+			})
+			s.auraMu.Lock()
+			var deathAuras []*activeAura
+			for _, aura := range s.activeCreatureAuras[victimKey] {
+				deathAuras = append(deathAuras, aura)
+			}
+			s.auraMu.Unlock()
+			s.grantChannelDeathItems(ctx, deathAuras, uint32(victimLevel), true, live.TapPlayerGUID, live.TapGroupID)
+			s.clearCreatureAurasOnDeath(victimKey)
+			s.removeThreatVictimFromAllLists(m.Map, m.InstanceID, guid)
+			s.clearCreatureDeathState(live)
+			if m.OwnerGUID != 0 {
+				s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(live))
+			}
+			s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(live))
+			s.fireCreatureDiedByCreature(ctx, live, m)
+			if live.BossAI != nil {
+				live.BossAI.OnDied(ctx, s, live)
+			}
+			s.fireCreatureDeathCast(ctx, live, m.GUID)
+			s.fireGuardDeathBroadcast(live, m)
+			s.recordCreatureKillLoot(live, m)
+			s.grantCreatureKillReward(ctx, live, m)
+			s.bindInstanceOnNoFunnelKill(ctx, live, m)
+			s.creditNoFunnelKillingBlow(m)
+			s.handleNoFunnelBattlegroundKill(live, m)
+		} else {
+			healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
+			if rageChanged {
+				healthUpdate[unitFieldPower1+powerRage] = rageNext
+			}
+			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, healthUpdate)
+			s.procCreatureDirectDamageAuras(victimKey, spell.ID, damage, maxHealth)
+		}
+		procHitMask := spellDamageProcHitMask(true, damageImmune, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, isCrit, absorbed, false)
+		if fullBlock {
+			procHitMask = procHitBlock | procHitFullBlock
+			if absorbed > 0 {
+				procHitMask |= procHitAbsorb
+			}
+		} else if blocked > 0 {
+			procHitMask |= procHitBlock
+		}
+		if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+			typeMask := spellDamageTakenProcTypeMask(spell)
+			if !damageImmune {
+				typeMask |= procFlagTakenDamage
+			}
+			if typeMask != 0 {
+				spellCopy := spell
+				s.fireCreatureAuraProcLoop(ctx, live, m.GUID, procEventInfo{
+					typeMask:       typeMask,
+					schoolMask:     uint32(schoolMask),
+					spellTypeMask:  procSpellTypeDamage,
+					spellPhaseMask: procSpellPhaseHit,
+					hitMask:        procHitMask,
+					triggered:      false,
+					eventSpell:     &spellCopy,
+					actorGUID:      m.GUID,
+					damage:         damage,
+				})
+			}
+		}
+		if killed && live != nil {
+			respawnHealth := maxHealth
+			if respawnHealth == 0 {
+				respawnHealth = 1
+			}
+			if live.InstanceID == 0 {
+				s.scheduleCreatureRespawn(ctx, uint32(guid&0x00FFFFFF), respawnHealth, time.Now())
+			} else {
+				s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: m.Map, InstanceID: live.InstanceID, X: liveX, Y: liveY, Z: liveZ, Health: 0, MaxHealth: maxHealth, Level: victimLevel}, respawnHealth, time.Now())
+			}
+			s.checkDeadTempSummon(ctx, live, time.Now())
 		}
 		leechTotal += leechDealt
 	}
