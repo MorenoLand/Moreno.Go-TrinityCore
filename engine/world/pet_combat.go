@@ -4292,6 +4292,34 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		castTriggered(launchTarget)
 	}
+	// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) on the pet
+	// path, same dispatch-ahead-of-damage position as the twin and inline
+	// blocks: the HIT arm, once per cast — finish() the parent spell, then
+	// cast the effect's TriggerSpell non-triggered with no target. Go has
+	// no in-flight pet spell object to finish (pet casts resolve
+	// instantly), and the zero target is the null-target stand-in: a
+	// UnitGUID of 0 defaults to the caster with explicitUnitTarget false,
+	// so the explicit-target gates are skipped, per the player path's
+	// effect-initiated-cast convention (handleEffectTriggerRitualOfSummoning).
+	// The cast rides the pet path natively — a twin call would switch the
+	// triggered spell's execution path, like the trigger-missile arm
+	// above. The self-trigger guard matches the trigger-spell arms.
+	// Previously a pet-cast spell carrying effect 151 triggered nothing
+	// server-side.
+	for i := range spell.Effects {
+		effect := spell.Effects[i]
+		if effect.Effect != spellEffectTriggerRitualOfSummoning {
+			continue
+		}
+		if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
+			continue
+		}
+		triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
+		if err != nil || !found {
+			continue
+		}
+		s.executePetSpellWithOptions(ctx, motion, triggered, 0, protocol.SpellTargetData{}, false)
+	}
 	// Spell::EffectForceCast (SpellEffects.cpp:1048) on the pet path,
 	// same dispatch-ahead-of-damage position as the twin and inline
 	// blocks: the HIT_TARGET arm, one force-cast per hit target — the

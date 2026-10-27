@@ -4703,7 +4703,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectGameObjectSetDestructionState(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
 					}
 				}
-				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).
+				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) + EffectTriggerRitualOfSummoning (:1106) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).
 				s.creatureEffectSummonType(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 				s.creatureEffectSummonPet(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 				for i := range inlineSpell.Effects {
@@ -4714,6 +4714,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectSummonObjectWild(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 					case spellEffectTransmitted:
 						s.creatureEffectTransmitted(ctx, motion, spellTarget, inlineSpell, inlineSpell.Effects[i])
+					case spellEffectTriggerRitualOfSummoning:
+						s.creatureEffectTriggerRitualOfSummoning(ctx, motion, spellID, inlineSpell.Effects[i])
 					}
 				}
 				// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the

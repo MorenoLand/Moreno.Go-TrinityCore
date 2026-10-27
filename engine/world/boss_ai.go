@@ -2071,6 +2071,18 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) for a creature
+	// caster: the HIT arm, once per cast — the helper casts the effect's
+	// TriggerSpell non-triggered on the caster (the null-target cast's
+	// stand-in, per the player path's convention). Gated on spellKnown like
+	// the Transmitted arm.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if eff := spellInfo.Effects[i]; eff.Effect == spellEffectTriggerRitualOfSummoning {
+				s.creatureEffectTriggerRitualOfSummoning(ctx, m, spellID, eff)
+			}
+		}
+	}
 	// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a creature
 	// caster: the per-effect HIT_TARGET arm — the only spell-effect arm
 	// bridged on this path, which otherwise runs the no-damage model (all
@@ -4857,6 +4869,29 @@ func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creat
 // (TriggerSpell == spellID) is the Go-only recursion guard the player
 // path carries; the unknown-triggered-spell gate keeps a stub cast from
 // sending a GO packet for a spell with no effects.
+// creatureEffectTriggerRitualOfSummoning is the SPELL_EFFECT_HANDLE_HIT arm
+// of Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) for a
+// creature caster: once per cast, finish() the parent spell, then cast the
+// effect's TriggerSpell non-triggered with no target. Go carries no
+// in-flight spell object to finish (the twin/inline paths run no Spell
+// object; pet casts resolve instantly), and no null-target cast entry —
+// the caster GUID stands in for the null target, per the player path's
+// effect-initiated-cast convention (handleEffectTriggerRitualOfSummoning):
+// the ritual completion spells resolve their real targets from implicit
+// targets. The self-trigger guard matches the trigger-spell arms.
+func (s *Server) creatureEffectTriggerRitualOfSummoning(ctx context.Context, m *creatureMotion, spellID uint32, eff wotlk.SpellEffect) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+		return
+	}
+	if _, found, err := s.Data.Spell(eff.TriggerSpell); err != nil || !found {
+		return
+	}
+	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, m.GUID, false)
+}
+
 func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, castTargetGUID uint64, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil || s.Data == nil {
 		return
