@@ -1416,8 +1416,7 @@ func playerTeam(race uint8) uint32 {
 // generic zone lookup. It is deliberately separate from closestGraveyard (the
 // ObjectMgr generic path the spirit-healer and corpse-query legs use), so the
 // BG overrides do not leak into those legs. A false return falls through to
-// closestGraveyard, which still carries the IC/SA dispatch for its own
-// callers.
+// closestGraveyard, now the pure generic zone lookup with no BG dispatch.
 func (s *Server) closestRepopGraveyard(x, y, z float32, mapID, team uint32) (wotlk.WorldSafeLoc, bool) {
 	switch mapID {
 	case ICMapID:
@@ -1439,21 +1438,6 @@ func (s *Server) closestRepopGraveyard(x, y, z float32, mapID, team uint32) (wot
 
 // closestGraveyard mirrors ObjectMgr::GetClosestGraveyard.
 func (s *Server) closestGraveyard(ctx context.Context, x, y, z float32, mapID, zoneID, team uint32) (wotlk.WorldSafeLoc, bool) {
-	// BattlegroundIC::GetClosestGraveyard replaces the generic zone lookup
-	// wholesale for IoC: owned-node graves first, per-team fallback after.
-	if mapID == ICMapID {
-		if loc, found := s.closestICGraveyard(x, y, team); found {
-			return loc, true
-		}
-	}
-	// BattlegroundSA::GetClosestGraveyard replaces the generic zone lookup
-	// wholesale for SotA: beach/defender-last fallback plus the nearest owned
-	// capturable graveyard.
-	if mapID == SAMapID {
-		if loc, found := s.closestSAGraveyard(x, y, z, team); found {
-			return loc, true
-		}
-	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return wotlk.WorldSafeLoc{}, false
 	}

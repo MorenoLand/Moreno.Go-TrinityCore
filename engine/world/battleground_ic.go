@@ -904,8 +904,8 @@ func (s *Server) grantICWinnerHonor(ic *icBattlegroundState, team uint32) {
 // (BattlegroundIC.cpp:63-70): on resurrection in IoC, grant the
 // quarry/refinery buffs (SPELL_QUARRY=68720 / SPELL_OIL_REFINERY=68719) when
 // the player's team controls that node (== C++ nodeState == controlled-for-team
-// gate). Called from the resurrect choke point, same class as the
-// death.go closestGraveyard IoC dispatch. Player.cpp:4722-4725 dispatches
+// gate). Called from the resurrect choke point, same membership class as the
+// repop dispatch. Player.cpp:4722-4725 dispatches
 // HandlePlayerResurrect on the player's battleground (InBattleground gate),
 // never on the standing map, so the guard takes the membership leg like
 // handleICPlayerDeath and the state resolves on ICMapID.
