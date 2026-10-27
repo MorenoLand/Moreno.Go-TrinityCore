@@ -589,17 +589,17 @@ func (s *Server) sendArenaInitialWorldStates(sess *session) {
 	sess.sendWorldState(ArenaWorldStateAlivePlayersGold, goldAlive)
 }
 
-// updateArenaWorldState broadcasts a world state update to all players on the arena map.
+// updateArenaWorldState broadcasts a world state update to the arena's
+// roster. C++ UpdateWorldState sends via SendPacketToAll over m_Players
+// (Battleground.cpp:659-664, :568-571), not over the map's players: a
+// sim-accepted roster member holds no arena map yet, while a map
+// bystander holds no roster slot.
 func (s *Server) updateArenaWorldState(arena *arenaBattlegroundState, variableID, value uint32) {
 	if s == nil || arena == nil {
 		return
 	}
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == arena.MapID {
-			sess.sendWorldState(variableID, value)
-		}
+	for _, sess := range s.arenaRosterSessions(arena) {
+		sess.sendWorldState(variableID, value)
 	}
 }
 
@@ -724,6 +724,54 @@ func (s *Server) checkArenaWinConditions(arena *arenaBattlegroundState) {
 	arena.mu.Unlock()
 }
 
+// removeShortDurationPositiveAuras implements the arena-start strip in
+// Battleground.cpp:476-484 (RemoveAppliedAuras predicate): a
+// non-permanent positive aura with 30s or less of live remaining
+// duration goes, unless its spell is UNAFFECTED_BY_INVULNERABILITY or
+// carries a MOD_INVISIBILITY effect. DurationMs == 0 is the Go
+// permanent marker (scheduleAuraUpkeepLocked precedent); remaining time
+// is the live DurationUpdatedAt-adjusted value, matching Aura::GetDuration.
+// A spell unresolvable from DBC data is left alone: its two exclusions
+// cannot be checked, so stripping it could remove an exempt aura.
+func (s *session) removeShortDurationPositiveAuras() {
+	if s == nil || s.player == nil {
+		return
+	}
+	var ids []uint32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || !aura.Positive || aura.DurationMs == 0 {
+			continue
+		}
+		remaining := aura.RemainingMs
+		if !aura.DurationUpdatedAt.IsZero() {
+			if elapsed := time.Since(aura.DurationUpdatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= uint32(elapsed)
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining > 30*1000 {
+			continue
+		}
+		if s.server == nil || s.server.Data == nil {
+			continue
+		}
+		spell, found, _ := s.server.Data.Spell(aura.SpellID)
+		if !found {
+			continue
+		}
+		if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 || spellHasAura(spell, spellAuraInvisibility) {
+			continue
+		}
+		ids = append(ids, aura.SpellID)
+	}
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
 // startArenaMatch transitions an arena from warmup to in-progress.
 func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 	if s == nil || arena == nil {
@@ -787,7 +835,13 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 		sess.removeAura(SpellArenaPreparation)
 		s.resetPlayerPowers(sess)
 
-		// Remove short-duration positive buffs (<= 30s)
+		// Battleground.cpp:476-484: non-GM players lose non-permanent
+		// positive auras with 30s or less remaining, except
+		// UNAFFECTED_BY_INVULNERABILITY spells and invisibility auras.
+		if !sessionIsGameMaster(sess) {
+			sess.removeShortDurationPositiveAuras()
+		}
+
 		// Remove Warlock Demonic Circle if on Dalaran Sewers
 		if arena.MapID == ArenaMapDalaranSewers {
 			sess.removeAura(SpellWarlDemonicCircle)
@@ -1162,7 +1216,15 @@ func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, gu
 		sess.applyAura(SpellShadowSight)
 		s.setGameObjectHidden(guid, true)
 		s.broadcastGameObjectDespawn(sess.player.Map, guid)
-		s.broadcastArenaMessage(sess.player.Map, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
+		// No C++ pickup broadcast exists in the Battlegrounds tree (the
+		// GO use just casts the buff spell); the announcement itself is
+		// Go-side, but its audience follows the same m_Players rule as
+		// every other arena announcement, not the map's players.
+		if arena := s.findArenaState(sess.player.Map, 0); arena != nil {
+			s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
+		} else {
+			s.broadcastArenaMessage(sess.player.Map, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
+		}
 		s.scheduleArenaShadowSightRespawn(sess.player.Map, guid)
 		return true
 	default:
