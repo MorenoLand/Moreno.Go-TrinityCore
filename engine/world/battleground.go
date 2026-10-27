@@ -2127,6 +2127,17 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// Player::LeaveBattleground itself gates on GetBattleground() != null
 	// (Player.cpp:22471); Player::InBattleground is m_bgData.bgInstanceID !=
 	// 0 (Player.h:1906), mirrored by s.bgData.InstanceID.
+	// Battleground::RemovePlayerAtLeave (Battleground.cpp:833-837)
+	// deletes the leaver's PlayerScores row. Read before the
+	// wasInBattleground block zeroes InstanceID; the logout arm runs
+	// here too, since Go has no offline queue to defer it through
+	// (C++ holds the row up to 5 minutes in m_OfflineQueue, then
+	// RemovePlayerAtLeave deletes it — battleground.go's untracked
+	// OFFLINE site). A rejoin always mints a fresh instance id, so
+	// the deleted row's key is dead either way.
+	if s.server != nil {
+		s.server.deleteBGScoreRow(s.player.Map, s.bgData.InstanceID, s.playerGUID)
+	}
 	wasInBattleground := !fromLogout && s.bgData.InstanceID != 0
 	if wasInBattleground {
 		// Battleground::RemovePlayer (Battleground.cpp:894-900): drop the

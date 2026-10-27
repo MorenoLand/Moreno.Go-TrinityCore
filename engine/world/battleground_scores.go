@@ -189,6 +189,37 @@ func (s *Server) addBGScore(sess *session, add func(*bgPlayerScore)) {
 	add(score)
 }
 
+// deleteBGScoreRow ports the per-player score deletion of
+// Battleground::RemovePlayerAtLeave (Battleground.cpp:833-837): the leaver's
+// row leaves the instance's PlayerScores, so a later MSG_PVP_LOG_DATA build
+// omits them. It is the only score-clearing hook Go needs: C++
+// EndBattleground (Battleground.cpp:667) does NOT clear scores — it builds
+// the log packet from the live table and players leave one by one during
+// STATUS_WAIT_LEAVE, each deletion draining the table — and Reset()
+// (Battleground.cpp:935) only clears what those deletions left behind when
+// no players remain. Deleting the table key once its last row leaves is
+// Go's Reset equivalent; no end function may clear a live table, or the
+// WAIT_LEAVE log requests would read empty. Callers hold no objectsMu.
+// The row key is the leaver's own map + instance id, read before the
+// leave path zeroes InstanceID; the row is keyed by player GUID alone, so
+// no other participant's row is touched.
+func (s *Server) deleteBGScoreRow(mapID, instanceID uint32, playerGUID uint64) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	key := bgScoreKey{MapID: mapID, InstanceID: instanceID}
+	table := s.bgScores[key]
+	if table == nil {
+		return
+	}
+	delete(table, playerGUID)
+	if len(table) == 0 {
+		delete(s.bgScores, key)
+	}
+}
+
 // bgKillPlayerScores snapshots one instance's score table for the non-arena
 // MSG_PVP_LOG_DATA builder (buildNonArenaPvPLogDataPacket). The copy keeps
 // callers off the live rows.
