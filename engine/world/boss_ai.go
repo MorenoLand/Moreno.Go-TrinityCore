@@ -9152,7 +9152,12 @@ func (s *Server) creatureCasterAuraStateMask(m *creatureMotion) uint32 {
 // creatureMotion — so the CC state is derived from the creature's
 // applied aura effects by type, the exact inverse of how C++ raises
 // the flags (HandleAuraModStun/Fear/Confuse via SetControlled, and
-// HandleAuraModSilence/Pacify directly, SpellAuraEffects.cpp). A
+// HandleAuraModSilence/Pacify directly, SpellAuraEffects.cpp).
+// MOD_PACIFY_SILENCE raises BOTH flags (HandleAuraModPacifyAndSilence
+// delegates to the pacify and silence handlers, SpellAuraEffects.cpp),
+// so it counts in both the silence and the pacify case below — the
+// session bridge already treats it that way (spells.go), and the
+// cancel compositions already include it on both arms. A
 // fizzle returns false; creature casts have no failure-packet path, so
 // the SPELL_FAILED_* codes and the PREVENTED_BY_MECHANIC param are
 // internal only.
@@ -9182,12 +9187,14 @@ func (s *Server) checkCreatureCasterAuras(m *creatureMotion, spell wotlk.Spell) 
 			// (29); a banish mechanic on the caster re-fails the cast.
 			result = spellFailedStunned
 		}
-	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModSilence)) > 0 && spell.PreventionType == spellPreventionTypeSilence:
+	case (len(s.creatureCasterAuraEffectsByType(m, spellAuraModSilence)) > 0 ||
+		len(s.creatureCasterAuraEffectsByType(m, spellAuraModPacifySilence)) > 0) && spell.PreventionType == spellPreventionTypeSilence:
 		if !(s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModSilence, &mechanic) &&
 			s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacifySilence, &mechanic)) {
 			result = spellFailedSilenced
 		}
-	case len(s.creatureCasterAuraEffectsByType(m, spellAuraModPacify)) > 0 && spell.PreventionType == spellPreventionTypePacify:
+	case (len(s.creatureCasterAuraEffectsByType(m, spellAuraModPacify)) > 0 ||
+		len(s.creatureCasterAuraEffectsByType(m, spellAuraModPacifySilence)) > 0) && spell.PreventionType == spellPreventionTypePacify:
 		if !(s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacify, &mechanic) &&
 			s.creatureSpellCancelsAuraEffect(m, spell, spellAuraModPacifySilence, &mechanic)) {
 			result = spellFailedPacified
