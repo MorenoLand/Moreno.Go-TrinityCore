@@ -246,6 +246,37 @@ func (s *Server) loadBattlegroundTemplates(ctx context.Context) {
 	}
 }
 
+// bgTemplateForType returns the loaded battleground_template row for a BG
+// type id, or nil when the store holds no row for it (unseeded table,
+// loader-skipped row, or no world DB). It lazy-loads the store exactly
+// like bgPrematureMinPlayers, so callers never query the table per call:
+// in C++ every reader goes through the loaded _battlegroundTemplates map
+// (BattlegroundMgr::GetBattlegroundTemplate), never a fresh DB read.
+func (s *Server) bgTemplateForType(ctx context.Context, bgTypeID uint32) *bgTemplate {
+	if s == nil {
+		return nil
+	}
+	s.loadBattlegroundTemplates(ctx)
+	s.bgTemplatesMu.Lock()
+	defer s.bgTemplatesMu.Unlock()
+	return s.bgTemplates[bgTypeID]
+}
+
+// invalidateBattlegroundTemplates drops the loaded store so the next
+// bgTemplateForType lookup reloads it: the Go twin of C++'s
+// `reload battleground_template` (cs_reload.cpp: HandleReloadBattlegroundTemplateCommand
+// re-runs LoadBattlegroundTemplates). Without it the load-once store would
+// keep serving pre-reload rows after a reload command.
+func (s *Server) invalidateBattlegroundTemplates() {
+	if s == nil {
+		return
+	}
+	s.bgTemplatesMu.Lock()
+	defer s.bgTemplatesMu.Unlock()
+	s.bgTemplatesLoaded = false
+	s.bgTemplates = nil
+}
+
 // battlegroundTemplateHasBattlemasterEntry mirrors the BattlemasterList.dbc
 // gate of LoadBattlegroundTemplates (BattlegroundMgr.cpp:535-541): a row
 // whose type has no BattlemasterList entry is not created. It shares the

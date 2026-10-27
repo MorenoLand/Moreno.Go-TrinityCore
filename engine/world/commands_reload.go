@@ -200,6 +200,11 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 	if arm.table == "item_enchantment_template" {
 		invalidateRandomEnchantTable()
 	}
+	// The battleground_template store is load-once, so a reload command
+	// must drop it or the next lookup would keep serving pre-reload rows.
+	if arm.table == "battleground_template" {
+		s.server.invalidateBattlegroundTemplates()
+	}
 	if !quiet && arm.msg != "" {
 		s.server.sendGlobalGMMessage(ctx, arm.msg)
 	}

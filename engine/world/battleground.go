@@ -196,11 +196,11 @@ func (s *session) battlemasterBGType(ctx context.Context, entry uint32) uint32 {
 // battleground_template row's [MinLvl, MaxLvl]; a missing row (== GetBattlegroundTemplate null)
 // denies access.
 func (s *session) bgAccessByLevel(ctx context.Context, bgTypeID uint32) bool {
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+	if s.server == nil || s.player == nil {
 		return false
 	}
-	var minLvl, maxLvl uint32
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil {
+	tmpl := s.server.bgTemplateForType(ctx, bgTypeID)
+	if tmpl == nil {
 		return false
 	}
 	maxLevel := s.server.Config.MaxPlayerLevel
@@ -211,7 +211,7 @@ func (s *session) bgAccessByLevel(ctx context.Context, bgTypeID uint32) bool {
 	if level > maxLevel {
 		level = maxLevel
 	}
-	return level >= minLvl && level <= maxLvl
+	return level >= uint32(tmpl.minLevel) && level <= uint32(tmpl.maxLevel)
 }
 
 // handleBattlefieldList processes CMSG_BATTLEFIELD_LIST (0x23C).
@@ -1486,12 +1486,11 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 
 	// Level gate (BattleGroundHandler.cpp:441-448): a player who leveled past the
 	// battleground's max level while queued does not port — the accept demotes to
-	// leave. MaxLvl comes from battleground_template (the Go mirror of the BG
-	// template's GetMaxLevel, same table bgAccessByLevel reads); a missing row
-	// leaves the demote unevaluated.
-	if action == 1 && !entry.IsArena && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var maxLvl uint32
-		if qerr := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&maxLvl); qerr == nil && maxLvl != 0 && uint32(s.player.Level) > maxLvl {
+	// leave. MaxLvl comes from the loaded template store (the Go mirror of the
+	// BG template's GetMaxLevel, same store bgAccessByLevel reads); a missing
+	// row leaves the demote unevaluated.
+	if action == 1 && !entry.IsArena && s.player != nil {
+		if tmpl := s.server.bgTemplateForType(ctx, bgTypeID); tmpl != nil && uint32(s.player.Level) > uint32(tmpl.maxLevel) {
 			s.debug("battlefield port accept demoted to leave: level above bg max", "account", s.accountName, "bg", bgTypeID)
 			action = 0
 		}
@@ -1807,37 +1806,34 @@ func battlegroundMapForType(bgTypeID uint32) uint32 {
 
 // bgTemplateLevels returns the battleground_template MinLvl/MaxLvl pair ==
 // Battleground::GetMinLevel/GetMaxLevel for the status packet
-// (BattlegroundMgr.cpp:210-211). The table is unseeded in this repo's
-// world.sql, so the 10/80 fallback applies (bgMaxLevelForMap convention).
+// (BattlegroundMgr.cpp:210-211), read from the loaded template store. The
+// table is unseeded in this repo's world.sql, so the 10/80 fallback applies
+// (bgMaxLevelForMap convention); a loader-skipped row (MinLvl/MaxLvl zero
+// or inverted) likewise falls back, since C++ creates no template for it.
 func bgTemplateLevels(srv *Server, bgTypeID uint32) (uint8, uint8) {
-	if srv == nil || srv.WorldStore == nil || srv.WorldStore.DB == nil {
-		return 10, 80
+	if tmpl := srv.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
+		return tmpl.minLevel, tmpl.maxLevel
 	}
-	var minLvl, maxLvl uint32
-	if err := srv.WorldStore.DB.QueryRowContext(context.Background(), `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil || maxLvl == 0 {
-		return 10, 80
-	}
-	return uint8(minLvl), uint8(maxLvl)
+	return 10, 80
 }
 
 // bgMaxLevelForMap returns the BG's m_LevelMax == Battleground::GetMaxLevel,
-// read from battleground_template (MaxLvl) keyed by battlegroundTypeForMap's
-// type ID. The table is unseeded in this repo's world.sql, so the 80 fallback
-// == DEFAULT_MAX_LEVEL applies (same convention as bgAccessByLevel's
-// MaxPlayerLevel cap).
+// read from the loaded template store (MaxLvl) keyed by
+// battlegroundTypeForMap's type ID. The table is unseeded in this repo's
+// world.sql, so the 80 fallback == DEFAULT_MAX_LEVEL applies (same
+// convention as bgAccessByLevel's MaxPlayerLevel cap).
 func bgMaxLevelForMap(s *Server, mapID uint32) uint32 {
-	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+	if s == nil {
 		return 80
 	}
 	bgTypeID, _, _, ok := battlegroundTypeForMap(mapID)
 	if !ok {
 		return 80
 	}
-	var minLvl, maxLvl uint32
-	if err := s.WorldStore.DB.QueryRowContext(context.Background(), `SELECT MinLvl, MaxLvl FROM battleground_template WHERE ID = ?`, bgTypeID).Scan(&minLvl, &maxLvl); err != nil || maxLvl == 0 {
-		return 80
+	if tmpl := s.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
+		return uint32(tmpl.maxLevel)
 	}
-	return maxLvl
+	return 80
 }
 
 // rewardBGEndHonor mirrors Battleground::RewardHonorToTeam (Battleground.cpp:633)
