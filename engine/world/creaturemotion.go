@@ -3609,6 +3609,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Spell::CheckCast aura-bounced tail (Spell.cpp:6155-6162), the
+					// inline twin of the castCreatureSpellInternal arm: a spell
+					// whose every effect is an aura effect, not targeting an area,
+					// fizzles when the wire victim already carries a strictly more
+					// powerful aura of the same type under an EXCLUSIVE_HIGHEST
+					// spell-group stack rule. Placed after the aura-name arms,
+					// matching C++ loop order, ahead of the stealth-break arm.
+					if !s.creatureAuraBouncedPreCast(motion, spellInfo, target.GUID) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// Spell::prepare stealth-break arm (Spell.cpp:3180-3191), same twin:
 					// a non-triggered cast of a stealth-breaking spell drops the
 					// caster's AURA_INTERRUPT_FLAG_CAST auras at cast start, and any
