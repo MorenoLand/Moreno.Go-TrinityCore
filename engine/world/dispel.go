@@ -1618,6 +1618,23 @@ func (s *session) applyDevourMagicSelfHeal(healAmount uint32) {
 		s.startTimedAchievement(timedTypeSpellTarget, 19658)
 		s.updateAchievementCriteria(criteriaTypeBeSpellTarget, 19658, 1)
 		s.updateAchievementCriteria(criteriaTypeBeSpellTarget2, 19658, 1)
+		// Unit::DealHeal (Unit.cpp:6292-6335): the 19658 self-cast is a
+		// player heal, so the caster-side legs fire on the effective gain
+		// (overheal excluded, skipped at zero) plus HIGHEST_HEAL_CAST on
+		// the addhealth, and the victim side — healer == victim here —
+		// takes TOTAL_HEALING_RECEIVED / HIGHEST_HEALING_RECEIVED, the
+		// same legs the direct-heal site carries.
+		effectiveHeal := heal - overheal
+		if effectiveHeal > 0 {
+			s.updateAchievementCriteria(criteriaTypeHealingDone, 0, effectiveHeal)
+		}
+		s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+		s.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
+		s.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
+		if s.server != nil {
+			s.server.updateArenaHealingScore(s, effectiveHeal)
+			s.server.addBGScore(s, func(score *bgPlayerScore) { score.HealingDone += effectiveHeal }) // BattlegroundScore twin of the arena line above (Unit.cpp:6292)
+		}
 		s.player.Health += heal
 		if s.player.Health > s.player.MaxHealth {
 			s.player.Health = s.player.MaxHealth
