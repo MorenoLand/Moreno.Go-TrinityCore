@@ -162,12 +162,13 @@ func (s *Server) addBGObjectiveScore(sess *session, add func(*bgPlayerScore)) {
 // Battleground::UpdatePlayerScore twin of addBGObjectiveScore for the
 // SCORE_DAMAGE_DONE / SCORE_HEALING_DONE / SCORE_BONUS_HONOR legs. The
 // InBattleground gate is bgData.InstanceID != 0, the mirror the kill-player
-// gates use (Player.h:1906); arena maps keep their own ArenaPlayerScore
-// table, so they never land in this store. C++ UpdatePlayerScore no-ops
+// gates use (Player.h:1906); arena roster members keep their own
+// ArenaPlayerScore table, so they never land in this store even when
+// standing off the arena map. C++ UpdatePlayerScore no-ops
 // for a player absent from PlayerScores; Go follows the getOrCreate
 // convention, so a BG participant's row exists once they act.
 func (s *Server) addBGScore(sess *session, add func(*bgPlayerScore)) {
-	if s == nil || sess == nil || sess.player == nil || add == nil || sess.bgData.InstanceID == 0 || IsArenaMap(sess.player.Map) {
+	if s == nil || sess == nil || sess.player == nil || add == nil || sess.bgData.InstanceID == 0 || IsArenaMap(sess.player.Map) || s.findArenaStateForPlayer(sess.playerGUID) != nil {
 		return
 	}
 	key := bgScoreKey{MapID: sess.player.Map, InstanceID: sess.bgData.InstanceID}

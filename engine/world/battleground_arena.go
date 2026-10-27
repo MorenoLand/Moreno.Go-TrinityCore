@@ -435,6 +435,52 @@ func (s *Server) findArenaState(mapID, instanceID uint32) *arenaBattlegroundStat
 	return nil
 }
 
+// findArenaStateForPlayer resolves the arena a player belongs to by roster
+// membership (PlayerTeams), not by standing map. C++ UpdatePlayerScore
+// (Battleground.cpp:1225-1228) keys on the player's Battleground pointer
+// and its PlayerScores table — the Unit.cpp:864 (damage) and :6320
+// (healing) callers reach it through killer->GetBattleground() and
+// player->GetBattleground(), which never consult the player's map — so a
+// roster member dealing damage or healing while standing off the arena
+// map still scores in their arena, and a map bystander with no roster
+// slot scores nowhere. Scores rows are created alongside PlayerTeams in
+// addPlayerToArena and deleted with them on leave, so the roster gate
+// never blocks a legitimate row. Matches sort by (MapID, InstanceID) so
+// a stale dual roster resolves deterministically, not by map order.
+func (s *Server) findArenaStateForPlayer(guid uint64) *arenaBattlegroundState {
+	if s == nil {
+		return nil
+	}
+	s.arenaMu.RLock()
+	states := make([]*arenaBattlegroundState, 0, len(s.arenaState))
+	for _, state := range s.arenaState {
+		states = append(states, state)
+	}
+	s.arenaMu.RUnlock()
+	var matches []*arenaBattlegroundState
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		state.mu.RLock()
+		_, inRoster := state.PlayerTeams[guid]
+		state.mu.RUnlock()
+		if inRoster {
+			matches = append(matches, state)
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].MapID != matches[j].MapID {
+			return matches[i].MapID < matches[j].MapID
+		}
+		return matches[i].InstanceID < matches[j].InstanceID
+	})
+	return matches[0]
+}
+
 // arenaRosterSessions resolves the arena's PlayerTeams roster to online
 // sessions, in GUID order (C++ m_Players is an ordered map). C++ _GetPlayer
 // skips offline members (Battleground.cpp:724, :465, BroadcastWorker), so
@@ -1307,10 +1353,10 @@ func (s *Server) scheduleArenaShadowSightRespawn(mapID uint32, guid uint64) {
 
 // updateArenaDamageScore updates damage done for a player in the arena score table.
 func (s *Server) updateArenaDamageScore(attacker *session, damage uint32) {
-	if s == nil || attacker == nil || attacker.player == nil || !IsArenaMap(attacker.player.Map) {
+	if s == nil || attacker == nil || attacker.player == nil {
 		return
 	}
-	arena := s.findArenaState(attacker.player.Map, 0)
+	arena := s.findArenaStateForPlayer(attacker.playerGUID)
 	if arena == nil {
 		return
 	}
@@ -1323,10 +1369,10 @@ func (s *Server) updateArenaDamageScore(attacker *session, damage uint32) {
 
 // updateArenaHealingScore updates healing done for a player in the arena score table.
 func (s *Server) updateArenaHealingScore(healer *session, healing uint32) {
-	if s == nil || healer == nil || healer.player == nil || !IsArenaMap(healer.player.Map) {
+	if s == nil || healer == nil || healer.player == nil {
 		return
 	}
-	arena := s.findArenaState(healer.player.Map, 0)
+	arena := s.findArenaStateForPlayer(healer.playerGUID)
 	if arena == nil {
 		return
 	}
