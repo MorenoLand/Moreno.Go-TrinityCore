@@ -4821,9 +4821,9 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 // goSkillupLists (m_SkillupList), which the chest loot re-roll clears
 // as the respawn-equivalent; item casts skip it (!m_CastItem). The
 // itemTarget arm (ITEM_FIELD_FLAG_UNLOCKED, SpellEffects.cpp:2032-2035)
-// has no Go model: nothing in the Go item path sets per-item lock state (the
-// open-item leg refuses any LockID outright), so there is no unlockable item
-// to flag — documented no-bridge. The spell-1842 owned-trap deactivation arm
+// lives in handleEffectOpenLockItem: the flag lands in item_instance.flags
+// and handleOpenItem consults it, so an unlocked item opens despite its LockID.
+// The spell-1842 owned-trap deactivation arm
 // (SpellEffects.cpp:1994-1998) is unreachable: Go spawns no player-owned trap
 // GOs. The despawned-GO cheat gate (SpellEffects.cpp:1883-1889) is moot: Go
 // never despawns static GOs. The GOOBER Use arm, QUESTGIVER gossip arm, and
@@ -4869,8 +4869,8 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// Player::GetPureSkillValue. The arm also covers doors/buttons: C++
 	// runs it after UseDoorOrButton, so it sits before the door/button
 	// early return. Item casts never grow skill (the !m_CastItem gate);
-	// the item-target arm (unflagged items) stays unmodeled — Go never
-	// marks items unlocked.
+	// the item-target arm runs in handleEffectOpenLockItem (flag + its own
+	// skill-up, with no per-item once-gate).
 	if !castItem {
 		if skillID, reqSkillValue := s.openLockSkillParams(goGUID, uint32(eff.MiscValue)); skillID != skillNone {
 			if pure := playerPureSkillValue(s.player, skillID); pure > 0 {
@@ -4884,7 +4884,8 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// Spell::ExecuteLogEffectOpenLock (SpellEffects.cpp:2058) fires after a
 	// successful open on the gameobject arm; C++ sends it after SendLoot, so
 	// the packet order relative to the door/button use and the loot window
-	// is a documented cosmetic delta. The item-target arm stays unmodeled.
+	// is a documented cosmetic delta. The item-target arm logs via
+	// handleEffectOpenLockItem with the item GUID.
 	s.sendOpenLockLog(spell.ID, goGUID)
 	// Spell::SendLoot GO arms (SpellEffects.cpp:1875-1946): after the hook leg,
 	// the type switch runs before Player::SendLoot. The GOOBER arm calls
@@ -5095,8 +5096,38 @@ func (s *session) openLockSkillParams(goGUID uint64, miscValue uint32) (uint32, 
 		"SELECT type, COALESCE(data0, 0), COALESCE(data1, 0), COALESCE(data2, 0), COALESCE(data3, 0), COALESCE(data4, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&goType, &data[0], &data[1], &data[2], &data[3], &data[4]); err != nil {
 		return skillNone, 0
 	}
-	lockID := uint32(data[goLockDataIndex(uint32(goType))])
-	if lockID == 0 {
+	return s.openLockSkillParamsForLock(uint32(data[goLockDataIndex(uint32(goType))]), miscValue)
+}
+
+// itemFieldFlagUnlocked mirrors ITEM_FIELD_FLAG_UNLOCKED (ItemTemplate.h:116):
+// a per-instance ITEM_FIELD_FLAGS bit, distinct from the item_template
+// ITEM_FLAG_* bits - it lives in item_instance.flags, set by EffectOpenLock's
+// item arm and read back by Item::IsLocked (Item.h:101).
+const itemFieldFlagUnlocked uint32 = 0x00000004
+
+// itemInstanceUnlocked mirrors Item::IsLocked (Item.h:101) for a wire or raw
+// item GUID: the low 48 bits key item_instance.guid (inventoryItemEntryByGUID
+// masks the same way). A missing row, NULL flags, or no DB reads as locked -
+// fail closed, matching the pre-arm behavior.
+func itemInstanceUnlocked(s *session, itemGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 {
+		return false
+	}
+	var flags int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(flags, 0) FROM item_instance WHERE guid = ? LIMIT 1", int64(itemGUID&0xFFFFFFFFFFFF)).Scan(&flags); err != nil {
+		return false
+	}
+	return flags&int64(itemFieldFlagUnlocked) != 0
+}
+
+// openLockSkillParamsForLock is the lock-row half of openLockSkillParams:
+// the skill-keyed row matching the effect's MiscValue maps to a gathering
+// skill via SkillByLockType, carrying Lock.dbc's required value. A lock keyed
+// by item or spell only (or with no skill row for this effect) resolves to
+// SKILL_NONE and grants no skill-up.
+func (s *session) openLockSkillParamsForLock(lockID, miscValue uint32) (uint32, uint32) {
+	if s == nil || s.server == nil || s.server.Data == nil || lockID == 0 {
 		return skillNone, 0
 	}
 	lock, found, err := s.server.Data.Lock(lockID)
@@ -5112,6 +5143,52 @@ func (s *session) openLockSkillParams(goGUID uint64, miscValue uint32) (uint32, 
 		}
 	}
 	return skillNone, 0
+}
+
+// handleEffectOpenLockItem mirrors the itemTarget arm of Spell::EffectOpenLock
+// (SpellEffects.cpp:2029-2035, 2038-2056, 2058): with no GO wire target, the
+// explicit item target (SelectImplicitTargetObjectTargets, Spell.cpp:1578,
+// via m_UniqueItemInfo, Spell.cpp:3734) is flagged ITEM_FIELD_FLAG_UNLOCKED,
+// grows the lock skill once for non-item casts (no per-item once-gate like
+// the GO arm's m_SkillupList - C++ does one skill-up per item open), and
+// sends the open-lock log effect with the item GUID. Trade-window items stay
+// out: the effect arm resolves inventory items alone, and Go has no
+// trade-item instance row to flag. An already-unlocked item is a no-op here;
+// CheckCast fails re-picks at the openable-item gate.
+func (s *session) handleEffectOpenLockItem(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect, castItem bool) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if eff.ImplicitTargetA != implicitTargetGameObjectItemTarget && eff.ImplicitTargetB != implicitTargetGameObjectItemTarget {
+		return
+	}
+	if spellGameObjectTargetGUID(target) != 0 {
+		return
+	}
+	if target.Flags&protocol.SpellTargetFlagItem == 0 || target.ItemGUID == 0 {
+		return
+	}
+	entry, ok := s.inventoryItemEntryByGUID(target.ItemGUID)
+	if !ok || entry == 0 {
+		return
+	}
+	lockID := itemLockIDByEntry(s, entry)
+	if lockID == 0 || itemInstanceUnlocked(s, target.ItemGUID) {
+		return
+	}
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE item_instance SET flags = COALESCE(flags, 0) | ? WHERE guid = ?", int64(itemFieldFlagUnlocked), int64(target.ItemGUID&0xFFFFFFFFFFFF))
+	}
+	if !castItem {
+		if skillID, reqSkillValue := s.openLockSkillParamsForLock(lockID, uint32(eff.MiscValue)); skillID != skillNone {
+			if pure := playerPureSkillValue(s.player, skillID); pure > 0 {
+				s.updateGatherSkill(ctx, skillID, uint32(pure), reqSkillValue, 1)
+			}
+		}
+	}
+	s.sendOpenLockLog(spell.ID, target.ItemGUID)
+	_ = s.sendInventoryItems(ctx)
 }
 
 // goSkillupUsed mirrors GameObject::IsInSkillupList (GameObject.h:191-197):
@@ -5188,8 +5265,9 @@ func itemLockIDByEntry(s *session, entry uint32) uint32 {
 // orange-lockpick fail chance can still reject with SPELL_FAILED_TRY_AGAIN.
 // The m_caster->GetTypeId() != TYPEID_PLAYER arm is vacuous on the client
 // path (handleCastSpell only serves player sessions). Item::IsLocked (the
-// ITEM_FIELD_FLAG_UNLOCKED check) has no Go model — Go never unlocks items,
-// so any item carrying a LockID is treated as locked. The battleground-object
+// ITEM_FIELD_FLAG_UNLOCKED check) reads item_instance.flags via
+// itemInstanceUnlocked, so an already-unlocked item fails the openable-item
+// gate below like C++. The battleground-object
 // gate (Spell.cpp:5754-5758, CanUseBattlegroundObject) has no Go bridge and
 // is skipped. The m_selfContainer recheck arm of the fail chance is moot —
 // Go runs CheckCast once per client cast, which is the initial check C++
@@ -5257,7 +5335,14 @@ func (s *session) checkOpenLockCast(spell wotlk.Spell, target protocol.SpellTarg
 	}
 	// Openable-item gate (Spell.cpp:5749-5752): with TARGET_GAMEOBJECT_ITEM_TARGET
 	// and no GO target the item must exist, carry a LockID, and be locked.
-	if isItemTarget && goGUID == 0 && (!haveTempItem || tempItemLockID == 0) {
+	// Item::IsLocked (Item.h:101) reads the ITEM_FIELD_FLAG_UNLOCKED bit, so an
+	// already-unlocked inventory item fails here like C++ - re-picking it is
+	// not a fresh open. Trade items carry no instance row, so they read locked.
+	itemUnlocked := false
+	if target.Flags&protocol.SpellTargetFlagItem != 0 && target.ItemGUID != 0 {
+		itemUnlocked = itemInstanceUnlocked(s, target.ItemGUID)
+	}
+	if isItemTarget && goGUID == 0 && (!haveTempItem || tempItemLockID == 0 || itemUnlocked) {
 		return spellFailedBadTargets
 	}
 	// GO template data for the lock-id arm. The wire GO GUID packs the entry
@@ -10785,6 +10870,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
+		// Spell::DoProcessTargetContainer(m_UniqueItemInfo) (Spell.cpp:3734):
+		// an item-target open-lock cast holds no unit or GO target, so the
+		// empty-list return below would otherwise drop the item arm
+		// entirely - C++ still runs EffectOpenLock on the item target.
+		for _, eff := range spell.Effects {
+			if eff.Effect == spellEffectOpenLock {
+				s.handleEffectOpenLockItem(ctx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
+			}
+		}
 		// Spell missed, do not trigger channel or effects
 		fireLaunchMissNodmgProcs(ctx)
 		return
@@ -12111,6 +12205,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, goGUID := range goMaskedTargetsForEffect(goEffectMasks, target, hitTargets, effectIndex, eff) {
 					s.handleEffectOpenLock(effCtx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: goGUID}, spell, eff, castItemGUID != 0 || castItemEntry != 0)
 				}
+				// The item arm for mixed casts: a 26-target open-lock effect
+				// beside unit/area sibling effects still flags its wire item
+				// (m_UniqueItemInfo processes alongside the unit lists).
+				s.handleEffectOpenLockItem(effCtx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
 			case spellEffectEnchantItem: // 53: SPELL_EFFECT_ENCHANT_ITEM
 				// The cast item's entry gates the skill-up arm
 				// (SpellEffects.cpp:2733: m_CastItem with

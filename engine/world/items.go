@@ -5746,9 +5746,11 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// SpellHandler.cpp:231-250 — locked items refuse with EQUIP_ERR_ITEM_LOCKED.
-	// Go has no Lock.dbc model and no per-item unlocked state, so any LockID
-	// refuses; the unknown-lock vs not-unlocked nuance is a documented delta.
-	if lockID != 0 {
+	// Go has no Lock.dbc model, so an unflagged LockID still refuses,
+	// matching C++'s unknown-lock refusal; an item whose lock was opened
+	// (EffectOpenLock's ITEM_FIELD_FLAG_UNLOCKED bit in item_instance.flags)
+	// opens despite its LockID.
+	if lockID != 0 && !itemInstanceUnlocked(s, uint64(itemGUID)) {
 		s.sendEquipError(equipErrItemLocked, uint64(itemGUID))
 		return true
 	}
