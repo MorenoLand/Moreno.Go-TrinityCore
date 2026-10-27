@@ -3920,6 +3920,45 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Spell::EffectApplyAura (SpellEffects.cpp) on the inline path:
+			// C++ runs the effect dispatch (DoTargetSpellHit per effect
+			// index, Spell.cpp:3555-3566) ahead of DoDamageAndTriggers,
+			// so a victim-targeted AI spell carrying an aura effect
+			// applies it before the damage legs below — the inline path
+			// previously ran damage, leech and instakill only, so a
+			// victim-targeted debuff/DoT never landed server-side
+			// (non-victim casts ride castCreatureSpellInternal, which
+			// already runs this arm). The shared twin carries the
+			// dead/reflect/evade/immune/miss gates; reflected victims
+			// retarget to the caster through the twin's None-status
+			// arm, like the reflect return trips below. InstaKilled
+			// victims are already dead here, so the twin's dead gate
+			// skips them. Gated on inlineSpellKnown like the twin
+			// above; GO GUIDs in hitTargets take no leg in the twin.
+			if inlineSpellKnown {
+				reflected := make(map[uint64]uint8, len(reflectedSet))
+				for guid := range reflectedSet {
+					reflected[guid] = protocol.SpellMissNone
+				}
+				for _, trip := range reflectTrips {
+					if trip.victim != nil {
+						reflected[trip.victim.GUID] = trip.status
+					}
+				}
+				for _, trip := range creatureReflectTrips {
+					reflected[trip.guid] = trip.status
+				}
+				s.creatureEffectApplyAura(ctx, motion, inlineSpell, hitTargets, reflected, evadedSet, immuneSet, missSet)
+				// Spell::EffectPersistentAreaAura (SpellEffects.cpp) on the
+				// inline path, same dispatch-ahead-of-damage position:
+				// a victim-targeted AI spell carrying effect 27 spawns
+				// no dynobj on this path today, so its ground aura never
+				// applies. The twin self-gates on the 27 effect and a
+				// positive duration/radius; the center reads back out of
+				// spellTarget like the GO-area twin above (the dest
+				// selection vars are block-scoped there).
+				s.creatureEffectPersistentAreaAura(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+			}
 			if !nearbyReplacesWireVictim && !reflectedSet[target.GUID] && !immuneSet[target.GUID] && missSet[target.GUID] == protocol.SpellMissNone && !instaKilled[target.GUID] {
 				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
 			}
