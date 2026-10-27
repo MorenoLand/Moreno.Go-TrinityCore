@@ -2122,6 +2122,22 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
+	// Spell::EffectTriggerSpell (SpellEffects.cpp:823) + EffectForceCast
+	// (SpellEffects.cpp:1048) for a creature caster: the trigger arms
+	// (LAUNCH_TARGET per target plus once-per-cast LAUNCH, in
+	// creatureEffectTriggerSpell) and the force-cast HIT_TARGET arm,
+	// grouped with the other effect-grouped arms above. Gated on
+	// spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
+				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
+				s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
 	// (3467), and even when IsNeedSendToClient skipped the packet. Gated
@@ -4204,6 +4220,273 @@ func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creat
 // legs. A landed reflect retargets to the caster, which resolves to no
 // session and is skipped the same way on the player leg, and to the
 // caster motion itself on the creature leg.
+// creatureEffectTriggerSpell mirrors Spell::EffectTriggerSpell
+// (SpellEffects.cpp:823-996) for a creature caster: the LAUNCH_TARGET and
+// LAUNCH arms. The per-target arm fires only when the triggered spell
+// needs to be triggered by the caster (SpellInfo.cpp:1052: an explicit
+// unit target, or a channeled triggering spell with a non-caster unit
+// target); the once-per-cast arm fires unless the per-target arm owns
+// the effect (needs-caster plus a unit target on the parent effect), so
+// the two arms never double-fire one effect — the same split the player
+// path carries in triggerSpellEffectTarget /
+// triggerLaunchSpellEffectIndex. The per-target loop mirrors
+// DoEffectOnLaunchTarget (Spell.cpp:7736-7753): evaded, immune, and
+// missed targets never reach the arm, and a landed reflect retargets to
+// the caster. The triggered cast rides castCreatureSpellInternal, which
+// is the player-target leg too: its dispatch already delivers effects to
+// player hit targets (creatureEffectSpellDamage, creatureEffectApplyAura,
+// creatureEffectHeal and friends), so no separate player arm is needed.
+// The LAUNCH arms run before SendSpellGo in C++ (HandleLaunchPhase,
+// Spell.cpp:7687); Go's creature dispatch groups every arm after the GO
+// packet, so the triggered cast lands after the sibling hit arms — the
+// same documented phase approximation the other grouped arms carry. The
+// TRIGGER_SPELL_WITH_VALUE base-point override (989-992) has no bridge:
+// castCreatureSpellInternal carries no base-point override, so 142 casts
+// ride DBC base points and the override stays a documented residual,
+// like the power-burn damage leg. The self-trigger guard
+// (TriggerSpell == spellID) is the Go-only recursion guard the player
+// path carries; the unknown-triggered-spell gate keeps a stub cast from
+// sending a GO packet for a spell with no effects.
+func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, castTargetGUID uint64, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
+		return
+	}
+	triggered, found, err := s.Data.Spell(eff.TriggerSpell)
+	if err != nil || !found {
+		return
+	}
+	needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+	if needsCaster {
+		for _, guid := range hitTargets {
+			if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+				continue
+			}
+			if status, isReflected := reflected[guid]; isReflected {
+				if status != protocol.SpellMissNone {
+					continue
+				}
+				guid = m.GUID
+			}
+			s.creatureTriggerSpellLaunchTarget(ctx, m, spell, spellID, eff, guid)
+		}
+	}
+	if needsCaster && spellEffectProvidedTargetMask(eff)&targetFlagUnitMask != 0 {
+		return
+	}
+	launchTarget := castTargetGUID
+	if launchTarget == 0 {
+		launchTarget = m.GUID
+	}
+	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
+}
+
+// creatureTriggerSpellLaunchTarget is the per-target LAUNCH_TARGET arm of
+// Spell::EffectTriggerSpell (SpellEffects.cpp:828-966) for a creature
+// caster. The special-cases switch runs only for SPELL_EFFECT_TRIGGER_SPELL
+// (64), never for 142, and the LAUNCH arm never runs it. Sayge's Dark
+// Fortune (23770) is skipped outright; Glyph of Mirror Image (63093 on
+// the caster) fires the copy-summon (65047) on the caster and then falls
+// through to the normal triggered cast; Brittle Armor (29284) and
+// Mercurial Shield (29286) stack their aura spells to the DBC stack
+// amount on the target and return; Demonic Empowerment (54437) strips
+// movement-impairing, stalked, and stun auras from the target and the
+// target casts Lesser Invisibility (7870) on itself, then returns.
+// Replenish Life (34756) and Replenish Mana (33394) cannot target the
+// caster, and the target casts the triggered spell on itself with the
+// computed base point — but only player targets have a base-point
+// override bridge (the target session's direct cast); a creature target
+// has none on this path, so its Replenish arm returns without casting
+// rather than firing a wrong-value heal.
+func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, targetGUID uint64) {
+	if s == nil || m == nil || s.Data == nil || targetGUID == 0 {
+		return
+	}
+	if eff.Effect == spellEffectTriggerSpell {
+		switch eff.TriggerSpell {
+		case triggerSaygesDarkFortune:
+			return
+		case triggerMirrorImageSpell:
+			if s.creatureHasAura(m, spellGlyphOfMirrorImage) {
+				s.castCreatureSpellInternal(ctx, m, spellMirrorImageCopies, m.GUID, true)
+			}
+		case triggerBrittleArmorSpell, triggerMercurialShieldSpell:
+			auraSpellID := uint32(spellBrittleArmorAura)
+			if eff.TriggerSpell == triggerMercurialShieldSpell {
+				auraSpellID = spellMercurialShieldAura
+			}
+			auraSpell, found, err := s.Data.Spell(auraSpellID)
+			if err != nil || !found {
+				return
+			}
+			for i := uint32(0); i < auraSpell.StackAmount; i++ {
+				s.castCreatureSpellInternal(ctx, m, auraSpellID, targetGUID, true)
+			}
+			return
+		case triggerReplenishLifeSpell:
+			if spellID != spellReplenishLife {
+				break
+			}
+			if targetGUID == m.GUID {
+				return
+			}
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				maxHealth := ts.player.MaxHealth
+				if maxHealth == 0 {
+					return
+				}
+				bp0 := int32(0.01 * float64(maxHealth) * float64(eff.BasePoints))
+				ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, []int32{bp0}, 0)
+			}
+			return
+		case triggerReplenishManaSpell:
+			if spellID != spellReplenishMana {
+				break
+			}
+			if targetGUID == m.GUID {
+				return
+			}
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, []int32{eff.BasePoints}, 0)
+			}
+			return
+		case triggerDemonicEmpowerSuccub:
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				ts.removeTargetMovementImpairingAuras(ctx, targetGUID)
+				ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStalked)
+				ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStun)
+				ts.castSpellDirect(ctx, spellLesserInvisibility, targetGUID)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+				s.removeCreatureMovementImpairingAuras(tm)
+				s.castCreatureSpellInternal(ctx, tm, spellLesserInvisibility, tm.GUID, true)
+			}
+			return
+		}
+	}
+	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
+}
+
+// removeCreatureMovementImpairingAuras mirrors the creature-target leg of
+// Unit::RemoveMovementImpairingAuras(true) (Unit.cpp:4193-4213) for the
+// Demonic Empowerment arm above: root-mechanic (spell-level or
+// any-effect) and snare-mechanic (spell-level) auras go, as do stalked-
+// and stun-type auras. The per-effect snare amount-zeroing leg has no
+// model here either — the same documented residual the session helper
+// carries. The aura table is released before removing, so the remove
+// funnel's own locking never nests.
+func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion) {
+	if s == nil || tm == nil || s.Data == nil {
+		return
+	}
+	key := creatureAuraKeyForMotion(tm)
+	s.auraMu.Lock()
+	var toRemove []uint32
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == spellAuraModStalked || aura.AuraType == spellAuraModStun {
+			toRemove = append(toRemove, aura.SpellID)
+			continue
+		}
+		spellRow, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellHasAnyEffectMechanic(spellRow, mechanicRoot) || spellRow.Mechanic == mechanicSnare {
+			toRemove = append(toRemove, aura.SpellID)
+		}
+	}
+	s.auraMu.Unlock()
+	for _, spellID := range toRemove {
+		s.removeCreatureAura(key, spellID)
+	}
+}
+
+// creatureEffectForceCast mirrors Spell::EffectForceCast
+// (SpellEffects.cpp:1048-1109) for a creature caster: the HIT_TARGET arm,
+// one force-cast per hit target — the TARGET casts the triggered spell
+// on the caster (unitTarget->CastSpell(m_caster, ...)), not the other way
+// round. Player targets cast through the target session's direct path
+// (the player path's handleEffectForceCast with the roles reversed);
+// creature targets cast through castCreatureSpellInternal with the
+// target motion as caster. The per-target gates mirror the remove-aura
+// arm: evaded, immune, and missed targets never reach the arm, and a
+// landed reflect retargets to the caster (which then casts on itself).
+// The 140 damage specials ride the rolled effect damage: Skeletal
+// Gryphon Escape (52588) and Ride Flamebringer Cue (48598) remove the
+// damage-valued aura from the target and still force-cast below; Hide
+// In Mine Car (52463) and Overtake (52349) are a non-triggered self-cast
+// with SPELLVALUE_BASE_POINT0 set — the player target rides the
+// session's base-point direct cast, while a creature target has no
+// base-point bridge on this path and stays out. Malleable Goo Summon
+// (72298) is a self-cast by the target instead. The
+// FORCE_CAST_WITH_VALUE (141) base-point override (1102-1104) rides the
+// session's base-point cast for player targets; creature targets cast
+// without it — the same documented residual as the 142 arm above.
+// FORCE_CAST_2 (160) shares the plain arm: C++ gives it no value leg.
+func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if eff.TriggerSpell == 0 {
+		return
+	}
+	if _, found, err := s.Data.Spell(eff.TriggerSpell); err != nil || !found {
+		return
+	}
+	damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if eff.Effect == spellEffectForceCast && damage != 0 {
+			switch spellID {
+			case 52588, 48598:
+				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+					ts.removeAura(uint32(damage))
+				} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+					s.removeCreatureAura(creatureAuraKeyForMotion(tm), uint32(damage))
+				}
+			case 52463, 52349:
+				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+					ts.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, guid, uint32(damage))
+				}
+				continue
+			}
+		}
+		if eff.TriggerSpell == 72298 {
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				ts.castSpellDirect(ctx, eff.TriggerSpell, guid)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.castCreatureSpellInternal(ctx, tm, eff.TriggerSpell, tm.GUID, true)
+			}
+			continue
+		}
+		if eff.Effect == spellEffectForceCastWithValue {
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{damage, damage, damage})
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.castCreatureSpellInternal(ctx, tm, eff.TriggerSpell, m.GUID, true)
+			}
+			continue
+		}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			ts.castSpellDirect(ctx, eff.TriggerSpell, m.GUID)
+		} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			s.castCreatureSpellInternal(ctx, tm, eff.TriggerSpell, m.GUID, true)
+		}
+	}
+}
+
 func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
