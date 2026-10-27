@@ -2100,6 +2100,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// documented approximation). Gated on spellKnown like the tail.
 	if spellKnown {
 		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
+		s.creatureEffectSummonPet(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 	}
 	// Spell::EffectSummonObject (SpellEffects.cpp:4215) + EffectSummonObjectWild
 	// (SpellEffects.cpp:3552) for a creature caster: the HIT arms, once per
@@ -3261,6 +3262,79 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		default:
 			// Unknown control: Map::SummonCreature returns null (Object.cpp
 			// default arm) — no spawn.
+		}
+	}
+}
+
+// creatureEffectSummonPet mirrors the ownerless branch of
+// Spell::EffectSummonPet (SpellEffects.cpp:3017-3041) for a creature
+// caster: GetUnitCasterForEffectHandlers returns the casting creature,
+// whose ToPlayer is null, so C++ falls to SummonGuardian with the fixed
+// properties row 67 (a missing row means no spawn, like C++'s null
+// check). The owner branch is unreachable here — a creature caster is
+// never a player — except the totem leg, which walks to the totem's
+// owner player and runs the player pet-summon machinery: totem casters
+// stay out, guarded by isTotemGUID. The HIT arm runs once per cast on
+// the caster (not per hit target), at the dest position else the
+// caster's position, with the spell duration's timed/dead-despawn
+// choice; the ALLY-control faction stamp is the SummonGuardian arm
+// (SpellEffects.cpp:5461), and the funnel stamps the creator
+// OwnerGUID. InitStatsForLevel, the MINION-mask follow angle, the
+// 27893 mirror-image display arm and summon-slot replacement stay out,
+// like the effect-28 guardian arm above; the engineering-skill level
+// leg is player-gated and the spellmod-duration leg has no creature
+// model, matching that arm.
+func (s *Server) creatureEffectSummonPet(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	if s.isTotemGUID(m.GUID) {
+		return
+	}
+	props, found, err := s.Data.SummonProperties(67)
+	if err != nil || !found {
+		return
+	}
+	lvl := m.Level
+	if lvl == 0 {
+		lvl = 80
+	}
+	var duration int32
+	if spell.DurationIndex > 0 {
+		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+			duration = dur
+		}
+	}
+	baseX, baseY, baseZ := m.X, m.Y, m.Z
+	if hasDest {
+		baseX, baseY, baseZ = dx, dy, dz
+	}
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		if eff.Effect != spellEffectSummonPet {
+			continue
+		}
+		entry := uint32(0)
+		if eff.MiscValue > 0 {
+			entry = uint32(eff.MiscValue)
+		}
+		if entry == 0 {
+			continue
+		}
+		summonType := uint8(tempSummonDeadDespawn)
+		var despawnMs uint32
+		if duration > 0 {
+			summonType = uint8(tempSummonTimedDespawn)
+			despawnMs = uint32(duration)
+		}
+		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, baseX, baseY, baseZ, m.Orientation, summonType, despawnMs)
+		if summoned == nil {
+			continue
+		}
+		if props.Control == summonCategoryAlly {
+			s.motionMu.Lock()
+			summoned.Faction = m.Faction
+			s.motionMu.Unlock()
 		}
 	}
 }

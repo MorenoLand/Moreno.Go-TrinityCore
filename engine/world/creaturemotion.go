@@ -4705,6 +4705,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).
 				s.creatureEffectSummonType(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+				s.creatureEffectSummonPet(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 				for i := range inlineSpell.Effects {
 					switch inlineSpell.Effects[i].Effect {
 					case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:

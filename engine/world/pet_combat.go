@@ -4080,12 +4080,48 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 	}
 	s.server.creatureEffectSummonType(ctx, motion, spell, hasDest, dx, dy, dz)
+	// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
+	// same dispatch-ahead-of-damage position as the summon-type block:
+	// the HIT arm, once per cast on the caster — a pet caster is never
+	// a player, so C++ always takes the ownerless SummonGuardian leg
+	// (properties 67) via the shared helper; the totem owner-player leg
+	// stays out inside it. Previously a pet-cast spell carrying effect
+	// 56 summoned nothing server-side.
+	s.server.creatureEffectSummonPet(ctx, motion, spell, hasDest, dx, dy, dz)
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
 			s.server.creatureEffectSummonObject(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
 		case spellEffectSummonObjectWild:
 			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
+		}
+	}
+	// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the pet
+	// path, same dispatch-ahead-of-damage position as the summon-type
+	// block: the HIT_TARGET arm, once per hit target — the unit target
+	// must be a hunter player with no current pet, and the pet is
+	// created from the effect's MiscValue entry at the target's level
+	// (Unit::CreateTamedPetFrom, Unit.cpp:11103, takes the target's
+	// level). Delegation goes to the TARGET's session, not the caster's
+	// owner session: handleCreateTamedPet gates on target == session
+	// player, so routing through the owner session would fail every
+	// real case (the owner already holds the casting pet) and could
+	// never reach another hunter target. Missed, evaded, immune and
+	// reflected targets take no leg — a reflected tame retargets to
+	// the casting pet, which fails the player gate in C++ anyway.
+	// Previously a pet-cast spell carrying effect 153 created nothing
+	// server-side.
+	for i := range spell.Effects {
+		if spell.Effects[i].Effect != spellEffectCreateTamedPet {
+			continue
+		}
+		for _, guid := range hitTargets {
+			if guid == 0 || immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || missedTarget(guid) {
+				continue
+			}
+			if ts := s.server.findSessionByGUID(guid); ts != nil {
+				ts.handleCreateTamedPet(ctx, spell.ID, guid, spell.Effects[i])
+			}
 		}
 	}
 	// Spell::EffectPersistentAreaAura (SpellEffects.cpp:1738) on the
