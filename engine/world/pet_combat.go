@@ -3701,8 +3701,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// dropped legs appended before it, and ahead of the chain arm below
 	// (area/cone selection never chains, and the pet chain anchor is
 	// targetGUID, so these legs cannot move it). GO GUIDs take no unit leg
-	// below, like the nearby GO pick above — the pet path runs no GO-arm
-	// dispatch, same as the inline path — and ride the GO packet only;
+	// below, like the nearby GO pick above — the GO arms run the
+	// dispatch-ahead-of-damage block below, like the twin and inline paths —
+	// and ride the GO packet only;
 	// the verdict passes already treat an unresolvable GUID as a hit, and
 	// the aura-scaling pass drops them only under the same full-mask
 	// shape the twin drops them under, so no new downstream hazard class
@@ -4008,6 +4009,51 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
+	}
+	// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
+	// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
+	// EffectGameObjectSetDestructionState (:5450) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// the GO arms over the GO GUIDs in hitTargets (the nearby-entry pick
+	// plus the GO-area/cone legs above join hitTargets ahead of dispatch;
+	// a wire GO GUID rides the same filter). Unit GUIDs in hitTargets
+	// take no leg in the twins. None of the four gates on a player caster
+	// in C++ — unlike open-lock 33, which returns on a non-player caster
+	// (SpellEffects.cpp:1953-1957) and stays out on this path.
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectActivateObject:
+			s.server.creatureEffectActivateObject(ctx, motion, target, spell.Effects[i], hitTargets)
+		case spellEffectGameObjectDamage:
+			s.server.creatureEffectGameObjectDamage(ctx, motion, spell, spell.ID, target, spell.Effects[i], hitTargets)
+		case spellEffectGameObjectRepair:
+			s.server.creatureEffectGameObjectRepair(ctx, motion, spell, spell.ID, target, spell.Effects[i], hitTargets)
+		case spellEffectGameObjectSetDestructionState:
+			s.server.creatureEffectGameObjectSetDestructionState(ctx, motion, target, spell.Effects[i], hitTargets)
+		}
+	}
+	// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject
+	// (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927)
+	// on the pet path, same dispatch-ahead-of-damage position as the
+	// inline block: all four are SPELL_EFFECT_HANDLE_HIT arms, once per
+	// cast on the caster, not per hit target (the summon-type helper
+	// itself keeps only the 28 effect). Previously a pet-cast spell
+	// carrying any of these effects summoned or transmitted nothing
+	// server-side (non-pet creature casts ride the twin).
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectTransmitted:
+			s.server.creatureEffectTransmitted(ctx, motion, target, spell, spell.Effects[i])
+		}
+	}
+	s.server.creatureEffectSummonType(ctx, motion, spell, hasDest, dx, dy, dz)
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+			s.server.creatureEffectSummonObject(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
+		case spellEffectSummonObjectWild:
+			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
+		}
 	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
