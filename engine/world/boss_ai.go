@@ -2078,6 +2078,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectHeal:
 				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectHealMechanical:
+				s.creatureEffectHealMechanical(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealMaxHealth:
 				s.creatureEffectHealMaxHealth(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealPct:
@@ -2238,6 +2240,51 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectTaxi(ctx, m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
 				s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
+	// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) +
+	// EffectDismissPet (:4201) + EffectInebriate (:4143) +
+	// EffectRenamePet (:5525) + EffectActivateSpec (:5567) +
+	// EffectDurabilityDamage (:4857) + EffectDurabilityDamagePCT
+	// (:4886) for a creature caster: the HIT_TARGET arms, grouped
+	// with the other effect-grouped arms above. The learn-pet-spell
+	// player leg, the inebriate/durability value rolls, and the
+	// spec-select value all run at the caster's level through the
+	// helpers' casterLevel parameters; the dismiss-pet and
+	// rename-pet legs resolve the pet's owner session. Stay-outs,
+	// verified against the C++ bodies this tick: summon-player 85
+	// (SendSummonRequestFrom reads the summoner's live position and
+	// zone, and the Go summon model resolves both from a player
+	// session — a creature summoner leaves the pending summon
+	// locationless); summon-RAF-friend 152 (m_caster TYPEID_PLAYER
+	// gate); create-tamed-pet 153 (hunter player target with no pet
+	// plus CreateTamedPetFrom/SetMinion/talent init, unmodeled);
+	// extra-attacks 19 (the bank lives on the caster session only,
+	// and a creature caster has no extra-attacks counter);
+	// destroy-all-totems 110 (HANDLE_HIT caster leg over the
+	// caster's totem slots, which are player-session state);
+	// farsight 72 / stuck 84 / summon-change-item 34 / glyph 74
+	// (caster-player legs: dynamic-object viewpoint, unstuck
+	// teleport, cast-item swap, glyph socket); force-deselect 93
+	// (HANDLE_HIT hostile broadcast around the caster — a
+	// creature-position twin is a next-strip candidate, not a
+	// session-helper arm). Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectLearnPetSpell:
+				s.creatureEffectLearnPetSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectDismissPet:
+				s.creatureEffectDismissPet(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectInebriate:
+				s.creatureEffectInebriate(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectAllowRenamePet:
+				s.creatureEffectAllowRenamePet(ctx, m, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectTalentSpecSelect:
+				s.creatureEffectTalentSpecSelect(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
+				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3571,7 +3618,7 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 // for a creature caster: the HIT_TARGET arm, player and creature hit
 // targets alike (shared delivery in creatureEffectHealCommon).
 func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
-	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, false)
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, false, false)
 }
 
 // creatureEffectHealPct mirrors Spell::EffectHealPct (SpellEffects.cpp:1477)
@@ -3583,12 +3630,16 @@ func (s *Server) creatureEffectHeal(ctx context.Context, m *creatureMotion, spel
 // client path's 10/136 comment) — none of them runs here. Otherwise the
 // delivery is the shared creatureEffectHealCommon body.
 func (s *Server) creatureEffectHealPct(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
-	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true, false)
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, true, false, false)
 }
 
 // creatureEffectHealCommon is the shared HIT_TARGET heal delivery for
-// EffectHeal (SpellEffects.cpp:1393), in pctMode EffectHealPct, and in
-// rawMode EffectHealMaxHealth (SpellEffects.cpp:3488). In rawMode the base
+// EffectHeal (SpellEffects.cpp:1393), in pctMode EffectHealPct, in
+// rawMode EffectHealMaxHealth (SpellEffects.cpp:3488), and in mechMode
+// EffectHealMechanical (SpellEffects.cpp:1495), which is the flat
+// EffectHeal delivery minus the EffectHeal-only arms (Death Pact,
+// Vessel of the Naaru, Swiftmend, Grievous Bite removal) — the 75 body
+// runs only the Done/Taken folds. In rawMode the base
 // value is only the effect value's zero test (see creatureEffectHealMaxHealth),
 // the EffectHeal-only arms do not run, and the Grievous Bite removal does
 // not run, and neither Done nor Taken fold runs (the 67 body calls neither;
@@ -3608,7 +3659,7 @@ func (s *Server) creatureEffectHealPct(ctx context.Context, m *creatureMotion, s
 // the capped health gain, the heal log, and the Grievous Bite removal
 // run in C++ order. Chain falloff has no model on this path (the cast
 // carries no chain-jump index), so the chain multiplier is 1.
-func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool, rawMode bool) {
+func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool, rawMode bool, mechMode bool) {
 	if s == nil || m == nil {
 		return
 	}
@@ -3616,10 +3667,10 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 	if base < 0 && !rawMode {
 		return
 	}
-	if !pctMode && !rawMode && spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
+	if !pctMode && !rawMode && !mechMode && spell.SpellFamilyName == spellFamilyDeathKnight && spell.SpellFamilyFlags[0]&0x80000 != 0 {
 		base = int32(uint64(m.MaxHealth) * uint64(base) / 100)
 	}
-	if !pctMode && !rawMode && spell.ID == 45064 {
+	if !pctMode && !rawMode && !mechMode && spell.ID == 45064 {
 		casterKey := creatureAuraKeyForMotion(m)
 		s.auraMu.Lock()
 		var holyEnergy uint32
@@ -3632,7 +3683,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			s.removeCreatureAura(casterKey, 45062)
 		}
 	}
-	swiftmend := !pctMode && !rawMode && spell.TargetAuraState == auraStateSwiftmend
+	swiftmend := !pctMode && !rawMode && !mechMode && spell.TargetAuraState == auraStateSwiftmend
 	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
 	casterKey := creatureAuraKeyForMotion(m)
 	for _, guid := range hitTargets {
@@ -3802,7 +3853,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, true)
 		}
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, vs)
-		if !pctMode && !rawMode {
+		if !pctMode && !rawMode && !mechMode {
 			if vs != nil {
 				vs.removeGrievousBiteIfFullyHealed(guid)
 			} else if tm != nil && tm.MaxHealth > 0 {
@@ -4211,7 +4262,15 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 // otherwise the delivery is the shared creatureEffectHealCommon body in
 // rawMode (no Done/Taken folds, per the 67 body and HealBySpell).
 func (s *Server) creatureEffectHealMaxHealth(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
-	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, true)
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, true, false)
+}
+
+// creatureEffectHealMechanical mirrors Spell::EffectHealMechanical
+// (SpellEffects.cpp:1495) for a creature caster: the HIT_TARGET arm,
+// the flat heal delivery in mechMode. The damage<0 and !IsAlive
+// gates ride the shared common (base<0 return, dead-target skip).
+func (s *Server) creatureEffectHealMechanical(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	s.creatureEffectHealCommon(ctx, m, spell, eff, hitTargets, reflected, evaded, immune, missed, false, false, true)
 }
 
 // creatureEffectRemoveAura mirrors Spell::EffectRemoveAura
@@ -5408,6 +5467,170 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 		launchTarget = m.GUID
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
+}
+
+// creatureEffectLearnPetSpell mirrors Spell::EffectLearnPetSpell
+// (SpellEffects.cpp:3105) for a creature caster: the HIT_TARGET arm.
+// A player hit target runs the EffectLearnSpell path at the caster's
+// level (the learn-spell arm's shape, including its damage carve-out
+// handling in the helper); any pet unit target teaches the effect's
+// TriggerSpell through its owner's session; other targets learn
+// nothing, matching the C++ ToPlayer/ToPet delegation.
+func (s *Server) creatureEffectLearnPetSpell(ctx context.Context, m *creatureMotion, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.learnSpellEffectTarget(ctx, spellID, spell, eff, uint32(m.Level))
+			continue
+		}
+		if os := s.findSessionByPetGUID(guid); os != nil {
+			os.teachPetSpell(ctx, eff.TriggerSpell)
+		}
+	}
+}
+
+// creatureEffectDismissPet mirrors Spell::EffectDismissPet
+// (SpellEffects.cpp:4201) for a creature caster: the HIT_TARGET arm
+// gated on the target being a pet — the owning session dismisses
+// it; non-pet targets dismiss nothing (findSessionByPetGUID only
+// resolves pets).
+func (s *Server) creatureEffectDismissPet(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if os := s.findSessionByPetGUID(guid); os != nil && os.player != nil {
+			os.handleDismissPet(ctx, spellID)
+		}
+	}
+}
+
+// creatureEffectInebriate mirrors Spell::EffectInebriate
+// (SpellEffects.cpp:4143) for a creature caster: the HIT_TARGET arm,
+// each player hit target via its own session's helper. The
+// drunkenness gain rolls at the caster's level through the helper's
+// casterLevel parameter, and the cast-item entry is 0 — a creature
+// cast carries no cast item, matching C++ m_CastItem null.
+func (s *Server) creatureEffectInebriate(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.handleEffectInebriate(ctx, spell, eff, []uint64{guid}, 0, uint32(m.Level))
+	}
+}
+
+// creatureEffectAllowRenamePet mirrors Spell::EffectRenamePet
+// (SpellEffects.cpp:5525) for a creature caster: the HIT_TARGET arm.
+// The pet's owner session runs the helper, which gates on the
+// target being that owner's hunter pet; any other target is a
+// no-op.
+func (s *Server) creatureEffectAllowRenamePet(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if os := s.findSessionByPetGUID(guid); os != nil && os.player != nil {
+			os.handleEffectAllowRenamePet(ctx, []uint64{guid})
+		}
+	}
+}
+
+// creatureEffectTalentSpecSelect mirrors Spell::EffectActivateSpec
+// (SpellEffects.cpp:5567) for a creature caster: the HIT_TARGET arm,
+// each player hit target activates spec damage-1 through its own
+// session's helper, the value rolling at the caster's level. The
+// helper's spec-range and already-active gates ride along.
+func (s *Server) creatureEffectTalentSpecSelect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.activateSpec(ctx, uint8(eff.CalcValueForLevel(spell, uint32(m.Level))-1))
+	}
+}
+
+// creatureEffectDurabilityDamage mirrors Spell::EffectDurabilityDamage
+// (SpellEffects.cpp:4857) and EffectDurabilityDamagePCT (:4886) for
+// a creature caster: the HIT_TARGET arms, each player hit target via
+// its own session's helper, the damage rolling at the caster's level
+// through the helper's casterLevel parameter. The slot, all-items,
+// and pct gates ride the helper.
+func (s *Server) creatureEffectDurabilityDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		targetSess := s.findSessionByGUID(guid)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		targetSess.handleEffectDurabilityDamage(ctx, spell, spellID, eff, []uint64{guid}, uint32(m.Level))
+	}
 }
 
 func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {

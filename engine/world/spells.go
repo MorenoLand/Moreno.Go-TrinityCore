@@ -11725,7 +11725,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectKnockBack, spellEffectKnockBackDest: // 98/144: SPELL_EFFECT_KNOCK_BACK* (EffectKnockBack, SpellEffects.cpp:4552)
 				s.handleEffectKnockBack(effCtx, spell, eff, hitTargets, target)
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct: // 111/115: SPELL_EFFECT_DURABILITY_DAMAGE* (EffectDurabilityDamage*, SpellEffects.cpp:4857)
-				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, hitTargets)
+				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, hitTargets, casterLevel)
 			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
 				s.handleEffectQuestClear(effCtx, eff, hitTargets)
 			case spellEffectQuestFail: // 147: SPELL_EFFECT_QUEST_FAIL (EffectQuestFail, SpellEffects.cpp:5283)
@@ -11845,7 +11845,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: player targets gain effect damage drunkenness
 				// (capped at 100, with a 25% Drunken Vomit cast when the cap
 				// is hit from below).
-				s.handleEffectInebriate(effCtx, spell, eff, hitTargets, castItemEntry)
+				s.handleEffectInebriate(effCtx, spell, eff, hitTargets, castItemEntry, casterLevel)
 			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
 				// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
 				// SpellEffects.cpp:4215). C++ runs this once at
@@ -17532,7 +17532,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					inebriateItemEntry = uint32(itemEntry)
 				}
 			}
-			s.handleEffectInebriate(ctx, spell, eff, inebriateGUIDs, inebriateItemEntry)
+			s.handleEffectInebriate(ctx, spell, eff, inebriateGUIDs, inebriateItemEntry, casterLevel)
 		}
 		if eff.Effect == spellEffectActivateObject || eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
 			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
@@ -18157,7 +18157,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// (SpellEffects.cpp:4857/4886) run at HIT_TARGET per
 				// player unit target: the client arm's helper over the
 				// single miss-filtered target.
-				s.handleEffectDurabilityDamage(ctx, spell, spellID, eff, []uint64{effectTarget})
+				s.handleEffectDurabilityDamage(ctx, spell, spellID, eff, []uint64{effectTarget}, casterLevel)
 			} else if eff.Effect == spellEffectLearnSpell {
 				// Spell::EffectLearnSpell (SpellEffects.cpp:2406) runs at
 				// HIT_TARGET per unit target: the client arm's legs over
@@ -36336,12 +36336,15 @@ func (s *session) takeCastButtonsSpellPower(ctx context.Context, spell wotlk.Spe
 // gain effect damage drunkenness, capped at 100 — hitting the cap from below
 // rolls a 25% Drunken Vomit (67468) self-cast. Creature targets are an
 // explicit no-op arm (TYPEID_PLAYER gate).
-func (s *session) handleEffectInebriate(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, castItemEntry uint32) {
+func (s *session) handleEffectInebriate(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, castItemEntry uint32, casterLevel uint32) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	// SpellEffects.cpp:4143 — the drunkenness gain is the rolled damage.
-	drunkMod := uint16(eff.CalcValueForLevel(spell, uint32(s.player.Level)))
+	// SpellEffects.cpp:4143 — the drunkenness gain is the rolled damage
+	// at the caster's level (the caller passes it: the caster session's
+	// level on the player paths, the creature's level on the
+	// creature path).
+	drunkMod := uint16(eff.CalcValueForLevel(spell, casterLevel))
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
 			continue
@@ -39077,17 +39080,16 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 // SPELL_AURA_PREVENT_DURABILITY_LOSS gate and the _ApplyItemMods stat strip
 // on the 0-crossing follow the Go durability convention (DB-backed +
 // inventory refresh, same as rollDurabilityLossOnHit/durabilityLossAll).
-func (s *session) handleEffectDurabilityDamage(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectDurabilityDamage(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, casterLevel uint32) {
 	if s == nil || s.server == nil {
 		return
 	}
 	isPct := eff.Effect == spellEffectDurabilityDamagePct
-	// Spell::EffectDurabilityDamage — DurabilityPointsLossAll(damage).
-	var durabilityCasterLevel uint32
-	if s.player != nil {
-		durabilityCasterLevel = uint32(s.player.Level)
-	}
-	damage := eff.CalcValueForLevel(spell, durabilityCasterLevel)
+	// Spell::EffectDurabilityDamage — DurabilityPointsLossAll(damage),
+	// the value rolling at the caster's level (the caller passes it:
+	// the caster session's level on the player paths, the creature's
+	// level on the creature path).
+	damage := eff.CalcValueForLevel(spell, casterLevel)
 	slot := eff.MiscValue
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 {
