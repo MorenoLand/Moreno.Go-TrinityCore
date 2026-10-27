@@ -2398,17 +2398,13 @@ const bgPrematureFinishTime = 5 * time.Minute
 // bgPrematureMinPlayers returns the battleground_template MinPlayersPerTeam
 // for mapID: Battleground::GetMinPlayersPerTeam (Battleground.cpp:208),
 // copied onto the instance at creation (BattlegroundMgr.cpp:505), read from
-// the template store loadBattlegroundTemplates fills. While the table is
+// the loaded template store via bgTemplateForType. While the table is
 // unseeded (this repo's world.sql) or holds no row for the type, the
 // shipped-template fallback below applies.
 func (s *Server) bgPrematureMinPlayers(mapID uint32) int {
 	if s != nil {
-		s.loadBattlegroundTemplates(context.Background())
 		if bgTypeID, _, _, ok := battlegroundTypeForMap(mapID); ok {
-			s.bgTemplatesMu.Lock()
-			tmpl := s.bgTemplates[bgTypeID]
-			s.bgTemplatesMu.Unlock()
-			if tmpl != nil {
+			if tmpl := s.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
 				return int(tmpl.minPlayersPerTeam)
 			}
 		}

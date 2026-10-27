@@ -111,11 +111,10 @@ func buildPlayerJoinedBattlegroundPacket(guid uint64) []byte {
 // instances plus the template store, and none has a Go twin.
 //
 // NOT ported: the GetBattlegroundTemplate registry lookup and template-copy
-// switch (BattlegroundMgr.cpp:355-408); GetRandomBG (BattlegroundMgr.cpp:968-
-// 990 — weighted pick over the BattlemasterEntry MapID list; the
-// weighted-pick kernel itself is ported below and Weight now loads with the
-// template store, but the MapID list still needs the BattlemasterEntry
-// record); the Set*/Reset wiring chain (BattlegroundMgr.cpp:417-422); the
+// switch (BattlegroundMgr.cpp:355-408); the CreateNewBattleground call site
+// of GetRandomBG (BattlegroundMgr.cpp:353 — the GetRandomBG pick itself is
+// ported below as getRandomBG); the Set*/Reset wiring chain
+// (BattlegroundMgr.cpp:417-422); the
 // start-location and script-id arms of LoadBattlegroundTemplates
 // (BattlegroundMgr.cpp:518-571 — AllianceStartLoc/HordeStartLoc resolved
 // through WorldSafeLocs.dbc, ScriptName through the script registry) and
@@ -156,8 +155,8 @@ func bgInstanceIsRandom(resolvedBgTypeID, originalBgTypeID uint32, isArena bool)
 // (src/common/Utilities/Random.cpp:87-91 — std::discrete_distribution over
 // the weight array): index i is picked with probability w_i / sum. The
 // caller supplies the uniform [0,1) roll, matching the seeded
-// RandomEngine draw in C++. BattlegroundMgr::GetRandomBG uses it over the
-// BattlemasterEntry MapID list with each candidate's Weight.
+// RandomEngine draw in C++. getRandomBG uses it over the BattlemasterEntry
+// MapID list with each candidate's Weight.
 
 func weightedRandomIndex(weights []float64, roll float64) int {
 	sum := 0.0
@@ -172,6 +171,57 @@ func weightedRandomIndex(weights []float64, roll float64) int {
 		}
 	}
 	return len(weights) - 1
+}
+
+// getRandomBG is the Go form of BattlegroundMgr::GetRandomBG
+// (BattlegroundMgr.cpp:968-992): the queued type's template must exist in
+// the loaded store (GetBattlegroundTemplateByTypeId), then each MapID of
+// its BattlemasterList.dbc entry (fields 1-8, DBCStructure.h:295-303, -1
+// terminates the list) resolves through battlegroundTypeForMap +
+// bgTemplateForType, the GetBattlegroundTemplateByMapId direction — only
+// maps with a loaded template row contribute, with that row's Weight —
+// and weightedRandomIndex picks over the candidates. No template, no DBC
+// entry, or no candidate returns BATTLEGROUND_TYPE_NONE. The caller
+// supplies the uniform [0,1) roll, the weightedRandomIndex convention.
+// CreateNewBattleground has no Go twin yet, so no live caller exists;
+// the simulated RB queue pop still maps type 32 to map 0.
+func (s *Server) getRandomBG(ctx context.Context, bgTypeID uint32, roll float64) uint32 {
+	if s == nil || s.bgTemplateForType(ctx, bgTypeID) == nil {
+		return battlegroundTypeNone
+	}
+	if s.Data == nil {
+		return battlegroundTypeNone
+	}
+	file, err := s.Data.File("BattlemasterList")
+	if err != nil {
+		return battlegroundTypeNone
+	}
+	rec, found := file.Find(bgTypeID)
+	if !found {
+		return battlegroundTypeNone
+	}
+	var ids []uint32
+	var weights []float64
+	for field := 1; field <= 8; field++ {
+		mapID, err := rec.Int32(field)
+		if err != nil || mapID == -1 {
+			break
+		}
+		candidateType, _, _, ok := battlegroundTypeForMap(uint32(mapID))
+		if !ok {
+			continue
+		}
+		tmpl := s.bgTemplateForType(ctx, candidateType)
+		if tmpl == nil {
+			continue
+		}
+		ids = append(ids, candidateType)
+		weights = append(weights, float64(tmpl.weight))
+	}
+	if len(ids) == 0 {
+		return battlegroundTypeNone
+	}
+	return ids[weightedRandomIndex(weights, roll)]
 }
 
 // bgTemplate is the Go form of BattlegroundTemplate (BattlegroundMgr.h):
@@ -248,8 +298,8 @@ func (s *Server) loadBattlegroundTemplates(ctx context.Context) {
 
 // bgTemplateForType returns the loaded battleground_template row for a BG
 // type id, or nil when the store holds no row for it (unseeded table,
-// loader-skipped row, or no world DB). It lazy-loads the store exactly
-// like bgPrematureMinPlayers, so callers never query the table per call:
+// loader-skipped row, or no world DB). It lazy-loads the store, so
+// callers (including bgPrematureMinPlayers) never query the table per call:
 // in C++ every reader goes through the loaded _battlegroundTemplates map
 // (BattlegroundMgr::GetBattlegroundTemplate), never a fresh DB read.
 func (s *Server) bgTemplateForType(ctx context.Context, bgTypeID uint32) *bgTemplate {
