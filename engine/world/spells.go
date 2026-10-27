@@ -17732,6 +17732,42 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// helper covers player targets only, same as the client
 				// arm (creature casts have no interrupt model here).
 				s.handleEffectInterruptCast(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectKnockBack || eff.Effect == spellEffectKnockBackDest {
+				// Spell::EffectKnockBack (SpellEffects.cpp:4552) runs at
+				// HIT_TARGET per unit target; the client arm's helper over
+				// the single miss-filtered target. The 144 dest leg stays
+				// gated: this path's spellTarget carries no Destination
+				// (unit-wire flags only), so C++'s !HasDst return holds
+				// and only the 98 caster-point leg can fire here.
+				s.handleEffectKnockBack(ctx, spell, eff, []uint64{effectTarget}, spellTarget)
+			} else if eff.Effect == spellEffectModifyThreatPercent {
+				// Spell::EffectModifyThreatPercent (SpellEffects.cpp:4915)
+				// runs at HIT_TARGET per unit target on the target's
+				// threat manager; the client arm's helper over the single
+				// miss-filtered target (its damage leg is CalcValue,
+				// the triggered path's CalculateDamage twin).
+				s.handleEffectModifyThreatPercent(ctx, spell, eff, []uint64{effectTarget})
+			} else if eff.Effect == 114 {
+				// Spell::EffectTaunt (SpellEffects.cpp:3131, SPELL_EFFECT_
+				// ATTACK_ME) runs at HIT_TARGET per unit target; the client
+				// arm's helper over the miss-filtered target (totem and
+				// no-threat-list gates ride along).
+				s.handleEffectTaunt(ctx, effectTarget, spellID)
+			} else if eff.Effect == spellEffectForceCast || eff.Effect == spellEffectForceCastWithValue || eff.Effect == spellEffectForceCast2 {
+				// Spell::EffectForceCast (SpellEffects.cpp:1048) runs at
+				// HIT_TARGET per unit target; the client arm's helper over
+				// the single miss-filtered target (player-session forced
+				// casters only, same as the client arm).
+				s.handleEffectForceCast(ctx, spell, spellID, eff, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectKillCredit {
+				// Spell::EffectKillCreditPersonal (SpellEffects.cpp:5253)
+				// runs at HIT_TARGET per player unit target.
+				s.handleEffectKillCredit(ctx, effectTarget, eff.MiscValue)
+			} else if eff.Effect == spellEffectKillCreditGroup {
+				// Spell::EffectKillCredit (SpellEffects.cpp:5264) runs at
+				// HIT_TARGET per player unit target, with the Burn Body
+				// (42793) entry fallback inside the helper.
+				s.handleEffectKillCreditGroup(ctx, effectTarget, spellID, eff.MiscValue)
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
