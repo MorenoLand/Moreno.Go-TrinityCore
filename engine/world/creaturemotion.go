@@ -3439,6 +3439,27 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Spell::_cast creature SetInFront leg (Spell.cpp:3404-3409,
+					// Unit::SetInFront, Unit.cpp:13663-13667), the inline twin of
+					// the castCreatureSpellInternal arm: a creature caster with a
+					// resolving non-empty combat target that isn't possessed faces
+					// it before SelectSpellTargets. Keys on the combat target
+					// (motion.TargetGUID), not the spell target; the
+					// UNIT_STATE_CANNOT_TURN gate has no Go model (same standing
+					// no-bridge as the twin). Placed after the CheckCast gates
+					// above and ahead of the redirect/selection legs below,
+					// matching C++ relative order (CheckCast precedes _cast's
+					// 3404 facing, which precedes SelectSpellTargets at 3410) —
+					// so the cone legs below read the faced orientation.
+					if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 {
+						if tx, ty, ok := s.creatureUnitTargetPos(motion, motion.TargetGUID); ok {
+							angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
+							if angle < 0 {
+								angle += 2 * math.Pi
+							}
+							motion.Orientation = angle
+						}
+					}
 					// Spell::SelectExplicitTargets magic-redirect arm (Spell.cpp:724-757),
 					// the inline twin of the castCreatureSpellInternal arm: a live
 					// Grounding Totem magnet on the wire victim pulls the cast onto the
@@ -3789,6 +3810,101 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					if isFriendlyNearbySpell(inlineSpell) && friendlyPick != nearby && !friendlyJoinedLegs {
 						hitTargets = append(hitTargets, friendlyPick)
+					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) post-nearby
+					// re-sweep, the inline twin of the castCreatureSpellInternal
+					// order: C++ runs nearby (1036) ahead of area (1227), so the
+					// twin's area sweeps exclude the nearby pick — the inline
+					// area legs above ran ahead of the nearby block and excluded
+					// the wire victim instead, so a wire victim standing in the
+					// area took no leg here while the twin gives it an area leg.
+					// Re-sweeping the pre-nearby families with the pick as the
+					// exclusion admits exactly that victim (the geometry is
+					// identical; only the excluded GUID differs) — merged deduped
+					// against hitTargets so no leg double-hits. The friendly-area
+					// family needs no re-sweep: the wire victim is the hostile
+					// combat victim, so it can never join an ally sweep.
+					// The dest variables live in the spellKnown block above, out of
+					// scope here — read the resolved dest back out of spellTarget
+					// like the GO block below does; it carries the post-redirect
+					// dest exactly when one resolved.
+					mergeDestX, mergeDestY, mergeDestZ, mergeHasDest := float32(0), float32(0), float32(0), false
+					if spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+						mergeDestX, mergeDestY, mergeDestZ, mergeHasDest = spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, true
+					}
+					if isAreaEnemySpell(inlineSpell) {
+						pickVictim := &playerPos{GUID: nearby}
+						for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest) {
+							if areaHit == nil || areaHit.GUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == areaHit.GUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaHits = append(areaHits, areaHit)
+							hitTargets = append(hitTargets, areaHit.GUID)
+						}
+						for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest) {
+							if areaCreatureGUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == areaCreatureGUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
+							hitTargets = append(hitTargets, areaCreatureGUID)
+						}
+					}
+					if isEntryAreaSpell(inlineSpell) {
+						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, inlineSpell, nearby, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest)
+						for _, entryHit := range entryPlayers {
+							if entryHit == nil || entryHit.GUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == entryHit.GUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaHits = append(areaHits, entryHit)
+							hitTargets = append(hitTargets, entryHit.GUID)
+						}
+						for _, entryCreatureGUID := range entryCreatures {
+							if entryCreatureGUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == entryCreatureGUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaCreatureHits = append(areaCreatureHits, entryCreatureGUID)
+							hitTargets = append(hitTargets, entryCreatureGUID)
+						}
 					}
 				}
 				// Spell::SelectImplicitConeTargets (Spell.cpp:1176) for a
