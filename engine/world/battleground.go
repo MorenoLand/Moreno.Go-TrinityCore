@@ -2066,7 +2066,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	startTime := time.Now()
 	var clientInstanceID uint32
 	if isArena && s.server != nil {
-		arena := s.server.findArenaState(state.Map, 0)
+		arena := s.server.findArenaStateForPlayer(s.playerGUID)
 		if arena == nil {
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
@@ -3731,7 +3731,7 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	// both are on the same team. Go has no live battleground instance model outside
 	// arenas, so the gates are mapped onto the live arena state; reports on non-arena
 	// maps are silent no-ops, as they would be in C++ with GetBattleground() null.
-	arena := s.server.findArenaState(s.player.Map, 0)
+	arena := s.server.findArenaStateForPlayer(s.playerGUID)
 	if arena == nil {
 		return true
 	}

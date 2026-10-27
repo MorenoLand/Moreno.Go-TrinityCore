@@ -415,33 +415,6 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 	return state
 }
 
-// findArenaState retrieves an existing arena state for a map and instance.
-func (s *Server) findArenaState(mapID, instanceID uint32) *arenaBattlegroundState {
-	if s == nil {
-		return nil
-	}
-	s.arenaMu.RLock()
-	defer s.arenaMu.RUnlock()
-	if s.arenaState == nil {
-		return nil
-	}
-	if instanceID != 0 {
-		key := (uint64(mapID) << 32) | uint64(instanceID)
-		if state := s.arenaState[key]; state != nil {
-			return state
-		}
-	}
-	if state := s.arenaState[uint64(mapID)]; state != nil {
-		return state
-	}
-	for _, state := range s.arenaState {
-		if state != nil && state.MapID == mapID {
-			return state
-		}
-	}
-	return nil
-}
-
 // findArenaStateForPlayer resolves the arena a player belongs to by roster
 // membership (PlayerTeams), not by standing map. C++ UpdatePlayerScore
 // (Battleground.cpp:1225-1228) keys on the player's Battleground pointer
@@ -1349,7 +1322,7 @@ func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, gu
 		// Go-side, but its audience follows the same m_Players rule as
 		// every other arena announcement, not the map's players.
 		s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
-		s.scheduleArenaShadowSightRespawn(arena.MapID, guid)
+		s.scheduleArenaShadowSightRespawn(arena, guid)
 		return true
 	default:
 		return true
@@ -1362,16 +1335,22 @@ func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, gu
 // the buff gameobject; setGameObjectHidden(false) is the established respawn
 // primitive (EOTS/WSG flag-return precedent). A fire landing after the match
 // ended is a no-op (EOTS respawn-timer battle-over gate).
-func (s *Server) scheduleArenaShadowSightRespawn(mapID uint32, guid uint64) {
+func (s *Server) scheduleArenaShadowSightRespawn(arena *arenaBattlegroundState, guid uint64) {
+	if s == nil || arena == nil {
+		return
+	}
 	delay := ArenaShadowSightRespawnDelay
-	if mapID == ArenaMapRingOfValor {
+	if arena.MapID == ArenaMapRingOfValor {
 		delay = ArenaShadowSightRespawnDelayRV
 	}
 	time.AfterFunc(delay, func() {
 		if s == nil {
 			return
 		}
-		if arena := s.findArenaState(mapID, 0); arena != nil && arena.Winner != ArenaTeamNone {
+		arena.mu.RLock()
+		ended := arena.Winner != ArenaTeamNone
+		arena.mu.RUnlock()
+		if ended {
 			return
 		}
 		s.setGameObjectHidden(guid, false)
@@ -1463,11 +1442,11 @@ func (s *Server) broadcastArenaStartTextToRoster(arena *arenaBattlegroundState, 
 // in-progress arena (status gate applied by the caller in areatrigger.go).
 // Reference: BattlegroundNA/BE/RL/DS/RV::HandleAreaTrigger; Battleground::
 // HandleAreaTrigger is empty, so only the arena map scripts have trigger arms.
-func (s *session) handleArenaAreaTrigger(triggerID, mapID uint32) {
-	if s == nil || s.player == nil {
+func (s *session) handleArenaAreaTrigger(triggerID uint32, arena *arenaBattlegroundState) {
+	if s == nil || s.player == nil || arena == nil {
 		return
 	}
-	switch mapID {
+	switch arena.MapID {
 	case ArenaMapDalaranSewers:
 		switch triggerID {
 		case 5347, 5348:
@@ -1475,13 +1454,11 @@ func (s *session) handleArenaAreaTrigger(triggerID, mapID uint32) {
 			// Circle; if the pipe knockback has already been performed, the
 			// count resets so the player is kicked into the arena again.
 			s.removeAura(SpellWarlDemonicCircle)
-			if arena := s.server.findArenaState(mapID, 0); arena != nil {
-				arena.mu.Lock()
-				if arena.DSPipeCount >= DSPipeKnockbackTotalCount {
-					arena.DSPipeCount = 0
-				}
-				arena.mu.Unlock()
+			arena.mu.Lock()
+			if arena.DSPipeCount >= DSPipeKnockbackTotalCount {
+				arena.DSPipeCount = 0
 			}
+			arena.mu.Unlock()
 		}
 	case ArenaMapNagrand:
 		// 4536, 4537: swallowed buff triggers, no-op in C++ and Go.

@@ -2044,10 +2044,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				if duelDefeatOnDamage(vicSess, s.playerGUID, damage, victimHealth) {
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
 				} else if victimHealth > 0 && damage+1 >= victimHealth {
-					if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+					if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
 						arena.mu.Lock()
-						if sc, ok := arena.Scores[s.playerGUID]; ok {
-							sc.KillingBlows++
+						if arena.Status == ArenaStatusInProgress && s.playerGUID != vicSess.playerGUID {
+							if sc, ok := arena.Scores[s.playerGUID]; ok {
+								sc.KillingBlows++
+							}
 						}
 						arena.mu.Unlock()
 					}
