@@ -4119,6 +4119,16 @@ func (s *session) lootReleaseCleanupAllowed(loot *activeLootState) bool {
 	if s == nil || s.server == nil || loot == nil {
 		return false
 	}
+	// WorldSession::DoLootRelease creature arm (LootHandler.cpp:372):
+	// the creature lookup reads the player's CURRENT map
+	// (GetMap()->GetCreature), so a release after a far teleport finds
+	// nothing — the old-map motion lookup below plus its 3D-only
+	// distance check could otherwise pass at coincident coordinates on
+	// the new map and clear a creature the player left behind. The
+	// same-map behavior is unchanged: the gate only fires cross-map.
+	if s.player != nil && (loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID) {
+		return false
+	}
 	if high := uint16(loot.TargetGUID >> 48); high == 0xF110 {
 		return true
 	}
@@ -4142,7 +4152,21 @@ func (s *session) lootReleaseCleanupAllowed(loot *activeLootState) bool {
 }
 
 func (s *session) releaseActiveLoot() {
+	loot := s.activeLoot
 	s.releaseActiveLootCleanup(s.lootReleaseCleanupAllowed(s.activeLoot))
+	// WorldSession::DoLootRelease item arm (LootHandler.cpp:321-349) via
+	// Player::RemoveFromWorld (Player.cpp:1976-1979) and LogoutPlayer
+	// (WorldSession.cpp:511-512): both callers run DoLootRelease while the
+	// player is still in world, so the item arm runs there too — a
+	// fully-looted container is destroyed at teleport/logout, not left
+	// in inventory. The arm resolves by GetItemByGuid (inventory, not
+	// map), so it needs no cleanupAllowed gate: the creature-gated gate
+	// above is false for item loot (no creature motion decodes from an
+	// item GUID) and must not block the destroy. doLootRelease already
+	// runs this arm on the packet path; this is the packet-less twin.
+	if loot != nil && loot.LootItemGUID != 0 {
+		s.releaseItemLoot(loot)
+	}
 }
 
 // releaseActiveLootCleanup runs the unconditional release legs (loot-GUID

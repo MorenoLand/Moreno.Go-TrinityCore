@@ -3930,6 +3930,17 @@ func (s *session) releaseGameObjectLoot(loot *activeLootState, targetGUID uint64
 	if s == nil || s.server == nil {
 		return true
 	}
+	// WorldSession::DoLootRelease GameObject arm (LootHandler.cpp:270):
+	// the GO lookup reads the player's CURRENT map
+	// (GetMap()->GetGameObject), so a release after a far teleport finds
+	// nothing and runs no cleanup leg. The old-map state lookup below
+	// plus its 3D-only distance check could otherwise pass at coincident
+	// coordinates on the new map and run door-use, fishing-hole count,
+	// or despawn legs on a GO the player left behind. Same-map behavior
+	// is unchanged: the gate only fires cross-map.
+	if s.player != nil && (loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID) {
+		return false
+	}
 	goState := s.server.gameObjectState(loot.MapID, loot.InstanceID, targetGUID)
 	if goState == nil {
 		return true
