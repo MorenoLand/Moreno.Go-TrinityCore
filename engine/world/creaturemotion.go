@@ -4068,6 +4068,66 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectResurrect(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					case spellEffectResurrectNew:
 						s.creatureEffectResurrectNew(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectLeap:
+						s.creatureEffectLeap(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectTeleportUnitsFaceCaster:
+						s.creatureEffectTeleUnitsFaceCaster(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectPullTowards:
+						s.creatureEffectPullTowards(ctx, motion, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectPullTowardsDest:
+						s.creatureEffectPullTowardsDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectDistract:
+						s.creatureEffectDistract(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectSanctuary:
+						s.creatureEffectSanctuary(ctx, motion, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
+						s.creatureEffectQuest(ctx, motion, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectReputation:
+						s.creatureEffectReputation(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectAddHonor:
+						s.creatureEffectAddHonor(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectKillCredit, spellEffectKillCreditGroup:
+						s.creatureEffectKillCredit(ctx, motion, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectSkillStep:
+						s.creatureEffectSkillStep(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectEnvironmentalDamage:
+						s.creatureEffectEnvironmentalDamage(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectCreateItem, spellEffectCreateItem2:
+						s.creatureEffectCreateItem(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectLearnSpell:
+						s.creatureEffectLearnSpell(ctx, motion, spellID, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectPlaySound, spellEffectPlayMusic:
+						s.creatureEffectPlaySoundMusic(motion, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectSendTaxi, spellEffectDiscoverTaxi:
+						s.creatureEffectTaxi(ctx, motion, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectLearnPetSpell:
+						s.creatureEffectLearnPetSpell(ctx, motion, spellID, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectDismissPet:
+						s.creatureEffectDismissPet(ctx, motion, spellID, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectInebriate:
+						s.creatureEffectInebriate(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectAllowRenamePet:
+						s.creatureEffectAllowRenamePet(ctx, motion, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectTalentSpecSelect:
+						s.creatureEffectTalentSpecSelect(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
+						s.creatureEffectDurabilityDamage(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectBind:
+						s.creatureEffectBind(ctx, motion, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectEnchantHeldItem:
+						s.creatureEffectEnchantHeldItem(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectUnlearnSpecialization:
+						s.creatureEffectUnlearnSpecialization(ctx, motion, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectCreateRandomItem:
+						s.creatureEffectCreateRandomItem(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectUntrainTalents:
+						s.creatureEffectUntrainTalents(ctx, motion, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectTalentSpecCount:
+						s.creatureEffectTalentSpecCount(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectForceDeselect:
+						s.creatureEffectForceDeselect(ctx, motion)
+					case spellEffectScriptEffect:
+						s.creatureEffectScriptEffect(ctx, motion, spellID, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					}
 				}
 				// Spell::EffectActivateObject (SpellEffects.cpp:3938) + EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) + EffectGameObjectSetDestructionState (:5450) on the inline path, same dispatch-ahead-of-damage position: the GO arms over the GO GUIDs in hitTargets (the nearby-entry GO pick joins hitTargets ahead of dispatch; a wire GO GUID rides the same filter), mirroring the twin's GO block. Unit GUIDs in hitTargets take no leg in the twins.
@@ -4081,6 +4141,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectGameObjectRepair(ctx, motion, inlineSpell, spellID, spellTarget, inlineSpell.Effects[i], hitTargets)
 					case spellEffectGameObjectSetDestructionState:
 						s.creatureEffectGameObjectSetDestructionState(ctx, motion, spellTarget, inlineSpell.Effects[i], hitTargets)
+					}
+				}
+				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).
+				s.creatureEffectSummonType(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+				for i := range inlineSpell.Effects {
+					switch inlineSpell.Effects[i].Effect {
+					case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+						s.creatureEffectSummonObject(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+					case spellEffectSummonObjectWild:
+						s.creatureEffectSummonObjectWild(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+					case spellEffectTransmitted:
+						s.creatureEffectTransmitted(ctx, motion, spellTarget, inlineSpell, inlineSpell.Effects[i])
 					}
 				}
 			}
