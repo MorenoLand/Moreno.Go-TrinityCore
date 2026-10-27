@@ -360,12 +360,19 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 	s.arenaMu.Lock()
 	defer s.arenaMu.Unlock()
 	if s.arenaState == nil {
-		s.arenaState = make(map[uint32]*arenaBattlegroundState)
+		s.arenaState = make(map[uint64]*arenaBattlegroundState)
 	}
 
-	key := (mapID << 16) | (instanceID & 0xFFFF)
+	// Full-width registry key: the old (mapID << 16) | (instanceID & 0xFFFF)
+	// key collided once minted instance ids wrapped their low 16 bits (every
+	// 65536 pops on one map), handing a successor pop the still-live old
+	// state — live or ended — instead of a fresh one. C++ keys instances by
+	// full id (BattlegroundMgr::CreateNewBattleground mints a new object per
+	// match), so the key carries both ids whole; instanceID 0 keeps the
+	// map-keyed slot, as before.
+	key := (uint64(mapID) << 32) | uint64(instanceID)
 	if instanceID == 0 {
-		key = mapID
+		key = uint64(mapID)
 	}
 
 	state := s.arenaState[key]
@@ -419,12 +426,12 @@ func (s *Server) findArenaState(mapID, instanceID uint32) *arenaBattlegroundStat
 		return nil
 	}
 	if instanceID != 0 {
-		key := (mapID << 16) | (instanceID & 0xFFFF)
+		key := (uint64(mapID) << 32) | uint64(instanceID)
 		if state := s.arenaState[key]; state != nil {
 			return state
 		}
 	}
-	if state := s.arenaState[mapID]; state != nil {
+	if state := s.arenaState[uint64(mapID)]; state != nil {
 		return state
 	}
 	for _, state := range s.arenaState {

@@ -176,7 +176,7 @@ type Server struct {
 	bgTemplates               map[uint32]*bgTemplate // _battlegroundTemplates by type id (battleground_mgr.go), guarded by bgTemplatesMu
 	bgTemplatesLoaded         bool
 	arenaMu                   sync.RWMutex
-	arenaState                map[uint32]*arenaBattlegroundState
+	arenaState                map[uint64]*arenaBattlegroundState
 	arenaTickLast             time.Time
 	avTickLast                time.Time
 	eotsTickLast              time.Time
