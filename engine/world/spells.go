@@ -17295,6 +17295,40 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if aoeSchoolMask == 0 {
 			aoeSchoolMask = 1
 		}
+		if len(effectTargets) > 0 && (eff.Effect == spellEffectDummy || eff.Effect == spellEffectHealthLeech) {
+			effectGUIDs := make([]uint64, 0, len(effectTargets))
+			for _, et := range effectTargets {
+				effectGUIDs = append(effectGUIDs, et.guid)
+			}
+			if eff.Effect == spellEffectDummy {
+				// Spell::EffectDummy (SpellEffects.cpp:792) runs at
+				// HIT_TARGET per unit target; the Go-modelled legs are
+				// the client path's case-3 pair - the Raise Ally initial
+				// resurrect request and the pet-aura source registration
+				// (the AddPetAura leg) - and the triggered dispatch had
+				// neither, so a triggered dummy spell (e.g. an equip
+				// spell riding castSpellDirectWithOverrides) registered
+				// no pet aura source. Once per effect over the
+				// miss-filtered effect targets, mirroring the client
+				// arm; the DB-script leg has no Go model on either path.
+				if spellID == spellRaiseAllyInitial {
+					s.handleRaiseAllyInitial(ctx, spell, eff, effectGUIDs)
+				} else {
+					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
+				}
+			} else {
+				// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553)
+				// runs at HIT_TARGET per unit target; the triggered
+				// dispatch fell through on effect 9, so a triggered
+				// leech spell dealt nothing and healed nothing. The
+				// client arm's helper runs once per effect over the
+				// miss-filtered effect targets; its own gates (skip
+				// zero/self targets, caster-alive self-heal) ride along.
+				// Chain-jump scaling is not carried (the helper takes
+				// no jump index; leech spells do not chain).
+				s.handleEffectHealthLeech(ctx, spell, spellID, effectGUIDs, effectIndex, eff)
+			}
+		}
 		for _, et := range effectTargets {
 			effectTarget, jumpIndex := et.guid, et.jumpIndex
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
@@ -17490,6 +17524,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						comboGain += gain
 					}
 				}
+			} else if eff.Effect == spellEffectDispel {
+				// Spell::EffectDispel (SpellEffects.cpp:2429) runs at
+				// HIT_TARGET per unit target; the triggered dispatch
+				// fell through on effect 38, so a triggered dispel
+				// stripped nothing. Mirrors the client arm; the
+				// per-target reflect flag rides et.reflected (C++
+				// passes the target's own reflect state to
+				// GetDispellableAuraList).
+				s.handleEffectDispel(ctx, effectTarget, spell, eff, et.reflected)
+			} else if eff.Effect == spellEffectDispelMechanic {
+				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733)
+				// runs at HIT_TARGET per unit target; same dropped
+				// class as the dispel arm above.
+				s.handleEffectDispelMechanic(ctx, effectTarget, spell, eff)
 			}
 		}
 	}
