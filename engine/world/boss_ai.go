@@ -2192,10 +2192,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// owner-player and totem-owner legs need a player owner, and the
 	// ownerless leg is the properties-67 SummonGuardian arm that
 	// creatureEffectSummonType already skips as unmodeled); skill 118
-	// (the C++ body is a log line only); GO arms 86-89 (they need a
-	// gameObjTarget, and this path's spellTarget is unit-wire only);
-	// the totem family rides the creatureEffectSummonType TOTEM leg
-	// already (totem pulses stay out, as documented there). Gated on
+	// (the C++ body is a log line only); the totem family rides the
+	// creatureEffectSummonType TOTEM leg already (totem pulses stay out,
+	// as documented there). The GO arms 86-89 ride the GO-target block
+	// below (a nearby-entry GO pick joins hitTargets). Gated on
 	// spellKnown like the tail.
 	if spellKnown {
 		for i := range spellInfo.Effects {
@@ -2286,6 +2286,29 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
+			}
+		}
+	}
+	// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
+	// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
+	// EffectGameObjectSetDestructionState (:5450) for a creature caster:
+	// the HIT_TARGET GO arms, over the GO GUIDs in the hit list (the
+	// nearby-entry pick joins hitTargets ahead of the dispatch; a wire
+	// GO GUID rides the same filter). None of the four gates on a player
+	// caster in C++ — unlike open-lock 33, which returns on a non-player
+	// caster (SpellEffects.cpp:1953-1957) and stays out on this path.
+	// Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectActivateObject:
+				s.creatureEffectActivateObject(ctx, m, spellTarget, spellInfo.Effects[i], hitTargets)
+			case spellEffectGameObjectDamage:
+				s.creatureEffectGameObjectDamage(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], hitTargets)
+			case spellEffectGameObjectRepair:
+				s.creatureEffectGameObjectRepair(ctx, m, spellInfo, spellID, spellTarget, spellInfo.Effects[i], hitTargets)
+			case spellEffectGameObjectSetDestructionState:
+				s.creatureEffectGameObjectSetDestructionState(ctx, m, spellTarget, spellInfo.Effects[i], hitTargets)
 			}
 		}
 	}
@@ -5080,6 +5103,138 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 	s.motionMu.Unlock()
 	for _, st := range stopped {
 		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), nil)
+	}
+}
+
+// creatureEffectActivateObject mirrors Spell::EffectActivateObject
+// (SpellEffects.cpp:3938) for a creature caster: the HIT_TARGET arm over
+// the GO GUIDs in the hit list — the nearby-entry pick joins hitTargets
+// ahead of the effect dispatch, so a GO target surfaces on this path
+// even though the wire target is unit-only. Server-state arms run on the
+// caster's map/instance; the Disturb/Open GameObject::Use arm delegates
+// to the owner/charm session when one resolves (the dispel delegation
+// precedent) and stays out for wild casters (Use needs a player for
+// gossip/menus). ToggleOpen, Creation, SetTapList and None have no C++
+// arm and stay no-ops, like the session twin.
+func (s *Server) creatureEffectActivateObject(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	action := uint32(eff.MiscValue)
+	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+		switch {
+		case action >= goActionAnimateCustom0 && action <= goActionAnimateCustom3:
+			s.broadcastGameObjectCustomAnimInInstance(m.Map, m.InstanceID, goGUID, action-goActionAnimateCustom0)
+		case action == goActionDisturb || action == goActionOpen:
+			if owner := s.creatureCasterOwnerSession(m); owner != nil {
+				owner.activateGameObjectUse(ctx, goGUID)
+			}
+		case action == goActionOpenAndUnlock:
+			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, false, 0)
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, false)
+		case action == goActionUnlock:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, false)
+		case action == goActionLock:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, true)
+		case action == goActionClose || action == goActionRebuild:
+			s.resetDoorOrButton(m.Map, m.InstanceID, goGUID)
+		case action == goActionDespawn:
+			s.despawnDynamicGameObjectInInstance(m.Map, m.InstanceID, goGUID)
+		case action == goActionMakeInert:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagNotSelectable, true)
+		case action == goActionMakeActive:
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagNotSelectable, false)
+		case action == goActionCloseAndLock:
+			s.resetDoorOrButton(m.Map, m.InstanceID, goGUID)
+			s.applyGameObjectFlag(m.Map, m.InstanceID, goGUID, goFlagLocked, true)
+		case action == goActionDestroy:
+			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, true, 0)
+		case action >= goActionUseArtKit0 && action <= goActionUseArtKit3:
+			s.creatureActivateObjectArtKit(ctx, m, goGUID, action-goActionUseArtKit0)
+		}
+	}
+}
+
+// creatureActivateObjectArtKit is the creature-caster twin of the session
+// applyGameObjectArtKit arm of EffectActivateObject (SpellEffects.cpp:3989-4008):
+// the artkit comes from gameobject_template_addon and lands via the bytes1
+// dword on the caster's map/instance.
+func (s *Server) creatureActivateObjectArtKit(ctx context.Context, m *creatureMotion, goGUID uint64, artKitIndex uint32) {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil || artKitIndex > 3 {
+		return
+	}
+	entry := uint32((goGUID >> 24) & 0xFFFFFF)
+	var artkits [4]uint32
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(artkit0,0), COALESCE(artkit1,0), COALESCE(artkit2,0), COALESCE(artkit3,0) FROM gameobject_template_addon WHERE entry = ?", entry).Scan(&artkits[0], &artkits[1], &artkits[2], &artkits[3]); err != nil {
+		return
+	}
+	if artkits[artKitIndex] == 0 {
+		return
+	}
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(m.Map, m.InstanceID, goGUID)
+	if st != nil {
+		st.ArtKit = uint8(artkits[artKitIndex])
+	}
+	s.objectsMu.Unlock()
+	if st != nil {
+		s.broadcastGameObjectBytes1InInstance(m.Map, m.InstanceID, goGUID)
+	}
+}
+
+// creatureEffectGameObjectDamage mirrors Spell::EffectGameObjectDamage
+// (SpellEffects.cpp:5424) for a creature caster: the HIT_TARGET arm over
+// the GO GUIDs in the hit list, with the friendly-faction gate from the
+// session twin (the caster template reads via Data.FactionTemplate on
+// the creature's faction, the creature-side pattern) and the damage value
+// at the caster's level. The destructible-damage packet has no caster
+// client to notify, so notify is nil (nil-safe in
+// modifyDestructibleHealth).
+func (s *Server) creatureEffectGameObjectDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || m == nil || s.Data == nil {
+		return
+	}
+	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+		if faction, ok := s.gameObjectTargetFaction(ctx, m.Map, m.InstanceID, goGUID); ok && faction != 0 {
+			targetTpl, targetOK, _ := s.Data.FactionTemplate(faction)
+			casterTpl, casterOK, _ := s.Data.FactionTemplate(m.Faction)
+			if targetOK && (!casterOK || factionTemplateFriendlyTo(casterTpl, targetTpl)) {
+				continue
+			}
+		}
+		damage := eff.CalcValueForLevel(spell, m.Level)
+		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, -damage, m.GUID, spellID, nil)
+	}
+}
+
+// creatureEffectGameObjectRepair mirrors Spell::EffectGameObjectRepair
+// (SpellEffects.cpp:5439) for a creature caster: the HIT_TARGET arm over
+// the GO GUIDs in the hit list, no faction gate, value at the caster's
+// level, notify nil as in the damage twin.
+func (s *Server) creatureEffectGameObjectRepair(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+		damage := eff.CalcValueForLevel(spell, m.Level)
+		s.modifyDestructibleHealth(ctx, m.Map, m.InstanceID, goGUID, damage, m.GUID, spellID, nil)
+	}
+}
+
+// creatureEffectGameObjectSetDestructionState mirrors
+// Spell::EffectGameObjectSetDestructionState (SpellEffects.cpp:5450) for a
+// creature caster: the HIT_TARGET arm over the GO GUIDs in the hit list,
+// with the session twin's out-of-range MiscValue no-op.
+func (s *Server) creatureEffectGameObjectSetDestructionState(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, hitTargets []uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	state := uint8(eff.MiscValue)
+	if state > goDestructibleRebuilding {
+		return
+	}
+	for _, goGUID := range spellEffectGOTargets(spellTarget, hitTargets) {
+		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
 	}
 }
 
