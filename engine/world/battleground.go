@@ -2032,6 +2032,8 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	// (resurrect, aura strips, STATUS_NONE packet) have no slot to act
 	// on at login time, and the login resurrection leg already ran
 	// before this call.
+	startTime := time.Now()
+	var clientInstanceID uint32
 	if isArena && s.server != nil {
 		arena := s.server.findArenaState(state.Map, 0)
 		if arena == nil {
@@ -2043,6 +2045,11 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		arena.mu.Lock()
 		_, inRoster := arena.PlayerTeams[s.playerGUID]
 		waitLeave := arena.Status == ArenaStatusWaitLeave
+		if !arena.MatchStartTime.IsZero() {
+			startTime = arena.MatchStartTime
+		} else if !arena.StartTime.IsZero() {
+			startTime = arena.StartTime
+		}
 		if inRoster && waitLeave {
 			delete(arena.PlayerTeams, s.playerGUID)
 			delete(arena.Scores, s.playerGUID)
@@ -2082,6 +2089,12 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
+		if state.Map == WSGMapID {
+			if matchStart := s.server.peekWSGMatchStartTime(state.Map); !matchStart.IsZero() {
+				startTime = matchStart
+			}
+		}
+		clientInstanceID = s.server.peekBGClientInstanceID(s.bgData.InstanceID)
 	}
 	for index := range s.bgQueues {
 		if s.bgQueues[index].Active {
@@ -2090,10 +2103,14 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// bgData.Team is the teamForRace id (0 alliance / 1 horde); the status
 		// packet's arena-faction byte is the C++ wire value (1 alliance /
 		// 0 horde, Player::SetBGTeam).
-		// ClientInstanceID stays 0 here: character_battleground_data
-		// persists only the internal id, and C++ re-reads the client id
-		// from the live battleground object, which has no Go twin.
-		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: 1 - uint8(s.bgData.Team)}
+		// StartTime is the live match clock, not the login time: C++ Time2
+		// is time from bg start (BattlegroundMgr.cpp:225), so a login-time
+		// stamp resets the client's elapsed timer on every relog. The
+		// other five non-arena maps carry no start clock, so they keep
+		// the login time. ClientInstanceID is the pop-claimed display id
+		// for the persisted internal id; arenas keep 0 (arenas have no
+		// client-instance ids, BattlegroundMgr.cpp:325-328).
+		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: startTime, ClientInstanceID: clientInstanceID, ArenaFaction: 1 - uint8(s.bgData.Team)}
 		return
 	}
 }
@@ -2113,6 +2130,24 @@ func (s *session) relocateLoginToBGEntryPoint() {
 	s.player.Y = s.bgData.JoinY
 	s.player.Z = s.bgData.JoinZ
 	s.player.Orientation = s.bgData.JoinO
+}
+
+// peekWSGMatchStartTime reads the WSG state's lazily armed match clock
+// (MatchStartTime, the Go form of GetStartTime for the timeout arm) without
+// creating a state; zero when the match has seen no flag interaction yet.
+func (s *Server) peekWSGMatchStartTime(mapID uint32) time.Time {
+	if s == nil || mapID != WSGMapID {
+		return time.Time{}
+	}
+	s.wsgMu.RLock()
+	state := s.wsgState[mapID]
+	s.wsgMu.RUnlock()
+	if state == nil {
+		return time.Time{}
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.MatchStartTime
 }
 
 // peekNonArenaBGState peeks the per-map battleground state for the six

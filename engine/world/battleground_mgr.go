@@ -126,6 +126,18 @@ func (s *Server) claimBGClientInstanceID(bgTypeID uint32, bracketID uint8, insta
 // arena state, and one score key). Group pops still share: they mint once
 // and pass the same id to every member. A nil server keeps the old
 // wall-clock fallback.
+// peekBGClientInstanceID reads the pop-claimed display id for a sim-internal
+// instance id without claiming one: a restore must never mint a fresh id
+// the rest of the match does not share.
+func (s *Server) peekBGClientInstanceID(instanceID uint32) uint32 {
+	if s == nil || instanceID == 0 {
+		return 0
+	}
+	s.bgClientIDsMu.Lock()
+	defer s.bgClientIDsMu.Unlock()
+	return s.bgClientIDByInstance[instanceID]
+}
+
 func (s *Server) mintBGInstanceID() uint32 {
 	if s == nil {
 		return uint32(time.Now().Unix())
