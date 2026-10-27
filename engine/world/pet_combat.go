@@ -4742,8 +4742,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				}
 			}
 		}
-		if effect.Effect == spellEffectTriggerSpell && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
+		if (effect.Effect == spellEffectTriggerSpell || effect.Effect == spellEffectTriggerSpellWithValue) && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
 			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
+				// SpellEffects.cpp:989-992 — the 142 with-value arm passes the
+				// 142 effect's CalcValue as every triggered effect's base
+				// point (twin convention via WithBasePoints); the 148 pet
+				// precedent patches the local triggered copy the same way
+				// (Data.Spell builds a fresh Spell per lookup, so the patch
+				// touches no shared record): flat effects take the value,
+				// rolled effects take value-1 so the nested CalcValue
+				// re-roll lands on it. The C++ special-cases switch is
+				// 64-only, so 142 rides the plain legs below like 64.
+				if effect.Effect == spellEffectTriggerSpellWithValue {
+					damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
+					for j, bp := range []int32{damage, damage, damage} {
+						if j < len(triggered.Effects) {
+							if triggered.Effects[j].DieSides == 0 {
+								triggered.Effects[j].BasePoints = bp
+							} else {
+								triggered.Effects[j].BasePoints = bp - 1
+							}
+						}
+					}
+				}
 				// Spell.cpp:2350 — a nulled reflect victim or an evaded wire
 				// target resolves no _spellHitTarget, so the trigger leg
 				// does not fire for it; immune and missed wire targets
