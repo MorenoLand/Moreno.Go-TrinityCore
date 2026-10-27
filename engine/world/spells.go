@@ -17409,6 +17409,58 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// unbridged per the helper's note.
 			s.handleEffectChargeDest(ctx, spellTarget)
 		}
+		if eff.Effect == spellEffectParry {
+			// Spell::EffectParry (SpellEffects.cpp:4316) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on a player caster — the client
+			// arm's inline leg, not per target.
+			if s.player != nil && !s.player.CanParry {
+				s.player.CanParry = true
+				s.updatePlayerParryPercentage(s.player, s.player.Level)
+				s.sendPlayerUpdate()
+			}
+		}
+		if eff.Effect == spellEffectBlock {
+			// Spell::EffectBlock (SpellEffects.cpp:4325) runs once at
+			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's
+			// helper, with its own idempotence gate.
+			s.handleEffectBlock()
+		}
+		if eff.Effect == spellEffectForceDeselect {
+			// Spell::EffectForceDeselect (SpellEffects.cpp:4396) runs
+			// once at SPELL_EFFECT_HANDLE_HIT on the caster — the
+			// client arm's helper.
+			s.handleEffectForceDeselect()
+		}
+		if eff.Effect == spellEffectCastButtons {
+			// Spell::EffectCastButtons (SpellEffects.cpp:5622) runs
+			// once at SPELL_EFFECT_HANDLE_HIT on the player caster —
+			// the client arm's helper.
+			s.handleEffectCastButtons(ctx, eff)
+		}
+		if eff.Effect == spellEffectActivateObject || eff.Effect == spellEffectGameObjectDamage || eff.Effect == spellEffectGameObjectRepair || eff.Effect == spellEffectGameObjectSetDestructionState {
+			// Spell::EffectActivateObject (SpellEffects.cpp:3938) and
+			// EffectGameObjectDamage/Repair/SetDestructionState
+			// (:5424/:5439/:5450) run at SPELL_EFFECT_HANDLE_HIT_TARGET
+			// per gameobject target — the client arms' helpers, which
+			// serve the wire GO target plus every GO GUID in the
+			// target list. The triggered effect-target list carries
+			// units, so the helpers' wire-GO leg is what fires here;
+			// with no GO target they are no-ops, as before.
+			effectGUIDs := make([]uint64, 0, len(effectTargets))
+			for _, et := range effectTargets {
+				effectGUIDs = append(effectGUIDs, et.guid)
+			}
+			switch eff.Effect {
+			case spellEffectActivateObject:
+				s.handleEffectActivateObject(ctx, eff, spellTarget, effectGUIDs)
+			case spellEffectGameObjectDamage:
+				s.handleEffectGameObjectDamage(ctx, spellID, eff, spellTarget, effectGUIDs)
+			case spellEffectGameObjectRepair:
+				s.handleEffectGameObjectRepair(ctx, spellID, eff, spellTarget, effectGUIDs)
+			case spellEffectGameObjectSetDestructionState:
+				s.handleEffectGameObjectSetDestructionState(ctx, eff, spellTarget, effectGUIDs)
+			}
+		}
 		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
 			// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) runs at
 			// HIT_TARGET per unit target; the once-per-effect shape here
@@ -18040,6 +18092,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// generic-family arms with a Go bridge fire, same as the
 				// client arm).
 				s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget)
+			} else if eff.Effect == spellEffectEnvironmentalDamage {
+				// Spell::EffectEnvironmentalDMG (SpellEffects.cpp:306)
+				// runs at HIT_TARGET per unit target: the client arm's
+				// helper over the single miss-filtered target.
+				s.handleEffectEnvironmentalDamage(ctx, spell, eff, spellID, uint8(spell.SchoolMask), []uint64{effectTarget})
+			} else if eff.Effect == spellEffectBind {
+				// Spell::EffectBind (SpellEffects.cpp:5695) runs at
+				// HIT_TARGET per player target: the client arm's helper
+				// over the single miss-filtered target.
+				s.handleEffectBind(ctx, eff, spellTarget, []uint64{effectTarget})
+			} else if eff.Effect == spellEffectEnchantHeldItem {
+				// Spell::EffectEnchantHeldItem (SpellEffects.cpp:4078)
+				// runs at HIT_TARGET per player target: the client arm's
+				// helper over the single miss-filtered target.
+				s.handleEffectEnchantHeldItem(ctx, spell, eff, []uint64{effectTarget})
 			}
 		}
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
