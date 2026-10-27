@@ -244,6 +244,17 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
 
+	// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:620):
+	// every flag interaction is gated on STATUS_IN_PROGRESS — a pre-start
+	// click while the doors are closed, or a click after the match ended,
+	// does nothing. Go has no status enum, so the gate is the grave gate's
+	// proxy: Started and not yet ended (Winner < 0). It sits above the
+	// switch so the tail arms (interrupt-aura strip, stalemate refresh,
+	// match-clock arm) stay in-progress-only too.
+	if !wsg.Started || wsg.Winner >= 0 {
+		return true
+	}
+
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 
 	switch entry {
@@ -533,6 +544,23 @@ func (s *Server) dropWSGCarriedFlag(wsg *wsgBattlegroundState, sess *session, ma
 	if wsg == nil || sess == nil {
 		return
 	}
+	// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:379-402):
+	// when not in progress, no dropped flag spawns, no message is sent and
+	// no return timer starts — the keeper is just cleared and the flag aura
+	// comes off. The debuff auras and the flag state are untouched, as in
+	// C++; the stalemate refresh below is skipped for the same reason (it
+	// recomputes from the untouched flag states, so it would be a no-op).
+	if !wsg.Started || wsg.Winner >= 0 {
+		if wsg.AllianceCarrierGUID == sess.playerGUID {
+			wsg.AllianceCarrierGUID = 0
+			sess.removeAura(WSGSpellSilverwingFlag)
+		}
+		if wsg.HordeCarrierGUID == sess.playerGUID {
+			wsg.HordeCarrierGUID = 0
+			sess.removeAura(WSGSpellWarsongFlag)
+		}
+		return
+	}
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
 		sess.removeAura(WSGSpellSilverwingFlag)
 		// BattlegroundWS::EventPlayerDroppedFlag (BattlegroundWS.cpp:418-421):
@@ -697,6 +725,23 @@ func (s *Server) handleWSGPlayerLeave(sess *session, bgMapID uint32) {
 
 	wsg.mu.Lock()
 	defer wsg.mu.Unlock()
+
+	// BattlegroundWS::RemovePlayer (BattlegroundWS.cpp:575-596) drops via
+	// EventPlayerDroppedFlag, whose non-in-progress branch (cpp:379-402)
+	// only clears the keeper and strips the flag aura — it never returns
+	// the flag to base. A pre-start or ended-match leave of a (stale)
+	// carrier therefore must not restore the base flag or broadcast.
+	if !wsg.Started || wsg.Winner >= 0 {
+		if wsg.AllianceCarrierGUID == sess.playerGUID {
+			wsg.AllianceCarrierGUID = 0
+			sess.removeAura(WSGSpellSilverwingFlag)
+		}
+		if wsg.HordeCarrierGUID == sess.playerGUID {
+			wsg.HordeCarrierGUID = 0
+			sess.removeAura(WSGSpellWarsongFlag)
+		}
+		return
+	}
 
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 	if wsg.AllianceCarrierGUID == sess.playerGUID {
