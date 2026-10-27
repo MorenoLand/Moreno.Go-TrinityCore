@@ -701,22 +701,34 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	teleports := make([]passengerTeleport, 0)
 	refresh := make([]*session, 0)
 	stream := make([]*session, 0)
+	vehicleRiders := make([]*session, 0)
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if !sess.authed || !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
 		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map && !sess.nearTeleportPending && !sess.farTeleportPending {
-			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
-			sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
-			// Transport::UpdatePassengerPositions (Transport.cpp:724-727):
-			// teleporting passengers are skipped, and the tick resets the
-			// passenger's fall info to the relocated position so a later
-			// FALL_LAND measures from here, not from the boarding position.
-			sess.lastFallZ, sess.lastFallTime = z, 0
-			dx, dy := float64(x-sess.lastStreamX), float64(y-sess.lastStreamY)
-			if dx*dx+dy*dy > 30*30 {
-				stream = append(stream, sess)
+			// Transport::UpdatePassengerPositions (Transport.cpp:724-727)
+			// skips vehicle riders: the vehicle is relocated as a
+			// transport passenger and RelocatePassengers moves its
+			// riders from seat offsets. A direct relocation here would
+			// place the rider at stale boarding offsets instead of the
+			// seat, so riders defer to the post-loop vehicle
+			// relocation below; the update block below still runs.
+			if sess.player.VehicleGUID != 0 {
+				vehicleRiders = append(vehicleRiders, sess)
+			} else {
+				x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
+				sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
+				// Transport::UpdatePassengerPositions (Transport.cpp:724-727):
+				// teleporting passengers are skipped, and the tick resets the
+				// passenger's fall info to the relocated position so a later
+				// FALL_LAND measures from here, not from the boarding position.
+				sess.lastFallZ, sess.lastFallTime = z, 0
+				dx, dy := float64(x-sess.lastStreamX), float64(y-sess.lastStreamY)
+				if dx*dx+dy*dy > 30*30 {
+					stream = append(stream, sess)
+				}
 			}
 		} else if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map != change.Spawn.Map {
 			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
@@ -754,6 +766,35 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 	for _, passenger := range teleports {
 		passenger.session.resetTransportPassengerVisibility()
 		passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true)
+	}
+	// Deferred vehicle riders (same-map arm above): relocate through the
+	// vehicle from its fresh world position plus seat offsets, as
+	// Vehicle::RelocatePassengers does after the transport relocates the
+	// vehicle passenger. Creature vehicles resolve via their motion
+	// (relocated earlier in updateContinentTransports); player vehicles
+	// resolve via the driver session. If neither resolves, fall back to
+	// the direct transport-offset relocation, never strand the rider.
+	for _, sess := range vehicleRiders {
+		if sess == nil || sess.player == nil || sess.player.VehicleGUID == 0 || sess.player.TransportGUID != rawGUID || sess.nearTeleportPending || sess.farTeleportPending {
+			continue
+		}
+		relocated := false
+		if motion := s.findCreatureMotion(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID); motion != nil {
+			s.relocatePassengers(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID, motion.X, motion.Y, motion.Z, motion.Orientation)
+			relocated = true
+		} else if driver := s.findSessionByGUID(sess.player.VehicleGUID); driver != nil && driver.player != nil && s.getVehicleKit(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID) != nil {
+			s.relocatePassengers(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID, driver.player.X, driver.player.Y, driver.player.Z, driver.player.Orientation)
+			relocated = true
+		}
+		if !relocated {
+			x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
+			sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
+			sess.lastFallZ, sess.lastFallTime = z, 0
+		}
+		dx, dy := float64(sess.player.X-sess.lastStreamX), float64(sess.player.Y-sess.lastStreamY)
+		if dx*dx+dy*dy > 30*30 {
+			sess.streamNearbyObjects(context.Background())
+		}
 	}
 	for _, sess := range refresh {
 		s.updateTransportPassengerVisibility(context.Background(), sess, transport)
