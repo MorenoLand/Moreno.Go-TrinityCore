@@ -9806,6 +9806,116 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
+	// chain effect chains even when a sibling effect is a friendly list: the
+	// friendly-list branch above replaces hitTargets with the area/cone list
+	// and the chain block below is gated !friendlyListSpell, so a
+	// friendly-list+chain spell lost both the chain primary (the wire target,
+	// added by SelectImplicitTargetObjectTargets, Spell.cpp:1575) and its
+	// jumps. The anchor is the wire target only for TARGET-object chain
+	// effects (6/21/25/35/45/57/90/95); a NEARBY chain effect anchors on its
+	// own nearby pick, which no list branch selects — that shape stays out
+	// (nearby pick helpers are spell-wide/first-effect-scoped, the
+	// area+nearby census). GO-area/cone lists stay out too: their hitTargets
+	// hold gameobject GUIDs and the GO-wire anchor needs its own census.
+	// A primary already in the list keeps the list roll's verdict (C++ merges
+	// it into one m_UniqueTargetInfo entry; list members roll reflect via
+	// rollAreaTargetReflect above); otherwise it rolls the wire arms
+	// (immune, damage-immune, reflect/hit, IMMUNE2) and jumps are searched
+	// regardless of its verdict, as C++ selects jumps at selection time.
+	// Jumps already in the list are skipped with no falloff index (the
+	// area-port convention); the flat list over-hits the primary with the
+	// list effect, the standing mixed-effect approximation.
+	if !areaSpell && (friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell) {
+		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
+			winTarget := uint32(0)
+			for i, eff := range spell.Effects {
+				if effectMask == 1<<uint(i) {
+					winTarget = eff.ImplicitTargetA
+					if !chainSelectionEligibleTarget(winTarget) {
+						winTarget = eff.ImplicitTargetB
+					}
+					break
+				}
+			}
+			anchor := uint64(0)
+			switch winTarget {
+			case 6, 21, 25, 35, 45, 57, 90, 95:
+				anchor = target.UnitGUID
+			}
+			if anchor != 0 {
+				primaryInList := false
+				for _, guid := range hitTargets {
+					if guid == anchor {
+						primaryInList = true
+						break
+					}
+				}
+				if !primaryInList {
+					var primarySess *session
+					if s.server != nil {
+						primarySess = s.server.findSessionByGUID(anchor)
+					}
+					var primaryFaction uint32
+					if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
+						primaryFaction = tgt.Faction
+					}
+					if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess != nil && spellHasOnlyDamageEffects(spell) && primarySess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, anchor), spell, spell.SchoolMask) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if missInfo := s.spellTargetMissResult(ctx, anchor, spell); missInfo != protocol.SpellMissNone {
+						entry := protocol.SpellMissStatus{TargetGUID: anchor, Reason: missInfo}
+						if missInfo == protocol.SpellMissReflect {
+							entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+							if entry.ReflectStatus == protocol.SpellMissNone {
+								reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+							}
+						}
+						missStatus = append(missStatus, entry)
+					} else if primarySess != nil && s.spellTargetFullyEffectImmune(spell, primarySess) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+					} else if primarySess == nil && s.creatureTargetFullyEffectImmune(ctx, anchor, spell, s, primaryFaction) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+					} else {
+						hitTargets = append(hitTargets, anchor)
+					}
+				}
+				jump := 0
+				for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {
+					alreadyListed := false
+					for _, guid := range hitTargets {
+						if guid == extraGUID {
+							alreadyListed = true
+							break
+						}
+					}
+					if alreadyListed {
+						continue
+					}
+					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+						entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
+						if missInfo == protocol.SpellMissReflect {
+							entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+							if entry.ReflectStatus == protocol.SpellMissNone {
+								jump++
+								reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+							}
+						}
+						missStatus = append(missStatus, entry)
+						continue
+					}
+					jump++
+					hitTargets = append(hitTargets, extraGUID)
+					chainJumpIndex[extraGUID] = jump
+				}
+			}
+		}
+	}
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 			jump := 0
