@@ -34056,7 +34056,7 @@ func (s *session) channelTick() {
 		channelCasterLevel = uint32(s.player.Level)
 	}
 	for effectIndex, effect := range spell.Effects {
-		if effect.Effect == 0 || effect.Effect == 6 && effect.Aura == 23 {
+		if effect.Effect == 0 {
 			continue
 		}
 		amount := uint32(effect.CalcValueForLevel(spell, channelCasterLevel))
@@ -34075,12 +34075,6 @@ func (s *session) channelTick() {
 						s.executeSpellHeal(ctx, targetGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
 					}
 				}
-			} else {
-				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
-			}
-		case 6, 105: // auras tick on the target or caster
-			if targetGUID != 0 && targetGUID != s.playerGUID {
-				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount, effectIndex)
 			} else {
 				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount, effectIndex, 0, 1.0, 0)
 			}
