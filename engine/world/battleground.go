@@ -2013,6 +2013,48 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	if !ok {
 		return
 	}
+	// Player::LoadFromDB (Player.cpp:17591-17637): an arena login restores
+	// the queue slot only while the player is still in the battleground
+	// AND the match has not ended (GetBattleground + IsPlayerInBattleground
+	// + status != STATUS_WAIT_LEAVE). A WaitLeave member is
+	// RemovePlayerAtLeave'd and relocated to the entry point, and a
+	// missing battleground relocates with bgInstanceID zeroed. The old
+	// unconditional slot creation recreated an InProgress slot for exactly
+	// the players endArena and the timer sweep had already dropped: a
+	// member offline at match end (the sweep erases roster/score but has
+	// no session whose slot it could clear), a member the logout funnel
+	// erased from the roster, or a member relogging during WaitLeave.
+	// That orphan slot is never flipped by endArena or cleared by the
+	// sweep (neither iterates non-roster sessions), so it blocks
+	// re-queueing through the join dup-block and reports a dead match
+	// InProgress. The WaitLeave-roster erase below is the
+	// RemovePlayerAtLeave player/score-map arm; its session arms
+	// (resurrect, aura strips, STATUS_NONE packet) have no slot to act
+	// on at login time, and the login resurrection leg already ran
+	// before this call.
+	if isArena && s.server != nil {
+		arena := s.server.findArenaState(state.Map, 0)
+		if arena == nil {
+			s.bgData.InstanceID = 0
+			s.bgData.Team = 0
+			s.relocateLoginToBGEntryPoint()
+			return
+		}
+		arena.mu.Lock()
+		_, inRoster := arena.PlayerTeams[s.playerGUID]
+		waitLeave := arena.Status == ArenaStatusWaitLeave
+		if inRoster && waitLeave {
+			delete(arena.PlayerTeams, s.playerGUID)
+			delete(arena.Scores, s.playerGUID)
+		}
+		arena.mu.Unlock()
+		if !inRoster || waitLeave {
+			s.bgData.InstanceID = 0
+			s.bgData.Team = 0
+			s.relocateLoginToBGEntryPoint()
+			return
+		}
+	}
 	for index := range s.bgQueues {
 		if s.bgQueues[index].Active {
 			continue
@@ -2026,6 +2068,23 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: time.Now(), ArenaFaction: 1 - uint8(s.bgData.Team)}
 		return
 	}
+}
+
+// relocateLoginToBGEntryPoint moves a logging-in player to the saved
+// battleground entry point, the Relocate(GetBattlegroundEntryPoint()) leg
+// of Player::LoadFromDB (Player.cpp:17614-17633). s.player aliases the
+// login state, so the move flows into LOGIN_VERIFY_WORLD and the map
+// add below. A JoinMap of 0 leaves the position untouched: no entry
+// point is recorded, and the homebind fallback is a separate leg.
+func (s *session) relocateLoginToBGEntryPoint() {
+	if s == nil || s.player == nil || s.bgData.JoinMap == 0 {
+		return
+	}
+	s.player.Map = s.bgData.JoinMap
+	s.player.X = s.bgData.JoinX
+	s.player.Y = s.bgData.JoinY
+	s.player.Z = s.bgData.JoinZ
+	s.player.Orientation = s.bgData.JoinO
 }
 
 func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
