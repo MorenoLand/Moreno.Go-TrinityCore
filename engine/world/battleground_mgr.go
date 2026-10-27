@@ -117,6 +117,24 @@ func (s *Server) claimBGClientInstanceID(bgTypeID uint32, bracketID uint8, insta
 	return id
 }
 
+// bgClientInstanceIDs is the Go form of the list-packet read arm of
+// BattlegroundMgr::BuildBattlegroundListPacket (BattlegroundMgr.cpp:680-698):
+// the claimed client ids for (bgTypeId, bracketId), copied under the claim
+// lock in the set's sorted order. The caller keeps the arena count at 0:
+// arenas claim no ids (CreateClientVisibleInstanceId returns 0 for them).
+func (s *Server) bgClientInstanceIDs(bgTypeID uint32, bracketID uint8) []uint32 {
+	if s == nil {
+		return nil
+	}
+	s.bgClientIDsMu.Lock()
+	defer s.bgClientIDsMu.Unlock()
+	used := s.bgClientIDs[bgClientIDKey{bgTypeID: bgTypeID, bracketID: bracketID}]
+	if len(used) == 0 {
+		return nil
+	}
+	return append([]uint32(nil), used...)
+}
+
 // buildPlayerLeftBattlegroundPacket is the Go form of
 // BattlegroundMgr::BuildPlayerLeftBattlegroundPacket
 // (BattlegroundMgr.cpp:247-251): SMSG_BATTLEGROUND_PLAYER_LEFT carrying the

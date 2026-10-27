@@ -308,7 +308,26 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 		buf.WriteU32(winArena)
 		buf.WriteU32(lossHonor)
 	}
-	buf.WriteU32(0) // count of active instances
+	// BattlegroundMgr::BuildBattlegroundListPacket (BattlegroundMgr.cpp:677-698):
+	// arenas write a bare 0; battlegrounds write the claimed client ids for
+	// the requester's bracket (m_ClientBattlegroundIds[type][bracket]) — the
+	// same set the simulated pop claims into, so a popped instance appears
+	// in the list exactly as a C++ CreateNewBattleground instance would
+	// until its BG is deleted. Go never deletes (no BG lifecycle past the
+	// invite dialog), so a row may outlive its pop — the recorded
+	// never-release delta of the claim map, not a new one. The bracket key
+	// is the same bgBracketIndex the pop claim uses, so list and claim
+	// cannot drift apart.
+	var listIDs []uint32
+	if bgTypeID != battlegroundAA && s != nil && s.player != nil {
+		if idx := bgBracketIndex(uint32(s.player.Level)); idx >= 0 {
+			listIDs = s.server.bgClientInstanceIDs(bgTypeID, uint8(idx))
+		}
+	}
+	buf.WriteU32(uint32(len(listIDs)))
+	for _, id := range listIDs {
+		buf.WriteU32(id)
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_LIST), buf.Bytes(), true) == nil
 }
 
@@ -340,7 +359,8 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 	// invited instance id. The join-time WAIT_QUEUE packet's live client
 	// id (builder, BattlegroundMgr.cpp:209) needs the bgDataStore lookup
 	// Go has no twin of (battleground_mgr.go header), and Go's own
-	// battlefield list advertises 0 active instances — so 0, the
+	// battlefield list now advertises claimed ids, but the join
+	// packet still needs a live-instance resolution — so 0, the
 	// template fallback for an unresolvable id, stands for the join
 	// packet; echoing the raw packet id would invent a live instance.
 	if _, err := r.ReadU32(); err != nil {
