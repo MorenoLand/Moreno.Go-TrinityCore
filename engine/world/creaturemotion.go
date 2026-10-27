@@ -3822,6 +3822,44 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissReflect, ReflectStatus: status})
 				}
 			}
+			// Spell::EffectTriggerSpell (SpellEffects.cpp:823) on the
+			// inline path, the LAUNCH pre-pass: C++ runs
+			// HandleLaunchPhase ahead of SendSpellGo (Spell.cpp:3465,
+			// 3468), so the trigger-spell LAUNCH_TARGET/LAUNCH arms
+			// land before the GO packet below, not in the HIT
+			// dispatch after it — the twin mixes both LAUNCH modes
+			// in one call, so the split here is positional, not
+			// per-mode: the per-target arm fires only for
+			// needs-caster triggered spells on landed targets, and
+			// the once-per-cast arm fires unless the per-target arm
+			// owns the effect. Gated on inlineSpellKnown like the
+			// HIT legs below; the reflected map is built the same
+			// way the HIT block builds it (reflectedSet keys at
+			// None, trip statuses overriding). A victim-targeted
+			// AI spell carrying a trigger effect previously
+			// triggered nothing server-side (non-victim casts ride
+			// castCreatureSpellInternal, which already runs this
+			// pre-pass).
+			if inlineSpellKnown {
+				launchReflected := make(map[uint64]uint8, len(reflectedSet))
+				for guid := range reflectedSet {
+					launchReflected[guid] = protocol.SpellMissNone
+				}
+				for _, trip := range reflectTrips {
+					if trip.victim != nil {
+						launchReflected[trip.victim.GUID] = trip.status
+					}
+				}
+				for _, trip := range creatureReflectTrips {
+					launchReflected[trip.guid] = trip.status
+				}
+				for i := range inlineSpell.Effects {
+					switch inlineSpell.Effects[i].Effect {
+					case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
+						s.creatureEffectTriggerSpell(ctx, motion, inlineSpell, spellID, inlineSpell.Effects[i], spellTarget.UnitGUID, hitTargets, launchReflected, evadedSet, immuneSet, missSet)
+					}
+				}
+			}
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
@@ -3973,7 +4011,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// damage leg (drained x effect-value multiplier into
 				// TargetInfo.Damage, SpellEffects.cpp:1382) stays out like
 				// the twin's: the inline damage leg below is DBC-value
-				// driven, not amount-driven.
+				// driven, not amount-driven. Spell::EffectDispel
+				// (:2429) + EffectDispelMechanic (:4733) +
+				// EffectRemoveAura (:5611) + EffectModifyThreatPercent
+				// (:4915) on the inline path, same
+				// dispatch-ahead-of-damage position: all four are
+				// HIT_TARGET arms in C++, so they join this per-effect
+				// loop rather than the LAUNCH pre-pass above. The
+				// twins carry the dead/reflect/evade/immune/miss gates;
+				// GO GUIDs in hitTargets take no leg in them.
 				for i := range inlineSpell.Effects {
 					switch inlineSpell.Effects[i].Effect {
 					case spellEffectHeal:
@@ -3992,6 +4038,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectPowerDrain(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, hitTargets, reflected, evadedSet, immuneSet, missSet)
 					case spellEffectPowerBurn:
 						s.creatureEffectPowerBurn(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectDispel:
+						s.creatureEffectDispel(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectDispelMechanic:
+						s.creatureEffectDispelMechanic(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectRemoveAura:
+						s.creatureEffectRemoveAura(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
+					case spellEffectModifyThreatPercent:
+						s.creatureEffectModifyThreatPercent(ctx, motion, inlineSpell, inlineSpell.Effects[i], hitTargets, reflected, evadedSet, immuneSet, missSet)
 					}
 				}
 			}
