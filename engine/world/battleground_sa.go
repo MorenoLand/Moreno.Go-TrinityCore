@@ -688,21 +688,17 @@ func (s *Server) TickSA(sa *saBattlegroundState, delta time.Duration) {
 // startSARoundTimedAchievement mirrors Battleground::StartTimedAchievement
 // (Battleground.cpp:1782-1787) as called from BattlegroundSA::PostUpdateImpl
 // (BattlegroundSA.cpp:349,374): every player in the BG starts the round's timed
-// achievement (23748 when Alliance attacks, 21702 when Horde attacks).
+// achievement (23748 when Alliance attacks, 21702 when Horde attacks). The
+// audience is bgRewardTargets (entered InProgress or WaitLeave slots), not
+// the map's players: C++ iterates m_Players, and the port teleport is
+// no-bridge, so off-map sim participants previously missed the timed
+// achievement while on-map bystanders started one.
 func (s *Server) startSARoundTimedAchievement(sa *saBattlegroundState) {
 	eventID := uint32(23748)
 	if sa.Attackers == SATeamHorde {
 		eventID = 21702
 	}
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == sa.MapID {
-			targets = append(targets, sess)
-		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
+	for _, sess := range s.bgRewardTargets(sa.MapID) {
 		sess.startTimedAchievement(timedTypeEvent, eventID)
 	}
 }
@@ -711,34 +707,27 @@ func (s *Server) startSARoundTimedAchievement(sa *saBattlegroundState) {
 // (1310)" loop in BattlegroundSA::TitanRelicActivated (BattlegroundSA.cpp:912-918,
 // 933-939): when a round ends with a relic capture, every player on the
 // attackers' team in the BG updates the BE_SPELL_TARGET criteria for 65246.
+// The audience is bgRewardTargets (entered InProgress or WaitLeave slots),
+// not the map's players: C++ iterates m_Players, so off-map sim attackers
+// previously missed the criteria while on-map bystanders on the team
+// collected it. (Round two's extra winner==Attackers leg is subsumed: the
+// round-two arm sets the winner to the attackers just above the loop.)
 func (s *Server) updateSAStormTheBeachCriteria(sa *saBattlegroundState, attackers uint32) {
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == sa.MapID &&
-			teamForRace(sess.player.Race) == attackers {
-			targets = append(targets, sess)
+	for _, sess := range s.bgRewardTargets(sa.MapID) {
+		if teamForRace(sess.player.Race) == attackers {
+			sess.updateAchievementCriteria(criteriaTypeBeSpellTarget, 65246, 1)
 		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
-		sess.updateAchievementCriteria(criteriaTypeBeSpellTarget, 65246, 1)
 	}
 }
 
-// removeSAAuraFromMap removes an aura from every worldReady session on the SA
-// map: the Go analog of the per-player RemoveAurasDueToSpell loop in
-// BattlegroundSA::PostUpdateImpl (BattlegroundSA.cpp:366-367).
+// removeSAAuraFromMap removes an aura from every entered-slot holder for the
+// SA map (bgRewardTargets): the Go analog of the per-player
+// RemoveAurasDueToSpell loop in BattlegroundSA::PostUpdateImpl
+// (BattlegroundSA.cpp:366-367, round-two start). C++ iterates m_Players, so
+// off-map sim participants previously kept Preparation while on-map
+// bystanders lost it.
 func (s *Server) removeSAAuraFromMap(mapID, spellID uint32) {
-	s.sessionsMu.RLock()
-	var targets []*session
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
-			targets = append(targets, sess)
-		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range targets {
+	for _, sess := range s.bgRewardTargets(mapID) {
 		sess.removeAura(spellID)
 	}
 }
