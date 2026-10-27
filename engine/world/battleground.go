@@ -615,6 +615,16 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 			e.MapID = battlegroundMapForType(bgTypeID)
 		}
 		e.Status = BGStatusWaitJoin
+		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+		// (BattlegroundQueue.cpp:238, called per player from InviteGroupToBG:463):
+		// the invite feeds the average-wait ring, not the port accept — the
+		// accept-time arm below can only fire for a pre-invite accept, so
+		// recording only there left the ring empty and every queued packet
+		// reporting a 0 average wait. Keyed by the queued type (RB stays 32,
+		// the queue the average is read back from), not the resolved type.
+		if s.server != nil && !joinTime.IsZero() {
+			s.server.recordBGQueueWait(bgTypeID, bgWaitTeamIndex(false, false, teamForRace(s.player.Race)), uint32(time.Since(joinTime).Milliseconds()))
+		}
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("simulated battleground invite", "account", s.accountName, "bg", bgTypeID, "slot", slot, "instance", instanceID)
 		// BGQueueInviteEvent::Execute (BattlegroundQueue.cpp:1018-1043):
@@ -709,6 +719,12 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 		e.InstanceID = instanceID
 		e.MapID = battlegroundMapForType(battlegroundAA)
 		e.Status = BGStatusWaitJoin
+		// Same invite-time recording as simulateBGQueueInvite
+		// (BattlegroundQueue.cpp:463): arenas key by the rated flag
+		// (BattlegroundQueue.cpp:251-253).
+		if s.server != nil && !joinTime.IsZero() {
+			s.server.recordBGQueueWait(battlegroundAA, bgWaitTeamIndex(true, e.IsRated, 0), uint32(time.Since(joinTime).Milliseconds()))
+		}
 		s.server.getOrCreateArenaState(e.MapID, e.InstanceID, e.ArenaType, e.IsRated)
 		s.sendBattlefieldStatus(uint8(slot))
 		s.debug("simulated arena invite", "account", s.accountName, "slot", slot, "type", e.ArenaType, "rated", e.IsRated, "instance", instanceID)
@@ -861,8 +877,8 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID, instanceID uint32) {
 	// err > 0: queue every member — AddBattlegroundQueueId slot assignment +
 	// BuildBattlegroundStatusPacket(STATUS_WAIT_QUEUE) + BuildGroupJoinedBattlegroundPacket(err)
 	// to each member (BattleGroundHandler.cpp:243-258). avgTime comes from
-	// GetAverageQueueWaitTime; Go keeps no queue wait stats, so sendBattlefieldStatus answers
-	// the hardcoded average — same documented delta as the solo arm.
+	// GetAverageQueueWaitTime; sendBattlefieldStatus answers it from the
+	// average-wait ring the simulate invite fire feeds.
 	// One shared synthetic instance id for the simulated pop, like the
 	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID — and one
 	// shared random-BG resolution for the same reason: C++ invites the
@@ -1345,10 +1361,9 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 
 	// err > 0: per-member slot assignment + BuildBattlegroundStatusPacket(STATUS_WAIT_QUEUE)
 	// + BuildGroupJoinedBattlegroundPacket(err) (BattleGroundHandler.cpp:747-773). avgTime
-	// comes from GetAverageQueueWaitTime; Go keeps no queue wait stats, so
-	// sendBattlefieldStatus answers the hardcoded average — same documented delta as the
-	// battlemaster group arm. bg->SetRated(isRated) has no Go template model; the rating
-	// rides on the queue entry, the solo-arm convention.
+	// comes from GetAverageQueueWaitTime; sendBattlefieldStatus answers it from the
+	// average-wait ring the simulate invite fire feeds. bg->SetRated(isRated) has no Go
+	// template model; the rating rides on the queue entry, the solo-arm convention.
 	// One shared synthetic instance id for the simulated pop, like the
 	// C++ GroupQueueInfo's single IsInvitedToBGInstanceGUID — the group
 	// lands in the same arena instance.
@@ -1566,11 +1581,13 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		// Stop taxi flight at port (BattleGroundHandler.cpp:465-466).
 		s.finishTaxiFlight()
 
-		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
-		// (BattlegroundQueue.cpp:242): the port accept is Go's invite point (Go
-		// models no STATUS_WAIT_JOIN state), so the join->port wait feeds the
-		// average-wait ring read back by sendBattlefieldStatus. The team index
-		// follows the shared selection (BattlegroundQueue.cpp:244-254):
+		// The invite fire in simulateBGQueueInvite/simulateArenaQueueInvite is
+		// the recording point for BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+		// (BattlegroundQueue.cpp:238, per player from InviteGroupToBG:463); this
+		// arm only fires for an accept that arrives while still WaitQueue (a join
+		// packet that carried a non-zero instance id), and the fire closure then
+		// skips the slot as no longer WaitQueue, so no wait is double-counted.
+		// The team index follows the shared selection (BattlegroundQueue.cpp:244-254):
 		// non-arena keys by the queued player's team, arenas by the rated flag.
 		if entry.Status == BGStatusWaitQueue && !entry.JoinTime.IsZero() {
 			s.server.recordBGQueueWait(entry.BgTypeID, bgWaitTeamIndex(entry.IsArena, entry.IsRated, teamForRace(s.player.Race)), uint32(time.Since(entry.JoinTime).Milliseconds()))
