@@ -263,10 +263,10 @@ func bgScoreTypeHasObjectives(bgTypeID uint32) bool {
 // (SharedDefines.h:3499-3501: Horde 0, Alliance 1, Neutral 2), the reverse of
 // Go's internal 0 = Alliance, 1 = Horde, with 2 = draw/neutral on both sides.
 // The peek creates no state: a map with no state row never armed one, so its
-// match is still in progress. Per-map states are never reset (the same
-// staleness the Winner >= 0 handler gates already carry), so a second match
-// on the same map inherits the ended flag until a state reset lands; that
-// reset is a separate unit, not smuggled in here. The winner is resolved
+// match is still in progress. A second match on the same map no longer
+// inherits the ended flag: deleteBattlegroundStateOnEmpty deletes the
+// per-map state once the last BG player leaves, so the next entrant
+// recreates it pristine with Winner -1. The winner is resolved
 // before the score snapshot below, so no state mu is ever held across the
 // objectsMu snapshot.
 func (s *Server) bgEndedWinner(mapID, bgTypeID uint32) (bool, uint8) {

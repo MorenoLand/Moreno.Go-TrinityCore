@@ -252,6 +252,32 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 	return state
 }
 
+// deleteABState removes the per-map AB state once no BG player remains on
+// the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
+// ab.mu before the delete so no armed callback fires on the orphan; the
+// delete only lands if the entry is still this state. Registry and state
+// locks are never held together here, for the same reason as
+// deleteWSGState.
+func (s *Server) deleteABState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.abMu.RLock()
+	ab := s.abState[mapID]
+	s.abMu.RUnlock()
+	if ab == nil {
+		return
+	}
+	ab.mu.Lock()
+	s.stopABNodeCaptureTimers(ab)
+	ab.mu.Unlock()
+	s.abMu.Lock()
+	if s.abState[mapID] == ab {
+		delete(s.abState, mapID)
+	}
+	s.abMu.Unlock()
+}
+
 // handleABBannerUse processes player interaction with an Arathi Basin banner.
 // Mirrors TrinityCore BattlegroundAB::EventPlayerClickedOnFlag (BattlegroundAB.cpp:210-310).
 func (s *Server) handleABBannerUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {

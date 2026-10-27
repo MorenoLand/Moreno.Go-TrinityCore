@@ -2037,6 +2037,22 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	// Capture the BG the leaver is in before any arm below zeroes
+	// InstanceID or deactivates the queue slots: Battleground::Update
+	// (Battleground.cpp:164-186) deletes an empty BG at any status, so the
+	// last player out of a Go per-map state deletes it — the next entrant
+	// recreates it pristine via getOrCreate, the CreateBattleground +
+	// Reset() pair (BattlegroundMgr.cpp:412). The map lives on the queue
+	// slot (activeBattlegroundMap); player.Map is the fallback when no
+	// slot is active. Arenas delete through deleteArenaState instead, so
+	// the dispatcher at the end only handles the six non-arena maps.
+	leaveBGMap := uint32(0)
+	if s.bgData.InstanceID != 0 {
+		leaveBGMap = s.activeBattlegroundMap()
+		if leaveBGMap == 0 {
+			leaveBGMap = s.player.Map
+		}
+	}
 	// BattleGroundHandler.cpp:531-534: the opcode handler skips 8 bytes
 	// (u8 unk1, u8 unk2, u32 bgTypeId, u16 unk3) before the combat gate; a
 	// short packet throws and nothing happens. Internal callers pass nil and
@@ -2191,7 +2207,61 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			s.sendBattlefieldStatus(uint8(slot))
 		}
 	}
+	// Last player out: delete the per-map state so the next match starts
+	// pristine (see the capture above). Runs for the logout path too — Go
+	// has no offline queue holding the BG open, and the score row is
+	// already deleted on logout.
+	if leaveBGMap != 0 && s.server != nil {
+		s.server.deleteBattlegroundStateOnEmpty(s, leaveBGMap)
+	}
 	return true
+}
+
+// deleteBattlegroundStateOnEmpty deletes a non-arena per-map BG state once
+// no BG player remains on the map, the Go form of Battleground::Update
+// deleting an empty BG (Battleground.cpp:164-186, "BG is empty — if there
+// are no players invited, delete BG"). The count is the codebase's
+// participant proxy — worldReady sessions on the map with a live BG
+// instance id — so a GM-teleported bystander on the map without an
+// instance never blocks the delete, and an invited-but-not-entered player
+// does not hold it open (C++ counts invited players; Go has no invited
+// count, so that narrow window is a known delta). The per-map state model
+// conflates concurrent instances on one map, so the count does too. A
+// state deleted here is recreated pristine by the next getOrCreate, which
+// is the CreateBattleground + Reset() pair (BattlegroundMgr.cpp:412).
+func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
+	if s == nil || leaver == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	remaining := false
+	for sess := range s.sessions {
+		if sess == leaver {
+			continue
+		}
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && sess.bgData.InstanceID != 0 {
+			remaining = true
+			break
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if remaining {
+		return
+	}
+	switch mapID {
+	case WSGMapID:
+		s.deleteWSGState(mapID)
+	case ABMapID:
+		s.deleteABState(mapID)
+	case AVMapID:
+		s.deleteAVState(mapID)
+	case EOTSMapID:
+		s.deleteEOTSState(mapID)
+	case SAMapID:
+		s.deleteSAState(mapID)
+	case ICMapID:
+		s.deleteICState(mapID)
+	}
 }
 
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).

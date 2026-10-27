@@ -331,6 +331,40 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 	return state
 }
 
+// deleteAVState removes the per-map AV state once no BG player remains on
+// the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
+// av.mu before the delete so no armed callback fires on the orphan; the
+// delete only lands if the entry is still this state. The registry phases
+// use objectsMu, the creation lock, and never hold it together with av.mu:
+// score paths already hold a BG mu while taking objectsMu. Readers under
+// avMu may still see the orphan briefly (the pre-existing split between
+// the objectsMu creation lock and the avMu read lock); they operate on the
+// orphan and the next getOrCreate returns fresh state.
+func (s *Server) deleteAVState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.RLock()
+	av := s.avState[mapID]
+	s.objectsMu.RUnlock()
+	if av == nil {
+		return
+	}
+	av.mu.Lock()
+	for i := range av.Nodes {
+		if av.Nodes[i].CaptureTimer != nil {
+			av.Nodes[i].CaptureTimer.Stop()
+			av.Nodes[i].CaptureTimer = nil
+		}
+	}
+	av.mu.Unlock()
+	s.objectsMu.Lock()
+	if s.avState[mapID] == av {
+		delete(s.avState, mapID)
+	}
+	s.objectsMu.Unlock()
+}
+
 // handleAVQuestComplete mirrors BattlegroundAV::HandleQuestComplete
 // (BattlegroundAV.cpp:156-254): the only battleground override of the base
 // no-op (Battleground.h:488). team is the GetTeamIndexByTeamId index (0

@@ -472,6 +472,37 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 	return state
 }
 
+// deleteICState removes the per-map IoC state once no BG player remains on
+// the map (deleteBattlegroundStateOnEmpty). Node capture timers stop under
+// ic.mu before the delete so no armed callback fires on the orphan; the
+// delete only lands if the entry is still this state. Registry and state
+// locks are never held together here, for the same reason as
+// deleteWSGState.
+func (s *Server) deleteICState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.icMu.RLock()
+	ic := s.icState[mapID]
+	s.icMu.RUnlock()
+	if ic == nil {
+		return
+	}
+	ic.mu.Lock()
+	for i := range ic.Nodes {
+		if ic.Nodes[i].CaptureTimer != nil {
+			ic.Nodes[i].CaptureTimer.Stop()
+			ic.Nodes[i].CaptureTimer = nil
+		}
+	}
+	ic.mu.Unlock()
+	s.icMu.Lock()
+	if s.icState[mapID] == ic {
+		delete(s.icState, mapID)
+	}
+	s.icMu.Unlock()
+}
+
 func (ic *icBattlegroundState) initNodes() {
 	// 0: Refinery
 	ic.Nodes[ICNodeRefinery] = icNodeState{

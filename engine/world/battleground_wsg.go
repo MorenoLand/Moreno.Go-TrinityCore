@@ -147,6 +147,33 @@ func (s *Server) getOrCreateWSGState(mapID uint32) *wsgBattlegroundState {
 	return state
 }
 
+// deleteWSGState removes the per-map WSG state once no BG player remains on
+// the map (deleteBattlegroundStateOnEmpty). Timers stop under wsg.mu
+// before the delete so no armed callback fires on the orphan; the delete
+// only lands if the entry is still this state, so a match that re-formed
+// in between is not wiped. Registry and state locks are never held
+// together here: score paths already hold a BG mu while taking objectsMu,
+// so nesting them in the other order could deadlock.
+func (s *Server) deleteWSGState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.wsgMu.RLock()
+	wsg := s.wsgState[mapID]
+	s.wsgMu.RUnlock()
+	if wsg == nil {
+		return
+	}
+	wsg.mu.Lock()
+	s.stopWSGMatchTimers(wsg)
+	wsg.mu.Unlock()
+	s.wsgMu.Lock()
+	if s.wsgState[mapID] == wsg {
+		delete(s.wsgState, mapID)
+	}
+	s.wsgMu.Unlock()
+}
+
 func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
 		return true

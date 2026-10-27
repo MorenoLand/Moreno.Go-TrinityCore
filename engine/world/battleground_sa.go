@@ -245,6 +245,29 @@ func (s *Server) getOrCreateSAState(mapID uint32) *saBattlegroundState {
 	return state
 }
 
+// deleteSAState removes the per-map SA state once no BG player remains on
+// the map (deleteBattlegroundStateOnEmpty). SA drives its timers from the
+// world tick (updateSABattles snapshots the registry each second), so
+// there are no armed callbacks to stop — the deleted state simply drops
+// out of the next sweep. The delete only lands if the entry is still this
+// state.
+func (s *Server) deleteSAState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.saMu.RLock()
+	sa := s.saState[mapID]
+	s.saMu.RUnlock()
+	if sa == nil {
+		return
+	}
+	s.saMu.Lock()
+	if s.saState[mapID] == sa {
+		delete(s.saState, mapID)
+	}
+	s.saMu.Unlock()
+}
+
 // resetObjects resets gates, graveyards, and demolishers for a new round.
 // Reference: BattlegroundSA::ResetObjs (BattlegroundSA.cpp:99-292).
 func (sa *saBattlegroundState) resetObjects() {

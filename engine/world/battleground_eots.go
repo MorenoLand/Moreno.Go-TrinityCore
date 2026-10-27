@@ -218,6 +218,39 @@ func (s *Server) getOrCreateEOTSState(mapID uint32) *eotsBattlegroundState {
 	return state
 }
 
+// deleteEOTSState removes the per-map EotS state once no BG player remains
+// on the map (deleteBattlegroundStateOnEmpty). The flag respawn/return
+// timers stop under eots.mu before the delete so no armed callback fires
+// on the orphan; the delete only lands if the entry is still this state.
+// Registry and state locks are never held together here, for the same
+// reason as deleteWSGState.
+func (s *Server) deleteEOTSState(mapID uint32) {
+	if s == nil {
+		return
+	}
+	s.eotsMu.RLock()
+	eots := s.eotsState[mapID]
+	s.eotsMu.RUnlock()
+	if eots == nil {
+		return
+	}
+	eots.mu.Lock()
+	if eots.FlagRespawnTimer != nil {
+		eots.FlagRespawnTimer.Stop()
+		eots.FlagRespawnTimer = nil
+	}
+	if eots.FlagReturnTimer != nil {
+		eots.FlagReturnTimer.Stop()
+		eots.FlagReturnTimer = nil
+	}
+	eots.mu.Unlock()
+	s.eotsMu.Lock()
+	if s.eotsState[mapID] == eots {
+		delete(s.eotsState, mapID)
+	}
+	s.eotsMu.Unlock()
+}
+
 func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
 		return true
