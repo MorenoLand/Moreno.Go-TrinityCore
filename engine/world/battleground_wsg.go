@@ -77,6 +77,8 @@ type wsgBattlegroundState struct {
 	MaxScore            uint32
 	Winner              int8      // -1 = ongoing, 0 = Alliance, 1 = Horde, 2 = draw; set by endWSGVictory/endWSGTie, read by the MSG_PVP_LOG_DATA ended block (battleground_scores.go)
 	EndedAt             time.Time // EndBattleground time: Battleground::_ProcessLeave removes stayers after TIME_TO_AUTOREMOVE (Battleground.cpp:506-528, Battleground.h:151 = 120s)
+	PrematureCountDown  bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
+	PrematureTimerMs    int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	AllianceFlagState   uint32
 	HordeFlagState      uint32
 	AllianceCarrierGUID uint64
@@ -946,10 +948,10 @@ func (s *Server) wsgMatchMinute(wsg *wsgBattlegroundState, mapID uint32, minute 
 // ahead on flag captures wins a premature finish. Team ids match the rest of
 // the Go WSG model (0 = alliance, 1 = horde). The tie fallthrough in C++ calls
 // Battleground::GetPrematureWinner (Battleground.cpp:344-352), the
-// min-players-per-team roster check — Go has no live BG-instance roster, so
-// that base arm stays unported and a tie reports no winner. No live caller
-// yet: Go has no premature-finish countdown
-// (Battleground::_ProcessProgress / m_PrematureCountDown).
+// min-players-per-team roster check — wired in
+// updateBattlegroundPrematureFinish as bgBasePrematureWinner on the live
+// roster counts, so a tie reports the roster winner or a draw, never no
+// winner.
 func wsgPrematureWinner(wsg *wsgBattlegroundState) (uint32, bool) {
 	if wsg == nil {
 		return 0, false

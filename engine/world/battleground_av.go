@@ -235,6 +235,8 @@ type avBattlegroundState struct {
 	MineTickElapsedMs      int64     // == m_Mine_Timer accumulation toward the 45s score tick
 	Winner                 int8      // -1: ongoing, 0: Alliance, 1: Horde
 	EndedAt                time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	PrematureCountDown     bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
+	PrematureTimerMs       int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	StopTicker             chan struct{}
 }
 
@@ -1163,6 +1165,28 @@ func (s *Server) updateAVBattles(now time.Time) {
 	}
 }
 
+// avPrematureWinner is the reinforcement leg of
+// BattlegroundAV::GetPrematureWinner (BattlegroundAV.cpp:1572-1582): the team
+// with more remaining reinforcements wins a premature finish. Go's
+// AllianceReinforcements/HordeReinforcements ARE m_Team_Scores (initial
+// BG_AV_SCORE_INITIAL_POINTS, decremented on losses, worldstate
+// AV_Alliance_Score/AV_Horde_Score). The tie fallthrough calls
+// Battleground::GetPrematureWinner, the base roster leg in
+// updateBattlegroundPrematureFinish. Team ids match the rest of the Go AV
+// model (0 = alliance, 1 = horde).
+func avPrematureWinner(av *avBattlegroundState) (uint32, bool) {
+	if av == nil {
+		return 0, false
+	}
+	if av.AllianceReinforcements > av.HordeReinforcements {
+		return 0, true
+	}
+	if av.HordeReinforcements > av.AllianceReinforcements {
+		return 1, true
+	}
+	return 0, false
+}
+
 func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 	if av.Winner >= 0 {
 		return
@@ -1183,11 +1207,20 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 			av.Nodes[i].CaptureTimer = nil
 		}
 	}
-	winnerTeam := "Alliance"
-	if winner == 1 {
-		winnerTeam = "Horde"
+	// The tower/captain bonuses below run for any winner
+	// (BattlegroundAV::EndBattleground computes them before the base-class
+	// call), so a neutral premature winner keeps them and only the
+	// announcement changes: C++ EndBattleground with a neutral winner sends
+	// no win broadcast.
+	if winner == 2 {
+		s.broadcastBattlegroundMessage(av.MapID, "The battle for Alterac Valley ended in a draw!")
+	} else {
+		winnerTeam := "Alliance"
+		if winner == 1 {
+			winnerTeam = "Horde"
+		}
+		s.broadcastBattlegroundMessage(av.MapID, fmt.Sprintf("The %s has won the battle for Alterac Valley!", winnerTeam))
 	}
-	s.broadcastBattlegroundMessage(av.MapID, fmt.Sprintf("The %s has won the battle for Alterac Valley!", winnerTeam))
 	// Reference: BattlegroundAV::EndBattleground (BattlegroundAV.cpp:453): bonus
 	// kills for surviving towers (BattlegroundAV.h:45-49: 2 kills / 12 rep per
 	// tower, 2 kills / 125 rep per living captain) plus Stormpike (730) /

@@ -2392,6 +2392,413 @@ func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time)
 	}
 }
 
+// bgPrematureFinishTime mirrors BattlegroundMgr::GetPrematureFinishTime
+// (BattlegroundMgr.cpp:867), the CONFIG_BATTLEGROUND_PREMATURE_FINISH_TIMER
+// default (World.cpp:1206: 5 * MINUTE * IN_MILLISECONDS). C++ arms
+// _ProcessProgress only when the config is nonzero; Go has no config load
+// for it, so the default applies unconditionally.
+const bgPrematureFinishTime = 5 * time.Minute
+
+// bgPrematureMinPlayers stands in for battleground_template.MinPlayersPerTeam
+// (BattlegroundMgr.cpp:505: copied onto the instance at creation). Go does
+// not ingest battleground_template (battleground_mgr.go documents the gap),
+// so the premature trigger uses this table until template rows land; replace
+// it with the loaded value then. AV's 20 is the documented minimum; the
+// others are the shipped-template values.
+func bgPrematureMinPlayers(mapID uint32) int {
+	switch mapID {
+	case AVMapID:
+		return 20
+	case WSGMapID:
+		return 5
+	case ABMapID:
+		return 6
+	case EOTSMapID:
+		return 6
+	case SAMapID:
+		return 10
+	case ICMapID:
+		return 20
+	default:
+		return 0
+	}
+}
+
+// bgRosterCounts counts live BG participants on mapID per team, the Go form
+// of Battleground::GetPlayersCountByTeam (Battleground.cpp:208, 347): a
+// worldReady session on the map with a live BG instance id, split by race
+// team (teamForRace, as rewardBGEndHonor does). Invited-but-not-entered
+// players are not counted — Go has no invited count, the same narrow window
+// the last-leave delete already carries.
+func (s *Server) bgRosterCounts(mapID uint32) (ally, horde int) {
+	if s == nil {
+		return 0, 0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		if teamForRace(sess.player.Race) == 0 {
+			ally++
+		} else {
+			horde++
+		}
+	}
+	return ally, horde
+}
+
+// bgBasePrematureWinner is Battleground::GetPrematureWinner
+// (Battleground.cpp:344-352): the team still at or above the minimum wins;
+// when neither team is, C++ returns 0, the neutral value EndBattleground
+// maps to PVP_TEAM_NEUTRAL — Go 2, the draw value bgEndedWinner already
+// maps to PvPTeamId neutral.
+func bgBasePrematureWinner(ally, horde, min int) int8 {
+	if ally >= min {
+		return 0
+	}
+	if horde >= min {
+		return 1
+	}
+	return 2
+}
+
+// prematureCountdownStep is one Battleground::_ProcessProgress tick
+// (Battleground.cpp:355-388) for a single instance. trigger is the Update
+// arm (Battleground.cpp:208): the premature config is nonzero and either
+// team is below the minimum. When trigger is false an armed countdown is
+// cancelled (flag only, matching C++: the timer value is left stale). When
+// trigger is true and no countdown runs, it starts at the full premature
+// time; when the timer runs below diff the match expires. Otherwise the
+// timer decrements and, unless the new time crosses no boundary, announces
+// on minute boundaries above a minute and 15-second boundaries below it —
+// the message value is the OLD timer (C++ sends m_PrematureCountDownTimer
+// before assigning newtime), so "5 mins" fires as the timer crosses from
+// 5:00 to 4:59, not at 4:00. The caller holds the per-map state mu; the
+// returned message is empty unless a boundary fired.
+func prematureCountdownStep(active *bool, timerMs *int64, diffMs int64, trigger bool) (expired bool, message string) {
+	if !trigger {
+		if *active {
+			*active = false
+		}
+		return false, ""
+	}
+	if !*active {
+		*active = true
+		*timerMs = int64(bgPrematureFinishTime / time.Millisecond)
+		return false, ""
+	}
+	if *timerMs < diffMs {
+		*active = false
+		return true, ""
+	}
+	newtime := *timerMs - diffMs
+	if newtime > int64(time.Minute/time.Millisecond) {
+		if newtime/(int64(time.Minute/time.Millisecond)) != *timerMs/(int64(time.Minute/time.Millisecond)) {
+			message = fmt.Sprintf("Not enough players. This game will close in %d mins.", *timerMs/(int64(time.Minute/time.Millisecond)))
+		}
+	} else {
+		if newtime/(15*int64(time.Second/time.Millisecond)) != *timerMs/(15*int64(time.Second/time.Millisecond)) {
+			message = fmt.Sprintf("Not enough players. This game will close in %d seconds.", *timerMs/int64(time.Second/time.Millisecond))
+		}
+	}
+	*timerMs = newtime
+	return false, message
+}
+
+// finishWSGPremature ends a WSG match on premature expiry: a decided winner
+// takes the victory arm, a draw the tie arm (endWSGTie is the C++
+// EndBattleground neutral arm). The caller's wsg.mu is held.
+func (s *Server) finishWSGPremature(wsg *wsgBattlegroundState, mapID uint32, winner int8) {
+	if winner == 2 {
+		s.endWSGTie(wsg, mapID)
+		return
+	}
+	s.endWSGVictory(wsg, mapID, uint32(winner))
+}
+
+// finishABPremature ends an AB match on premature expiry. AB has no
+// dedicated end function: the resource-max arm (TickResources) sets Winner,
+// stamps EndedAt, flips slots to WAIT_LEAVE, stops node timers and announces
+// victory (announceABVictory carries the winner + completion honor from
+// BattlegroundAB::EndBattleground, BattlegroundAB.cpp:624). The draw arm
+// mirrors the same EndBattleground completion honor for both teams with no
+// winner honor, since a neutral winner pays neither side's win bonus. The
+// caller's ab.mu is held.
+func (s *Server) finishABPremature(ab *abBattlegroundState, winner int8) {
+	ab.Winner = winner
+	ab.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(ab.MapID)
+	s.stopABNodeCaptureTimers(ab)
+	if winner == 2 {
+		s.broadcastBattlegroundMessage(ab.MapID, "The battle ended in a draw!")
+		s.rewardBGEndHonor(ab.MapID, 0, 1)
+		s.rewardBGEndHonor(ab.MapID, 1, 1)
+		return
+	}
+	s.announceABVictory(ab.MapID, uint32(winner))
+}
+
+// finishAVPremature ends an AV match on premature expiry via endAV, whose
+// tower/captain bonuses run for any winner (BattlegroundAV::EndBattleground,
+// BattlegroundAV.cpp:453, computes them before the base-class call) and
+// whose draw message arm covers the neutral winner. The caller's av.mu is
+// held.
+func (s *Server) finishAVPremature(av *avBattlegroundState, winner int8) {
+	s.endAV(av, winner)
+}
+
+// finishEOTSPremature ends an EotS match on premature expiry. Like AB, EotS
+// has no dedicated end function: the resource-max arm (addEOTSResources)
+// sets Winner, stamps EndedAt, flips slots, stops the flag timers and
+// announces victory (announceEOTSVictory carries the winner + completion
+// honor from BattlegroundEY::EndBattleground, BattlegroundEY.cpp:316). The
+// draw arm mirrors the completion honor for both teams with no winner
+// honor. The caller's eots.mu is held.
+func (s *Server) finishEOTSPremature(eots *eotsBattlegroundState, winner int8) {
+	eots.Winner = winner
+	eots.EndedAt = time.Now()
+	s.markBGSlotsWaitLeave(eots.MapID)
+	if eots.FlagRespawnTimer != nil {
+		eots.FlagRespawnTimer.Stop()
+		eots.FlagRespawnTimer = nil
+	}
+	if eots.FlagReturnTimer != nil {
+		eots.FlagReturnTimer.Stop()
+		eots.FlagReturnTimer = nil
+	}
+	if winner == 2 {
+		s.broadcastBattlegroundMessage(eots.MapID, "The battle ended in a draw!")
+		s.rewardBGEndHonor(eots.MapID, 0, 1)
+		s.rewardBGEndHonor(eots.MapID, 1, 1)
+		return
+	}
+	s.announceEOTSVictory(eots.MapID, uint32(winner))
+}
+
+// finishSAPremature ends an SA match on premature expiry via endSA, which
+// already handles the draw winner (2). The caller's sa.mu is held.
+func (s *Server) finishSAPremature(sa *saBattlegroundState, winner int8) {
+	s.endSA(sa, winner)
+}
+
+// finishICPremature ends an IoC match on premature expiry via endIC, whose
+// draw message arm covers the neutral winner. The caller's ic.mu is held.
+func (s *Server) finishICPremature(ic *icBattlegroundState, winner int8) {
+	s.endIC(ic, winner)
+}
+
+// updateBattlegroundPrematureFinish ports the STATUS_IN_PROGRESS arm of
+// Battleground::Update (Battleground.cpp:205-211) plus _ProcessProgress
+// (Battleground.cpp:355-388) for the six non-arena maps: when either team's
+// live roster drops below the minimum, a 5-minute countdown starts,
+// announces on minute/15-second boundaries, and on expiry ends the match
+// with the per-map GetPrematureWinner (score/node/reinforcement legs, base
+// roster leg on ties); when both teams are back at or above the minimum
+// an armed countdown cancels. Arenas are excluded by the C++ arm itself
+// (the arena branch ends at 47 minutes instead); Wintergrasp is a
+// Battlefield, not a Battleground. The sweep peeks the registries (never
+// getOrCreate) and runs on the world tick's 1s cadence beside
+// updateBattlegroundWaitLeave; the per-map Winner >= 0 gate keeps ended
+// matches out, and the AV peek uses objectsMu, the creation lock. SA is
+// additionally gated on an in-progress round (RoundOne/RoundTwo): C++ only
+// runs _ProcessProgress in STATUS_IN_PROGRESS, and SA is the one Go map
+// with a warmup/finished status to gate on. The other five Go maps have no
+// WAIT_JOIN/IN_PROGRESS distinction (Winner -1 spans warmup and play), so
+// their countdown may start during warmup — a roster at queue-full rarely
+// trips it there. No registry or state mu is held across the roster count;
+// the end arms run under the state mu, the same ordering their normal
+// callers already use.
+func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
+	if s == nil {
+		return
+	}
+	if !s.bgPrematureTickLast.IsZero() && now.Sub(s.bgPrematureTickLast) < time.Second {
+		return
+	}
+	diffMs := int64(0)
+	if !s.bgPrematureTickLast.IsZero() {
+		diffMs = now.Sub(s.bgPrematureTickLast).Milliseconds()
+	}
+	s.bgPrematureTickLast = now
+
+	// WSG: score leg, base leg on ties.
+	s.wsgMu.RLock()
+	wsg := s.wsgState[WSGMapID]
+	s.wsgMu.RUnlock()
+	if wsg != nil {
+		wsg.mu.Lock()
+		ended := wsg.Winner >= 0
+		wsg.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(WSGMapID)
+			min := bgPrematureMinPlayers(WSGMapID)
+			wsg.mu.Lock()
+			if wsg.Winner < 0 {
+				expired, msg := prematureCountdownStep(&wsg.PrematureCountDown, &wsg.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(WSGMapID, msg)
+				}
+				if expired {
+					winner := int8(0)
+					if w, ok := wsgPrematureWinner(wsg); ok {
+						winner = int8(w)
+					} else {
+						winner = bgBasePrematureWinner(ally, horde, min)
+					}
+					s.finishWSGPremature(wsg, WSGMapID, winner)
+				}
+			}
+			wsg.mu.Unlock()
+		}
+	}
+
+	// AB: node-count leg, base leg on ties.
+	s.abMu.RLock()
+	ab := s.abState[ABMapID]
+	s.abMu.RUnlock()
+	if ab != nil {
+		ab.mu.Lock()
+		ended := ab.Winner >= 0
+		ab.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(ABMapID)
+			min := bgPrematureMinPlayers(ABMapID)
+			ab.mu.Lock()
+			if ab.Winner < 0 {
+				expired, msg := prematureCountdownStep(&ab.PrematureCountDown, &ab.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(ABMapID, msg)
+				}
+				if expired {
+					winner := int8(0)
+					if w, ok := abPrematureWinner(ab); ok {
+						winner = int8(w)
+					} else {
+						winner = bgBasePrematureWinner(ally, horde, min)
+					}
+					s.finishABPremature(ab, winner)
+				}
+			}
+			ab.mu.Unlock()
+		}
+	}
+
+	// AV: reinforcement (m_Team_Scores) leg, base leg on ties.
+	s.objectsMu.RLock()
+	av := s.avState[AVMapID]
+	s.objectsMu.RUnlock()
+	if av != nil {
+		av.mu.Lock()
+		ended := av.Winner >= 0
+		av.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(AVMapID)
+			min := bgPrematureMinPlayers(AVMapID)
+			av.mu.Lock()
+			if av.Winner < 0 {
+				expired, msg := prematureCountdownStep(&av.PrematureCountDown, &av.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(AVMapID, msg)
+				}
+				if expired {
+					winner := int8(0)
+					if w, ok := avPrematureWinner(av); ok {
+						winner = int8(w)
+					} else {
+						winner = bgBasePrematureWinner(ally, horde, min)
+					}
+					s.finishAVPremature(av, winner)
+				}
+			}
+			av.mu.Unlock()
+		}
+	}
+
+	// EotS: victory-point leg, base leg on ties.
+	s.eotsMu.RLock()
+	eots := s.eotsState[EOTSMapID]
+	s.eotsMu.RUnlock()
+	if eots != nil {
+		eots.mu.Lock()
+		ended := eots.Winner >= 0
+		eots.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(EOTSMapID)
+			min := bgPrematureMinPlayers(EOTSMapID)
+			eots.mu.Lock()
+			if eots.Winner < 0 {
+				expired, msg := prematureCountdownStep(&eots.PrematureCountDown, &eots.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(EOTSMapID, msg)
+				}
+				if expired {
+					winner := int8(0)
+					if w, ok := eotsPrematureWinner(eots); ok {
+						winner = int8(w)
+					} else {
+						winner = bgBasePrematureWinner(ally, horde, min)
+					}
+					s.finishEOTSPremature(eots, winner)
+				}
+			}
+			eots.mu.Unlock()
+		}
+	}
+
+	// SA: no per-map override in C++, base roster leg only, and only while
+	// a round is in progress.
+	s.saMu.RLock()
+	sa := s.saState[SAMapID]
+	s.saMu.RUnlock()
+	if sa != nil {
+		sa.mu.Lock()
+		ended := sa.Winner >= 0 || (sa.Status != SAStatusRoundOne && sa.Status != SAStatusRoundTwo)
+		sa.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(SAMapID)
+			min := bgPrematureMinPlayers(SAMapID)
+			sa.mu.Lock()
+			if sa.Winner < 0 && (sa.Status == SAStatusRoundOne || sa.Status == SAStatusRoundTwo) {
+				expired, msg := prematureCountdownStep(&sa.PrematureCountDown, &sa.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(SAMapID, msg)
+				}
+				if expired {
+					s.finishSAPremature(sa, bgBasePrematureWinner(ally, horde, min))
+				}
+			}
+			sa.mu.Unlock()
+		}
+	}
+
+	// IoC: no per-map override in C++, base roster leg only.
+	s.icMu.RLock()
+	ic := s.icState[ICMapID]
+	s.icMu.RUnlock()
+	if ic != nil {
+		ic.mu.Lock()
+		ended := ic.Winner >= 0
+		ic.mu.Unlock()
+		if !ended {
+			ally, horde := s.bgRosterCounts(ICMapID)
+			min := bgPrematureMinPlayers(ICMapID)
+			ic.mu.Lock()
+			if ic.Winner < 0 {
+				expired, msg := prematureCountdownStep(&ic.PrematureCountDown, &ic.PrematureTimerMs, diffMs, ally < min || horde < min)
+				if msg != "" {
+					s.broadcastBattlegroundMessage(ICMapID, msg)
+				}
+				if expired {
+					s.finishICPremature(ic, bgBasePrematureWinner(ally, horde, min))
+				}
+			}
+			ic.mu.Unlock()
+		}
+	}
+}
+
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
 // Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795) and Player::ReportedAfkBy (Player.cpp:22524).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {

@@ -173,6 +173,8 @@ type saBattlegroundState struct {
 	GateDestroyed        bool
 	Winner               int8      // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
 	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	PrematureCountDown   bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
+	PrematureTimerMs     int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	DemolishersDestroyed map[uint64]uint32
 	GatesDestroyed       map[uint64]uint32
 	StopTicker           chan struct{}

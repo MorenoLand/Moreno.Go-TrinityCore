@@ -378,6 +378,8 @@ type icBattlegroundState struct {
 	ResourceTickDuration   time.Duration
 	Winner                 int8      // -1: ongoing, 0: Alliance, 1: Horde
 	EndedAt                time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	PrematureCountDown     bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
+	PrematureTimerMs       int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	VehiclesDestroyed      map[uint64]uint32
 	StopTicker             chan struct{}
 	ResourceAccumMs        int64 // ms accumulated toward the next 45s resource tick
@@ -1119,11 +1121,21 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 			ic.Nodes[i].CaptureTimer = nil
 		}
 	}
-	winnerTeam := "Alliance"
-	if winner == int8(ICTeamHorde) {
-		winnerTeam = "Horde"
+	// A neutral premature winner sends no win broadcast (C++
+	// EndBattleground's neutral arm sets PVP_TEAM_NEUTRAL with no win text);
+	// the criteria credit below still runs, since the WIN_BG /
+	// COMPLETE_BATTLEGROUND arms are unconditional and creditBattlegroundWin
+	// with a neutral team credits completion to all participants and the win
+	// to nobody (teamForRace never returns 2).
+	if winner == 2 {
+		s.broadcastBattlegroundMessage(ic.MapID, "The battle for Isle of Conquest ended in a draw!")
+	} else {
+		winnerTeam := "Alliance"
+		if winner == int8(ICTeamHorde) {
+			winnerTeam = "Horde"
+		}
+		s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("The %s has won the battle for Isle of Conquest!", winnerTeam))
 	}
-	s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("The %s has won the battle for Isle of Conquest!", winnerTeam))
 	// Reference: Battleground::EndBattleground (Battleground.cpp:775-800): the
 	// WIN_BG / COMPLETE_BATTLEGROUND criteria arms are unconditional (unlike the
 	// IsRandom/Weekend-gated winner/loser honor arms, which have no reachable

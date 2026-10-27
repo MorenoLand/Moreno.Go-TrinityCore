@@ -155,6 +155,8 @@ type abBattlegroundState struct {
 	CaptureDuration      time.Duration
 	Winner               int8      // -1 = ongoing, 0 = Alliance, 1 = Horde
 	EndedAt              time.Time // EndBattleground time for the _ProcessLeave auto-remove (Battleground.cpp:506-528, TIME_TO_AUTOREMOVE = 120s)
+	PrematureCountDown   bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
+	PrematureTimerMs     int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	AllianceAccumMs      int64
 	HordeAccumMs         int64
 	HonorTicsAccum       [2]uint32 // resource points banked toward the next trickle-honor award
@@ -859,10 +861,10 @@ func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {
 // (BattlegroundAB.cpp:613-631): the team holding more occupied bases wins a
 // premature finish. Team ids match the rest of the Go AB model (0 = alliance,
 // 1 = horde). The tie fallthrough in C++ calls Battleground::GetPrematureWinner
-// (Battleground.cpp:344-352), the min-players-per-team roster check — Go has no
-// live BG-instance roster, so that base arm stays unported and a tie reports no
-// winner. No live caller yet: Go has no premature-finish countdown
-// (Battleground::_ProcessProgress / m_PrematureCountDown).
+// (Battleground.cpp:344-352), the min-players-per-team roster check — wired in
+// updateBattlegroundPrematureFinish as bgBasePrematureWinner on the live
+// roster counts, so a tie reports the roster winner or a draw, never no
+// winner.
 func abPrematureWinner(ab *abBattlegroundState) (uint32, bool) {
 	if ab == nil {
 		return 0, false
