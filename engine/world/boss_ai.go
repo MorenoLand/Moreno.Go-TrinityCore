@@ -2266,10 +2266,9 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// caster's totem slots, which are player-session state);
 	// farsight 72 / stuck 84 / summon-change-item 34 / glyph 74
 	// (caster-player legs: dynamic-object viewpoint, unstuck
-	// teleport, cast-item swap, glyph socket); force-deselect 93
-	// (HANDLE_HIT hostile broadcast around the caster — a
-	// creature-position twin is a next-strip candidate, not a
-	// session-helper arm). Gated on spellKnown like the tail.
+	// teleport, cast-item swap, glyph socket). Force-deselect 93
+	// rides the creature-position twin in the tail switch below
+	// (HANDLE_HIT, once per effect). Gated on spellKnown like the tail.
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
@@ -2285,6 +2284,8 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectTalentSpecSelect(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
 				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectForceDeselect:
+				s.creatureEffectForceDeselect(ctx, m)
 			}
 		}
 	}
@@ -5029,6 +5030,59 @@ func (s *Server) creatureEffectSanctuary(ctx context.Context, m *creatureMotion,
 // session (the helpers resolve the target themselves, so the
 // receiver session here is only a vehicle). Non-player targets fall
 // through the C++ ToPlayer gates via the session lookup.
+// creatureEffectForceDeselect mirrors Spell::EffectForceDeselect
+// (SpellEffects.cpp:4396) for a creature caster: the once-per-effect
+// HANDLE_HIT arm. SMSG_BREAK_TARGET (packed caster GUID) and
+// SMSG_CLEAR_TARGET (raw caster GUID) go to hostile players within the
+// caster's visibility range (100yd) on the caster's map/instance, keyed
+// on the creatureHostileToPlayer verdict (the session twin keys on
+// alliance; a creature caster has no alliance, so the C++
+// MessageDistDelivererToHostile hostility is the faction verdict).
+// Attackers that cannot have a threat list (nil ThreatMgr motions:
+// pets, totems, triggers) stop attacking the caster, with SMSG_ATTACK_STOP
+// broadcast in the instance (no caster session exists on this path).
+func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMotion) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	breakPkt := protocol.NewBuffer(9)
+	breakPkt.WritePackedGUID(m.GUID)
+	clearPkt := protocol.NewBuffer(8)
+	clearPkt.WriteU64(m.GUID)
+	s.sessionsMu.RLock()
+	for target := range s.sessions {
+		if target == nil || !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != m.Map || target.player.InstanceID != m.InstanceID {
+			continue
+		}
+		if !s.creatureHostileToPlayer(m, target) {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, m.X, m.Y, m.Z) > 100.0 {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_BREAK_TARGET), breakPkt.Bytes(), true)
+		_ = target.write(uint16(protocol.OpcodeSMSG_CLEAR_TARGET), clearPkt.Bytes(), true)
+	}
+	s.sessionsMu.RUnlock()
+	type stoppedMotion struct{ guid, victim uint64 }
+	var stopped []stoppedMotion
+	s.motionMu.Lock()
+	for _, motion := range s.motionMapLocked(m.Map, m.InstanceID) {
+		if motion == nil || motion.TargetGUID != m.GUID || motion.ThreatMgr != nil {
+			continue
+		}
+		stopped = append(stopped, stoppedMotion{guid: motion.GUID, victim: motion.TargetGUID})
+		motion.TargetGUID = 0
+		motion.InCombat = false
+	}
+	s.motionMu.Unlock()
+	for _, st := range stopped {
+		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), nil)
+	}
+}
+
 func (s *Server) creatureEffectQuest(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
