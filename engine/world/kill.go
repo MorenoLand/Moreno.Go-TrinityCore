@@ -1156,6 +1156,33 @@ func (s *Server) fireCreatureDeathCast(ctx context.Context, dead *creatureMotion
 	}
 }
 
+// fireGuardDeathBroadcast is the GuardAI::JustDied leg
+// (GuardAI.cpp:72-76) for the no-funnel death chains: a guard slain
+// by a player broadcasts SMSG_ZONE_UNDER_ATTACK with the guard's area
+// id to the killer's opposite team (Creature::SendZoneUnderAttackMessage,
+// Creature.cpp:2706-2712). The killer resolves through
+// GetCharmerOrOwnerPlayerOrPlayerItself (Object.cpp:2226-2232): a
+// creature killer counts only via its charmer/owner player, and only
+// when that player is loaded — an online session in Go. A
+// wild-creature killer, or a player-owned killer whose owner is
+// offline, resolves to nil and broadcasts nothing; the funnel path
+// keeps its own session-player gate (a player killer has no motion).
+func (s *Server) fireGuardDeathBroadcast(dead, killer *creatureMotion) {
+	if s == nil || dead == nil || killer == nil || killer.OwnerGUID == 0 {
+		return
+	}
+	if dead.FlagsExtra&creatureFlagExtraGuard == 0 {
+		return
+	}
+	owner := s.findSessionByGUID(killer.OwnerGUID)
+	if owner == nil || owner.player == nil {
+		return
+	}
+	if _, areaID := s.zoneAndAreaID(dead.Map, dead.X, dead.Y, dead.Z, 0); areaID != 0 {
+		s.broadcastZoneUnderAttack(teamForRace(owner.player.Race), areaID)
+	}
+}
+
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):
 // Eluna::OnPVPKill (PlayerHooks.cpp:155-161), (event, killer, killed), void
 // (CallAllFunctions). Unit::Kill tail (Unit.cpp:11466-11480): attacker and

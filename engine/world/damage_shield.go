@@ -547,6 +547,10 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 				killerGUID = attackerMotion.GUID
 			}
 			s.fireCreatureDeathCast(ctx, m, killerGUID)
+			// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+			// leg, resolved through the attacker motion's charmer/owner
+			// player — a gone attacker motion broadcasts nothing.
+			s.fireGuardDeathBroadcast(m, attackerMotion)
 			respawnHealth := m.MaxHealth
 			if respawnHealth == 0 {
 				respawnHealth = 1

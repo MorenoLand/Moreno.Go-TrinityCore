@@ -1837,6 +1837,9 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// death cast at the caster killer — the funnel leg, fired
 		// here because this path skips onCreatureKilled.
 		s.fireCreatureDeathCast(ctx, live, motion.GUID)
+		// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+		// leg, resolved through the caster motion's charmer/owner player.
+		s.fireGuardDeathBroadcast(live, motion)
 	} else {
 		healthUpdate := map[int]uint32{unitFieldHealth: newHealth}
 		if rageChanged {
@@ -3030,6 +3033,10 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			// event-4 killer (the motion itself on the self-trip; the
 			// reflector GUID is not plumbed into the trip core).
 			s.fireCreatureDeathCast(ctx, live, motion.GUID)
+			// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+			// leg — the killer here is the motion itself, so a
+			// player-owned reflector-victim resolves via its owner.
+			s.fireGuardDeathBroadcast(live, motion)
 		}
 		if reflector.killCredit != nil {
 			reflector.killCredit(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID})

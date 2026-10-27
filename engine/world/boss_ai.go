@@ -2560,6 +2560,10 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// cast at the attacker killer — the funnel leg, fired here
 	// because the no-owner arm skips onCreatureKilled.
 	s.fireCreatureDeathCast(ctx, tm, m.GUID)
+	// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+	// leg, resolved here through the attacker motion's charmer/owner
+	// player — the funnel gate, on a path with no session in hand.
+	s.fireGuardDeathBroadcast(tm, m)
 	// Creature::RemoveCorpse schedules the respawn for every death; the
 	// owner path gets it from onCreatureKilled.
 	if tm.InstanceID == 0 {

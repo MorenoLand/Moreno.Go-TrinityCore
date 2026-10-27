@@ -1775,6 +1775,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// at the pet killer — the funnel leg, fired here because this
 				// branch skips onCreatureKilled.
 				s.fireCreatureDeathCast(ctx, victim, motion.GUID)
+				// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+				// leg, resolved through the pet motion's owner player —
+				// an owner-gone pet broadcasts nothing (C++ has no pet
+				// with an offline owner to resolve).
+				s.fireGuardDeathBroadcast(victim, motion)
 				// Creature::RemoveCorpse schedules the respawn for every death
 				// (boss_ai.go precedent: the owner path gets it from
 				// onCreatureKilled); placed ahead of the dead-leg stamp, so the
