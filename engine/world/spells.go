@@ -9710,10 +9710,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// into one m_UniqueTargetInfo entry); otherwise it rolls the wire arms
 	// (immune, damage-immune, reflect/hit, IMMUNE2) and jumps are searched
 	// regardless of its verdict, as C++ selects jumps at selection time.
+	// The gate carries no !friendlyListSpell term: an area spell carrying a
+	// friendly/entry/GO list leg is still area-selected (the area branch wins
+	// the else-if selection chain, so hitTargets is the enemy-area list and
+	// the list leg is shadowed), and its chain anchor is the same wire unit
+	// target — while the friendly-list block requires !areaSpell and the plain
+	// block requires !friendlyListSpell, so the combined shape lost chain to
+	// both gates. A GO wire target still resolves no anchor here (unit-only
+	// anchor resolution, the GO-wire census); only a unit wire target chains.
 	// Jumps already in the area list are skipped with no falloff index (the
 	// twin/triggered dedupe convention); the flat list over-hits the
 	// primary with the area effect, the standing mixed-effect approximation.
-	if areaSpell && !friendlyListSpell {
+	if areaSpell {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 			winTarget := uint32(0)
 			for i, eff := range spell.Effects {
