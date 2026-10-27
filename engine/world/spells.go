@@ -11827,7 +11827,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: the target's equipped main-hand weapon gains the
 				// MiscValue enchantment in the temp slot.
-				s.handleEffectEnchantHeldItem(effCtx, spell, eff, hitTargets)
+				s.handleEffectEnchantHeldItem(effCtx, spell, eff, hitTargets, casterLevel)
 			case spellEffectForceDeselect: // 93: SPELL_EFFECT_FORCE_DESELECT (EffectForceDeselect, SpellEffects.cpp:4396)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// SMSG_BREAK_TARGET + SMSG_CLEAR_TARGET go to hostile players
@@ -11931,7 +11931,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: sets the homebind, sends bind point update +
 				// player-bound packet.
-				s.handleEffectBind(effCtx, eff, target, hitTargets)
+				s.handleEffectBind(effCtx, eff, target, hitTargets, s.playerGUID)
 			case spellEffectBlock: // 23: SPELL_EFFECT_BLOCK (EffectBlock, SpellEffects.cpp:4325)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// SetCanBlock(true).
@@ -18198,12 +18198,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// Spell::EffectBind (SpellEffects.cpp:5695) runs at
 				// HIT_TARGET per player target: the client arm's helper
 				// over the single miss-filtered target.
-				s.handleEffectBind(ctx, eff, spellTarget, []uint64{effectTarget})
+				s.handleEffectBind(ctx, eff, spellTarget, []uint64{effectTarget}, s.playerGUID)
 			} else if eff.Effect == spellEffectEnchantHeldItem {
 				// Spell::EffectEnchantHeldItem (SpellEffects.cpp:4078)
 				// runs at HIT_TARGET per player target: the client arm's
 				// helper over the single miss-filtered target.
-				s.handleEffectEnchantHeldItem(ctx, spell, eff, []uint64{effectTarget})
+				s.handleEffectEnchantHeldItem(ctx, spell, eff, []uint64{effectTarget}, casterLevel)
 			} else if eff.Effect == spellEffectSkillStep {
 				// Spell::EffectSkillStep (SpellEffects.cpp:2644) runs at
 				// HIT_TARGET per unit target: the client arm's helper over
@@ -35974,7 +35974,7 @@ func (s *session) itemEnchantmentIDAtSlot(ctx context.Context, instanceGUID uint
 // blocks the apply. The ApplyEnchantment stat arm rides Go's existing
 // equipment stat calc (applyPlayerItemStatEnchants reads slot 1) once the
 // enchant is persisted and the equipment cache resyncs.
-func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, casterLevel uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -35991,12 +35991,8 @@ func (s *session) handleEffectEnchantHeldItem(ctx context.Context, spell wotlk.S
 	}
 	if durationMs == 0 {
 		// Spell::EffectEnchantHeldItem — the duration fallback is the
-		// rolled damage.
-		var enchantCasterLevel uint32
-		if s.player != nil {
-			enchantCasterLevel = uint32(s.player.Level)
-		}
-		if dmg := eff.CalcValueForLevel(spell, enchantCasterLevel); dmg != 0 {
+		// rolled damage at the caster's level.
+		if dmg := eff.CalcValueForLevel(spell, casterLevel); dmg != 0 {
 			durationMs = uint32(dmg)
 		}
 	}
@@ -38486,7 +38482,7 @@ func (s *session) handleEffectEnvironmentalDamage(ctx context.Context, spell wot
 // via UPDATE character_homebind (Player.cpp:17342-17357); the bind point
 // update and player-bound packets mirror SendBindPointUpdate and the
 // PlayerBound packet, the latter carrying the caster GUID.
-func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
+func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64, casterGUID uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
@@ -38521,7 +38517,7 @@ func (s *session) handleEffectBind(ctx context.Context, eff wotlk.SpellEffect, t
 				mapID, areaID, bindX, bindY, bindZ, effectTarget)
 		}
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(targetSess.player), true)
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_PLAYER_BOUND), buildPlayerBound(s.playerGUID, areaID), true)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_PLAYER_BOUND), buildPlayerBound(casterGUID, areaID), true)
 		targetSess.sendPlayerUpdate()
 	}
 }

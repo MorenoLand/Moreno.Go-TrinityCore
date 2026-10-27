@@ -2284,6 +2284,12 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 				s.creatureEffectTalentSpecSelect(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
 				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectBind:
+				s.creatureEffectBind(ctx, m, spellInfo.Effects[i], hasDest, destX, destY, destZ, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectEnchantHeldItem:
+				s.creatureEffectEnchantHeldItem(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectUnlearnSpecialization:
+				s.creatureEffectUnlearnSpecialization(ctx, m, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
 			}
@@ -5053,6 +5059,95 @@ func (s *Server) creatureEffectSanctuary(ctx context.Context, m *creatureMotion,
 // session (the helpers resolve the target themselves, so the
 // receiver session here is only a vehicle). Non-player targets fall
 // through the C++ ToPlayer gates via the session lookup.
+// creatureEffectBind mirrors Spell::EffectBind (SpellEffects.cpp:5695)
+// for a creature caster: the HIT_TARGET arm. Each player hit target rides
+// its own session's helper over the singleton list; the dest leg carries
+// the resolved dest coordinates when the cast has a dest-family target,
+// else the target's own location, matching C++ HasDst. The PlayerBound
+// packet carries the creature caster's GUID, and the helper keeps the
+// target's map (Go dests carry no map), the documented player-path limit.
+// creatureEffectEnchantHeldItem mirrors Spell::EffectEnchantHeldItem
+// (SpellEffects.cpp:4078) for a creature caster: the HIT_TARGET arm. Each
+// player hit target rides its own session's helper over the singleton
+// list, with the temp-enchant duration fallback rolled at the creature
+// caster's level through the helper's casterLevel parameter.
+// creatureEffectUnlearnSpecialization mirrors
+// Spell::EffectUnlearnSpecialization (SpellEffects.cpp:1249) for a
+// creature caster: the HIT_TARGET arm. Each player hit target rides its
+// own session's helper over the singleton list, removing the effect's
+// TriggerSpell. No caster-level or caster-state leg exists in C++.
+// Steal-beneficial-buff 126 stays out on this path: C++ transfers the
+// stolen aura to the caster (Unit.cpp:3999-4049), and the transfer
+// sequence is session-player machinery (mergeStolenAura, single-target
+// purge, victim-effect carry, recalc, charges, periods) with no creature
+// twin — removing the victim aura without the transfer would fabricate
+// a dispel, and the victim-creature charge leg rides the player-bound
+// creatureAuraKeyForPlayer key.
+func (s *Server) creatureEffectBind(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hasDest bool, destX, destY, destZ float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	target := protocol.SpellTargetData{}
+	if hasDest {
+		target.Flags = protocol.SpellTargetFlagDestLocation
+		target.Destination = protocol.SpellTargetLocation{X: destX, Y: destY, Z: destZ}
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.handleEffectBind(ctx, eff, target, []uint64{guid}, m.GUID)
+		}
+	}
+}
+
+func (s *Server) creatureEffectEnchantHeldItem(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.handleEffectEnchantHeldItem(ctx, spell, eff, []uint64{guid}, uint32(m.Level))
+		}
+	}
+}
+
+func (s *Server) creatureEffectUnlearnSpecialization(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			targetSess.handleEffectUnlearnSpecialization(ctx, eff, []uint64{guid})
+		}
+	}
+}
+
 // creatureEffectForceDeselect mirrors Spell::EffectForceDeselect
 // (SpellEffects.cpp:4396) for a creature caster: the once-per-effect
 // HANDLE_HIT arm. SMSG_BREAK_TARGET (packed caster GUID) and
