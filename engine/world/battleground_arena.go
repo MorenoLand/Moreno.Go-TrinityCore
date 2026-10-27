@@ -187,6 +187,37 @@ func bgStatusForArena(status uint32) uint32 {
 	}
 }
 
+// arenaMatchQueueSlot returns the index of the session's queue slot for this
+// arena instance. The slot is the one whose instance id matches the state's
+// (the pop stamps the slot and the state with the same id, and the accept
+// re-finds the state by it); when the state carries no instance id, the
+// arena-type slot is used instead — at most one active slot exists per
+// arena type (the join dup-block). C++ keys the packet slot by queue type
+// (Battleground::RemovePlayerAtLeave, Battleground.cpp:887, via
+// GetBattlegroundQueueIndex), never by first-active-slot: a player can
+// hold several arena slots at once (one per arena type), so first-active
+// flips or clears a different match's slot — a 3v3 WaitJoin invite
+// overwritten when its owner's 2v2 match starts, ends, or auto-removes.
+func arenaMatchQueueSlot(sess *session, arena *arenaBattlegroundState) int {
+	if sess == nil || arena == nil {
+		return -1
+	}
+	for i := range sess.bgQueues {
+		e := &sess.bgQueues[i]
+		if !e.Active || !e.IsArena {
+			continue
+		}
+		if arena.InstanceID != 0 {
+			if e.InstanceID == arena.InstanceID {
+				return i
+			}
+		} else if e.ArenaType == arena.ArenaType {
+			return i
+		}
+	}
+	return -1
+}
+
 // IsArenaMap returns true if the specified map ID is an arena map.
 func IsArenaMap(mapID uint32) bool {
 	switch mapID {
@@ -459,18 +490,17 @@ func (s *Server) addPlayerToArena(sess *session, arenaTeam uint8, arena *arenaBa
 		s.resetPlayerPowers(sess)
 	}
 
-	// Set queue entry state
-	for i := 0; i < len(sess.bgQueues); i++ {
-		if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-			sess.bgQueues[i].Status = bgStatusForArena(arena.Status)
-			sess.bgQueues[i].MapID = arena.MapID
-			sess.bgQueues[i].InstanceID = arena.InstanceID
-			sess.bgQueues[i].ArenaType = arena.ArenaType
-			sess.bgQueues[i].ArenaFaction = arenaTeam
-			sess.bgQueues[i].StartTime = arena.StartTime
-			sess.sendBattlefieldStatus(uint8(i))
-			break
-		}
+	// Set queue entry state on this arena's own slot (arenaMatchQueueSlot):
+	// the first-active slot may belong to another arena type the player
+	// also holds, and overwriting it would destroy that invite.
+	if i := arenaMatchQueueSlot(sess, arena); i >= 0 {
+		sess.bgQueues[i].Status = bgStatusForArena(arena.Status)
+		sess.bgQueues[i].MapID = arena.MapID
+		sess.bgQueues[i].InstanceID = arena.InstanceID
+		sess.bgQueues[i].ArenaType = arena.ArenaType
+		sess.bgQueues[i].ArenaFaction = arenaTeam
+		sess.bgQueues[i].StartTime = arena.StartTime
+		sess.sendBattlefieldStatus(uint8(i))
 	}
 	arena.mu.Unlock()
 
@@ -732,26 +762,25 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 				sess.removeAura(SpellWarlDemonicCircle)
 			}
 
-			// Update queue status
-			for i := 0; i < len(sess.bgQueues); i++ {
-				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-					// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
-					// (BattlegroundQueue.cpp:242): the arena match start is the
-					// invite point for arena queues. C++ keys arenas by the
-					// rated flag (BattlegroundQueue.cpp:251-253): rated ->
-					// TEAM_HORDE, else TEAM_ALLIANCE.
-					if sess.bgQueues[i].Status == BGStatusWaitQueue && !sess.bgQueues[i].JoinTime.IsZero() {
-						teamIdx := uint8(0)
-						if sess.bgQueues[i].IsRated {
-							teamIdx = 1
-						}
-						s.recordBGQueueWait(sess.bgQueues[i].BgTypeID, teamIdx, uint32(time.Since(sess.bgQueues[i].JoinTime).Milliseconds()))
+			// Update queue status on this arena's own slot (arenaMatchQueueSlot),
+			// not the first active arena slot, which may belong to another
+			// arena type the player also holds.
+			if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+				// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
+				// (BattlegroundQueue.cpp:242): the arena match start is the
+				// invite point for arena queues. C++ keys arenas by the
+				// rated flag (BattlegroundQueue.cpp:251-253): rated ->
+				// TEAM_HORDE, else TEAM_ALLIANCE.
+				if sess.bgQueues[idx].Status == BGStatusWaitQueue && !sess.bgQueues[idx].JoinTime.IsZero() {
+					teamIdx := uint8(0)
+					if sess.bgQueues[idx].IsRated {
+						teamIdx = 1
 					}
-					sess.bgQueues[i].Status = BGStatusInProgress
-					sess.bgQueues[i].StartTime = arena.MatchStartTime
-					sess.sendBattlefieldStatus(uint8(i))
-					break
+					s.recordBGQueueWait(sess.bgQueues[idx].BgTypeID, teamIdx, uint32(time.Since(sess.bgQueues[idx].JoinTime).Milliseconds()))
 				}
+				sess.bgQueues[idx].Status = BGStatusInProgress
+				sess.bgQueues[idx].StartTime = arena.MatchStartTime
+				sess.sendBattlefieldStatus(uint8(idx))
 			}
 		}
 	}
@@ -888,13 +917,12 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 
 			_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
 
-			// Update queue entry
-			for i := 0; i < len(sess.bgQueues); i++ {
-				if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-					sess.bgQueues[i].Status = BGStatusWaitLeave
-					sess.sendBattlefieldStatus(uint8(i))
-					break
-				}
+			// Update queue entry on this arena's own slot (arenaMatchQueueSlot),
+			// not the first active arena slot, which may belong to another
+			// arena type the player also holds.
+			if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+				sess.bgQueues[idx].Status = BGStatusWaitLeave
+				sess.sendBattlefieldStatus(uint8(idx))
 			}
 		}
 	}
@@ -968,12 +996,13 @@ func (s *Server) removeArenaPlayerAtLeave(ctx context.Context, arena *arenaBattl
 		// battlefield-status packet; the cleared slot is the Go form of
 		// RemoveBattlegroundQueueId, and sendBattlefieldStatus writes the
 		// 12-byte none form for an inactive slot.
-		for i := 0; i < len(sess.bgQueues); i++ {
-			if sess.bgQueues[i].Active && sess.bgQueues[i].IsArena {
-				sess.bgQueues[i] = bgQueueEntry{}
-				sess.sendBattlefieldStatus(uint8(i))
-				break
-			}
+		// Clear this arena's own slot (arenaMatchQueueSlot): the first-active
+		// slot may belong to another arena type the player also holds, and
+		// clearing it would destroy that invite while leaving this match's
+		// slot dangling.
+		if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+			sess.bgQueues[idx] = bgQueueEntry{}
+			sess.sendBattlefieldStatus(uint8(idx))
 		}
 		// Transport=true arm (Battleground.cpp:925-927):
 		// Player::TeleportToBGEntryPoint.
