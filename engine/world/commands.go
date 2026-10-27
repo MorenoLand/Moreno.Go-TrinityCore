@@ -300,8 +300,6 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	}
 	movement := s.movementInfoForCreate(*s.player)
 	s.stopPlayerCombat()
-	s.selection = 0
-	s.player.Selection = 0
 	// Player::TeleportTo (Player.cpp:1711-1716): a far teleport leaves the
 	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT. Detaching before the
 	// snapshot keeps TRANSFER_PENDING / NEW_WORLD faithful to C++'s
@@ -329,6 +327,10 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		s.farTeleportOriginInstanceID = s.player.InstanceID
 		s.nearTeleportPending = false
 		s.nearTeleportDest = nearTeleportDestination{}
+		// Player::TeleportTo far branch (Player.cpp:1801) clears the selection;
+		// the near branch holds it, so the clear lives here, not above the branch.
+		s.selection = 0
+		s.player.Selection = 0
 		// Player::RemoveFromWorld (Player.cpp:1976-1979) via Map::RemovePlayerFromMap
 		// (Map.cpp:1016): a far teleport releases the active loot while the player is
 		// still on the origin map at the origin position, before SMSG_NEW_WORLD — so the
