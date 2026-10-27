@@ -2310,13 +2310,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// status model (ambient map-keyed states), so the gate never fires
 	// there — a documented delta. C++ relative order: right after the
 	// cheat-spell gate, ahead of the outdoors/indoors arms.
-	if s.server != nil && IsArenaMap(s.player.Map) {
-		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+	if s.server != nil {
+		if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
 			arena.mu.Lock()
-			_, inArena := arena.PlayerTeams[s.playerGUID]
 			ended := arena.Status == ArenaStatusWaitLeave
 			arena.mu.Unlock()
-			if inArena && ended {
+			if ended {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
 				return true

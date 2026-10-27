@@ -1315,26 +1315,34 @@ func (s *Server) buildArenaPvPLogDataPacket(arena *arenaBattlegroundState) []byt
 }
 
 // handleArenaGameObjectUse processes clicks on arena gameobjects (such as Shadow Sight).
+// The GO dispatch is entry-based, not map-based, but the old gate required
+// the clicker to stand on the arena map: a sim roster member never stands
+// there (accept never teleports), so every sim Shadow Sight click no-op'd.
+// C++ GameObject::Use runs for a player in the battleground, never for a
+// map bystander, so the arm now keys on roster membership and uses the
+// match's own map for the despawn and the respawn schedule; a non-roster
+// clicker gets nothing, and the old no-arena-state map broadcast is gone
+// with the map gate.
 func (s *Server) handleArenaGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
-	if s == nil || sess == nil || sess.player == nil || !IsArenaMap(sess.player.Map) {
+	if s == nil || sess == nil || sess.player == nil {
 		return true
 	}
 
 	switch entry {
 	case ArenaGOShadowSight1, ArenaGOShadowSight2:
+		arena := s.findArenaStateForPlayer(sess.playerGUID)
+		if arena == nil {
+			return true
+		}
 		sess.applyAura(SpellShadowSight)
 		s.setGameObjectHidden(guid, true)
-		s.broadcastGameObjectDespawn(sess.player.Map, guid)
+		s.broadcastGameObjectDespawn(arena.MapID, guid)
 		// No C++ pickup broadcast exists in the Battlegrounds tree (the
 		// GO use just casts the buff spell); the announcement itself is
 		// Go-side, but its audience follows the same m_Players rule as
 		// every other arena announcement, not the map's players.
-		if arena := s.findArenaState(sess.player.Map, 0); arena != nil {
-			s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
-		} else {
-			s.broadcastArenaMessage(sess.player.Map, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
-		}
-		s.scheduleArenaShadowSightRespawn(sess.player.Map, guid)
+		s.broadcastArenaMessageToRoster(arena, fmt.Sprintf("%s has picked up Shadow Sight!", sess.player.Name))
+		s.scheduleArenaShadowSightRespawn(arena.MapID, guid)
 		return true
 	default:
 		return true

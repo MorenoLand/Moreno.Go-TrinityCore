@@ -2779,13 +2779,20 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// status is not ArenaStatusWaitLeave cannot leave while in combat
 	// (Unit::IsInCombat == session.isInCombat, combat.go:1924). Queue-leave is
 	// never gated: C++'s port action==0 arm has no combat check.
-	if s.server != nil && IsArenaMap(s.player.Map) && s.isInCombat() {
-		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+	// The old arm keyed on the leaver standing on the arena map, so a sim
+	// roster member in combat left freely (accept never teleports); the
+	// roster is the C++ GetBattleground() analog here, as in the
+	// death/leave/score arms. The payload gate is load-bearing, not
+	// cosmetic: the C++ gate lives only in the opcode handler, and
+	// internal callers (logout, GM command, areatrigger) pass nil — a
+	// roster-keyed gate without it would deny a combat logout and strand
+	// the slot InProgress past every leave arm below.
+	if payload != nil && s.server != nil && s.isInCombat() {
+		if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
 			arena.mu.Lock()
-			_, inArena := arena.PlayerTeams[s.playerGUID]
 			waitLeave := arena.Status == ArenaStatusWaitLeave
 			arena.mu.Unlock()
-			if inArena && !waitLeave {
+			if !waitLeave {
 				return true
 			}
 		}
@@ -2793,7 +2800,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// BattleGroundHandler.cpp:531-540: leaving a battleground while in combat
 	// is denied unless the BG is already STATUS_WAIT_LEAVE, and the denial
 	// runs before Player::LeaveBattleground, so it casts no deserter and
-	// tracks nothing. The arena arm above covers arena maps; a non-arena
+	// tracks nothing. The arena arm above covers arena rosters; a non-arena
 	// ported-in slot (Status InProgress) is the same gate for battlegrounds
 	// — WaitLeave slots are exempt, and WaitJoin slots are not yet in a BG
 	// (C++ GetBattleground() is null there), so neither is gated. The opcode
