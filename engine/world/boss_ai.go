@@ -1899,6 +1899,16 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
 		}
 	}
+	// Spell::EffectInterruptCast (SpellEffects.cpp:3511) for a creature
+	// caster: the LAUNCH_TARGET arm, placed ahead of the HIT arms below
+	// like the C++ launch phase. Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if eff := spellInfo.Effects[i]; eff.Effect == spellEffectInterruptCast {
+				s.creatureEffectInterruptCast(ctx, m, spellInfo, eff, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
+	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
 	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
 	// (not per hit target), spawning the effect's MiscValue gameobject
@@ -1935,6 +1945,21 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	// documented approximation). Gated on spellKnown like the tail.
 	if spellKnown {
 		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
+	}
+	// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt
+	// (SpellEffects.cpp:3131) for a creature caster: the HIT_TARGET arms,
+	// grouped with the other effect-grouped arms above (C++ runs effects
+	// in index order; documented approximation). Gated on spellKnown like
+	// the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			switch spellInfo.Effects[i].Effect {
+			case spellEffectThreat:
+				s.creatureEffectThreat(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectAttackMe:
+				s.creatureEffectTaunt(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			}
+		}
 	}
 	// Spell::_cast spell_linked tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for creature casters too — after SendSpellGo
@@ -2304,6 +2329,164 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		s.creatureInstaKillVictim(ctx, m, guid)
+	}
+}
+
+// creatureEffectInterruptCast mirrors Spell::EffectInterruptCast
+// (SpellEffects.cpp:3511) for a creature caster: the LAUNCH_TARGET arm,
+// placed ahead of the HIT arms below like the C++ launch phase. Creature
+// victims carry no in-flight casts on this path (fire-and-forget), so only
+// player hit targets interrupt; a landed reflect retargets to the caster
+// (Spell.cpp:2350), which is vacuous for the same reason. Missed, evaded,
+// immune and bounced targets skip like every other per-hit leg here.
+func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if _, isReflected := reflected[guid]; isReflected {
+			continue
+		}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			ts.handleEffectInterruptCast(ctx, guid, spell, eff)
+		}
+	}
+}
+
+// creatureEffectThreat mirrors Spell::EffectThreat (SpellEffects.cpp:3470)
+// for a creature caster: the HIT_TARGET arm adding the effect's CalcValue
+// threat to the hit target's threat list, toward the caster. The gates and
+// the switch/attack-start tail mirror the session twin applySpellThreat;
+// the redirect leg stays unbridged (creature casters carry no redirect
+// registry) and the ATTACK_START packet rides broadcastToInstance (no
+// caster session exists on this path).
+func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	if m.Health == 0 {
+		return
+	}
+	if spell.AttributesEx&spellAttr1NoThreat != 0 {
+		return
+	}
+	amount := eff.CalcValueForLevel(spell, uint32(m.Level))
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil || motion.Health == 0 || isCreaturePassive(motion) {
+			s.motionMu.Unlock()
+			continue
+		}
+		if motion.PetID != 0 && motion.OwnerGUID != 0 {
+			s.motionMu.Unlock()
+			continue
+		}
+		if spell.AttributesEx3&spellAttr3NoInitialAggro != 0 && !motion.InCombat {
+			s.motionMu.Unlock()
+			continue
+		}
+		if motion.ThreatMgr == nil {
+			motion.ThreatMgr = NewThreatManager(motion)
+		}
+		if !motion.ThreatMgr.OwnerCanHaveThreatList() {
+			s.motionMu.Unlock()
+			continue
+		}
+		wasInCombat := motion.InCombat
+		inMelee := inMeleeThreatRange(motion.CombatReach, m.CombatReach, distance3D(m.X, m.Y, m.Z, motion.X, motion.Y, motion.Z))
+		switched, victim := motion.ThreatMgr.AddThreat(m.GUID, float32(amount), inMelee)
+		motion.TargetGUID = victim
+		motion.InCombat = true
+		motion.Moving = false
+		mapID := motion.Map
+		entries := motion.ThreatMgr.SortedEntries()
+		targetGUID := motion.GUID
+		s.motionMu.Unlock()
+		if switched {
+			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, targetGUID, victim, entries)
+		}
+		if !wasInCombat {
+			s.broadcastAIReactionInInstance(mapID, m.InstanceID, targetGUID, 2)
+			startPkt := buildAttackStart(targetGUID, m.GUID)
+			s.broadcastToInstance(mapID, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+		}
+	}
+}
+
+// creatureEffectTaunt mirrors Spell::EffectTaunt (SpellEffects.cpp:3131)
+// for a creature caster: the HIT_TARGET arm matching the hit target's
+// threat to the highest threat, toward the caster. The gates and the
+// Hand of Reckoning (62124) leg mirror the session twin handleEffectTaunt;
+// the 67485 cast runs outside motionMu like that twin (the spell pipeline
+// re-enters motionMu through its initial-threat leg).
+func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if s.isTotemGUID(guid) {
+			continue
+		}
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		horDamage := spellID == 62124 && motion != nil && !motion.Evading && motion.TargetGUID != m.GUID
+		s.motionMu.Unlock()
+		if horDamage && s.findSessionByGUID(guid) == nil {
+			s.castCreatureSpellInternal(ctx, m, 67485, guid, true)
+		}
+		s.motionMu.Lock()
+		motion = s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
+		if motion == nil || motion.Evading {
+			s.motionMu.Unlock()
+			continue
+		}
+		if !motionCanHaveThreatList(motion) {
+			s.motionMu.Unlock()
+			continue
+		}
+		if motion.ThreatMgr == nil {
+			motion.ThreatMgr = NewThreatManager(motion)
+		}
+		if motion.ThreatMgr.GetCurrentVictim() == m.GUID {
+			s.motionMu.Unlock()
+			continue
+		}
+		switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(m.GUID)
+		if switched || newVictim != motion.TargetGUID {
+			motion.TargetGUID = newVictim
+			entries := motion.ThreatMgr.SortedEntries()
+			mapID := motion.Map
+			targetGUID := motion.GUID
+			s.motionMu.Unlock()
+			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, targetGUID, newVictim, entries)
+			s.motionMu.Lock()
+		}
+		motion.InCombat = true
+		motion.Moving = true
+		s.motionMu.Unlock()
 	}
 }
 
