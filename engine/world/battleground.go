@@ -634,7 +634,7 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 			return
 		}
 		if instanceID == 0 {
-			instanceID = uint32(time.Now().Unix())
+			instanceID = s.server.mintBGInstanceID()
 		}
 		// The C++ pop's IsInvitedToBGInstanceGUID: a fresh instance id (no
 		// live BG world backs it — the port itself stays no-bridge,
@@ -643,8 +643,8 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// BattlegroundMgr::CreateClientVisibleInstanceId
 		// (BattlegroundMgr.cpp:325-348): the live instance's
 		// display-only client id, claimed at pop time under the queued
-		// type and the player's bracket — the unix-time internal id
-		// above is not a client id and must never reach the wire.
+		// type and the player's bracket — the sim-internal id above
+		// is not a client id and must never reach the wire.
 		bracketID := uint8(0)
 		if idx := bgBracketIndex(uint32(s.player.Level)); idx >= 0 {
 			bracketID = uint8(idx)
@@ -757,7 +757,7 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 			return
 		}
 		if instanceID == 0 {
-			instanceID = uint32(time.Now().Unix())
+			instanceID = s.server.mintBGInstanceID()
 		}
 		// The C++ pop's IsInvitedToBGInstanceGUID: a fresh instance id (the
 		// arena state created here is the Go form of the C++ pop's new
@@ -933,7 +933,7 @@ func (s *session) handleBattlemasterJoinGroup(bgTypeID uint32) {
 	if bgTypeID == battlegroundRB {
 		sharedResolved = s.resolveRandomBGType()
 	}
-	simInstanceID := uint32(time.Now().Unix())
+	simInstanceID := s.server.mintBGInstanceID()
 	for _, member := range members {
 		slot := memberFreeBGQueueIndex(member)
 		if slot == -1 {
@@ -1427,7 +1427,7 @@ func (s *session) handleBattlemasterJoinArenaGroup(ctx context.Context, arenaTyp
 			groupTeamName, groupTeamRating = name, rating
 		}
 	}
-	simInstanceID := uint32(time.Now().Unix())
+	simInstanceID := s.server.mintBGInstanceID()
 	for _, m := range grp.Members {
 		member := s.server.findSessionByGUID(m.GUID)
 		if member == nil || !member.playerLoaded || member.player == nil {

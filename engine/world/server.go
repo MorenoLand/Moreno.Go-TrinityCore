@@ -102,6 +102,13 @@ type Server struct {
 	bgClientIDsMu        sync.Mutex
 	bgClientIDs          map[bgClientIDKey][]uint32
 	bgClientIDByInstance map[uint32]uint32
+	// bgInstanceIDSeq is the monotonic sim-internal battleground/arena
+	// instance-id source (mintBGInstanceID): wall-clock seconds collide
+	// for pops in the same second, which merged two live pops onto one
+	// claim, one arena state, and one score key. Values stay seconds-scale
+	// but are only ever compared for equality or used as map keys, never
+	// read as time, so monotonicity past the wall clock is harmless.
+	bgInstanceIDSeq uint32
 	// spellBonusOnce/spellBonus mirror SpellMgr::mSpellBonusMap
 	// (SpellMgr.cpp:1888): spell_bonus_data rows cached on first use by
 	// Server.spellBonusData, for the damage-done coefficient leg.

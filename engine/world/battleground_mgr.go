@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -115,6 +116,29 @@ func (s *Server) claimBGClientInstanceID(bgTypeID uint32, bracketID uint8, insta
 	}
 	s.bgClientIDByInstance[instanceID] = id
 	return id
+}
+
+// mintBGInstanceID mints a sim-internal battleground/arena instance id:
+// the wall-clock second when no id has been minted in that second yet,
+// otherwise one past the last mint, so two pops in the same second never
+// share an id (C++ GenerateInstanceId is unique per live battleground,
+// while a bare unix second merged same-second pops onto one claim, one
+// arena state, and one score key). Group pops still share: they mint once
+// and pass the same id to every member. A nil server keeps the old
+// wall-clock fallback.
+func (s *Server) mintBGInstanceID() uint32 {
+	if s == nil {
+		return uint32(time.Now().Unix())
+	}
+	s.bgClientIDsMu.Lock()
+	defer s.bgClientIDsMu.Unlock()
+	now := uint32(time.Now().Unix())
+	if s.bgInstanceIDSeq < now {
+		s.bgInstanceIDSeq = now
+	} else {
+		s.bgInstanceIDSeq++
+	}
+	return s.bgInstanceIDSeq
 }
 
 // bgClientInstanceIDs is the Go form of the list-packet read arm of
