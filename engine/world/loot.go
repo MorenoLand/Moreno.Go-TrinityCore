@@ -3003,9 +3003,16 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || s.activeLoot.Money == 0 {
 		return true
 	}
-	if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
-		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
-	}
+	// HandleLootMoneyOpcode (LootHandler.cpp:116-158) resolves each arm
+	// against the player's CURRENT map — C++ has no blanket map gate:
+	// the item arm reads inventory (GetItemByGuid, map-independent), the
+	// creature arm reads the current map (GetMap()->GetCreature, null
+	// after a far teleport), and the GO arm reads the current map
+	// (GetMap()->GetGameObject, null after a far teleport). No teleport
+	// path clears the loot GUID in either tree (C++ clears it only in
+	// DoLootRelease, LootHandler.cpp:262; Go only in doLootRelease), so a
+	// CMSG_LOOT_MONEY after a far teleport reaches the per-arm gates
+	// below instead of one blanket TOO_FAR answer.
 	// HandleLootMoneyOpcode (LootHandler.cpp:132-142) Unit/Vehicle arm: the
 	// creature must still be dead and lootable and within INTERACTION_DISTANCE,
 	// else LOOT_ERROR_DIDNT_KILL / LOOT_ERROR_TOO_FAR. Gameobject loot keeps the
@@ -3015,6 +3022,14 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	shareMoney := true
 	if uint16(s.activeLoot.TargetGUID>>48) == 0xF110 {
 		// HandleLootMoneyOpcode (LootHandler.cpp:116-126) GameObject arm:
+		// a GO left on another map/instance is null on the player's
+		// current map (GetMap()->GetGameObject) and the take is silent,
+		// not a TOO_FAR error. The state lookup below keys on the loot's
+		// old map, so without this gate its 3D-only distance check could
+		// still pass at coincident coordinates on the new map.
+		if s.activeLoot.MapID != s.player.Map || s.activeLoot.InstanceID != s.player.InstanceID {
+			return true
+		}
 		// the money is only reachable when the GO is still there for the
 		// player — owned GOs (fishing bobbers) skip the distance check, all
 		// other types must be within GameObject::IsWithinDistInMap
@@ -3048,7 +3063,14 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		// above); pickpocket money is never shared
 		// ("item, pickpocket and players can be looted only single player").
 		isRoguePickpocket := s.player.Class == 4 && s.activeLoot.LootType == lootTypePickpocketing
-		lootAllowed := ok && (target.Health != 0) == isRoguePickpocket && s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID)
+		// LootHandler.cpp:150-158 Unit/Vehicle arm, current-map gate:
+		// getCombatTarget's DB fallback resolves a creature by low GUID
+		// regardless of map, while C++ reads only the player's current
+		// map — a creature left behind is null, so the answer is
+		// DIDNT_KILL (lootAllowed false), never TOO_FAR or a cross-map
+		// take at coincident coordinates.
+		mapMatches := s.activeLoot.MapID == s.player.Map && s.activeLoot.InstanceID == s.player.InstanceID
+		lootAllowed := mapMatches && ok && (target.Health != 0) == isRoguePickpocket && s.server.creatureLootAllowed(s.activeLoot.MapID, s.activeLoot.InstanceID, s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID)
 		if !lootAllowed || !withinLootDistance(s, target) {
 			code := uint8(0)
 			if lootAllowed {
