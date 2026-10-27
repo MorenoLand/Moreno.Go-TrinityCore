@@ -1821,8 +1821,17 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	} else {
 		buf.WriteU8(0)
 	}
-	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
-	switch entry.Status {
+	// BattleGroundHandler.cpp:562-572 + Battleground.cpp:667-810: C++ never
+	// sends STATUS_WAIT_LEAVE in this packet — an ended match still reports
+	// STATUS_IN_PROGRESS, with Time1 = GetEndTime() (remaining auto-remove).
+	// A Go non-arena WaitLeave slot therefore serializes as InProgress;
+	// arena slots keep their own status machine and are untouched.
+	wireStatus := entry.Status
+	if wireStatus == BGStatusWaitLeave && !entry.IsArena {
+		wireStatus = BGStatusInProgress
+	}
+	buf.WriteU32(wireStatus) // STATUS_WAIT_QUEUE = 1
+	switch wireStatus {
 	case BGStatusWaitQueue:
 		// BattlegroundQueue::GetAverageQueueWaitTime (BattlegroundQueue.cpp:266):
 		// 0 until bgWaitSampleCount invites have been seen, then the ring mean.
@@ -1844,7 +1853,11 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	case BGStatusInProgress:
 		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
-		buf.WriteU32(0) // time to auto leave
+		// BattlegroundMgr.cpp:225 Time1 is GetEndTime(): 0 while the match
+		// runs, the remaining auto-remove countdown once it has ended
+		// (EndBattleground sets TIME_TO_AUTOREMOVE, _ProcessLeave decrements
+		// it). A running match and an unpeekable state both read 0.
+		buf.WriteU32(s.server.bgAutoRemoveRemaining(entry.MapID))
 		elapsed := uint32(0)
 		if !entry.StartTime.IsZero() {
 			elapsed = uint32(time.Since(entry.StartTime).Milliseconds())
@@ -2200,6 +2213,23 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			}
 		}
 	}
+	// BattleGroundHandler.cpp:531-540: leaving a battleground while in combat
+	// is denied unless the BG is already STATUS_WAIT_LEAVE, and the denial
+	// runs before Player::LeaveBattleground, so it casts no deserter and
+	// tracks nothing. The arena arm above covers arena maps; a non-arena
+	// ported-in slot (Status InProgress) is the same gate for battlegrounds
+	// — WaitLeave slots are exempt, and WaitJoin slots are not yet in a BG
+	// (C++ GetBattleground() is null there), so neither is gated. The opcode
+	// handler is the only C++ site with this gate, so internal callers (nil
+	// payload: logout, GM command, areatrigger) bypass it.
+	if payload != nil && s.isInCombat() {
+		for i := range s.bgQueues {
+			e := &s.bgQueues[i]
+			if e.Active && !e.IsArena && e.InstanceID != 0 && e.Status == BGStatusInProgress {
+				return true
+			}
+		}
+	}
 	// Player::LeaveBattleground (Player.cpp:22490-22499): leaving a live
 	// battleground while inside it is tracked. Battleground::isBattleground()
 	// excludes arenas; Go keeps no live BG instances, so an active non-arena
@@ -2386,6 +2416,93 @@ func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
 // bgWaitLeaveAutoRemove mirrors TIME_TO_AUTOREMOVE (Battleground.h:151):
 // _ProcessLeave removes stayers 120 seconds after the match ends.
 const bgWaitLeaveAutoRemove = 120 * time.Second
+
+// bgAutoRemoveRemaining returns the milliseconds until _ProcessLeave
+// auto-removes stayers of an ended match on mapID (Battleground::GetEndTime,
+// Battleground.cpp:512-515, set to TIME_TO_AUTOREMOVE at EndBattleground:717
+// and decremented by _ProcessLeave). It returns 0 for a running match, for
+// a map with no state, and for an ended state with a zero EndedAt — the
+// updateBattlegroundWaitLeave due-immediately convention for a stamp-less
+// end arm. The peek creates no state.
+func (s *Server) bgAutoRemoveRemaining(mapID uint32) uint32 {
+	if s == nil {
+		return 0
+	}
+	var winner int8 = -1
+	var endedAt time.Time
+	switch mapID {
+	case AVMapID:
+		s.objectsMu.RLock()
+		state := s.avState[mapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	case WSGMapID:
+		s.wsgMu.RLock()
+		state := s.wsgState[mapID]
+		s.wsgMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	case ABMapID:
+		s.abMu.RLock()
+		state := s.abState[mapID]
+		s.abMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	case EOTSMapID:
+		s.eotsMu.RLock()
+		state := s.eotsState[mapID]
+		s.eotsMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	case SAMapID:
+		s.saMu.RLock()
+		state := s.saState[mapID]
+		s.saMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	case ICMapID:
+		s.icMu.RLock()
+		state := s.icState[mapID]
+		s.icMu.RUnlock()
+		if state == nil {
+			return 0
+		}
+		state.mu.Lock()
+		winner, endedAt = state.Winner, state.EndedAt
+		state.mu.Unlock()
+	default:
+		return 0
+	}
+	if winner < 0 || endedAt.IsZero() {
+		return 0
+	}
+	remaining := bgWaitLeaveAutoRemove - time.Since(endedAt)
+	if remaining < 0 {
+		return 0
+	}
+	return uint32(remaining.Milliseconds())
+}
 
 // markBGSlotsWaitLeave flips every live participant slot on mapID to
 // BGStatusWaitLeave, the Go form of Battleground::EndBattleground setting
