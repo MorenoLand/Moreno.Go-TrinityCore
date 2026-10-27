@@ -17381,6 +17381,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// at SPELL_EFFECT_HANDLE_HIT on the caster.
 			s.handleEffectDestroyAllTotems(ctx, spell, eff)
 		}
+		if eff.Effect == spellEffectSelfResurrect {
+			// Spell::EffectSelfResurrect (SpellEffects.cpp:4429) runs at
+			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target — the
+			// client arm's helper; its own dead-or-ghost gate rides along.
+			// A triggered self-resurrect otherwise resurrected nothing: the
+			// per-target loop below carries no caster arm.
+			s.handleEffectSelfResurrect(ctx, spell, eff)
+		}
+		if eff.Effect == spellEffectResurrectPet {
+			// Spell::EffectResurrectPet (SpellEffects.cpp:4758) runs at
+			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target — the
+			// client arm's helper; its damage<0 and dead-pet gates ride along.
+			if s.server != nil {
+				s.handleResurrectPet(ctx, spellID, eff)
+			}
+		}
 		if eff.Effect == spellEffectChargeDest {
 			// Spell::EffectChargeDest (SpellEffects.cpp:4528) runs once at
 			// SPELL_EFFECT_HANDLE_LAUNCH on the caster, never per target —
@@ -17522,6 +17538,106 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 				}
 				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false)
+			} else if eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg {
+				// Spell::EffectWeaponDmg (SpellEffects.cpp:3171) runs at
+				// SPELL_EFFECT_HANDLE_LAUNCH_TARGET per unit target; like the
+				// charge and interrupt arms, the LAUNCH leg rides the
+				// miss-filtered target list — there is no separate launch
+				// phase on this path. A triggered weapon-damage spell
+				// otherwise dealt nothing: the effect-2 arm above never ran
+				// for 17/31/58/121.
+				// Spell::EffectWeaponDmg multiple-weapon-dmg-effect workaround
+				// (SpellEffects.cpp:3178-3190): only the last weapon-damage
+				// effect in the spell computes — earlier weapon effects
+				// return without dealing anything.
+				lastWeaponEffect := true
+				for later := effectIndex + 1; later < len(spell.Effects); later++ {
+					switch spell.Effects[later].Effect {
+					case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
+						lastWeaponEffect = false
+					}
+				}
+				if lastWeaponEffect {
+					// Spell::EffectWeaponDmg (SpellEffects.cpp:3193-3200): the
+					// Mocking Blow arm zeroes the damage when the target is
+					// immune to effect 1 or is a player; the player leg
+					// mirrors as a skip of this target's damage, like the
+					// client arm.
+					mockingBlow := spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[0]&0x8000000 != 0 &&
+						(s.server != nil && s.server.findSessionByGUID(effectTarget) != nil || s.creatureTargetImmuneToSpellEffect(ctx, effectTarget, spell, 1, s))
+					if !mockingBlow {
+						wd := weaponDmgParamsForSpell(spell, casterLevel)
+						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
+						// the Devastate arm applies Sunder Armor through a
+						// triggered cast of 58567, a second time with the
+						// Glyph of Devastate dummy aura (58388), and folds
+						// (stackAmount-1) * CalculateDamage(EFFECT_2) into
+						// fixed_bonus. The nested casts ride the triggered
+						// route, matching C++'s CastSpell(..., true).
+						if spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
+							s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0)
+							if s.hasAura(devastateGlyphSpell) {
+								s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0)
+							}
+							if stacks := s.devastateSunderStacks(ctx, effectTarget); stacks > 1 {
+								var eff2 uint32
+								if len(spell.Effects) > 2 {
+									eff2 = uint32(spell.Effects[2].CalcValueForLevel(spell, casterLevel))
+								}
+								wd.fixedBonus += int32((stacks - 1) * eff2)
+							}
+						}
+						targetDamage := chainScaledAmount(s.weaponDmgEffectBase(ctx, spell, wd), chainMult, jumpIndex)
+						// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) and
+						// the player AoE 10-target cap (Spell.cpp:7761-7766)
+						// land on the post-bonus per-target damage, like the
+						// effect-2 arm above; the cap divisor counts the
+						// hit list the same way the top-of-loop computation
+						// does for area effects.
+						weaponArea := spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect)
+						if weaponArea && targetDamage > 0 {
+							if avoid := s.aoeDamageAvoidanceMultiplier(ctx, effectTarget, aoeSchoolMask); avoid != 1 {
+								targetDamage = uint32(float64(targetDamage) * avoid)
+							}
+						}
+						targetDamage = s.applySchoolDMGFamilyArms(ctx, spell, spellID, eff, effectIndex, casterLevel, effectTarget, targetDamage)
+						if weaponArea && targetDamage > 0 {
+							weaponCapDivisor := 0
+							for _, guid := range hitTargets {
+								if guid == 0 || guid == s.playerGUID {
+									continue
+								}
+								weaponCapDivisor++
+							}
+							if weaponCapDivisor > 10 {
+								targetDamage = targetDamage * 10 / uint32(weaponCapDivisor)
+							}
+						}
+						s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false)
+					}
+				}
+			} else if eff.Effect == spellEffectResurrect {
+				// Spell::EffectResurrect (SpellEffects.cpp:4270) runs at
+				// SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: the client
+				// arm's helper over the single miss-filtered target.
+				// Dead-target analysis: triggeredSpellHitResult carries no
+				// alive gate, so a dead player target survives the miss
+				// filter into this loop (a positive spell never misses a
+				// non-hostile target); the helper's alive/pending gates ride
+				// along. The corpse-target arm has no Go model on either path.
+				s.handleEffectResurrect(ctx, effectTarget, spell, eff)
+			} else if eff.Effect == spellEffectResurrectNew {
+				// Spell::EffectResurrectNew (SpellEffects.cpp:246) runs at
+				// SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: flat
+				// damage as health, MiscValue as mana, via the client
+				// arm's helpers — the unit-target helper for other players,
+				// the self-cast helper when the miss-filtered target is
+				// the caster (its own dead-or-ghost gate rides along).
+				if effectTarget == s.playerGUID {
+					s.applySelfResurrectEffect(spell)
+				} else {
+					s.applyResurrectNewToTargets(spell, eff, []uint64{effectTarget})
+				}
 			} else if eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura) { // SPELL_EFFECT_APPLY_AURA
 				// Spell::EffectPersistentAA (SpellEffects.cpp:1729) runs in
 				// SPELL_EFFECT_HANDLE_HIT mode — once per effect, never per
@@ -39122,7 +39238,11 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	if targetSess == nil || targetSess.player == nil {
 		return
 	}
-	if targetSess.player.Health > 0 {
+	// C++ gates on !IsAlive, and a released ghost counts as not alive even
+	// though Go carries Health=1 for ghosts (buildPlayerRepop, death.go) —
+	// the old Health>0 gate skipped every ghost target. isDeadOrGhost
+	// covers both the unreleased corpse (Health==0) and the ghost flag.
+	if !targetSess.isDeadOrGhost() {
 		return
 	}
 	if targetSess.resurrection != nil {

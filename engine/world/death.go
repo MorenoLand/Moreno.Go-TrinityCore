@@ -2539,7 +2539,10 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 		if targetSess == nil || targetSess.player == nil {
 			continue
 		}
-		if targetSess.player.Health > 0 || targetSess.resurrection != nil {
+		// Same ghost correction as handleEffectResurrect: C++ gates on
+		// !IsAlive, and Go ghosts carry Health=1, so the old Health>0 gate
+		// skipped ghost targets.
+		if !targetSess.isDeadOrGhost() || targetSess.resurrection != nil {
 			continue
 		}
 		// EffectResurrectNew (SpellEffects.cpp:246-275) logs the effect,
