@@ -3237,7 +3237,15 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 	}
 
-	if s.server != nil && s.groupID != 0 {
+	// Item-target loot skips the group-method gate entirely: the SendLoot
+	// item arm fills with personal=true (Player.cpp:8675-8690, Loot.cpp:214-232
+	// skips the group block for personal fills) and never calls Group::GroupLoot
+	// or Group::MasterLoot, so no item row is ever is_blocked or roll-gated by
+	// group rules. The recomputed master-loot gate below would otherwise refuse
+	// a grouped player's take of any over-threshold container item (e.g. an epic
+	// under master loot) and answer SendLootRelease, while C++ takes it: the
+	// blocked flag it approximates is only ever set by the group-loot paths.
+	if s.activeLoot.LootItemGUID == 0 && s.server != nil && s.groupID != 0 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]
 		s.server.groupsMu.Unlock()
