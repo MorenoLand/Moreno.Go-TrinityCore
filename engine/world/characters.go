@@ -141,7 +141,9 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 			s.debug("character enumeration scan failed", "account", s.accountName, "error", err)
 			continue
 		}
-		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
+		// Player::IsValidGender (Player.h:1334): Gender <= GENDER_FEMALE (1);
+		// a GENDER_NONE (2) row is skipped by BuildEnumData, not listed.
+		if character.Race == 0 || character.Class == 0 || character.Gender > 1 {
 			continue
 		}
 		// Player::BuildEnumData (Player.cpp:1447-1453): a race/class pair with
@@ -317,11 +319,12 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	// CharacterHandler.cpp:277-377: every packet field is parsed up front,
 	// but name normalization runs after the creation-mask gates — a disabled
 	// faction or race/class mask answers CHAR_CREATE_DISABLED even for a
-	// malformed name, == C++ error precedence. The race/class/gender
-	// hardening gate has no C++ twin (a zero race fails the ChrRaces lookup
-	// below with the same CHAR_CREATE_FAILED code); it sits here so the mask
-	// gates keep C++ precedence on malformed packets.
-	if race == 0 || class == 0 || gender > 2 {
+	// malformed name, == C++ error precedence. The race/class hardening gate
+	// has no C++ twin; it sits here so the mask gates keep C++ precedence
+	// on malformed packets. Gender is not gated
+	// here: Player::Create rejects it with CHAR_CREATE_ERROR after every
+	// handler-level gate (see the Create-point check below).
+	if race == 0 || class == 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
 	}
 	// normalizePlayerName: the name C++ validates and stores is the
@@ -469,6 +472,19 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		// client can retry; the session stays open.
 		s.debug("character create GUID allocation failed", "account", s.accountName, "error", err)
 		return true
+	}
+
+	// Player::Create (Player.cpp): IsValidGender (Gender <= GENDER_FEMALE)
+	// and ValidateAppearance(create=true) reject after every handler-level
+	// gate, before any persistence, with CHAR_CREATE_ERROR — the early
+	// hardening gate above must not answer CHAR_CREATE_FAILED for gender.
+	if gender > 1 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateError)
+	}
+	if s.server.Data != nil {
+		if valid, known, appearanceErr := s.server.Data.ValidateAppearance(race, class, gender, values[5], values[6], values[4], values[7], values[3], true); appearanceErr == nil && known && !valid {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateError)
+		}
 	}
 
 	startLevel := uint8(1)
