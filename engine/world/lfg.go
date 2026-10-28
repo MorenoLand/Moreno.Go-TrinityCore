@@ -99,6 +99,7 @@ const (
 	LFGDungeonTypeRandom  uint32 = 6
 
 	LFGJoinOK                  uint32 = 0
+	LFGJoinFailed              uint32 = 1
 	LFGJoinNotMeetReqs         uint32 = 5
 	LFGJoinPartyNotMeetReqs    uint32 = 6
 	LFGJoinMixedRaidDungeon    uint32 = 7
@@ -118,6 +119,7 @@ const (
 	lfgSpellLuckOfTheDraw   = 72221 // LFG_SPELL_LUCK_OF_THE_DRAW
 	lfgGroupKickVotesNeeded = 3     // LFG_GROUP_KICK_VOTES_NEEDED (LFGMgr.h:54)
 	lfgTimeBoot             = 120   // LFG_TIME_BOOT (LFGMgr.h:48, seconds)
+	lfgTimeRoleCheck        = 45    // LFG_TIME_ROLECHECK (LFGMgr.h:47, seconds)
 	lfgGroupMaxKicks        = 3     // LFG_GROUP_MAX_KICKS (LFGGroupData.h:28)
 	lfgFlagSeasonal         = 0x4   // LFG_FLAG_SEASONAL
 )
@@ -138,6 +140,7 @@ type LfgRoleCheck struct {
 	Roles     map[uint64]uint8 // playerGUID -> roles
 	State     uint32
 	CreatedAt time.Time
+	CancelAt  time.Time
 }
 
 type LFGProposalPlayer struct {
@@ -223,8 +226,8 @@ func (m *LFGManager) RequiresFullGroup(players, groupSize int) bool {
 // queued player is matchable alone and a proposal forms with fewer than 5
 // players. Go has no queue matcher (FindNewGroups has no twin), so the solo
 // path forms the proposal directly from the queued entry; grouped queues
-// stay queued because the role-check pipeline (StartRoleCheck) has no live
-// callers and grouped solo proposals cannot form faithfully.
+// form no solo proposal (no group matcher exists) — grouped joins open a
+// role check instead, and a finished check still waits on that matcher.
 func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -337,18 +340,31 @@ func cloneLFGQueueEntry(entry LFGQueueEntry) LFGQueueEntry {
 	return entry
 }
 
-func (m *LFGManager) StartRoleCheck(groupID uint64, leaderGUID uint64, dungeons []uint32, leaderRoles uint8) *LfgRoleCheck {
+// StartRoleCheck mirrors the grouped branch of LFGMgr::JoinLfg
+// (LFGMgr.cpp:594-602, 620-627): the check is keyed by the group, every
+// live member starts unanswered (roles 0), the joiner is the check leader
+// (not necessarily the group leader), and the check expires 45s after
+// creation (LFGMgr.cpp:597). The joiner's roles are sanitized like C++
+// sanitizes the join input (LFGMgr.cpp:411-414); the remaining members
+// answer through UpdateRoleCheck, which is what moves the check out of
+// INITIALIZING.
+func (m *LFGManager) StartRoleCheck(groupID uint64, leaderGUID uint64, dungeons []uint32, leaderRoles uint8, members []uint64) *LfgRoleCheck {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
 	rc := &LfgRoleCheck{
 		GroupID:   groupID,
 		Leader:    leaderGUID,
 		Dungeons:  append([]uint32(nil), dungeons...),
 		Roles:     make(map[uint64]uint8),
 		State:     LFGRoleCheckInitializing,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
+		CancelAt:  now.Add(time.Duration(lfgTimeRoleCheck) * time.Second),
 	}
-	rc.Roles[leaderGUID] = leaderRoles
+	for _, guid := range members {
+		rc.Roles[guid] = LFGRoleNone
+	}
+	rc.Roles[leaderGUID] = leaderRoles & LFGRoleAny
 	m.roleChecks[groupID] = rc
 	return rc
 }
@@ -395,6 +411,12 @@ func (m *LFGManager) UpdateRoleCheck(groupID uint64, guid uint64, roles uint8) *
 		} else {
 			rc.State = LFGRoleCheckWrongRoles
 		}
+	}
+	// LFGMgr.cpp:868-878: a finished check and a failed check are both
+	// erased from the store once resolved; the returned pointer stays
+	// valid for the caller's terminal notifies.
+	if rc.State == LFGRoleCheckFinished || rc.State == LFGRoleCheckWrongRoles || rc.State == LFGRoleCheckNoRole {
+		delete(m.roleChecks, groupID)
 	}
 	return rc
 }
@@ -826,6 +848,42 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 	if isRaid {
 		return true
 	}
+	// LFGMgr::JoinLfg grouped branch (LFGMgr.cpp:594-683): a grouped join
+	// opens a role check instead of queueing the joiner solo — the check
+	// is keyed by the group, every live member starts unanswered, each
+	// member gets the JOIN_QUEUE party update, and the joiner's own
+	// answer is recorded at once (UpdateRoleCheck). No join result and
+	// no player update go out on the initializing path: C++ sends those
+	// only on role-check failure (leader) or queueing (members).
+	if s.groupID != 0 && s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil {
+			memberGUIDs := make([]uint64, 0, len(grp.Members))
+			for _, m := range grp.Members {
+				memberGUIDs = append(memberGUIDs, m.GUID)
+			}
+			rc := s.server.Features.LFG.StartRoleCheck(s.groupID, s.playerGUID, joinDungeons, roles8, memberGUIDs)
+			for _, guid := range memberGUIDs {
+				if ms := s.server.findSessionByGUID(guid); ms != nil {
+					_ = ms.sendLFGUpdateParty(LFGUpdateJoinQueue, LFGQueueEntry{Dungeons: joinDungeons, Comment: comment})
+				}
+			}
+			preState := rc.State
+			rc = s.server.Features.LFG.UpdateRoleCheck(s.groupID, s.playerGUID, roles8)
+			if rc != nil {
+				s.sendRoleCheckAnswerNotifies(rc, s.playerGUID, roles8, preState)
+				if rc.State == LFGRoleCheckFinished {
+					// Single-member group: C++ queues the group at once
+					// (AddQueueData, LFGMgr.cpp:868-872). Go has no group
+					// queue entry, so the joiner queues solo and every
+					// member gets the ADDED_TO_QUEUE party update.
+					_, _ = s.server.Features.LFG.Join(s.playerGUID, roles8, joinDungeons, comment)
+					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+						buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
+				}
+			}
+			return true
+		}
+	}
 	// LFGMgr::JoinLfg (LFGMgr.cpp:683-691): on isContinue the stored
 	// selection is not overwritten (the SetSelectedDungeons skip) — the
 	// player's original pick (e.g. the random id driving luck-of-the-draw)
@@ -853,9 +911,8 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		// SoloLFG: the C++ queue matcher forms proposals from underfilled
 		// queue sets on its update tick (LFGQueue.cpp:425, 523 arms); Go has
 		// no matcher, so the solo proposal is formed directly from the
-		// queued entry. Grouped joiners stay queued — the role-check
-		// pipeline (StartRoleCheck) has no live callers, so grouped solo
-		// proposals cannot form faithfully.
+		// queued entry. Grouped joins never reach this arm — they branch
+		// to the role check above.
 		if s.groupID == 0 {
 			if prop := s.server.Features.LFG.FormSoloProposal(s.playerGUID); prop != nil {
 				if err := s.sendLFGProposalUpdate(prop); err != nil {
@@ -1511,6 +1568,42 @@ func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
 		packet.WriteU8(level)
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHECK_UPDATE), packet.Bytes(), true)
+}
+
+// sendRoleCheckAnswerNotifies mirrors the per-member tail of
+// LFGMgr::UpdateRoleCheck (LFGMgr.cpp:838-852): while a check is in
+// progress every member gets SMSG_LFG_ROLE_CHOSEN for the answerer
+// (sendRoleChosen = the check state before this answer was not DEFAULT)
+// followed by SMSG_LFG_ROLE_CHECK_UPDATE. The caller handles the
+// terminal arms (FINISHED queueing, failure notifies).
+func (s *session) sendRoleCheckAnswerNotifies(rc *LfgRoleCheck, answererGUID uint64, answerRoles uint8, preState uint32) {
+	if rc == nil || s.server == nil {
+		return
+	}
+	if preState != LFGRoleCheckDefault {
+		// LFGMgr::SendLfgRoleChosen (LFGMgr.cpp:2094-2098):
+		// SMSG_LFG_ROLE_CHOSEN (guid, ready, roles) unicast to each
+		// role-check member's session, not a group broadcast.
+		packet := protocol.NewBuffer(13)
+		packet.WriteU64(answererGUID)
+		if answerRoles > 0 {
+			packet.WriteU8(1)
+		} else {
+			packet.WriteU8(0)
+		}
+		packet.WriteU32(uint32(answerRoles))
+		pkt := packet.Bytes()
+		for memberGUID := range rc.Roles {
+			if ms := s.server.findSessionByGUID(memberGUID); ms != nil {
+				_ = ms.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), pkt, true)
+			}
+		}
+	}
+	for memberGUID := range rc.Roles {
+		if ms := s.server.findSessionByGUID(memberGUID); ms != nil {
+			_ = ms.sendLFGRoleCheckUpdate(rc)
+		}
+	}
 }
 
 func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
@@ -2457,36 +2550,19 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 		}
 		rc := lfg.UpdateRoleCheck(s.groupID, s.playerGUID, roles)
 		if rc != nil {
-			grp := s.server.getGroup(s.groupID)
-			if grp != nil {
-				for _, m := range grp.Members {
-					if ms := s.server.findSessionByGUID(m.GUID); ms != nil {
-						_ = ms.sendLFGRoleCheckUpdate(rc)
-					}
-				}
-			}
+			s.sendRoleCheckAnswerNotifies(rc, s.playerGUID, roles, preState)
 			if rc.State == LFGRoleCheckFinished {
 				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
 					buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
-			}
-			if preState != LFGRoleCheckDefault {
-				// LFGMgr::SendLfgRoleChosen (LFGMgr.cpp:2094-2098):
-				// SMSG_LFG_ROLE_CHOSEN (guid, ready, roles) unicast to each
-				// role-check member's session, not a group broadcast.
-				packet := protocol.NewBuffer(13)
-				packet.WriteU64(s.playerGUID)
-				if roles > 0 {
-					packet.WriteU8(1)
-				} else {
-					packet.WriteU8(0)
+			} else if rc.State != LFGRoleCheckInitializing {
+				// LFGMgr::UpdateRoleCheck default arm (LFGMgr.cpp:858-866):
+				// the check leader gets the FAILED join result and every
+				// member gets the ROLECHECK_FAILED party update.
+				if ls := s.server.findSessionByGUID(rc.Leader); ls != nil {
+					_ = ls.sendLFGJoinResult(LFGJoinFailed, rc.State)
 				}
-				packet.WriteU32(uint32(roles))
-				pkt := packet.Bytes()
-				for memberGUID := range rc.Roles {
-					if ms := s.server.findSessionByGUID(memberGUID); ms != nil {
-						_ = ms.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), pkt, true)
-					}
-				}
+				s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+					buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
 			}
 		}
 	}
