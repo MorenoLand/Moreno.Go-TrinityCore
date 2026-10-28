@@ -2105,6 +2105,25 @@ func (s *Server) lfgSelectedRandomDungeon(guid uint64) bool {
 	return dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0
 }
 
+// lfgFirstSelectedDungeonIsRandom is the MakeNewGroup cooldown arm
+// (LFGMgr.cpp:1136-1141): only a first selected dungeon of type RANDOM
+// grants the cooldown — seasonal entries do not count here, unlike
+// lfgSelectedRandomDungeon above.
+func (s *Server) lfgFirstSelectedDungeonIsRandom(guid uint64) bool {
+	if s == nil || s.Features == nil || s.Features.LFG == nil || s.Data == nil {
+		return false
+	}
+	entry, ok := s.Features.LFG.Status(guid)
+	if !ok || entry.State == LFGStateNone || len(entry.Dungeons) == 0 {
+		return false
+	}
+	dungeon, found, err := s.Data.LFGDungeon(entry.Dungeons[0] & 0x00FFFFFF)
+	if err != nil || !found {
+		return false
+	}
+	return dungeon.TypeID == LFGDungeonTypeRandom
+}
+
 // lfgGroupMemberRemoved mirrors LFGGroupScript::OnRemoveMember
 // (LFGScripts.cpp:183-228): the LeaveLfg arms for the removed player, the
 // Dungeon Deserter cast on mid-dungeon leaves, the Dungeon Cooldown aura
@@ -4132,6 +4151,44 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				ordered = append(ordered, pguid)
 			}
 		}
+		// LFGMgr::MakeNewGroup (LFGMgr.cpp:1038): playersToTeleport
+		// holds every player when the proposal is new, else only
+		// players whose live group is not the proposal group. C++
+		// isNew (LFGQueue.cpp:538) is false only for a single-group
+		// match whose group OldState is DUNGEON — a group refilling
+		// while inside a dungeon. Go's groupState.LFGState is sticky
+		// the same way (QUEUED/PROPOSAL live in the queue entries,
+		// never on the group), so the riding group's LFGState at
+		// success time is the same test; the distinct owner-group
+		// count is the Go analog of numLfgGroups (the matcher caps a
+		// combo at one group unit, and every member of that unit
+		// carries its group id). Snapshot before formation: the
+		// loop moves everyone into the new group.
+		teleportSet := make(map[uint64]bool, len(proposal.Players))
+		{
+			ownerGroups := make(map[uint64]bool)
+			for _, pdata := range proposal.Players {
+				if pdata.Group != 0 {
+					ownerGroups[pdata.Group] = true
+				}
+			}
+			isNew := true
+			if len(ownerGroups) == 1 && proposal.Group != 0 {
+				if grp := s.server.getGroup(proposal.Group); grp != nil && grp.LFGState == LFGStateDungeon {
+					isNew = false
+				}
+			}
+			for pguid := range proposal.Players {
+				if isNew {
+					teleportSet[pguid] = true
+					continue
+				}
+				if ps := s.server.findSessionByGUID(pguid); ps != nil && ps.groupID == proposal.Group {
+					continue
+				}
+				teleportSet[pguid] = true
+			}
+		}
 		var grp *groupState
 		if proposal.Group != 0 {
 			grp = s.server.getGroup(proposal.Group)
@@ -4141,6 +4198,19 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 			ps := s.server.findSessionByGUID(pguid)
 			if ps == nil || ps.player == nil {
 				continue
+			}
+			// Group::RemoveMember runs before creation in C++
+			// (group != grp with grp still nil on the first player),
+			// so a proposal member who joined a manual group
+			// mid-proposal leaves it instead of ending up in two
+			// groups; the old creation branch overwrote groupID
+			// without removing.
+			if ps.groupID != 0 && (grp == nil || ps.groupID != grp.ID) {
+				if old := s.server.getGroup(ps.groupID); old != nil {
+					_ = ps.removeFromGroup(ctx, old, ps, groupRemoveMethodDefault)
+				} else {
+					ps.groupID = 0
+				}
 			}
 			if grp == nil {
 				s.server.groupsMu.Lock()
@@ -4164,13 +4234,6 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				ps.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(ps.player.PlayerFlags, true)
 				s.server.groupsMu.Unlock()
 				continue
-			}
-			if ps.groupID != 0 && ps.groupID != grp.ID {
-				if old := s.server.getGroup(ps.groupID); old != nil {
-					_ = ps.removeFromGroup(ctx, old, ps, groupRemoveMethodDefault)
-				} else {
-					ps.groupID = 0
-				}
 			}
 			s.server.groupsMu.Lock()
 			added := true
@@ -4227,21 +4290,23 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 
 		for pguid := range proposal.Players {
 			if ps := s.server.findSessionByGUID(pguid); ps != nil {
-				// LFGMgr::UpdateProposal (LFGMgr.cpp:1127-1141): players who
-				// queued for a random dungeon take the Dungeon Cooldown aura
-				// on proposal accept.
-				if s.server.lfgSelectedRandomDungeon(pguid) {
+				// LFGMgr::MakeNewGroup (LFGMgr.cpp:1136-1141): the member
+				// loop grants the Dungeon Cooldown aura for a first
+				// selected dungeon of type RANDOM only; seasonal
+				// entries do not count here (unlike
+				// selectedRandomLfgDungeon, LFGMgr.cpp:2250).
+				if s.server.lfgFirstSelectedDungeonIsRandom(pguid) {
 					ps.applyAura(lfgSpellDungeonCooldown)
 				}
 				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1543-1548): a player
-				// already on the dungeon's map is not teleported (the
-				// call errors instead of moving them); the cooldown above
-				// still applies, since MakeNewGroup grants it before the
-				// teleport pass. The !isNew playersToTeleport skip is
-				// vacuous here: every Go-formed proposal is isNew (solo
-				// proposals are new groups, grouped proposals have no
-				// live former), so it needs an IsNew field only when a
-				// queue matcher lands.
+				// already on the dungeon's map is not teleported; the
+				// cooldown above still applies, since MakeNewGroup
+				// grants it before the teleport pass. Players outside
+				// playersToTeleport (the !isNew skip: members already
+				// in the riding group) stay put.
+				if !teleportSet[pguid] {
+					continue
+				}
 				if ps.player != nil {
 					if mapID, _, _, _, _ := ps.getLFGDungeonEntrance(proposal.DungeonID); mapID != 0 && ps.player.Map == mapID {
 						continue
