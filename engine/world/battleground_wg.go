@@ -27,6 +27,9 @@ const (
 	WGStartGroupingDuration = 15 * time.Minute  // 15 minutes before war
 	wgMaxPlayersPerTeam     = 100               // Wintergrasp.PlayerMax default (World.cpp:1477)
 	wgResurrectInterval     = 30 * time.Second  // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
+	wgInviteAcceptWindow    = 20 * time.Second  // m_TimeForAcceptInvite (BattlefieldWG.cpp:429)
+	wgKickDelay             = 10 * time.Second  // m_PlayersWillBeKick deadline (Battlefield.cpp:89, 253)
+	wgKickSweepInterval     = time.Second       // m_uiKickDontAcceptTimer / m_uiKickAfkPlayersTimer (Battlefield.cpp:60, 165-186)
 
 	// Teams
 	WGTeamAlliance uint32 = 0
@@ -274,12 +277,15 @@ type wgBattlegroundState struct {
 	TenacityTeam  int8 // -1: neutral, 0: Alliance, 1: Horde
 	TenacityStack int32
 
-	PlayersInWar      map[uint64]uint32 // playerGUID -> team
-	PlayersInZone     map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_players, the zone roster, distinct from the war roster
-	PlayersInQueue    map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_PlayersInQueue[team] (Battlefield.h)
-	PlayerRanks       map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
-	PlayerKillsInRank map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
-	Vehicles          map[uint64]uint32 // vehicleGUID -> team
+	PlayersInWar      map[uint64]uint32    // playerGUID -> team
+	PlayersInZone     map[uint64]uint32    // playerGUID -> team; mirrors Battlefield::m_players, the zone roster, distinct from the war roster
+	PlayersInQueue    map[uint64]uint32    // playerGUID -> team; mirrors Battlefield::m_PlayersInQueue[team] (Battlefield.h)
+	InvitedPlayers    map[uint64]wgInvite  // playerGUID -> team + accept deadline; mirrors Battlefield::m_InvitedPlayers (Battlefield.h:374)
+	PlayersWillBeKick map[uint64]time.Time // playerGUID -> kick deadline; mirrors Battlefield::m_PlayersWillBeKick
+	KickSweepTimer    time.Duration        // accumulator for the 1s wartime kick sweep (Battlefield::Update)
+	PlayerRanks       map[uint64]uint32    // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
+	PlayerKillsInRank map[uint64]uint32    // playerGUID -> kills in current rank towards next promotion (0..5)
+	Vehicles          map[uint64]uint32    // vehicleGUID -> team
 
 	// ReviveQueue is the Wintergrasp spirit-healer revive queue
 	// (playerGUID -> spirit-guide GUID). C++ fans the queue out per
@@ -398,6 +404,7 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 	wg.Vehicles = make(map[uint64]uint32)
 	wg.PlayerRanks = make(map[uint64]uint32)
 	wg.PlayerKillsInRank = make(map[uint64]uint32)
+	wg.KickSweepTimer = wgKickSweepInterval
 
 	s.inviteWGZoneAndQueueToWar(wg)
 
@@ -407,58 +414,156 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 	s.UpdateWGTenacity()
 }
 
-// inviteWGZoneAndQueueToWar repopulates PlayersInWar at battle start.
-// Caller holds wg.mu. Battlefield::InvitePlayersInZoneToWar iterates
-// m_players (a GUID-ordered set) and invites each online player not
-// already in war or invited, while the per-team war+invited count is
-// below m_MaxPlayer; a full battlefield marks the player for kick after
-// 10 seconds (no Go kick-timer model, so excess zone players simply stay
-// zone-roster only). InvitePlayersInQueueToWar then moves the queue the
-// same way and clears it. Go has no invited-set or accept handshake on
-// this path — its queue-accept handler already inserts directly — so
-// invited players join at once, and the Recruit aura mirrors the
-// wartime-enter path (OnPlayerJoinWar's tower-control stacks are not
-// modeled on Go's wartime entry either, so they are not added here).
-func (s *Server) inviteWGZoneAndQueueToWar(wg *wgBattlegroundState) {
-	wg.PlayersInWar = make(map[uint64]uint32)
-	counts := map[uint32]int{}
-	invite := func(guid uint64, team uint32) {
-		if counts[team] >= wgMaxPlayersPerTeam {
-			return
+// wgInvite is one outstanding war invite: the team it was issued for and
+// the accept deadline (GameTime + m_TimeForAcceptInvite).
+type wgInvite struct {
+	Team     uint32
+	Deadline time.Time
+}
+
+// warAndInvitedCount counts the per-team war roster plus outstanding
+// invites, the vacancy check every InvitePlayerToWar caller applies
+// (Battlefield.cpp:84, 229, 251).
+func (wg *wgBattlegroundState) warAndInvitedCount(team uint32) int {
+	count := 0
+	for _, t := range wg.PlayersInWar {
+		if t == team {
+			count++
 		}
-		sess := s.findSessionByGUID(guid)
-		if sess == nil || sess.player == nil {
-			return
-		}
-		wg.PlayersInWar[guid] = team
-		counts[team]++
-		if _, ok := wg.PlayerRanks[guid]; !ok {
-			wg.PlayerRanks[guid] = WGSpellRecruit
-			wg.PlayerKillsInRank[guid] = 0
-		}
-		sess.applyAura(WGSpellRecruit)
 	}
+	for _, inv := range wg.InvitedPlayers {
+		if inv.Team == team {
+			count++
+		}
+	}
+	return count
+}
+
+// inviteWGPlayerToWar mirrors Battlefield::InvitePlayerToWar
+// (Battlefield.cpp:260-292): already-in-war or already-invited is a
+// no-op, a will-be-kick entry is cleared, and the invite lands in
+// m_InvitedPlayers with a SendBfInvitePlayerToWar dialog
+// (BattlefieldHandler.cpp:36-44: battleId, zoneId, accept deadline).
+// The vacancy check lives in the callers, as in C++. Caller holds wg.mu.
+// The in-flight / arena / battleground guards and the min-level leg have
+// no Go state on this path and stay unmodeled.
+func (s *Server) inviteWGPlayerToWar(wg *wgBattlegroundState, sess *session, team uint32) bool {
+	if sess == nil || sess.player == nil {
+		return false
+	}
+	guid := sess.playerGUID
+	if _, inWar := wg.PlayersInWar[guid]; inWar {
+		return false
+	}
+	if _, invited := wg.InvitedPlayers[guid]; invited {
+		return false
+	}
+	delete(wg.PlayersWillBeKick, guid)
+	deadline := time.Now().Add(wgInviteAcceptWindow)
+	wg.InvitedPlayers[guid] = wgInvite{Team: team, Deadline: deadline}
+	packet := protocol.NewBuffer(12)
+	packet.WriteU32(WGBattleID)
+	packet.WriteU32(WGZoneID)
+	packet.WriteU32(uint32(deadline.Unix()))
+	_ = sess.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_ENTRY_INVITE), packet.Bytes(), true)
+	return true
+}
+
+// joinWGWar moves a player into the war roster on invite accept.
+// Caller holds wg.mu. Mirrors Battlefield::PlayerAcceptInviteToWar
+// (Battlefield.cpp:390-404) minus the raid-group leg: invited erase,
+// war insert, and OnPlayerJoinWar's Recruit cast
+// (BattlefieldWG.cpp:1061-1065). Accept does not require an outstanding
+// invite in C++ either, so an uninvited accept still joins.
+func (s *Server) joinWGWar(wg *wgBattlegroundState, sess *session, team uint32) {
+	if sess == nil {
+		return
+	}
+	delete(wg.InvitedPlayers, sess.playerGUID)
+	wg.PlayersInWar[sess.playerGUID] = team
+	if _, ok := wg.PlayerRanks[sess.playerGUID]; !ok {
+		wg.PlayerRanks[sess.playerGUID] = WGSpellRecruit
+		wg.PlayerKillsInRank[sess.playerGUID] = 0
+	}
+	sess.applyAura(WGSpellRecruit)
+}
+
+// inviteWGZoneToWar mirrors Battlefield::InvitePlayersInZoneToWar
+// (Battlefield.cpp:241-258): GUID-ordered zone-roster sweep, inviting
+// while the per-team war+invited count is below m_MaxPlayer and marking
+// the rest for kick after wgKickDelay. GUIDs in exclude (just kicked
+// this sweep) are skipped so a kicked player is not re-invited in the
+// same pass. Caller holds wg.mu.
+func (s *Server) inviteWGZoneToWar(wg *wgBattlegroundState, exclude map[uint64]bool) {
 	zoneGUIDs := make([]uint64, 0, len(wg.PlayersInZone))
 	for guid := range wg.PlayersInZone {
 		zoneGUIDs = append(zoneGUIDs, guid)
 	}
 	sort.Slice(zoneGUIDs, func(i, j int) bool { return zoneGUIDs[i] < zoneGUIDs[j] })
 	for _, guid := range zoneGUIDs {
+		if exclude[guid] {
+			continue
+		}
 		team := wg.PlayersInZone[guid]
 		sess := s.findSessionByGUID(guid)
 		if sess == nil || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
 			continue
 		}
-		invite(guid, team)
+		if wg.warAndInvitedCount(team) < wgMaxPlayersPerTeam {
+			s.inviteWGPlayerToWar(wg, sess, team)
+		} else {
+			wg.PlayersWillBeKick[guid] = time.Now().Add(wgKickDelay)
+		}
 	}
+}
+
+// inviteWGQueueToWar mirrors Battlefield::InvitePlayersInQueueToWar
+// (Battlefield.cpp:222-239): the queue sweep invites while vacant and,
+// unlike the zone sweep, marks nothing on full. Caller holds wg.mu;
+// the caller clears the queue afterwards, as C++ does.
+func (s *Server) inviteWGQueueToWar(wg *wgBattlegroundState) {
 	queueGUIDs := make([]uint64, 0, len(wg.PlayersInQueue))
 	for guid := range wg.PlayersInQueue {
 		queueGUIDs = append(queueGUIDs, guid)
 	}
 	sort.Slice(queueGUIDs, func(i, j int) bool { return queueGUIDs[i] < queueGUIDs[j] })
 	for _, guid := range queueGUIDs {
-		invite(guid, wg.PlayersInQueue[guid])
+		team := wg.PlayersInQueue[guid]
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		if wg.warAndInvitedCount(team) < wgMaxPlayersPerTeam {
+			s.inviteWGPlayerToWar(wg, sess, team)
+		}
 	}
+}
+
+// kickWGPlayerFromBattlefield mirrors Battlefield::KickPlayerFromBattlefield
+// (Battlefield.cpp:309-314): a player still in the zone is teleported to
+// KickPosition (BattlefieldWG.cpp:435). Call after releasing wg.mu: the
+// teleport's zone-change path takes wg.mu via handleWGPlayerLeave.
+func (s *Server) kickWGPlayerFromBattlefield(sess *session) {
+	if sess == nil || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
+		return
+	}
+	sess.teleportTo(WGMapID, 5728.117, 2714.346, 697.733, 0)
+}
+
+// inviteWGZoneAndQueueToWar repopulates the war at battle start.
+// Reference: Battlefield::StartBattle (Battlefield.cpp:316-335) clears
+// m_PlayersInWar, then InvitePlayersInZoneToWar and
+// InvitePlayersInQueueToWar invite; players join the war only on accept,
+// so the sweep records invites (and full-battlefield kick marks) instead
+// of inserting into PlayersInWar directly. OnPlayerJoinWar's
+// tower-control stacks are not modeled on Go's wartime entry either, so
+// they are not added here.
+func (s *Server) inviteWGZoneAndQueueToWar(wg *wgBattlegroundState) {
+	wg.PlayersInWar = make(map[uint64]uint32)
+	wg.InvitedPlayers = make(map[uint64]wgInvite)
+	wg.PlayersWillBeKick = make(map[uint64]time.Time)
+	s.inviteWGZoneToWar(wg, nil)
+	s.inviteWGQueueToWar(wg)
 	wg.PlayersInQueue = make(map[uint64]uint32)
 }
 
@@ -565,7 +670,14 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	// (PlayersInZone) survives, so the next StartBattle can repopulate
 	// from it. Previously the clear was deferred because the war roster
 	// doubled as the zone roster.
+	// Outstanding invites and kick marks lapse with the battle: C++
+	// leaves m_InvitedPlayers entries until leave-zone, but Go clears
+	// them here so stale expiries cannot poison the next StartBattle's
+	// war+invited count or fire a stale kick — accept is gated on
+	// IsActive, so a lapsed invite can never be accepted anyway.
 	wg.PlayersInWar = make(map[uint64]uint32)
+	wg.InvitedPlayers = make(map[uint64]wgInvite)
+	wg.PlayersWillBeKick = make(map[uint64]time.Time)
 
 	if !endByTimer {
 		// On a relic capture every player in the zone swaps to the new
@@ -1032,6 +1144,57 @@ func (s *Server) TickWG(ctx context.Context, delta time.Duration) {
 			s.StartWGBattle(defenderTeam)
 		}
 	}
+	// Wartime kick sweep (Battlefield::Update, Battlefield.cpp:165-186):
+	// every second, kick expired invites, re-invite the zone to fill
+	// freed slots, kick expired will-be-kick marks, and kick AFK war
+	// members (KickAfkPlayers). C++ kicks in place during the sweep;
+	// Go collects GUIDs under wg.mu and teleports after unlock, since
+	// the teleport's zone-change path takes wg.mu. Expired invites are
+	// erased at kick time (C++ leaves the entry until leave-zone, but
+	// Go must free the slot for the same-pass re-invite); just-kicked
+	// GUIDs are excluded from that re-invite.
+	wg = s.getOrCreateWGState()
+	wg.mu.Lock()
+	var kickGUIDs []uint64
+	if wg.IsActive {
+		wg.KickSweepTimer -= delta
+		if wg.KickSweepTimer <= 0 {
+			wg.KickSweepTimer = wgKickSweepInterval
+			now := time.Now()
+			kicked := map[uint64]bool{}
+			for guid, inv := range wg.InvitedPlayers {
+				if !inv.Deadline.After(now) {
+					delete(wg.InvitedPlayers, guid)
+					kicked[guid] = true
+					kickGUIDs = append(kickGUIDs, guid)
+				}
+			}
+			s.inviteWGZoneToWar(wg, kicked)
+			for guid, deadline := range wg.PlayersWillBeKick {
+				if !deadline.After(now) {
+					delete(wg.PlayersWillBeKick, guid)
+					if !kicked[guid] {
+						kicked[guid] = true
+						kickGUIDs = append(kickGUIDs, guid)
+					}
+				}
+			}
+			for guid := range wg.PlayersInWar {
+				if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil && sess.player.PlayerFlags&playerFlagAFK != 0 {
+					if !kicked[guid] {
+						kicked[guid] = true
+						kickGUIDs = append(kickGUIDs, guid)
+					}
+				}
+			}
+		}
+	}
+	wg.mu.Unlock()
+	for _, guid := range kickGUIDs {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			s.kickWGPlayerFromBattlefield(sess)
+		}
+	}
 	if len(queued) != 0 {
 		s.resurrectWGQueuedPlayers(ctx, queued)
 	}
@@ -1183,18 +1346,24 @@ func (s *Server) handleWGPlayerEnter(sess *session) {
 
 	playerTeam := teamForRace(sess.player.Race)
 	// Battlefield::HandlePlayerEnterZone (Battlefield.cpp:80-102) always
-	// adds the player to the zone roster m_players, but joins the war
-	// roster only in wartime (InvitePlayerToWar); peacetime entrants were
-	// previously added to PlayersInWar, leaking them into war-only loops
-	// (tenacity counts, tower credit) and blocking the EndBattle clear.
+	// adds the player to the zone roster m_players, but in wartime only
+	// invites to the war (InvitePlayerToWar); a full battlefield marks
+	// the entrant for kick and invites them to the queue instead. Go
+	// invites (no direct war insert, so tenacity/tower loops only see
+	// accepters); the queue-invite leg stays unmodeled — Go sends no
+	// QUEUE_INVITE packet on any path and peacetime grouping is
+	// unmodeled — and the min-level leg has no Go WG config.
 	wg.PlayersInZone[sess.playerGUID] = playerTeam
 	if wg.IsActive {
-		wg.PlayersInWar[sess.playerGUID] = playerTeam
-		if _, ok := wg.PlayerRanks[sess.playerGUID]; !ok {
-			wg.PlayerRanks[sess.playerGUID] = WGSpellRecruit
-			wg.PlayerKillsInRank[sess.playerGUID] = 0
+		if _, inWar := wg.PlayersInWar[sess.playerGUID]; !inWar {
+			if _, invited := wg.InvitedPlayers[sess.playerGUID]; !invited {
+				if wg.warAndInvitedCount(playerTeam) < wgMaxPlayersPerTeam {
+					s.inviteWGPlayerToWar(wg, sess, playerTeam)
+				} else {
+					wg.PlayersWillBeKick[sess.playerGUID] = time.Now().Add(wgKickDelay)
+				}
+			}
 		}
-		sess.applyAura(WGSpellRecruit)
 	}
 
 	// Apply continent/zone phase shift
@@ -1219,6 +1388,10 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	wg.mu.Lock()
 	delete(wg.PlayersInWar, sess.playerGUID)
 	delete(wg.PlayersInZone, sess.playerGUID)
+	// Battlefield::HandlePlayerLeaveZone (Battlefield.cpp:126-127) erases
+	// the invited and will-be-kick entries alongside the rosters.
+	delete(wg.InvitedPlayers, sess.playerGUID)
+	delete(wg.PlayersWillBeKick, sess.playerGUID)
 
 	sess.removeAura(WGSpellRecruit)
 	sess.removeAura(WGSpellCorporal)
@@ -1318,6 +1491,9 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			PlayersInWar:       make(map[uint64]uint32),
 			PlayersInZone:      make(map[uint64]uint32),
 			PlayersInQueue:     make(map[uint64]uint32),
+			InvitedPlayers:     make(map[uint64]wgInvite),
+			PlayersWillBeKick:  make(map[uint64]time.Time),
+			KickSweepTimer:     wgKickSweepInterval,
 			PlayerRanks:        make(map[uint64]uint32),
 			PlayerKillsInRank:  make(map[uint64]uint32),
 			Vehicles:           make(map[uint64]uint32),

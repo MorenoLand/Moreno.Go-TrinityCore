@@ -2659,15 +2659,16 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 	if accepted != 0 {
 		// Battlefield::PlayerAcceptInviteToWar (Battlefield.cpp:390): the
 		// IsWarTime() gate, the m_PlayersInWar insert
-		// (AddOrSetPlayerToCorrectBfGroup), SendBfEntered, and the AFK clear.
-		// The invited-set erase has no Go model (no invite tracking); the
-		// OnPlayerJoinWar script hook is engine-only.
+		// (AddOrSetPlayerToCorrectBfGroup), SendBfEntered, the AFK clear,
+		// and the invited-set erase plus OnPlayerJoinWar's Recruit cast
+		// (BattlefieldWG.cpp:1061-1065) via joinWGWar; UpdateTenacity
+		// runs after unlock, as OnPlayerJoinWar calls it.
 		if s.server != nil && battleID == WGBattleID {
 			wg := s.server.getOrCreateWGState()
 			wg.mu.Lock()
 			if wg.Enabled && wg.IsActive {
 				afk := s.player.PlayerFlags&playerFlagAFK != 0
-				wg.PlayersInWar[s.playerGUID] = teamForRace(s.player.Race)
+				s.server.joinWGWar(wg, s, teamForRace(s.player.Race))
 				wg.mu.Unlock()
 				// SendBfEntered (BattlefieldHandler.cpp:100): u32 battleId,
 				// u8(1), u8(1), u8(isAFK) — 7 bytes; the AFK byte is read
@@ -2685,6 +2686,7 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 				if afk {
 					s.setPlayerAFK(false)
 				}
+				s.server.UpdateWGTenacity()
 			} else {
 				wg.mu.Unlock()
 			}
