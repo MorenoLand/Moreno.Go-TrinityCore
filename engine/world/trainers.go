@@ -524,7 +524,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)
 		}
 		for _, triggerSpell := range triggerSpells {
 			s.learnSpell(ctx, triggerSpell)
@@ -683,7 +683,7 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 				goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 				if s.server != nil {
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+					s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)
 				}
 				if s.auras == nil {
 					s.auras = make(map[uint32]struct{})

@@ -1118,7 +1118,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
 			s.debug("pet summon effect failed", "account", s.accountName, "petID", petID, "spell", createdBySpell, "error", err)
 		} else if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), packet)
 		}
 	}
 
@@ -3149,7 +3149,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 				stopPkt := buildAttackStop(petGUID, oldVictim, false)
 				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 				if s.server != nil {
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 				}
 			}
 			if s.server != nil {
@@ -3191,7 +3191,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 				stopPkt := buildAttackStop(petGUID, followVictim, false)
 				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 				if s.server != nil {
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 				}
 			}
 			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
@@ -3267,7 +3267,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 				if s.server != nil {
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 				}
 			}
 			s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
@@ -4466,6 +4466,7 @@ func (s *session) stopPetAttacks(petGUID uint64, clearThreat bool) {
 	}
 	s.server.motionMu.Lock()
 	victim := motion.TargetGUID
+	petMap, petInstance, petX, petY, petZ := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z
 	motion.TargetGUID = 0
 	motion.InCombat = false
 	if clearThreat && motion.ThreatMgr != nil {
@@ -4478,7 +4479,7 @@ func (s *session) stopPetAttacks(petGUID uint64, clearThreat bool) {
 	if victim != 0 {
 		stopPkt := buildAttackStop(petGUID, victim, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, petMap, petInstance, petX, petY, petZ, s)
 	}
 	s.debug("pet stop attack", "account", s.accountName, "pet", petGUID)
 }

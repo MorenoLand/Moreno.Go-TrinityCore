@@ -2184,9 +2184,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, targetSess)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, targetSess)
 		} else {
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 		}
 	}
 	// Spell::EffectInterruptCast (SpellEffects.cpp:3511) for a creature

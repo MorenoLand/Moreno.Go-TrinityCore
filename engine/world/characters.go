@@ -2120,7 +2120,7 @@ func (s *session) sendLoginEffect() error {
 	}
 	nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
 	nearby := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, 836, nearbyFlags, castTime, []uint64{s.playerGUID}, nil, target)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearby, s)
+	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), nearby)
 	return nil
 }
 

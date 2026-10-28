@@ -423,23 +423,52 @@ func (s *Server) isGameObjectHiddenInInstance(mapID, instanceID uint32, guid uin
 	return hidden
 }
 
+// gameObjectPositionInInstance returns the live dynamic GO position for the
+// visibility-set fan-out below. GameObject::SendCustomAnim
+// (GameObject.cpp:2097) and WorldObject::SendObjectDeSpawnAnim
+// (Object.cpp:1826) both use SendMessageToSet(true) = the GO's visibility
+// set, and WorldObject::BuildUpdate (Object.cpp:3620) builds values updates
+// "for all visible players" — so all four instance helpers center on the GO
+// instead of the whole instance. Unknown GUIDs keep the old instance-wide
+// fan-out so no recipient is dropped for an unlocated GO.
+func (s *Server) gameObjectPositionInInstance(mapID, instanceID uint32, guid uint64) (float32, float32, float32, bool) {
+	if s == nil {
+		return 0, 0, 0, false
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		return 0, 0, 0, false
+	}
+	return st.X, st.Y, st.Z, true
+}
+
+func (s *Server) broadcastToVisibleSetForGameObject(opcode uint16, payload []byte, mapID, instanceID uint32, guid uint64) {
+	if x, y, z, ok := s.gameObjectPositionInInstance(mapID, instanceID, guid); ok {
+		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
+		return
+	}
+	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
+}
+
 func (s *Server) broadcastGameObjectCustomAnimInInstance(mapID, instanceID uint32, guid uint64, anim uint32) {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
 	buf.WriteU32(anim)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_CUSTOM_ANIM), buf.Bytes(), nil)
+	s.broadcastToVisibleSetForGameObject(uint16(protocol.OpcodeSMSG_GAMEOBJECT_CUSTOM_ANIM), buf.Bytes(), mapID, instanceID, guid)
 }
 
 func (s *Server) broadcastGameObjectResetStateInInstance(mapID, instanceID uint32, guid uint64) {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(guid)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_RESET_STATE), buf.Bytes(), nil)
+	s.broadcastToVisibleSetForGameObject(uint16(protocol.OpcodeSMSG_GAMEOBJECT_RESET_STATE), buf.Bytes(), mapID, instanceID, guid)
 }
 
 func (s *Server) broadcastGameObjectDespawnInInstance(mapID, instanceID uint32, guid uint64) {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(guid)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), nil)
+	s.broadcastToVisibleSetForGameObject(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, instanceID, guid)
 }
 
 // broadcastGameObjectValuesUpdateInInstance mirrors the values-update half of
@@ -477,7 +506,7 @@ func (s *Server) broadcastGameObjectValuesUpdateInInstance(mapID, instanceID uin
 	if err != nil || packet == nil {
 		return
 	}
-	s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+	s.broadcastToVisibleSetForGameObject(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, guid)
 }
 
 // broadcastGameObjectBytes1InInstance pushes the recomputed GAMEOBJECT_BYTES_1

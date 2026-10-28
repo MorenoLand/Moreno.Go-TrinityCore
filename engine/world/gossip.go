@@ -1741,7 +1741,7 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)
 	}
 
 	// 2. SMSG_BIND_POINT_UPDATE (0x155, 20 bytes: X, Y, Z, Map, Area)

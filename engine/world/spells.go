@@ -37207,14 +37207,17 @@ func (s *session) handleEffectForceDeselect() {
 	// ThreatMgr — take Unit::AttackStop (Unit.cpp:5763): drop the victim and
 	// send SMSG_ATTACK_STOP, following the stopControlledPetCombat packet
 	// pattern (combat.go:2027).
-	type stoppedMotion struct{ guid, victim uint64 }
+	type stoppedMotion struct {
+		guid, victim uint64
+		x, y, z      float32
+	}
 	var stopped []stoppedMotion
 	s.server.motionMu.Lock()
 	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 		if motion == nil || motion.TargetGUID != s.playerGUID || motion.ThreatMgr != nil {
 			continue
 		}
-		stopped = append(stopped, stoppedMotion{guid: motion.GUID, victim: motion.TargetGUID})
+		stopped = append(stopped, stoppedMotion{guid: motion.GUID, victim: motion.TargetGUID, x: motion.X, y: motion.Y, z: motion.Z})
 		motion.TargetGUID = 0
 		motion.InCombat = false
 	}
@@ -37222,7 +37225,7 @@ func (s *session) handleEffectForceDeselect() {
 	for _, st := range stopped {
 		stopPkt := buildAttackStop(st.guid, st.victim, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s.player.Map, s.player.InstanceID, st.x, st.y, st.z, s)
 	}
 }
 

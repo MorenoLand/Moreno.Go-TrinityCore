@@ -276,7 +276,11 @@ func (s *Server) onPetSetReaction(ctx context.Context, mapID, instanceID uint32,
 		// SendMessageToSet(&data, true): the broadcast reaches the nearby
 		// set including the sender — the old whole-instance broadcast was
 		// too wide and skipped the owner.
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, source)
+		if leftMotion != nil {
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, leftMotion.Map, leftMotion.InstanceID, leftMotion.X, leftMotion.Y, leftMotion.Z, source)
+		} else {
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, source)
+		}
 		if source != nil {
 			_ = source.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 		}
@@ -4299,7 +4303,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			return false
 		}
 		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 	}
 	// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),
 	// pet-path twin of the creature funnels: once per cast, on the
