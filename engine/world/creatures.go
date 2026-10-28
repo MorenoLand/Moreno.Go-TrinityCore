@@ -785,38 +785,6 @@ func (s *Server) buildCreatureValuesUpdate(guid uint64, fields map[int]uint32) (
 	return updates.BuildPacket(0)
 }
 
-func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields map[int]uint32) {
-	packet, err := s.buildCreatureValuesUpdate(guid, fields)
-	if err != nil || packet == nil {
-		return
-	}
-	// Unit::BuildValuesUpdateBlockForPlayer (Unit.cpp:13921-13931) masks
-	// UNIT_DYNFLAG_LOOTABLE per viewer via Player::isAllowedToLoot: build the
-	// masked variant once and pick per viewer. A failed masked build falls
-	// back to the base packet for everyone.
-	var masked *protocol.Packet
-	if fields[unitFieldDynamicFlags]&unitDynFlagLootable != 0 {
-		maskedFields := make(map[int]uint32, len(fields))
-		for k, v := range fields {
-			maskedFields[k] = v
-		}
-		maskedFields[unitFieldDynamicFlags] &^= unitDynFlagLootable
-		masked, _ = s.buildCreatureValuesUpdate(guid, maskedFields)
-	}
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
-			continue
-		}
-		if masked != nil && !s.creatureLootSparkleVisible(mapID, sess.player.InstanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {
-			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
-			continue
-		}
-		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
-	}
-}
-
 // isUnitStandState is Unit::IsStandState (Unit.cpp:10551-10555): not a sit
 // state (Unit::IsSitState, Unit.cpp:10542-10549) and neither SLEEP (3) nor
 // KNEEL (8) — DEAD (7) and SUBMERGED (9) count as standing.
@@ -907,10 +875,45 @@ func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint3
 		maskedFields[unitFieldDynamicFlags] &^= unitDynFlagLootable
 		masked, _ = s.buildCreatureValuesUpdate(guid, maskedFields)
 	}
+	// WorldObject::BuildUpdate (Object.cpp:3620) builds values updates
+	// "for all visible players" — the motion-centered visibility set, not
+	// the whole instance. An unlocated creature keeps the instance-wide
+	// fan-out so no recipient is dropped.
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, true, m.X, m.Y, m.Z)
+		return
+	}
+	s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, false, 0, 0, 0)
+}
+
+// broadcastCreatureValuesUpdateAtInInstance is the motionMu-held twin of
+// broadcastCreatureValuesUpdateInInstance: the caller holds the motion lock
+// and passes the creature's coordinates, so no motion lookup runs here.
+// The per-viewer loot-sparkle mask is skipped on this path — that check
+// takes motionMu through findCreatureMotion — so the base packet goes to
+// the visibility set; the mask only matters for lootable-flag broadcasts,
+// and the one lock-held site carrying that flag deadlocked on the mask
+// path before this variant existed.
+func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32, x, y, z float32) {
+	packet, err := s.buildCreatureValuesUpdate(guid, fields)
+	if err != nil || packet == nil {
+		return
+	}
+	s.fanOutCreatureValuesUpdate(packet, nil, mapID, instanceID, guid, true, x, y, z)
+}
+
+// fanOutCreatureValuesUpdate delivers a built creature values-update block
+// to an instance's sessions, distance-gated to the 100yd visibility range
+// around (cx, cy, cz) when gated, instance-wide otherwise. The masked
+// variant, when present, goes to viewers the loot sparkle is hidden from.
+func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		if gated && distance3D(sess.player.X, sess.player.Y, sess.player.Z, cx, cy, cz) > 100.0 {
 			continue
 		}
 		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {

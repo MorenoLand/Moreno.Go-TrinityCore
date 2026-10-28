@@ -4118,7 +4118,7 @@ func duelDefeatOnVehicleDamage(s *session, motion *creatureMotion, attackerPlaye
 		return false
 	}
 	motion.Health = 1
-	s.server.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: 1})
+	s.server.broadcastCreatureValuesUpdateAtInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: 1}, motion.X, motion.Y, motion.Z)
 	opp := s.server.findSessionByGUID(rider.duelPartner)
 	if opp == nil {
 		opp = rider

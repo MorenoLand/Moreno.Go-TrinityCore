@@ -589,6 +589,7 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 		return
 	}
 	s.objectsMu.Lock()
+	var x, y, z float32
 	state := s.gameObjectStateLocked(mapID, instanceID, guid)
 	if state != nil {
 		if state.AutoCloseTimer != nil {
@@ -606,6 +607,9 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 				delete(s.instanceGameObjects, key)
 			}
 		}
+	}
+	if state != nil {
+		x, y, z = state.X, state.Y, state.Z
 	}
 	s.objectsMu.Unlock()
 	if state == nil {
@@ -632,7 +636,10 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)
 		}
 	}
-	s.broadcastGameObjectDespawnInInstance(mapID, instanceID, guid)
+	// The state was deleted above, so the lookup-based despawn twin would
+	// always miss and fall back instance-wide — fan out from the captured
+	// coordinates instead (SendObjectDeSpawnAnim, Object.cpp:1826).
+	s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z)
 	// Eluna GAMEOBJECT_EVENT_ON_REMOVE (event 13), fired from
 	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
 	// Only dynamic despawns have a live server-side object — static template

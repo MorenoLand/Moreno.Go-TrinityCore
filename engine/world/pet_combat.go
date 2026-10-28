@@ -1670,7 +1670,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				}
 				// The corpse keeps TAPPED when the tap survived to death
 				// (Unit.cpp:11172-11175), so broadcast the real flags.
-				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: cMotion.DynamicFlags})
+				s.broadcastCreatureValuesUpdateAtInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: cMotion.DynamicFlags}, cMotion.X, cMotion.Y, cMotion.Z)
 				killed = true
 			} else {
 				cMotion.Health -= damage
@@ -1682,7 +1682,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				if newlyTapped {
 					healthUpdate[unitFieldDynamicFlags] = cMotion.DynamicFlags
 				}
-				s.broadcastCreatureValuesUpdateInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, healthUpdate)
+				s.broadcastCreatureValuesUpdateAtInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, healthUpdate, cMotion.X, cMotion.Y, cMotion.Z)
 			}
 		}
 		s.motionMu.Unlock()
@@ -6985,7 +6985,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				fireDealDamageAIHooks(ctx, s.server, tm, caster, caster.GUID, tm.GUID, &damage)
 				if absorbed > 0 {
 					if next, changed := s.server.addCreatureRageLocked(tm, tm.Level, absorbed); changed {
-						s.server.broadcastCreatureValuesUpdateInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next})
+						s.server.broadcastCreatureValuesUpdateAtInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next}, tm.X, tm.Y, tm.Z)
 					}
 				}
 			}

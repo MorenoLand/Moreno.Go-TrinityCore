@@ -1908,12 +1908,6 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	grantPetXP()
 }
 
-// broadcastCreatureValueUpdate pushes an UPDATETYPE_VALUES block for a
-// creature to sessions within visibility range.
-func (s *Server) broadcastCreatureValueUpdate(guid uint64, mapID uint32, x, y float32, fields map[int]uint32) {
-	s.broadcastCreatureValuesUpdate(mapID, guid, fields)
-}
-
 // scheduleCreatureRespawn stores spawn health to restore after
 // creature.spawntimesecs like Map::AddToActiveMap respawn handling.
 func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint32, now time.Time) {
