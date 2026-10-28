@@ -319,33 +319,59 @@ func inspectCombatReach(p *playerState) float64 {
 }
 
 // inspectBlockedByHostility mirrors the player-vs-player arms of
-// WorldObject::IsValidAttackTarget (Object.cpp:2930-3079): the can't-attack-GM
-// arm (IsGameMaster = PLAYER_EXTRA_GM_ON, Player.h:959), the can't-attack-dead
-// arm and the can't-attack-untargetable arm (UNIT_FLAG_NOT_SELECTABLE) all
-// allow inspect before the PvP tail runs; same-team pairs are never valid
-// attack targets (the duel/arena arms need duel state Go does not feed here);
-// a cross-team target blocks inspect only while it IsPvP()
-// (PLAYER_FLAGS_IN_PVP is Go's modeled proxy — the UNIT byte flag and the
-// EndTimer/hostile-area machinery have no Go model), both sides carry
-// UNIT_BYTE2_FLAG_FFA_PVP, or either side carries UNIT_BYTE2_FLAG_UNK1 (no Go
-// model). Sanctuary and the UNK1 byte flag stay documented gaps.
-func inspectBlockedByHostility(requester, target *playerState) bool {
-	if target.ExtraFlags&playerExtraGMOn != 0 {
+// WorldObject::IsValidAttackTarget (Object.cpp:2930-3080) in C++ order, and
+// returns true when the target IS a valid attack target, i.e. when the
+// inspect handler must stay silent: the can't-attack-GM arm (IsGameMaster =
+// PLAYER_EXTRA_GM_ON, Player.h:959), the can't-attack-dead arm, the
+// can't-attack-untargetable arm (UNIT_FLAG_NOT_SELECTABLE), the attacker-UBER
+// arm (PLAYER_FLAGS_UBER), the non-attackable flag group
+// (UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_TAXI_FLIGHT |
+// UNIT_FLAG_NOT_ATTACKABLE_1 | UNIT_FLAG_NON_ATTACKABLE_2), the
+// immune-to-PC arm (either side carries UNIT_FLAG_IMMUNE_TO_PC; both sides
+// are player-controlled here), the friendly arm (same team), the duel arm
+// (duel opponents while DUEL_STATE_IN_PROGRESS, which Go marks with DuelTeam
+// set on both sides when the countdown elapses), the sanctuary arm (either
+// side in sanctuary), and the PvP tail (target IsPvP(), both sides FFA).
+// The UNIT_BYTE2_FLAG_UNK1 fallback term is dead: the flag is never set
+// anywhere in C++, only read here and in IsValidAssistTarget. The
+// UNIT_STATE_UNATTACKABLE and CanSeeOrDetect arms have no Go model for
+// inspect and stay documented gaps.
+func inspectBlockedByHostility(requester, target *session) bool {
+	if requester == nil || requester.player == nil || target == nil || target.player == nil {
 		return false
 	}
-	if target.Health == 0 {
+	req, tgt := requester.player, target.player
+	if tgt.ExtraFlags&playerExtraGMOn != 0 {
 		return false
 	}
-	if target.UnitFlags&unitFlagNotSelectable != 0 {
+	if tgt.Health == 0 {
 		return false
 	}
-	if playerTeam(requester.Race) == playerTeam(target.Race) {
+	if tgt.UnitFlags&unitFlagNotSelectable != 0 {
 		return false
 	}
-	if target.PlayerFlags&playerFlagInPVP != 0 {
+	if req.PlayerFlags&playerFlagUber != 0 {
+		return false
+	}
+	if tgt.UnitFlags&(unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return false
+	}
+	if req.UnitFlags&unitFlagImmuneToPC != 0 || tgt.UnitFlags&unitFlagImmuneToPC != 0 {
+		return false
+	}
+	if playerTeam(req.Race) == playerTeam(tgt.Race) {
+		return false
+	}
+	if req.DuelTeam != 0 && tgt.DuelTeam != 0 && requester.duelPartner == target.playerGUID && target.duelPartner == requester.playerGUID {
 		return true
 	}
-	if requester.PVPFlags&pvpFlagFFA != 0 && target.PVPFlags&pvpFlagFFA != 0 {
+	if req.PVPFlags&pvpFlagSanctuary != 0 || tgt.PVPFlags&pvpFlagSanctuary != 0 {
+		return false
+	}
+	if tgt.PlayerFlags&playerFlagInPVP != 0 {
+		return true
+	}
+	if req.PVPFlags&pvpFlagFFA != 0 && tgt.PVPFlags&pvpFlagFFA != 0 {
 		return true
 	}
 	return false
@@ -540,7 +566,7 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 	if !inspectWithinDistance(s.player, target) {
 		return true
 	}
-	if inspectBlockedByHostility(s.player, target) {
+	if inspectBlockedByHostility(s, targetSession) {
 		return true
 	}
 

@@ -2189,7 +2189,7 @@ func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) b
 	}
 
 	// IsValidAttackTarget arm (ArenaTeamHandler.cpp:51)
-	if inspectBlockedByHostility(s.player, target) {
+	if inspectBlockedByHostility(s, targetSession) {
 		return true
 	}
 
@@ -2247,26 +2247,22 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 	if !inspectWithinDistance(s.player, target) {
 		return true
 	}
-	if inspectBlockedByHostility(s.player, target) {
+	if inspectBlockedByHostility(s, targetSession) {
 		return true
 	}
 
-	var honorPoints uint8
-	var killsToday, todayContrib, yestContrib, lifetimeHK uint32
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		charLow := uint32(targetGUID & 0x00FFFFFF)
-		var hp, tk, yk, hk, thp, yhp int64
-		// PLAYER_FIELD_KILLS packs todayKills (low u16) + yesterdayKills
-		// (high u16) (Player.cpp:17569-17570); the packet sends the full u32
-		// (MiscHandler.cpp:1063).
-		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT totalHonorPoints, todayKills, yesterdayKills, totalKills, todayHonorPoints, yesterdayHonorPoints FROM characters WHERE guid = ?`, charLow).Scan(&hp, &tk, &yk, &hk, &thp, &yhp); err == nil {
-			honorPoints = uint8(hp)
-			killsToday = uint32(tk) | uint32(yk)<<16
-			lifetimeHK = uint32(hk)
-			todayContrib = uint32(thp)
-			yestContrib = uint32(yhp)
-		}
-	}
+	// C++ reads the live player object (MiscHandler.cpp:1060-1067), not the
+	// database: the target session is in hand, so its in-memory fields are
+	// the faithful source — a DB read lags any rollover or kill the session
+	// has not persisted yet (the Player.cpp:6830 rollover with no following
+	// grant, kill increments ahead of the next save).
+	// PLAYER_FIELD_KILLS packs todayKills (low u16) + yesterdayKills
+	// (high u16) (Player.cpp:17569-17570); the packet sends the full u32.
+	honorPoints := uint8(target.TotalHonorPoints)
+	killsToday := uint32(target.TodayKills) | uint32(target.YesterdayKills)<<16
+	todayContrib := target.TodayHonorPoints
+	yestContrib := target.YesterdayHonorPoints
+	lifetimeHK := target.TotalKills
 
 	// TrinityCore MiscHandler.cpp:1060: data(MSG_INSPECT_HONOR_STATS, 8+1+4*4)
 	buf := protocol.NewBuffer(8 + 1 + 4*4)

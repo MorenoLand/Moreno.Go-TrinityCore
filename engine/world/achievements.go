@@ -744,7 +744,7 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 	if !inspectWithinDistance(s.player, target) {
 		return true
 	}
-	if inspectBlockedByHostility(s.player, target) {
+	if inspectBlockedByHostility(s, targetSession) {
 		return true
 	}
 
