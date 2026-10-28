@@ -35,9 +35,9 @@ import (
 //     die natively through the combat.go death sequence. The
 //     CONFIG_DIE_COMMAND_MODE kill branch and the DealDamage branch are
 //     unmodeled (documented gap).
-//   - `flusharenapoints` has no Go bridge: sArenaTeamMgr::
-//     DistributeArenaPoints (rating-driven point distribution + mail) is
-//     unbuilt.
+//   - `flusharenapoints` is bridged via Server.FlushWeeklyArenaPoints
+//     (arena_rating.go); the C++ SendWorldText announcements are not sent,
+//     the invoker gets a summary instead.
 //
 // Console-vs-chat LANG branches are moot (Go commands are always sessioned,
 // so the C++ "Console" name fallback is unreachable); GetNameLink/playerLink
@@ -942,10 +942,11 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Distance: %.2f (2D: %.2f, exact: %.2f, exact 2D: %.2f)", dist, dist2d, dist, dist2d))
 }
 
-// handleCmdFlushArenaPoints is the documented-blocked flusharenapoints arm
+// handleCmdFlushArenaPoints mirrors HandleFlushArenaPointsCommand
 // (cs_misc.cpp:2292-2296, RBAC 503): sArenaTeamMgr::DistributeArenaPoints
-// (rating-driven point distribution + mail) has no Go bridge. RBAC-gated
-// with an honest message, not a stub.
+// runs via Server.FlushWeeklyArenaPoints (arena_rating.go). C++ takes no
+// player and sends world-text announcements; Go keeps the sessioned-command
+// player gate and reports the total to the invoker instead.
 func (s *session) handleCmdFlushArenaPoints(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -954,7 +955,15 @@ func (s *session) handleCmdFlushArenaPoints(ctx context.Context, args []string) 
 	if s.miscDeny(ctx, permissionCommandFlushArenaPoints) {
 		return
 	}
-	s.sendSysMessage("Arena point distribution is unavailable: the Go tree has no arena-team point distribution bridge.")
+	if s.server == nil {
+		return
+	}
+	total, err := s.server.FlushWeeklyArenaPoints(ctx)
+	if err != nil {
+		s.sendSysMessage("Arena point distribution failed.")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Arena points distributed: %d points granted.", total))
 }
 
 // freezeAuraSpellID is the GM Freeze spell (cs_misc.cpp:2401).

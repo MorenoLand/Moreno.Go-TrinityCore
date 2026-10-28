@@ -69,10 +69,9 @@ func arenaTeamRatingLossMod(ownRating, opponentRating uint32, loseMod float64) i
 // CalculateArenaPoints calculates the weekly Arena Points awarded for a given rating and bracket type.
 // Mirrors TrinityCore ArenaTeam::GetPoints (ArenaTeam.cpp:622-646).
 func CalculateArenaPoints(rating uint32, teamType uint32, seasonID uint32) uint32 {
-	if rating <= 150 {
-		return 0
-	}
-
+	// ArenaTeam::GetPoints (ArenaTeam.cpp:622-646) has no rating floor: a
+	// member at rating <= 150 still earns the linear (season < 6) or flat
+	// 344 (season >= 6) points, bracket-multiplied below.
 	var points float64
 	if rating <= 1500 {
 		// Seasons before 6 use the linear formula; season 6+ awards a flat
@@ -134,8 +133,9 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 	// match start from the queued players' average); the end-of-match
 	// participants' average is its twin here.
 	winSlot := arenaTeamSlotByType(winType)
+	loseSlot := arenaTeamSlotByType(loseType)
 	winnerMMR := s.avgArenaMatchmakerRating(ctx, winnerMembers, winSlot)
-	loserMMR := s.avgArenaMatchmakerRating(ctx, loserMembers, winSlot)
+	loserMMR := s.avgArenaMatchmakerRating(ctx, loserMembers, loseSlot)
 
 	winnerChange := arenaGetRatingMod(winRating, loserMMR, true, winMod1, winMod2, loseMod)
 	winnerMMRChange := arenaGetMatchmakerRatingMod(winnerMMR, loserMMR, true, mmMod)
@@ -155,7 +155,7 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 
 	// Update winning team: games, wins, rank recompute (FinishGame).
 	var winRank uint32
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ?", winType, newWinRating).Scan(&winRank)
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ? AND arenaTeamId != ?", winType, newWinRating, winnerTeamID).Scan(&winRank)
 	_, err = cdb.ExecContext(ctx, `UPDATE arena_team SET rating = ?, weekGames = weekGames + 1, weekWins = weekWins + 1,
 		seasonGames = seasonGames + 1, seasonWins = seasonWins + 1, rank = ? WHERE arenaTeamId = ?`,
 		newWinRating, winRank, winnerTeamID)
@@ -168,7 +168,7 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 
 	// Update losing team.
 	var loseRank uint32
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ?", loseType, newLoseRating).Scan(&loseRank)
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*)+1 FROM arena_team WHERE type = ? AND rating > ? AND arenaTeamId != ?", loseType, newLoseRating, loserTeamID).Scan(&loseRank)
 	_, err = cdb.ExecContext(ctx, `UPDATE arena_team SET rating = ?, weekGames = weekGames + 1,
 		seasonGames = seasonGames + 1, rank = ? WHERE arenaTeamId = ?`, newLoseRating, loseRank, loserTeamID)
 	if err != nil {
@@ -203,7 +203,7 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 		_, _ = cdb.ExecContext(ctx, `UPDATE arena_team_member SET personalRating = ?,
 			weekGames = weekGames + 1, seasonGames = seasonGames + 1
 			WHERE arenaTeamId = ? AND guid = ?`, newPersonal, loserTeamID, mGUID)
-		s.applyArenaMMRChange(ctx, mGUID, winSlot, loserMMRChange)
+		s.applyArenaMMRChange(ctx, mGUID, loseSlot, loserMMRChange)
 		if sess := s.findSessionByGUID(mGUID); sess != nil {
 			sess.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
 		}
@@ -391,7 +391,12 @@ func (s *Server) FlushWeeklyArenaPoints(ctx context.Context) (totalGranted uint3
 		}
 	}
 
-	// Grant arena points to characters (respecting 10,000 cap)
+	// Grant arena points to characters, capped at the configured
+	// MaxArenaPoints (Player::SetArenaPoints, Player.cpp:7060-7064).
+	pointsCap := s.Config.MaxArenaPoints
+	if pointsCap == 0 {
+		pointsCap = ArenaPointsCap
+	}
 	for guid, pts := range playerMaxPoints {
 		if pts == 0 {
 			continue
@@ -399,8 +404,8 @@ func (s *Server) FlushWeeklyArenaPoints(ctx context.Context) (totalGranted uint3
 		var curPoints uint32
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(arenaPoints, 0) FROM characters WHERE guid = ?", guid).Scan(&curPoints)
 		newPoints := curPoints + pts
-		if newPoints > ArenaPointsCap {
-			newPoints = ArenaPointsCap
+		if newPoints > pointsCap {
+			newPoints = pointsCap
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET arenaPoints = ? WHERE guid = ?", newPoints, guid)
 		totalGranted += pts
@@ -418,6 +423,20 @@ func (s *Server) FlushWeeklyArenaPoints(ctx context.Context) (totalGranted uint3
 	// Reset weekGames and weekWins
 	_, _ = cdb.ExecContext(ctx, "UPDATE arena_team SET weekGames = 0, weekWins = 0")
 	_, _ = cdb.ExecContext(ctx, "UPDATE arena_team_member SET weekGames = 0, weekWins = 0")
+
+	// ArenaTeamMgr::DistributeArenaPoints (ArenaTeamMgr.cpp:177-184) calls
+	// NotifyStatsChanged for every team after FinishWeek, so online members
+	// see the reset week stats, not just the point earners.
+	teamRows, terr := cdb.QueryContext(ctx, "SELECT arenaTeamId, rating FROM arena_team")
+	if terr == nil {
+		defer teamRows.Close()
+		for teamRows.Next() {
+			var teamID, teamRating uint32
+			if teamRows.Scan(&teamID, &teamRating) == nil {
+				s.broadcastArenaTeamStats(teamID, teamRating)
+			}
+		}
+	}
 
 	return totalGranted, nil
 }
