@@ -275,15 +275,24 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		}
 	}
 	race, class, gender := values[0], values[1], values[2]
-	if disabled := s.server.Config.CharacterCreatingDisabled; disabled != 0 {
-		team := raceTeam(race)
-		if (team == 1 && disabled&1 != 0) || (team == 2 && disabled&2 != 0) {
-			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	// CharacterHandler.cpp:293: the team-mask gate is skipped for sessions
+	// holding RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK.
+	if !s.skipCharCreateTeammask {
+		if disabled := s.server.Config.CharacterCreatingDisabled; disabled != 0 {
+			team := raceTeam(race)
+			if (team == 1 && disabled&1 != 0) || (team == 2 && disabled&2 != 0) {
+				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+			}
 		}
 	}
 	raceAllowed, raceRequiredExpansion := s.server.raceDefinition(race)
 	classAllowed, classRequiredExpansion := s.server.classDefinition(class)
-	if !raceAllowed || !classAllowed {
+	// CharacterHandler.cpp:359-377: a race row that exists but is not
+	// playable answers CHAR_CREATE_DISABLED at the racemask gate, not
+	// CHAR_CREATE_FAILED — only an unknown race fails the lookup. The
+	// unplayable race falls through the lookup-fail and expansion gates
+	// (C++ checks expansions before the playable gate) and is caught below.
+	if !classAllowed || (!raceAllowed && !s.server.raceKnownUnplayable(race)) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
 	}
 	if raceRequiredExpansion > uint32(s.accountExpansion) {
@@ -292,11 +301,18 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if classRequiredExpansion > uint32(s.accountExpansion) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansionClass)
 	}
-	if s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	if !s.skipCharCreateRacemask {
+		if s.server.raceKnownUnplayable(race) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+		}
+		if s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+		}
 	}
-	if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	if !s.skipCharCreateClassmask {
+		if s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+		}
 	}
 	// CharacterHandler.cpp:277-377: every packet field is parsed up front,
 	// but name normalization runs after the creation-mask gates — a disabled
@@ -318,11 +334,14 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if name == "" {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameNoName)
 	}
-	// ObjectMgr::CheckPlayerName approximation (CharacterHandler.cpp:381-386):
-	// validCharacterName covers the length/alphabet arms; runs after the
-	// creation-mask gates, == C++ order.
-	if !validCharacterName(name) {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
+	// ObjectMgr::CheckPlayerName (CharacterHandler.cpp:381-386): C++ forwards
+	// the specific failure code to SendCharCreate — too short/long, mixed
+	// languages, three consecutive — not CHAR_CREATE_FAILED, and the
+	// three-consecutive arm (ObjectMgr.cpp:8620-8623) is a real gate the
+	// old bool check never enforced. Runs after the creation-mask gates,
+	// == C++ order.
+	if res := checkPlayerName(name); res != 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), res)
 	}
 	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact
 	// match against the reserved_name rows, gated on
@@ -336,7 +355,9 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charNameReserved)
 		}
 	}
-	if class == 6 {
+	// CharacterHandler.cpp:394: the death-knight arms are skipped for sessions
+	// holding RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT.
+	if class == 6 && !s.skipCharCreateDeathKnight {
 		if s.server.Config.DeathKnightsPerRealm == 0 {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
 		}
@@ -2378,6 +2399,20 @@ func playableRace(race uint8) bool {
 	default:
 		return false
 	}
+}
+
+// raceKnownUnplayable reports whether id names a ChrRaces row that exists
+// but is marked not playable (Alliance == NOT_PLAYABLE or the NOT_PLAYABLE
+// flag, wotlk.IsPlayableRace) — CharacterHandler.cpp:359-365 answers such a
+// race CHAR_CREATE_DISABLED at the racemask gate. Without DBC data the
+// fallback cannot distinguish known-but-unplayable from unknown, so it
+// reports false and the lookup-fail arm keeps answering FAILED there.
+func (s *Server) raceKnownUnplayable(id uint8) bool {
+	if s.Data == nil {
+		return false
+	}
+	race, found, err := s.Data.Race(uint32(id))
+	return err == nil && found && !wotlk.IsPlayableRace(race)
 }
 
 func (s *Server) raceDefinition(id uint8) (bool, uint32) {

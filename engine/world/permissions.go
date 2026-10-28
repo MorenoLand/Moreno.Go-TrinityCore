@@ -165,6 +165,18 @@ const permissionSkipCheckCharacterCreationReservedName uint32 = 17
 // rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RACEMASK (RBAC.h:69).
 const permissionSkipCheckCharacterCreationRacemask uint32 = 16
 
+// permissionSkipCheckCharacterCreationTeammask mirrors
+// rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK (RBAC.h:67).
+const permissionSkipCheckCharacterCreationTeammask uint32 = 14
+
+// permissionSkipCheckCharacterCreationClassmask mirrors
+// rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_CLASSMASK (RBAC.h:68).
+const permissionSkipCheckCharacterCreationClassmask uint32 = 15
+
+// permissionSkipCheckCharacterCreationDeathKnight mirrors
+// rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT (RBAC.h:71).
+const permissionSkipCheckCharacterCreationDeathKnight uint32 = 18
+
 // permissionSilentlyJoinChannel mirrors rbac::RBAC_PERM_SILENTLY_JOIN_CHANNEL (RBAC.h:98).
 const permissionSilentlyJoinChannel uint32 = 45
 

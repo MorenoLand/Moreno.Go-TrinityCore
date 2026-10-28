@@ -378,6 +378,15 @@ type session struct {
 	// (RBAC.h:70) at auth time; the char-customize handler answers CHAR_NAME_RESERVED
 	// without it (CharacterHandler.cpp:1445).
 	skipReservedNameCheck bool
+	// skipCharCreateTeammask / skipCharCreateRacemask / skipCharCreateClassmask /
+	// skipCharCreateDeathKnight cache rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_*
+	// (RBAC.h:67-69,71) at auth time; HandleCharCreateOpcode gates its team-mask,
+	// race-playable/mask, class-mask and death-knight arms on them
+	// (CharacterHandler.cpp:293, 359-377, 394).
+	skipCharCreateTeammask    bool
+	skipCharCreateRacemask    bool
+	skipCharCreateClassmask   bool
+	skipCharCreateDeathKnight bool
 	// ignoreIdleTimeout caches rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION (RBAC.h:60)
 	// at auth time so the idle-connection sweeper needs no per-tick DB lookup,
 	// mirroring WorldSession::Update's HasPermission check (WorldSession.cpp:290).
@@ -4788,6 +4797,22 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.skipReservedNameCheck, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationReservedName); err != nil {
 		s.skipReservedNameCheck = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationReservedName, "error", err)
+	}
+	if s.skipCharCreateTeammask, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationTeammask); err != nil {
+		s.skipCharCreateTeammask = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationTeammask, "error", err)
+	}
+	if s.skipCharCreateRacemask, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationRacemask); err != nil {
+		s.skipCharCreateRacemask = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationRacemask, "error", err)
+	}
+	if s.skipCharCreateClassmask, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationClassmask); err != nil {
+		s.skipCharCreateClassmask = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationClassmask, "error", err)
+	}
+	if s.skipCharCreateDeathKnight, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationDeathKnight); err != nil {
+		s.skipCharCreateDeathKnight = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationDeathKnight, "error", err)
 	}
 	for _, perm := range []struct {
 		id  uint32
