@@ -561,6 +561,18 @@ func (s *session) sendQuestRewardMail(ctx context.Context, questID uint32, giver
 }
 
 func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, []uint64, error) {
+	return s.commitQuestRewardOptions(ctx, view, choice, false, false)
+}
+
+// commitQuestRewardOptions is commitQuestReward with the two gates the
+// dungeon-finder grant must not apply. LFGMgr::FinishDungeon
+// (LFGMgr.cpp:1686-1696) calls Player::RewardQuest directly on a quest the
+// player never accepted: selection (firstQuest vs otherQuest) is the only
+// gate, so a quest already recorded for the day must still grant (the
+// otherQuest fallback), and DestroyItemCount never fails on a missing
+// required item — it just destroys what is there. The turn-in packet and
+// the tracking/GM paths keep both gates via commitQuestReward.
+func (s *session) commitQuestRewardOptions(ctx context.Context, view questRewardView, choice uint32, skipClaimedCheck, lenientTurnIn bool) ([]questItemGrant, []uint64, error) {
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
 	questState, err := s.loadQuestRewardPersistenceState(ctx, view.Detail.ID)
@@ -595,14 +607,16 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		_ = tx.Rollback()
 		return nil, nil, cause
 	}
-	if err := rejectClaimedQuestReward(ctx, tx, s.playerGUID, view.Detail.ID, questState); err != nil {
-		return rollback(err)
+	if !skipClaimedCheck {
+		if err := rejectClaimedQuestReward(ctx, tx, s.playerGUID, view.Detail.ID, questState); err != nil {
+			return rollback(err)
+		}
 	}
 	inventory, err := loadInventoryRewardRecords(ctx, tx, s.playerGUID)
 	if err != nil {
 		return rollback(err)
 	}
-	destroyedGUIDs, err := s.destroyQuestTurnInItems(ctx, tx, inventory, view, view.Detail.ID)
+	destroyedGUIDs, err := s.destroyQuestTurnInItems(ctx, tx, inventory, view, view.Detail.ID, lenientTurnIn)
 	if err != nil {
 		return rollback(err)
 	}
@@ -1316,7 +1330,7 @@ func (s *session) questMoneyChanged(ctx context.Context) {
 // source items (:15352); otherwise only the required count is destroyed.
 // Items without an item_template row are skipped, like the C++ null-template
 // arm.
-func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, view questRewardView, questID uint32) ([]uint64, error) {
+func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, view questRewardView, questID uint32, lenient bool) ([]uint64, error) {
 	type destroySpec struct {
 		entry      uint32
 		count      uint32
@@ -1376,7 +1390,7 @@ func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inven
 				return nil, err
 			}
 		}
-		if spec.strict && !spec.destroyAll && remaining != 0 {
+		if spec.strict && !lenient && !spec.destroyAll && remaining != 0 {
 			return nil, fmt.Errorf("required quest item %d is unavailable", spec.entry)
 		}
 	}

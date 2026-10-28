@@ -4466,6 +4466,12 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32, mapID uint
 		if !ok {
 			continue
 		}
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1686-1696): the grant runs
+		// before the reward packet, and it never suppresses the packet —
+		// a full inventory mails the overflow in C++ instead of failing
+		// the grant, so a Go grant error is logged and the packet still
+		// goes out (the overflow-mail arm is a documented residual).
+		sess.rewardDungeonFinderQuest(context.Background(), detail.ID)
 		_ = sess.sendLFGDungeonReward(context.Background(), rDungeon.Entry(), storedGroupDungeon, done, detail)
 	}
 }
@@ -4477,9 +4483,9 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32, mapID uint
 // GetRandomDungeonReward assign-before-break quirk), firstQuest unless
 // the player can no longer earn it, in which case otherQuest with
 // done set. ok is false when no quest template resolves, matching the
-// C++ continue arms — and the actual RewardQuest grant itself is not
-// done here (no Go DF-grant path exists yet); only the packet values
-// are ported.
+// C++ continue arms. The grant itself lives in rewardDungeonFinderQuest,
+// called by the finish loop before the reward packet, mirroring the
+// C++ RewardQuest-then-SendLfgPlayerReward order.
 func (s *session) lfgFinishDungeonReward(ctx context.Context, dungeonID uint32, level uint8) (questDetailData, bool, bool) {
 	var firstQuest, otherQuest uint32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
@@ -4525,6 +4531,35 @@ func (s *session) lfgFinishDungeonReward(ctx context.Context, dungeonID uint32, 
 		return other, true, true
 	}
 	return detail, false, true
+}
+
+// rewardDungeonFinderQuest mirrors the RewardQuest half of
+// LFGMgr::FinishDungeon (LFGMgr.cpp:1686-1696): RewardQuest(quest, 0,
+// nullptr, false) on a quest the player never accepted. There is no
+// quest-log gate to bypass — commitQuestReward never checked log state,
+// only the turn-in packet did — so the log-free property falls out of
+// calling commit directly, as rewardTrackingQuest already does for the
+// TRACKING arm. The DF options skip the claimed-window check (the
+// otherQuest fallback grants even when recorded for the day) and the
+// strict turn-in destroy (C++ DestroyItemCount never fails). Giver 0
+// skips the single questgiver-status packet and the turn-in chain in
+// applyQuestRewardGrants, matching the nullptr giver; announce=false
+// skips the quest-complete packet.
+func (s *session) rewardDungeonFinderQuest(ctx context.Context, questID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	view, err := s.loadQuestRewardView(ctx, questID)
+	if err != nil {
+		s.debug("dungeon-finder reward load failed", "account", s.accountName, "quest", questID, "error", err)
+		return
+	}
+	grants, destroyedGUIDs, err := s.commitQuestRewardOptions(ctx, view, 0, true, true)
+	if err != nil {
+		s.debug("dungeon-finder reward grant failed", "account", s.accountName, "quest", questID, "error", err)
+		return
+	}
+	s.applyQuestRewardGrants(ctx, view, questID, 0, 0, grants, destroyedGUIDs, false)
 }
 
 // sendLFGDungeonReward sends SMSG_LFG_PLAYER_REWARD (0x1FF) to the client,
