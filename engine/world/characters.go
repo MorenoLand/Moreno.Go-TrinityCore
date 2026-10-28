@@ -917,6 +917,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.breathTimer = -1
 	s.fatigueTimer = -1
 	s.player = &state
+	s.grantEarnedAchievementTitles()
 	s.restoreBattlegroundLoginQueue(state)
 	s.visiblePlayersMu.Lock()
 	s.visiblePlayers = nil

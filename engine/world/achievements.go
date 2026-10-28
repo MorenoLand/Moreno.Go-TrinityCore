@@ -998,6 +998,83 @@ func (s *session) updateAchievementCriteriaWithTarget(criterionType, asset uint3
 	}
 }
 
+// criterionCompleted mirrors AchievementMgr::IsCompletedCriteria
+// (AchievementMgr.cpp:1150-1245): the per-type completion threshold for a
+// criterion counter. Most types complete at counter >= Quantity; the
+// COMPLETE_ACHIEVEMENT/COMPLETE_QUEST/LEARN_SPELL/EXPLORE_AREA types at
+// >= 1; LEARN_SKILL_LEVEL at Quantity*75 (the DBC quantity counts 75-point
+// skill tiers, while the counter holds the raw skill value); WIN_ARENA
+// only when Quantity is nonzero; ON_LOGIN as soon as progress exists.
+// Statistic-only types (deaths, money, auction, highest-value and the
+// unimplemented raid/arena/rank types) fall through to false, exactly as
+// the C++ default arm does. EARN_ACHIEVEMENT_POINTS keeps the DBC quantity
+// when present and falls back to the C++ 9000 literal when it is 0.
+// Realm-first achievements return false while another character already
+// holds the realm completion (IsCompletedCriteria's realm arm), so a
+// second earner keeps accumulating but never completes.
+func (s *session) criterionCompleted(criterion achievementCriteriaEntry, counter uint32) bool {
+	// Realm-first arm first, matching IsCompletedCriteria's order: a
+	// realm-first achievement already held on the realm is never
+	// completed again, whatever the counter says.
+	if s != nil && s.player != nil {
+		achievementIndex.mu.RLock()
+		entry, hasEntry := achievementIndex.achieveByID[criterion.AchievementID]
+		achievementIndex.mu.RUnlock()
+		if hasEntry && entry.Flags&(achievementFlagRealmFirstReach|achievementFlagRealmFirstKill) != 0 &&
+			s.realmAchievementCompleted(context.Background(), criterion.AchievementID) {
+			return false
+		}
+	}
+	switch criterion.Type {
+	case criteriaTypeKillCreature, criteriaTypeWinBG, criteriaTypeReachLevel,
+		criteriaTypeReachSkillLevel, criteriaTypeQuestCount,
+		criteriaTypeCompleteDailyQuestDaily, criteriaTypeCompleteQuestsInZone,
+		criteriaTypeDamageDone, criteriaTypeCompleteDailyQuest,
+		criteriaTypeFallWithoutDying, criteriaTypeBeSpellTarget,
+		criteriaTypeBeSpellTarget2, criteriaTypeCastSpell, criteriaTypeCastSpell2,
+		criteriaTypeBGObjective, criteriaTypeHKAtArea, criteriaTypeHonorableKill,
+		criteriaTypeEarnHonorableKill, criteriaTypeOwnItem,
+		criteriaTypeWinRatedArena, criteriaTypeHighestPersonalRating,
+		criteriaTypeUseItem, criteriaTypeLootItem, criteriaTypeBuyBankSlot,
+		criteriaTypeGainReputation, criteriaTypeExaltedRep,
+		criteriaTypeVisitBarberShop, criteriaTypeEquipEpicItem,
+		criteriaTypeRollNeed, criteriaTypeRollGreed, criteriaTypeHKClass,
+		criteriaTypeHKRace, criteriaTypeDoEmote, criteriaTypeEquipItem,
+		criteriaTypeMoneyFromQuest, criteriaTypeLootMoney,
+		criteriaTypeUseGameObject, criteriaTypeSpecialPvPKill,
+		criteriaTypeFishInGameObject, criteriaTypeLearnSkillLineSpells,
+		criteriaTypeWinDuel, criteriaTypeLootType, criteriaTypeLearnSkillLine,
+		criteriaTypeUseLFDToGroup, criteriaTypeGetKillingBlows,
+		criteriaTypeHealingDone:
+		if counter < criterion.Quantity {
+			return false
+		}
+	case criteriaTypeCompleteAchievement, criteriaTypeCompleteQuest,
+		criteriaTypeLearnSpell, criteriaTypeExplore:
+		if counter < 1 {
+			return false
+		}
+	case criteriaTypeLearnSkillLevel:
+		if counter < criterion.Quantity*75 {
+			return false
+		}
+	case criteriaTypeWinArena:
+		if criterion.Quantity == 0 || counter < criterion.Quantity {
+			return false
+		}
+	case criteriaTypeOnLogin:
+		return true
+	case criteriaTypeEarnAchievementPoints:
+		if criterion.Quantity > 0 {
+			return counter >= criterion.Quantity
+		}
+		return counter >= 9000
+	default:
+		return false
+	}
+	return true
+}
+
 // applyCriteriaProgress applies one criterion's progress update: the
 // earned/requirements gates, counter advance, client update, DB persist,
 // and completion check shared by every criteria advance path.
@@ -1014,6 +1091,18 @@ func (s *session) applyCriteriaProgressWithTarget(criterion achievementCriteriaE
 	if !s.meetsCriteriaRequirementsWithTarget(criterion, quantity, asset, target) {
 		return
 	}
+	// SetCriteriaProgress (AchievementMgr.cpp:1355-1360): a timed criterion
+	// with no armed timer takes no progress at all ("Don't allow to cheat").
+	if criterion.StartTimer > 0 {
+		if _, running := s.timedCriteria[criterion.ID]; !running {
+			return
+		}
+	}
+	// CanUpdateCriteria (AchievementMgr.cpp:1676-1680): an already
+	// completed criterion is not updated again.
+	if progress := s.criteriaProgress[criterion.ID]; progress != nil && s.criterionCompleted(criterion, progress.Counter) {
+		return
+	}
 	progress := s.criteriaProgress[criterion.ID]
 	if progress == nil {
 		progress = &criteriaProgressState{CriteriaID: criterion.ID}
@@ -1027,7 +1116,7 @@ func (s *session) applyCriteriaProgressWithTarget(criterion achievementCriteriaE
 			"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, ?, ?)",
 			s.playerGUID, criterion.ID, progress.Counter, progress.Date)
 	}
-	if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+	if s.criterionCompleted(criterion, progress.Counter) {
 		s.stopTimedAchievement(criterion.ID)
 		s.checkAchievementComplete(criterion.AchievementID)
 	}
@@ -1101,6 +1190,14 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 		if !s.meetsCriteriaRequirements(criterion, value, asset) {
 			continue
 		}
+		if criterion.StartTimer > 0 {
+			if _, running := s.timedCriteria[criterion.ID]; !running {
+				continue
+			}
+		}
+		if progress := s.criteriaProgress[criterion.ID]; progress != nil && s.criterionCompleted(criterion, progress.Counter) {
+			continue
+		}
 		progress := s.criteriaProgress[criterion.ID]
 		if progress == nil {
 			progress = &criteriaProgressState{CriteriaID: criterion.ID}
@@ -1117,7 +1214,7 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 				"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, ?, ?)",
 				s.playerGUID, criterion.ID, progress.Counter, progress.Date)
 		}
-		if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+		if s.criterionCompleted(criterion, progress.Counter) {
 			s.checkAchievementComplete(criterion.AchievementID)
 		}
 	}
@@ -1285,7 +1382,7 @@ func (s *session) resetAchievementCriteriaByCondition(condition, value uint32) {
 			continue
 		}
 		if progress, ok := s.criteriaProgress[criterion.ID]; ok {
-			if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+			if s.criterionCompleted(criterion, progress.Counter) {
 				continue
 			}
 			s.removeCriteriaProgress(criterion.ID)
@@ -1359,7 +1456,7 @@ func (s *session) checkSingleAchievementComplete(achievementID uint32) {
 	completedCount := uint32(0)
 	for _, criterion := range criteria {
 		progress := s.criteriaProgress[criterion.ID]
-		if progress != nil && criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+		if progress != nil && s.criterionCompleted(criterion, progress.Counter) {
 			completedCount++
 		}
 	}
@@ -1435,9 +1532,78 @@ func (s *session) completeAchievement(achievementID uint32) {
 	achievementIndex.mu.RUnlock()
 	s.setAchievementCriteria(criteriaTypeEarnAchievementPoints, 0, totalPoints)
 
+	// CompletedAchievement (AchievementMgr.cpp:1533-1540) grants the
+	// achievement_reward title before the mail: TitleA for Alliance,
+	// TitleH for Horde, with the gender-indexed exception for
+	// achievement 1793. The mail path never granted it, so title-only
+	// rewards (Sender 0) granted nothing at all.
+	s.grantAchievementRewardTitle(achievementID)
+
 	// Reference: AchievementMgr::CompletedAchievement mails the configured
 	// achievement_reward row (AchievementMgr.cpp:1544-1578).
 	s.sendAchievementRewardMail(achievementID)
+}
+
+// grantAchievementRewardTitle mirrors the title arm of
+// AchievementMgr::CompletedAchievement and its LoadFromDB retroactive
+// leg (AchievementMgr.cpp:620-624, 1533-1540): the achievement_reward
+// TitleA/TitleH pair, indexed by team (Alliance 0, Horde 1) except
+// achievement 1793, which indexes by native gender. Player::SetTitle
+// (Player.cpp:24814) is a no-op when the MaskID bit is already set,
+// so the retroactive login pass only fires for titles the character
+// is still missing.
+func (s *session) grantAchievementRewardTitle(achievementID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil ||
+		s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var titleA, titleH uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(TitleA, 0), COALESCE(TitleH, 0) FROM achievement_reward WHERE ID = ?",
+		achievementID).Scan(&titleA, &titleH); err != nil {
+		return
+	}
+	titles := [2]uint32{titleA, titleH}
+	idx := int(teamForRace(s.player.Race))
+	if achievementID == 1793 && s.player.Gender <= 1 {
+		idx = int(s.player.Gender)
+	}
+	titleID := titles[idx]
+	if titleID == 0 {
+		return
+	}
+	title, found, err := s.server.Data.CharTitle(titleID)
+	if err != nil || !found {
+		return
+	}
+	if word := title.MaskID / 32; int(word) < len(s.player.KnownTitles) {
+		if s.player.KnownTitles[word]&(uint32(1)<<(title.MaskID%32)) == 0 {
+			s.player.KnownTitles[word] |= uint32(1) << (title.MaskID % 32)
+			s.persistTitles(context.Background(), s)
+			packet := protocol.NewBuffer(8)
+			packet.WriteU32(title.MaskID)
+			packet.WriteU32(1) // 1 - earned, 0 - lost
+			_ = s.write(uint16(protocol.OpcodeSMSG_TITLE_EARNED), packet.Bytes(), true)
+		}
+	}
+}
+
+// grantEarnedAchievementTitles is the LoadFromDB retroactive leg: every
+// already-earned achievement whose reward title the character is
+// missing grants it at login, in achievement-ID order.
+func (s *session) grantEarnedAchievementTitles() {
+	if s == nil || s.player == nil {
+		return
+	}
+	ids := make([]uint32, 0, len(s.earnedAchievements))
+	for id := range s.earnedAchievements {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		s.grantAchievementRewardTitle(id)
+	}
 }
 
 // broadcastRealmFirstAchievement mirrors the realm-first arm of
