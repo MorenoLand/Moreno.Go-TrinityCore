@@ -3762,14 +3762,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): a
 					// creature-cast AoE hits every enemy in the area, so the
 					// GO packet's hit list extends past the wire victim.
-					for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+					enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest)
+					for _, areaHit := range enemyPlayers {
 						areaHits = append(areaHits, areaHit)
 						hitTargets = append(hitTargets, areaHit.GUID)
 					}
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): the
 					// area also picks enemy creatures (creatureAIAreaEnemyCreatures),
 					// not just enemy players — their GUIDs join the GO hit list too.
-					for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+					for _, areaCreatureGUID := range enemyCreatures {
 						areaCreatureHits = append(areaCreatureHits, areaCreatureGUID)
 						hitTargets = append(hitTargets, areaCreatureGUID)
 					}
@@ -3799,7 +3800,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// would otherwise double-hit in the area damage/dispatch loops below.
 					if hasFriendlyAreaEffect(spellInfo) {
 						allyOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
-						allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+						allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 						for _, allyHit := range allyPlayers {
 							if allyHit == nil || allyHit.GUID == 0 {
 								continue
@@ -3817,7 +3818,6 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							areaHits = append(areaHits, allyHit)
 							hitTargets = append(hitTargets, allyHit.GUID)
 						}
-						allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 						for _, allyCreatureGUID := range allyCreatures {
 							if allyCreatureGUID == 0 {
 								continue
@@ -4073,7 +4073,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					if isAreaEnemySpell(inlineSpell) {
 						pickVictim := &playerPos{GUID: nearby}
-						for _, areaHit := range s.creatureAIAreaEnemyPlayers(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest) {
+						enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest)
+						for _, areaHit := range enemyPlayers {
 							if areaHit == nil || areaHit.GUID == 0 {
 								continue
 							}
@@ -4090,7 +4091,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							areaHits = append(areaHits, areaHit)
 							hitTargets = append(hitTargets, areaHit.GUID)
 						}
-						for _, areaCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest) {
+						for _, areaCreatureGUID := range enemyCreatures {
 							if areaCreatureGUID == 0 {
 								continue
 							}

@@ -3650,20 +3650,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
-				areaHits = s.server.creatureAIAreaEnemyPlayers(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
-				areaCreatureHits = s.server.creatureAIAreaEnemyCreatures(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
+				areaHits, areaCreatureHits = s.server.creatureAIAreaEnemyTargets(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
 			}
 			if hasFriendlyAreaEffect(spell) {
-				var playerChecks, creatureChecks map[uint64]uint8
-				areaAllyHits, playerChecks = s.server.creatureAIAreaAllyPlayers(ctx, motion, spell, victimPos, s, dx, dy, dz, hasDest)
-				areaAllyCreatureHits, creatureChecks = s.server.creatureAIAreaAllyCreatures(ctx, motion, spell, victimPos, s, dx, dy, dz, hasDest)
-				areaAllyChecks = make(map[uint64]uint8, len(playerChecks)+len(creatureChecks))
-				for guid, bits := range playerChecks {
-					areaAllyChecks[guid] = bits
-				}
-				for guid, bits := range creatureChecks {
-					areaAllyChecks[guid] |= bits
-				}
+				areaAllyHits, areaAllyCreatureHits, areaAllyChecks = s.server.creatureAIAreaAllyTargets(ctx, motion, spell, victimPos, s, dx, dy, dz, hasDest)
 			}
 			if isEntryAreaSpell(spell) {
 				// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):

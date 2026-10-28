@@ -1745,24 +1745,24 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				hitTargets = append(hitTargets, guid)
 			}
 			if isAreaEnemySpell(spellInfo) {
-				for _, enemyHit := range s.creatureAIAreaEnemyPlayers(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+				enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest)
+				for _, enemyHit := range enemyPlayers {
 					if enemyHit != nil {
 						appendAreaGUID(enemyHit.GUID)
 					}
 				}
-				for _, enemyCreatureGUID := range s.creatureAIAreaEnemyCreatures(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest) {
+				for _, enemyCreatureGUID := range enemyCreatures {
 					appendAreaGUID(enemyCreatureGUID)
 				}
 			}
 			if hasFriendlyAreaEffect(spellInfo) {
 				allyOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
-				allyPlayers, _ := s.creatureAIAreaAllyPlayers(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+				allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 				for _, allyHit := range allyPlayers {
 					if allyHit != nil {
 						appendAreaGUID(allyHit.GUID)
 					}
 				}
-				allyCreatures, _ := s.creatureAIAreaAllyCreatures(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
 				for _, allyCreatureGUID := range allyCreatures {
 					appendAreaGUID(allyCreatureGUID)
 				}

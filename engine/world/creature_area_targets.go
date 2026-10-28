@@ -112,10 +112,9 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 // creature-vs-creature template verdict (factionTemplatesHostile —
 // reputation terms are player-only in C++, Object.cpp:2708-2840),
 // cylinder area (Spell.cpp:8409), cone arc + line of sight
-// (Spell.cpp:7479-7492). MaxAffectedTargets caps this list alone:
-// C++ caps the merged player+creature area list (Spell.cpp:1293), so a
-// mixed area can exceed the cap by the overlap — the same approximation
-// the player twin already makes for its own list.
+// (Spell.cpp:7479-7492). The merged player+creature MaxAffectedTargets
+// cap lives in creatureAIAreaEnemyTargets: C++ caps the merged area
+// list (Spell.cpp:1293), not each half.
 func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, destX, destY, destZ float32, hasDest bool) []uint64 {
 	if s == nil || motion == nil || victim == nil || !isAreaEnemySpell(spell) {
 		return nil
@@ -248,15 +247,6 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 				hits = append(hits, guid)
 			}
 		}
-	}
-	// Spell.cpp:1293: MaxAffectedTargets caps the area list, then
-	// Trinity::Containers::RandomResize keeps that many chosen uniformly at
-	// random (shuffle + truncate draws the same uniform subset). The motion
-	// has no aura model, so no SPELL_AURA_MOD_MAX_AFFECTED_TARGETS term
-	// applies.
-	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
-		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
-		hits = hits[:maxTargets]
 	}
 	return hits
 }
@@ -671,15 +661,6 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		hits = append(hits, &cp)
 	}
 	s.sessionsMu.RUnlock()
-	// Spell.cpp:1293: MaxAffectedTargets caps the area list, then
-	// Trinity::Containers::RandomResize keeps that many chosen uniformly at
-	// random (shuffle + truncate draws the same uniform subset). The motion
-	// has no aura model, so no SPELL_AURA_MOD_MAX_AFFECTED_TARGETS term
-	// applies.
-	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
-		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
-		hits = hits[:maxTargets]
-	}
 	return hits
 }
 
@@ -843,8 +824,8 @@ func petAreaAllyGroupScope(server *Server, owner *session) (ownerGUID uint64, in
 // the cylinder area (Spell.cpp:8409) and line of sight from the center
 // (Spell.cpp:7479-7481). The wire victim is excluded (it rides the wire
 // leg; C++ merges it into one TargetInfo, AddUnitTarget Spell.cpp:2152).
-// Returns the extra player hits plus each hit's check bits; the MaxTargets
-// cap mirrors the enemy twin (Spell.cpp:1293, shuffle + truncate).
+// Returns the extra player hits plus each hit's check bits; the merged
+// player+creature MaxTargets cap lives in creatureAIAreaAllyTargets.
 func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]*playerPos, map[uint64]uint8) {
 	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
 		return nil, nil
@@ -902,19 +883,6 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 		hits = append(hits, &cp)
 	}
 	s.sessionsMu.RUnlock()
-	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
-		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
-		hits = hits[:maxTargets]
-		kept := make(map[uint64]struct{}, len(hits))
-		for _, hit := range hits {
-			kept[hit.GUID] = struct{}{}
-		}
-		for guid := range checks {
-			if _, ok := kept[guid]; !ok {
-				delete(checks, guid)
-			}
-		}
-	}
 	return hits, checks
 }
 
@@ -1040,20 +1008,77 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 			}
 		}
 	}
-	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(hits)) > maxTargets {
-		rand.Shuffle(len(hits), func(a, b int) { hits[a], hits[b] = hits[b], hits[a] })
-		hits = hits[:maxTargets]
-		kept := make(map[uint64]struct{}, len(hits))
-		for _, guid := range hits {
-			kept[guid] = struct{}{}
+	return hits, checks
+}
+
+// creatureAIAreaEnemyTargets merges the enemy player and creature sweeps
+// under one MaxAffectedTargets cap: C++ SelectImplicitAreaTargets
+// (Spell.cpp:1227) collects players and creatures into a single list and
+// RandomResize caps that merged list (Spell.cpp:1293), so capping each
+// half separately let a mixed area exceed the cap by up to 2x. The motion
+// has no aura model, so no SPELL_AURA_MOD_MAX_AFFECTED_TARGETS term
+// applies, like the twins.
+func (s *Server) creatureAIAreaEnemyTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, destX, destY, destZ float32, hasDest bool) ([]*playerPos, []uint64) {
+	players := s.creatureAIAreaEnemyPlayers(ctx, motion, spell, victim, destX, destY, destZ, hasDest)
+	creatures := s.creatureAIAreaEnemyCreatures(ctx, motion, spell, victim, destX, destY, destZ, hasDest)
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(players))+uint32(len(creatures)) > maxTargets {
+		order := make([]int, 0, len(players)+len(creatures))
+		for i := range players {
+			order = append(order, i)
 		}
-		for guid := range checks {
-			if _, ok := kept[guid]; !ok {
-				delete(checks, guid)
+		for j := range creatures {
+			order = append(order, len(players)+j)
+		}
+		rand.Shuffle(len(order), func(a, b int) { order[a], order[b] = order[b], order[a] })
+		keptPlayers := make([]*playerPos, 0, maxTargets)
+		keptCreatures := make([]uint64, 0, maxTargets)
+		for _, idx := range order[:maxTargets] {
+			if idx < len(players) {
+				keptPlayers = append(keptPlayers, players[idx])
+			} else {
+				keptCreatures = append(keptCreatures, creatures[idx-len(players)])
 			}
 		}
+		return keptPlayers, keptCreatures
 	}
-	return hits, checks
+	return players, creatures
+}
+
+// creatureAIAreaAllyTargets is the ally twin of
+// creatureAIAreaEnemyTargets: one merged MaxAffectedTargets cap over the
+// player and creature ally sweeps (Spell.cpp:1293), with the check bits
+// pruned to the kept GUIDs.
+func (s *Server) creatureAIAreaAllyTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]*playerPos, []uint64, map[uint64]uint8) {
+	players, playerChecks := s.creatureAIAreaAllyPlayers(ctx, motion, spell, victim, owner, destX, destY, destZ, hasDest)
+	creatures, creatureChecks := s.creatureAIAreaAllyCreatures(ctx, motion, spell, victim, owner, destX, destY, destZ, hasDest)
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(players))+uint32(len(creatures)) > maxTargets {
+		order := make([]int, 0, len(players)+len(creatures))
+		for i := range players {
+			order = append(order, i)
+		}
+		for j := range creatures {
+			order = append(order, len(players)+j)
+		}
+		rand.Shuffle(len(order), func(a, b int) { order[a], order[b] = order[b], order[a] })
+		keptPlayers := make([]*playerPos, 0, maxTargets)
+		keptCreatures := make([]uint64, 0, maxTargets)
+		for _, idx := range order[:maxTargets] {
+			if idx < len(players) {
+				keptPlayers = append(keptPlayers, players[idx])
+			} else {
+				keptCreatures = append(keptCreatures, creatures[idx-len(players)])
+			}
+		}
+		players, creatures = keptPlayers, keptCreatures
+	}
+	checks := make(map[uint64]uint8, len(players)+len(creatures))
+	for _, hit := range players {
+		checks[hit.GUID] |= playerChecks[hit.GUID]
+	}
+	for _, guid := range creatures {
+		checks[guid] |= creatureChecks[guid]
+	}
+	return players, creatures, checks
 }
 
 // applyInlineCreatureSpellHit runs the per-hit legs of the inline AI
