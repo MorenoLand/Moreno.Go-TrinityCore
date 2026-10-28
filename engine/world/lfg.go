@@ -114,14 +114,15 @@ const (
 
 	// LFG script auras (LFGMgr.h:51-54,61): cast by the LFGPlayerScript /
 	// LFGGroupScript arms in LFGScripts.cpp.
-	lfgSpellDungeonCooldown = 71328 // LFG_SPELL_DUNGEON_COOLDOWN
-	lfgSpellDungeonDeserter = 71041 // LFG_SPELL_DUNGEON_DESERTER
-	lfgSpellLuckOfTheDraw   = 72221 // LFG_SPELL_LUCK_OF_THE_DRAW
-	lfgGroupKickVotesNeeded = 3     // LFG_GROUP_KICK_VOTES_NEEDED (LFGMgr.h:54)
-	lfgTimeBoot             = 120   // LFG_TIME_BOOT (LFGMgr.h:48, seconds)
-	lfgTimeRoleCheck        = 45    // LFG_TIME_ROLECHECK (LFGMgr.h:47, seconds)
-	lfgGroupMaxKicks        = 3     // LFG_GROUP_MAX_KICKS (LFGGroupData.h:28)
-	lfgFlagSeasonal         = 0x4   // LFG_FLAG_SEASONAL
+	lfgSpellDungeonCooldown = 71328            // LFG_SPELL_DUNGEON_COOLDOWN
+	lfgSpellDungeonDeserter = 71041            // LFG_SPELL_DUNGEON_DESERTER
+	lfgSpellLuckOfTheDraw   = 72221            // LFG_SPELL_LUCK_OF_THE_DRAW
+	lfgGroupKickVotesNeeded = 3                // LFG_GROUP_KICK_VOTES_NEEDED (LFGMgr.h:54)
+	lfgTimeBoot             = 120              // LFG_TIME_BOOT (LFGMgr.h:48, seconds)
+	lfgTimeRoleCheck        = 45               // LFG_TIME_ROLECHECK (LFGMgr.h:47, seconds)
+	lfgGroupMaxKicks        = 3                // LFG_GROUP_MAX_KICKS (LFGGroupData.h:28)
+	lfgQueueUpdateInterval  = 15 * time.Second // LFG_QUEUEUPDATE_INTERVAL (LFGMgr.h:50)
+	lfgFlagSeasonal         = 0x4              // LFG_FLAG_SEASONAL
 )
 
 type LFGQueueEntry struct {
@@ -169,6 +170,13 @@ type LFGProposal struct {
 	Players    map[uint64]*LFGProposalPlayer
 }
 
+// lfgWaitTime mirrors LfgWaitTime (LFGQueue.h:70-75): the running-average
+// wait for one dungeon, starting at -1 with zero samples.
+type lfgWaitTime struct {
+	time   int32
+	number uint32
+}
+
 type LFGManager struct {
 	mu              sync.RWMutex
 	soloEnable      bool
@@ -179,6 +187,10 @@ type LFGManager struct {
 	roleChecks      map[uint64]*LfgRoleCheck
 	proposals       map[uint32]*LFGProposal
 	groupQueue      map[uint64]*LFGGroupQueueEntry
+	waitAvg         map[uint32]lfgWaitTime
+	waitTank        map[uint32]lfgWaitTime
+	waitHealer      map[uint32]lfgWaitTime
+	waitDps         map[uint32]lfgWaitTime
 	nextProposalID  uint32
 	validateDungeon func(uint32) bool
 }
@@ -192,6 +204,10 @@ func NewLFGManager(soloEnable bool) *LFGManager {
 		roleChecks: make(map[uint64]*LfgRoleCheck),
 		proposals:  make(map[uint32]*LFGProposal),
 		groupQueue: make(map[uint64]*LFGGroupQueueEntry),
+		waitAvg:    make(map[uint32]lfgWaitTime),
+		waitTank:   make(map[uint32]lfgWaitTime),
+		waitHealer: make(map[uint32]lfgWaitTime),
+		waitDps:    make(map[uint32]lfgWaitTime),
 	}
 }
 
@@ -925,6 +941,49 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 	// first accept of any proposal.
 	if allAgree || m.solo {
 		prop.State = LFGProposalSuccess
+		// LFGMgr::UpdateProposal (LFGMgr.cpp:1240-1283): success records
+		// each member's queue wait into the per-dungeon stores before the
+		// queue entries are dropped. The dungeon is the member's first
+		// selected dungeon (the C++ set's begin), the join time the group
+		// entry's for grouped members, and the role the stored queue role
+		// with the leader bit stripped; a single role selects its store,
+		// anything else the average. The C++ wait divides a time_t second
+		// difference by IN_MILLISECONDS, so waits under ~16.7 minutes
+		// record as 0 — replicated verbatim.
+		nowUnix := time.Now().Unix()
+		for pguid, player := range prop.Players {
+			dungeonID := prop.DungeonID
+			joinUnix := nowUnix
+			role := player.Role
+			if entry, ok := m.queue[pguid]; ok {
+				if d, ok := lfgMinDungeon(entry.Dungeons); ok {
+					dungeonID = d
+				}
+				joinUnix = entry.QueuedAt.Unix()
+				role = entry.Roles
+			}
+			if player.Group != 0 {
+				if gentry, ok := m.groupQueue[player.Group]; ok {
+					joinUnix = gentry.QueuedAt.Unix()
+					if _, ok := m.queue[pguid]; !ok {
+						if d, ok := lfgMinDungeon(gentry.Dungeons); ok {
+							dungeonID = d
+						}
+					}
+				}
+			}
+			waitTime := int32((nowUnix - joinUnix) / 1000)
+			switch role &^ LFGRoleLeader {
+			case LFGRoleDamage:
+				m.updateLFGWaitTime(m.waitDps, waitTime, dungeonID)
+			case LFGRoleHealer:
+				m.updateLFGWaitTime(m.waitHealer, waitTime, dungeonID)
+			case LFGRoleTank:
+				m.updateLFGWaitTime(m.waitTank, waitTime, dungeonID)
+			default:
+				m.updateLFGWaitTime(m.waitAvg, waitTime, dungeonID)
+			}
+		}
 		// LFGMgr::UpdateProposal (LFGMgr.cpp:1291-1293): players leave the
 		// queue when the proposal succeeds.
 		for pguid := range prop.Players {
@@ -934,6 +993,194 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 		delete(m.proposals, proposalID)
 	}
 	return prop, true
+}
+
+// updateLFGWaitTime mirrors LFGQueue::UpdateWaitTimeAvg/Tank/Healer/Dps
+// (LFGQueue.cpp:205-232): the running average over all recorded waits.
+func (m *LFGManager) updateLFGWaitTime(store map[uint32]lfgWaitTime, waitTime int32, dungeonID uint32) {
+	wt := store[dungeonID]
+	old := wt.number
+	wt.number++
+	wt.time = (wt.time*int32(old) + waitTime) / int32(wt.number)
+	store[dungeonID] = wt
+}
+
+func lfgWaitTimeOf(store map[uint32]lfgWaitTime, dungeonID uint32) int32 {
+	if wt, ok := store[dungeonID]; ok {
+		return wt.time
+	}
+	return -1
+}
+
+// lfgQueueWaitTime mirrors the role switch in LFGQueue::UpdateQueueTimers
+// (LFGQueue.cpp:609-625): a single role selects its store, anything else
+// (none or mixed) the average.
+func lfgQueueWaitTime(role uint8, avg, tank, healer, dps int32) int32 {
+	switch role {
+	case LFGRoleNone:
+		return -1
+	case LFGRoleTank:
+		return tank
+	case LFGRoleHealer:
+		return healer
+	case LFGRoleDamage:
+		return dps
+	default:
+		return avg
+	}
+}
+
+func lfgMinDungeon(dungeons []uint32) (uint32, bool) {
+	if len(dungeons) == 0 {
+		return 0, false
+	}
+	min := dungeons[0]
+	for _, d := range dungeons[1:] {
+		if d < min {
+			min = d
+		}
+	}
+	return min, true
+}
+
+// lfgQueueStatus is one LfgQueueStatusData (LFGMgr.h:178-192) for a single
+// queue unit: a group entry plus its members, or one solo player.
+type lfgQueueStatus struct {
+	dungeonID  uint32
+	waitTime   int32
+	waitAvg    int32
+	waitTank   int32
+	waitHealer int32
+	waitDps    int32
+	queuedTime uint32
+	recipients []uint64
+}
+
+// QueueStatuses mirrors LFGQueue::UpdateQueueTimers (LFGQueue.cpp:589-640):
+// one status per queue unit — a group entry sent to every member, a solo
+// entry to its player — with the first selected dungeon, the queued
+// seconds, and the role-derived wait. Queue data survives a pending
+// proposal until success, so state is deliberately not filtered: C++
+// sends the status to proposal members too. The bestCompatible refresh
+// (LFGQueue.cpp:631-632) has no twin: Go's matcher recomputes combos
+// every tick and keeps no cached compatible string to refresh.
+func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	grouped := make(map[uint64]bool)
+	var groupIDs []uint64
+	for groupID, entry := range m.groupQueue {
+		groupIDs = append(groupIDs, groupID)
+		for guid := range entry.Roles {
+			grouped[guid] = true
+		}
+	}
+	sort.Slice(groupIDs, func(i, j int) bool { return groupIDs[i] < groupIDs[j] })
+	var out []lfgQueueStatus
+	for _, groupID := range groupIDs {
+		entry := m.groupQueue[groupID]
+		dungeonID, ok := lfgMinDungeon(entry.Dungeons)
+		if !ok {
+			continue
+		}
+		role := uint8(0)
+		var guids []uint64
+		for guid, r := range entry.Roles {
+			role |= r
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		role &^= LFGRoleLeader
+		queued := now.Unix() - entry.QueuedAt.Unix()
+		if queued < 0 {
+			queued = 0
+		}
+		out = append(out, lfgQueueStatus{
+			dungeonID:  dungeonID,
+			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
+			waitAvg:    lfgWaitTimeOf(m.waitAvg, dungeonID),
+			waitTank:   lfgWaitTimeOf(m.waitTank, dungeonID),
+			waitHealer: lfgWaitTimeOf(m.waitHealer, dungeonID),
+			waitDps:    lfgWaitTimeOf(m.waitDps, dungeonID),
+			queuedTime: uint32(queued),
+			recipients: guids,
+		})
+	}
+	var soloGUIDs []uint64
+	for guid := range m.queue {
+		if !grouped[guid] {
+			soloGUIDs = append(soloGUIDs, guid)
+		}
+	}
+	sort.Slice(soloGUIDs, func(i, j int) bool { return soloGUIDs[i] < soloGUIDs[j] })
+	for _, guid := range soloGUIDs {
+		entry := m.queue[guid]
+		dungeonID, ok := lfgMinDungeon(entry.Dungeons)
+		if !ok {
+			continue
+		}
+		queued := now.Unix() - entry.QueuedAt.Unix()
+		if queued < 0 {
+			queued = 0
+		}
+		role := entry.Roles &^ LFGRoleLeader
+		out = append(out, lfgQueueStatus{
+			dungeonID:  dungeonID,
+			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
+			waitAvg:    lfgWaitTimeOf(m.waitAvg, dungeonID),
+			waitTank:   lfgWaitTimeOf(m.waitTank, dungeonID),
+			waitHealer: lfgWaitTimeOf(m.waitHealer, dungeonID),
+			waitDps:    lfgWaitTimeOf(m.waitDps, dungeonID),
+			queuedTime: uint32(queued),
+			recipients: []uint64{guid},
+		})
+	}
+	return out
+}
+
+// sendLFGQueueStatus mirrors WorldSession::SendLfgQueueStatus
+// (LFGHandler.cpp:455-478): the packet writes the average wait before
+// the role wait, and the needs bytes are the LfgQueueData ctor constants,
+// not queue-derived counts.
+func (s *session) sendLFGQueueStatus(status lfgQueueStatus) error {
+	packet := protocol.NewBuffer(4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 4)
+	packet.WriteU32(status.dungeonID)
+	packet.WriteI32(status.waitAvg)
+	packet.WriteI32(status.waitTime)
+	packet.WriteI32(status.waitTank)
+	packet.WriteI32(status.waitHealer)
+	packet.WriteI32(status.waitDps)
+	packet.WriteU8(lfgTanksNeeded)
+	packet.WriteU8(lfgHealersNeeded)
+	packet.WriteU8(lfgDPSNeeded)
+	packet.WriteU32(status.queuedTime)
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_QUEUE_STATUS), packet.Bytes(), true)
+}
+
+// updateLFGQueueTimers mirrors the queue-update arm of LFGMgr::Update
+// (LFGMgr.cpp:382-391): once the timer exceeds the interval it resets
+// and every queued player gets the status packet, otherwise the timer
+// just accumulates the tick diff. The finder+browser-disabled skip is
+// the LFGMgr::Update head return (LFGMgr.cpp:294-296).
+func (s *Server) updateLFGQueueTimers(now time.Time, diff time.Duration) {
+	if s == nil || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	if s.lfgQueueTimer > lfgQueueUpdateInterval {
+		s.lfgQueueTimer = 0
+		for _, status := range s.Features.LFG.QueueStatuses(now) {
+			for _, guid := range status.recipients {
+				if ms := s.findSessionByGUID(guid); ms != nil {
+					_ = ms.sendLFGQueueStatus(status)
+				}
+			}
+		}
+	} else {
+		s.lfgQueueTimer += diff
+	}
 }
 
 // canJoinDungeonFinder mirrors the HasPermission gate at the head of

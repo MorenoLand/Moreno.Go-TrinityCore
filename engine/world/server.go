@@ -268,6 +268,7 @@ type Server struct {
 	creatureStatsCache     map[uint32]creatureStats
 	groupRolls             map[lootRollKey]*activeGroupRoll
 	lfgBoots               map[uint64]*lfgPlayerBoot // active LFG kick votes by group ID (LFGMgr::BootsStore)
+	lfgQueueTimer          time.Duration             // LFGMgr::m_QueueTimer (LFGMgr.cpp:384-391)
 	spiritWaveMu           sync.Mutex
 	lastSpiritWave         time.Time
 	lastCorpseExpiry       time.Time
@@ -1423,6 +1424,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateLFGRoleCheckExpiry(now)
 			s.updateLFGProposalExpiry(now)
 			s.updateLFGFindGroups()
+			s.updateLFGQueueTimers(now, diff)
 			s.updateRestedBonuses(ctx, now)
 			if !s.respawnTimesLoaded {
 				s.cleanupExpiredInstanceSaves(ctx)
