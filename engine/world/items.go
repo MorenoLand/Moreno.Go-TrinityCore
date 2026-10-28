@@ -3737,7 +3737,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				if tplSpellID == 0 {
 					continue
 				}
-				if spell, found, sErr := s.server.Data.Spell(uint32(tplSpellID)); sErr == nil && found && spell.Attributes&spellAttr0CantUsedInCombat == 0 {
+				if spell, found, sErr := s.server.Data.Spell(uint32(tplSpellID)); sErr == nil && found && spell.Attributes&spellAttr0CantUsedInCombat != 0 {
 					s.sendEquipError(equipErrNotInCombat, fullItemGUID)
 					return true
 				}
@@ -5785,13 +5785,14 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 	}
 
 	// SpellHandler.cpp:221-229 — only items flagged lootable (ITEM_FLAG_HAS_LOOT
-	// 0x4, ItemTemplate.h:154) or wrapped (a character_gifts row, the async
-	// HandleOpenWrappedItemCallback arm) can be opened at all.
+	// 0x4, ItemTemplate.h:154) or wrapped (ITEM_FIELD_FLAG_WRAPPED 0x8 on the
+	// item instance, Item.h:100 — the character_gifts row is only the async
+	// HandleOpenWrappedItemCallback payload, not the wrapped test) can be opened.
 	wrapped := false
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		var giftCount int64
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftCount)
-		wrapped = giftCount > 0
+		var instFlags int64
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ?", itemGUID).Scan(&instFlags)
+		wrapped = instFlags&int64(itemInstanceFlagWrapped) != 0
 	}
 	var tplFlags, lockID int64
 	tplFound := false
@@ -5831,6 +5832,14 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ?, giftCreatorGuid = 0 WHERE guid = ?", giftEntry, giftFlags, itemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
 			_ = s.sendInventoryItems(ctx)
+			return true
+		}
+		if wrapped && err != nil {
+			// HandleOpenWrappedItemCallback (SpellHandler.cpp:272-279): a
+			// still-wrapped item whose gift row is gone is destroyed, not
+			// opened as a container — the gift-row proxy used to fall
+			// through to the loot path here instead.
+			s.destroyItemInstance(ctx, uint64(itemGUID))
 			return true
 		}
 
