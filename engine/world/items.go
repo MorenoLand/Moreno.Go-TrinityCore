@@ -5359,6 +5359,14 @@ func (s *session) getEquippedBags(ctx context.Context, playerGUID uint64) []equi
 }
 
 func (s *session) freeInventorySlotForPlayer(ctx context.Context, playerGUID uint64, bagKey int64) (uint8, bool) {
+	return s.freeInventorySlotForPlayerExcept(ctx, playerGUID, bagKey, -1)
+}
+
+// freeInventorySlotForPlayerExcept mirrors freeInventorySlotForPlayer, but
+// the exceptSlot row scans as empty: CanStoreItem_InBag ignores the moved
+// item itself (Player.cpp:10614-10617, pItem2 == pSrcItem leg), so an
+// already-banked item's own interior slot is a free place for its own move.
+func (s *session) freeInventorySlotForPlayerExcept(ctx context.Context, playerGUID uint64, bagKey int64, exceptSlot int) (uint8, bool) {
 	first, last := int64(invSlotItemStart), int64(invSlotItemEnd-1)
 	if bagKey != 0 {
 		first, last = 0, 35
@@ -5385,6 +5393,9 @@ func (s *session) freeInventorySlotForPlayer(ctx context.Context, playerGUID uin
 	for rows.Next() {
 		var slot int64
 		if rows.Scan(&slot) == nil {
+			if exceptSlot >= 0 && slot == int64(exceptSlot) {
+				continue
+			}
 			used[slot] = struct{}{}
 		}
 	}
@@ -5398,6 +5409,10 @@ func (s *session) freeInventorySlotForPlayer(ctx context.Context, playerGUID uin
 
 func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, bool) {
 	return s.freeInventorySlotForPlayer(ctx, s.playerGUID, bagKey)
+}
+
+func (s *session) freeInventorySlotExcept(ctx context.Context, bagKey int64, exceptSlot uint8) (uint8, bool) {
+	return s.freeInventorySlotForPlayerExcept(ctx, s.playerGUID, bagKey, int(exceptSlot))
 }
 
 // freeSlotRef is one free inventory position: the character_inventory bag key

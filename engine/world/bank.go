@@ -179,7 +179,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	// SMSG_BUY_BANK_SLOT_RESULT carries only the u32 result (BankPackets.h:60-67);
 	// the banker GUID is not echoed back.
 	res.WriteU32(bankSlotResultOK)
-	s.updateAchievementCriteria(criteriaTypeBuyBankSlot, 0, 1)
+	s.setAchievementCriteria(criteriaTypeBuyBankSlot, 0, uint32(newCount))
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
@@ -240,7 +240,7 @@ func itemCanGoIntoBag(bagClass, bagSubClass uint32, itemBagFamily uint32) bool {
 // specialized bags on the plain pass, and ItemCanGoIntoBag rejects
 // family-mismatched bags (a sword never lands in a soul bag). Empty bags
 // nest in plain containers per ItemCanGoIntoBag's plain arm.
-func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, specializedOnly bool) (int64, uint8, bool) {
+func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, specializedOnly bool, itemGUID, srcBagKey int64, srcSlot uint8) (int64, uint8, bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil ||
 		s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return 0, 0, false
@@ -265,6 +265,12 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, spe
 		if bagGUID == 0 {
 			continue
 		}
+		// CanStoreItem_InBag skips the destination bag when it IS the moved
+		// item (Player.cpp:10590-10592, pBag == pSrcItem): an empty bank bag
+		// never nests inside itself.
+		if itemGUID != 0 && bagGUID == itemGUID {
+			continue
+		}
 		var class, subclass uint32
 		if err := wdb.QueryRowContext(ctx, `SELECT COALESCE(class, 0), COALESCE(subclass, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, bagGUID).Scan(&class, &subclass); err != nil {
 			continue
@@ -284,7 +290,7 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, spe
 			if isPlain(b) || !itemCanGoIntoBag(b.class, b.subclass, itemBagFamily) {
 				continue
 			}
-			if slot, ok := s.freeInventorySlot(ctx, b.guid); ok {
+			if slot, ok := s.freeBankBagSlot(ctx, b.guid, srcBagKey, srcSlot); ok {
 				return b.guid, slot, true
 			}
 		}
@@ -296,11 +302,22 @@ func (s *session) findFreeBankBagSlot(ctx context.Context, itemEntry uint32, spe
 		if !isPlain(b) {
 			continue
 		}
-		if slot, ok := s.freeInventorySlot(ctx, b.guid); ok {
+		if slot, ok := s.freeBankBagSlot(ctx, b.guid, srcBagKey, srcSlot); ok {
 			return b.guid, slot, true
 		}
 	}
 	return 0, 0, false
+}
+
+// freeBankBagSlot scans one bank bag for a free interior slot; when the bag
+// is the moved item's own container, the item's own slot scans as empty
+// (CanStoreItem_InBag pItem2 == pSrcItem leg), so a first-free scan can
+// resolve to the item's own position and the caller's dest==own guard fires.
+func (s *session) freeBankBagSlot(ctx context.Context, bagGUID, srcBagKey int64, srcSlot uint8) (uint8, bool) {
+	if srcBagKey != 0 && bagGUID == srcBagKey {
+		return s.freeInventorySlotExcept(ctx, bagGUID, srcSlot)
+	}
+	return s.freeInventorySlot(ctx, bagGUID)
 }
 
 // itemBagFamilyOf reads the item_template BagFamily mask used by the
@@ -391,7 +408,7 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	// Pass 1 (Player.cpp:11817-11826): BagFamily items try the specialized
 	// family-matching bank bags BEFORE the bank slots.
 	if s.itemBagFamilyOf(ctx, uint32(itemEntry)) != 0 {
-		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true); ok {
+		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true, itemGUID, srcBagKey, srcSlot); ok {
 			destBagKey = bagKey
 			destSlot = slot
 		}
@@ -422,10 +439,18 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	// in plain-container bank bags (bffff2c8's !srcIsBag gate was wrong —
 	// C++ has no bag-in-bag rejection on this path).
 	if destSlot == 0xFF {
-		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false); ok {
+		if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false, itemGUID, srcBagKey, srcSlot); ok {
 			destBagKey = bagKey
 			destSlot = slot
 		}
+	}
+
+	// BankHandler.cpp:79-83: dest resolved to the item's own position
+	// (own slot scans empty in the bag passes too) — answer EQUIP_ERR_NONE
+	// instead of moving, and no quest check fires.
+	if destSlot != 0xFF && destBagKey == srcBagKey && destSlot == srcSlot {
+		s.sendEquipError(equipErrNone, uint64(itemGUID))
+		return true
 	}
 
 	if destSlot == 0xFF {
@@ -643,7 +668,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		// Pass 1 (Player.cpp:11817-11826): BagFamily items try the
 		// specialized family-matching bank bags BEFORE the bank slots.
 		if s.itemBagFamilyOf(ctx, uint32(itemEntry)) != 0 {
-			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true); ok {
+			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), true, itemGUID, srcBagKey, srcSlot); ok {
 				destBagKey = bagKey
 				destSlot = slot
 			}
@@ -661,7 +686,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		// bags; ItemCanGoIntoBag's plain arm accepts anything, so empty
 		// bags may nest.
 		if destSlot == 0xFF {
-			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false); ok {
+			if bagKey, slot, ok := s.findFreeBankBagSlot(ctx, uint32(itemEntry), false, itemGUID, srcBagKey, srcSlot); ok {
 				destBagKey = bagKey
 				destSlot = slot
 			}
