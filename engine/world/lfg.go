@@ -132,6 +132,7 @@ type LFGQueueEntry struct {
 	Comment  string
 	QueuedAt time.Time
 	State    uint8
+	OldState uint8
 }
 
 type LFGGroupQueueEntry struct {
@@ -306,6 +307,12 @@ func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment s
 		return LFGJoinInvalidDungeon, LFGQueueEntry{GUID: guid, Roles: roles, State: LFGStateNone}
 	}
 	entry := LFGQueueEntry{GUID: guid, Roles: roles, Dungeons: filtered, Comment: comment, QueuedAt: time.Now(), State: LFGStateQueued}
+	// JoinLfg sets QUEUED without touching OldState (LFGPlayerData::SetState
+	// records only NONE, DUNGEON and FINISHED), so a re-joining player
+	// keeps the OldState a later RemoveProposal restore reads back.
+	if cur, ok := m.queue[guid]; ok {
+		entry.OldState = cur.OldState
+	}
 	m.queue[guid] = entry
 	return LFGJoinOK, cloneLFGQueueEntry(entry)
 }
@@ -336,7 +343,9 @@ func (m *LFGManager) leaveLocked(guid uint64) bool {
 // keeps no separate PlayersStore, so a NONE entry is deleted outright —
 // every consumer treats a missing entry exactly like a NONE entry with
 // cleared fields. Other states create the entry on demand, like C++'s
-// PlayersStore operator[].
+// PlayersStore operator[]. DUNGEON and FINISHED also record OldState
+// (LFGPlayerData::SetState), which restoreStateLocked reads back; QUEUED,
+// PROPOSAL and the other states leave OldState untouched.
 func (m *LFGManager) SetState(guid uint64, state uint8) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -354,12 +363,36 @@ func (m *LFGManager) setStateLocked(guid uint64, state uint8) {
 		entry = LFGQueueEntry{GUID: guid}
 	}
 	entry.State = state
+	if state == LFGStateDungeon || state == LFGStateFinishedDungeon {
+		entry.OldState = state
+	}
 	if state == LFGStateFinishedDungeon {
 		entry.Roles = 0
 		entry.Dungeons = nil
 		entry.Comment = ""
 		delete(m.comments, guid)
 	}
+	m.queue[guid] = entry
+}
+
+// restoreStateLocked mirrors LFGPlayerData::RestoreState
+// (LFGPlayerData.cpp:47-55): the entry returns to its OldState, clearing
+// roles and selected dungeons only when that state is NONE (a missing
+// entry, i.e. a fresh player, restores to NONE and is deleted, matching
+// setStateLocked). Any other OldState keeps the current fields, so a
+// re-queued FINISHED group member comes back FINISHED with the queue
+// selection still attached, exactly as C++ leaves it.
+func (m *LFGManager) restoreStateLocked(guid uint64) {
+	entry, ok := m.queue[guid]
+	if !ok {
+		return
+	}
+	if entry.OldState == LFGStateNone {
+		delete(m.queue, guid)
+		delete(m.comments, guid)
+		return
+	}
+	entry.State = entry.OldState
 	m.queue[guid] = entry
 }
 
@@ -439,6 +472,11 @@ func (m *LFGManager) QueueGroup(groupID, leaderGUID uint64, dungeons []uint32, r
 	}
 	for guid, role := range copiedRoles {
 		entry := LFGQueueEntry{GUID: guid, Roles: role, Dungeons: append([]uint32(nil), dungeons...), QueuedAt: now, State: LFGStateQueued}
+		// Queueing sets QUEUED without touching OldState, so a FINISHED
+		// member keeps FINISHED for a later RemoveProposal restore.
+		if cur, ok := m.queue[guid]; ok {
+			entry.OldState = cur.OldState
+		}
 		if guid == leaderGUID {
 			entry.Comment = comment
 		}
@@ -869,7 +907,7 @@ func (m *LFGManager) ExpireProposals(now time.Time) []*LFGProposal {
 		}
 		for guid, player := range prop.Players {
 			if player.Accept == LFGAnswerDeny || deniedGroups[player.Group] {
-				delete(m.queue, guid)
+				m.restoreStateLocked(guid)
 				continue
 			}
 			if entry, ok := m.queue[guid]; ok {
@@ -1001,15 +1039,16 @@ func (m *LFGManager) declineProposalLocked(prop *LFGProposal, guid uint64) {
 	player := prop.Players[guid]
 	player.Accept = LFGAnswerDeny
 	prop.State = LFGProposalFailed
-	// LFGMgr::RemoveProposal (LFGMgr.cpp:1318-1332): the decliner is
-	// removed from the queue.
-	delete(m.queue, guid)
+	// LFGMgr::RemoveProposal (LFGMgr.cpp:1356-1359): denied players are
+	// restored, not dropped — a re-queued FINISHED member comes back
+	// FINISHED, a fresh joiner restores to NONE and loses the entry.
+	m.restoreStateLocked(guid)
 	// LFGMgr::RemoveProposal (LFGMgr.cpp:1306-1345): the denied player's
 	// whole group leaves the queue, not just the decliner.
 	if player.Group != 0 {
 		for pguid, p := range prop.Players {
 			if p.Group == player.Group {
-				delete(m.queue, pguid)
+				m.restoreStateLocked(pguid)
 			}
 		}
 		delete(m.groupQueue, player.Group)
