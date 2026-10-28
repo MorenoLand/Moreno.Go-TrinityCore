@@ -3731,11 +3731,18 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 		// unmodeled (no charmed-creature bridge).
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
+		// Unit::CombatStop(true) (Unit.cpp:5809-5813) interrupts non-melee
+		// spells, and InterruptNonMeleeSpells (Unit.cpp:3219-3220) covers
+		// the autorepeat slot too — the death-path interruptDuel already
+		// cancels it, but the surrender path omitted it, leaving a
+		// surrendering auto-shooter firing after the duel ended.
+		s.cancelAutoRepeatOnInterrupt()
 		s.stopControlledPetCombat()
 		if s.server != nil {
 			if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
 				partner.interruptCurrentCast()
 				partner.interruptCurrentChannel()
+				partner.cancelAutoRepeatOnInterrupt()
 				partner.stopControlledPetCombat()
 			}
 		}

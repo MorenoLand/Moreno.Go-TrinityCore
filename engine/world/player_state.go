@@ -5341,6 +5341,12 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	if granter == nil || granter.player == nil || !granter.playerLoaded {
 		return true
 	}
+	// ObjectAccessor::GetPlayer(*_player, guid) (ObjectAccessor.cpp:217-220),
+	// the same map gate as HandleGrantLevel: a cross-map granter resolves to
+	// nullptr in C++ and the accept silently drops.
+	if granter.player.Map != s.player.Map || granter.player.InstanceID != s.player.InstanceID {
+		return true
+	}
 	if s.accountID != granter.recruiterID {
 		return true
 	}
@@ -5401,14 +5407,21 @@ func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
 	}
 	r := protocol.NewReader(payload)
 	targetGUID, err := r.ReadPackedGUID()
-	if err != nil || targetGUID == 0 {
+	if err != nil {
 		return true
 	}
 	var targetSess *session
 	var targetName string
 	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.playerLoaded {
-		targetSess = ts
-		targetName = ts.player.Name
+		// ObjectAccessor::GetPlayer(*_player, guid) (ObjectAccessor.cpp:217-220)
+		// resolves only a target in-world on the granter's map: a cross-map
+		// session is nullptr in C++ and reports NO_TARGET, and a zero guid
+		// resolves to no session either, so it must reach the NO_TARGET arm
+		// below instead of the old silent drop.
+		if ts.player.Map == s.player.Map && ts.player.InstanceID == s.player.InstanceID {
+			targetSess = ts
+			targetName = ts.player.Name
+		}
 	}
 	var code uint32
 	switch {
