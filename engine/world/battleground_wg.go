@@ -741,8 +741,10 @@ func (s *Server) inviteWGPlayerToWar(wg *wgBattlegroundState, sess *session, tea
 // joinWGWar moves a player into the war roster on invite accept.
 // Caller holds wg.mu. Mirrors Battlefield::PlayerAcceptInviteToWar
 // (Battlefield.cpp:390-404) minus the raid-group leg: invited erase,
-// war insert, and OnPlayerJoinWar's Recruit cast
-// (BattlefieldWG.cpp:1061-1065). Accept does not require an outstanding
+// war insert, and OnPlayerJoinWar (BattlefieldWG.cpp:1061-1094):
+// RemoveAurasFromPlayer's strip, the Recruit cast with the rank reset,
+// and the tower-control stacks (attacker 3 - broken south towers,
+// defender broken south towers). Accept does not require an outstanding
 // invite in C++ either, so an uninvited accept still joins.
 func (s *Server) joinWGWar(wg *wgBattlegroundState, sess *session, team uint32) {
 	if sess == nil {
@@ -750,11 +752,77 @@ func (s *Server) joinWGWar(wg *wgBattlegroundState, sess *session, team uint32) 
 	}
 	delete(wg.InvitedPlayers, sess.playerGUID)
 	wg.PlayersInWar[sess.playerGUID] = team
-	if _, ok := wg.PlayerRanks[sess.playerGUID]; !ok {
-		wg.PlayerRanks[sess.playerGUID] = WGSpellRecruit
-		wg.PlayerKillsInRank[sess.playerGUID] = 0
-	}
+	// RemoveAurasFromPlayer (BattlefieldWG.cpp:1049-1059) strips the
+	// wartime auras before the Recruit cast, so a rejoiner drops a stale
+	// Corporal/Lieutenant rank instead of keeping it with no rank aura.
+	sess.removeAura(WGSpellRecruit)
+	sess.removeAura(WGSpellCorporal)
+	sess.removeAura(WGSpellLieutenant)
+	sess.removeAura(WGSpellTenacity)
+	sess.removeAura(WGSpellTowerControl)
+	sess.removeAura(WGSpellSpiritualImmunity)
+	sess.removeAura(WGSpellRestrictedFlightArea)
+	sess.removeAura(WGSpellEssenceOfWintergrasp)
+	wg.PlayerRanks[sess.playerGUID] = WGSpellRecruit
+	wg.PlayerKillsInRank[sess.playerGUID] = 0
 	sess.applyAura(WGSpellRecruit)
+	if team == wg.AttackerTeam() {
+		if wg.BrokenSouthTowers < 3 {
+			s.setWGTowerControlStacks(sess, int(3-wg.BrokenSouthTowers))
+		}
+	} else if wg.BrokenSouthTowers > 0 {
+		s.setWGTowerControlStacks(sess, int(wg.BrokenSouthTowers))
+	}
+}
+
+// wgTowerControlStacks reads the live Tower Control stack count on sess.
+// A present aura whose StackCount field is still zero carries one stack:
+// applyAura's fresh apply sends stack 1 without setting the field.
+func wgTowerControlStacks(sess *session) int {
+	if sess == nil {
+		return 0
+	}
+	sess.castMu.Lock()
+	defer sess.castMu.Unlock()
+	aura := sess.activeAuras[WGSpellTowerControl]
+	if aura == nil || aura.Stopped {
+		return 0
+	}
+	if aura.StackCount == 0 {
+		return 1
+	}
+	return int(aura.StackCount)
+}
+
+// setWGTowerControlStacks mirrors Aura::SetStackAmount for Tower Control
+// (BattlefieldWG.cpp:1085/1090 join stacks, :1217/:1224 destroy steps):
+// zero stacks removes the aura, otherwise a fresh apply is corrected to
+// the count with the SetStackAmount rescale + client update. Caller holds
+// no castMu; applyAura/removeAura take it themselves.
+func (s *Server) setWGTowerControlStacks(sess *session, stacks int) {
+	if sess == nil {
+		return
+	}
+	if stacks <= 0 {
+		sess.removeAura(WGSpellTowerControl)
+		return
+	}
+	sess.applyAura(WGSpellTowerControl)
+	sess.castMu.Lock()
+	aura := sess.activeAuras[WGSpellTowerControl]
+	if aura == nil || aura.Stopped {
+		sess.castMu.Unlock()
+		return
+	}
+	oldCount := int(aura.StackCount)
+	if oldCount == 0 {
+		oldCount = 1
+	}
+	aura.StackCount = uint8(stacks)
+	rescaleAuraAmountsByStack(aura, uint32(oldCount), uint32(stacks))
+	slot, positive, maxDur, dur := aura.Slot, aura.Positive, aura.DurationMs, aura.RemainingMs
+	sess.castMu.Unlock()
+	sess.sendAuraUpdateWithStack(slot, WGSpellTowerControl, false, positive, maxDur, dur, uint8(stacks))
 }
 
 // inviteWGZoneToWar mirrors Battlefield::InvitePlayersInZoneToWar
@@ -907,8 +975,7 @@ func (s *Server) kickWGPlayerFromBattlefield(sess *session) {
 // InvitePlayersInQueueToWar invite; players join the war only on accept,
 // so the sweep records invites (and full-battlefield kick marks) instead
 // of inserting into PlayersInWar directly. OnPlayerJoinWar's
-// tower-control stacks are not modeled on Go's wartime entry either, so
-// they are not added here.
+// tower-control stacks land at accept via joinWGWar, not here.
 func (s *Server) inviteWGZoneAndQueueToWar(wg *wgBattlegroundState) {
 	wg.PlayersInWar = make(map[uint64]uint32)
 	wg.InvitedPlayers = make(map[uint64]wgInvite)
@@ -1301,18 +1368,17 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 				if wg.Towers[i].IsSouthTower {
 					wg.BrokenSouthTowers++
 
-					// Update tower control buffs
-					// Tower Control reaches m_PlayersInWar only
-					// (BattlefieldWG.cpp:1204-1245): the old map scan handed
-					// the buff to every defender on Northrend and stripped it
-					// from every attacker there. Same audience as the credit
-					// loop below.
+					// Update tower control stacks (UpdatedDestroyedTowerCount,
+					// BattlefieldWG.cpp:1204-1245): each south tower destroyed
+					// adds one stack to defenders in war and removes one from
+					// attackers, reaching m_PlayersInWar only. Same audience as
+					// the credit loop below.
 					for guid, pTeam := range wg.PlayersInWar {
 						if sess := s.findSessionByGUID(guid); sess != nil {
 							if pTeam == wg.DefenderTeam {
-								sess.applyAura(WGSpellTowerControl)
+								s.setWGTowerControlStacks(sess, wgTowerControlStacks(sess)+1)
 							} else {
-								sess.removeAura(WGSpellTowerControl)
+								s.setWGTowerControlStacks(sess, wgTowerControlStacks(sess)-1)
 							}
 						}
 					}

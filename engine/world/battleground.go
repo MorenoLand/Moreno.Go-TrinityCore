@@ -2660,9 +2660,11 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 		// Battlefield::PlayerAcceptInviteToWar (Battlefield.cpp:390): the
 		// IsWarTime() gate, the m_PlayersInWar insert
 		// (AddOrSetPlayerToCorrectBfGroup), SendBfEntered, the AFK clear,
-		// and the invited-set erase plus OnPlayerJoinWar's Recruit cast
-		// (BattlefieldWG.cpp:1061-1065) via joinWGWar; UpdateTenacity
-		// runs after unlock, as OnPlayerJoinWar calls it.
+		// and the invited-set erase plus OnPlayerJoinWar's strip, Recruit
+		// cast and tower-control stacks (BattlefieldWG.cpp:1061-1094)
+		// via joinWGWar; UpdateTenacity runs after unlock, as
+		// OnPlayerJoinWar calls it, followed by the joiner's init
+		// world states (OnPlayerJoinWar's tail).
 		if s.server != nil && battleID == WGBattleID {
 			wg := s.server.getOrCreateWGState()
 			wg.mu.Lock()
@@ -2687,6 +2689,11 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 					s.setPlayerAFK(false)
 				}
 				s.server.UpdateWGTenacity()
+				// OnPlayerJoinWar's tail (BattlefieldWG.cpp:1093) sends the
+				// joiner its init world states; wartime zone entry already
+				// sends them, but an accepter re-entering via invite gets
+				// them here.
+				s.server.sendWGInitWorldStatesTo(s)
 			} else {
 				wg.mu.Unlock()
 			}
