@@ -4861,6 +4861,13 @@ func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bo
 const (
 	guildCharterItemID = 5863
 	guildCharterCost   = 1000 // 10s
+	// Arena charter entries/costs (PetitionsHandler.cpp:44-47, World.cpp:826-828).
+	arenaCharter2v2ItemID = 23560
+	arenaCharter3v3ItemID = 23561
+	arenaCharter5v5ItemID = 23562
+	arenaCharter2v2Cost   = 800000
+	arenaCharter3v3Cost   = 1200000
+	arenaCharter5v5Cost   = 2000000
 )
 
 // handlePetitionBuy processes CMSG_PETITION_BUY (0x1BD).
@@ -4886,9 +4893,8 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 
 	// PetitionsHandler.cpp:85-100: the seller must be an interactable
 	// petitioner NPC (UNIT_NPC_FLAG_PETITIONER); C++ only then branches on
-	// IsTabardDesigner for the guild path. The arena-charter branch has no
-	// Go model, so a petitioner that is not a tabard designer sells nothing
-	// here.
+	// IsTabardDesigner for the guild path. A petitioner that is not a
+	// tabard designer sells arena charters (handlePetitionBuyArena below).
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
 		return true
 	}
@@ -4896,7 +4902,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	// petition strips a faked death.
 	s.removeFakeDeath()
 	if !s.creatureHasNPCFlag(ctx, npcGUID, unitNPCFlagTabardDesigner) {
-		return true
+		return s.handlePetitionBuyArena(ctx, r, npcGUID, name)
 	}
 
 	cdb := s.server.CharactersStore.DB
@@ -4991,6 +4997,139 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		s.playerGUID, petitionGUID, name)
 
 	_ = s.sendItemCreate(uint64(nextItemGUID), 5863, 1, clientBag, freeSlot)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	return true
+}
+
+// handlePetitionBuyArena runs the non-tabard branch of
+// WorldSession::HandlePetitionBuyOpcode (PetitionsHandler.cpp:102-143):
+// a petitioner that is not a tabard designer sells arena charters. The
+// mint tail mirrors the guild path (template, money, store, item, petition
+// row), parameterized by the bracket's charter entry, cost, and type.
+func (s *session) handlePetitionBuyArena(ctx context.Context, r *protocol.Buffer, npcGUID uint64, name string) bool {
+	// The clientIndex sits at the tail of the buy packet
+	// (PetitionsHandler.cpp:76-82): after the name come a string, seven
+	// u32s, a u16, three u32s, ten strings, then clientIndex
+	// (arenaSlot+1), then a trailing u32.
+	if _, err := r.ReadCString(); err != nil {
+		return true
+	}
+	for i := 0; i < 7; i++ {
+		if _, err := r.ReadU32(); err != nil {
+			return true
+		}
+	}
+	if _, err := r.ReadU16(); err != nil {
+		return true
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := r.ReadU32(); err != nil {
+			return true
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := r.ReadCString(); err != nil {
+			return true
+		}
+	}
+	clientIndex, err := r.ReadU32()
+	if err != nil {
+		return true
+	}
+
+	// PetitionsHandler.cpp:108-110: arena charters require max level.
+	maxLevel := uint32(80)
+	if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
+		maxLevel = s.server.Config.MaxPlayerLevel
+	}
+	if uint32(s.player.Level) < maxLevel {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", s.player.Name, arenaTeamTargetTooLowS)
+		return true
+	}
+
+	var charterEntry uint32
+	var cost uint32
+	var pType uint32
+	switch clientIndex {
+	case 1:
+		charterEntry, cost, pType = arenaCharter2v2ItemID, arenaCharter2v2Cost, 2
+	case 2:
+		charterEntry, cost, pType = arenaCharter3v3ItemID, arenaCharter3v3Cost, 3
+	case 3:
+		charterEntry, cost, pType = arenaCharter5v5ItemID, arenaCharter5v5Cost, 5
+	default:
+		return true
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	// PetitionsHandler.cpp:135-138: already in a team of the slot.
+	if arenaTeamIDForSlot(ctx, cdb, s.playerGUID, pType) != 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, name, "", alreadyInArenaTeam)
+		return true
+	}
+
+	// PetitionsHandler.cpp:160-171: arena name-taken, then
+	// reserved/invalid (reserved names have no Go bridge, as in the
+	// guild path).
+	var nameTaken int64
+	_ = cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE UPPER(name) = UPPER(?) LIMIT 1", name).Scan(&nameTaken)
+	if nameTaken > 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, name, "", arenaTeamNameExistsS)
+		return true
+	}
+	if rn := []rune(name); len(rn) > 24 || len(rn) < 2 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, name, "", arenaTeamNameInvalid)
+		return true
+	}
+
+	// PetitionsHandler.cpp:166-171: the charter must exist in
+	// item_template, otherwise BUY_ERR_CANT_FIND_ITEM with an empty
+	// vendor GUID (null creature, as in the guild path).
+	var templateEntry int64
+	if terr := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE entry = ? LIMIT 1", charterEntry).Scan(&templateEntry); terr != nil && !missingTable(terr) && !isMissingColumn(terr) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, charterEntry, buyErrCantFindItem), true)
+		return true
+	}
+
+	if s.player.Money < cost {
+		// PetitionsHandler.cpp:175: SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY).
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(npcGUID, charterEntry, buyErrNotEnoughMoney), true)
+		return true
+	}
+
+	// PetitionsHandler.cpp:178-183: CanStoreNewItem(NULL_BAG, NULL_SLOT).
+	bagKey, clientBag, freeSlot, slotOK := s.findFreeInventorySlot(ctx, s.playerGUID)
+	if !slotOK {
+		s.sendEquipError(equipErrInventoryFull, 0)
+		return true
+	}
+
+	nextItemGUID := int64(s.server.generateItemGUID())
+	if nextItemGUID <= 0 {
+		nextItemGUID = 1
+	}
+	petitionGUID := uint64(nextItemGUID)
+	s.player.Money -= cost
+	s.questMoneyChanged(ctx)
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	// PetitionsHandler.cpp:192: the petition id (the item GUID counter)
+	// is stored in enchantment slot 0, as in the guild path.
+	enchantments := fmt.Sprintf("%d 0 0", nextItemGUID)
+	charterDuration := s.server.itemTemplateDuration(ctx, charterEntry)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, ?, 1, ?, '', 0, ?, 0, 0, 0, '')", nextItemGUID, charterEntry, s.playerGUID, s.playerGUID, charterDuration, enchantments)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, bagKey, freeSlot, nextItemGUID)
+	// PetitionsHandler.cpp:197-204: buying a new charter invalidates the
+	// owner's previous petition of the same type.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", s.playerGUID, pType)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, ?)",
+		s.playerGUID, petitionGUID, name, pType)
+
+	_ = s.sendItemCreate(uint64(nextItemGUID), charterEntry, 1, clientBag, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true
@@ -5182,24 +5321,56 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 	}
 
 	// Cross-faction check (PetitionsHandler.cpp:404): skipped when
-	// AllowTwoSide.Interaction.Guild is enabled.
+	// AllowTwoSide.Interaction.Guild is enabled. The error channel is
+	// type-branched: arena charters answer through the arena-team
+	// result, guild charters through the guild result.
 	var ownerRace int64
 	_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", ownerGUID).Scan(&ownerRace)
+	isArenaPetition := pType != int64(charterTypeGuild)
 	if s.server != nil && !s.server.Config.AllowTwoSideInteractionGuild &&
 		s.player.Race != 0 && ownerRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(ownerRace)) {
-		s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+		if isArenaPetition {
+			s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", "", arenaTeamNotAllied)
+		} else {
+			s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+		}
 		return true
 	}
 
-	// Already-in-guild / invited arms (PetitionsHandler.cpp:430-438): the
-	// reference answers guild command results, not sign results.
-	if s.player.GuildID != 0 {
-		s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
-		return true
-	}
-	if s.guildInvitedID != 0 {
-		s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
-		return true
+	if isArenaPetition {
+		// PetitionsHandler.cpp:416-428: an arena signer must be max
+		// level, in no team of the bracket's slot, and uninvited.
+		// An unknown bracket slot is a silent drop.
+		maxLevel := uint32(80)
+		if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
+			maxLevel = s.server.Config.MaxPlayerLevel
+		}
+		if uint32(s.player.Level) < maxLevel {
+			s.sendArenaTeamCommandResult(arenaTeamCreateS, "", s.player.Name, arenaTeamTargetTooLowS)
+			return true
+		}
+		if arenaTeamSlotByType(uint32(pType)) == 0xFF {
+			return true
+		}
+		if arenaTeamIDForSlot(ctx, cdb, s.playerGUID, uint32(pType)) != 0 {
+			s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", s.player.Name, alreadyInArenaTeamS)
+			return true
+		}
+		if s.arenaTeamInvited != 0 {
+			s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", s.player.Name, alreadyInvitedToArenaTeamS)
+			return true
+		}
+	} else {
+		// Already-in-guild / invited arms (PetitionsHandler.cpp:430-438): the
+		// reference answers guild command results, not sign results.
+		if s.player.GuildID != 0 {
+			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
+			return true
+		}
+		if s.guildInvitedID != 0 {
+			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
+			return true
+		}
 	}
 
 	// PetitionsHandler.cpp:441: the client-sign cap is ++signs > type —
@@ -5546,28 +5717,59 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 		if cdb == nil {
 			return true
 		}
-		var petitionRow int64
-		if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionRow); err != nil {
+		var petitionType int64
+		if err := cdb.QueryRowContext(ctx, "SELECT type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&petitionType); err != nil {
 			return true
 		}
 
 		// Cross-faction check (PetitionsHandler.cpp:541): skipped when
-		// AllowTwoSide.Interaction.Guild is enabled.
+		// AllowTwoSide.Interaction.Guild is enabled. The error channel is
+		// type-branched, as in the sign handler.
+		isArenaPetition := petitionType != int64(charterTypeGuild)
 		if s.server != nil && !s.server.Config.AllowTwoSideInteractionGuild &&
 			s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
-			s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+			if isArenaPetition {
+				s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", "", arenaTeamNotAllied)
+			} else {
+				s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+			}
 			return true
 		}
 
-		// Target already in guild (PetitionsHandler.cpp:576): the reference
-		// reports the offerer's name, and also covers the invited arm.
-		if targetSess.player.GuildID != 0 {
-			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
-			return true
-		}
-		if targetSess.guildInvitedID != 0 {
-			s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
-			return true
+		if isArenaPetition {
+			// PetitionsHandler.cpp:549-572: an arena offeree must be
+			// max level, in no team of the bracket's slot, and
+			// uninvited. An unknown bracket slot is a silent drop.
+			maxLevel := uint32(80)
+			if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
+				maxLevel = s.server.Config.MaxPlayerLevel
+			}
+			if uint32(targetSess.player.Level) < maxLevel {
+				s.sendArenaTeamCommandResult(arenaTeamCreateS, targetSess.player.Name, "", arenaTeamTargetTooLowS)
+				return true
+			}
+			if arenaTeamSlotByType(uint32(petitionType)) == 0xFF {
+				return true
+			}
+			if arenaTeamIDForSlot(ctx, cdb, targetGUID, uint32(petitionType)) != 0 {
+				s.sendArenaTeamCommandResult(arenaTeamCreateS, targetSess.player.Name, "", alreadyInArenaTeamS)
+				return true
+			}
+			if targetSess.arenaTeamInvited != 0 {
+				s.sendArenaTeamCommandResult(arenaTeamInviteSS, "", s.player.Name, alreadyInvitedToArenaTeamS)
+				return true
+			}
+		} else {
+			// Target already in guild (PetitionsHandler.cpp:576): the reference
+			// reports the offerer's name, and also covers the invited arm.
+			if targetSess.player.GuildID != 0 {
+				s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInGuildS)
+				return true
+			}
+			if targetSess.guildInvitedID != 0 {
+				s.sendGuildCommandResult(guildCmdInvite, s.player.Name, errAlreadyInvitedToGuildS)
+				return true
+			}
 		}
 
 		s.sendPetitionShowSignatures(targetSess, petitionGUID)
@@ -5586,10 +5788,37 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	npcGUID, _ := r.ReadU64()
 
 	// PetitionsHandler.cpp:743-749: the list is served only by an
-	// interactable petitioner NPC. Go lists only the guild charter row;
-	// the C++ arena-charter rows for non-tabard petitioners have no Go
-	// model (documented delta).
+	// interactable petitioner NPC.
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
+		return true
+	}
+
+	// PetitionsHandler.cpp:766-789: a non-tabard petitioner lists the
+	// three arena charters (index, entry, display id, cost, unknown and
+	// required-signs fields all equal the bracket size).
+	if !s.creatureHasNPCFlag(ctx, npcGUID, unitNPCFlagTabardDesigner) {
+		buf := protocol.NewBuffer(8 + 1 + 3*24)
+		buf.WriteU64(npcGUID)
+		buf.WriteU8(3)
+		buf.WriteU32(1)
+		buf.WriteU32(arenaCharter2v2ItemID)
+		buf.WriteU32(CHARTER_DISPLAY_ID)
+		buf.WriteU32(arenaCharter2v2Cost)
+		buf.WriteU32(2)
+		buf.WriteU32(2)
+		buf.WriteU32(2)
+		buf.WriteU32(arenaCharter3v3ItemID)
+		buf.WriteU32(CHARTER_DISPLAY_ID)
+		buf.WriteU32(arenaCharter3v3Cost)
+		buf.WriteU32(3)
+		buf.WriteU32(3)
+		buf.WriteU32(3)
+		buf.WriteU32(arenaCharter5v5ItemID)
+		buf.WriteU32(CHARTER_DISPLAY_ID)
+		buf.WriteU32(arenaCharter5v5Cost)
+		buf.WriteU32(5)
+		buf.WriteU32(5)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
 		return true
 	}
 
@@ -5662,13 +5891,10 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 	if err != nil {
 		return true
 	}
-	if newName == "" {
-		// HandlePetitionRenameGuild (PetitionsHandler.cpp:342-354): an
-		// empty name reaches the validity arm and answers
-		// ERR_GUILD_NAME_INVALID; it does not drop the session.
-		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameInvalid)
-		return true
-	}
+	// No early empty-name answer here: C++ checks the charter item and
+	// the petition row first, then the name-taken arm, and only then the
+	// validity arm — an empty name is answered INVALID by the length
+	// arms below, after the item/petition gates.
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
