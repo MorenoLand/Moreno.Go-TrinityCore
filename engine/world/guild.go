@@ -2288,8 +2288,13 @@ func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
 	// BattleGroundHandler.cpp:321-323 — arenas never answer the log request ("Prevent
 	// players from sending BuildPvpLogDataPacket in an arena except for when sent in
 	// BattleGround::EndBattleGround"). The live-BG queue entry carries the IsArena flag.
+	// The gate covers entered arena states only: at arena end the slot flips to
+	// WaitLeave while the instance id is still set (the auto-remove sweep clears
+	// it later), and C++ still answers silence there since the battleground
+	// still exists and isArena; a merely queued arena slot (WaitQueue, no
+	// instance) must not block a non-arena log, so WaitQueue is excluded.
 	for i := 0; i < len(s.bgQueues); i++ {
-		if s.bgQueues[i].Active && s.bgQueues[i].Status == BGStatusInProgress && s.bgQueues[i].IsArena {
+		if s.bgQueues[i].Active && s.bgQueues[i].IsArena && (s.bgQueues[i].Status == BGStatusInProgress || s.bgQueues[i].Status == BGStatusWaitLeave) {
 			return true
 		}
 	}

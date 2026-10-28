@@ -2863,6 +2863,19 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			}
 		}
 	}
+	// Player::LeaveBattleground (Player.cpp:22469-22472) runs only when
+	// GetBattleground() is non-null, i.e. the port accept has set the
+	// instance id; for the opcode path a merely queued or invited player
+	// (InstanceID == 0) gets a complete no-op, so the trailing slot-clear
+	// loop below must not run for them — it would drop a live queue entry
+	// or a live invite and answer STATUS_NONE where C++ answers nothing.
+	// Internal callers (nil payload: logout, far teleport, sweeps) bypass
+	// this gate, as in C++ where only the opcode handler calls
+	// LeaveBattleground through this path. Arena accepts set the instance
+	// id too, so no separate roster check is needed here.
+	if payload != nil && s.bgData.InstanceID == 0 {
+		return true
+	}
 	// Player::LeaveBattleground (Player.cpp:22490-22499): leaving a live
 	// battleground while inside it is tracked. Battleground::isBattleground()
 	// excludes arenas; Go keeps no live BG instances, so an active non-arena
@@ -2875,10 +2888,16 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// (DELAYED_SPELL_CAST_DESERTER, Player.cpp:1918): Go arms
 	// pendingDeserterCast and fires it in completeWorldPort, the
 	// ProcessDelayedOperations analog for the far-teleport semaphore.
+	// A WaitJoin slot is NOT a live battleground: it is invited-not-entered,
+	// and GetBattleground() is null until the port accept sets the instance
+	// id (Player.cpp:23546: GetBattlegroundId() == 0 → nullptr), so
+	// Player::LeaveBattleground is a complete no-op for it — no deserter,
+	// no track, and the invite survives. The WaitJoin term below would have
+	// cast/tracked for a player who never entered.
 	if !fromLogout && s.server != nil && s.server.Config.BattlegroundCastDeserter && !sessionIsGameMaster(s) {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
-			if e.Active && !e.IsArena && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitJoin) {
+			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
 				if skipEntryTeleport {
 					s.pendingDeserterCast = true
 				} else {
@@ -2891,7 +2910,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	if !fromLogout {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
-			if e.Active && !e.IsArena && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitJoin) {
+			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
 				s.trackBGDeserter(ctx, bgDesertionTypeLeaveBG)
 				break
 			}
@@ -3815,7 +3834,15 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 		return true
 	}
 	// Reference BattlegroundHandler.cpp:266-268:
-	// Only respond if player is inside a battleground or arena instance/map
+	// Only respond if player is inside a battleground or arena instance/map.
+	// The C++ gate is Battleground* bg = _player->GetBattleground(); if (!bg)
+	// return — a player merely standing on a battleground map (GM teleport,
+	// entry-point edge) with no live instance gets silence, where the old
+	// map-only gate answered the flag-carrier packet. GetBattleground() is
+	// null until the port accept sets the instance id (Player.cpp:23546).
+	if s.bgData.InstanceID == 0 {
+		return true
+	}
 	switch s.player.Map {
 	case 30, 489, 529, 566, 607, 628, 559, 562, 572, 617, 618:
 		// Reference BattleGroundHandler.cpp:274-286:
