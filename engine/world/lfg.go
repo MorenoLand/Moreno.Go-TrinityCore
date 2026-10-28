@@ -133,6 +133,14 @@ type LFGQueueEntry struct {
 	State    uint8
 }
 
+type LFGGroupQueueEntry struct {
+	GroupID  uint64
+	Dungeons []uint32
+	Roles    map[uint64]uint8
+	QueuedAt time.Time
+	State    uint8
+}
+
 type LfgRoleCheck struct {
 	GroupID   uint64
 	Leader    uint64
@@ -170,6 +178,7 @@ type LFGManager struct {
 	comments        map[uint64]string
 	roleChecks      map[uint64]*LfgRoleCheck
 	proposals       map[uint32]*LFGProposal
+	groupQueue      map[uint64]*LFGGroupQueueEntry
 	nextProposalID  uint32
 	validateDungeon func(uint32) bool
 }
@@ -182,6 +191,7 @@ func NewLFGManager(soloEnable bool) *LFGManager {
 		comments:   make(map[uint64]string),
 		roleChecks: make(map[uint64]*LfgRoleCheck),
 		proposals:  make(map[uint32]*LFGProposal),
+		groupQueue: make(map[uint64]*LFGGroupQueueEntry),
 	}
 }
 
@@ -224,10 +234,7 @@ func (m *LFGManager) RequiresFullGroup(players, groupSize int) bool {
 // the "underfilled group always compatible" early-out is skipped and the
 // "Enough players?" numPlayers != MAXGROUPSIZE gate is skipped, so a solo
 // queued player is matchable alone and a proposal forms with fewer than 5
-// players. Go has no queue matcher (FindNewGroups has no twin), so the solo
-// path forms the proposal directly from the queued entry; grouped queues
-// form no solo proposal (no group matcher exists) — grouped joins open a
-// role check instead, and a finished check still waits on that matcher.
+// players. the solo path forms the proposal directly from the queued entry; grouped queues match through FindGroups below, not here.
 func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -295,6 +302,264 @@ func (m *LFGManager) Leave(guid uint64) bool {
 	}
 	delete(m.queue, guid)
 	return true
+}
+
+// QueueGroup mirrors the FINISHED arm of LFGMgr::UpdateRoleCheck (LFGMgr.cpp:868-872): the finished group itself enters the queue (AddQueueData keyed by the group guid), and every member is marked queued with the role the check assigned (the SetState/SetRoles arms, LFGMgr.cpp:858-864). The per-member entries let Leave and status reads work per player; FindGroups treats the group entry as the unit and never double-counts its members as solos.
+func (m *LFGManager) QueueGroup(groupID, leaderGUID uint64, dungeons []uint32, roles map[uint64]uint8, comment string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.groupQueue == nil {
+		m.groupQueue = make(map[uint64]*LFGGroupQueueEntry)
+	}
+	now := time.Now()
+	copiedRoles := make(map[uint64]uint8, len(roles))
+	for guid, role := range roles {
+		copiedRoles[guid] = role
+	}
+	m.groupQueue[groupID] = &LFGGroupQueueEntry{
+		GroupID:  groupID,
+		Dungeons: append([]uint32(nil), dungeons...),
+		Roles:    copiedRoles,
+		QueuedAt: now,
+		State:    LFGStateQueued,
+	}
+	for guid, role := range copiedRoles {
+		entry := LFGQueueEntry{GUID: guid, Roles: role, Dungeons: append([]uint32(nil), dungeons...), QueuedAt: now, State: LFGStateQueued}
+		if guid == leaderGUID {
+			entry.Comment = comment
+		}
+		m.queue[guid] = entry
+	}
+}
+
+// LeaveGroup drops a queued group entry; the caller drops the members' per-player entries.
+func (m *LFGManager) LeaveGroup(groupID uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.groupQueue[groupID]; !ok {
+		return false
+	}
+	delete(m.groupQueue, groupID)
+	return true
+}
+
+func (m *LFGManager) deleteGroupEntriesContainingLocked(guid uint64) {
+	for groupID, entry := range m.groupQueue {
+		if _, ok := entry.Roles[guid]; ok {
+			delete(m.groupQueue, groupID)
+		}
+	}
+}
+
+type lfgMatchUnit struct {
+	groupID  uint64
+	guids    []uint64
+	roles    map[uint64]uint8
+	dungeons []uint32
+}
+
+func lfgIntersectDungeons(a, b []uint32) []uint32 {
+	set := make(map[uint32]bool, len(b))
+	for _, d := range b {
+		set[d] = true
+	}
+	var out []uint32
+	for _, d := range a {
+		if set[d] {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// FindGroups mirrors LFGQueue::FindGroups + FindNewGroups + CheckCompatibility (LFGQueue.cpp:293-360, 373-560) over Go's queue: group entries and solo entries are the units, and a combination matches when it holds at most one LFG group, its dungeon sets intersect, and its merged roles resolve through lfgCheckGroupRoles. Non-solo queues need exactly 5 players (MAXGROUPSIZE); with SoloLFG on, the "enough players" gate is skipped, so a single compatible unit matches alone. Differences from C++: no ignore check (Go keeps no ignore store), the proposal dungeon is the smallest common dungeon instead of a random one, and the leader is the smallest leader-bit guid instead of a random one. Matched units are marked PROPOSAL, not removed, so proposal decline/expiry keep working off the existing queue arms.
+func (m *LFGManager) FindGroups() []*LFGProposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var groupIDs []uint64
+	for groupID := range m.groupQueue {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Slice(groupIDs, func(i, j int) bool { return groupIDs[i] < groupIDs[j] })
+	memberOfGroup := make(map[uint64]bool)
+	var units []*lfgMatchUnit
+	for _, groupID := range groupIDs {
+		entry := m.groupQueue[groupID]
+		if entry.State != LFGStateQueued {
+			continue
+		}
+		var guids []uint64
+		roles := make(map[uint64]uint8, len(entry.Roles))
+		for guid, role := range entry.Roles {
+			guids = append(guids, guid)
+			roles[guid] = role
+			memberOfGroup[guid] = true
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		units = append(units, &lfgMatchUnit{groupID: groupID, guids: guids, roles: roles, dungeons: append([]uint32(nil), entry.Dungeons...)})
+	}
+	var soloGUIDs []uint64
+	for guid, entry := range m.queue {
+		if entry.State == LFGStateQueued && !memberOfGroup[guid] {
+			soloGUIDs = append(soloGUIDs, guid)
+		}
+	}
+	sort.Slice(soloGUIDs, func(i, j int) bool { return soloGUIDs[i] < soloGUIDs[j] })
+	for _, guid := range soloGUIDs {
+		entry := m.queue[guid]
+		units = append(units, &lfgMatchUnit{guids: []uint64{guid}, roles: map[uint64]uint8{guid: entry.Roles}, dungeons: append([]uint32(nil), entry.Dungeons...)})
+	}
+	used := make([]bool, len(units))
+	var proposals []*LFGProposal
+	for seed := range units {
+		if used[seed] {
+			continue
+		}
+		combo := m.findLFGCombo(units, used, seed)
+		if combo == nil {
+			continue
+		}
+		var dungeons []uint32
+		merged := make(map[uint64]uint8)
+		ownerGroup := make(map[uint64]uint64)
+		proposalGroup := uint64(0)
+		for i, idx := range combo {
+			unit := units[idx]
+			if i == 0 {
+				dungeons = append([]uint32(nil), unit.dungeons...)
+			} else {
+				dungeons = lfgIntersectDungeons(dungeons, unit.dungeons)
+			}
+			if unit.groupID != 0 {
+				proposalGroup = unit.groupID
+			}
+			for _, guid := range unit.guids {
+				merged[guid] = unit.roles[guid]
+				ownerGroup[guid] = unit.groupID
+			}
+		}
+		if len(dungeons) == 0 {
+			continue
+		}
+		assigned := make(map[uint64]uint8, len(merged))
+		for guid, role := range merged {
+			assigned[guid] = role
+		}
+		if !lfgCheckGroupRoles(assigned) {
+			continue
+		}
+		var allGUIDs []uint64
+		for guid := range merged {
+			allGUIDs = append(allGUIDs, guid)
+		}
+		sort.Slice(allGUIDs, func(i, j int) bool { return allGUIDs[i] < allGUIDs[j] })
+		leader := uint64(0)
+		for _, guid := range allGUIDs {
+			if assigned[guid]&LFGRoleLeader != 0 {
+				leader = guid
+				break
+			}
+		}
+		if leader == 0 {
+			leader = allGUIDs[0]
+		}
+		m.nextProposalID++
+		prop := &LFGProposal{
+			ID:         m.nextProposalID,
+			DungeonID:  dungeons[0],
+			State:      LFGProposalInitiating,
+			Group:      proposalGroup,
+			Leader:     leader,
+			CancelTime: time.Now().Add(45 * time.Second),
+			Players:    make(map[uint64]*LFGProposalPlayer, len(merged)),
+		}
+		for _, guid := range allGUIDs {
+			prop.Players[guid] = &LFGProposalPlayer{Role: assigned[guid], Group: ownerGroup[guid], Accept: LFGAnswerPending}
+		}
+		m.proposals[prop.ID] = prop
+		for _, idx := range combo {
+			used[idx] = true
+			unit := units[idx]
+			if unit.groupID != 0 {
+				if entry, ok := m.groupQueue[unit.groupID]; ok {
+					entry.State = LFGStateProposal
+				}
+			} else if entry, ok := m.queue[unit.guids[0]]; ok {
+				entry.State = LFGStateProposal
+				m.queue[unit.guids[0]] = entry
+			}
+		}
+		proposals = append(proposals, prop)
+	}
+	return proposals
+}
+
+// findLFGCombo searches increasing-index combinations starting at seed for a set satisfying the size, group-count and dungeon gates; role resolution is re-checked by the caller on the full merged set.
+func (m *LFGManager) findLFGCombo(units []*lfgMatchUnit, used []bool, seed int) []int {
+	var search func(chosen []int, total, groups int, dungeons []uint32) []int
+	search = func(chosen []int, total, groups int, dungeons []uint32) []int {
+		if total > 5 || groups > 1 {
+			return nil
+		}
+		if total == 5 {
+			merged := make(map[uint64]uint8)
+			for _, idx := range chosen {
+				for guid, role := range units[idx].roles {
+					merged[guid] = role
+				}
+			}
+			if lfgCheckGroupRoles(merged) {
+				return append([]int(nil), chosen...)
+			}
+			return nil
+		}
+		if m.solo && total > 0 {
+			merged := make(map[uint64]uint8)
+			for _, idx := range chosen {
+				for guid, role := range units[idx].roles {
+					merged[guid] = role
+				}
+			}
+			if lfgCheckGroupRoles(merged) {
+				return append([]int(nil), chosen...)
+			}
+		}
+		last := seed - 1
+		if len(chosen) > 0 {
+			last = chosen[len(chosen)-1]
+		}
+		for i := last + 1; i < len(units); i++ {
+			if used[i] {
+				continue
+			}
+			unit := units[i]
+			if total+len(unit.guids) > 5 {
+				continue
+			}
+			nextGroups := groups
+			if unit.groupID != 0 {
+				nextGroups++
+			}
+			if nextGroups > 1 {
+				continue
+			}
+			var nextDungeons []uint32
+			if len(chosen) == 0 {
+				nextDungeons = append([]uint32(nil), unit.dungeons...)
+			} else {
+				nextDungeons = lfgIntersectDungeons(dungeons, unit.dungeons)
+				if len(nextDungeons) == 0 {
+					continue
+				}
+			}
+			if combo := search(append(chosen, i), total+len(unit.guids), nextGroups, nextDungeons); combo != nil {
+				return combo
+			}
+		}
+		return nil
+	}
+	return search([]int{}, 0, 0, nil)
 }
 
 // SetComment mirrors LFGMgr::SetComment (LFGMgr.cpp:1984-1988): the comment
@@ -498,6 +763,18 @@ func (m *LFGManager) ExpireProposals(now time.Time) []*LFGProposal {
 				m.queue[guid] = entry
 			}
 		}
+		for groupID, entry := range m.groupQueue {
+			if deniedGroups[groupID] {
+				delete(m.groupQueue, groupID)
+				continue
+			}
+			for guid := range prop.Players {
+				if _, ok := entry.Roles[guid]; ok {
+					entry.State = LFGStateQueued
+					break
+				}
+			}
+		}
 		expired = append(expired, prop)
 		delete(m.proposals, id)
 	}
@@ -617,6 +894,17 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 		// LFGMgr::RemoveProposal (LFGMgr.cpp:1318-1332): the decliner is
 		// removed from the queue.
 		delete(m.queue, guid)
+		// LFGMgr::RemoveProposal (LFGMgr.cpp:1306-1345): the denied player's
+		// whole group leaves the queue, not just the decliner.
+		if player.Group != 0 {
+			for pguid, p := range prop.Players {
+				if p.Group == player.Group {
+					delete(m.queue, pguid)
+				}
+			}
+			delete(m.groupQueue, player.Group)
+		}
+		m.deleteGroupEntriesContainingLocked(guid)
 		delete(m.proposals, proposalID)
 		return prop, true
 	}
@@ -641,6 +929,7 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 		// queue when the proposal succeeds.
 		for pguid := range prop.Players {
 			delete(m.queue, pguid)
+			m.deleteGroupEntriesContainingLocked(pguid)
 		}
 		delete(m.proposals, proposalID)
 	}
@@ -956,13 +1245,23 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 			if rc != nil {
 				s.sendRoleCheckAnswerNotifies(rc, s.playerGUID, roles8, preState)
 				if rc.State == LFGRoleCheckFinished {
-					// Single-member group: C++ queues the group at once
-					// (AddQueueData, LFGMgr.cpp:868-872). Go has no group
-					// queue entry, so the joiner queues solo and every
-					// member gets the ADDED_TO_QUEUE party update.
-					_, _ = s.server.Features.LFG.Join(s.playerGUID, roles8, joinDungeons, comment)
+					multi := len(rc.Roles) > 1
+					if multi {
+						// Multi-member group: the finished group itself enters
+						// the queue (AddQueueData, LFGMgr.cpp:868-872).
+						s.server.Features.LFG.QueueGroup(s.groupID, s.playerGUID, rc.Dungeons, rc.Roles, comment)
+					} else {
+						// Single-member group: the joiner queues solo.
+						_, _ = s.server.Features.LFG.Join(s.playerGUID, roles8, joinDungeons, comment)
+					}
 					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
 						buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
+					if multi {
+						// The matcher runs at once, like the C++ update tick.
+						for _, prop := range s.server.Features.LFG.FindGroups() {
+							s.server.deliverLFGProposal(prop)
+						}
+					}
 				}
 			}
 			return true
@@ -993,8 +1292,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 			return true
 		}
 		// SoloLFG: the C++ queue matcher forms proposals from underfilled
-		// queue sets on its update tick (LFGQueue.cpp:425, 523 arms); Go has
-		// no matcher, so the solo proposal is formed directly from the
+		// queue sets on its update tick (LFGQueue.cpp:425, 523 arms); the solo proposal is formed directly from the
 		// queued entry. Grouped joins never reach this arm — they branch
 		// to the role check above.
 		if s.groupID == 0 {
@@ -1071,6 +1369,9 @@ func (s *session) handleLFGLeave() bool {
 			if lfg.Leave(ms.playerGUID) {
 				removed = true
 			}
+		}
+		if lfg.LeaveGroup(s.groupID) {
+			removed = true
 		}
 		if !removed {
 			return true
@@ -1546,6 +1847,47 @@ func (s *Server) updateLFGProposalExpiry(now time.Time) {
 					_ = ms.sendLFGUpdatePlayer(LFGUpdateAddedToQueue, entry)
 				}
 			}
+		}
+	}
+}
+
+// updateLFGFindGroups mirrors the FindGroups arm of LFGMgr::Update (LFGMgr.cpp:352-356): each update tick forms proposals from the queued groups and players.
+func (s *Server) updateLFGFindGroups() {
+	if s == nil || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	for _, prop := range s.Features.LFG.FindGroups() {
+		s.deliverLFGProposal(prop)
+	}
+}
+
+// deliverLFGProposal mirrors the proposal-notify arm of LFGMgr::Update (LFGMgr.cpp:360-373): every proposal member gets the proposal update, grouped members the PROPOSAL_BEGIN party update and solo members the player update.
+func (s *Server) deliverLFGProposal(prop *LFGProposal) {
+	if s == nil || prop == nil {
+		return
+	}
+	guids := make([]uint64, 0, len(prop.Players))
+	for guid := range prop.Players {
+		guids = append(guids, guid)
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	for _, guid := range guids {
+		ms := s.findSessionByGUID(guid)
+		if ms == nil {
+			continue
+		}
+		_ = ms.sendLFGProposalUpdate(prop)
+		entry := LFGQueueEntry{Dungeons: []uint32{prop.DungeonID}, State: LFGStateProposal}
+		if cur, ok := s.Features.LFG.Status(guid); ok {
+			entry = cur
+		}
+		if prop.Players[guid].Group != 0 {
+			_ = ms.sendLFGUpdateParty(LFGUpdateProposalBegin, entry)
+		} else {
+			_ = ms.sendLFGUpdatePlayer(LFGUpdateProposalBegin, entry)
 		}
 	}
 }
