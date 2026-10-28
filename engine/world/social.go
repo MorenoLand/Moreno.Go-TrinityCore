@@ -138,6 +138,12 @@ func isVisibleGloballyFor(viewer, target *session) bool {
 // is limited to 48 UTF-16 code units; when the cut splits a surrogate pair the
 // C++ utf16to8 throws and the note is cleared entirely.
 func truncateSocialNote(note string) string {
+	// Util.cpp:344-363: utf8::distance throws on invalid UTF-8 and the
+	// catch clears the note entirely, so an invalid note stores "" rather
+	// than a U+FFFD-mangled copy.
+	if !utf8.ValidString(note) {
+		return ""
+	}
 	runes := []rune(note)
 	if len(runes) <= 48 {
 		return note
@@ -494,17 +500,18 @@ func (s *session) handleDelFriend(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		return true
+	// C++ RemoveFromSocialList is a no-op on a missing entry but the
+	// handler still answers FRIEND_REMOVED, so the packet is not gated
+	// on the characters DB being present.
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		// Clear friend flag; delete if no other flags remain
+		_, _ = cdb.ExecContext(ctx,
+			"UPDATE character_social SET flags = flags & ~1 WHERE guid = ? AND friend = ?",
+			s.playerGUID, friendGUID)
+		_, _ = cdb.ExecContext(ctx,
+			"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
+			s.playerGUID, friendGUID)
 	}
-	// Clear friend flag; delete if no other flags remain
-	_, _ = cdb.ExecContext(ctx,
-		"UPDATE character_social SET flags = flags & ~1 WHERE guid = ? AND friend = ?",
-		s.playerGUID, friendGUID)
-	_, _ = cdb.ExecContext(ctx,
-		"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
-		s.playerGUID, friendGUID)
 	_ = s.sendFriendStatus(friendsResultRemoved, friendGUID, "")
 	return true
 }
@@ -594,16 +601,16 @@ func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		return true
+	// Same unanswered-packet shape as the del-friend arm above: the
+	// handler still answers FRIEND_IGNORE_REMOVED with no characters DB.
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx,
+			"UPDATE character_social SET flags = flags & ~2 WHERE guid = ? AND friend = ?",
+			s.playerGUID, ignoreGUID)
+		_, _ = cdb.ExecContext(ctx,
+			"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
+			s.playerGUID, ignoreGUID)
 	}
-	_, _ = cdb.ExecContext(ctx,
-		"UPDATE character_social SET flags = flags & ~2 WHERE guid = ? AND friend = ?",
-		s.playerGUID, ignoreGUID)
-	_, _ = cdb.ExecContext(ctx,
-		"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
-		s.playerGUID, ignoreGUID)
 	_ = s.sendFriendStatus(friendsResultIgnoreRemoved, ignoreGUID, "")
 	return true
 }
