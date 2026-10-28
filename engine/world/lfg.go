@@ -4362,6 +4362,14 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 		s.groupsMu.Unlock()
 		return
 	}
+	// LFGMgr::FinishDungeon head (LFGMgr.cpp:1595-1601): the group must
+	// be queued for this dungeon — GetDungeon masks to the low 24 bits,
+	// as does the stored id here — or the finish is a no-op and the
+	// stored dungeon is left untouched.
+	if grp.LFGDungeonID&0x00FFFFFF != dungeonID&0x00FFFFFF {
+		s.groupsMu.Unlock()
+		return
+	}
 	if grp.LFGState == LFGStateFinishedDungeon {
 		s.groupsMu.Unlock()
 		return

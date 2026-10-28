@@ -104,9 +104,9 @@ func (s *Server) loadDungeonEncounters(ctx context.Context) {
 // group-lock warning — reads the instance row, so the write goes straight
 // to the row via CHAR_UPD_INSTANCE_DATA, preserving the row's data string.
 // The row's own difficulty column keys the lookup, so normal/heroic/10/25
-// DBC rows resolve exactly as GetDungeonEncounterList does. The
-// lastEncounterDungeon LFG finish (FinishDungeon) has no Go LFG flow and
-// is recorded on the credit but not acted on.
+// DBC rows resolve exactly as GetDungeonEncounterList does. A
+// lastEncounterDungeon credit finishes the instance's LFG group via
+// finishLFGDungeonForInstance (the UpdateEncounterState dungeonId block).
 func (s *session) creditDungeonEncounterKill(ctx context.Context, target combatTarget, creatureEntry uint32) {
 	if s == nil || s.server == nil || target.InstanceID == 0 {
 		return
@@ -132,19 +132,57 @@ func (s *session) creditDungeonEncounterKill(ctx context.Context, target combatT
 		return
 	}
 	newMask := uint32(mask)
+	var finishedDungeon uint32
 	for _, credit := range creditList {
 		if credit.Bit >= 32 {
 			continue
 		}
 		newMask |= 1 << credit.Bit
 		if credit.LastEncounterDungeon != 0 {
+			finishedDungeon = credit.LastEncounterDungeon
 			break
 		}
 	}
-	if newMask == uint32(mask) {
+	if newMask != uint32(mask) {
+		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, target.InstanceID)
+	}
+	// InstanceScript::UpdateEncounterState (InstanceScript.cpp:756-773):
+	// a final-encounter credit finishes the first LFG group found among
+	// the instance players, even when the mask bit was already set (the
+	// C++ runs the dungeonId block regardless; FinishDungeon's own
+	// FINISHED guard makes a repeat finish a no-op).
+	if finishedDungeon != 0 {
+		s.server.finishLFGDungeonForInstance(target.Map, target.InstanceID, finishedDungeon)
+	}
+}
+
+// finishLFGDungeonForInstance mirrors the UpdateEncounterState dungeonId
+// block (InstanceScript.cpp:756-773): it scans the instance players for
+// the first one in an LFG group and finishes that group, then returns —
+// other LFG groups in the same instance are never tried, matching the
+// C++ return after the first LFG-grouped player. The scan collects group
+// ids under the session lock and resolves them after release, so the
+// finish runs outside both locks.
+func (s *Server) finishLFGDungeonForInstance(mapID, instanceID, dungeonID uint32) {
+	if s == nil || dungeonID == 0 {
 		return
 	}
-	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, target.InstanceID)
+	s.sessionsMu.RLock()
+	var groupIDs []uint64
+	for sess := range s.sessions {
+		if !sess.authed || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID || sess.groupID == 0 {
+			continue
+		}
+		groupIDs = append(groupIDs, sess.groupID)
+	}
+	s.sessionsMu.RUnlock()
+	for _, gid := range groupIDs {
+		if g := s.getGroup(gid); g == nil || !g.IsLFG {
+			continue
+		}
+		s.completeLFGDungeon(uint32(gid), dungeonID)
+		return
+	}
 }
 
 // loadDungeonCreditSpells mirrors ObjectMgr::LoadSpellScriptNames
@@ -214,19 +252,25 @@ func (s *Server) creditDungeonEncounterSpellCast(ctx context.Context, mapID, ins
 		return
 	}
 	newMask := uint32(mask)
+	var finishedDungeon uint32
 	for _, credit := range creditList {
 		if credit.Bit >= 32 {
 			continue
 		}
 		newMask |= 1 << credit.Bit
 		if credit.LastEncounterDungeon != 0 {
+			finishedDungeon = credit.LastEncounterDungeon
 			break
 		}
 	}
-	if newMask == uint32(mask) {
-		return
+	if newMask != uint32(mask) {
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, instanceID)
 	}
-	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, instanceID)
+	// Same UpdateEncounterState dungeonId block as the kill twin: a
+	// final-encounter spell credit finishes the instance's LFG group.
+	if finishedDungeon != 0 {
+		s.finishLFGDungeonForInstance(mapID, instanceID, finishedDungeon)
+	}
 }
 
 // creatureSpellHasLiveHit mirrors the AfterHit skip set in
