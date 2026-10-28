@@ -271,18 +271,35 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	channelName, channelFlagsValue, channelIDValue, announce := channel.Name, channel.Flags, channel.ID, channel.Announce
 	joinerFlags, numPlayers := channel.memberFlags(s.playerGUID), uint32(len(channel.Members))
 	// Reference: Channel::JoinChannel (Channel.cpp:217-228) — when ownership
-	// is enabled and the channel has no owner (the DB-persisted empty custom
-	// channel case), the joiner becomes owner+moderator. Fresh channels
-	// already carry the joiner as owner from creation above.
+	// is enabled and the channel has no owner, or its owner is an invisible
+	// GM, a visible joiner (or any joiner to an empty channel) becomes
+	// owner+moderator. Fresh channels already carry the joiner as owner
+	// from creation above. The guid SetOwner reads the old flags before
+	// the moderator grant, so the mode change starts from MEMBER_FLAG_NONE.
 	handoutOwner := false
+	handoutExclaim := false
 	var handoutOldFlags, handoutNewFlags uint8
-	if channelIDValue == 0 && channel.OwnershipEnabled && channel.Owner == 0 {
-		handoutOldFlags = channel.memberFlags(s.playerGUID)
-		channel.Owner = s.playerGUID
-		channel.Moderators[s.playerGUID] = struct{}{}
-		channel.Dirty = true
-		handoutNewFlags = channel.memberFlags(s.playerGUID)
-		handoutOwner = true
+	if channelIDValue == 0 && channel.OwnershipEnabled {
+		wasEmpty := numPlayers == 1
+		joinerInvisible := s.player != nil && s.player.ExtraFlags&playerExtraGMInvisible != 0
+		ownerInvisible := false
+		if channel.Owner != 0 {
+			for member := range channel.Members {
+				if member.playerGUID == channel.Owner && member.player != nil && member.player.ExtraFlags&playerExtraGMInvisible != 0 {
+					ownerInvisible = true
+					break
+				}
+			}
+		}
+		if (channel.Owner == 0 || ownerInvisible) && (wasEmpty || !joinerInvisible) {
+			handoutOldFlags = channel.memberFlags(s.playerGUID)
+			channel.Moderators[s.playerGUID] = struct{}{}
+			channel.Owner = s.playerGUID
+			channel.Dirty = true
+			handoutNewFlags = channel.memberFlags(s.playerGUID)
+			handoutOwner = true
+			handoutExclaim = !wasEmpty
+		}
 	}
 	s.server.channelsMu.Unlock()
 	// Reference: Channel::JoinChannel (Channel.cpp) - the joined broadcast
@@ -309,12 +326,21 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		_ = s.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: 0, NewFlags: joinerFlags})
 	}
 	if handoutOwner {
-		// Reference: Channel::JoinChannel / SetOwner(guid, exclaim=true)
-		// (Channel.cpp:217-228, 777-805) — the ownership handout on an
-		// existing ownerless custom channel broadcasts the mode change and
-		// the owner-changed notice.
+		// Reference: Channel::JoinChannel (Channel.cpp:217-228) calls the
+		// guid SetOwner, which broadcasts the mode change to all members
+		// and the owner-changed notice only when exclaim is set — the
+		// joiner's invisibility overwrites _isOwnerInvisible first, so
+		// exclaim is exactly the non-empty-join case.
+		for _, member := range others {
+			_ = member.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: handoutOldFlags, NewFlags: handoutNewFlags})
+			if handoutExclaim {
+				_ = member.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
+			}
+		}
 		_ = s.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: s.playerGUID, OldFlags: handoutOldFlags, NewFlags: handoutNewFlags})
-		_ = s.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
+		if handoutExclaim {
+			_ = s.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
+		}
 	}
 	s.debug("channel joined", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
@@ -686,22 +712,33 @@ func removeChannelKeyLocked(member *session, key string) {
 }
 
 // channelTakeOwnershipLocked hands a custom channel to its next member when the
-// owner leaves, mirroring Channel::LeaveChannel: the first remaining member
-// becomes owner and moderator. C++ iterates its member map (arbitrary order)
-// preferring a visible member; Go has no invisibility model, so the lowest
-// GUID wins for determinism. The caller must hold channelsMu. It returns the
-// new owner session plus the old/new member flags for the mode-change
-// broadcast, or nil when no transfer applies.
+// owner leaves, mirroring Channel::LeaveChannel: the first non-invisible
+// member in GUID order becomes owner and moderator, falling back to the
+// lowest GUID when every remaining member is an invisible GM. The caller
+// must hold channelsMu. It returns the new owner session plus the old/new
+// member flags for the mode-change broadcast, or nil when no transfer applies.
 func channelTakeOwnershipLocked(ch *worldChannel) (newOwner *session, oldFlags, newFlags uint8) {
 	// Reference: Channel::LeaveChannel (Channel.cpp:266-282) — the handout
-	// requires _ownershipEnabled (the DB-persisted ownership=0 arm).
+	// requires _ownershipEnabled (the DB-persisted ownership=0 arm), and
+	// picks the first non-invisible member in GUID order, falling back to
+	// the first member when every remaining member is an invisible GM.
 	if ch.Flags&channelFlagCustom == 0 || !ch.OwnershipEnabled || len(ch.Members) == 0 {
 		return nil, 0, 0
 	}
+	var fallback *session
 	for m := range ch.Members {
+		if fallback == nil || m.playerGUID < fallback.playerGUID {
+			fallback = m
+		}
+		if m.player != nil && m.player.ExtraFlags&playerExtraGMInvisible != 0 {
+			continue
+		}
 		if newOwner == nil || m.playerGUID < newOwner.playerGUID {
 			newOwner = m
 		}
+	}
+	if newOwner == nil {
+		newOwner = fallback
 	}
 	// Reference: Channel::LeaveChannel (Channel.cpp:278-282) grants the
 	// moderator bit BEFORE SetOwner reads the old flags, so the mode-change
