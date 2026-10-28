@@ -4027,7 +4027,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			// Opcodes.cpp:866 routes 0x2DF to HandleForceSpeedChangeAck
 			// (MOVE_TURN_RATE), which never applies the acked position —
 			// the turn-rate ack must not take the position-applying
-			// handleMovementAck path.
+			// a position-applying path.
 			if !state.authed || !state.handleForceSpeedChangeAck(uint16(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK), ctx, payload) {
 				return
 			}

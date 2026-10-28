@@ -766,7 +766,7 @@ func (s *session) handleSetActiveMover(payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	// MovementHandler.cpp:602-607 — the client names the active mover; C++
+	// MovementHandler.cpp:518-528 — the client names the active mover; C++
 	// only logs a mismatch against GetUnitBeingMoved() (the vehicle while
 	// driving) and applies nothing.
 	if moverGUID := s.moverGUID(); guid != moverGUID {
@@ -1235,25 +1235,11 @@ func (s *session) discardMovementAck(payload []byte) bool {
 	return true
 }
 
-func (s *session) handleMovementAck(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
-		return true
-	}
-	b := protocol.NewReader(payload)
-	_, _ = b.ReadPackedGUID()
-	_, _ = b.ReadU32() // ack index
-	info, err := readMovementInfo(b)
-	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-	}
-	return true
-}
-
 // CMSG_FORCE_TURN_RATE_CHANGE_ACK (0x2DF) has no dedicated handler in Go:
 // Opcodes.cpp:866 routes it to WorldSession::HandleForceSpeedChangeAck
 // (MOVE_TURN_RATE), so the server.go dispatch feeds it to
 // handleForceSpeedChangeAck directly. It must never take the
-// position-applying handleMovementAck path — C++ never applies the acked
+// a position-applying path — C++ never applies the acked
 // position on this opcode.
 
 func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
