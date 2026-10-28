@@ -4470,7 +4470,7 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32, mapID uint
 		// before the reward packet, and it never suppresses the packet —
 		// a full inventory mails the overflow in C++ instead of failing
 		// the grant, so a Go grant error is logged and the packet still
-		// goes out (the overflow-mail arm is a documented residual).
+		// goes out.
 		sess.rewardDungeonFinderQuest(context.Background(), detail.ID)
 		_ = sess.sendLFGDungeonReward(context.Background(), rDungeon.Entry(), storedGroupDungeon, done, detail)
 	}
@@ -4541,10 +4541,12 @@ func (s *session) lfgFinishDungeonReward(ctx context.Context, dungeonID uint32, 
 // calling commit directly, as rewardTrackingQuest already does for the
 // TRACKING arm. The DF options skip the claimed-window check (the
 // otherQuest fallback grants even when recorded for the day) and the
-// strict turn-in destroy (C++ DestroyItemCount never fails). Giver 0
-// skips the single questgiver-status packet and the turn-in chain in
-// applyQuestRewardGrants, matching the nullptr giver; announce=false
-// skips the quest-complete packet.
+// strict turn-in destroy (C++ DestroyItemCount never fails). The DF
+// options also mail fixed-item overflow (Player.cpp:15363-15389) instead
+// of rolling the grant back; the choice item has no mail arm and drops.
+// Giver 0 skips the single questgiver-status packet and the turn-in
+// chain in applyQuestRewardGrants, matching the nullptr giver;
+// announce=false skips the quest-complete packet.
 func (s *session) rewardDungeonFinderQuest(ctx context.Context, questID uint32) {
 	if s == nil || s.player == nil {
 		return
@@ -4554,10 +4556,19 @@ func (s *session) rewardDungeonFinderQuest(ctx context.Context, questID uint32) 
 		s.debug("dungeon-finder reward load failed", "account", s.accountName, "quest", questID, "error", err)
 		return
 	}
-	grants, destroyedGUIDs, err := s.commitQuestRewardOptions(ctx, view, 0, true, true)
+	grants, destroyedGUIDs, overflow, err := s.commitQuestRewardOptions(ctx, view, 0, true, true, true)
 	if err != nil {
 		s.debug("dungeon-finder reward grant failed", "account", s.accountName, "quest", questID, "error", err)
 		return
+	}
+	// Player::RewardQuest (Player.cpp:15363-15389): fixed items that do
+	// not fit whole go out by SendItemRetrievalMail before the money/XP
+	// arms run; the choice item has no mail arm and is already dropped
+	// by the commit. sendItemRetrievalMail is the Go twin (mail.go).
+	if s.server != nil {
+		for _, item := range overflow {
+			s.server.sendItemRetrievalMail(ctx, s.playerGUID, item.ID, item.Quantity)
+		}
 	}
 	s.applyQuestRewardGrants(ctx, view, questID, 0, 0, grants, destroyedGUIDs, false)
 }

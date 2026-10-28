@@ -561,10 +561,11 @@ func (s *session) sendQuestRewardMail(ctx context.Context, questID uint32, giver
 }
 
 func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, []uint64, error) {
-	return s.commitQuestRewardOptions(ctx, view, choice, false, false)
+	grants, destroyedGUIDs, _, err := s.commitQuestRewardOptions(ctx, view, choice, false, false, false)
+	return grants, destroyedGUIDs, err
 }
 
-// commitQuestRewardOptions is commitQuestReward with the two gates the
+// commitQuestRewardOptions is commitQuestReward with the gates the
 // dungeon-finder grant must not apply. LFGMgr::FinishDungeon
 // (LFGMgr.cpp:1686-1696) calls Player::RewardQuest directly on a quest the
 // player never accepted: selection (firstQuest vs otherQuest) is the only
@@ -572,17 +573,26 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 // otherQuest fallback), and DestroyItemCount never fails on a missing
 // required item — it just destroys what is there. The turn-in packet and
 // the tracking/GM paths keep both gates via commitQuestReward.
-func (s *session) commitQuestRewardOptions(ctx context.Context, view questRewardView, choice uint32, skipClaimedCheck, lenientTurnIn bool) ([]questItemGrant, []uint64, error) {
+// mailOverflow is the third DF-only gate: Player::RewardQuest
+// (Player.cpp:15363-15389) never fails the grant on a full inventory — a
+// fixed reward item that does not fit whole is mailed in full via
+// SendItemRetrievalMail when the quest IsDFQuest, and the choice item has
+// no mail arm, so it is simply dropped when it does not fit. The normal
+// path keeps the all-or-nothing rollback (CanRewardQuest gates it first).
+// Overflow items are returned for the caller to mail; they are not grants.
+func (s *session) commitQuestRewardOptions(ctx context.Context, view questRewardView, choice uint32, skipClaimedCheck, lenientTurnIn, mailOverflow bool) ([]questItemGrant, []uint64, []questRewardItem, error) {
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
 	questState, err := s.loadQuestRewardPersistenceState(ctx, view.Detail.ID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	fixed := append([]questRewardItem(nil), view.Detail.RewardItems...)
+	choiceIdx := -1
 	if len(view.Detail.ChoiceItems) > 0 && choice < uint32(len(view.Detail.ChoiceItems)) {
 		fixed = append(fixed, view.Detail.ChoiceItems[choice])
+		choiceIdx = len(fixed) - 1
 	}
 	equippedBags := s.getEquippedBags(ctx, s.playerGUID)
 	stackables := make(map[uint32]int64)
@@ -601,11 +611,11 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 
 	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	rollback := func(cause error) ([]questItemGrant, []uint64, error) {
+	rollback := func(cause error) ([]questItemGrant, []uint64, []questRewardItem, error) {
 		_ = tx.Rollback()
-		return nil, nil, cause
+		return nil, nil, nil, cause
 	}
 	if !skipClaimedCheck {
 		if err := rejectClaimedQuestReward(ctx, tx, s.playerGUID, view.Detail.ID, questState); err != nil {
@@ -620,7 +630,7 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 	if err != nil {
 		return rollback(err)
 	}
-	grants, err := s.storeQuestRewardItems(ctx, tx, inventory, fixed, equippedBags, stackables)
+	grants, overflow, err := s.storeQuestRewardItems(ctx, tx, inventory, fixed, equippedBags, stackables, mailOverflow, choiceIdx)
 	if err != nil {
 		return rollback(err)
 	}
@@ -666,16 +676,23 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 	}
 	questID := view.Detail.ID
 	if err := tx.Commit(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, item := range view.RequiredItems {
 		if item.ID != 0 && item.Quantity != 0 {
 			s.adjustQuestItemCount(ctx, item.ID, item.Quantity, false)
 		}
 	}
-	for _, item := range fixed {
-		if item.ID != 0 && item.Quantity != 0 {
-			s.adjustQuestItemCount(ctx, item.ID, item.Quantity, true)
+	// Only stored counts register as held quest items: mailed overflow and
+	// a dropped choice item are not in the inventory. On the normal path
+	// grants sum to the full fixed quantities, so this is unchanged there.
+	storedByEntry := make(map[uint32]uint32)
+	for _, grant := range grants {
+		storedByEntry[grant.Entry] += grant.Count
+	}
+	for entry, count := range storedByEntry {
+		if entry != 0 && count != 0 {
+			s.adjustQuestItemCount(ctx, entry, count, true)
 		}
 	}
 	s.applyQuestRewardPersistenceState(questID, questState)
@@ -691,7 +708,7 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuest, 0, 1)
 		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuestDaily, 0, 1)
 	}
-	return grants, destroyedGUIDs, nil
+	return grants, destroyedGUIDs, overflow, nil
 }
 
 func rejectClaimedQuestReward(ctx context.Context, tx *sql.Tx, guid uint64, questID uint32, state questRewardPersistenceState) error {
@@ -864,15 +881,30 @@ type rewardSlotLocation struct {
 	Slot      uint8
 }
 
-func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, items []questRewardItem, equippedBags []equippedBagInfo, stackables map[uint32]int64) ([]questItemGrant, error) {
+func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, items []questRewardItem, equippedBags []equippedBagInfo, stackables map[uint32]int64, mailOverflow bool, choiceIdx int) ([]questItemGrant, []questRewardItem, error) {
 	grants := make([]questItemGrant, 0, len(items))
-	for _, item := range items {
+	overflow := make([]questRewardItem, 0)
+	for idx, item := range items {
 		if item.ID == 0 || item.Quantity == 0 {
 			continue
 		}
 		stackable := stackables[item.ID]
 		if stackable < 1 {
 			stackable = 1
+		}
+		// Player::RewardQuest (Player.cpp:15363-15389) probes
+		// CanStoreNewItem for the WHOLE count before storing anything:
+		// a fixed item that does not fit whole is mailed in full, never
+		// partially stacked, and the choice item is dropped, never mailed.
+		// The probe must run before the stack loop below, which would
+		// otherwise commit a partial stack before discovering the bag is
+		// full. Capacity mirrors findNextRewardSlot exactly: stack space
+		// in every record of this entry plus one stack per free slot.
+		if mailOverflow && uint64(item.Quantity) > rewardFitCapacity(inventory, equippedBags, item.ID, stackable) {
+			if idx != choiceIdx {
+				overflow = append(overflow, item)
+			}
+			continue
 		}
 		remaining := uint64(item.Quantity)
 		// Item::Create (Item.cpp:291) seeds ITEM_FIELD_DURATION from the
@@ -891,7 +923,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			record.Count += uint32(add)
 			remaining -= add
 			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			clientBag := resolveRewardClientBag(record.Bag, equippedBags)
 			grants = append(grants, questItemGrant{
@@ -906,7 +938,14 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 		for remaining != 0 {
 			loc, ok := findNextRewardSlot(inventory, equippedBags)
 			if !ok {
-				return nil, errQuestInventoryFull
+				if !mailOverflow {
+					return nil, nil, errQuestInventoryFull
+				}
+				// Unreachable when the fit probe above ran: capacity
+				// guarantees a slot for every remaining stack. Rolling
+				// back beats mailing a full count on top of the partial
+				// stacks already written for this item.
+				return nil, nil, errQuestInventoryFull
 			}
 			add := remaining
 			if add > uint64(stackable) {
@@ -914,13 +953,13 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			}
 			nextGUID := s.server.generateItemGUID()
 			if nextGUID == 0 {
-				return nil, errors.New("item guid space exhausted")
+				return nil, nil, errors.New("item guid space exhausted")
 			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 0, ?, ?, '', 0, '', 0, 0, 0, NULL)", nextGUID, item.ID, s.playerGUID, add, rewardDuration); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, loc.BagKey, loc.Slot, nextGUID); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			inventory = append(inventory, inventoryRewardRecord{Bag: loc.BagKey, Slot: loc.Slot, ItemGUID: nextGUID, Entry: item.ID, Count: uint32(add)})
 			remaining -= add
@@ -936,7 +975,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			})
 		}
 	}
-	return grants, nil
+	return grants, overflow, nil
 }
 
 func findNextRewardSlot(inventory []inventoryRewardRecord, equippedBags []equippedBagInfo) (rewardSlotLocation, bool) {
@@ -970,6 +1009,44 @@ func findNextRewardSlot(inventory []inventoryRewardRecord, equippedBags []equipp
 	}
 
 	return rewardSlotLocation{}, false
+}
+
+// rewardFitCapacity is the CanStoreNewItem probe for one reward item:
+// stack space in every inventory record of this entry, plus one full
+// stack per free backpack/bag slot, mirroring findNextRewardSlot's slot
+// search (backpack slots 23-38, then each equipped bag's slots).
+func rewardFitCapacity(inventory []inventoryRewardRecord, equippedBags []equippedBagInfo, entry uint32, stackable int64) uint64 {
+	var capacity uint64
+	for _, record := range inventory {
+		if record.Entry == entry && record.Count < uint32(stackable) {
+			capacity += uint64(uint32(stackable) - record.Count)
+		}
+	}
+	occupiedBackpack := make(map[uint8]struct{})
+	for _, record := range inventory {
+		if record.Bag == 0 && record.Slot >= inventoryRewardFirst && record.Slot <= inventoryRewardLast && record.Count != 0 {
+			occupiedBackpack[record.Slot] = struct{}{}
+		}
+	}
+	freeBackpack := int(inventoryRewardLast-inventoryRewardFirst+1) - len(occupiedBackpack)
+	if freeBackpack > 0 {
+		capacity += uint64(freeBackpack) * uint64(stackable)
+	}
+	for _, bag := range equippedBags {
+		if bag.slots <= 0 {
+			continue
+		}
+		occupied := make(map[uint8]struct{})
+		for _, record := range inventory {
+			if record.Bag == bag.guid && record.Count != 0 && record.Slot < uint8(bag.slots) {
+				occupied[record.Slot] = struct{}{}
+			}
+		}
+		if free := int(bag.slots) - len(occupied); free > 0 {
+			capacity += uint64(free) * uint64(stackable)
+		}
+	}
+	return capacity
 }
 
 func resolveRewardClientBag(bagKey int64, equippedBags []equippedBagInfo) uint8 {
