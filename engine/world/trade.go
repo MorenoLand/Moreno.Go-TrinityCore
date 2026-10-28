@@ -589,6 +589,28 @@ func tradeHasItem(items map[uint8]tradeSlotItem, itemGUID uint64) bool {
 	return false
 }
 
+// isTradeBagPos mirrors Player::IsBagPos (Player.cpp:10174-10183): the item
+// sits in a bag slot (19..22) or a bank-bag slot (67..73) of the backpack
+// (bag byte 255).
+func isTradeBagPos(bag, slot uint8) bool {
+	return bag == invSlotBag0 && ((slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot < 74))
+}
+
+// inProgressArena mirrors the Battleground* leg of Player::CanUnequipItem
+// (Player.cpp:11660-11664): the player holds an Active IsArena bgQueues
+// slot in STATUS_IN_PROGRESS (WaitLeave is not in progress).
+func (s *session) inProgressArena() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.bgQueues {
+		if e := &s.bgQueues[i]; e.Active && e.IsArena && e.Status == BGStatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
 // tradeItemCanBeTraded mirrors Item::CanBeTraded(false, true) (Item.cpp:720-742):
 // whether the item may occupy a traded slot of the trade window.
 func (s *session) tradeItemCanBeTraded(ctx context.Context, itemGUID uint64, bag, slot uint8, flags int64, containerSlots, itemClass, inventoryType uint32, templateFound bool, enchantFields []string) bool {
@@ -625,24 +647,32 @@ func (s *session) tradeItemCanBeTraded(ctx context.Context, itemGUID uint64, bag
 		}
 	}
 	// Bag arm (Item.cpp:730): a bag sitting in a bag position, or a non-empty
-	// bag, cannot be traded.
+	// bag, cannot be traded. The position term is Player::IsBagPos
+	// (Player.cpp:10174-10183): bag 255 with a bag slot (19..22) or a
+	// bank-bag slot (67..73) — not a bag byte in 19..22, which addresses
+	// contents under Go's client-bag convention (inventoryBagKey).
 	if containerSlots > 0 {
-		if bag >= invSlotBagStart && bag < invSlotBagEnd && slot == 0 {
+		if isTradeBagPos(bag, slot) {
 			return false
 		}
 		if !s.isBagEmpty(ctx, int64(itemGUID)) {
 			return false
 		}
 	}
-	// CanUnequipItem arm (Item.cpp:734-735; Player::CanUnequipItem): applies
-	// only to equipped items and bag positions. The loot-generation
-	// (m_lootGenerated), loot-window (GetLootGUID), charm, and arena arms are
-	// transient server state with no database bridge and are not modeled.
-	if (bag == invSlotBag0 && slot < equipSlotEnd) || (bag >= invSlotBagStart && bag < invSlotBagEnd && slot == 0) {
+	// CanUnequipItem arm (Item.cpp:734-735; Player::CanUnequipItem,
+	// Player.cpp:11626-11666): applies only to equipped items and bag
+	// positions (IsEquipmentPos/IsBagPos). Besides combat it blocks
+	// gear that cannot change equip state in combat while the player is
+	// in an in-progress arena (bg->isArena() && STATUS_IN_PROGRESS),
+	// which Go models as an Active IsArena InProgress bgQueues slot.
+	// The loot-generation (m_lootGenerated), loot-window (GetLootGUID),
+	// and charm arms are transient server state with no database bridge
+	// and are not modeled.
+	if (bag == invSlotBag0 && slot < equipSlotEnd) || isTradeBagPos(bag, slot) {
 		if !templateFound {
 			return false
 		}
-		if s.player != nil && s.player.UnitFlags&unitFlagInCombat != 0 && !tradeItemCanChangeEquipStateInCombat(itemClass, inventoryType) {
+		if s.player != nil && !tradeItemCanChangeEquipStateInCombat(itemClass, inventoryType) && (s.player.UnitFlags&unitFlagInCombat != 0 || s.inProgressArena()) {
 			return false
 		}
 	}
@@ -1076,35 +1106,30 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	// TRADE_STATUS_TRADE_CANCELED and the handler returns, leaving the
 	// accepted state untouched exactly like C++.
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
-		type ownedTrade struct {
-			tr      *playerTradeState
-			owner   *session
-			bindArm bool
-		}
-		for _, owned := range []ownedTrade{{s.trade, s, true}, {partner.trade, partner, false}} {
-			tr := owned.tr
-			if tr == nil {
-				continue
-			}
-			failed := false
-			for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
-				it, ok := tr.Items[slot]
-				if !ok {
-					continue
-				}
-				if !s.tradeAcceptItemStillTradable(ctx, owned.owner, it.ItemGUID) {
-					_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
-					failed = true
-					break
-				}
-				if owned.bindArm && owned.owner.tradeItemBindedNotWith(ctx, it.ItemGUID, partner.playerGUID) {
-					_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrCannotTradeThat, 0, 0, 0)
-					failed = true
-					break
+		// C++ order (TradeHandler.cpp:307-348): one loop over the six
+		// traded slots, my item then his item per slot — a partner
+		// CanBeTraded failure at a low slot wins over my bind failure at
+		// a higher slot, since both arms return from the same loop.
+		for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
+			if s.trade != nil {
+				if it, ok := s.trade.Items[slot]; ok {
+					if !s.tradeAcceptItemStillTradable(ctx, s, it.ItemGUID) {
+						_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+						return true
+					}
+					if s.tradeItemBindedNotWith(ctx, it.ItemGUID, partner.playerGUID) {
+						_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, equipErrCannotTradeThat, 0, 0, 0)
+						return true
+					}
 				}
 			}
-			if failed {
-				return true
+			if partner.trade != nil {
+				if it, ok := partner.trade.Items[slot]; ok {
+					if !s.tradeAcceptItemStillTradable(ctx, partner, it.ItemGUID) {
+						_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
+						return true
+					}
+				}
 			}
 		}
 	}
