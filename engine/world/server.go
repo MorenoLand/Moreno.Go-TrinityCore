@@ -221,6 +221,10 @@ type Server struct {
 	creatureRespawns         map[uint32]creatureRespawn
 	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
 	respawnTimesLoaded       bool // set once runWorldTick loads the saved respawn rows (loadCreatureRespawnTimes)
+	instanceResetMu          sync.Mutex
+	instanceResets           map[instanceResetKey]*instanceResetSchedule
+	instanceResetsLoaded     bool
+	lastInstancePerSaveSweep int64 // unix seconds of the last type-0 per-save expiry sweep
 	// evadeDespawns tracks BossAI::_DespawnAtEvade removals awaiting their
 	// delayed respawn (boss_ai.go), keyed by motion GUID.
 	evadeDespawns map[uint64]evadeDespawn
@@ -1428,6 +1432,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateCorpseExpiry(ctx)
 			s.updateItemDurations(ctx)
 			s.updatePlayerUnderwater(ctx, now)
+			s.updateInstanceResets(ctx, now)
 			s.updateHomebindTimers(ctx, diff)
 			s.sweepIdleConnections(now)
 			s.updateArenaBattles(now)

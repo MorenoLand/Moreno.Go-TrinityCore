@@ -48,6 +48,42 @@ func (s *Store) MapDifficulty(mapID, difficulty uint32) (MapDifficultyEntry, boo
 	return entry, found, nil
 }
 
+func (s *Store) MapDifficulties() ([]MapDifficultyEntry, error) {
+	file, err := s.File("MapDifficulty")
+	if err != nil {
+		return nil, err
+	}
+	var entries []MapDifficultyEntry
+	for index := 0; index < file.Records(); index++ {
+		record, err := file.Record(index)
+		if err != nil {
+			return nil, err
+		}
+		rowMap, err := record.Uint32(1)
+		if err != nil {
+			return nil, err
+		}
+		rowDifficulty, err := record.Uint32(2)
+		if err != nil {
+			return nil, err
+		}
+		message, err := record.String(3)
+		if err != nil {
+			return nil, err
+		}
+		raidDuration, err := record.Uint32(20)
+		if err != nil {
+			return nil, err
+		}
+		maxPlayers, err := record.Uint32(21)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, MapDifficultyEntry{MapID: rowMap, Difficulty: rowDifficulty, RaidDuration: raidDuration, MaxPlayers: maxPlayers, HasErrorMessage: message != ""})
+	}
+	return entries, nil
+}
+
 func (s *Store) DownscaledMapDifficulty(mapID, difficulty uint32) (MapDifficultyEntry, uint32, bool, error) {
 	entry, found, err := s.MapDifficulty(mapID, difficulty)
 	if err != nil || found {
