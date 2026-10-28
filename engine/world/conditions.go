@@ -1282,12 +1282,16 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		}
 		difficulty, _ := s.loginInstanceDifficulty(ctx, *s.player)
 		return difficulty == uint32(row.Value1), nil
-	case 50: // CONDITION_GAMEMASTER
+	case 50: // CONDITION_GAMEMASTER (ConditionMgr.cpp:573-580):
+		// Value1==1 is Player::CanBeGameMaster, which is
+		// HasPermission(RBAC_PERM_COMMAND_GM) (Player.cpp:2499-2502), not
+		// a security-level test; Value1==0 is Player::IsGameMaster, the
+		// GM-on extra flag alone (Player.h:959).
 		if s.player == nil {
 			return false, nil
 		}
 		if row.Value1 == 1 {
-			return s.security >= 1, nil
+			return s.commandAllowed(ctx, permissionCommandGM), nil
 		}
 		return s.player.ExtraFlags&playerExtraGMOn != 0, nil
 	default:

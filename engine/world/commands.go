@@ -4027,13 +4027,7 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 		s.sendSysMessage("Invalid achievement ID.")
 		return
 	}
-	allowed := s.security >= 1
-	if !allowed && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		hasPerm, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCommandAchievementAdd)
-		if permErr == nil && hasPerm {
-			allowed = true
-		}
-	}
+	allowed := s.commandAllowed(ctx, permissionCommandAchievementAdd)
 	if !allowed {
 		s.sendNotification("You do not have permission to use that command.")
 		return
@@ -4066,19 +4060,22 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Achievement %d added.", achievementID))
 }
 
-// commandAllowed mirrors the achievement-port permission gate
-// (handleCmdAchievement): security >= 1 grants the command, otherwise the
-// RBAC grant is consulted via accountHasPermission.
+// commandAllowed mirrors WorldSession::HasPermission (RBAC.h:828):
+// membership in _globalPerms, i.e. expanded granted rows (account rows plus
+// the security level's rbac_default_permissions) minus expanded denied rows
+// (RBAC.cpp:223-232, LoadFromDBCallback). There is no security-level
+// short-circuit in C++: a sec>=1 account with the permission denied, or
+// without any grant for it, is refused. The security>=1 leg below is only
+// the tree's DB-unavailable fallback (same pattern as
+// commandNotFoundNotified/skipChatSpamCheck in chat.go): with no rows to
+// consult, a GM account keeps its commands rather than losing them all.
 func (s *session) commandAllowed(ctx context.Context, permissionID uint32) bool {
-	if s.security >= 1 {
-		return true
-	}
 	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		if hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionID); err == nil && hasPerm {
-			return true
+		if hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionID); err == nil {
+			return hasPerm
 		}
 	}
-	return false
+	return s.security >= 1
 }
 
 // splitQuotedArgs re-splits command fields after the dispatcher tokenized the
@@ -6676,13 +6673,7 @@ func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
-	allowed := s.security >= 1 || (s.player.ExtraFlags&playerExtraGMOn != 0)
-	if !allowed && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionOpcodeWorldTeleport)
-		if err == nil && hasPerm {
-			allowed = true
-		}
-	}
+	allowed := s.commandAllowed(ctx, permissionOpcodeWorldTeleport)
 	if !allowed {
 		s.sendNotification("You do not have permission to use that command.")
 		return true

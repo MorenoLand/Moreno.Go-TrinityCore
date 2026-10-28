@@ -524,10 +524,10 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 	buf.WritePackedGUID(targetGUID)
 
 	// Talent visibility (MiscHandler.cpp:1024): CanBeGameMaster() is
-	// RBAC_PERM_COMMAND_GM (held at security >= SEC_GAMEMASTER); with
+	// HasPermission(RBAC_PERM_COMMAND_GM) (Player.cpp:2499-2502); with
 	// CONFIG_TALENTS_INSPECTING at its default of 1, a same-team requester sees
-	// talents while a cross-team non-GM gets the zero arm.
-	if s.security >= 2 || playerTeam(s.player.Race) == playerTeam(target.Race) {
+	// talents (1+1>1) while a cross-team requester needs the GM permission.
+	if s.commandAllowed(ctx, permissionCommandGM) || playerTeam(s.player.Race) == playerTeam(target.Race) {
 		s.writeInspectTalentData(ctx, buf, targetSession, target)
 	} else {
 		buf.WriteU32(0) // unspentTalentPoints
