@@ -3131,6 +3131,18 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) bool {
 	if s.player == nil {
 		return false
 	}
+	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
+	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1514-1521): a nil dungeon
+	// (GetLFGDungeon failure) reports INVALID_LOCATION before any
+	// error-chain or teleport block runs. An unresolvable entrance
+	// resolves to map 0 here, and map 0 is a real map (Eastern
+	// Kingdoms), so without this guard a broken dungeon row teleported
+	// the player to 0,0,0 instead of failing — and overwrote the
+	// battleground entry point and finished the taxi flight first.
+	// Both callers report INVALID_LOCATION on a false return.
+	if mapID == 0 {
+		return false
+	}
 	inDungeon := false
 	if s.server != nil && s.server.Data != nil {
 		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
@@ -3142,7 +3154,6 @@ func (s *session) teleportToLFGDungeon(dungeonID uint32, fromOpcode bool) bool {
 	}
 	s.finishTaxiFlight()
 
-	mapID, x, y, z, ori := s.getLFGDungeonEntrance(dungeonID)
 	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1550-1567): with fromOpcode=false
 	// the destination is an LFG group member already inside the dungeon
 	// when one exists, falling back to the dungeon entrance; the opcode
@@ -4466,9 +4477,16 @@ func (s *session) hasCharmedCreature() bool {
 // (LFGMgr.h:91, "Original - 4"), so the final != OK send never fires for
 // it — the player is blocked silently, not teleported. Unit::IsFalling
 // (Unit.cpp:13313) covers MOVEMENTFLAG_FALLING_FAR as well as FALLING,
-// so the falling arm reads isFallingFar too; spline falling and the
-// server-driven UNIT_STATE_JUMPING arm (MotionMaster JumpTo/MoveJump
-// only) have no Go player state and stay out.
+// so the falling arm reads isFallingFar too. The server-driven
+// UNIT_STATE_JUMPING arm has no Go producer to flag: MoveJumpTo
+// early-returns for players (MotionMaster.cpp:763), Unit::JumpTo(float)
+// for a player sends a knockback packet (Unit.cpp:12950-12966, covered
+// by the client's falling flags), EffectJump/JumpDest are Go no-ops
+// (spells.go) so no spline window ever opens, and the script MoveJump
+// player sites (Isle of Conquest, Maexxna web-wrap, Flame Leviathan
+// throw-passenger) are unported; spline falling is likewise
+// player-vacuous (SetFall producers are creature-only / MoveFall
+// early-returns for players). A flag with no producer would be dead.
 func (s *session) lfgTeleportInError() (uint32, bool) {
 	if s.player == nil {
 		return LFGTeleportErrorInvalidLocation, false

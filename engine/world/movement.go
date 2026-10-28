@@ -1346,6 +1346,13 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	info.GUID = guid
 	s.setLastMovementInfo(info)
+	// MovementHandler.cpp:553-576: the acked info becomes m_movementInfo
+	// wholesale, so Unit::IsFalling reads the acked FALLING/FALLING_FAR
+	// flags until the next movement packet — the old code left isFalling
+	// stale across a knockback, so an LFG teleport (or logout) taken
+	// mid-knockback arc was wrongly allowed.
+	s.isFalling = info.Flags&movementFalling != 0
+	s.isFallingFar = info.Flags&movementFallingFar != 0
 
 	packet := protocol.NewBuffer(66)
 	packet.WritePackedGUID(guid)
