@@ -1361,13 +1361,28 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 		questIDs = append(questIDs, questID)
 	}
 
+	// QueryHandler.cpp:344-356 — only quests in the player's log are
+	// echoed: FindQuestSlot must resolve, and the count field is still the
+	// deduped request count (C++ writes questIds.size() up front), so a
+	// spoofed non-log id shrinks the entry list but not the count.
+	logQuests := make(map[uint32]struct{})
+	if s.player != nil {
+		for _, entry := range s.player.QuestLog {
+			if entry.QuestID != 0 {
+				logQuests[entry.QuestID] = struct{}{}
+			}
+		}
+	}
 	buf := protocol.NewBuffer(4 + len(questIDs)*8)
 	buf.WriteU32(uint32(len(questIDs)))
 	for _, questID := range questIDs {
-		// QueryHandler.cpp:332-356 echoes every quest id; quests with POI data
-		// append the QuestPOIWrapper buffer. Go has no quest_poi model (no
-		// loader for quest_poi/quest_poi_points), so every quest takes the
-		// C++ no-wrapper arm: quest id + zero POI count (documented delta).
+		if _, inLog := logQuests[questID]; !inLog {
+			continue
+		}
+		// Quests with POI data append the QuestPOIWrapper buffer. Go has no
+		// quest_poi model (no loader for quest_poi/quest_poi_points), so
+		// every in-log quest takes the C++ no-wrapper arm: quest id + zero
+		// POI count (documented delta).
 		buf.WriteU32(questID)
 		buf.WriteU32(0)
 	}

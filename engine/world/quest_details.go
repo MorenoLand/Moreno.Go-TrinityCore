@@ -538,15 +538,45 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "cannot interact with quest giver")
 		return s.rejectQuestgiverAccept()
 	}
+	// QuestHandler.cpp:176 — CanTakeQuest only runs when the quest template
+	// loads; a missing template closes gossip and clears sharing silently,
+	// with no INVALID packet. Resolve it once for both CanTakeQuest arms.
+	templateMissing := false
+	if _, derr := s.loadQuestDetailData(ctx, questID); errors.Is(derr, sql.ErrNoRows) {
+		templateMissing = true
+	}
 	// If player is already on this quest, close gossip and return success
 	status, _ := s.characterQuestStatus(ctx, questID)
 	if status == questStatusIncomplete {
+		// QuestHandler.cpp:168-173 + Player::CanTakeQuest (Player.cpp:14934):
+		// CanTakeQuest runs with msg=true, so SatisfyQuestStatus answers
+		// SMSG_QUESTGIVER_QUEST_INVALID (ALREADY_ON) before the handler
+		// closes gossip and clears sharing. The query-quest path already
+		// sends it; the accept path dropped it.
+		if !templateMissing {
+			s.sendQuestGiverQuestInvalid(questInvalidAlreadyOn)
+		}
 		return s.rejectQuestgiverAccept()
 	}
 	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
 	canTake, err := s.canTakeQuest(ctx, questID)
 	if err != nil || !canTake {
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
+		if err == nil && !templateMissing {
+			// QuestHandler.cpp:168-173 — CanTakeQuest(msg=true) answers
+			// INVALID before the close+clear: REWARDED reads ALREADY_DONE
+			// (SatisfyQuestStatus checks it first, Player.cpp:15880), any
+			// other held status reads ALREADY_ON, everything else the
+			// generic DONT_HAVE_REQ (the query-quest path's documented
+			// approximation for the specific low-level/race reasons).
+			if s.isQuestRewarded(ctx, questID) {
+				s.sendQuestGiverQuestInvalid(questInvalidAlreadyDone)
+			} else if status != 0 {
+				s.sendQuestGiverQuestInvalid(questInvalidAlreadyOn)
+			} else {
+				s.sendQuestGiverQuestInvalid(questInvalidDontHaveReq)
+			}
+		}
 		return s.rejectQuestgiverAccept()
 	}
 	// QuestHandler.cpp:183-189 — an accept that lands while the player still
@@ -1030,6 +1060,10 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	}
 	questID := s.player.QuestLog[slot].QuestID
 	if questID == 0 {
+		// QuestHandler.cpp:460-465 — SetQuestSlot(slot, 0) and the
+		// QUEST_ABANDONED criteria update sit outside the questId block:
+		// an empty-slot remove still counts as an abandonment.
+		s.updateAchievementCriteria(criteriaTypeQuestAbandoned, 0, 1)
 		return true
 	}
 	// WorldSession::HandleQuestLogRemoveQuest (QuestHandler.cpp:427-428):
