@@ -342,17 +342,26 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
-	s.movementMu.Lock()
-	s.lastMovementInfo.Flags = info.Flags
-	s.movementMu.Unlock()
+	// MiscHandler.cpp:1398 copies to GetUnitBeingMoved()->m_movementInfo.flags,
+	// so while driving the acked flags belong to the vehicle, not the player:
+	// the player-scoped copy and falling sync below run only when the mover
+	// is the player.
+	if !s.controlsVehicle() {
+		s.movementMu.Lock()
+		s.lastMovementInfo.Flags = info.Flags
+		s.movementMu.Unlock()
+	}
 	// MiscHandler.cpp:1398 — the acked flags become the mover's
 	// m_movementInfo.flags, so Unit::IsFalling reads them until the next
 	// movement packet; the knockback/not-active arms already sync them,
 	// and this copy left them stale the same way (a can-fly ack clearing
 	// FALLING still left an LFG teleport or logout wrongly denied, and
-	// one setting it wrongly allowed).
-	s.isFalling = info.Flags&movementFalling != 0
-	s.isFallingFar = info.Flags&movementFallingFar != 0
+	// one setting it wrongly allowed). Gated on the player mover above:
+	// a driving player's can-fly ack updates the vehicle's flags only.
+	if !s.controlsVehicle() {
+		s.isFalling = info.Flags&movementFalling != 0
+		s.isFallingFar = info.Flags&movementFallingFar != 0
+	}
 	return true
 }
 
@@ -438,34 +447,42 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// ascending/descending player counts as moving for the
 	// SPELL_INTERRUPT_FLAG_MOVEMENT legs.
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling|movementFallingFar|movementAscending|movementDescending|movementSplineElevation) != 0
-	s.isMoving = isMove
-	if isMove {
-		// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
-		s.interruptSpellsOnMovement()
-	}
-	// No rooted/controlled reject here: HandleMovementOpcodes carries no
-	// such gate (MovementHandler.cpp:423 even carries a @todo noting rooted
-	// packets are not discarded) — the packet is applied and rebroadcast.
-	isFalling := (info.Flags & movementFalling) != 0
-	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
-		isFalling = false
-	} else if opcode == uint32(protocol.OpcodeMSG_MOVE_JUMP) {
-		isFalling = true
-	}
-	s.isFalling = isFalling
-	s.isFallingFar = info.Flags&movementFallingFar != 0
-	if isMove {
-		// Movement interrupts land via interruptSpellsOnMovement above,
-		// which gates on SPELL_INTERRUPT_FLAG_MOVEMENT (Spell::update,
-		// Spell.cpp:3814-3831) — including the IsMoveAllowedChannel
-		// channeled exemption. No unconditional interrupt here: C++
-		// never breaks a cast whose InterruptFlags lack the movement bit.
-		if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
-			s.autoRepeatSpell = 0
-			s.autoRepeatTarget = 0
-			buf := protocol.NewBuffer(9)
-			buf.WritePackedGUID(s.playerGUID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	// MovementHandler.cpp:261/389 — the generic path assigns the packet to
+	// the MOVER's m_movementInfo, so while driving (mover = vehicle) the
+	// player's own flags are untouched: the cached IsFalling/isMoving
+	// state and the movement-interrupt/auto-repeat legs below run only
+	// for player-mover packets, and a falling/moving vehicle leaves the
+	// driver's cached flags exactly as C++ leaves them.
+	if !vehicleMover {
+		s.isMoving = isMove
+		if isMove {
+			// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
+			s.interruptSpellsOnMovement()
+		}
+		// No rooted/controlled reject here: HandleMovementOpcodes carries no
+		// such gate (MovementHandler.cpp:423 even carries a @todo noting rooted
+		// packets are not discarded) — the packet is applied and rebroadcast.
+		isFalling := (info.Flags & movementFalling) != 0
+		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
+			isFalling = false
+		} else if opcode == uint32(protocol.OpcodeMSG_MOVE_JUMP) {
+			isFalling = true
+		}
+		s.isFalling = isFalling
+		s.isFallingFar = info.Flags&movementFallingFar != 0
+		if isMove {
+			// Movement interrupts land via interruptSpellsOnMovement above,
+			// which gates on SPELL_INTERRUPT_FLAG_MOVEMENT (Spell::update,
+			// Spell.cpp:3814-3831) — including the IsMoveAllowedChannel
+			// channeled exemption. No unconditional interrupt here: C++
+			// never breaks a cast whose InterruptFlags lack the movement bit.
+			if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
+				s.autoRepeatSpell = 0
+				s.autoRepeatTarget = 0
+				buf := protocol.NewBuffer(9)
+				buf.WritePackedGUID(s.playerGUID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+			}
 		}
 	}
 	// Vehicle passengers may only turn their own orientation when the seat
