@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ const (
 	WGNoWarDuration         = 150 * time.Minute // 2.5 hours peace
 	WGSouthTowerTimePenalty = 10 * time.Minute  // 10 minutes removed when all 3 south towers fall
 	WGStartGroupingDuration = 15 * time.Minute  // 15 minutes before war
+	wgMaxPlayersPerTeam     = 100               // Wintergrasp.PlayerMax default (World.cpp:1477)
 	wgResurrectInterval     = 30 * time.Second  // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
 
 	// Teams
@@ -273,6 +275,7 @@ type wgBattlegroundState struct {
 	TenacityStack int32
 
 	PlayersInWar      map[uint64]uint32 // playerGUID -> team
+	PlayersInZone     map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_players, the zone roster, distinct from the war roster
 	PlayersInQueue    map[uint64]uint32 // playerGUID -> team; mirrors Battlefield::m_PlayersInQueue[team] (Battlefield.h)
 	PlayerRanks       map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
 	PlayerKillsInRank map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
@@ -364,11 +367,19 @@ func (wg *wgBattlegroundState) updateVehicleLimits() {
 }
 
 // StartBattle initializes a wartime battle.
-// Reference: BattlefieldWG::OnBattleStart (BattlefieldWG.cpp:567-629).
+// Reference: Battlefield::StartBattle (Battlefield.cpp:316-335) clears
+// m_PlayersInWar, then InvitePlayersInZoneToWar (Battlefield.cpp:241-262)
+// and InvitePlayersInQueueToWar (:222-239) repopulate it; OnBattleStart
+// (BattlefieldWG.cpp:567-629) is the WG script hook. Go previously kept
+// every zone entrant in PlayersInWar across battles, so the EndBattle
+// clear the head tick deferred could never land.
 func (s *Server) StartWGBattle(defenderTeam uint32) {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
-	defer wg.mu.Unlock()
+	if wg.IsActive {
+		wg.mu.Unlock()
+		return
+	}
 
 	wg.IsActive = true
 	wg.DefenderTeam = defenderTeam
@@ -388,8 +399,67 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 	wg.PlayerRanks = make(map[uint64]uint32)
 	wg.PlayerKillsInRank = make(map[uint64]uint32)
 
+	s.inviteWGZoneAndQueueToWar(wg)
+
 	s.broadcastWGInitWorldStates()
 	s.broadcastBattlegroundMessage(wg.MapID, "The battle for Wintergrasp has begun!")
+	wg.mu.Unlock()
+	s.UpdateWGTenacity()
+}
+
+// inviteWGZoneAndQueueToWar repopulates PlayersInWar at battle start.
+// Caller holds wg.mu. Battlefield::InvitePlayersInZoneToWar iterates
+// m_players (a GUID-ordered set) and invites each online player not
+// already in war or invited, while the per-team war+invited count is
+// below m_MaxPlayer; a full battlefield marks the player for kick after
+// 10 seconds (no Go kick-timer model, so excess zone players simply stay
+// zone-roster only). InvitePlayersInQueueToWar then moves the queue the
+// same way and clears it. Go has no invited-set or accept handshake on
+// this path — its queue-accept handler already inserts directly — so
+// invited players join at once, and the Recruit aura mirrors the
+// wartime-enter path (OnPlayerJoinWar's tower-control stacks are not
+// modeled on Go's wartime entry either, so they are not added here).
+func (s *Server) inviteWGZoneAndQueueToWar(wg *wgBattlegroundState) {
+	wg.PlayersInWar = make(map[uint64]uint32)
+	counts := map[uint32]int{}
+	invite := func(guid uint64, team uint32) {
+		if counts[team] >= wgMaxPlayersPerTeam {
+			return
+		}
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil {
+			return
+		}
+		wg.PlayersInWar[guid] = team
+		counts[team]++
+		if _, ok := wg.PlayerRanks[guid]; !ok {
+			wg.PlayerRanks[guid] = WGSpellRecruit
+			wg.PlayerKillsInRank[guid] = 0
+		}
+		sess.applyAura(WGSpellRecruit)
+	}
+	zoneGUIDs := make([]uint64, 0, len(wg.PlayersInZone))
+	for guid := range wg.PlayersInZone {
+		zoneGUIDs = append(zoneGUIDs, guid)
+	}
+	sort.Slice(zoneGUIDs, func(i, j int) bool { return zoneGUIDs[i] < zoneGUIDs[j] })
+	for _, guid := range zoneGUIDs {
+		team := wg.PlayersInZone[guid]
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
+			continue
+		}
+		invite(guid, team)
+	}
+	queueGUIDs := make([]uint64, 0, len(wg.PlayersInQueue))
+	for guid := range wg.PlayersInQueue {
+		queueGUIDs = append(queueGUIDs, guid)
+	}
+	sort.Slice(queueGUIDs, func(i, j int) bool { return queueGUIDs[i] < queueGUIDs[j] })
+	for _, guid := range queueGUIDs {
+		invite(guid, wg.PlayersInQueue[guid])
+	}
+	wg.PlayersInQueue = make(map[uint64]uint32)
 }
 
 // EndBattle completes a wartime battle.
@@ -489,6 +559,13 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		}
 	}
 	s.sessionsMu.RUnlock()
+
+	// BattlefieldWG::OnBattleEnd clears m_PlayersInWar per team after the
+	// aura strip above (BattlefieldWG.cpp:704-731); the zone roster
+	// (PlayersInZone) survives, so the next StartBattle can repopulate
+	// from it. Previously the clear was deferred because the war roster
+	// doubled as the zone roster.
+	wg.PlayersInWar = make(map[uint64]uint32)
 
 	if !endByTimer {
 		// On a relic capture every player in the zone swaps to the new
@@ -1105,9 +1182,14 @@ func (s *Server) handleWGPlayerEnter(sess *session) {
 	}
 
 	playerTeam := teamForRace(sess.player.Race)
-	wg.PlayersInWar[sess.playerGUID] = playerTeam
-
+	// Battlefield::HandlePlayerEnterZone (Battlefield.cpp:80-102) always
+	// adds the player to the zone roster m_players, but joins the war
+	// roster only in wartime (InvitePlayerToWar); peacetime entrants were
+	// previously added to PlayersInWar, leaking them into war-only loops
+	// (tenacity counts, tower credit) and blocking the EndBattle clear.
+	wg.PlayersInZone[sess.playerGUID] = playerTeam
 	if wg.IsActive {
+		wg.PlayersInWar[sess.playerGUID] = playerTeam
 		if _, ok := wg.PlayerRanks[sess.playerGUID]; !ok {
 			wg.PlayerRanks[sess.playerGUID] = WGSpellRecruit
 			wg.PlayerKillsInRank[sess.playerGUID] = 0
@@ -1136,6 +1218,7 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
 	delete(wg.PlayersInWar, sess.playerGUID)
+	delete(wg.PlayersInZone, sess.playerGUID)
 
 	sess.removeAura(WGSpellRecruit)
 	sess.removeAura(WGSpellCorporal)
@@ -1233,6 +1316,7 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			Enabled:            true,
 			Winner:             -1,
 			PlayersInWar:       make(map[uint64]uint32),
+			PlayersInZone:      make(map[uint64]uint32),
 			PlayersInQueue:     make(map[uint64]uint32),
 			PlayerRanks:        make(map[uint64]uint32),
 			PlayerKillsInRank:  make(map[uint64]uint32),
