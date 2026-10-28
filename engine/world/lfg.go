@@ -2126,6 +2126,120 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	}
 }
 
+// lfgGroupMemberRemovedOffline runs the session-less subset of
+// LFGGroupScript::OnRemoveMember (LFGScripts.cpp:183-228) for victims
+// removed while offline: Group::RemoveMember (Group.cpp:569) fires the
+// script before any online check, but Go's removeGroupMemberByGUID offline
+// branch previously ran only the Eluna event, so an offline-kicked member
+// of an LFG group kept a stale DUNGEON/FINISHED entry, a stale group-queue
+// membership, or a live proposal — the desync LFGPlayerScript::OnLogin
+// (LFGScripts.cpp:55-78) repairs in C++ only when the stored group differs
+// from the live group, which Go's login never sees because the row is
+// already deleted. The victim-session arms are skipped, matching the C++
+// FindPlayer guards: no Dungeon Deserter cast, no Dungeon Cooldown strip,
+// no victim update-party ping, no dungeon teleport. The leader offer still
+// goes out (leader-session-guarded in C++ too). A KICK on an LFG group
+// runs nothing here: the C++ script KICK arm returns before LeaveLfg
+// (Group.cpp:588-589, InitBoot instead), and Go's Lua bridge already
+// diverts LFG kicks to a boot vote before reaching the offline path.
+func (s *Server) lfgGroupMemberRemovedOffline(g *groupState, guid uint64, method uint8) {
+	if s == nil || g == nil || !g.IsLFG || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if method == groupRemoveMethodKick {
+		return
+	}
+	lfg := s.Features.LFG
+	// LFGMgr::LeaveLfg ROLECHECK arm (LFGMgr.cpp:763-766): a live check
+	// containing the victim aborts. Go sets no per-player ROLECHECK
+	// entry, so the check is keyed on the group and the victim's
+	// membership in its role map; the abort restores the pre-check state
+	// in C++, and Go never overwrote the entries, so the entry switch
+	// below is skipped on this arm. Notifies mirror handleLFGLeave's
+	// abort arm; the offline victim gets none of them.
+	abortedCheck := false
+	if rc := lfg.GetRoleCheck(g.ID); rc != nil {
+		if _, ok := rc.Roles[guid]; ok {
+			if aborted := lfg.AbortRoleCheck(g.ID); aborted != nil {
+				abortedCheck = true
+				guids := make([]uint64, 0, len(aborted.Roles))
+				for mguid := range aborted.Roles {
+					guids = append(guids, mguid)
+				}
+				sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+				for _, mguid := range guids {
+					if ms := s.findSessionByGUID(mguid); ms != nil {
+						_ = ms.sendLFGRoleCheckUpdate(aborted)
+					}
+				}
+				if ls := s.findSessionByGUID(aborted.Leader); ls != nil {
+					_ = ls.sendLFGJoinResult(LFGJoinFailed, LFGRoleCheckAborted)
+				}
+				s.broadcastToGroup(g.ID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+					buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
+			}
+		}
+	}
+	if !abortedCheck {
+		if entry, ok := lfg.Status(guid); ok {
+			switch entry.State {
+			case LFGStateProposal:
+				if method == groupRemoveMethodDefault {
+					return
+				}
+				// LEAVE/KICK_LFG during a proposal reach LeaveLfg's
+				// PROPOSAL arm (LFGMgr.cpp:754-779); the decline
+				// notify skips nil sessions, so the offline denier
+				// sends nothing while online members still hear it.
+				if prop := lfg.DeclineProposalForPlayer(guid); prop != nil {
+					s.sendLFGProposalDeclined(prop)
+				}
+			case LFGStateQueued:
+				// LeaveLfg QUEUED arm, same shape as the online hook:
+				// the whole queued group leaves the queue, members
+				// flip to the restore state or NONE, and online
+				// members get the REMOVED send. Exclude is 0 because
+				// C++ runs LeaveLfg before RemovePlayerFromGroup.
+				restore := g.IsLFG && g.LFGDungeonID != 0 &&
+					(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+				affected := lfg.LeaveQueuedGroup(g.ID, 0, restore, g.LFGState)
+				inAffected := false
+				for _, aguid := range affected {
+					if aguid == guid {
+						inAffected = true
+					}
+					if ms := s.findSessionByGUID(aguid); ms != nil {
+						_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+					}
+				}
+				if !inAffected {
+					// Not in the queue entry's role map: C++ flips
+					// every group player, so flip the victim directly
+					// instead of leaving a stale QUEUED entry.
+					if restore {
+						lfg.SetState(guid, g.LFGState)
+					} else {
+						lfg.SetState(guid, LFGStateNone)
+					}
+				}
+			case LFGStateDungeon, LFGStateFinishedDungeon:
+				// LeaveLfg DUNGEON/FINISHED arm: the removed player
+				// (not a disconnect — logout never reaches this hook)
+				// drops to NONE.
+				lfg.SetState(guid, LFGStateNone)
+			}
+		}
+	}
+	// LFGScripts.cpp:224-227: a non-FINISHED LFG group offers the leader
+	// the chance to continue; the state is the pre-removal group state
+	// (g.LFGState is untouched by the LeaveLfg arms above).
+	if g.LFGState != LFGStateFinishedDungeon {
+		if leader := s.findSessionByGUID(g.LeaderGUID); leader != nil {
+			_ = leader.sendLFGOfferContinue(g.LFGDungeonID)
+		}
+	}
+}
+
 // lfgGroupDisbanded mirrors LFGMgr::RemoveGroupData (LFGMgr.cpp:2010-2030)
 // as fired by Group::Disband's OnGroupDisband: every listed member's player
 // entry drops to NONE with a REMOVED_FROM_QUEUE update-party, unless the

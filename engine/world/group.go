@@ -1672,6 +1672,11 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 	}
+	// Group::RemoveMember (Group.cpp:569) fires OnGroupRemoveMember before
+	// any online check, so the offline victim runs the session-less LFG
+	// subset here, ahead of the disband tail below (C++ RemoveMember
+	// script precedes Disband's OnDisband, same as the online path).
+	s.lfgGroupMemberRemovedOffline(g, guid, method)
 	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, guid, method)
 	if disbanded {
 		// Group::Disband (Group.cpp:859-934) via removeFromGroup's tail:
@@ -1708,6 +1713,11 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
 		}
+		// LFGScripts::OnDisband (RemoveGroupData, LFGMgr.cpp:2010-2030):
+		// the online disband path runs this for the survivors; the
+		// offline-kick disband previously skipped it, leaving survivors'
+		// DUNGEON/FINISHED entries behind after the group dissolved.
+		s.lfgGroupDisbanded(g, remaining)
 		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
 	}
