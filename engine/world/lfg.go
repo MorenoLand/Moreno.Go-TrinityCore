@@ -1755,6 +1755,13 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 		// to the role check above.
 		if s.groupID == 0 {
 			if prop := s.server.Features.LFG.FormSoloProposal(s.playerGUID); prop != nil {
+				// LFGMgr::Update (LFGMgr.cpp:371-375) sends the PROPOSAL_BEGIN
+				// player update before the proposal update; the tick path
+				// (deliverLFGProposal) does the same, but a solo proposal
+				// formed here bypasses it.
+				if statusEntry, ok := s.server.Features.LFG.Status(s.playerGUID); ok {
+					_ = s.sendLFGUpdatePlayer(LFGUpdateProposalBegin, statusEntry)
+				}
 				if err := s.sendLFGProposalUpdate(prop); err != nil {
 					return true
 				}
@@ -2952,7 +2959,7 @@ func (s *Server) updateLFGFindGroups() {
 	}
 }
 
-// deliverLFGProposal mirrors the proposal-notify arm of LFGMgr::Update (LFGMgr.cpp:360-373): every proposal member gets the proposal update, grouped members the PROPOSAL_BEGIN party update and solo members the player update.
+// deliverLFGProposal mirrors the proposal-notify arm of LFGMgr::Update (LFGMgr.cpp:360-373): every proposal member gets the PROPOSAL_BEGIN party/player update first and the proposal update second (LFGMgr.cpp:371-375 order), grouped members on the party channel and solo members on the player channel.
 func (s *Server) deliverLFGProposal(prop *LFGProposal) {
 	if s == nil || prop == nil {
 		return
@@ -2967,7 +2974,6 @@ func (s *Server) deliverLFGProposal(prop *LFGProposal) {
 		if ms == nil {
 			continue
 		}
-		_ = ms.sendLFGProposalUpdate(prop)
 		entry := LFGQueueEntry{Dungeons: []uint32{prop.DungeonID}, State: LFGStateProposal}
 		if cur, ok := s.Features.LFG.Status(guid); ok {
 			entry = cur
@@ -2977,6 +2983,7 @@ func (s *Server) deliverLFGProposal(prop *LFGProposal) {
 		} else {
 			_ = ms.sendLFGUpdatePlayer(LFGUpdateProposalBegin, entry)
 		}
+		_ = ms.sendLFGProposalUpdate(prop)
 	}
 }
 
@@ -3235,8 +3242,38 @@ func (s *session) sendRoleCheckAnswerNotifies(rc *LfgRoleCheck, answererGUID uin
 
 func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
 	guid := s.playerGUID
+	// WorldSession::SendLfgUpdateProposal (LFGHandler.cpp:547): the dungeon
+	// field is the DBC entry (id + type<<24), not the stored id, and a
+	// non-silent proposal whose dungeon the recipient did not select shows
+	// the recipient's first selected dungeon instead (a random-queued player
+	// matched to a specific dungeon).
+	displayDungeon := proposal.DungeonID
+	if !proposal.Silent && s != nil && s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
+		if entry, ok := s.server.Features.LFG.Status(guid); ok && len(entry.Dungeons) > 0 {
+			selected := false
+			for _, dungeon := range entry.Dungeons {
+				if dungeon == proposal.DungeonID {
+					selected = true
+					break
+				}
+			}
+			if !selected {
+				displayDungeon = entry.Dungeons[0]
+			}
+		}
+	}
+	dungeonEntry := displayDungeon
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if dungeon, found, err := s.server.Data.LFGDungeon(displayDungeon & 0x00FFFFFF); err == nil {
+			if found {
+				dungeonEntry = dungeon.Entry()
+			} else {
+				dungeonEntry = 0
+			}
+		}
+	}
 	packet := protocol.NewBuffer(64)
-	packet.WriteU32(proposal.DungeonID)
+	packet.WriteU32(dungeonEntry)
 	packet.WriteU8(proposal.State)
 	packet.WriteU32(proposal.ID)
 	packet.WriteU32(proposal.Encounters)
@@ -3247,18 +3284,30 @@ func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
 	}
 	packet.WriteU8(uint8(len(proposal.Players)))
 
-	for pguid, pdata := range proposal.Players {
+	// C++ iterates the std::map, so players are guid-ordered.
+	playerGUIDs := make([]uint64, 0, len(proposal.Players))
+	for pguid := range proposal.Players {
+		playerGUIDs = append(playerGUIDs, pguid)
+	}
+	sort.Slice(playerGUIDs, func(i, j int) bool { return playerGUIDs[i] < playerGUIDs[j] })
+	recipientGroup := uint64(0)
+	if recipient, ok := proposal.Players[guid]; ok {
+		recipientGroup = recipient.Group
+	}
+	for _, pguid := range playerGUIDs {
+		pdata := proposal.Players[pguid]
 		packet.WriteU32(uint32(pdata.Role))
 		if pguid == guid {
 			packet.WriteU8(1) // isSelf
 		} else {
 			packet.WriteU8(0)
 		}
-		packet.WriteU8(0) // inDungeon
-		if s.groupID != 0 && pdata.Group == s.groupID {
-			packet.WriteU8(1) // sameGroup
+		if pdata.Group == 0 {
+			packet.WriteU8(0) // inDungeon
+			packet.WriteU8(0) // sameGroup
 		} else {
-			packet.WriteU8(0)
+			packet.WriteU8(boolToU8(pdata.Group == proposal.Group)) // inDungeon
+			packet.WriteU8(boolToU8(pdata.Group == recipientGroup)) // sameGroup
 		}
 		if pdata.Accept != LFGAnswerPending {
 			packet.WriteU8(1) // answered
