@@ -180,7 +180,7 @@ func (s *Server) finishLFGDungeonForInstance(mapID, instanceID, dungeonID uint32
 		if g := s.getGroup(gid); g == nil || !g.IsLFG {
 			continue
 		}
-		s.completeLFGDungeon(uint32(gid), dungeonID)
+		s.completeLFGDungeon(uint32(gid), dungeonID, mapID)
 		return
 	}
 }

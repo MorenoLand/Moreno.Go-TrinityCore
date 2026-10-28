@@ -4355,7 +4355,9 @@ func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool 
 }
 
 // completeLFGDungeon rewards players in an LFG dungeon group and triggers criteria.
-func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
+// mapID is the instance map the encounter completed on (InstanceScript's
+// currMap); the per-player reward arms check it before paying out.
+func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32, mapID uint32) {
 	s.groupsMu.Lock()
 	grp := s.groups[uint64(groupID)]
 	if grp == nil || !grp.IsLFG {
@@ -4375,6 +4377,10 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 		return
 	}
 	grp.LFGState = LFGStateFinishedDungeon
+	// GetDungeon(gguid, false) is the group's raw stored dungeon, not the
+	// finished dungeon id — capture it before the overwrite below, since
+	// SendLfgPlayerReward sends it as sdungeonEntry.
+	storedGroupDungeon := grp.LFGDungeonID
 	grp.LFGDungeonID = dungeonID
 	dbGroupID := grp.DBID
 	members := append([]groupMember(nil), grp.Members...)
@@ -4385,49 +4391,180 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, dungeonID, LFGStateFinishedDungeon)
 	}
+	// LFGMgr::FinishDungeon (LFGMgr.cpp:1661-1663): the dungeonDone map
+	// check reads the finished dungeon's DBC map, not the selected one.
+	var dungeonDoneMap uint32
+	dungeonDoneOK := false
+	if s.Data != nil {
+		if dungeonDone, found, err := s.Data.LFGDungeon(dungeonID & 0x00FFFFFF); err == nil && found {
+			dungeonDoneMap = uint32(dungeonDone.MapID)
+			dungeonDoneOK = true
+		}
+	}
 	for _, m := range members {
 		// LFGMgr::FinishDungeon (LFGMgr.cpp:1615-1626): a player already
 		// FINISHED is skipped entirely, and every other member flips to
 		// FINISHED — which clears roles and selected dungeons
-		// (LFGPlayerData::SetState) — before any reward is computed.
+		// (LFGPlayerData::SetState) — before any reward is computed, so
+		// the first selected dungeon is captured before the flip.
+		var rDungeonID uint32
 		if s.Features != nil && s.Features.LFG != nil {
-			if entry, ok := s.Features.LFG.Status(m.GUID); ok && entry.State == LFGStateFinishedDungeon {
+			entry, ok := s.Features.LFG.Status(m.GUID)
+			if ok && entry.State == LFGStateFinishedDungeon {
 				continue
+			}
+			if ok && len(entry.Dungeons) > 0 {
+				rDungeonID = entry.Dungeons[0]
 			}
 			s.Features.LFG.SetState(m.GUID, LFGStateFinishedDungeon)
 		}
-		if sess := s.findSessionByGUID(m.GUID); sess != nil {
-			// LFGMgr::FinishDungeon (LFGMgr.cpp:1664-1673): the only LFG
-			// achievement criteria the C++ server fires is
-			// USE_LFD_TO_GROUP_WITH_PLAYERS, for heroic random dungeons,
-			// miscValue = 5 minus the party size at join recorded at
-			// proposal success, or the fallback 4 when that count is
-			// unknown (zero). The C++ never fires LFG_COMPLETION or
-			// LFG_DUNGEON_REWARD.
-			if s.Data != nil {
-				if dungeon, found, err := s.Data.LFGDungeon(dungeonID & 0x00FFFFFF); err == nil && found &&
-					(dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0) &&
-					dungeon.Difficulty == 1 {
-					misc := uint32(4)
-					if sess.lfgPartyMembersAtJoin != 0 {
-						misc = 5 - uint32(sess.lfgPartyMembersAtJoin)
-					}
-					sess.updateAchievementCriteria(criteriaTypeUseLFDToGroup, misc, 1)
-				}
-			}
-			_ = sess.sendLFGDungeonReward(dungeonID)
+		sess := s.findSessionByGUID(m.GUID)
+		if sess == nil || sess.player == nil {
+			continue
 		}
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1631-1643): rewards only for
+		// a random or seasonal selected dungeon; a specific-dungeon
+		// selection (or no selection at all) pays nothing.
+		if s.Data == nil {
+			continue
+		}
+		rDungeon, found, err := s.Data.LFGDungeon(rDungeonID & 0x00FFFFFF)
+		if err != nil || !found {
+			continue
+		}
+		if rDungeon.TypeID != LFGDungeonTypeRandom && rDungeon.Flags&lfgFlagSeasonal == 0 {
+			continue
+		}
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1650-1651): a player on a
+		// different map than the completed instance gets no reward.
+		if sess.player.Map != mapID {
+			continue
+		}
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1653): the dungeon cooldown
+		// aura comes off before the dungeon-map check, so a player in
+		// the instance but on the wrong dungeon map still loses it.
+		sess.removeAura(lfgSpellDungeonCooldown)
+		if !dungeonDoneOK || sess.player.Map != dungeonDoneMap {
+			continue
+		}
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1664-1673): the only LFG
+		// achievement criteria the C++ server fires is
+		// USE_LFD_TO_GROUP_WITH_PLAYERS, for heroic random dungeons,
+		// miscValue = 5 minus the party size at join recorded at
+		// proposal success, or the fallback 4 when that count is
+		// unknown (zero). The C++ never fires LFG_COMPLETION or
+		// LFG_DUNGEON_REWARD. The difficulty gate reads the selected
+		// random dungeon, not the finished one.
+		if rDungeon.Difficulty == 1 {
+			misc := uint32(4)
+			if sess.lfgPartyMembersAtJoin != 0 {
+				misc = 5 - uint32(sess.lfgPartyMembersAtJoin)
+			}
+			sess.updateAchievementCriteria(criteriaTypeUseLFDToGroup, misc, 1)
+		}
+		detail, done, ok := sess.lfgFinishDungeonReward(context.Background(), rDungeon.ID, sess.player.Level)
+		if !ok {
+			continue
+		}
+		_ = sess.sendLFGDungeonReward(context.Background(), rDungeon.Entry(), storedGroupDungeon, done, detail)
 	}
 }
 
-// sendLFGDungeonReward sends SMSG_LFG_PLAYER_REWARD (0x1FF) to the client.
-func (s *session) sendLFGDungeonReward(dungeonID uint32) error {
-	packet := protocol.NewBuffer(32)
-	packet.WriteU32(dungeonID)
-	packet.WriteU32(dungeonID)
-	packet.WriteU32(0) // copper
-	packet.WriteU32(0) // xp
-	packet.WriteU8(0)  // reward count
+// lfgFinishDungeonReward mirrors the FinishDungeon reward-quest selection
+// (LFGMgr.cpp:1672-1696): the lfg_dungeon_rewards row for the selected
+// random dungeon whose maxLevel first reaches the player level (an
+// out-leveled player keeps the last, highest-maxLevel row, per the
+// GetRandomDungeonReward assign-before-break quirk), firstQuest unless
+// the player can no longer earn it, in which case otherQuest with
+// done set. ok is false when no quest template resolves, matching the
+// C++ continue arms — and the actual RewardQuest grant itself is not
+// done here (no Go DF-grant path exists yet); only the packet values
+// are ported.
+func (s *session) lfgFinishDungeonReward(ctx context.Context, dungeonID uint32, level uint8) (questDetailData, bool, bool) {
+	var firstQuest, otherQuest uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx,
+			"SELECT firstQuestId, otherQuestId, maxLevel FROM lfg_dungeon_rewards WHERE dungeonId = ? ORDER BY maxLevel ASC",
+			dungeonID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var maxLevel uint8
+				if scanErr := rows.Scan(&firstQuest, &otherQuest, &maxLevel); scanErr != nil {
+					break
+				}
+				if maxLevel >= level {
+					break
+				}
+			}
+		}
+	}
+	if firstQuest == 0 {
+		return questDetailData{}, false, false
+	}
+	detail, err := s.loadQuestDetailData(ctx, firstQuest)
+	if err != nil {
+		return questDetailData{}, false, false
+	}
+	// Player::CanRewardQuest (Player.cpp:15059) fails once the daily is
+	// turned in; same derivation as writeLFGRandomDungeonReward.
+	done := s.isQuestRewarded(ctx, firstQuest)
+	if canTake, err := s.canTakeQuest(ctx, firstQuest); err == nil && !canTake {
+		if status, serr := s.characterQuestStatus(ctx, firstQuest); serr != nil || status == 0 {
+			done = true
+		}
+	}
+	if done {
+		if otherQuest == 0 {
+			return questDetailData{}, false, false
+		}
+		other, err := s.loadQuestDetailData(ctx, otherQuest)
+		if err != nil {
+			return questDetailData{}, false, false
+		}
+		return other, true, true
+	}
+	return detail, false, true
+}
+
+// sendLFGDungeonReward sends SMSG_LFG_PLAYER_REWARD (0x1FF) to the client,
+// mirroring WorldSession::SendLfgPlayerReward (LFGHandler.cpp:478-510):
+// random dungeon entry, finished dungeon entry, done flag, a constant 1,
+// the quest's reward-or-required money and XP reward, two zero words,
+// then the quest's non-empty reward items with display ids and counts.
+// A zero random or finished entry, like a missing quest, sends nothing.
+func (s *session) sendLFGDungeonReward(ctx context.Context, rdungeonEntry, sdungeonEntry uint32, done bool, detail questDetailData) error {
+	if rdungeonEntry == 0 || sdungeonEntry == 0 || detail.ID == 0 {
+		return nil
+	}
+	packet := protocol.NewBuffer(64)
+	packet.WriteU32(rdungeonEntry)
+	packet.WriteU32(sdungeonEntry)
+	if done {
+		packet.WriteU8(1)
+	} else {
+		packet.WriteU8(0)
+	}
+	packet.WriteU32(1)
+	packet.WriteU32(uint32(s.questRewOrReqMoney(detail)))
+	packet.WriteU32(s.questXPRewardRaw(ctx, detail.ID, detail.RewardXPDifficulty))
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	var count uint8
+	for _, item := range detail.RewardItems {
+		if item.ID != 0 {
+			count++
+		}
+	}
+	packet.WriteU8(count)
+	for _, item := range detail.RewardItems {
+		if item.ID == 0 {
+			continue
+		}
+		packet.WriteU32(item.ID)
+		packet.WriteU32(item.DisplayID)
+		packet.WriteU32(item.Quantity)
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_REWARD), packet.Bytes(), true)
 }
 
