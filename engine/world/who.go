@@ -301,22 +301,44 @@ func (s *session) handleWhoIs(ctx context.Context, payload []byte) bool {
 // inspectWithinDistance mirrors the range arm of the inspect-family handlers
 // (MiscHandler.cpp:1018/1050/1423, ArenaTeamHandler.cpp:48):
 // IsWithinDistInMap(player, INSPECT_DISTANCE, false) — the false selects the 2D
-// distance. Bounding radii have no Go model.
+// distance, while the radii default true: _IsWithinDist (Object.cpp:1147-1166)
+// compares against INSPECT_DISTANCE plus both combat reaches (players carry
+// scale * DEFAULT_PLAYER_COMBAT_REACH = 1.5, Player.cpp:2012,
+// ObjectDefines.h:40).
 func inspectWithinDistance(requester, target *playerState) bool {
 	dx := float64(requester.X - target.X)
 	dy := float64(requester.Y - target.Y)
-	return math.Sqrt(dx*dx+dy*dy) <= inspectDistance
+	return math.Sqrt(dx*dx+dy*dy) <= inspectDistance+inspectCombatReach(requester)+inspectCombatReach(target)
 }
 
-// inspectBlockedByHostility mirrors the player-vs-player PvP arm of
-// WorldObject::IsValidAttackTarget (Object.cpp:3006-3017): same-team pairs are
-// never valid attack targets (the duel/arena arms need duel state Go does not
-// feed here); a cross-team target blocks inspect only while it IsPvP()
+func inspectCombatReach(p *playerState) float64 {
+	if p != nil && p.CombatReach > 0 {
+		return float64(p.CombatReach)
+	}
+	return 1.5
+}
+
+// inspectBlockedByHostility mirrors the player-vs-player arms of
+// WorldObject::IsValidAttackTarget (Object.cpp:2930-3079): the can't-attack-GM
+// arm (IsGameMaster = PLAYER_EXTRA_GM_ON, Player.h:959), the can't-attack-dead
+// arm and the can't-attack-untargetable arm (UNIT_FLAG_NOT_SELECTABLE) all
+// allow inspect before the PvP tail runs; same-team pairs are never valid
+// attack targets (the duel/arena arms need duel state Go does not feed here);
+// a cross-team target blocks inspect only while it IsPvP()
 // (PLAYER_FLAGS_IN_PVP is Go's modeled proxy — the UNIT byte flag and the
 // EndTimer/hostile-area machinery have no Go model), both sides carry
 // UNIT_BYTE2_FLAG_FFA_PVP, or either side carries UNIT_BYTE2_FLAG_UNK1 (no Go
-// model). Sanctuary, GM-mode targets and the UNK1 byte flag stay documented gaps.
+// model). Sanctuary and the UNK1 byte flag stay documented gaps.
 func inspectBlockedByHostility(requester, target *playerState) bool {
+	if target.ExtraFlags&playerExtraGMOn != 0 {
+		return false
+	}
+	if target.Health == 0 {
+		return false
+	}
+	if target.UnitFlags&unitFlagNotSelectable != 0 {
+		return false
+	}
 	if playerTeam(requester.Race) == playerTeam(target.Race) {
 		return false
 	}
