@@ -2049,6 +2049,10 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	if s == nil || g == nil || !g.IsLFG || target == nil || target.player == nil {
 		return
 	}
+	if s.Features != nil && s.Features.LFG != nil &&
+		s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
 	// LFGMgr::LeaveLfg (LFGMgr.cpp:714-800) switches on the removed
 	// player's own entry state and runs before the general-path arms.
 	// Go tracks PROPOSAL on player entries, not on groupState, so the
@@ -2151,6 +2155,9 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 // diverts LFG kicks to a boot vote before reaching the offline path.
 func (s *Server) lfgGroupMemberRemovedOffline(g *groupState, guid uint64, method uint8) {
 	if s == nil || g == nil || !g.IsLFG || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
 		return
 	}
 	if method == groupRemoveMethodKick {
@@ -2369,6 +2376,9 @@ func (s *Server) lfgOnPlayerLogout(sess *session, disconnected bool) {
 // early and nothing is sent.
 func (s *Server) lfgGroupDisbanded(g *groupState, memberGUIDs []uint64) {
 	if s == nil || g == nil || !g.IsLFG || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
 		return
 	}
 	footprint := g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon
@@ -2633,6 +2643,10 @@ func (s *Server) initLFGBoot(g *groupState, kickerGUID, victimGUID uint64, reaso
 	if s == nil || g == nil {
 		return
 	}
+	if s.Features != nil && s.Features.LFG != nil &&
+		s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
 	boot := &lfgPlayerBoot{
 		cancelTime: time.Now().Unix() + lfgTimeBoot,
 		inProgress: true,
@@ -2746,6 +2760,10 @@ func (s *Server) lfgBootVote(ctx context.Context, voter *session, accept bool) {
 // state clears. No kicks are spent on expiry.
 func (s *Server) updateLFGBootVotes(now time.Time) {
 	if s == nil {
+		return
+	}
+	if s.Features != nil && s.Features.LFG != nil &&
+		s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
 		return
 	}
 	nowSec := now.Unix()

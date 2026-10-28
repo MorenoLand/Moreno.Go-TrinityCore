@@ -87,6 +87,7 @@ func attachGroupMutations(srv *Server, obj *scripting.Object, groupID uint64) {
 		// validity, like the CMSG_GROUP_ACCEPT path.
 		sess.instanceValid = sess.checkInstanceValidity(ctx, g)
 		if srv.Features != nil && srv.Features.LFG != nil &&
+			srv.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 &&
 			srv.Features.LFG.Leave(playerGUID) {
 			_ = sess.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: playerGUID, State: LFGStateNone})
 		}
@@ -96,7 +97,8 @@ func attachGroupMutations(srv *Server, obj *scripting.Object, groupID uint64) {
 		// leaves the queue when a member joins. The joiner is excluded:
 		// C++ runs the leave arms before SetGroup/AddPlayerToGroup, so
 		// the joiner is not yet group LFG membership.
-		if srv.Features != nil && srv.Features.LFG != nil {
+		if srv.Features != nil && srv.Features.LFG != nil &&
+			srv.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 {
 			restore := g.IsLFG && g.LFGDungeonID != 0 &&
 				(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
 			if affected := srv.Features.LFG.LeaveQueuedGroup(g.ID, playerGUID, restore, g.LFGState); len(affected) > 0 {

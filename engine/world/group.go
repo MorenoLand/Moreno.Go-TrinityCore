@@ -1013,7 +1013,8 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		// a leader mid-proposal is marked DENY and the proposal is
 		// removed declined (LFGMgr.cpp:754-779), while a leader in any
 		// other non-queued state is a no-op here.
-		if s.server.Features != nil && s.server.Features.LFG != nil {
+		if s.server.Features != nil && s.server.Features.LFG != nil &&
+			s.server.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 {
 			if s.server.Features.LFG.Leave(s.playerGUID) {
 				_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
 			} else if prop := s.server.Features.LFG.DeclineProposalForPlayer(s.playerGUID); prop != nil {
@@ -1172,6 +1173,7 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	// (SetGroup/AddPlayerToGroup/SetLeader) has no Go counterpart — Go keeps
 	// no per-group LFG data.
 	if srv.Features != nil && srv.Features.LFG != nil &&
+		srv.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 &&
 		srv.Features.LFG.Leave(s.playerGUID) {
 		_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
 	}
@@ -1184,7 +1186,8 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	// is the restore state). The joiner is excluded: C++ runs the leave
 	// arms before SetGroup/AddPlayerToGroup, so the joiner is not yet
 	// group LFG membership.
-	if srv.Features != nil && srv.Features.LFG != nil {
+	if srv.Features != nil && srv.Features.LFG != nil &&
+		srv.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 {
 		restore := g.IsLFG && g.LFGDungeonID != 0 &&
 			(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
 		if affected := srv.Features.LFG.LeaveQueuedGroup(g.ID, s.playerGUID, restore, g.LFGState); len(affected) > 0 {
