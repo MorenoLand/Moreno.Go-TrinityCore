@@ -39,6 +39,7 @@ const (
 	WGSpellTenacityVehicle                   uint32 = 59911
 	WGSpellTowerControl                      uint32 = 62064
 	WGSpellSpiritualImmunity                 uint32 = 58729
+	WGSpellRestrictedFlightArea              uint32 = 58730
 	WGSpellGreatHonor                        uint32 = 58555
 	WGSpellGreaterHonor                      uint32 = 58556
 	WGSpellGreatestHonor                     uint32 = 58557
@@ -438,7 +439,10 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	wg.TotalDuration = WGNoWarDuration
 	wg.EndTime = time.Now().Add(WGNoWarDuration)
 
-	// Reward players
+	// Reward players: OnBattleEnd rewards and aura-strips reach
+	// m_PlayersInWar only (BattlefieldWG.cpp:704-731) — the old
+	// all-sessions loop handed victory/defeat rewards to every player
+	// of the team anywhere in the world, not just war participants.
 	// Reference: BattlefieldWG::OnBattleEnd (BattlefieldWG.cpp:651-760).
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
@@ -448,7 +452,7 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		pGUID := sess.playerGUID
 		pTeam, inWar := wg.PlayersInWar[pGUID]
 		if !inWar {
-			pTeam = teamForRace(sess.player.Race)
+			continue
 		}
 
 		// Remove wartime auras (BattlefieldWG::RemoveAurasFromPlayer,
@@ -459,6 +463,7 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		sess.removeAura(WGSpellTenacity)
 		sess.removeAura(WGSpellTowerControl)
 		sess.removeAura(WGSpellSpiritualImmunity)
+		sess.removeAura(WGSpellRestrictedFlightArea)
 		sess.removeAura(WGSpellGreatHonor)
 		sess.removeAura(WGSpellGreaterHonor)
 		sess.removeAura(WGSpellGreatestHonor)
@@ -466,45 +471,47 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		if pTeam == winningTeam {
 			sess.applyAura(WGSpellEssenceOfWintergrasp)
 			sess.applyAura(WGSpellVictoryReward)
-			if inWar {
-				sess.completeAchievement(WGAchievementWinWG)
-				if !endByTimer && remainingBattleTime <= 10*time.Second {
-					sess.completeAchievement(WGAchievementWinWGTimer10)
-				}
-				// Complete victory quests (Player::AreaExploredOrEventHappens,
-				// BattlefieldWG.cpp:719-720)
-				for _, questID := range [2]uint32{WGQuestVictoryAlliance, WGQuestVictoryHorde} {
-					if status, _ := sess.characterQuestStatus(context.Background(), questID); status == questStatusIncomplete {
-						sess.sendQuestComplete(questID)
-						sess.completeQuest(context.Background(), questID)
-					}
-				}
+			sess.completeAchievement(WGAchievementWinWG)
+			if !endByTimer && remainingBattleTime <= 10*time.Second {
+				sess.completeAchievement(WGAchievementWinWGTimer10)
 			}
-			if pTeam == WGTeamAlliance {
-				sess.applyAura(WGSpellAllianceControlPhaseShift)
-				sess.removeAura(WGSpellHordeControlPhaseShift)
-			} else {
-				sess.applyAura(WGSpellHordeControlPhaseShift)
-				sess.removeAura(WGSpellAllianceControlPhaseShift)
+			// Complete victory quests (Player::AreaExploredOrEventHappens,
+			// BattlefieldWG.cpp:719-720)
+			for _, questID := range [2]uint32{WGQuestVictoryAlliance, WGQuestVictoryHorde} {
+				if status, _ := sess.characterQuestStatus(context.Background(), questID); status == questStatusIncomplete {
+					sess.sendQuestComplete(questID)
+					sess.completeQuest(context.Background(), questID)
+				}
 			}
 		} else if pTeam == losingTeam {
 			sess.removeAura(WGSpellEssenceOfWintergrasp)
 			sess.applyAura(WGSpellDefeatReward)
-			if !endByTimer {
-				// On a relic capture every player swaps to the new defender's
-				// control phase shift (BattlefieldWG.cpp:747-757); on a
-				// successful defense the shifts are untouched.
-				if winningTeam == WGTeamAlliance {
-					sess.removeAura(WGSpellHordeControlPhaseShift)
-					sess.applyAura(WGSpellAllianceControlPhaseShift)
-				} else {
-					sess.removeAura(WGSpellAllianceControlPhaseShift)
-					sess.applyAura(WGSpellHordeControlPhaseShift)
-				}
-			}
 		}
 	}
 	s.sessionsMu.RUnlock()
+
+	if !endByTimer {
+		// On a relic capture every player in the zone swaps to the new
+		// defender's control phase shift (BattlefieldWG.cpp:747-757, the
+		// m_players zone-roster loop); on a successful defense the shifts
+		// are untouched. The old winner/loser arms applied the swap to
+		// every session of the team world-wide, and the winner arm did so
+		// even on a timer defense.
+		s.sessionsMu.RLock()
+		for sess := range s.sessions {
+			if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
+				continue
+			}
+			if winningTeam == WGTeamAlliance {
+				sess.removeAura(WGSpellHordeControlPhaseShift)
+				sess.applyAura(WGSpellAllianceControlPhaseShift)
+			} else {
+				sess.removeAura(WGSpellAllianceControlPhaseShift)
+				sess.applyAura(WGSpellHordeControlPhaseShift)
+			}
+		}
+		s.sessionsMu.RUnlock()
+	}
 
 	// Despawn vehicles
 	wg.VehiclesAlliance = 0
