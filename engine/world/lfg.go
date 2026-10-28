@@ -2211,7 +2211,19 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	}
 	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
 	if target.isDungeonMap(target.player.Map) {
-		target.teleportToBGEntryPoint()
+		// LFGMgr::TeleportPlayer out leg (LFGMgr.cpp:1529-1537): the
+		// script gate is any dungeon map, but the out leg teleports
+		// only from the group's own dungeon map, and an unresolvable
+		// group dungeon sends INVALID_LOCATION instead of teleporting.
+		if s.Data != nil {
+			if dungeon, found, _ := s.Data.LFGDungeon(g.LFGDungeonID & 0x00FFFFFF); found {
+				if dungeon.MapID >= 0 && target.player.Map == uint32(dungeon.MapID) {
+					target.teleportToBGEntryPoint()
+				}
+			} else {
+				target.sendLFGTeleportDenied(LFGTeleportErrorInvalidLocation)
+			}
+		}
 	}
 	// LFGScripts.cpp:224-227: a non-FINISHED LFG group offers the leader
 	// the chance to continue — the state is the group state from before
