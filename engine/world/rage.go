@@ -330,7 +330,7 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: unitDynFlagLootable,
 		})
-		s.server.broadcastThreatClearInInstance(mapID, instanceID, guid)
+		s.server.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid)
 		s.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
 		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
 		// (Unit.cpp:11466-11480) — the shared damage keeps the original

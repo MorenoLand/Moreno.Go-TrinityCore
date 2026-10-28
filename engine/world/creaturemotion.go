@@ -2255,7 +2255,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
 	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
-	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.GUID)
+	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID)
 	// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
 	// evade drops the creature from everyone else's threat table too, so no
 	// stale entry keeps another creature hunting an evaded/reset target.
@@ -3071,17 +3071,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		passive := isCreaturePassive(motion)
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
-			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries())
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim
 				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), nil)
-				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, victim, motion.ThreatMgr.SortedEntries())
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, victim, motion.ThreatMgr.SortedEntries())
 			}
 		} else if dirty {
 			// The list moved without a victim switch: SendThreatListToClients
 			// sends SMSG_THREAT_UPDATE (ThreatManager.cpp:524, 770-787).
-			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.ThreatMgr.SortedEntries())
+			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntries())
 		}
 	}
 	if motion.Moving {
@@ -3154,7 +3154,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
 				entries := motion.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries)
 				return
 			}
 			s.triggerCreatureEvade(ctx, motion, now)
@@ -3245,7 +3245,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					nextVictim := motion.ThreatMgr.GetCurrentVictim()
 					motion.TargetGUID = nextVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, nextVictim, entries)
+					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries)
 					return
 				}
 				s.triggerCreatureEvade(ctx, motion, now)

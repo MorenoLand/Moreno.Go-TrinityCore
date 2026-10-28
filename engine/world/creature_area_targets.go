@@ -1774,7 +1774,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		s.procCreatureLethalDamageAuras(victimKey, spellID, damage, maxHealth)
 		s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, victimGUID, liveX, liveY, liveZ)
 		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, victimGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
-		s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, victimGUID)
+		s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, liveX, liveY, liveZ, victimGUID)
 		// Unit::Kill's death chain (Unit.cpp:11320 setDeathState
 		// JUST_DIED, :11385-11391 KilledUnit/JustDied): the strip
 		// precedes the hooks, so the taken-proc leg below evaluates
@@ -2988,7 +2988,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: unitDynFlagLootable,
 		})
-		s.broadcastThreatClearInInstance(mapID, instanceID, guid)
+		s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid)
 		// Unit::Kill death chain for the self-trip, gated on
 		// killCredit == nil like the stamp below: a credited trip
 		// already runs the full chain via the session funnel, and

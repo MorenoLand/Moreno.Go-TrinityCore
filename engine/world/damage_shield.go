@@ -461,7 +461,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.broadcastThreatClearInInstance(key.Map, key.InstanceID, key.GUID)
+		s.broadcastThreatClearInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID)
 		if attackerSess != nil {
 			_ = attackerSess.sendAttackStop(key.GUID, true)
 			attackerSess.attackTarget = 0
@@ -618,7 +618,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, key.GUID, newVictim, entries)
+				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, newVictim, entries)
 			}
 		}
 	}

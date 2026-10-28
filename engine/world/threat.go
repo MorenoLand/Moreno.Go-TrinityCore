@@ -805,7 +805,7 @@ func (s *session) handleEffectModifyThreatPercent(ctx context.Context, spell wot
 		s.server.motionMu.Lock()
 		if m := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID); m != nil {
 			m.TargetGUID = newVictim
-			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, tm.SortedEntries())
+			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, tm.SortedEntries())
 		}
 		s.server.motionMu.Unlock()
 	}
@@ -906,39 +906,19 @@ func (tm *ThreatManager) SortedEntries() []protocol.ThreatEntry {
 	return list
 }
 
-// Broadcast helpers for Threat Packets
-func (s *Server) broadcastThreatUpdate(mapID uint32, creatureGUID uint64, list []protocol.ThreatEntry) {
-	if s == nil {
-		return
-	}
+// Threat broadcast helpers
+// broadcastThreatUpdateInInstance fans SMSG_THREAT_UPDATE out to the
+// visibility set around the threat owner (ThreatManager::SendThreatListToClients,
+// ThreatManager.cpp:770-788: _owner->SendMessageToSet(&data, false)); the
+// source is nil because the owner is a creature, so no player self leg exists.
+func (s *Server) broadcastThreatUpdateInInstance(mapID, instanceID uint32, x, y, z float32, creatureGUID uint64, list []protocol.ThreatEntry) {
 	payload := protocol.BuildThreatUpdate(creatureGUID, list)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_UPDATE), payload, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_THREAT_UPDATE), payload, mapID, instanceID, x, y, z, nil)
 }
 
-func (s *Server) broadcastThreatUpdateInInstance(mapID, instanceID uint32, creatureGUID uint64, list []protocol.ThreatEntry) {
-	payload := protocol.BuildThreatUpdate(creatureGUID, list)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_UPDATE), payload, nil)
-}
-
-func (s *Server) broadcastHighestThreatUpdate(mapID uint32, creatureGUID, highestGUID uint64, list []protocol.ThreatEntry) {
-	if s == nil {
-		return
-	}
+func (s *Server) broadcastHighestThreatUpdateInInstance(mapID, instanceID uint32, x, y, z float32, creatureGUID, highestGUID uint64, list []protocol.ThreatEntry) {
 	payload := protocol.BuildHighestThreatUpdate(creatureGUID, highestGUID, list)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, nil)
-}
-
-func (s *Server) broadcastHighestThreatUpdateInInstance(mapID, instanceID uint32, creatureGUID, highestGUID uint64, list []protocol.ThreatEntry) {
-	payload := protocol.BuildHighestThreatUpdate(creatureGUID, highestGUID, list)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, nil)
-}
-
-func (s *Server) broadcastThreatRemove(mapID uint32, creatureGUID, victimGUID uint64) {
-	if s == nil {
-		return
-	}
-	payload := protocol.BuildThreatRemove(creatureGUID, victimGUID)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, mapID, instanceID, x, y, z, nil)
 }
 
 // sumThreatTempModifier sums the SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
@@ -1024,12 +1004,9 @@ func (s *Server) refreshThreatTempModifier(mapID, instanceID uint32, unitGUID ui
 	}
 }
 
-func (s *Server) broadcastThreatRemoveInInstance(mapID, instanceID uint32, creatureGUID, victimGUID uint64) {
-	if s == nil {
-		return
-	}
+func (s *Server) broadcastThreatRemoveInInstance(mapID, instanceID uint32, x, y, z float32, creatureGUID, victimGUID uint64) {
 	payload := protocol.BuildThreatRemove(creatureGUID, victimGUID)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_THREAT_REMOVE), payload, mapID, instanceID, x, y, z, nil)
 }
 
 // removeThreatVictimFromAllLists drops victimGUID from every other unit's
@@ -1064,7 +1041,7 @@ func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victim
 			continue
 		}
 		motion.ThreatMgr.RemoveThreat(victimGUID)
-		s.broadcastThreatRemoveInInstance(mapID, instanceID, ownerGUID, victimGUID)
+		s.broadcastThreatRemoveInInstance(mapID, instanceID, motion.X, motion.Y, motion.Z, ownerGUID, victimGUID)
 	}
 }
 
@@ -1242,26 +1219,15 @@ func (s *Server) zeroThreatOnAllLists(mapID, instanceID uint32, targetGUID uint6
 		s.motionMu.Lock()
 		if m := s.findCreatureMotionLocked(mapID, instanceID, ownerGUID); m != nil {
 			m.TargetGUID = newVictim
-			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, motion.ThreatMgr.SortedEntries())
+			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, motion.ThreatMgr.SortedEntries())
 		}
 		s.motionMu.Unlock()
 	}
 }
 
-func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
-	if s == nil {
-		return
-	}
+func (s *Server) broadcastThreatClearInInstance(mapID, instanceID uint32, x, y, z float32, creatureGUID uint64) {
 	payload := protocol.BuildThreatClear(creatureGUID)
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, nil)
-}
-
-func (s *Server) broadcastThreatClearInInstance(mapID, instanceID uint32, creatureGUID uint64) {
-	if s == nil {
-		return
-	}
-	payload := protocol.BuildThreatClear(creatureGUID)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, mapID, instanceID, x, y, z, nil)
 }
 
 // getThreatMultiplier calculates the session's current threat multiplier based on active stances and auras.
@@ -1398,7 +1364,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
-		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
 	}
 	motion.InCombat = true
 	motion.Moving = true
@@ -1551,7 +1517,7 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
-			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
+			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
 	}

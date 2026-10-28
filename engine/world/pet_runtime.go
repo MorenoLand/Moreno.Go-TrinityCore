@@ -468,6 +468,7 @@ func (s *Server) updatePetRuntime(ctx context.Context, now time.Time, diff time.
 		instanceID   uint32
 		guid         uint64
 		ownerGUID    uint64
+		x, y, z      float32
 		currentPower uint32
 		fields       map[int]uint32
 	}
@@ -544,7 +545,7 @@ func (s *Server) updatePetRuntime(ctx context.Context, now time.Time, diff time.
 			if motion.PowerType < uint32(len(motion.Powers)) {
 				currentPower = motion.Powers[motion.PowerType]
 			}
-			updates = append(updates, petUpdate{mapID: petMotion.mapID, instanceID: petMotion.instanceID, guid: motion.GUID, ownerGUID: motion.OwnerGUID, currentPower: currentPower, fields: fields})
+			updates = append(updates, petUpdate{mapID: petMotion.mapID, instanceID: petMotion.instanceID, guid: motion.GUID, ownerGUID: motion.OwnerGUID, currentPower: currentPower, fields: fields, x: motion.X, y: motion.Y, z: motion.Z})
 		}
 		s.motionMu.Unlock()
 	}
@@ -559,7 +560,7 @@ func (s *Server) updatePetRuntime(ctx context.Context, now time.Time, diff time.
 			packet.WritePackedGUID(update.guid)
 			packet.WriteU8(uint8(powerType))
 			packet.WriteU32(power)
-			s.broadcastToInstance(update.mapID, update.instanceID, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), update.mapID, update.instanceID, update.x, update.y, update.z, nil)
 		}
 		// Pet power for the party frame rides the 5s SMSG_PARTY_MEMBER_STATS
 		// delta flush (flushGroupMemberStats, mirroring Unit::SetPower's

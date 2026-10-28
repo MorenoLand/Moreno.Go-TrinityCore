@@ -746,8 +746,8 @@ const (
 // (Spell.cpp:4283): m_caster->SendMessageToSet(packet.Write(), true) puts
 // the cast-start packet in front of everyone in range, self included —
 // nearby players see the caster's cast bar. Previously Go sent
-// SMSG_SPELL_START self-only; the broadcast rides Go's map+instance-wide
-// grid model, the same path as the SMSG_SPELL_GO broadcast.
+// SMSG_SPELL_START self-only; the others leg is the visibility set
+// (SendMessageToSet true), the same gating as the SMSG_SPELL_GO broadcast.
 func (s *session) sendSpellStart(packet []byte) error {
 	if s == nil {
 		return nil
@@ -756,7 +756,7 @@ func (s *session) sendSpellStart(packet []byte) error {
 		return err
 	}
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_START), packet, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_START), packet)
 	}
 	return nil
 }
@@ -8709,7 +8709,7 @@ func (s *session) applySchoolDMGFamilyArms(effCtx context.Context, spell wotlk.S
 		powerPacket.WriteU32(s.player.Powers[powerEnergy])
 		_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes())
 		}
 		ap := s.totalAttackPowerValue(false)
 		multiple := ap/410 + spell.Effects[effectIndex].ChainAmplitude
@@ -10508,7 +10508,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			powerPacket.WriteU32(s.player.Powers[pType])
 			_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
 			if s.server != nil {
-				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+				s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes())
 			}
 			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				col := fmt.Sprintf("power%d", pType+1)
@@ -16735,7 +16735,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target, nil)
@@ -16841,7 +16841,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
 				} else {
 					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 				}
@@ -20522,7 +20522,7 @@ func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, power
 	packet.WriteU32(newPower)
 	_ = target.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
 	if target.server != nil {
-		target.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), target)
+		target.server.broadcastToVisibleSetFromSession(target, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes())
 		if target.server.CharactersStore != nil && target.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", index+1)
 			_, _ = target.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), newPower, target.playerGUID)
@@ -20612,7 +20612,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	guid := motion.GUID
 	s.server.motionMu.Unlock()
 	if switched {
-		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, guid, victim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, motion.X, motion.Y, motion.Z, guid, victim, entries)
 	}
 	if !wasInCombat {
 		s.server.broadcastAIReactionInInstance(mapID, s.player.InstanceID, guid, 2)
@@ -33182,7 +33182,7 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 		unitFieldHealth:       0,
 		unitFieldDynamicFlags: corpseFlags,
 	})
-	srv.broadcastThreatClearInInstance(mapID, instanceID, casterGUID)
+	srv.broadcastThreatClearInInstance(mapID, instanceID, cx, cy, cz, casterGUID)
 	srv.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID})
 	if s.player != nil {
 		// C++ Unit::Kill runs with the caster as its own killer; no player
@@ -33356,7 +33356,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				unitFieldHealth:       0,
 				unitFieldDynamicFlags: corpseFlags,
 			})
-			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.GUID)
+			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
 			s.server.clearCreatureAuras(key)
 		}
 		_ = s.sendAttackStop(target.GUID, true)
@@ -35270,7 +35270,7 @@ func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []
 	// no-bridge. The SMSG_SET_PROJECTILE_POSITION broadcast (SpellHandler.cpp:846-853)
 	// is bridgeable: u64 caster, u8 castCount, 3xf32, sent to the caster's
 	// set including self (SendMessageToSet(&data, true) == self write plus
-	// broadcastToNearby skipping self).
+	// visibility-set fan-out).
 	buf := protocol.NewBuffer(21)
 	buf.WriteU64(casterGuid)
 	buf.WriteU8(castCount)
@@ -35280,7 +35280,7 @@ func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []
 	pkt := buf.Bytes()
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PROJECTILE_POSITION), pkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SET_PROJECTILE_POSITION), pkt, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SET_PROJECTILE_POSITION), pkt)
 	}
 	s.debug("update projectile position", "account", s.accountName, "guid", casterGuid, "spell", spellID, "castCount", castCount, "hit", []float32{hitX, hitY, hitZ})
 	return true
@@ -35711,7 +35711,7 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	packet.WriteU32(uint32(durationMs))
 	_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes())
 	}
 	s.sendPlayerUpdate()
 
@@ -37354,7 +37354,7 @@ func (s *session) takeCastButtonsSpellPower(ctx context.Context, spell wotlk.Spe
 	powerPacket.WriteU32(s.player.Powers[pType])
 	_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes())
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		col := fmt.Sprintf("power%d", pType+1)

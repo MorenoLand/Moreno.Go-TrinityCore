@@ -529,7 +529,7 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
-		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
 	} else {
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 	}
@@ -613,7 +613,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
-		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, newVictim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
 	} else {
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 	}
@@ -699,7 +699,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
-			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.GUID, newVictim, entries)
+			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, entries)
 		}
 		m.Moving = true
 	}
