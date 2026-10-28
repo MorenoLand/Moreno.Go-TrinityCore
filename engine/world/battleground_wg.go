@@ -1939,7 +1939,24 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	}
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
+	// Battlefield::HandlePlayerLeaveZone (Battlefield.cpp:108-118) sends
+	// SendBfLeaveMessage (BattlefieldHandler.cpp:106-116: u32 battleId,
+	// u8 reason, u8(2) BattleStatus, u8(0) Relocated = 7 bytes) when a
+	// wartime war member leaves the zone, before the raid-group removal
+	// and OnPlayerLeaveWar; the default reason is BF_LEAVE_REASON_EXITED
+	// (WorldSession.h:267, 0x08). The send sits here, after the war
+	// erase and before the aura strips below, matching that order.
+	_, wasInWar := wg.PlayersInWar[sess.playerGUID]
+	wasActive := wg.IsActive
 	delete(wg.PlayersInWar, sess.playerGUID)
+	if wasInWar && wasActive {
+		buf := protocol.NewBuffer(7)
+		buf.WriteU32(WGBattleID)
+		buf.WriteU8(8)
+		buf.WriteU8(2)
+		buf.WriteU8(0)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_EJECTED), buf.Bytes(), true)
+	}
 	delete(wg.PlayersInZone, sess.playerGUID)
 	// Battlefield::HandlePlayerLeaveZone (Battlefield.cpp:126-127) erases
 	// the invited and will-be-kick entries alongside the rosters.

@@ -2670,11 +2670,13 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 			wg.mu.Lock()
 			if wg.Enabled && wg.IsActive {
 				afk := s.player.PlayerFlags&playerFlagAFK != 0
-				s.server.joinWGWar(wg, s, teamForRace(s.player.Race))
-				wg.mu.Unlock()
 				// SendBfEntered (BattlefieldHandler.cpp:100): u32 battleId,
 				// u8(1), u8(1), u8(isAFK) — 7 bytes; the AFK byte is read
-				// before the ToggleAFK clear below.
+				// before the ToggleAFK clear below. It goes out BEFORE
+				// joinWGWar: Battlefield::PlayerAcceptInviteToWar
+				// (Battlefield.cpp:390-404) sends ENTERED before the war
+				// insert and OnPlayerJoinWar, so the Recruit and tower
+				// aura packets land after it, not before.
 				buf := protocol.NewBuffer(7)
 				buf.WriteU32(battleID)
 				buf.WriteU8(1)
@@ -2685,6 +2687,8 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 					buf.WriteU8(0)
 				}
 				_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_ENTERED), buf.Bytes(), true)
+				s.server.joinWGWar(wg, s, teamForRace(s.player.Race))
+				wg.mu.Unlock()
 				if afk {
 					s.setPlayerAFK(false)
 				}
