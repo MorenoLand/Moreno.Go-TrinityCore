@@ -5975,7 +5975,9 @@ func (s *session) handleReadItem(ctx context.Context, payload []byte) bool {
 // handlePageTextQuery processes CMSG_PAGE_TEXT_QUERY (0x05A).
 // Reference: WorldSession::HandleQueryPageText (QueryHandler.cpp:277-316).
 func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool {
-	if len(payload) < 4 {
+	// QueryHandler.cpp:281-283: the packet carries pageID + an 8-byte guid
+	// read_skip (throws on a short packet), so fewer than 12 bytes drop.
+	if len(payload) < 12 {
 		return true
 	}
 	r := protocol.NewReader(payload)

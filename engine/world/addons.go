@@ -71,6 +71,16 @@ func buildAddonInfoResponse(payload []byte) ([]byte, bool) {
 			_, _ = decodedReader.ReadU32()
 			addons = append(addons, addonEntry{enabled: enabled != 0, crc: crc})
 		}
+	} else {
+		// AddonHandler.cpp: BuildAddonPacket reads the addon count with
+		// ByteBuffer operator>> (throws on over-read); a decoded block
+		// shorter than 4 bytes sends nothing.
+		return nil, false
+	}
+	// AddonHandler.cpp: the trailing unk4 is read unconditionally after the
+	// addon loop; a block ending inside it throws, so no response goes out.
+	if decodedReader.Remaining() < 4 {
+		return nil, false
 	}
 	response := protocol.NewBuffer(4 + len(addons)*8)
 	for _, addon := range addons {

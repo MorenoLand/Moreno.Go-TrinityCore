@@ -34080,7 +34080,12 @@ func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byt
 // Reference: WorldSession::HandleCorpseMapPositionQuery (QueryHandler.cpp:317).
 func (s *session) handleCorpseMapPositionQuery(payload []byte) bool {
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU32() // unk
+	// QueryHandler.cpp:317-321: the unk u32 is read with ByteBuffer
+	// operator>> (throws on a short packet), so a truncated packet sends
+	// nothing instead of the zeroed response.
+	if _, err := r.ReadU32(); err != nil {
+		return true
+	}
 
 	buf := protocol.NewBuffer(16)
 	buf.WriteF32(0)
