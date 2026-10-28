@@ -444,6 +444,7 @@ type session struct {
 	randomBGWinner               bool
 	bgData                       battlegroundLoginData
 	instanceLockTimes            map[uint32]int64
+	lfgPartyMembersAtJoin        uint8 // LfgPlayerData::m_NumberOfPartyMembersAtJoin (LFGPlayerData.h:75): source group size at proposal success (LFGMgr.cpp:1286-1289); 0 = unknown, FinishDungeon maps it to the fallback 4
 	player                       *playerState
 	visiblePlayersMu             sync.Mutex
 	visiblePlayers               map[uint64]struct{}

@@ -921,6 +921,31 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 			delete(m.groupQueue, player.Group)
 		}
 		m.deleteGroupEntriesContainingLocked(guid)
+		// LFGMgr::RemoveProposal (LFGMgr.cpp:1366-1376): agreeing players
+		// outside a denied group are re-queued, mirroring ExpireProposals.
+		deniedGroups := make(map[uint64]bool)
+		for _, p := range prop.Players {
+			if p.Accept == LFGAnswerDeny && p.Group != 0 {
+				deniedGroups[p.Group] = true
+			}
+		}
+		for pguid, p := range prop.Players {
+			if p.Accept == LFGAnswerDeny || deniedGroups[p.Group] {
+				continue
+			}
+			if entry, ok := m.queue[pguid]; ok {
+				entry.State = LFGStateQueued
+				m.queue[pguid] = entry
+			}
+		}
+		for _, entry := range m.groupQueue {
+			for guid := range prop.Players {
+				if _, ok := entry.Roles[guid]; ok {
+					entry.State = LFGStateQueued
+					break
+				}
+			}
+		}
 		delete(m.proposals, proposalID)
 		return prop, true
 	}
@@ -3104,10 +3129,51 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 	}
 
 	if !accept {
-		for pguid := range proposal.Players {
-			if ps := s.server.findSessionByGUID(pguid); ps != nil {
-				_ = ps.sendLFGProposalUpdate(proposal)
-				_ = ps.sendLFGUpdatePlayer(LFGUpdateProposalDeclined, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
+		// LFGMgr::RemoveProposal with PROPOSAL_DECLINED (LFGMgr.cpp:1306-1380),
+		// mirroring the updateLFGProposalExpiry FAILED arm: deniers get the
+		// decline update, their group-mates the REMOVED update, and agreeing
+		// players outside a denied group the ADDED_TO_QUEUE re-add — each on
+		// the party channel when grouped, the player channel when solo.
+		// Pending players are NOT marked deny on this arm (only the FAILED arm
+		// does that), so a pending group-mate of a denier lands in the
+		// REMOVED case via deniedGroups, not the decline case.
+		deniedGroups := make(map[uint64]bool)
+		for _, player := range proposal.Players {
+			if player.Accept == LFGAnswerDeny && player.Group != 0 {
+				deniedGroups[player.Group] = true
+			}
+		}
+		guids := make([]uint64, 0, len(proposal.Players))
+		for guid := range proposal.Players {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, pguid := range guids {
+			player := proposal.Players[pguid]
+			ps := s.server.findSessionByGUID(pguid)
+			if ps == nil {
+				continue
+			}
+			_ = ps.sendLFGProposalUpdate(proposal)
+			switch {
+			case player.Accept == LFGAnswerDeny:
+				if player.Group != 0 {
+					_ = ps.sendLFGUpdateParty(LFGUpdateProposalDeclined, LFGQueueEntry{})
+				} else {
+					_ = ps.sendLFGUpdatePlayer(LFGUpdateProposalDeclined, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
+				}
+			case player.Group != 0 && deniedGroups[player.Group]:
+				_ = ps.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+			default:
+				entry := LFGQueueEntry{Dungeons: []uint32{proposal.DungeonID}, State: LFGStateQueued}
+				if cur, ok := s.server.Features.LFG.Status(pguid); ok {
+					entry = cur
+				}
+				if player.Group != 0 {
+					_ = ps.sendLFGUpdateParty(LFGUpdateAddedToQueue, entry)
+				} else {
+					_ = ps.sendLFGUpdatePlayer(LFGUpdateAddedToQueue, entry)
+				}
 			}
 		}
 		return true
@@ -3117,8 +3183,27 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 		for pguid := range proposal.Players {
 			if ps := s.server.findSessionByGUID(pguid); ps != nil {
 				_ = ps.sendLFGProposalUpdate(proposal)
-				_ = ps.sendLFGUpdatePlayer(LFGUpdateGroupFound, LFGQueueEntry{GUID: pguid, State: LFGStateDungeon})
+				// LFGMgr::UpdateProposal (LFGMgr.cpp:1243-1266): a grouped
+				// member gets the GROUP_FOUND party update, a solo member
+				// the player update; every member then gets REMOVED on
+				// both channels. Grouped members also record their source
+				// group size for the FinishDungeon achievement count
+				// (LFGMgr.cpp:1286-1289); the sends run before MakeNewGroup
+				// moves anyone, so groupID is still the source group.
+				if proposal.Players[pguid].Group != 0 {
+					_ = ps.sendLFGUpdateParty(LFGUpdateGroupFound, LFGQueueEntry{GUID: pguid, State: LFGStateDungeon})
+					if ps.groupID != 0 {
+						s.server.groupsMu.RLock()
+						if grp := s.server.groups[ps.groupID]; grp != nil {
+							ps.lfgPartyMembersAtJoin = uint8(len(grp.Members))
+						}
+						s.server.groupsMu.RUnlock()
+					}
+				} else {
+					_ = ps.sendLFGUpdatePlayer(LFGUpdateGroupFound, LFGQueueEntry{GUID: pguid, State: LFGStateDungeon})
+				}
 				_ = ps.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
+				_ = ps.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
 			}
 		}
 
@@ -3536,14 +3621,19 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 			// LFGMgr::FinishDungeon (LFGMgr.cpp:1664-1673): the only LFG
 			// achievement criteria the C++ server fires is
 			// USE_LFD_TO_GROUP_WITH_PLAYERS, for heroic random dungeons,
-			// miscValue = random players grouped with (the C++ fallback 4
-			// when the premade count is unknown, which it is here). The C++
-			// never fires LFG_COMPLETION or LFG_DUNGEON_REWARD.
+			// miscValue = 5 minus the party size at join recorded at
+			// proposal success, or the fallback 4 when that count is
+			// unknown (zero). The C++ never fires LFG_COMPLETION or
+			// LFG_DUNGEON_REWARD.
 			if s.Data != nil {
 				if dungeon, found, err := s.Data.LFGDungeon(dungeonID & 0x00FFFFFF); err == nil && found &&
 					(dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0) &&
 					dungeon.Difficulty == 1 {
-					sess.updateAchievementCriteria(criteriaTypeUseLFDToGroup, 4, 1)
+					misc := uint32(4)
+					if sess.lfgPartyMembersAtJoin != 0 {
+						misc = 5 - uint32(sess.lfgPartyMembersAtJoin)
+					}
+					sess.updateAchievementCriteria(criteriaTypeUseLFDToGroup, misc, 1)
 				}
 			}
 			_ = sess.sendLFGDungeonReward(dungeonID)
