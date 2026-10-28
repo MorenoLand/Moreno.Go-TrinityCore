@@ -1006,16 +1006,16 @@ func writeRawMovementInfo(b *protocol.Buffer, info movementInfo) {
 			b.WriteU32(info.Transport.Time2)
 		}
 	}
-	if info.HasPitch {
+	if info.Flags&(movementSwimming|movementFlying) != 0 || info.Flags2&movement2Pitch != 0 {
 		b.WriteF32(info.Pitch)
 	}
 	b.WriteU32(info.FallTime)
-	if info.HasJump {
+	if info.Flags&movementFalling != 0 {
 		for _, value := range info.Jump {
 			b.WriteF32(value)
 		}
 	}
-	if info.HasSpline {
+	if info.Flags&movementSplineElevation != 0 {
 		b.WriteF32(info.SplineElevation)
 	}
 }
