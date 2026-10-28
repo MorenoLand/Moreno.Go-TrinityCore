@@ -1403,12 +1403,13 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 		packet.WriteF32(0)
 	}
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	// MovementHandler.cpp:578: _player->SendMessageToSet(&data, false) —
-	// the bool overload never skips self (Object.cpp:1814-1818), so the
-	// acking player receives its own knockback echo like everyone else.
-	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+	// the Player bool overload (Player.h:1685) honors self via
+	// SendMessageToSetInRange (Player.cpp:6485), so self=false sends no
+	// self packet and the deliverer never sends to the source: the
+	// acking player gets no echo of its own knockback.
 	return true
 }
 
@@ -1593,13 +1594,11 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	buf.WritePackedGUID(moverGUID)
 	buf.WriteU32(timeSkipped)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	// MovementHandler.cpp:647-650: GetPlayer()->SendMessageToSet(&data, false) —
-	// the bool overload never skips self (Object.cpp:1814-1818), so the acking
-	// player receives its own time-skipped echo like everyone else. Same
-	// self-echo fix as handleMoveKnockBackAck.
-	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), true)
+	// same Player bool overload as the knockback ack: self=false sends
+	// no self packet, so the acking player gets no time-skipped echo.
 	return true
 }
 
@@ -1727,11 +1726,10 @@ func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bo
 	}
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(s.playerGUID)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), s)
-	// MovementHandler.cpp:549: SendMessageToSet(&data, false) — the bool
-	// overload never skips self (Object.cpp:1807-1813), so the actor
-	// receives its own SMSG_MOUNTSPECIAL_ANIM like everyone else.
-	_ = s.write(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), true)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+	// MovementHandler.cpp:549: SendMessageToSet(&data, false) — same
+	// Player bool overload: self=false sends no self packet, so the
+	// actor gets no echo of its own mount-special anim.
 	return true
 }
 
@@ -1978,7 +1976,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	packet.WriteU32(absorb)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 
 	s.sendPlayerUpdate()
