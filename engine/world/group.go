@@ -1512,6 +1512,16 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 		return true
 	}
 
+	// Group::RemoveMember (Group.cpp:656-662): the removed member's DB
+	// row is deleted on the normal path; the disband tail above already
+	// deleted every row. Runtime-formed groups (DBID 0) hold no rows, so
+	// this is a no-op for them, as is the tail. Without it a kicked or
+	// departed member of a DB-loaded group kept their row and reloaded
+	// into the group at next login (loadPlayerGroup keys on the row).
+	if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+		_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), target.playerGUID)
+	}
+
 	// Group::RemoveMember (Group.cpp:632-640): the removed player gets
 	// SMSG_GROUP_UNINVITE only on KICK/KICK_LFG; every removal (incl. LEAVE)
 	// is followed by the empty SMSG_GROUP_LIST.
@@ -1537,14 +1547,13 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 // removeGroupMemberByGUID removes a member by guid, mirroring
 // Group::RemoveMember (Group.cpp:564): online members ride the normal
 // session detach path, offline members are dropped from the slot list.
-// CHAR_DEL_GROUP_MEMBER is the C++ _removeMember DB persist. The RemoveMethod
-// reaches the Eluna event like the C++ sScriptMgr->OnGroupRemoveMember arm.
+// The member-row delete rides removeFromGroup (Group.cpp:656-662). The
+// RemoveMethod reaches the Eluna event like the C++ sScriptMgr->OnGroupRemoveMember arm.
 func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, guid uint64, method uint8) {
 	if sess := s.findSessionByGUID(guid); sess != nil {
+		// removeFromGroup persists the member-row delete (Group.cpp:656-662)
+		// on its normal path and the full tail on disband.
 		sess.removeFromGroup(ctx, g, sess, method)
-		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
-			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
-		}
 		return
 	}
 	s.groupsMu.Lock()
@@ -1562,10 +1571,18 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 	}
 	g.Members = append(g.Members[:idx], g.Members[idx+1:]...)
 	refreshGroupMaxEnchantingLevel(s, g)
+	// removeFromGroup parity: the removed member leaves the group's loot
+	// rolls on every removal, online or offline.
+	s.onPlayerLeaveGroupRolls(guid, g.ID)
 	disbanded := len(g.Members) <= 1
+	var remaining []uint64
 	if disbanded {
 		// Dissolve like Group::RemoveMember does for a 1-member group.
 		delete(s.groups, g.ID)
+		remaining = make([]uint64, len(g.Members))
+		for i, m := range g.Members {
+			remaining[i] = m.GUID
+		}
 	}
 	// C++ Group::RemoveMember (Group.cpp:710-720): when the removed member
 	// was the leader, the first remaining CONNECTED member is promoted via
@@ -1587,6 +1604,40 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 	}
 	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, guid, method)
 	if disbanded {
+		// Group::Disband (Group.cpp:859-934) via removeFromGroup's tail:
+		// every connected remaining member is detached with
+		// SMSG_GROUP_DESTROYED + an empty SMSG_GROUP_LIST and the
+		// _homebindIfInstance arm. The old path left the survivor's
+		// session groupID, client list, and DB rows behind: only the
+		// kicked row was deleted, so the groups row, the survivor's
+		// member row, and the LFG row survived a runtime disband.
+		for _, rguid := range remaining {
+			if sess := s.findSessionByGUID(rguid); sess != nil {
+				sess.groupID = 0
+				s.homebindIfInstance(sess)
+				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
+				emptyList := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: rguid}, rguid, 0)
+				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
+			}
+		}
+		// Group::RemoveAllInvites (Group.cpp:375-382).
+		disbandSet := make(map[uint64]struct{}, len(remaining)+1)
+		disbandSet[guid] = struct{}{}
+		for _, rguid := range remaining {
+			disbandSet[rguid] = struct{}{}
+		}
+		s.sessionsMu.Lock()
+		for sess := range s.sessions {
+			if _, ok := disbandSet[sess.pendingGroupLeader]; ok {
+				sess.pendingGroupLeader = 0
+			}
+		}
+		s.sessionsMu.Unlock()
+		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
+		}
 		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return
 	}
