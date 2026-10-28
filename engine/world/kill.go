@@ -2009,13 +2009,15 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if spawnEntry <= 0 {
 		spawnEntry = int64(entry)
 	}
-	if rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(spawnEntry)) {
-		// Creature::setDeathState JUST_DIED (Creature.cpp:2085-2093): a
-		// dungeon boss (Creature::IsDungeonBoss, Creature.h:112) with no
-		// respawn delay never respawns in the instance; the old
-		// NULLIF(...,0)->300 default resurrected it after 5 minutes.
-		return
-	}
+	neverRespawn := rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(spawnEntry))
+	// Creature::setDeathState JUST_DIED (Creature.cpp:2077-2085): a dungeon
+	// boss (Creature::IsDungeonBoss, Creature.h:112) with no respawn delay
+	// never respawns in the instance; C++ stores
+	// numeric_limits<time_t>::max() via SaveRespawnTime (Creature.cpp:2090).
+	// Go used to return here with no record and no row, so after a restart
+	// the boss streamed alive in the reused instance (instance kills never
+	// write curhealth=0, unlike the world path); the record below now
+	// carries the far-future time instead.
 	seconds := rawSeconds
 	if seconds <= 0 {
 		seconds = 300
@@ -2038,6 +2040,11 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 			respawnAt = pushed
 		}
 	}
+	respawnDelay := uint32(seconds)
+	if neverRespawn {
+		respawnAt = now.AddDate(100, 0, 0)
+		respawnDelay = 0
+	}
 	key := instanceAdmissionKey{MapID: target.Map, InstanceID: target.InstanceID}
 	s.motionMu.Lock()
 	if s.instanceCreatureRespawns == nil {
@@ -2046,7 +2053,7 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if s.instanceCreatureRespawns[key] == nil {
 		s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
 	}
-	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
+	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: respawnDelay}
 	s.motionMu.Unlock()
 	s.saveCreatureRespawnRow(ctx, guid, respawnAt, target.Map, target.InstanceID)
 }
