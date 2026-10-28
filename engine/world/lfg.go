@@ -363,6 +363,61 @@ func (m *LFGManager) setStateLocked(guid uint64, state uint8) {
 	m.queue[guid] = entry
 }
 
+// SetupGroupMember mirrors LFGMgr::SetupGroupMember (LFGMgr.cpp:2240-2248):
+// the member takes the group's single dungeon as their whole selection,
+// then takes the group's state; NONE and FINISHED clear the selection
+// again through SetState, so the call order (dungeons first, state
+// second) is load-bearing. The C++ SetGroup/AddPlayerToGroup legs have
+// no Go counterpart — group membership lives in groupState.Members, not
+// in the LFG manager.
+func (m *LFGManager) SetupGroupMember(guid uint64, dungeon uint32, state uint8) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.queue[guid]
+	if !ok {
+		entry = LFGQueueEntry{GUID: guid}
+	}
+	entry.Dungeons = []uint32{dungeon}
+	m.queue[guid] = entry
+	m.setStateLocked(guid, state)
+}
+
+// LeaveQueuedGroup mirrors the gstate == QUEUED arm of
+// LFGGroupScript::OnAddMember (LFGScripts.cpp:143-181) as reached through
+// the group QUEUED arm of LFGMgr::LeaveLfg (LFGMgr.cpp:726-748): a queued
+// group that gains a member by invite leaves the queue. It returns the
+// GUIDs of the group's pre-existing members (the joiner, excluded by the
+// caller, is not yet group LFG membership in C++ — OnAddMember runs the
+// leave arms before SetGroup/AddPlayerToGroup). QUEUED member entries flip
+// to restoreState when restore is set (a mid-dungeon group that re-queued:
+// C++ restores OldState DUNGEON/FINISHED) and to NONE otherwise; members
+// in any other state keep it, since QueueGroup is what put them in QUEUED.
+func (m *LFGManager) LeaveQueuedGroup(groupID uint64, exclude uint64, restore bool, restoreState uint8) []uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.groupQueue[groupID]
+	if !ok || entry.State != LFGStateQueued {
+		return nil
+	}
+	delete(m.groupQueue, groupID)
+	affected := make([]uint64, 0, len(entry.Roles))
+	for guid := range entry.Roles {
+		if guid == exclude {
+			continue
+		}
+		affected = append(affected, guid)
+		if cur, ok := m.queue[guid]; ok && cur.State == LFGStateQueued {
+			if restore {
+				m.setStateLocked(guid, restoreState)
+			} else {
+				m.setStateLocked(guid, LFGStateNone)
+			}
+		}
+	}
+	sort.Slice(affected, func(i, j int) bool { return affected[i] < affected[j] })
+	return affected
+}
+
 // QueueGroup mirrors the FINISHED arm of LFGMgr::UpdateRoleCheck (LFGMgr.cpp:868-872): the finished group itself enters the queue (AddQueueData keyed by the group guid), and every member is marked queued with the role the check assigned (the SetState/SetRoles arms, LFGMgr.cpp:858-864). The per-member entries let Leave and status reads work per player; FindGroups treats the group entry as the unit and never double-counts its members as solos.
 func (m *LFGManager) QueueGroup(groupID, leaderGUID uint64, dungeons []uint32, roles map[uint64]uint8, comment string) {
 	m.mu.Lock()

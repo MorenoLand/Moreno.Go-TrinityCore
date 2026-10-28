@@ -325,6 +325,19 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	}
 	s.server.groups[g.ID] = g
 	s.server.groupsMu.Unlock()
+	// Group::LoadMemberFromDB (Group.cpp:291) calls SetupGroupMember for
+	// every loaded member; LFGMgr::_LoadFromDB (LFGMgr.cpp:76-97)
+	// restores group LFG data only for DUNGEON/FINISHED rows, so only
+	// those states seed per-member entries. The already-loaded early
+	// return above keeps this startup-once: later logins do not re-seed
+	// members who have since left.
+	if g.IsLFG && g.LFGDungeonID != 0 &&
+		(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon) &&
+		s.server.Features != nil && s.server.Features.LFG != nil {
+		for _, m := range members {
+			s.server.Features.LFG.SetupGroupMember(m.GUID, g.LFGDungeonID, g.LFGState)
+		}
+	}
 	s.groupID = g.ID
 	if s.player != nil {
 		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, g.isLeader(guid))
@@ -1154,6 +1167,26 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	if srv.Features != nil && srv.Features.LFG != nil &&
 		srv.Features.LFG.Leave(s.playerGUID) {
 		_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+	}
+
+	// LFGGroupScript::OnAddMember second arm: a group in QUEUED state
+	// leaves the queue when a member joins by invite. A mid-dungeon
+	// group that re-queued restores its dungeon state instead of NONE
+	// (LeaveLfg QUEUED arm, LFGMgr.cpp:726-748, OldState leg; Go's group
+	// state never leaves DUNGEON on re-queue, so the group's own LFGState
+	// is the restore state). The joiner is excluded: C++ runs the leave
+	// arms before SetGroup/AddPlayerToGroup, so the joiner is not yet
+	// group LFG membership.
+	if srv.Features != nil && srv.Features.LFG != nil {
+		restore := g.IsLFG && g.LFGDungeonID != 0 &&
+			(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+		if affected := srv.Features.LFG.LeaveQueuedGroup(g.ID, s.playerGUID, restore, g.LFGState); len(affected) > 0 {
+			for _, guid := range affected {
+				if ms := srv.findSessionByGUID(guid); ms != nil {
+					_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+				}
+			}
+		}
 	}
 
 	srv.broadcastGroupList(g)
