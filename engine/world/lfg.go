@@ -1978,6 +1978,13 @@ func (s *session) sendLFGOfferContinue(dungeonID uint32) error {
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_OFFER_CONTINUE), packet.Bytes(), true)
 }
 
+// sendLfgLfrList mirrors WorldSession::SendLfgLfrList (LFGHandler.cpp:596-605):
+// SMSG_LFG_UPDATE_SEARCH with a single update byte; false clears the client's
+// search list.
+func (s *session) sendLfgLfrList(update bool) error {
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_SEARCH), []byte{boolToU8(update)}, true)
+}
+
 func (s *session) getLFGDungeonEntrance(dungeonID uint32) (mapID uint32, x, y, z, ori float32) {
 	baseID := dungeonID & 0x00FFFFFF
 	var dungeonType uint32
@@ -2237,6 +2244,118 @@ func (s *Server) lfgGroupMemberRemovedOffline(g *groupState, guid uint64, method
 		if leader := s.findSessionByGUID(g.LeaderGUID); leader != nil {
 			_ = leader.sendLFGOfferContinue(g.LFGDungeonID)
 		}
+	}
+}
+
+// lfgOnPlayerLogout mirrors LFGPlayerScript::OnLogout (LFGScripts.cpp:41-53),
+// which the old unconditional Leave in triggerLogout did not: a grouped player
+// on a clean logout is a C++ no-op (the grouped branch requires
+// PlayerDisconnected), while a grouped disconnect runs LeaveLfg(guid, true)
+// and a groupless logout runs LeaveLfg(guid) with disconnected=false — the
+// groupless branch never checks PlayerDisconnected, so a groupless DUNGEON
+// entry clears on disconnect too. triggerLogout runs before
+// removeSessionFromGroup, so groupID here is still the live group, matching
+// C++ player->GetGroup() at hook time. Logout never fires OnRemoveMember, so
+// there is no leader offer-continue arm here, unlike the removal hooks.
+func (s *Server) lfgOnPlayerLogout(sess *session, disconnected bool) {
+	if s == nil || sess == nil || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	lfg := s.Features.LFG
+	if lfg.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	if sess.groupID == 0 {
+		_ = sess.sendLfgLfrList(false)
+		entry, ok := lfg.Status(sess.playerGUID)
+		if !ok {
+			return
+		}
+		switch entry.State {
+		case LFGStateQueued:
+			lfg.Leave(sess.playerGUID)
+		case LFGStateProposal:
+			if prop := lfg.DeclineProposalForPlayer(sess.playerGUID); prop != nil {
+				s.sendLFGProposalDeclined(prop)
+			}
+		case LFGStateDungeon, LFGStateFinishedDungeon:
+			// LeaveLfg DUNGEON/FINISHED arm with disconnected=false: the
+			// groupless player drops to NONE on clean logout and on
+			// disconnect alike.
+			lfg.SetState(sess.playerGUID, LFGStateNone)
+		}
+		return
+	}
+	if !disconnected {
+		return
+	}
+	g := s.getGroup(sess.groupID)
+	if g == nil || !g.IsLFG {
+		lfg.Leave(sess.playerGUID)
+		return
+	}
+	// LFGMgr::LeaveLfg ROLECHECK arm (LFGMgr.cpp:763-766): a live check
+	// containing the disconnecting player aborts; notifies mirror the
+	// offline-removal arm, and the disconnecting player gets none of them.
+	if rc := lfg.GetRoleCheck(g.ID); rc != nil {
+		if _, ok := rc.Roles[sess.playerGUID]; ok {
+			if aborted := lfg.AbortRoleCheck(g.ID); aborted != nil {
+				guids := make([]uint64, 0, len(aborted.Roles))
+				for mguid := range aborted.Roles {
+					guids = append(guids, mguid)
+				}
+				sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+				for _, mguid := range guids {
+					if ms := s.findSessionByGUID(mguid); ms != nil {
+						_ = ms.sendLFGRoleCheckUpdate(aborted)
+					}
+				}
+				if ls := s.findSessionByGUID(aborted.Leader); ls != nil {
+					_ = ls.sendLFGJoinResult(LFGJoinFailed, LFGRoleCheckAborted)
+				}
+				s.broadcastToGroup(g.ID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+					buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
+			}
+		}
+	}
+	entry, ok := lfg.Status(sess.playerGUID)
+	if !ok {
+		return
+	}
+	switch entry.State {
+	case LFGStateProposal:
+		if prop := lfg.DeclineProposalForPlayer(sess.playerGUID); prop != nil {
+			s.sendLFGProposalDeclined(prop)
+		}
+	case LFGStateQueued:
+		restore := g.IsLFG && g.LFGDungeonID != 0 &&
+			(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+		affected := lfg.LeaveQueuedGroup(g.ID, 0, restore, g.LFGState)
+		if affected == nil {
+			// No queued group entry: the player entry is a solo queue
+			// entry, dropped like the groupless QUEUED arm.
+			lfg.Leave(sess.playerGUID)
+			return
+		}
+		inAffected := false
+		for _, aguid := range affected {
+			if aguid == sess.playerGUID {
+				inAffected = true
+			}
+			if ms := s.findSessionByGUID(aguid); ms != nil {
+				_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+			}
+		}
+		if !inAffected {
+			if restore {
+				lfg.SetState(sess.playerGUID, g.LFGState)
+			} else {
+				lfg.SetState(sess.playerGUID, LFGStateNone)
+			}
+		}
+	case LFGStateDungeon, LFGStateFinishedDungeon:
+		// LeaveLfg DUNGEON/FINISHED arm with disconnected=true: the
+		// disconnecting player keeps the dungeon state.
 	}
 }
 

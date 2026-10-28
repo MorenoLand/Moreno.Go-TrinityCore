@@ -3966,7 +3966,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// (ClearAllReactives).
 	s.clearAllReactives()
 	s.broadcastGuildMemberLogout()
-	s.triggerLogout(ctx)
+	s.triggerLogout(ctx, !sendLogoutComplete)
 	s.releaseActiveLoot()
 	if s.player != nil && s.player.Health == 0 && s.player.PlayerFlags&playerFlagGhost == 0 && !s.deathTimer.IsZero() {
 		// WorldSession::LogoutPlayer sets m_playerLogout before the repop
@@ -4212,13 +4212,17 @@ func (s *session) releaseActiveLootCleanup(cleanupAllowed bool) {
 	}
 }
 
-func (s *session) triggerLogout(ctx context.Context) {
+func (s *session) triggerLogout(ctx context.Context, disconnected bool) {
 	if !s.playerLoaded || s.logoutHook {
 		return
 	}
 	s.logoutHook = true
-	if s.server.Features != nil && s.server.Features.LFG != nil {
-		s.server.Features.LFG.Leave(s.playerGUID)
+	// disconnected is C++ WorldSession::PlayerDisconnected: completeLogoutWithPacket
+	// reaches here from completeLogout (clean instant/countdown logout) with
+	// sendLogoutComplete=true, and from session.logout (deferred on connection
+	// close) with false, so !sendLogoutComplete is exactly the disconnect case.
+	if s.server != nil {
+		s.server.lfgOnPlayerLogout(s, disconnected)
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
 }
