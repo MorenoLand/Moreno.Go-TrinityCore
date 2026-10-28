@@ -5650,7 +5650,10 @@ func (s *session) kickSession(target *session) {
 
 // kickAccountSessions mirrors the World::BanAccount kick loop
 // (World.cpp:2866-2871): disconnects every session of the account except
-// the author's own session.
+// the author's own session. C++ kicks a single FindSession because its map
+// is account-keyed; Go's map is session-keyed, so the sweep is the same
+// kick once the login duplicate-kick invariant (one live session per
+// account) holds — and the sweep also cleans up any race leftover.
 func (s *session) kickAccountSessions(accountID uint32, author string) {
 	if s.server == nil {
 		return

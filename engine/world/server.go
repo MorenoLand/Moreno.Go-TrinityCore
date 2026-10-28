@@ -5041,17 +5041,22 @@ func normalizeLoginMuteTime(ctx context.Context, db *sql.DB, accountID uint32, m
 // (World.cpp:320): the previous session for the account is kicked so the new
 // login can take its place. It returns false when the new session must be kicked
 // instead — World::RemoveSession refuses to replace a session whose player is
-// still loading.
+// still loading. C++ serializes this through the addSessQueue world-update
+// thread, so the scan-and-replace is atomic there; Go auth runs per-connection,
+// so the whole scan, kick, and claim holds the write lock and the claim
+// (current.accountID) lands before authed is set — otherwise two logins whose
+// DB round trips overlap both pass the old authed-only scan and both survive,
+// which C++'s account-keyed session map makes impossible.
 func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session) bool {
 	if s == nil || accountID == 0 {
 		return true
 	}
-	s.sessionsMu.RLock()
+	s.sessionsMu.Lock()
 	duplicates := make([]*session, 0)
 	for sess := range s.sessions {
-		if sess != current && sess.authed && sess.accountID == accountID {
+		if sess != current && sess.accountID == accountID {
 			if sess.playerLoading {
-				s.sessionsMu.RUnlock()
+				s.sessionsMu.Unlock()
 				current.debug("new login rejected: previous session still loading player", "account", current.accountName)
 				if current.conn != nil {
 					_ = current.conn.Close()
@@ -5061,23 +5066,20 @@ func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session
 			duplicates = append(duplicates, sess)
 		}
 	}
-	s.sessionsMu.RUnlock()
-	if len(duplicates) > 0 {
-		s.sessionsMu.Lock()
-		queuedRemoved := false
-		for _, sess := range duplicates {
-			sess.superseded = true
-			delete(s.sessions, sess)
-			// World::AddSession_ removes a queued old session from the login
-			// queue synchronously via RemoveQueuedPlayer, not on socket close.
-			if s.removeQueuedSessionLocked(sess) {
-				queuedRemoved = true
-			}
+	queuedRemoved := false
+	for _, sess := range duplicates {
+		sess.superseded = true
+		delete(s.sessions, sess)
+		// World::AddSession_ removes a queued old session from the login
+		// queue synchronously via RemoveQueuedPlayer, not on socket close.
+		if s.removeQueuedSessionLocked(sess) {
+			queuedRemoved = true
 		}
-		s.sessionsMu.Unlock()
-		if queuedRemoved {
-			s.updateQueuePositions()
-		}
+	}
+	current.accountID = accountID
+	s.sessionsMu.Unlock()
+	if queuedRemoved {
+		s.updateQueuePositions()
 	}
 	for _, sess := range duplicates {
 		sess.debug("session replaced by new login", "account", sess.accountName)
