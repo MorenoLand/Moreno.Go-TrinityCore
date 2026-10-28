@@ -122,15 +122,17 @@ func (s *session) handleWho(ctx context.Context, payload []byte) bool {
 
 		// Cross-team and GM-level visibility mirror HandleWhoOpcode's opening filters:
 		// opposite-team players are hidden without RBAC_PERM_TWO_SIDE_WHO_LIST
-		// (off by default), and console-level accounts stay hidden from players
-		// without RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS (default GM.InWhoList.Level = 3).
-		if s.security == 0 {
-			if teamForRace(target.Race) != teamForRace(s.player.Race) {
-				continue
-			}
-			if targetSession.security > 3 {
-				continue
-			}
+		// (the session's cached twoSideWhoList flag, as in social.go), and
+		// targets above GM.InWhoList.Level stay hidden from viewers without
+		// RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS (cached whoSeeAllSecurityLevels).
+		// The old security == 0 shortcut hid nothing from any GM account even
+		// when it lacked both permissions, and hid cross-team players from a
+		// player account that held the two-side permission.
+		if teamForRace(target.Race) != teamForRace(s.player.Race) && !s.twoSideWhoList {
+			continue
+		}
+		if !s.whoSeeAllSecurityLevels && int(targetSession.security) > s.server.Config.GMInWhoListLevel {
+			continue
 		}
 
 		// Level range
