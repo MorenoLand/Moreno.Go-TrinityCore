@@ -255,6 +255,17 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if err != nil {
 		return
 	}
+	// GroupMgr::LoadGroups (GroupMgr.cpp) deletes groups whose leader
+	// does not exist in characters before loading any group; a
+	// leader-deleted group never loads, so its surviving members log in
+	// ungrouped and _LoadBoundInstances keeps their non-perm binds.
+	// Without this gate Go loads the group and validateBoundInstances
+	// deletes those binds (permanent == 0 && grouped). A query failure
+	// fails closed to unloaded, matching the C++ delete.
+	var leaderExists int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE guid = ?", leaderGUID).Scan(&leaderExists); err != nil || leaderExists == 0 {
+		return
+	}
 	if dungeonDiff < 0 || dungeonDiff >= 3 {
 		dungeonDiff = 0
 	}
