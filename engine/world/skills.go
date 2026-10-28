@@ -230,7 +230,7 @@ func (s *session) sendTalentsInfo(pet bool) error {
 			var petID, petType, level int64
 			err := s.server.CharactersStore.DB.QueryRow("SELECT id, PetType, level FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &petType, &level)
 			if err == nil && petType == 1 && level >= 20 { // Hunter pet
-				maxPoints := uint32((level - 16) / 4)
+				maxPoints := s.petMaxTalentPointsForLevel(uint32(level))
 				rows, qErr := s.server.CharactersStore.DB.Query("SELECT spell FROM pet_spell WHERE guid = ?", petID)
 				if qErr == nil {
 					defer rows.Close()

@@ -3717,6 +3717,26 @@ func (s *session) petKnowsSpell(ctx context.Context, motion *creatureMotion, spe
 const maxPetTalentRank = 3
 const maxPetTalentScanRanks = 5
 
+// petMaxTalentPointsForLevel mirrors Pet::GetMaxTalentPointsForLevel
+// (Pet.cpp:1781-1787): level >= 20 gives (level-16)/4 plus the owner's
+// SPELL_AURA_MOD_PET_TALENT_POINTS total (GetTotalAuraModifier, summed over
+// the owner's auras); a negative total floors the result at 0, matching the
+// free-points clamp in Pet::addSpell/removeSpell.
+func (s *session) petMaxTalentPointsForLevel(level uint32) uint32 {
+	var base int32
+	if level >= 20 {
+		base = int32((level - 16) / 4)
+	}
+	var bonus int32
+	if s != nil {
+		bonus = s.totalAuraModifier(spellAuraModPetTalentPoints)
+	}
+	if total := base + bonus; total > 0 {
+		return uint32(total)
+	}
+	return 0
+}
+
 // learnPetTalent mirrors Player::LearnPetTalent (Player.cpp:25563-25702),
 // shared by CMSG_PET_LEARN_TALENT and CMSG_LEARN_PREVIEW_TALENTS_PET. The
 // pet GUID must resolve to the session's live pet and the talent must
@@ -3728,10 +3748,9 @@ const maxPetTalentScanRanks = 5
 // see it. The prereq-talent and tier spent-points gates below mirror
 // Player.cpp:25627-25673. The free-talent-point gate, the family
 // PetTalentType gate and the tab PetTalentMask gate (Player.cpp:25573-25606,
-// 25622-25624) are ported below; the owner-aura bonus in
-// Pet::GetMaxTalentPointsForLevel (SPELL_AURA_MOD_PET_TALENT_POINTS) stays a
-// documented deviation (no owner-aura total on this path), so the cap is
-// the base (level-16)/4 for level >= 20, matching sendTalentsInfo.
+// 25622-25624) are ported below, as is the owner-aura bonus in
+// Pet::GetMaxTalentPointsForLevel (SPELL_AURA_MOD_PET_TALENT_POINTS), via
+// petMaxTalentPointsForLevel; sendTalentsInfo shares the same helper.
 func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) bool {
 	if petNumber == 0 || talentRank >= maxPetTalentRank || s == nil || s.server == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
@@ -3797,15 +3816,11 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	// curtalent_maxrank is curMax+1 (0 when nothing is known) — so the
 	// needed points are talentRank-curMax in Go's -1-based curMax. The free
 	// count is recomputed from the live spell list exactly as C++ maintains
-	// m_usedTalentCount: GetMaxTalentPointsForLevel (level >= 20:
-	// (level-16)/4) minus the TalentSpellCost sum over known spells, where
-	// the owner-aura MOD_PET_TALENT_POINTS bonus is the documented residual
-	// above. Previously this gate was absent entirely, so a pet could learn
-	// past its point cap.
-	var maxPoints uint32
-	if motion.Level >= 20 {
-		maxPoints = (motion.Level - 16) / 4
-	}
+	// m_usedTalentCount: petMaxTalentPointsForLevel (base (level-16)/4 for
+	// level >= 20 plus the owner-aura MOD_PET_TALENT_POINTS bonus) minus
+	// the TalentSpellCost sum over known spells. Previously this gate was
+	// absent entirely, so a pet could learn past its point cap.
+	maxPoints := s.petMaxTalentPointsForLevel(motion.Level)
 	var usedPoints uint32
 	for _, sp := range motion.Spells {
 		if cost, costErr := s.server.Data.TalentSpellCost(sp); costErr == nil {

@@ -164,10 +164,11 @@ func (s *Server) getOrGenerateZoneWeather(ctx context.Context, zone uint32) *zon
 	for season := 0; season < 4; season++ {
 		for kind := 0; kind < 3; kind++ {
 			value := values[season*3+kind]
-			if value < 0 {
-				value = 0
-			}
-			if value > 100 {
+			// WeatherMgr::LoadWeatherData (WeatherMgr.cpp:77-92) resets
+			// any chance > 100 to 25; a negative DB value reaches that
+			// arm too, because Field::GetUInt8 (Field.cpp) runs strtoul
+			// and truncates to uint8 (e.g. -1 -> 255) before the check.
+			if value < 0 || value > 100 {
 				value = 25
 			}
 			weather.Chances[season][kind] = uint8(value)
@@ -279,6 +280,16 @@ func (s *Server) updateWeather(ctx context.Context, now time.Time) {
 		}
 		weather.Next = now.Add(s.weatherInterval())
 		if weather.regenerate(now) {
+			// Weather::UpdateWeather (Weather.cpp) clamps the stored
+			// intensity in place (>= 1 to 0.9999, < 0 to 0.0001) before
+			// sending; packet() alone only clamped the wire copy, so a
+			// worse-arm stack past 1.0 (radical 0.9999 + 0.3333) drifted
+			// the stored value and every later regenerate trajectory.
+			if weather.Intensity >= 1 {
+				weather.Intensity = 0.9999
+			} else if weather.Intensity < 0 {
+				weather.Intensity = 0.0001
+			}
 			changedZones = append(changedZones, zone)
 		}
 	}

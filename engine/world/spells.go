@@ -722,6 +722,7 @@ const (
 	spellAuraModScale2                                = 239 // SPELL_AURA_MOD_SCALE_2 (SpellAuraDefines.h:319)
 	spellAuraModSkill                                 = 30  // SPELL_AURA_MOD_SKILL (SpellAuraDefines.h:110)
 	spellAuraModSkillTalent                           = 98  // SPELL_AURA_MOD_SKILL_TALENT (SpellAuraDefines.h:178)
+	spellAuraModPetTalentPoints                       = 145 // SPELL_AURA_MOD_PET_TALENT_POINTS (SpellAuraDefines.h:225)
 	spellAuraArenaPreparation                         = 215 // SPELL_AURA_ARENA_PREPARATION (SpellAuraDefines.h:295)
 	spellAuraModFaction                               = 243 // SPELL_AURA_MOD_FACTION (SpellAuraDefines.h:323)
 	unitStandFlagCreep                                = 0x02
