@@ -542,6 +542,21 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	if !s.server.Data.TaxiNodeExists(sourceNode) {
 		return reply(taxiErrNoSuchPath)
 	}
+	// Player::ActivateTaxiPathTo (Player.cpp:21572-21587): the pre-flight
+	// teardown — CombatStop, ExitVehicle, TradeCancel — runs BEFORE the hop
+	// loop (:21596), so a failed flight (missing hop, no mount, broke) still
+	// leaves the player out of the vehicle and out of the trade. CombatStop
+	// is vacuous here (the busy gate above already rejected combat), and
+	// StopCastingCharm/StopCastingBindSight have no Go cast state to stop.
+	// ExitVehicle is a no-op when not mounted on a vehicle; TradeCancel(true)
+	// tears the trade down even though the client closes its window when
+	// the taxi map opens, since cheating tools can reopen it.
+	s.exitVehicle(ctx)
+	s.cancelTrade(true)
+	// ClearTaxiDestinations (:21589) rides the same teardown point: a failed
+	// activation leaves no stale resume string for the next relog's
+	// ContinueTaxiFlight (the success arm below rewrites TaxiPath).
+	s.player.TaxiPath = ""
 	// Player::ActivateTaxiPathTo (Player.cpp:21591-21608): each consecutive
 	// node pair resolves through its own direct TaxiPath link (the C++
 	// ObjectMgr::GetTaxiPath lookup); a missing hop clears the destinations
@@ -579,15 +594,6 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	if uint64(s.player.Money) < uint64(totalCost) {
 		return reply(taxiErrNotEnoughMoney)
 	}
-	// Player::ActivateTaxiPathTo (Player.cpp:21580): the player leaves any
-	// vehicle before the flight starts — Go's exitVehicle mirrors
-	// Unit::_ExitVehicle and is a no-op when not mounted on a vehicle.
-	s.exitVehicle(ctx)
-	// Flight start tears the trade down: the client closes its trade window
-	// when the taxi map opens, but cheating tools can reopen it, so C++
-	// calls TradeCancel(true) unconditionally at flight start
-	// (Player::ActivateTaxiPathTo, Player.cpp:21586).
-	s.cancelTrade(true)
 	// SendDoFlight (TaxiHandler.cpp:117-119) strips a faked death at flight
 	// start, after the ActivateTaxiPathTo money deduction.
 	s.removeFakeDeath()
@@ -601,6 +607,10 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte, expres
 	s.player.TaxiPath = formatTaxiPath(faction, nodes)
 	if !s.beginTaxiFlight(ctx, nodes, pathIDs, hopPrices, discount, faction, mount, 0, true) {
 		s.player.TaxiPath = previousTaxiPath
+		// Internal merge failure has no C++ twin (the gates above all
+		// passed): no flight started, so no OK reply and no
+		// FLIGHT_PATHS_TAKEN credit, matching the spell path below.
+		return true
 	}
 	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "nodes", nodes, "cost", totalCost)
@@ -1306,6 +1316,13 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 	// the aura remove leg runs the Unit::Dismount mirror (display/flag
 	// clear, SMSG_DISMOUNT, pet resummon), not just the display field.
 	s.removeAurasByType(spellAuraMounted)
+	// Player.cpp:21556 (spell case): InterruptSpell(CURRENT_AUTOREPEAT_SPELL)
+	// runs unconditionally — auto-shot/auto-attack keeps running through a
+	// handler-path flight (the npc branch has no such arm), but a spell-path
+	// flight cancels it. The generic/channeled interrupt arms are vacuous
+	// here: the effect fires during its own spell's execution, whose Id
+	// equals spellid, so both skip arms miss it.
+	s.autoRepeatSpell = 0
 	// Player.cpp:21562: the source node must exist.
 	if !s.server.Data.TaxiNodeExists(from) {
 		reply(taxiErrNoSuchPath)
@@ -1317,6 +1334,9 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 	// mounted on a vehicle.
 	s.exitVehicle(ctx)
 	s.cancelTrade(true)
+	// ClearTaxiDestinations (:21589) rides the same teardown point, as in
+	// the handler path above; the success arm below rewrites TaxiPath.
+	s.player.TaxiPath = ""
 	// Player.cpp:21588: resolve the hop through GetTaxiPath. A missing
 	// sourcepath answers ERR_TAXIUNSPECIFIEDSERVERERROR (Player.cpp:21613);
 	// the mount-0 allowance is spell-case-only and checked implicitly by
@@ -1332,7 +1352,6 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		reply(taxiErrNotEnoughMoney)
 		return
 	}
-	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	// Player.cpp:21645: the spell case records no flight-master faction (0).
 	// The single hop's raw price is charged at departure (the firstcost arm);
 	// the spell path never discounts (npc == nullptr, Player.cpp:21644).
@@ -1342,6 +1361,9 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 		s.player.TaxiPath = previousTaxiPath
 		return
 	}
+	// FLIGHT_PATHS_TAKEN credits only once the flight actually started;
+	// a merge failure above grants nothing (the handler path matches).
+	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	reply(taxiErrOK)
 }
 
