@@ -82,7 +82,7 @@ func (s *Server) loadCreatureTexts(ctx context.Context, creatureID uint32) map[u
 }
 
 // broadcastCreatureTalk emits sound, emote, and chat message matching TrinityCore CreatureTextMgr::SendChat.
-func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatureGUID uint64, entry uint32, creatureName string, groupID uint8, whisperTarget uint64) {
+func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID uint32, creatureGUID uint64, entry uint32, creatureName string, groupID uint8, whisperTarget uint64) {
 	if s == nil || entry == 0 {
 		return
 	}
@@ -152,12 +152,30 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		}
 	}
 
+	// TEXT_RANGE_NORMAL legs fan out by listen distance, not by map:
+	// SendChatPacket / SendNonChatPacket fall through to PlayerDistWorker /
+	// SendMessageToSetInRange with GetRangeForChatType (CreatureTextMgr.cpp
+	// :285-290, :382; CreatureTextMgrImpl.h:170-173): MONSTER_YELL 300yd,
+	// everything else 25yd (SAY default). AREA/ZONE/MAP/WORLD rows keep the
+	// old map-wide fan-out (MAP is exact; AREA/ZONE over-deliver and WORLD
+	// under-delivers — Go models no per-player area/zone for those legs).
+	// MONSTER_PARTY rows keep it too: C++ sends those to the whisper
+	// target's group, which this path cannot address. A creature with no
+	// motion entry keeps the old fan-out rather than dropping the row.
+	motion := s.findCreatureMotion(mapID, instanceID, creatureGUID)
+	listenDist := 25.0
+	if chatType == 0x0E { // CHAT_MSG_MONSTER_YELL
+		listenDist = 300.0
+	}
+
 	// 1. Play Sound
 	if chosen.Sound > 0 && (!whispered || whisperSess != nil) {
 		soundPkt := protocol.NewBuffer(4)
 		soundPkt.WriteU32(chosen.Sound)
 		if whispered {
 			_ = whisperSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), true)
+		} else if chosen.TextRange == 0 && motion != nil {
+			s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
 		} else {
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
 		}
@@ -169,9 +187,14 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		emotePkt.WriteU32(chosen.Emote)
 		emotePkt.WriteU64(creatureGUID)
 		// CreatureTextMgr::SendEmote takes no whisper target (HandleEmoteCommand
-		// broadcasts to nearby), so the emote stays broadcast on the whisper arm,
-		// even when the chat message itself was dropped.
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
+		// fans out via SendMessageToSet, i.e. the visibility set), so the emote
+		// stays broadcast on the whisper arm, even when the chat message itself
+		// was dropped.
+		if motion != nil {
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
+		} else {
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
+		}
 	}
 
 	// 3. Broadcast chat message
@@ -183,5 +206,9 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID uint32, creatu
 		_ = whisperSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, true)
 		return
 	}
-	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
+	if chosen.TextRange == 0 && chatType != 0x0D && motion != nil { // not MONSTER_PARTY
+		s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
+	} else {
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
+	}
 }

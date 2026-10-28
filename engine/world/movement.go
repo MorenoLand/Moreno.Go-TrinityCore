@@ -1291,6 +1291,16 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 // SendMessageToSet "self" leg. The center form (not source-player position)
 // lets server-side casters (creatures) fan out too.
 func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, source *session) {
+	s.broadcastToSetWithin(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, source)
+}
+
+// broadcastToSetWithin is the radius-parameterized form of
+// broadcastToVisibleSet: the same map/instance + distance gate, with the
+// caller's radius instead of the 100yd visibility range. CreatureTextMgr
+// listen ranges (CreatureTextMgr.cpp GetRangeForChatType: SAY/TEXTEMOTE
+// 25yd, YELL 300yd) fan out through SendMessageToSetInRange, not the
+// visibility range, so creature-talk legs use this form.
+func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, source *session) {
 	if s == nil {
 		return
 	}
@@ -1303,11 +1313,28 @@ func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, ins
 		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > 100.0 {
+		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > radius {
 			continue
 		}
 		_ = target.write(opcode, payload, true)
 	}
+}
+
+// broadcastToVisibleSetFromSession centers a visibility-set fan-out on a
+// session's player position, for SendMessageToSet(self=true) packets whose
+// self leg the caller already wrote (the aura-update / destroy-object /
+// emote pattern: the source session is excluded from the set fan-out). When
+// the session has no loaded player the map-wide broadcast is kept, so no
+// recipient is dropped for a positionless source.
+func (s *Server) broadcastToVisibleSetFromSession(sess *session, opcode uint16, payload []byte) {
+	if s == nil {
+		return
+	}
+	if sess == nil || sess.player == nil {
+		s.broadcastToNearby(opcode, payload, sess)
+		return
+	}
+	s.broadcastToVisibleSet(opcode, payload, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, sess)
 }
 
 func (s *Server) broadcastToInstance(mapID, instanceID uint32, opcode uint16, payload []byte, source *session) {

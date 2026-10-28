@@ -1100,7 +1100,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// PerformEmote is UnitMethods::PerformEmote (UnitMethods.h:2041-2049):
 	// Unit::HandleEmoteCommand sends SMSG_EMOTE (u32 emote + u64 guid) via
-	// SendMessageToSet — self write plus nearby broadcast skipping self.
+	// SendMessageToSet — self write plus visibility-set fan-out skipping self.
 	methods["PerformEmote"] = func(_ context.Context, args []any) ([]any, error) {
 		emote, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -1112,7 +1112,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err := s.write(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), true); err != nil {
 			return nil, err
 		}
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes())
 		return nil, nil
 	}
 	// ClearThreatList is UnitMethods::ClearThreatList

@@ -7744,7 +7744,7 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 		targetSess.sendAuraUpdateWithStack(slot, se.TriggerSpell, false, positive, maxDur, dur, parentStack)
 		wireMax, wireDur := auraWireDurations(triggered, maxDur, dur)
 		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, wantCaster, slot, se.TriggerSpell, false, positive, wireMax, wireDur, level, parentStack, effectMask)
-		targetSess.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, targetSess)
+		targetSess.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt)
 	}
 }
 
@@ -7811,7 +7811,7 @@ func (targetSess *session) propagateLinkedAuraStacks(ctx context.Context, spell 
 		targetSess.sendAuraUpdateWithStack(slot, linkedID, false, positive, maxDur, dur, uint8(want))
 		wireMax, wireDur := auraWireDurations(linked, maxDur, dur)
 		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, parentCasterGUID, slot, linkedID, false, positive, wireMax, wireDur, level, uint8(want), effectMask)
-		targetSess.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, targetSess)
+		targetSess.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt)
 	}
 }
 
@@ -21939,7 +21939,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, casterLevel, stack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 		}
 		return
 	}
@@ -21961,7 +21961,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, casterLevel, stack, effectMask)
 		_ = other.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if other.server != nil {
-			other.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, other)
+			other.server.broadcastToVisibleSetFromSession(other, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 		}
 		return
 	}
@@ -21985,7 +21985,7 @@ func (s *session) consumePoisonDoses(ctx context.Context, targetGUID uint64, poi
 		s.server.auraMu.Unlock()
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, casterGUID, slot, poison.SpellID, false, positive, maxDur, dur, casterLevel, stack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 	}
 }
 
@@ -25096,7 +25096,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// until the target left range.
 			if s.server != nil && s.player != nil {
 				removePkt := protocol.BuildAuraUpdateWithStackEffect(s.playerGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1, 1, 0x01)
-				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, s)
+				s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt)
 			}
 			delete(s.auraSlots, spellID)
 		}
@@ -27687,7 +27687,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 			if s.server != nil {
-				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
+				s.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 			}
 			targetSess.sendPlayerUpdate()
 			// AuraEffect::HandleAuraLinked REAPPLY arm
@@ -28305,7 +28305,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
+			s.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 		}
 		targetSess.sendPlayerUpdate()
 		if eff.Aura == 4 {
@@ -28553,7 +28553,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// caster level — a refresh keeps the old aura's level.
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 		return
 	}
 	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil {
@@ -28871,7 +28871,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, aura.StoredCasterLevel, stackCount, spellEffectMask(spell, eff))
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 
 	if aura.PeriodMs > 0 {
 		initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
@@ -39845,7 +39845,7 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			destroyBuf := protocol.NewBuffer(9)
 			destroyBuf.WriteU64(targetGUID)
 			destroyBuf.WriteU8(0)
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
 		}
 	case 57349:
 		// Drop RP-GG (Wintergrasp RP-GG at death drop, SpellEffects.cpp:3718-3725):

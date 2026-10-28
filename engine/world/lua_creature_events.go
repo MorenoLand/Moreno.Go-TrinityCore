@@ -372,7 +372,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if len(args) >= 2 {
 			whisperTarget = luaObjectGUID(args[1])
 		}
-		s.broadcastCreatureTalk(ctx, motion.Map, motion.GUID, motion.Entry, motion.Name, uint8(textID), whisperTarget)
+		s.broadcastCreatureTalk(ctx, motion.Map, motion.InstanceID, motion.GUID, motion.Entry, motion.Name, uint8(textID), whisperTarget)
 		return nil, nil
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
@@ -1915,7 +1915,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		pkt := protocol.NewBuffer(12)
 		pkt.WriteU32(emote)
 		pkt.WriteU64(motion.GUID)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		return nil, nil
 	}
 	// GetAITargets is CreatureMethods::GetAITargets

@@ -1486,7 +1486,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	for _, record := range records {
 		packet := protocol.BuildAuraUpdateWithStackEffect(petGUID, record.CasterGUID, record.Slot, record.SpellID, false, record.Positive, record.MaxDurationMs, record.DurationMs, record.CasterLevel, record.StackCount, record.EffectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
 	}
 }
 
@@ -1522,7 +1522,7 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(petGUID)
 		destroyBuf.WriteU8(0)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
 	}
 
 	buf := protocol.NewBuffer(8)
@@ -2146,7 +2146,7 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(targetGUID)
 		destroyBuf.WriteU8(0)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
 	}
 
 	playerLevel := uint32(s.player.Level)
@@ -2515,7 +2515,7 @@ func (s *session) destroyCritterObject(critterGUID uint64) {
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(critterGUID)
 		destroyBuf.WriteU8(0)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
 	}
 }
 

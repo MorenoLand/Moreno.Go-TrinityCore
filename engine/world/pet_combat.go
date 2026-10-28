@@ -5650,7 +5650,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 		packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, targetSess)
+		s.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
 		if periodMs > 0 {
 			targetSess.schedulePlayerPeriodicTickInitial(aura, periodMs, periodicTickInitialDelay(spell, periodMs))
 		}
@@ -5756,7 +5756,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 	packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, s)
+	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
 	if periodMs > 0 {
 		s.scheduleCreaturePeriodicTickInitial(aura, periodMs, periodicTickInitialDelay(spell, periodMs))
 	}

@@ -2526,7 +2526,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		destroy.WriteU8(0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroy.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroy.Bytes(), s)
+			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroy.Bytes())
 		}
 	}
 }

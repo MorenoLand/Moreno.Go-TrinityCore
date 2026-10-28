@@ -81,8 +81,8 @@ func (srv *Server) luaSoundTargetSession(args []any) *session {
 // PlayDirectSound and PlayDistanceSound (WorldObjectMethods.h:1161-1242): a
 // resolved player target gets the direct write; otherwise the packet goes to
 // the object's visible set — C++ SendMessageToSet(data, true), i.e. self plus
-// nearby (the sendSpellStart/sendSpellMiss convention: self write plus
-// broadcastToNearby skipping self; creatures and gameobjects have no session,
+// visibility set (the sendSpellStart/sendSpellMiss convention: self write plus
+// visibility-set fan-out skipping self; creatures and gameobjects have no session,
 // so they broadcast with a nil source like the creature-text sound arm).
 // The sSoundEntriesStore existence gate has no Go bridge (no SoundEntries.dbc
 // model, same documented-blocked state as handleEffectPlaySound): an unknown
@@ -98,7 +98,7 @@ func (srv *Server) luaDeliverSound(self *session, opcode uint16, payload []byte,
 		if err := self.write(opcode, payload, true); err != nil {
 			return err
 		}
-		srv.broadcastToNearby(opcode, payload, self)
+		srv.broadcastToVisibleSetFromSession(self, opcode, payload)
 		return nil
 	}
 	srv.broadcastToNearby(opcode, payload, nil)
@@ -412,7 +412,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		pkt := protocol.NewBuffer(12)
 		pkt.WriteU32(emote)
 		pkt.WriteU64(state.GUID)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
+		// HandleEmoteCommand fans out via SendMessageToSet (Unit.cpp),
+		// i.e. the visibility set around the creature, not the whole map.
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		} else {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
+		}
 		return nil, nil
 	}
 	// ClearThreatList is UnitMethods::ClearThreatList

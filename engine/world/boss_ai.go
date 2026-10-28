@@ -316,7 +316,7 @@ func (ai *rhahkZorAI) OnReset(ctx context.Context, s *Server, m *creatureMotion)
 
 func (ai *rhahkZorAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
 	// SAY_AGGRO = 0: "VanCleef pay big for you heads!"
-	s.broadcastCreatureTalk(ctx, m.Map, m.GUID, m.Entry, "Rhahk'Zor", 0, 0)
+	s.broadcastCreatureTalk(ctx, m.Map, m.InstanceID, m.GUID, m.Entry, "Rhahk'Zor", 0, 0)
 }
 
 func (ai *rhahkZorAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
