@@ -1465,7 +1465,9 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 		}
 	}
 	oldFlags, oldPlayerFlags := state.PVPFlags, state.PlayerFlags
-	pvpRealm := s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 6
+	// World::IsPvPRealm (World.cpp:3527): REALM_TYPE_PVP = 1, REALM_TYPE_RPPVP = 8,
+	// REALM_TYPE_FFA_PVP = 16 (Realm.h:53-61); 4 is NORMAL2 and 6 is RP, neither PvP.
+	pvpRealm := s.server.Config.GameType == 1 || s.server.Config.GameType == 8 || s.server.Config.GameType == 16
 	team := teamForRace(state.Race)
 	hostile := s.hasPvPForcingQuest(ctx)
 	switch zone.FactionGroupMask {
@@ -1493,7 +1495,14 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	} else {
 		state.PVPFlags &^= 0x08
 	}
-	if area.Flags&wotlk.AreaFlagArena != 0 || s.server.Config.GameType == 6 {
+	// Player::UpdatePvPState (Player.cpp:22157): the FFA byte is suppressed in a
+	// NoPvP area — area sanctuary (UpdateArea, Player.cpp:7176-7186) or a capital
+	// zone (UpdateZone, Player.cpp:7251-7256, unconditional, after UpdateArea) —
+	// and for GMs (IsGameMaster = PLAYER_EXTRA_GM_ON, Player.h:959). A capital
+	// sets IsInNoPvPArea only, never the 0x08 sanctuary byte above. The realm arm
+	// is REALM_TYPE_FFA_PVP = 16 (Realm.h:61); 6 is RP.
+	noPvP := sanctuary || zone.Flags&wotlk.AreaFlagCapital != 0
+	if !noPvP && state.ExtraFlags&playerExtraGMOn == 0 && (area.Flags&wotlk.AreaFlagArena != 0 || s.server.Config.GameType == 16) {
 		state.PVPFlags |= 0x04
 	} else {
 		state.PVPFlags &^= 0x04
