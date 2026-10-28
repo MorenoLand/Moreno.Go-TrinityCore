@@ -4300,6 +4300,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
 	}
+	// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),
+	// pet-path twin of the creature funnels: once per cast, on the
+	// first live hit — the single call is the _handled latch. The
+	// reflected map mirrors the launch map (reflectedSet keys at None,
+	// trip statuses overriding); placed outside the packet if above so
+	// an invisible triggered cast still credits.
+	s.server.maybeCreditDungeonEncounterSpellCast(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
 	// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
 	// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
 	// EffectGameObjectSetDestructionState (:5450) on the pet path, same
