@@ -98,6 +98,19 @@ const (
 	WGWorkshopKeepEast uint8 = 5
 	WGMaxWorkshops           = 6
 
+	// Graveyard IDs in WGGraveyardId enum order (BattlefieldWG.h:152-160).
+	// Note the order differs from the workshop enum above (SE, SW, NE, NW):
+	// GY index 0 is the NE graveyard, not the SE one. BfGraveyard lookups
+	// below use these indices directly, as C++ does.
+	WGGraveyardNE       uint8 = 0
+	WGGraveyardNW       uint8 = 1
+	WGGraveyardSE       uint8 = 2
+	WGGraveyardSW       uint8 = 3
+	WGGraveyardKeep     uint8 = 4
+	WGGraveyardHorde    uint8 = 5
+	WGGraveyardAlliance uint8 = 6
+	WGMaxGraveyards           = 7
+
 	// Tower WorldStates
 	WGWorldStateTowerShadowsight uint32 = 3704 // West South Tower
 	WGWorldStateTowerWintersEdge uint32 = 3705 // South South Tower
@@ -219,6 +232,20 @@ type wgWorkshopState struct {
 	Name        string
 }
 
+// Graveyard definition: one entry per WGGraveyard row
+// (BattlefieldWG.cpp:53-64: position, WorldSafeLocs ID, gossip text ID,
+// starting controller). TeamControl is the BfGraveyard::m_ControlTeam
+// value; the spirit-guide/resurrect-queue halves of BfGraveyard are not
+// modeled per graveyard (Go keeps the single battlefield-level
+// ReviveQueue), so only control is tracked here.
+type wgGraveyardState struct {
+	ID           uint8
+	SafeLocID    uint32
+	GossipTextID uint32
+	TeamControl  uint32 // WGTeamAlliance, WGTeamHorde, WGTeamNeutral
+	Name         string
+}
+
 // Tower definition
 type wgTowerState struct {
 	ID           uint8
@@ -275,6 +302,7 @@ type wgBattlegroundState struct {
 	Enabled bool
 
 	Workshops         [WGMaxWorkshops]wgWorkshopState
+	Graveyards        [WGMaxGraveyards]wgGraveyardState
 	Towers            [WGMaxTowers]wgTowerState
 	Gates             [2]wgGateState // 0: Fortress Gate, 1: Vault Gate
 	Walls             []wgWallState
@@ -303,8 +331,8 @@ type wgBattlegroundState struct {
 	// ReviveQueue is the Wintergrasp spirit-healer revive queue
 	// (playerGUID -> spirit-guide GUID). C++ fans the queue out per
 	// graveyard (BfGraveyard::m_ResurrectQueue, Battlefield.cpp:605-627);
-	// Go keeps the single battlefield-level queue since it models no
-	// graveyard list.
+	// Go keeps the single battlefield-level queue: the Graveyards list
+	// tracks control only, not per-graveyard queues.
 	ReviveQueue map[uint64]uint64
 	// LastResurrectTimer mirrors Battlefield::m_LastResurrectTimer
 	// (Battlefield.cpp:62,191-199): time until the next 30-second
@@ -338,6 +366,45 @@ func (wg *wgBattlegroundState) initWorkshops() {
 		{ID: WGWorkshopNW, WorldState: WGWorldStateWorkshopNW, BannerEntry: WGGameObjectBannerNW, TeamControl: defender, Name: "Broken Temple Workshop"},
 		{ID: WGWorkshopKeepWest, WorldState: WGWorldStateWorkshopKeepWest, BannerEntry: 0, TeamControl: defender, Name: "Keep West Workshop"},
 		{ID: WGWorkshopKeepEast, WorldState: WGWorldStateWorkshopKeepEast, BannerEntry: 0, TeamControl: defender, Name: "Keep East Workshop"},
+	}
+}
+
+// initGraveyards sets up the 7 Wintergrasp graveyards.
+// Reference: BattlefieldWG::SetupBattlefield (BattlefieldWG.cpp:471-483):
+// graveyards whose WGGraveyard row starts neutral take the defending
+// team between battles, the Horde and Alliance graveyards keep their
+// fixed team. This is the steady between-battles state (the same values
+// OnBattleEnd restores); C++'s first-boot workshop-init scramble of
+// graveyard control is not reproduced, since Go's initWorkshops already
+// carries the corrected OnBattleStart workshop assignment.
+func (wg *wgBattlegroundState) initGraveyards() {
+	defender := wg.DefenderTeam
+	wg.Graveyards = [WGMaxGraveyards]wgGraveyardState{
+		{ID: WGGraveyardNE, SafeLocID: 1329, GossipTextID: 20071, TeamControl: defender, Name: "NE Workshop Graveyard"},
+		{ID: WGGraveyardNW, SafeLocID: 1330, GossipTextID: 20072, TeamControl: defender, Name: "NW Workshop Graveyard"},
+		{ID: WGGraveyardSE, SafeLocID: 1333, GossipTextID: 20074, TeamControl: defender, Name: "SE Workshop Graveyard"},
+		{ID: WGGraveyardSW, SafeLocID: 1334, GossipTextID: 20073, TeamControl: defender, Name: "SW Workshop Graveyard"},
+		{ID: WGGraveyardKeep, SafeLocID: 1285, GossipTextID: 20070, TeamControl: defender, Name: "Keep Graveyard"},
+		{ID: WGGraveyardHorde, SafeLocID: 1331, GossipTextID: 20075, TeamControl: WGTeamHorde, Name: "Horde Graveyard"},
+		{ID: WGGraveyardAlliance, SafeLocID: 1332, GossipTextID: 20076, TeamControl: WGTeamAlliance, Name: "Alliance Graveyard"},
+	}
+}
+
+// updateGraveyardsFromWorkshops mirrors the graveyard leg of
+// WintergraspWorkshop::UpdateGraveyardAndWorkshop
+// (BattlefieldWG.cpp:1830-1836), called from OnBattleStart: each
+// capturable workshop's control flips its linked graveyard. The link
+// is the workshop enum ID passed straight to GetGraveyardById
+// (BattlefieldWG.cpp:1800-1801, 1818-1819), NOT the workshop's
+// position in the workshop list — and the graveyard enum orders
+// NE, NW, SE, SW while the workshop enum orders SE, SW, NE, NW, so
+// the linkage is crossed exactly as in C++: an Eastspark (SE, id 0)
+// control flips Graveyards[0], the NE graveyard. Keep workshops
+// have no graveyard leg (WorkshopId >= KEEP_WEST gate). Caller
+// holds wg.mu; workshop controls are already set by initWorkshops.
+func (wg *wgBattlegroundState) updateGraveyardsFromWorkshops() {
+	for w := uint8(0); w < WGWorkshopKeepWest; w++ {
+		wg.Graveyards[w].TeamControl = wg.Workshops[w].TeamControl
 	}
 }
 
@@ -408,6 +475,10 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 	wg.Winner = -1
 
 	wg.initWorkshops()
+	// OnBattleStart (BattlefieldWG.cpp:605-606) runs
+	// UpdateGraveyardAndWorkshop per workshop; the workshop-control
+	// half is initWorkshops above, this is the graveyard half.
+	wg.updateGraveyardsFromWorkshops()
 	wg.initTowers()
 	wg.initGates()
 	wg.updateVehicleLimits()
@@ -797,6 +868,16 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	wg.InvitedPlayers = make(map[uint64]wgInvite)
 	wg.PlayersWillBeKick = make(map[uint64]time.Time)
 
+	// OnBattleEnd (BattlefieldWG.cpp:684-687): between battles every
+	// zone graveyard returns to the defending team — indices below
+	// GY_HORDE, i.e. the four workshop graveyards plus the keep
+	// graveyard; the faction graveyards keep their team. DefenderTeam
+	// was already swapped to the winner above on a relic capture,
+	// matching C++ ("teams have already been swapped" at :676).
+	for i := uint8(0); i < WGGraveyardHorde; i++ {
+		wg.Graveyards[i].TeamControl = wg.DefenderTeam
+	}
+
 	if !endByTimer {
 		// On a relic capture every player in the zone swaps to the new
 		// defender's control phase shift (BattlefieldWG.cpp:747-757, the
@@ -1157,6 +1238,17 @@ func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName s
 	}
 	s.broadcastWGZoneMessage(fmt.Sprintf("The %s is attacking %s!", attackerName, ws.Name))
 	ws.TeamControl = team
+	// WintergraspWorkshop::GiveControlTo (BattlefieldWG.cpp:1800-1802,
+	// 1818-1820): a capture flips the linked graveyard, gated on
+	// WorkshopId < KEEP_WEST, so keep workshops never reach this leg
+	// (they also return false above). The index is the workshop enum
+	// ID, crossed against the graveyard enum exactly as in C++ — see
+	// updateGraveyardsFromWorkshops. The BfGraveyard::GiveControlTo
+	// RelocateDeadPlayers leg has no Go twin: Go's revive queue is
+	// battlefield-level, not per-graveyard (see ReviveQueue).
+	if workshopID < WGWorkshopKeepWest {
+		wg.Graveyards[workshopID].TeamControl = team
+	}
 	s.updateWGWorldState(ws.WorldState, uint32(wgBuildingState(0, team)))
 	wg.updateVehicleLimits()
 	s.updateWGWorldState(WGWorldStateMaxVehicleA, wg.MaxVehiclesAlliance)
@@ -1669,6 +1761,7 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			LastResurrectTimer: wgResurrectInterval,
 		}
 		wg.initWorkshops()
+		wg.initGraveyards()
 		wg.initTowers()
 		wg.initGates()
 		wg.updateVehicleLimits()
