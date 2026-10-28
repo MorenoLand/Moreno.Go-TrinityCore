@@ -152,6 +152,16 @@ const (
 	WGCreatureGnomishEngineer     uint32 = 30499
 	WGCreatureSpiritGuideAlliance uint32 = 31842
 	WGCreatureSpiritGuideHorde    uint32 = 31841
+	WGCreatureStalker             uint32 = 15214 // BATTLEFIELD_WG_NPC_STALKER (BattlefieldWG.h:178), the SendWarning/SendChat source
+
+	// Wintergrasp stalker creature-text groups (BattlefieldWG.h:470-471):
+	// the rank-up SendChat groups. CHAT_MSG_ADDON/LANG_ADDON in the
+	// PromotePlayer call are placeholders (SharedDefines.h:3161:
+	// CHAT_MSG_ADDON = 0xFF): SendChat replaces them with the row's
+	// type, language, and range, so the row — not this call — decides
+	// the packet type and audience.
+	WGTextRankCorporal        uint8 = 37
+	WGTextRankFirstLieutenant uint8 = 38
 
 	// Achievements & Quests
 	WGAchievementWinWG           uint32 = 1717
@@ -940,6 +950,13 @@ func (wg *wgBattlegroundState) HandlePromotion(s *Server, killerGUID uint64, kil
 			if sess := s.findSessionByGUID(killerGUID); sess != nil {
 				sess.removeAura(WGSpellRecruit)
 				sess.applyAura(WGSpellCorporal)
+				// PromotePlayer's stalker SendChat (BattlefieldWG.cpp:1030):
+				// routed through the row-driven creature-text path, so
+				// the DB row's type/range decides the audience; the
+				// sender is the promoted player (srcPlr = killer), hence
+				// killerGUID as both source GUID and whisper target.
+				// Instance 0 is the open-world Northrend instance.
+				s.broadcastCreatureTalk(context.Background(), WGMapID, 0, killerGUID, WGCreatureStalker, sess.player.Name, WGTextRankCorporal, killerGUID)
 			}
 		}
 	case WGSpellCorporal:
@@ -950,6 +967,9 @@ func (wg *wgBattlegroundState) HandlePromotion(s *Server, killerGUID uint64, kil
 			if sess := s.findSessionByGUID(killerGUID); sess != nil {
 				sess.removeAura(WGSpellCorporal)
 				sess.applyAura(WGSpellLieutenant)
+				// PromotePlayer's stalker SendChat (BattlefieldWG.cpp:1042),
+				// same row-driven path as the Corporal arm above.
+				s.broadcastCreatureTalk(context.Background(), WGMapID, 0, killerGUID, WGCreatureStalker, sess.player.Name, WGTextRankFirstLieutenant, killerGUID)
 			}
 		}
 	case WGSpellLieutenant:
@@ -1120,6 +1140,22 @@ func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName s
 	if ws.TeamControl == team {
 		return true // already controlled
 	}
+	// WintergraspWorkshop::GiveControlTo(TEAM_NEUTRAL)
+	// (BattlefieldWG.cpp:1786): when a capture bar crosses the midpoint,
+	// the workshop warns of the attack before any capture leg fires, and
+	// the warning names the attacker as the opposite of the current
+	// controller (controller Alliance -> HordeAttack text, otherwise
+	// AllianceAttack). Go captures instantly on banner use, so the
+	// midpoint warning collapses into the capture call, ahead of the
+	// capture message below. Init captures never reach this function
+	// (initWorkshops sets control directly), matching the C++ init=true
+	// warning suppression.
+	prevControl := ws.TeamControl
+	attackerName := "Alliance"
+	if prevControl == WGTeamAlliance {
+		attackerName = "Horde"
+	}
+	s.broadcastWGZoneMessage(fmt.Sprintf("The %s is attacking %s!", attackerName, ws.Name))
 	ws.TeamControl = team
 	s.updateWGWorldState(ws.WorldState, uint32(wgBuildingState(0, team)))
 	wg.updateVehicleLimits()
@@ -1545,10 +1581,6 @@ func (s *Server) handleWGPlayerDeath(victimSess *session, killerSess *session) {
 	wg.mu.Lock()
 	defer wg.mu.Unlock()
 
-	if !wg.IsActive {
-		return
-	}
-
 	killerTeam := teamForRace(killerSess.player.Race)
 	victimTeam := teamForRace(victimSess.player.Race)
 	if killerTeam == victimTeam {
@@ -1557,22 +1589,32 @@ func (s *Server) handleWGPlayerDeath(victimSess *session, killerSess *session) {
 
 	// BattlefieldWG::HandlePromotion: every in-war player of the killer's
 	// team within 40 (2D) yards of the victim shares the promotion credit.
-	vx, vy := victimSess.player.X, victimSess.player.Y
-	for guid, team := range wg.PlayersInWar {
-		if team != killerTeam {
-			continue
+	// PromotePlayer itself gates on war active; the skinnable arm below
+	// does not, so the loop — not the whole handler — carries the gate.
+	if wg.IsActive {
+		vx, vy := victimSess.player.X, victimSess.player.Y
+		for guid, team := range wg.PlayersInWar {
+			if team != killerTeam {
+				continue
+			}
+			sess := s.findSessionByGUID(guid)
+			if sess == nil || sess.player == nil || sess.player.Map != wg.MapID {
+				continue
+			}
+			dx := float64(sess.player.X - vx)
+			dy := float64(sess.player.Y - vy)
+			if math.Sqrt(dx*dx+dy*dy) > 40.0 {
+				continue
+			}
+			wg.HandlePromotion(s, guid, team)
 		}
-		sess := s.findSessionByGUID(guid)
-		if sess == nil || sess.player == nil || sess.player.Map != wg.MapID {
-			continue
-		}
-		dx := float64(sess.player.X - vx)
-		dy := float64(sess.player.Y - vy)
-		if math.Sqrt(dx*dx+dy*dy) > 40.0 {
-			continue
-		}
-		wg.HandlePromotion(s, guid, team)
 	}
+
+	// BattlefieldWG::HandleKill (BattlefieldWG.cpp:962-977): a slain
+	// player in the zone becomes skinnable so the insignia can be
+	// removed. Same bare flag set as the battleground-victim arm in
+	// death.go; repop clears it there.
+	victimSess.player.UnitFlags |= unitFlagSkinnable
 }
 
 // isWGGameObject identifies Wintergrasp interactible objects.
