@@ -1426,20 +1426,6 @@ func (s *Server) updateArenaHealingScore(healer *session, healing uint32) {
 	}
 }
 
-// broadcastArenaMessage sends a system chat message to all players on the arena map.
-func (s *Server) broadcastArenaMessage(mapID uint32, msg string) {
-	if s == nil {
-		return
-	}
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID {
-			sess.sendSystemMessage(msg)
-		}
-	}
-}
-
 // resolveArenaStartText resolves an arena start broadcast_text ID from the
 // world DB, falling back to the hardcoded English text when the row is
 // missing (Battleground::SendBroadcastText, Arena.h:25-28, Arena.cpp:68-71).

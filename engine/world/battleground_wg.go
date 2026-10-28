@@ -733,19 +733,20 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 					wg.BrokenSouthTowers++
 
 					// Update tower control buffs
-					s.sessionsMu.RLock()
-					for sess := range s.sessions {
-						if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != wg.MapID {
-							continue
-						}
-						pTeam := teamForRace(sess.player.Race)
-						if pTeam == wg.DefenderTeam {
-							sess.applyAura(WGSpellTowerControl)
-						} else {
-							sess.removeAura(WGSpellTowerControl)
+					// Tower Control reaches m_PlayersInWar only
+					// (BattlefieldWG.cpp:1204-1245): the old map scan handed
+					// the buff to every defender on Northrend and stripped it
+					// from every attacker there. Same audience as the credit
+					// loop below.
+					for guid, pTeam := range wg.PlayersInWar {
+						if sess := s.findSessionByGUID(guid); sess != nil {
+							if pTeam == wg.DefenderTeam {
+								sess.applyAura(WGSpellTowerControl)
+							} else {
+								sess.removeAura(WGSpellTowerControl)
+							}
 						}
 					}
-					s.sessionsMu.RUnlock()
 
 					// Tower-destroy achievement and quest credit to defenders in war.
 					// Reference: BattlefieldWG::UpdatedDestroyedTowerCount
@@ -884,29 +885,28 @@ func (s *Server) UpdateWGTenacity() {
 
 	wg.TenacityTeam = teamToBuff
 
-	s.sessionsMu.RLock()
-	for sess := range s.sessions {
-		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != wg.MapID {
-			continue
-		}
-		pTeam := teamForRace(sess.player.Race)
-		if teamToBuff >= 0 && uint32(teamToBuff) == pTeam {
-			sess.applyAura(WGSpellTenacity)
-			if absStack >= 15 {
-				sess.applyAura(WGSpellGreatestHonor)
-			} else if absStack >= 10 {
-				sess.applyAura(WGSpellGreaterHonor)
-			} else if absStack >= 5 {
-				sess.applyAura(WGSpellGreatHonor)
+	// Tenacity reaches m_PlayersInWar only (BattlefieldWG.cpp:1301+):
+	// the counts above already come from PlayersInWar, but the old map
+	// scan applied the buff to every same-team player on Northrend.
+	for guid, pTeam := range wg.PlayersInWar {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			if teamToBuff >= 0 && uint32(teamToBuff) == pTeam {
+				sess.applyAura(WGSpellTenacity)
+				if absStack >= 15 {
+					sess.applyAura(WGSpellGreatestHonor)
+				} else if absStack >= 10 {
+					sess.applyAura(WGSpellGreaterHonor)
+				} else if absStack >= 5 {
+					sess.applyAura(WGSpellGreatHonor)
+				}
+			} else {
+				sess.removeAura(WGSpellTenacity)
+				sess.removeAura(WGSpellGreatHonor)
+				sess.removeAura(WGSpellGreaterHonor)
+				sess.removeAura(WGSpellGreatestHonor)
 			}
-		} else {
-			sess.removeAura(WGSpellTenacity)
-			sess.removeAura(WGSpellGreatHonor)
-			sess.removeAura(WGSpellGreaterHonor)
-			sess.removeAura(WGSpellGreatestHonor)
 		}
 	}
-	s.sessionsMu.RUnlock()
 }
 
 // TickWG processes periodic Wintergrasp timer countdown and state transitions.
@@ -1243,22 +1243,27 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 }
 
 // updateWGWorldState sends an SMSG_UPDATE_WORLD_STATE packet to players in Wintergrasp.
+// Reference: Battlefield::SendUpdateWorldState (Battlefield.cpp:465-471)
+// iterates m_players, the zone roster — not every player on map 571, so
+// the old map gate spammed all of Northrend. The zone gate is the live
+// player.Zone (recomputed on map change and zone tick).
 func (s *Server) updateWGWorldState(variableID, value uint32) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID && sess.player.Zone == WGZoneID {
 			sess.sendWorldState(variableID, value)
 		}
 	}
 }
 
 // broadcastWGInitWorldStates sends SMSG_INIT_WORLD_STATES to all players in Wintergrasp.
+// Same zone-roster audience as updateWGWorldState (Battlefield.cpp:465-471).
 func (s *Server) broadcastWGInitWorldStates() {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID && sess.player.Zone == WGZoneID {
 			s.sendWGInitWorldStatesTo(sess)
 		}
 	}

@@ -992,6 +992,11 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 		teamName = "Horde"
 	}
 	s.broadcastBattlegroundMessage(mapID, "The "+teamName+" wins!")
+	// BattlegroundWS::EndBattleground calls Battleground::EndBattleground
+	// (BattlegroundWS.cpp:766, Battleground.cpp:724-802), which credits
+	// WIN_BG/COMPLETE to every m_Players member — the roster, via
+	// creditBattlegroundWin, like the AB/EOTS/IC/SA end arms.
+	s.creditBattlegroundWin(mapID, winningTeam)
 	s.rewardBGEndHonor(WSGMapID, winningTeam, 1)
 	s.rewardBGEndHonor(WSGMapID, 0, 2)
 	s.rewardBGEndHonor(WSGMapID, 1, 2)
@@ -1060,6 +1065,9 @@ func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
 	wsg.Winner = 2
 	wsg.EndedAt = time.Now()
 	s.markBGSlotsWaitLeave(WSGMapID)
+	// Tie arm of the same EndBattleground path: COMPLETE credit to the
+	// roster, no WIN_BG — winningTeam 2 matches no race team.
+	s.creditBattlegroundWin(mapID, 2)
 	s.rewardBGEndHonor(WSGMapID, 0, 2)
 	s.rewardBGEndHonor(WSGMapID, 1, 2)
 }

@@ -1684,21 +1684,20 @@ func (s *session) loadExploredZones(ctx context.Context) {
 }
 
 // creditBattlegroundWin mirrors the reference WIN_BG criteria credit at
-// battleground end: every online player of the winning team on the
-// battleground map gains progress, and all participants complete the battleground.
+// battleground end: Battleground::EndBattleground iterates m_Players
+// (Battleground.cpp:724-802), the roster, not the map — a sim-accepted
+// roster member holds no BG map yet, so the old map scan missed their
+// win/complete credit while crediting on-map bystanders. The audience is
+// bgRewardTargets (entered InProgress or WaitLeave slots): every end arm
+// flips slots to WaitLeave before crediting.
 func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
-	s.sessionsMu.RLock()
 	var allParticipants, winners []*session
-	for sess := range s.sessions {
-		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
-			continue
-		}
+	for _, sess := range s.bgRewardTargets(mapID) {
 		allParticipants = append(allParticipants, sess)
 		if teamForRace(sess.player.Race) == winningTeam {
 			winners = append(winners, sess)
 		}
 	}
-	s.sessionsMu.RUnlock()
 	for _, sess := range allParticipants {
 		sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1)
 	}
