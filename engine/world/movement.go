@@ -1478,6 +1478,12 @@ func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) 
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
 	info.GUID = guid
 	s.setLastMovementInfo(info)
+	// MovementHandler.cpp:542 — the info becomes m_movementInfo wholesale,
+	// so Unit::IsFalling reads the acked FALLING/FALLING_FAR flags until the
+	// next movement packet; the knockback-ack arm already syncs them, and
+	// this one left them stale the same way.
+	s.isFalling = info.Flags&movementFalling != 0
+	s.isFallingFar = info.Flags&movementFallingFar != 0
 	return true
 }
 

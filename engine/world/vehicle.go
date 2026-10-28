@@ -1269,9 +1269,16 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 	if len(payload) > 0 {
 		b := protocol.NewReader(payload)
 		if _, err := b.ReadPackedGUID(); err == nil {
-			// _player->m_movementInfo = mi (VehicleHandler.cpp:46).
+			// _player->m_movementInfo = mi (VehicleHandler.cpp:47), before
+			// ExitVehicle — so Unit::IsFalling reads the dismissed info's
+			// FALLING/FALLING_FAR flags until the next movement packet.
+			// The info runs the same ReadMovementInfo sanitize the
+			// knockback/not-active-mover arms apply before it is stored.
 			if info, err := readMovementInfo(b); err == nil {
+				info.Flags = s.sanitizeMovementFlags(info.Flags)
 				s.setLastMovementInfo(info)
+				s.isFalling = info.Flags&movementFalling != 0
+				s.isFallingFar = info.Flags&movementFallingFar != 0
 			}
 		}
 	}
