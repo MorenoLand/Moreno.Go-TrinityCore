@@ -974,6 +974,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
 	if state.Cinematic == 0 {
+		// CharacterHandler.cpp:812-815 (HandlePlayerLogin): the first-login
+		// branch sets the cinematic flag unconditionally, before the
+		// sequence lookup — the opcode handler itself never touches it.
+		s.player.Cinematic = 1
 		if !s.handleOpeningCinematic() {
 			return false
 		}
@@ -2161,13 +2165,12 @@ func (s *session) handleNextCinematicCamera() bool {
 
 func (s *session) handleOpeningCinematic() bool {
 	// Reference: WorldSession::HandleOpeningCinematic (CharacterHandler.cpp:2223):
-	// only players that have not yet gained any experience can use this
-	// (PLAYER_XP must be 0); the Go Cinematic flag additionally prevents
-	// repeats after the first play.
-	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 || s.player.XP != 0 {
+	// the opcode handler gates on PLAYER_XP alone — a zero-XP player replays
+	// the intro on every request, even after the first-login play set the
+	// cinematic flag (that flag is only read/set by the login branch).
+	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
 		return true
 	}
-	s.player.Cinematic = 1
 	cinematicID := s.getStartingCinematicID(s.player.Race, s.player.Class)
 	if cinematicID == 0 {
 		return true
