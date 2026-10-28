@@ -1375,6 +1375,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
 		s.motionMu.Unlock()
+		s.deleteCreatureRespawnRow(ctx, dbGUID, mapID, instanceID)
 		s.clearLootState(mapID, instanceID, guid)
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: maxHealth, unitFieldDynamicFlags: 0})
 		s.fireCreatureSpawned(ctx, m)

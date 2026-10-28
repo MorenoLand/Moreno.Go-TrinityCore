@@ -1967,6 +1967,7 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	}
 	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
 	s.motionMu.Unlock()
+	s.saveCreatureRespawnRow(ctx, guid, respawnAt, uint32(mapID), 0)
 }
 
 // reseatRespawnedEntry reverts a scripted UpdateEntry transform when the
@@ -2047,6 +2048,120 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	}
 	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
 	s.motionMu.Unlock()
+	s.saveCreatureRespawnRow(ctx, guid, respawnAt, target.Map, target.InstanceID)
+}
+
+// saveCreatureRespawnRow mirrors Map::SaveRespawnInfoDB (Map.cpp:4486,
+// CHAR_REP_RESPAWN): the respawn-table row for one creature (type 0).
+// The row is the restart half of the in-memory record: without it a
+// creature dead at shutdown keeps only its curhealth=0 row, which the
+// motion sweep skips, so it would stay dead forever. Best-effort like
+// the other schedule-path writes; a failed write degrades to the old
+// in-memory-only behavior.
+func (s *Server) saveCreatureRespawnRow(ctx context.Context, guid uint32, at time.Time, mapID, instanceID uint32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || guid == 0 {
+		return
+	}
+	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_REP_RESPAWN", 0, guid, at.Unix(), mapID, instanceID)
+}
+
+// deleteCreatureRespawnRow mirrors Map::DeleteRespawnInfoFromDB
+// (Map.cpp:3241, CHAR_DEL_RESPAWN) for one creature row.
+func (s *Server) deleteCreatureRespawnRow(ctx context.Context, guid uint32, mapID, instanceID uint32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || guid == 0 {
+		return
+	}
+	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_RESPAWN", 0, guid, mapID, instanceID)
+}
+
+// deleteRespawnRowsForInstance mirrors Map::DeleteRespawnTimesInDB
+// (Map.cpp:4527, CHAR_DEL_ALL_RESPAWNS) for one (map, instance) pair:
+// the rows go with the unloaded instance (InstanceSaveMgr.cpp:621),
+// and the in-memory instance records for that key go with them. Go
+// tracks no gameobject respawns, so the creature rows are the whole
+// effect.
+func (s *Server) deleteRespawnRowsForInstance(ctx context.Context, mapID, instanceID uint32) {
+	if s == nil {
+		return
+	}
+	s.motionMu.Lock()
+	delete(s.instanceCreatureRespawns, instanceAdmissionKey{MapID: mapID, InstanceID: instanceID})
+	s.motionMu.Unlock()
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_ALL_RESPAWNS", mapID, instanceID)
+}
+
+// loadCreatureRespawnTimes mirrors Map::LoadRespawnTimes (Map.cpp:4497):
+// rows saved by saveCreatureRespawnRow seed the in-memory respawn maps
+// at the first world tick, so a creature dead at shutdown revives at
+// its remaining time. CorpseRemoveAt stays zero with CorpseRemoved
+// set: Go persists no creature corpses (C++ LoadCorpseData covers
+// player corpses only), so the corpse is already gone and
+// buildNearbyCreatureUpdates skips the spawn via creatureCorpseRemoved
+// until At. Rows for spawns that no longer exist are ignored like
+// C++'s spawn-exists check, and a row already covered by a live
+// in-memory record is left alone (C++ startup duplicate skips).
+// Past-due rows revive on the next tick, matching C++ loading a past
+// respawnTime.
+func (s *Server) loadCreatureRespawnTimes(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT spawnId, respawnTime, mapId, instanceId FROM respawn WHERE type = 0 ORDER BY spawnId")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spawnID, respawnTime, mapID, instanceID int64
+		if err := rows.Scan(&spawnID, &respawnTime, &mapID, &instanceID); err != nil || spawnID <= 0 {
+			continue
+		}
+		var entry int64
+		var x, y, z float64
+		var rawSeconds int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, position_x, position_y, position_z, COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", spawnID).Scan(&entry, &x, &y, &z, &rawSeconds); err != nil || entry <= 0 {
+			continue
+		}
+		stats := s.loadCreatureStats(ctx, uint32(entry))
+		health := stats.Health
+		if health == 0 {
+			health = 1
+		}
+		seconds := rawSeconds
+		if seconds <= 0 {
+			seconds = 300
+		}
+		rec := creatureRespawn{
+			GUID: uint32(spawnID), At: time.Unix(respawnTime, 0), Health: health,
+			Entry: uint32(entry), Map: uint32(mapID), InstanceID: uint32(instanceID),
+			X: float32(x), Y: float32(y), Z: float32(z),
+			CorpseRemoved: true, CorpseDelay: s.creatureCorpseDelaySeconds(ctx, uint32(entry)), RespawnDelay: uint32(seconds),
+		}
+		s.motionMu.Lock()
+		if rec.InstanceID == 0 {
+			if s.creatureRespawns == nil {
+				s.creatureRespawns = make(map[uint32]creatureRespawn)
+			}
+			if _, ok := s.creatureRespawns[rec.GUID]; !ok {
+				s.creatureRespawns[rec.GUID] = rec
+			}
+		} else {
+			key := instanceAdmissionKey{MapID: rec.Map, InstanceID: rec.InstanceID}
+			if s.instanceCreatureRespawns == nil {
+				s.instanceCreatureRespawns = make(map[instanceAdmissionKey]map[uint32]creatureRespawn)
+			}
+			if s.instanceCreatureRespawns[key] == nil {
+				s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
+			}
+			if _, ok := s.instanceCreatureRespawns[key][rec.GUID]; !ok {
+				s.instanceCreatureRespawns[key][rec.GUID] = rec
+			}
+		}
+		s.motionMu.Unlock()
+	}
 }
 
 // processCreatureRespawns restores expired spawns; called from world tick.
@@ -2169,10 +2284,12 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			}
 			s.motionMu.Unlock()
 			if alive {
+				s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 				continue
 			}
 			if newAt, drop, ok := s.checkRespawnLinkedDeferral(ctx, respawn, now, pendingAt); ok {
 				if drop {
+					s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 					continue
 				}
 				s.motionMu.Lock()
@@ -2182,12 +2299,14 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				respawn.At = newAt
 				s.creatureRespawns[respawn.GUID] = respawn
 				s.motionMu.Unlock()
+				s.saveCreatureRespawnRow(ctx, respawn.GUID, newAt, respawn.Map, respawn.InstanceID)
 				continue
 			}
 		}
 		if _, err := s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", respawn.Health, respawn.GUID); err != nil {
 			continue
 		}
+		s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 		if respawn.Entry != 0 {
 			rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
 			var motion *creatureMotion
@@ -2238,10 +2357,12 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		alive := motion != nil && motion.Health > 0
 		s.motionMu.Unlock()
 		if alive {
+			s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 			continue
 		}
 		if newAt, drop, ok := s.checkRespawnLinkedDeferral(ctx, respawn, now, pendingAt); ok {
 			if drop {
+				s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 				continue
 			}
 			s.motionMu.Lock()
@@ -2254,6 +2375,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			respawn.At = newAt
 			s.instanceCreatureRespawns[item.key][respawn.GUID] = respawn
 			s.motionMu.Unlock()
+			s.saveCreatureRespawnRow(ctx, respawn.GUID, newAt, respawn.Map, respawn.InstanceID)
 			continue
 		}
 		s.motionMu.Lock()
@@ -2284,6 +2406,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			}
 			s.broadcastCreatureValuesUpdateInInstance(item.key.MapID, item.key.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: motion.Health, unitFieldDynamicFlags: 0})
 		}
+		s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 	}
 }
 

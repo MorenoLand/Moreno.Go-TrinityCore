@@ -2478,6 +2478,7 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 				// by online players, so both arms fire when nobody is in it.
 				if s.isDungeonMap(r.mapID) && !s.mapHasOnlinePlayers(r.mapID) {
 					s.deleteCorpseDataForMap(ctx, r.mapID, r.instanceID)
+					s.server.deleteRespawnRowsForInstance(ctx, r.mapID, r.instanceID)
 					s.repositionOfflineGroupMembersToEntrance(ctx, grp, r.mapID)
 				}
 				resetBuf := protocol.NewBuffer(4)
@@ -2627,6 +2628,7 @@ func (s *session) resetCharacterBinds(ctx context.Context, charGUID uint64, curD
 		// solo path (Player.cpp:20648-20686).
 		if s.isDungeonMap(r.mapID) {
 			s.deleteCorpseDataForMap(ctx, r.mapID, r.instanceID)
+			s.server.deleteRespawnRowsForInstance(ctx, r.mapID, r.instanceID)
 		}
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ? AND permanent = 0", charGUID, r.instanceID)
 		out = append(out, r.mapID)

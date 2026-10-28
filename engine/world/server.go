@@ -220,6 +220,7 @@ type Server struct {
 	formationLoaded          bool
 	creatureRespawns         map[uint32]creatureRespawn
 	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
+	respawnTimesLoaded       bool // set once runWorldTick loads the saved respawn rows (loadCreatureRespawnTimes)
 	// evadeDespawns tracks BossAI::_DespawnAtEvade removals awaiting their
 	// delayed respawn (boss_ai.go), keyed by motion GUID.
 	evadeDespawns map[uint64]evadeDespawn
@@ -1409,6 +1410,10 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.flushGroupMemberStats(ctx, now)
 			s.updateLFGBootVotes(now)
 			s.updateRestedBonuses(ctx, now)
+			if !s.respawnTimesLoaded {
+				s.loadCreatureRespawnTimes(ctx)
+				s.respawnTimesLoaded = true
+			}
 			s.processCreatureRespawns(ctx, now)
 			s.processCreatureCorpseRemovals(ctx, now)
 			s.processEvadeDespawns(ctx, now)
