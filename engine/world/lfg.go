@@ -991,6 +991,76 @@ func (m *LFGManager) GetProposal(proposalID uint32) *LFGProposal {
 	return m.proposals[proposalID]
 }
 
+// declineProposalLocked runs the LFGMgr::RemoveProposal decline arm
+// (LFGMgr.cpp:1306-1380) for one player: the decliner is marked DENY, the
+// denied group leaves the queue, agreeing players outside a denied group
+// are re-queued, and the proposal is dropped. The caller holds m.mu, and
+// the proposal must still be in m.proposals. Pending players are NOT
+// marked deny on this arm (only the FAILED arm does that).
+func (m *LFGManager) declineProposalLocked(prop *LFGProposal, guid uint64) {
+	player := prop.Players[guid]
+	player.Accept = LFGAnswerDeny
+	prop.State = LFGProposalFailed
+	// LFGMgr::RemoveProposal (LFGMgr.cpp:1318-1332): the decliner is
+	// removed from the queue.
+	delete(m.queue, guid)
+	// LFGMgr::RemoveProposal (LFGMgr.cpp:1306-1345): the denied player's
+	// whole group leaves the queue, not just the decliner.
+	if player.Group != 0 {
+		for pguid, p := range prop.Players {
+			if p.Group == player.Group {
+				delete(m.queue, pguid)
+			}
+		}
+		delete(m.groupQueue, player.Group)
+	}
+	m.deleteGroupEntriesContainingLocked(guid)
+	// LFGMgr::RemoveProposal (LFGMgr.cpp:1366-1376): agreeing players
+	// outside a denied group are re-queued, mirroring ExpireProposals.
+	deniedGroups := make(map[uint64]bool)
+	for _, p := range prop.Players {
+		if p.Accept == LFGAnswerDeny && p.Group != 0 {
+			deniedGroups[p.Group] = true
+		}
+	}
+	for pguid, p := range prop.Players {
+		if p.Accept == LFGAnswerDeny || deniedGroups[p.Group] {
+			continue
+		}
+		if entry, ok := m.queue[pguid]; ok {
+			entry.State = LFGStateQueued
+			m.queue[pguid] = entry
+		}
+	}
+	for _, entry := range m.groupQueue {
+		for pguid := range prop.Players {
+			if _, ok := entry.Roles[pguid]; ok {
+				entry.State = LFGStateQueued
+				break
+			}
+		}
+	}
+	delete(m.proposals, prop.ID)
+}
+
+// DeclineProposalForPlayer runs the LeaveLfg PROPOSAL arm
+// (LFGMgr.cpp:754-779) for a player who leaves or is kicked mid-proposal:
+// the proposal containing the player is found, the player is marked DENY,
+// and the proposal is removed with the DECLINED notify data. It returns
+// the removed proposal for the caller to notify, or nil when the player
+// is in no proposal.
+func (m *LFGManager) DeclineProposalForPlayer(guid uint64) *LFGProposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, prop := range m.proposals {
+		if _, ok := prop.Players[guid]; ok {
+			m.declineProposalLocked(prop, guid)
+			return prop
+		}
+	}
+	return nil
+}
+
 func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool) (*LFGProposal, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1003,48 +1073,7 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 		return nil, false
 	}
 	if !accept {
-		player.Accept = LFGAnswerDeny
-		prop.State = LFGProposalFailed
-		// LFGMgr::RemoveProposal (LFGMgr.cpp:1318-1332): the decliner is
-		// removed from the queue.
-		delete(m.queue, guid)
-		// LFGMgr::RemoveProposal (LFGMgr.cpp:1306-1345): the denied player's
-		// whole group leaves the queue, not just the decliner.
-		if player.Group != 0 {
-			for pguid, p := range prop.Players {
-				if p.Group == player.Group {
-					delete(m.queue, pguid)
-				}
-			}
-			delete(m.groupQueue, player.Group)
-		}
-		m.deleteGroupEntriesContainingLocked(guid)
-		// LFGMgr::RemoveProposal (LFGMgr.cpp:1366-1376): agreeing players
-		// outside a denied group are re-queued, mirroring ExpireProposals.
-		deniedGroups := make(map[uint64]bool)
-		for _, p := range prop.Players {
-			if p.Accept == LFGAnswerDeny && p.Group != 0 {
-				deniedGroups[p.Group] = true
-			}
-		}
-		for pguid, p := range prop.Players {
-			if p.Accept == LFGAnswerDeny || deniedGroups[p.Group] {
-				continue
-			}
-			if entry, ok := m.queue[pguid]; ok {
-				entry.State = LFGStateQueued
-				m.queue[pguid] = entry
-			}
-		}
-		for _, entry := range m.groupQueue {
-			for guid := range prop.Players {
-				if _, ok := entry.Roles[guid]; ok {
-					entry.State = LFGStateQueued
-					break
-				}
-			}
-		}
-		delete(m.proposals, proposalID)
+		m.declineProposalLocked(prop, guid)
 		return prop, true
 	}
 
@@ -1939,6 +1968,16 @@ func (s *session) sendLFGUpdateParty(updateType uint8, entry LFGQueueEntry) erro
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY), buildLFGUpdateParty(updateType, entry), true)
 }
 
+// sendLFGOfferContinue mirrors WorldSession::SendLfgOfferContinue
+// (LFGHandler.cpp:612-620): SMSG_LFG_OFFER_CONTINUE carries only the
+// dungeon entry, sent to the group leader when a member leaves a
+// non-finished LFG dungeon.
+func (s *session) sendLFGOfferContinue(dungeonID uint32) error {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(dungeonID)
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_OFFER_CONTINUE), packet.Bytes(), true)
+}
+
 func (s *session) getLFGDungeonEntrance(dungeonID uint32) (mapID uint32, x, y, z, ori float32) {
 	baseID := dungeonID & 0x00FFFFFF
 	var dungeonType uint32
@@ -1992,14 +2031,13 @@ func (s *Server) lfgSelectedRandomDungeon(guid uint64) bool {
 // lfgGroupMemberRemoved mirrors LFGGroupScript::OnRemoveMember
 // (LFGScripts.cpp:183-228): the LeaveLfg arms for the removed player, the
 // Dungeon Deserter cast on mid-dungeon leaves, the Dungeon Cooldown aura
-// strip on KICK_LFG removals, the SMSG_LFG_UPDATE_PARTY ping, and the
-// teleport-out of the dungeon. The KICK arm (InitBoot) never reaches here:
+// strip on KICK_LFG removals, the SMSG_LFG_UPDATE_PARTY ping, the
+// teleport-out of the dungeon, and the SMSG_LFG_OFFER_CONTINUE to the
+// leader on non-FINISHED removals. The KICK arm (InitBoot) never reaches here:
 // Group::RemoveMember returns before removal for LFG+KICK (Group.cpp:588),
 // and Go starts the boot at the uninvite handlers and the Lua bridge
 // instead. The per-group data writes (SetGroup/RemovePlayerFromGroup) have
-// no Go counterpart — group membership lives in groupState.Members — and
-// SendLfgOfferContinue has no Go sender yet, so the leader offer on
-// non-FINISHED removals stays an open gap.
+// no Go counterpart — group membership lives in groupState.Members.
 func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method uint8) {
 	if s == nil || g == nil || !g.IsLFG || target == nil || target.player == nil {
 		return
@@ -2018,9 +2056,12 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 					return
 				}
 				// LEAVE/KICK_LFG during a proposal reach LeaveLfg's
-				// PROPOSAL arm (mark DENY + RemoveProposal declined);
-				// the proposal flow has no removal hook, so the entry
-				// is left for it and only the general arms below run.
+				// PROPOSAL arm (LFGMgr.cpp:754-779): the leaver is
+				// marked DENY and the proposal is removed declined;
+				// the general arms below still run, as in C++.
+				if prop := s.Features.LFG.DeclineProposalForPlayer(target.playerGUID); prop != nil {
+					s.sendLFGProposalDeclined(prop)
+				}
 			case LFGStateQueued:
 				// LeaveLfg QUEUED arm: the whole queued group leaves
 				// the queue. Exclude is 0 because C++ runs LeaveLfg
@@ -2071,6 +2112,17 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
 	if target.isDungeonMap(target.player.Map) {
 		target.teleportToBGEntryPoint()
+	}
+	// LFGScripts.cpp:224-227: a non-FINISHED LFG group offers the leader
+	// the chance to continue — the state is the group state from before
+	// the LeaveLfg arms (g.LFGState is untouched by them), and the leader
+	// is the pre-removal one (ChangeLeader runs after the hook in C++
+	// Group::RemoveMember and in Go removeFromGroup alike). The dungeon
+	// is GetDungeon(gguid, false), the group's raw LFGDungeonID.
+	if g.LFGState != LFGStateFinishedDungeon {
+		if leader := s.findSessionByGUID(g.LeaderGUID); leader != nil {
+			_ = leader.sendLFGOfferContinue(g.LFGDungeonID)
+		}
 	}
 }
 
@@ -3336,6 +3388,60 @@ func (s *session) writeLFGRandomDungeonReward(ctx context.Context, buf *protocol
 
 // handleLfgProposalResult processes CMSG_LFG_PROPOSAL_RESULT (0x362).
 // Reference: WorldSession::HandleLfgProposalResultOpcode (LFGHandler.cpp:68).
+// sendLFGProposalDeclined sends the LFGMgr::RemoveProposal notify arm with
+// PROPOSAL_DECLINED (LFGMgr.cpp:1306-1380), mirroring the
+// updateLFGProposalExpiry FAILED arm: deniers get the decline update, their
+// group-mates the REMOVED update, and agreeing players outside a denied
+// group the ADDED_TO_QUEUE re-add — each on the party channel when grouped,
+// the player channel when solo. Pending players are NOT marked deny on this
+// arm (only the FAILED arm does that), so a pending group-mate of a denier
+// lands in the REMOVED case via deniedGroups, not the decline case. The
+// proposal must already have been declined and removed from the manager.
+func (s *Server) sendLFGProposalDeclined(proposal *LFGProposal) {
+	if s == nil || proposal == nil {
+		return
+	}
+	deniedGroups := make(map[uint64]bool)
+	for _, player := range proposal.Players {
+		if player.Accept == LFGAnswerDeny && player.Group != 0 {
+			deniedGroups[player.Group] = true
+		}
+	}
+	guids := make([]uint64, 0, len(proposal.Players))
+	for guid := range proposal.Players {
+		guids = append(guids, guid)
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	for _, pguid := range guids {
+		player := proposal.Players[pguid]
+		ps := s.findSessionByGUID(pguid)
+		if ps == nil {
+			continue
+		}
+		_ = ps.sendLFGProposalUpdate(proposal)
+		switch {
+		case player.Accept == LFGAnswerDeny:
+			if player.Group != 0 {
+				_ = ps.sendLFGUpdateParty(LFGUpdateProposalDeclined, LFGQueueEntry{})
+			} else {
+				_ = ps.sendLFGUpdatePlayer(LFGUpdateProposalDeclined, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
+			}
+		case player.Group != 0 && deniedGroups[player.Group]:
+			_ = ps.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+		default:
+			entry := LFGQueueEntry{Dungeons: []uint32{proposal.DungeonID}, State: LFGStateQueued}
+			if cur, ok := s.Features.LFG.Status(pguid); ok {
+				entry = cur
+			}
+			if player.Group != 0 {
+				_ = ps.sendLFGUpdateParty(LFGUpdateAddedToQueue, entry)
+			} else {
+				_ = ps.sendLFGUpdatePlayer(LFGUpdateAddedToQueue, entry)
+			}
+		}
+	}
+}
+
 func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) bool {
 	if s.playerGUID == 0 {
 		return true
@@ -3360,53 +3466,7 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 	}
 
 	if !accept {
-		// LFGMgr::RemoveProposal with PROPOSAL_DECLINED (LFGMgr.cpp:1306-1380),
-		// mirroring the updateLFGProposalExpiry FAILED arm: deniers get the
-		// decline update, their group-mates the REMOVED update, and agreeing
-		// players outside a denied group the ADDED_TO_QUEUE re-add — each on
-		// the party channel when grouped, the player channel when solo.
-		// Pending players are NOT marked deny on this arm (only the FAILED arm
-		// does that), so a pending group-mate of a denier lands in the
-		// REMOVED case via deniedGroups, not the decline case.
-		deniedGroups := make(map[uint64]bool)
-		for _, player := range proposal.Players {
-			if player.Accept == LFGAnswerDeny && player.Group != 0 {
-				deniedGroups[player.Group] = true
-			}
-		}
-		guids := make([]uint64, 0, len(proposal.Players))
-		for guid := range proposal.Players {
-			guids = append(guids, guid)
-		}
-		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
-		for _, pguid := range guids {
-			player := proposal.Players[pguid]
-			ps := s.server.findSessionByGUID(pguid)
-			if ps == nil {
-				continue
-			}
-			_ = ps.sendLFGProposalUpdate(proposal)
-			switch {
-			case player.Accept == LFGAnswerDeny:
-				if player.Group != 0 {
-					_ = ps.sendLFGUpdateParty(LFGUpdateProposalDeclined, LFGQueueEntry{})
-				} else {
-					_ = ps.sendLFGUpdatePlayer(LFGUpdateProposalDeclined, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
-				}
-			case player.Group != 0 && deniedGroups[player.Group]:
-				_ = ps.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
-			default:
-				entry := LFGQueueEntry{Dungeons: []uint32{proposal.DungeonID}, State: LFGStateQueued}
-				if cur, ok := s.server.Features.LFG.Status(pguid); ok {
-					entry = cur
-				}
-				if player.Group != 0 {
-					_ = ps.sendLFGUpdateParty(LFGUpdateAddedToQueue, entry)
-				} else {
-					_ = ps.sendLFGUpdatePlayer(LFGUpdateAddedToQueue, entry)
-				}
-			}
-		}
+		s.server.sendLFGProposalDeclined(proposal)
 		return true
 	}
 
