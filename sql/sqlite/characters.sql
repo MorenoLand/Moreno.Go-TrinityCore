@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS `calendar_events` (
 `eventtime` INTEGER  NOT NULL DEFAULT '0',
 `flags` INTEGER  NOT NULL DEFAULT '0',
 `time2` INTEGER  NOT NULL DEFAULT '0',
+`guildid` INTEGER  NOT NULL DEFAULT '0',
 PRIMARY KEY (`id`)
 );
 CREATE TABLE IF NOT EXISTS `calendar_invites` (

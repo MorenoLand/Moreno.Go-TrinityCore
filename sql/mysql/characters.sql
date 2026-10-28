@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS `calendar_events` (
   `eventtime` int unsigned NOT NULL DEFAULT '0',
   `flags` int unsigned NOT NULL DEFAULT '0',
   `time2` int unsigned NOT NULL DEFAULT '0',
+  `guildid` int unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 CREATE TABLE IF NOT EXISTS `calendar_invites` (

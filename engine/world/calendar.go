@@ -321,13 +321,52 @@ func calendarEventInPast(packed uint32) bool {
 	return calendarPackedToEventTime(packed) < time.Now().Unix()-86400
 }
 
-// calendarCreatorGuildID returns the guild of an event's creator, which is
-// where CalendarEvent::GetGuildId comes from for guild events and guild
-// announcements (CalendarHandler.cpp:262-265 sets it from the creator).
-func calendarCreatorGuildID(ctx context.Context, cdb *sql.DB, creator uint64) uint32 {
+// calendarEventGuildID returns an event's stored guild id. C++ keeps the
+// guild id in memory only (CalendarEvent::_guildId, CalendarMgr.h:268):
+// set at creation from the creator's guild (CalendarHandler.cpp:295-297),
+// recomputed from the creator's guild at load (CalendarMgr.cpp:87-92),
+// and never recomputed in-run afterwards — a kicked creator's guild events
+// keep the old guild until restart, and an update never touches it
+// (CalendarMgr.cpp:251-266). Go has no in-memory event store, so the
+// creation-time guild is persisted in calendar_events.guildid (written at
+// creation, copied verbatim by the copy path, recomputed at server start by
+// ensureCalendarEventGuildIDs) and read back here. On a database where the
+// column is absent the query fails and the creator's current guild is the
+// fallback, preserving the previous behaviour.
+func calendarEventGuildID(ctx context.Context, cdb *sql.DB, eventID uint64, creator uint64) uint32 {
 	var guildID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(guildid, 0) FROM calendar_events WHERE id = ?", eventID).Scan(&guildID); err == nil {
+		return guildID
+	}
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(guildid, 0) FROM guild_member WHERE guid = ?", creator).Scan(&guildID)
 	return guildID
+}
+
+// ensureCalendarEventGuildIDs adds calendar_events.guildid to an existing
+// characters database (fresh databases carry it in sql/*/characters.sql)
+// and recomputes it exactly the way CalendarMgr::LoadFromDB does: guild
+// events and announcements take the creator's current guild, everything
+// else takes 0. It runs once at server start, before any session can
+// query calendar state.
+func (s *Server) ensureCalendarEventGuildIDs(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, "ALTER TABLE calendar_events ADD COLUMN guildid INTEGER NOT NULL DEFAULT 0"); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			if s.Logger != nil {
+				s.Logger.Warn("calendar guildid column ensure failed", "error", err)
+			}
+			return
+		}
+	}
+	if _, err := cdb.ExecContext(ctx,
+		`UPDATE calendar_events SET guildid = CASE WHEN (flags & ?) != 0 THEN COALESCE((SELECT guildid FROM guild_member WHERE guid = creator), 0) ELSE 0 END`,
+		calendarFlagGuildEvent|calendarFlagWithoutInvites); err != nil && s.Logger != nil {
+		s.Logger.Warn("calendar guildid recompute failed", "error", err)
+	}
 }
 
 // calendarCreateGateError enforces the shared add/copy creation gates
@@ -341,10 +380,8 @@ func calendarCreateGateError(ctx context.Context, cdb *sql.DB, playerGUID uint64
 		}
 		var count int
 		_ = cdb.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM calendar_events e
-			 JOIN guild_member gm ON gm.guid = e.creator
-			 WHERE (e.flags & ?) != 0 AND gm.guildid = ?`,
-			calendarFlagGuildEvent|calendarFlagWithoutInvites, playerGuildID).Scan(&count)
+			`SELECT COUNT(*) FROM calendar_events WHERE guildid = ?`,
+			playerGuildID).Scan(&count)
 		if count >= calendarMaxGuildEvents {
 			return CalendarErrorGuildEventsExceeded
 		}
@@ -420,7 +457,7 @@ func calendarEventRelativeSessions(ctx context.Context, srv *Server, eventID uin
 	}
 	var eventGuild uint32
 	if evFlags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
-		eventGuild = calendarCreatorGuildID(ctx, cdb, evCreator)
+		eventGuild = calendarEventGuildID(ctx, cdb, eventID, evCreator)
 	}
 	seen := make(map[*session]struct{})
 	var targets []*session
@@ -575,10 +612,10 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 			 WHERE id IN (SELECT event FROM calendar_invites WHERE invitee = ?)
 			 UNION
 			 SELECT e.id, e.title, e.type, e.dungeon, e.flags, e.eventtime, e.creator
-			 FROM calendar_events e JOIN guild_member gm ON gm.guid = e.creator
-			 WHERE (e.flags & ?) != 0 AND gm.guildid = ? AND ? != 0`,
+			 FROM calendar_events e
+			 WHERE e.guildid = ? AND ? != 0`,
 			s.playerGUID,
-			calendarFlagGuildEvent|calendarFlagWithoutInvites, s.player.GuildID, s.player.GuildID)
+			s.player.GuildID, s.player.GuildID)
 		if err == nil {
 			defer evRows.Close()
 			for evRows.Next() {
@@ -872,9 +909,8 @@ func (s *session) buildCalendarSendEvent(ctx context.Context, eventID uint64, se
 	}
 	eventType = uint8(evType32)
 
-	if (flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites)) != 0 && creator != 0 {
-		_ = cdb.QueryRowContext(ctx,
-			"SELECT COALESCE(guildid, 0) FROM guild_member WHERE guid = ?", creator).Scan(&guildID)
+	if creator != 0 {
+		guildID = calendarEventGuildID(ctx, cdb, eventID, creator)
 	}
 
 	invRows, err := cdb.QueryContext(ctx,
@@ -1187,10 +1223,14 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 		// via AppendPackedTime.
 		eventTime := uint32(calendarPackedToEventTime(packedEventTime))
 		lockDate := uint32(calendarPackedRawEpoch(packedLockDate))
+		createGuildID := uint32(0)
+		if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
+			createGuildID = s.player.GuildID
+		}
 		_, _ = cdb.ExecContext(ctx,
-			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			nextID, s.playerGUID, title, description, eventType, dungeonID, eventTime, flags, lockDate)
+			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2, guildid)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			nextID, s.playerGUID, title, description, eventType, dungeonID, eventTime, flags, lockDate, createGuildID)
 
 		// Guild announcements carry a single Empty-GUID NOT_SIGNED_UP invite
 		// that CalendarMgr::AddInvite neither stores nor broadcasts
@@ -1515,7 +1555,7 @@ func (s *session) removePlayerGuildEventsAndSignups(ctx context.Context, playerG
 	if rows, err := cdb.QueryContext(ctx, `SELECT i.id, i.event, i.invitee, e.flags FROM calendar_invites i
 		JOIN calendar_events e ON e.id = i.event
 		WHERE i.invitee = ? AND (e.flags & ?) != 0
-		AND e.creator IN (SELECT guid FROM guild_member WHERE guildid = ?)`,
+		AND e.guildid = ?`,
 		playerGUID, calendarFlagGuildEvent, guildID); err == nil {
 		for rows.Next() {
 			var inv guildInvite
@@ -1578,7 +1618,7 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 		}
 
 		if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
-			if calendarCreatorGuildID(ctx, cdb, creator) != s.player.GuildID {
+			if calendarEventGuildID(ctx, cdb, eventID, creator) != s.player.GuildID {
 				return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
 			}
 		} else if creator != s.playerGUID {
@@ -1596,8 +1636,8 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
 		newEventTime := int64(calendarPackedToEventTime(packedEventTime))
 		_, _ = cdb.ExecContext(ctx,
-			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
-			 SELECT ?, creator, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
+			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2, guildid)
+			 SELECT ?, creator, title, description, type, dungeon, ?, flags, time2, guildid FROM calendar_events WHERE id = ?`,
 			nextID, uint32(newEventTime), eventID)
 
 		// CalendarMgr::AddEvent on the copy path (CalendarHandler.cpp:489)
@@ -1654,7 +1694,7 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 
 			var eventGuild uint32
 			if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
-				eventGuild = calendarCreatorGuildID(ctx, cdb, creator)
+				eventGuild = calendarEventGuildID(ctx, cdb, nextID, creator)
 			}
 
 			for i, c := range copies {
@@ -1717,7 +1757,7 @@ func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) b
 				if flags&calendarFlagGuildEvent == 0 || uint64(c.invitee) == creator {
 					alertPkt := buildCalendarInviteAlertPacket(nextID, evTitle, newEventTime, flags, evType, evDungeon, c.id, uint8(c.status), uint8(c.rank), creator, uint64(c.sender))
 					if flags&(calendarFlagGuildEvent|calendarFlagWithoutInvites) != 0 {
-						for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, creator)) {
+						for _, t := range calendarGuildMemberSessions(s.server, calendarEventGuildID(ctx, cdb, nextID, creator)) {
 							_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertPkt, true)
 						}
 					} else if invSess != nil {
@@ -1836,7 +1876,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 		}
 
 		if evFlags&calendarFlagGuildEvent != 0 &&
-			calendarCreatorGuildID(ctx, cdb, evCreator) == inviteeGuildID {
+			calendarEventGuildID(ctx, cdb, eventID, evCreator) == inviteeGuildID {
 			return s.sendCalendarCommandResult(CalendarErrorNoGuildInvites)
 		}
 
@@ -1903,7 +1943,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 		alertBuf.WritePackedGUID(s.playerGUID)
 		if evFlags&calendarFlagGuildEvent != 0 {
 			if targetGUID == evCreator {
-				for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
+				for _, t := range calendarGuildMemberSessions(s.server, calendarEventGuildID(ctx, cdb, eventID, evCreator)) {
 					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 				}
 			}
@@ -1911,7 +1951,7 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 			// SendCalendarEventInviteAlert (CalendarMgr.cpp:581-598):
 			// announcements broadcast to the whole guild like guild
 			// events, even without the guild-event flag.
-			for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
+			for _, t := range calendarGuildMemberSessions(s.server, calendarEventGuildID(ctx, cdb, eventID, evCreator)) {
 				_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 			}
 		} else if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
@@ -2177,7 +2217,7 @@ func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte)
 			return s.sendCalendarCommandResult(CalendarErrorEventInvalid)
 		}
 		if evFlags&calendarFlagGuildEvent != 0 &&
-			calendarCreatorGuildID(ctx, cdb, evCreator) != s.player.GuildID {
+			calendarEventGuildID(ctx, cdb, eventID, evCreator) != s.player.GuildID {
 			return s.sendCalendarCommandResult(CalendarErrorGuildPlayerNotInGuild)
 		}
 
@@ -2240,7 +2280,7 @@ func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte)
 			alertBuf.WritePackedGUID(evCreator)
 			alertBuf.WritePackedGUID(s.playerGUID)
 			if isGuildEvent || isAnnouncement {
-				for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
+				for _, t := range calendarGuildMemberSessions(s.server, calendarEventGuildID(ctx, cdb, eventID, evCreator)) {
 					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 				}
 			} else {

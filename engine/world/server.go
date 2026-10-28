@@ -860,6 +860,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.loadClientCacheVersion(ctx)
 	s.repairGuildRankOverrides(ctx)
+	s.ensureCalendarEventGuildIDs(ctx)
 	s.loadCustomChannels(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
