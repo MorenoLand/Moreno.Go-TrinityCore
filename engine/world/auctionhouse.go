@@ -225,6 +225,14 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// escapeAuctionLike escapes the LIKE wildcards in a player-typed search
+// term: C++ BuildListAuctionItems matches with Utf8FitTo (Util.cpp:547),
+// a literal case-insensitive substring find, so a '%' or '_' in the term
+// must not widen the match the way an unescaped LIKE pattern would.
+func escapeAuctionLike(term string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(term)
+}
+
 func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -343,8 +351,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	args := []interface{}{now}
 
 	if searchedName != "" {
-		whereClauses = append(whereClauses, "UPPER(it.name) LIKE UPPER(?)")
-		args = append(args, "%"+searchedName+"%")
+		whereClauses = append(whereClauses, "UPPER(it.name) LIKE UPPER(?) ESCAPE '\\'")
+		args = append(args, "%"+escapeAuctionLike(searchedName)+"%")
 	}
 	// C++ AuctionHouseObject::BuildListAuctionItems (AuctionHouseMgr.cpp:765):
 	// the level filter applies only when levelmin != 0 — with a zero min
@@ -404,8 +412,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		whereSQL = "ah.time > ?"
 		args = []interface{}{time.Now().Unix()}
 		if searchedName != "" {
-			whereSQL += " AND UPPER(it.name) LIKE UPPER(?)"
-			args = append(args, "%"+searchedName+"%")
+			whereSQL += " AND UPPER(it.name) LIKE UPPER(?) ESCAPE '\\'"
+			args = append(args, "%"+escapeAuctionLike(searchedName)+"%")
 		}
 	}
 
@@ -640,9 +648,6 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionSellItem, errAuctionNotEnoughMoney), true)
 		return true
 	}
-	s.player.Money -= deposit
-	s.questMoneyChanged(ctx)
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	auctionItemGUID := itemGUIDs[0]
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:296-341): a single
 	// item sold whole is moved onto the auction; otherwise the stacks are
@@ -712,8 +717,16 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// AUCTION_ENTRY_FLAG_NONE. Column order matches the C++ bind order:
 	// Id, houseId, itemGUIDLow, owner, buyout, expire_time, bidder, bid,
 	// startbid, deposit, Flags.
-	_, _ = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit, Flags)
-		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0)`, nextID, defaultAuctionHouseID, auctionItemGUID, s.playerGUID, buyout, expire, bid, deposit)
+	if _, err = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit, Flags)
+		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0)`, nextID, defaultAuctionHouseID, auctionItemGUID, s.playerGUID, buyout, expire, bid, deposit); err != nil {
+		return sellFail(errAuctionDatabaseError)
+	}
+	// The deposit is charged only once the auction row persists: charging
+	// it up front lost the deposit whenever the clone or auction insert
+	// failed afterward, while C++ holds every sell step in one transaction.
+	s.player.Money -= deposit
+	s.questMoneyChanged(ctx)
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	s.updateAchievementCriteria(criteriaTypeCreateAuction, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(uint32(nextID), auctionSellItem, errAuctionOK), true)
 	_ = s.sendInventoryItems(ctx)
@@ -993,31 +1006,43 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	}
 	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
-		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.itemowner = ? AND ah.time > ?`, s.playerGUID, time.Now().Unix())
+		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
+		WHERE ah.itemowner = ? AND ah.time > ?
+		ORDER BY ah.id ASC`, s.playerGUID, time.Now().Unix())
 	if err != nil {
 		return true
 	}
 	defer rows.Close()
 	var auctions []auctionRecord
+	var totalcount uint32
 	for rows.Next() {
-		var id, iGuid, iTmpl, owner, buyout, expTime, bidder, lastBid, startBid, deposit, count, randProp, itemFlags int64
+		var id, iGuid, owner, buyout, expTime, bidder, lastBid, startBid, deposit, randProp, itemFlags int64
+		var iTmpl, count sql.NullInt64
 		if err := rows.Scan(&id, &iGuid, &iTmpl, &owner, &buyout, &expTime, &bidder, &lastBid, &startBid, &deposit, &count, &randProp, &itemFlags); err == nil {
-			auctions = append(auctions, auctionRecord{
-				ID:           uint32(id),
-				ItemGUID:     uint64(iGuid),
-				ItemEntry:    uint32(iTmpl),
-				ItemCount:    uint32(count),
-				Owner:        uint64(owner),
-				Buyout:       uint32(buyout),
-				ExpireTime:   expTime,
-				Bidder:       uint64(bidder),
-				Bid:          uint32(lastBid),
-				StartBid:     uint32(startBid),
-				Deposit:      uint32(deposit),
-				RandomPropID: int32(randProp),
-				ItemFlags:    uint32(itemFlags),
-			})
+			// C++ BuildListOwnerItems (AuctionHouseMgr.cpp:686-698): an
+			// owner auction whose item row is gone still counts toward
+			// totalcount — only the info block is skipped when
+			// BuildAuctionInfo fails. The bidder list already honored
+			// this via its LEFT JOIN; the owner list's INNER JOIN
+			// dropped such rows from the total entirely.
+			totalcount++
+			if iTmpl.Valid && count.Valid {
+				auctions = append(auctions, auctionRecord{
+					ID:           uint32(id),
+					ItemGUID:     uint64(iGuid),
+					ItemEntry:    uint32(iTmpl.Int64),
+					ItemCount:    uint32(count.Int64),
+					Owner:        uint64(owner),
+					Buyout:       uint32(buyout),
+					ExpireTime:   expTime,
+					Bidder:       uint64(bidder),
+					Bid:          uint32(lastBid),
+					StartBid:     uint32(startBid),
+					Deposit:      uint32(deposit),
+					RandomPropID: int32(randProp),
+					ItemFlags:    uint32(itemFlags),
+				})
+			}
 		}
 	}
 	packet := protocol.NewBuffer(12 + len(auctions)*120)
@@ -1025,7 +1050,7 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	for _, a := range auctions {
 		writeAuctionInfo(packet, a)
 	}
-	packet.WriteU32(uint32(len(auctions)))
+	packet.WriteU32(totalcount)
 	packet.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_OWNER_LIST_RESULT), packet.Bytes(), true)
 	return true
@@ -1254,7 +1279,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 	// entry/count resolve from the item_instance join.
 	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.houseid, ah.itemguid, ii.itemEntry, ii.count, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, COALESCE(ii.randomPropertyId, 0)
 		FROM auctionhouse AS ah
-		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
+		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
 		WHERE ah.time <= ?`, now+60)
 	if err != nil {
 		return
@@ -1265,7 +1290,18 @@ func (s *session) expireAuctions(ctx context.Context) {
 	var expired []expiredRecord
 	for rows.Next() {
 		var r expiredRecord
-		if err := rows.Scan(&r.id, &r.houseID, &r.itemGUID, &r.itemTmpl, &r.count, &r.owner, &r.buyout, &r.bidder, &r.lastBid, &r.deposit, &r.randomProp); err == nil {
+		var itemTmpl, count sql.NullInt64
+		if err := rows.Scan(&r.id, &r.houseID, &r.itemGUID, &itemTmpl, &count, &r.owner, &r.buyout, &r.bidder, &r.lastBid, &r.deposit, &r.randomProp); err == nil {
+			// An itemless auction still reaches the loop: C++
+			// AuctionHouseObject::Update (AuctionHouseMgr.cpp:630-664)
+			// iterates every auction, and its sold branch sends
+			// SendAuctionSuccessfulMail even when GetAItem fails —
+			// only SendAuctionWonMail silently no-ops, which the
+			// won-mail arm below already does on its failed item
+			// query. The old INNER JOIN dropped these rows, so a
+			// sold auction with a vanished item lost the seller's
+			// profit mail to the trailing silent delete.
+			r.itemTmpl, r.count = itemTmpl.Int64, count.Int64
 			expired = append(expired, r)
 		}
 	}
@@ -1276,8 +1312,10 @@ func (s *session) expireAuctions(ctx context.Context) {
 		// C++ AuctionEntry::DeleteFromDB (AuctionHouseMgr.cpp:890-896):
 		// the auction's bidder rows die with it.
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", a.id)
-		if a.bidder > 0 && a.lastBid > 0 {
-			// Won by bidder. C++ AuctionHouseObject::Update (AuctionHouseMgr.cpp:649-657)
+		if a.bidder > 0 || a.lastBid > 0 {
+			// Won by bidder: C++ Update (AuctionHouseMgr.cpp:640-647)
+			// takes the sold branch unless bidder == 0 AND bid == 0,
+			// so a bid without a recorded bidder is sold, not expired. C++ AuctionHouseObject::Update (AuctionHouseMgr.cpp:649-657)
 			// sends SendAuctionSuccessfulMail first, then SendAuctionWonMail — the
 			// sale-pending/invoice mail (SendAuctionSalePendingMail) fires only on
 			// player buyout (AuctionHouseHandler.cpp:559) and the bot-buyer path.
