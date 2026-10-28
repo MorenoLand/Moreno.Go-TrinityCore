@@ -412,7 +412,7 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 	s.inviteWGZoneAndQueueToWar(wg)
 
 	s.broadcastWGInitWorldStates()
-	s.broadcastBattlegroundMessage(wg.MapID, "The battle for Wintergrasp has begun!")
+	s.broadcastWGZoneMessage("The battle for Wintergrasp has begun!")
 	wg.mu.Unlock()
 	s.UpdateWGTenacity()
 }
@@ -625,9 +625,11 @@ func (s *Server) inviteWGZoneToQueue(wg *wgBattlegroundState) {
 // broadcastWGZoneMessage sends a system chat line to every live player in
 // the Wintergrasp zone, the Go stand-in for Battlefield::SendWarning
 // (Battlefield.cpp:448-452: stalker creature text, zone-range chat) used
-// where Go models no stalker creature. It follows the zone-roster
-// audience of updateWGWorldState, not the BG-queue audience of
-// broadcastBattlegroundMessage.
+// where Go models no stalker creature. It carries every WG SendWarning
+// line (grouping, battle start, fortress defend/capture, tower damage/
+// destroy, workshop capture); the old broadcastBattlegroundMessage
+// routing reached nobody, since its BG-queue audience requires a
+// battleground queue slot on map 571 and WG players never hold one.
 func (s *Server) broadcastWGZoneMessage(message string) {
 	if s == nil {
 		return
@@ -819,13 +821,13 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		if winningTeam == WGTeamHorde {
 			teamName = "Horde"
 		}
-		s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("The %s has successfully defended Wintergrasp Fortress!", teamName))
+		s.broadcastWGZoneMessage(fmt.Sprintf("The %s has successfully defended Wintergrasp Fortress!", teamName))
 	} else {
 		teamName := "Alliance"
 		if winningTeam == WGTeamHorde {
 			teamName = "Horde"
 		}
-		s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("The %s has captured Wintergrasp Fortress!", teamName))
+		s.broadcastWGZoneMessage(fmt.Sprintf("The %s has captured Wintergrasp Fortress!", teamName))
 	}
 }
 
@@ -980,7 +982,7 @@ func (s *Server) DamageWGBuilding(entry uint32) bool {
 			if wg.Towers[i].State == 0 {
 				wg.Towers[i].State = 1 // Damaged
 				s.updateWGWorldState(wg.Towers[i].WorldState, uint32(wgBuildingState(1, wg.Towers[i].TeamControl)))
-				s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("%s is under attack!", wg.Towers[i].Name))
+				s.broadcastWGZoneMessage(fmt.Sprintf("%s is under attack!", wg.Towers[i].Name))
 				return true
 			}
 			return false
@@ -992,7 +994,6 @@ func (s *Server) DamageWGBuilding(entry uint32) bool {
 			if wg.Gates[i].State == 0 {
 				wg.Gates[i].State = 1
 				s.updateWGWorldState(wg.Gates[i].WorldState, uint32(wgBuildingState(1, wg.DefenderTeam)))
-				s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("%s is damaged!", wg.Gates[i].Name))
 				return true
 			}
 			return false
@@ -1029,7 +1030,7 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 			if wg.Towers[i].State != 2 {
 				wg.Towers[i].State = 2 // Destroyed
 				s.updateWGWorldState(wg.Towers[i].WorldState, uint32(wgBuildingState(2, wg.Towers[i].TeamControl)))
-				s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("%s has been destroyed!", wg.Towers[i].Name))
+				s.broadcastWGZoneMessage(fmt.Sprintf("%s has been destroyed!", wg.Towers[i].Name))
 
 				if wg.Towers[i].IsSouthTower {
 					wg.BrokenSouthTowers++
@@ -1073,7 +1074,6 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 							wg.Timer = 0
 						}
 						wg.EndTime = time.Now().Add(wg.Timer)
-						s.broadcastBattlegroundMessage(wg.MapID, "All southern towers destroyed! Battle time reduced by 10 minutes!")
 						s.broadcastWGInitWorldStates()
 					}
 				}
@@ -1088,12 +1088,10 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 			if wg.Gates[i].State != 2 {
 				wg.Gates[i].State = 2
 				s.updateWGWorldState(wg.Gates[i].WorldState, uint32(wgBuildingState(2, wg.DefenderTeam)))
-				s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("%s has been breached!", wg.Gates[i].Name))
 
 				// If Vault Gate breached, unlock Titan's Relic!
 				if entry == WGGameObjectVaultGate {
 					wg.RelicInteractible = true
-					s.broadcastBattlegroundMessage(wg.MapID, "The Chamber of the Titan Relic has been breached!")
 				}
 				return true
 			}
@@ -1132,7 +1130,7 @@ func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName s
 	if team == WGTeamHorde {
 		teamName = "Horde"
 	}
-	s.broadcastBattlegroundMessage(wg.MapID, fmt.Sprintf("%s has captured %s for the %s!", capturerName, ws.Name, teamName))
+	s.broadcastWGZoneMessage(fmt.Sprintf("%s has captured %s for the %s!", capturerName, ws.Name, teamName))
 	return true
 }
 
