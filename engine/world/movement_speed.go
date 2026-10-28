@@ -705,7 +705,10 @@ func (s *session) sendRuntimeMovementSpeed(opcode protocol.Opcode, nearbyOpcode 
 	nearby := protocol.NewBuffer(64)
 	writeMovementInfo(nearby, info)
 	nearby.WriteF32(speed)
-	s.server.broadcastToNearby(uint16(nearbyOpcode), nearby.Bytes(), s)
+	// C++ player-controlled arm (Unit.cpp:8865-8874): the others leg is
+	// MSG_MOVE_SET_* via SendMessageToSet(false) = visibility set, self
+	// excluded (self already got the FORCE packet above).
+	s.server.broadcastToVisibleSetFromSession(s, uint16(nearbyOpcode), nearby.Bytes())
 }
 
 func (s *session) sendRuntimeFlightState() {

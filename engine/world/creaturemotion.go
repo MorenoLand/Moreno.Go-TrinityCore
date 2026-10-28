@@ -617,8 +617,9 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 // store, the PropagateSpeedChange in-flight leg rescale
 // (MotionMaster::PropagateSpeedChange, MotionMaster.cpp — the current
 // generator's UnitSpeedChanged recalculates the spline velocity mid-leg),
-// and SMSG_FORCE_RUN_SPEED_CHANGE (packed GUID + yd/s speed) to the
-// instance, matching the AI-controlled arm of SetSpeedRate's packet tail.
+// and SMSG_SPLINE_SET_RUN_SPEED (packed GUID + yd/s speed) to the
+// creature's visibility set, matching the AI-controlled arm of SetSpeedRate
+// (Unit.cpp:8876-8880: spline opcode, SendMessageToSet(false)).
 func (s *Server) refreshCreatureRunSpeed(key creatureAuraKey, guid uint64) {
 	if s == nil || guid == 0 {
 		return
@@ -656,7 +657,7 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	packet := protocol.NewBuffer(16)
 	packet.WritePackedGUID(motion.GUID)
 	packet.WriteF32(newSpeed)
-	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE), packet.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPLINE_SET_RUN_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 }
 
 const (
@@ -1073,7 +1074,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		motion.ThreatMgr.AddThreat(playerGUID, 0.0, true)
 		if !motion.InCombat {
 			enteredCombat = true
-			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, creatureGUID, 2)
+			s.broadcastAIReactionAt(motion.Map, motion.InstanceID, creatureGUID, 2, motion.X, motion.Y, motion.Z)
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
@@ -6818,25 +6819,23 @@ func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, gu
 	}
 }
 
-func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uint32) {
-	buf := protocol.NewBuffer(12)
-	buf.WriteU64(guid)
-	buf.WriteU32(reactionType)
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
-			continue
-		}
-		_ = sess.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)
-	}
-}
-
 func (s *Server) broadcastAIReactionInInstance(mapID, instanceID uint32, guid uint64, reactionType uint32) {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
 	buf.WriteU32(reactionType)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), nil)
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, guid)
+}
+
+// broadcastAIReactionAt is the lock-held twin of broadcastAIReactionInInstance:
+// Creature::SendAIReaction (Creature.cpp:2390) fans out via SendMessageToSet
+// (visibility set), but triggerCreatureAggro calls it while holding motionMu,
+// so the motion lookup inside broadcastToVisibleSetForCreature would deadlock.
+// Callers pass the in-hand motion coordinates instead.
+func (s *Server) broadcastAIReactionAt(mapID, instanceID uint32, guid uint64, reactionType uint32, x, y, z float32) {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(guid)
+	buf.WriteU32(reactionType)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, x, y, z, nil)
 }
 
 // loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.

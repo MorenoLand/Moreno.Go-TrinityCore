@@ -87,7 +87,7 @@ func (srv *Server) luaSoundTargetSession(args []any) *session {
 // The sSoundEntriesStore existence gate has no Go bridge (no SoundEntries.dbc
 // model, same documented-blocked state as handleEffectPlaySound): an unknown
 // id plays nothing client-side.
-func (srv *Server) luaDeliverSound(self *session, opcode uint16, payload []byte, args []any) error {
+func (srv *Server) luaDeliverSound(self *session, sourceGUID uint64, opcode uint16, payload []byte, args []any) error {
 	if srv == nil {
 		return nil
 	}
@@ -101,8 +101,47 @@ func (srv *Server) luaDeliverSound(self *session, opcode uint16, payload []byte,
 		srv.broadcastToVisibleSetFromSession(self, opcode, payload)
 		return nil
 	}
+	if mapID, instanceID, x, y, z, ok := srv.luaSoundSourcePosition(sourceGUID); ok {
+		srv.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
+		return nil
+	}
 	srv.broadcastToNearby(opcode, payload, nil)
 	return nil
+}
+
+// luaSoundSourcePosition resolves a nil-session sound source (creature or
+// gameobject) to its live position for the visibility-set fan-out: creature
+// motions are scanned across instances (the handler surface carries no map),
+// gameobject states across both dynamic maps. Static gameobjects live in no
+// runtime map, so they report not-found and the caller keeps the map-wide
+// fan-out rather than dropping the sound.
+func (srv *Server) luaSoundSourcePosition(sourceGUID uint64) (mapID, instanceID uint32, x, y, z float32, ok bool) {
+	if srv == nil || sourceGUID == 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	srv.motionMu.Lock()
+	for scope := range srv.instanceCreatureMotion {
+		if m := srv.findCreatureMotionLocked(scope.MapID, scope.InstanceID, sourceGUID); m != nil {
+			mapID, instanceID, x, y, z = m.Map, m.InstanceID, m.X, m.Y, m.Z
+			ok = true
+			break
+		}
+	}
+	srv.motionMu.Unlock()
+	if ok {
+		return mapID, instanceID, x, y, z, true
+	}
+	srv.objectsMu.RLock()
+	defer srv.objectsMu.RUnlock()
+	if st := srv.dynamicGameObjects[sourceGUID]; st != nil {
+		return st.Map, st.InstanceID, st.X, st.Y, st.Z, true
+	}
+	for _, byGUID := range srv.instanceGameObjects {
+		if st := byGUID[sourceGUID]; st != nil {
+			return st.Map, st.InstanceID, st.X, st.Y, st.Z, true
+		}
+	}
+	return 0, 0, 0, 0, 0, false
 }
 
 // luaWorldObjectSoundMethods registers the three Eluna WorldObject sound
@@ -119,21 +158,21 @@ func luaWorldObjectSoundMethods(srv *Server, self *session, sourceGUID uint64, m
 		}
 		pkt := protocol.NewBuffer(4)
 		pkt.WriteU32(musicID)
-		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_MUSIC), pkt.Bytes(), args)
+		return nil, srv.luaDeliverSound(self, sourceGUID, uint16(protocol.OpcodeSMSG_PLAY_MUSIC), pkt.Bytes(), args)
 	}
 	methods["PlayDirectSound"] = func(_ context.Context, args []any) ([]any, error) {
 		soundID, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(soundID), args)
+		return nil, srv.luaDeliverSound(self, sourceGUID, uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(soundID), args)
 	}
 	methods["PlayDistanceSound"] = func(_ context.Context, args []any) ([]any, error) {
 		soundID, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		return nil, srv.luaDeliverSound(self, uint16(protocol.OpcodeSMSG_PLAY_OBJECT_SOUND), buildPlayObjectSound(soundID, sourceGUID), args)
+		return nil, srv.luaDeliverSound(self, sourceGUID, uint16(protocol.OpcodeSMSG_PLAY_OBJECT_SOUND), buildPlayObjectSound(soundID, sourceGUID), args)
 	}
 }
 

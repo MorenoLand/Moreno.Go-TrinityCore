@@ -2374,7 +2374,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// Reset arms that restore _baseSpeed/DefaultMoveSpeedRate/SPEED_RUN).
 	// The normal refresh path recomputes RunSpeed, rescales in-flight
 	// legs (PropagateSpeedChange) and broadcasts
-	// SMSG_FORCE_RUN_SPEED_CHANGE to the instance.
+	// SMSG_SPLINE_SET_RUN_SPEED to the creature's visibility set.
 	methods["SetSpeedRate"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
