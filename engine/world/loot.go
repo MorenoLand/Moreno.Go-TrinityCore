@@ -3006,9 +3006,14 @@ func (s *session) addLootMoney(amount uint32) bool {
 }
 
 func (s *session) handleLootMoney(ctx context.Context) bool {
-	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || s.activeLoot.Money == 0 {
+	if !s.playerLoaded || s.player == nil || s.activeLoot == nil {
 		return true
 	}
+	// HandleLootMoneyOpcode (LootHandler.cpp:104-212) has no zero-gold
+	// early return: a loot with gold == 0 still runs NotifyMoneyRemoved,
+	// the (zero) split/notify and the fully-looted item release below.
+	// The old Money == 0 guard swallowed all three for gold-free loot
+	// and for a duplicate money packet after the take.
 	// HandleLootMoneyOpcode (LootHandler.cpp:116-158) resolves each arm
 	// against the player's CURRENT map — C++ has no blanket map gate:
 	// the item arm reads inventory (GetItemByGuid, map-independent), the
@@ -3190,28 +3195,6 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	// SendLootRelease (GetGameObject returns null), and the item arm is
 	// map-independent so the take proceeds. A dead player with an open
 	// window can still autostore.
-	lootSlot := payload[0]
-	it, ok := s.activeLoot.Items[lootSlot]
-	// Loot::LootItemInSlot (Loot.cpp:446): slots at/above items.size() index
-	// into the viewer's quest list, not the raw quest_items vector.
-	questIndex := uint8(0)
-	isQuestItem := false
-	if !ok && lootSlot >= s.activeLoot.NormalSlotCount {
-		questList := s.viewerQuestLootList(ctx, s.activeLoot)
-		if pos := int(lootSlot - s.activeLoot.NormalSlotCount); pos < len(questList) {
-			questIndex = questList[pos]
-			if qit, found := s.activeLoot.QuestItems[questIndex]; found {
-				it = qit
-				isQuestItem = true
-			}
-		}
-	}
-	// Player::StoreLootItem (Player.cpp:25059-25063): a missing or already
-	// taken slot answers EQUIP_ERR_ALREADY_LOOTED, not a silent drop.
-	if !ok && !isQuestItem {
-		s.sendEquipError(equipErrAlreadyLooted, 0)
-		return true
-	}
 	high := uint16(s.activeLoot.TargetGUID >> 48)
 	if high == 0xF110 {
 		// LootHandler.cpp (HandleAutostoreLootItemOpcode): the GameObject arm
@@ -3253,6 +3236,35 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	// possession check does.
 	if s.activeLoot.LootItemGUID != 0 && !s.lootItemStillHeld(ctx, s.activeLoot.LootItemGUID) {
 		return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
+	}
+	// HandleAutostoreLootItemOpcode (LootHandler.cpp:37-102) runs the
+	// type gates above BEFORE Player::StoreLootItem, so the slot check
+	// below must not precede them: a far player taking a missing slot
+	// answers TOO_FAR/DIDNT_KILL (or the release), not
+	// EQUIP_ERR_ALREADY_LOOTED. The slot resolution itself is
+	// StoreLootItem's LootItemInSlot arm (Loot.cpp:446), which runs
+	// after the handler gates.
+	lootSlot := payload[0]
+	it, ok := s.activeLoot.Items[lootSlot]
+	// Loot::LootItemInSlot (Loot.cpp:446): slots at/above items.size() index
+	// into the viewer's quest list, not the raw quest_items vector.
+	questIndex := uint8(0)
+	isQuestItem := false
+	if !ok && lootSlot >= s.activeLoot.NormalSlotCount {
+		questList := s.viewerQuestLootList(ctx, s.activeLoot)
+		if pos := int(lootSlot - s.activeLoot.NormalSlotCount); pos < len(questList) {
+			questIndex = questList[pos]
+			if qit, found := s.activeLoot.QuestItems[questIndex]; found {
+				it = qit
+				isQuestItem = true
+			}
+		}
+	}
+	// Player::StoreLootItem (Player.cpp:25059-25063): a missing or already
+	// taken slot answers EQUIP_ERR_ALREADY_LOOTED, not a silent drop.
+	if !ok && !isQuestItem {
+		s.sendEquipError(equipErrAlreadyLooted, 0)
+		return true
 	}
 
 	// Player::StoreLootItem (Player.cpp:25071-25075): the AllowedForPlayer
