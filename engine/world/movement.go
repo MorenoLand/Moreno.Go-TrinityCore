@@ -345,6 +345,14 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	s.movementMu.Lock()
 	s.lastMovementInfo.Flags = info.Flags
 	s.movementMu.Unlock()
+	// MiscHandler.cpp:1398 — the acked flags become the mover's
+	// m_movementInfo.flags, so Unit::IsFalling reads them until the next
+	// movement packet; the knockback/not-active arms already sync them,
+	// and this copy left them stale the same way (a can-fly ack clearing
+	// FALLING still left an LFG teleport or logout wrongly denied, and
+	// one setting it wrongly allowed).
+	s.isFalling = info.Flags&movementFalling != 0
+	s.isFallingFar = info.Flags&movementFallingFar != 0
 	return true
 }
 
