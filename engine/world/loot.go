@@ -2711,6 +2711,12 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 		guid := uint32(loot.TargetGUID & 0x00FFFFFF)
 		creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
 		stdGUID := creatureWorldGUID(guid, creatureEntry)
+		// DoLootRelease creature arm (LootHandler.cpp:372-381): a
+		// fully-looted dead creature runs AllLootRemovedFromCorpse —
+		// the decay shortening (and respawn push) below. The record
+		// lookup is itself the dead gate: live pickpocketed creatures
+		// hold no respawn record, so the call is a no-op for them.
+		s.server.applyAllLootRemovedFromCorpse(time.Now(), guid, loot.MapID, loot.InstanceID, loot.LootType == lootTypeSkinning)
 		// Loot::isLooted (Loot.h:236) turns true when the corpse's loot fully
 		// empties: clearCreatureLoot only runs on empty-loot paths, so the
 		// motion flips to looted here (respawn clears it in kill.go).

@@ -148,6 +148,12 @@ type creatureRespawn struct {
 	// survive until At, because respawn still revives from it.
 	CorpseRemoveAt time.Time
 	CorpseRemoved  bool
+	// CorpseDelay is the rank-mapped corpse-decay delay in seconds and
+	// RespawnDelay the spawntimesecs value the record was scheduled
+	// with; both feed applyAllLootRemovedFromCorpse's shortening/push
+	// math without a DB read at release time.
+	CorpseDelay  uint32
+	RespawnDelay uint32
 }
 
 // creatureCorpseDelaySeconds maps a template rank to its corpse-decay
@@ -225,7 +231,7 @@ func (s *Server) corpseRemovalBroadcastMap(respawn creatureRespawn) (uint32, uin
 // is untouched (records at/past At are skipped — respawn wins when both
 // come due on the same tick) and the transport revive path still revives
 // the live motion in place at At.
-func (s *Server) processCreatureCorpseRemovals(now time.Time) {
+func (s *Server) processCreatureCorpseRemovals(ctx context.Context, now time.Time) {
 	if s == nil {
 		return
 	}
@@ -256,6 +262,19 @@ func (s *Server) processCreatureCorpseRemovals(now time.Time) {
 	for _, item := range due {
 		broadcastMap, instanceID := s.corpseRemovalBroadcastMap(item.respawn)
 		rawGUID := creatureWorldGUID(item.respawn.GUID, item.respawn.Entry)
+		// Creature::RemoveCorpse (Creature.cpp:393/429) fires
+		// ai->CorpseRemoved here, after the Update CORPSE branch
+		// reaches the removal time — not at death, where Go used to
+		// fire it. The Update-driven call passes setSpawnTime=false
+		// (Creature.cpp:433-439), so a script's delay rewrite has no
+		// respawn effect in the normal flow and is discarded; the
+		// direct RemoveCorpse(true) callers have no Go analog.
+		// Records whose respawn already won (At reached first) never
+		// reach this sweep, matching the single-motion model: once
+		// revived there is no corpse left to remove.
+		if motion := s.findCreatureMotion(broadcastMap, instanceID, rawGUID); motion != nil {
+			_ = s.fireCreatureCorpseRemoved(ctx, motion, item.respawn.RespawnDelay)
+		}
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(rawGUID)
 		destroyBuf.WriteU8(0)
@@ -264,6 +283,62 @@ func (s *Server) processCreatureCorpseRemovals(now time.Time) {
 		if broadcastMap != item.respawn.Map {
 			s.clearLootState(item.respawn.Map, instanceID, rawGUID)
 		}
+	}
+}
+
+// applyCorpseDecay applies one AllLootRemovedFromCorpse shortening to a
+// respawn record: removal moves to now + corpseDelay/2 (now itself for
+// skinning loot, which despawns on the next update) and respawn pushes to
+// max(new removal + respawnDelay, old respawn). Already-removed corpses
+// are untouched, and a shortening never extends a removal.
+func applyCorpseDecay(respawn *creatureRespawn, now time.Time, skinning bool) {
+	if respawn == nil || respawn.CorpseRemoved || respawn.CorpseRemoveAt.IsZero() || !respawn.CorpseRemoveAt.After(now) || respawn.CorpseDelay == 0 {
+		return
+	}
+	var newRemove time.Time
+	if skinning {
+		newRemove = now
+	} else {
+		newRemove = now.Add(time.Duration(respawn.CorpseDelay/2) * time.Second)
+	}
+	if !newRemove.Before(respawn.CorpseRemoveAt) {
+		return
+	}
+	respawn.CorpseRemoveAt = newRemove
+	if pushed := newRemove.Add(time.Duration(respawn.RespawnDelay) * time.Second); pushed.After(respawn.At) {
+		respawn.At = pushed
+	}
+}
+
+// applyAllLootRemovedFromCorpse ports Creature::AllLootRemovedFromCorpse
+// (Creature.cpp:2827-2847) for a fully-looted corpse release: the corpse
+// removal shortens to now + corpseDelay * RATE_CORPSE_DECAY_LOOTED (0.5
+// default, World.cpp:604) and respawn pushes to max(new removal +
+// respawnDelay, old respawn). The record lookup is itself the dead
+// gate: only deaths create a record, so a live pickpocketed creature's
+// release is a no-op here. Called from the DoLootRelease fully-looted
+// leg via clearCreatureLoot.
+func (s *Server) applyAllLootRemovedFromCorpse(now time.Time, dbGUID, mapID, instanceID uint32, skinning bool) {
+	if s == nil || dbGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if instanceID != 0 {
+		for key, respawns := range s.instanceCreatureRespawns {
+			if key.MapID != mapID || key.InstanceID != instanceID {
+				continue
+			}
+			if r, ok := respawns[dbGUID]; ok {
+				applyCorpseDecay(&r, now, skinning)
+				respawns[dbGUID] = r
+			}
+		}
+		return
+	}
+	if r, ok := s.creatureRespawns[dbGUID]; ok {
+		applyCorpseDecay(&r, now, skinning)
+		s.creatureRespawns[dbGUID] = r
 	}
 }
 
@@ -945,6 +1020,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		s.server.clearLootState(target.Map, target.InstanceID, target.GUID, standardGUID)
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.motionMu.Lock()
+			motion.PreDeathLooted = motion.Looted && motion.PetID == 0
 			motion.Looted = false
 			s.server.motionMu.Unlock()
 		}
@@ -1338,6 +1414,7 @@ func (s *Server) recordCreatureKillLoot(victim, killer *creatureMotion) {
 	standardGUID := creatureWorldGUID(guid, entry)
 	s.clearLootState(victim.Map, victim.InstanceID, targetGUID, standardGUID)
 	s.motionMu.Lock()
+	victim.PreDeathLooted = victim.Looted && victim.PetID == 0
 	victim.Looted = false
 	s.motionMu.Unlock()
 	damageReqMet := true
@@ -1858,23 +1935,36 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if seconds <= 0 {
 		seconds = 300
 	}
-	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26): C++ fires it from
-	// Creature::RemoveCorpse (Creature.cpp:393/429) and applies the rewrite as
-	// m_respawnTime = max(now + respawnDelay, m_respawnTime) — the hook can
-	// only extend the respawn timer, never shorten it. Go has no separate
-	// corpse-removal phase; the respawn delay is consumed here, so the hook
-	// fires with the spawntimesecs delay and only an extension takes effect.
+	// Creature::RemoveCorpse (Creature.cpp:393/429) is the sole
+	// CREATURE_EVENT_ON_CORPSE_REMOVED (26) fire site; it now fires from
+	// processCreatureCorpseRemovals at removal time, not here. The
+	// Unit::DealDamageNotPlayer arm (Unit.cpp:11376-11381) runs
+	// AllLootRemovedFromCorpse at death when the victim's loot is already
+	// fully taken (a pickpocketed creature): the stash captured by
+	// recordCreatureKillLoot/onCreatureKilled shortens this record's
+	// removal to death + corpseDelay/2, with the respawn push of
+	// applyAllLootRemovedFromCorpse.
+	corpseDelay := s.creatureCorpseDelaySeconds(ctx, uint32(entry))
+	preDeathLooted := false
 	if motion := s.findCreatureMotion(uint32(mapID), 0, creatureWorldGUID(guid, uint32(entry))); motion != nil {
-		delay := uint32(seconds)
-		if rewritten := s.fireCreatureCorpseRemoved(ctx, motion, delay); rewritten > delay {
-			seconds = int64(rewritten)
+		s.motionMu.Lock()
+		preDeathLooted = motion.PreDeathLooted
+		motion.PreDeathLooted = false
+		s.motionMu.Unlock()
+	}
+	corpseRemoveAt := now.Add(time.Duration(corpseDelay) * time.Second)
+	respawnAt := now.Add(time.Duration(seconds) * time.Second)
+	if preDeathLooted {
+		corpseRemoveAt = now.Add(time.Duration(corpseDelay/2) * time.Second)
+		if pushed := corpseRemoveAt.Add(time.Duration(seconds) * time.Second); pushed.After(respawnAt) {
+			respawnAt = pushed
 		}
 	}
 	s.motionMu.Lock()
 	if s.creatureRespawns == nil {
 		s.creatureRespawns = make(map[uint32]creatureRespawn)
 	}
-	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: now.Add(time.Duration(s.creatureCorpseDelaySeconds(ctx, uint32(entry))) * time.Second)}
+	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
 	s.motionMu.Unlock()
 }
 
@@ -1928,13 +2018,22 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if seconds <= 0 {
 		seconds = 300
 	}
-	// Eluna CREATURE_EVENT_ON_CORPSE_REMOVED (26), instance path: same
-	// extend-only rewrite semantics as the world path above
-	// (Creature::RemoveCorpse, Creature.cpp:393/429).
+	// Corpse-removed hook and DealDamage pickpocket arm: same as the
+	// world path above (Creature::RemoveCorpse; Unit.cpp:11376-11381).
+	corpseDelay := s.creatureCorpseDelaySeconds(ctx, uint32(spawnEntry))
+	preDeathLooted := false
 	if motion := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
-		delay := uint32(seconds)
-		if rewritten := s.fireCreatureCorpseRemoved(ctx, motion, delay); rewritten > delay {
-			seconds = int64(rewritten)
+		s.motionMu.Lock()
+		preDeathLooted = motion.PreDeathLooted
+		motion.PreDeathLooted = false
+		s.motionMu.Unlock()
+	}
+	corpseRemoveAt := now.Add(time.Duration(corpseDelay) * time.Second)
+	respawnAt := now.Add(time.Duration(seconds) * time.Second)
+	if preDeathLooted {
+		corpseRemoveAt = now.Add(time.Duration(corpseDelay/2) * time.Second)
+		if pushed := corpseRemoveAt.Add(time.Duration(seconds) * time.Second); pushed.After(respawnAt) {
+			respawnAt = pushed
 		}
 	}
 	key := instanceAdmissionKey{MapID: target.Map, InstanceID: target.InstanceID}
@@ -1945,7 +2044,7 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if s.instanceCreatureRespawns[key] == nil {
 		s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
 	}
-	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: now.Add(time.Duration(s.creatureCorpseDelaySeconds(ctx, uint32(spawnEntry))) * time.Second)}
+	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
 	s.motionMu.Unlock()
 }
 

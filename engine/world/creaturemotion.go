@@ -348,6 +348,13 @@ type creatureMotion struct {
 	// == 0): set when the corpse's loot window fully empties, cleared on
 	// respawn. Consulted by the skinning CheckCast gate (spells.go).
 	Looted bool
+	// PreDeathLooted stashes Looted across the kill-time reset for the
+	// Unit::DealDamageNotPlayer arm (Unit.cpp:11376-11381): a creature
+	// killed with its loot already fully taken (pickpocketed) runs
+	// AllLootRemovedFromCorpse at death. Written by
+	// recordCreatureKillLoot/onCreatureKilled, consumed (and cleared)
+	// by the schedule functions when the respawn record is created.
+	PreDeathLooted bool
 	// LootMode mirrors Creature::m_LootMode (Creature.h:224/482 — the
 	// bitmask of loot modes whose rows are lootable, default
 	// LOOT_MODE_DEFAULT). Scripts change it via Set/Add/RemoveLootMode
