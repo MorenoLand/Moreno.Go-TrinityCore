@@ -90,6 +90,23 @@ func attachGroupMutations(srv *Server, obj *scripting.Object, groupID uint64) {
 			srv.Features.LFG.Leave(playerGUID) {
 			_ = sess.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: playerGUID, State: LFGStateNone})
 		}
+
+		// LFGGroupScript::OnAddMember second arm (LFGScripts.cpp:143-181),
+		// same as the CMSG_GROUP_ACCEPT path: a group in QUEUED state
+		// leaves the queue when a member joins. The joiner is excluded:
+		// C++ runs the leave arms before SetGroup/AddPlayerToGroup, so
+		// the joiner is not yet group LFG membership.
+		if srv.Features != nil && srv.Features.LFG != nil {
+			restore := g.IsLFG && g.LFGDungeonID != 0 &&
+				(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+			if affected := srv.Features.LFG.LeaveQueuedGroup(g.ID, playerGUID, restore, g.LFGState); len(affected) > 0 {
+				for _, guid := range affected {
+					if ms := srv.findSessionByGUID(guid); ms != nil {
+						_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+					}
+				}
+			}
+		}
 		srv.broadcastGroupList(g)
 		srv.triggerGroupEvent(scripting.GroupEventOnMemberAdd, groupLuaObject(srv, g), playerGUID)
 		return []any{true}, nil

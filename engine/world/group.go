@@ -1009,9 +1009,16 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, invitedSess.playerGUID)
 		// LFGGroupScript::OnInviteMember (LFGScripts.cpp:231-245): a queued
 		// leader forming a new group via invite leaves the LFG queue.
-		if s.server.Features != nil && s.server.Features.LFG != nil &&
-			s.server.Features.LFG.Leave(s.playerGUID) {
-			_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+		// LeaveLfg runs the full state switch, not just the QUEUED arm:
+		// a leader mid-proposal is marked DENY and the proposal is
+		// removed declined (LFGMgr.cpp:754-779), while a leader in any
+		// other non-queued state is a no-op here.
+		if s.server.Features != nil && s.server.Features.LFG != nil {
+			if s.server.Features.LFG.Leave(s.playerGUID) {
+				_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+			} else if prop := s.server.Features.LFG.DeclineProposalForPlayer(s.playerGUID); prop != nil {
+				s.server.sendLFGProposalDeclined(prop)
+			}
 		}
 	}
 
