@@ -500,6 +500,14 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.ExtraFlags &^= playerExtraGMOn | playerExtraGMInvisible | playerExtraGMChat
 		s.gmChat = false
 	}
+	// Player::InitPvP (Player.cpp:22146-22151), called from LoadFromDB
+	// (:18085): a persisted PLAYER_FLAGS_IN_PVP restores the unit PvP byte
+	// before any login packet goes out, so the login create block already
+	// shows flagged; UpdatePvP(true, true) also clears the toggle-off timer.
+	if state.PlayerFlags&playerFlagInPVP != 0 {
+		state.PVPFlags |= 0x01
+		s.pvpEnd = time.Time{}
+	}
 	var homeMap, homeZone int64
 	var homeX, homeY, homeZ float32
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
