@@ -3378,10 +3378,22 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 	if s.server != nil {
 		key := creatureAuraKeyForMotion(motion)
 		s.server.auraMu.Lock()
-		delete(s.server.creatureAuras[key], spellID)
-		delete(s.server.activeCreatureAuras[key], spellID)
+		// SpellHandler.cpp:534 -> Unit::RemoveOwnedAura (Unit.cpp:3703):
+		// the pet removes only auras it owns (m_ownedAuras, caster == pet).
+		// An aura another unit cast on the pet survives the cancel — restored
+		// pet_aura rows carry the true casterGuid (loadPetAuras), so an
+		// owner-cast buff on the pet is not pet-owned. A zero caster is the
+		// loadPetAuras NULL-caster case, which maps to the pet itself.
+		owned := false
+		if aura := s.server.activeCreatureAuras[key][spellID]; aura != nil {
+			owned = aura.CasterGUID == 0 || aura.CasterGUID == petGUID
+		}
+		if owned {
+			delete(s.server.creatureAuras[key], spellID)
+			delete(s.server.activeCreatureAuras[key], spellID)
+		}
 		s.server.auraMu.Unlock()
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if owned && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ? AND spell = ?", petNumber, spellID)
 		}
 	}

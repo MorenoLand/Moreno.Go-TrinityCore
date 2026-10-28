@@ -34904,7 +34904,16 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		if click.userType >= 4 {
 			continue
 		}
-		if !isPet {
+		// SpellClickInfo::IsFitToRequirements (ObjectMgr.cpp:194): the
+		// requirement resolves against the clickee's summoner (summon) or
+		// the clickee itself, and IsInPartyWith/IsInRaidWith resolve both
+		// sides through GetCharmerOrOwnerOrSelf (Unit.cpp:12126) — so a
+		// summon or charmed unit owned by the clicker passes every userType
+		// (FRIEND is self-friendly, PARTY/RAID hit the this==unit arm).
+		// The old code passed only own pets and rejected own summons and
+		// charmed units on RAID/PARTY rows.
+		clickerOwned := isPet || (motion != nil && (motion.OwnerGUID == s.playerGUID || motion.CharmerGUID == s.playerGUID))
+		if !clickerOwned {
 			switch click.userType {
 			case 1: // SPELL_CLICK_USER_FRIEND
 				player := playerPos{Race: s.player.Race, Class: s.player.Class, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
