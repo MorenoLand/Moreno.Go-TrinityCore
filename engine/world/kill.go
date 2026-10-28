@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -2059,6 +2060,59 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 // table is already empty from the death chain (cleared at the kill site,
 // and the dead unit was dropped from everyone else's table by
 // removeThreatVictimFromAllLists), so no threat reset is needed here.
+// Map::CheckRespawn (Map.cpp:3034-3123) gates run here before the revive:
+// an alive instance deletes the respawn, and a linked-respawn master
+// defers it. The spawn-group and pool arms have no Go model (no spawn-group
+// manager, no pool manager) and stay unmodeled; see the checkpoint.
+// checkRespawnLinkedDeferral ports the linked-respawn arm of Map::CheckRespawn
+// (Map.cpp:3088-3104) for creature dependents (linkType 0, the
+// LINKED_RESPAWN_CREATURE_TO_CREATURE row in ObjectMgr::LoadLinkedRespawn).
+// It returns (newAt, drop, ok): ok=false means no link row or an unresolvable
+// lookup, and the caller proceeds with the revive; drop=true means the master
+// never respawns, so the already-deleted record stays deleted; otherwise the
+// caller re-inserts the record at newAt. Callers must not hold motionMu:
+// the never-respawn arm reads the master motion under it.
+func (s *Server) checkRespawnLinkedDeferral(ctx context.Context, respawn creatureRespawn, now time.Time, pendingAt map[uint32]time.Time) (time.Time, bool, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return time.Time{}, false, false
+	}
+	var linkedGuid uint32
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT linkedGuid FROM linked_respawn WHERE guid = ? AND linkType = 0", respawn.GUID).Scan(&linkedGuid); err != nil || linkedGuid == 0 {
+		return time.Time{}, false, false
+	}
+	if linkedGuid == respawn.GUID {
+		// Self-linked: C++ stores now + WEEK ("never respawn, save something in DB").
+		return now.Add(7 * 24 * time.Hour), false, true
+	}
+	if masterAt, ok := pendingAt[linkedGuid]; ok {
+		// set us to check again shortly after the linked unit (urand(5, 15)).
+		base := now
+		if masterAt.After(now) {
+			base = masterAt
+		}
+		return base.Add(time.Duration(5+rand.Intn(11)) * time.Second), false, true
+	}
+	// No pending master record: C++ GetCreatureRespawnTime is 0 when the master
+	// is alive (proceed), and max when the master is a never-respawning dungeon
+	// boss (block forever). Tell them apart via the master motion + table row;
+	// any other dead-without-record master fails open to the revive.
+	var masterEntry uint32
+	var rawSeconds int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", linkedGuid).Scan(&masterEntry, &rawSeconds); err != nil || masterEntry == 0 {
+		return time.Time{}, false, false
+	}
+	if rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, masterEntry) {
+		s.motionMu.Lock()
+		master := s.findCreatureMotionLocked(respawn.Map, respawn.InstanceID, creatureWorldGUID(linkedGuid, masterEntry))
+		dead := master != nil && master.Health == 0
+		s.motionMu.Unlock()
+		if dead {
+			return time.Time{}, true, true
+		}
+	}
+	return time.Time{}, false, false
+}
+
 func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
@@ -2070,6 +2124,18 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		respawn creatureRespawn
 	}
 	instanceDue := make([]instanceRespawn, 0, 8)
+	// Snapshot pending times before due collection deletes them, so a master
+	// due on the same tick still defers its dependent (its linkedTime is at
+	// most now, so the deferral base is now + urand(5, 15)).
+	pendingAt := make(map[uint32]time.Time, len(s.creatureRespawns)+8)
+	for guid, respawn := range s.creatureRespawns {
+		pendingAt[guid] = respawn.At
+	}
+	for _, respawns := range s.instanceCreatureRespawns {
+		for guid, respawn := range respawns {
+			pendingAt[guid] = respawn.At
+		}
+	}
 	for guid, respawn := range s.creatureRespawns {
 		if now.After(respawn.At) {
 			due = append(due, respawn)
@@ -2089,6 +2155,36 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	}
 	s.motionMu.Unlock()
 	for _, respawn := range due {
+		if respawn.Entry != 0 {
+			rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
+			// CheckRespawn order: the alive-instance arm runs before the linked
+			// arm. An alive instance deletes the respawn (respawnTime = 0),
+			// so a live creature is never reset to spawn health/position
+			// here; the escort exception needs IsEscorted + spawn-group flag
+			// data Go does not track, so it stays unmodeled.
+			s.motionMu.Lock()
+			alive := false
+			if m := s.findCreatureMotionLocked(respawn.Map, 0, rawGUID); m != nil && m.Health > 0 {
+				alive = true
+			}
+			s.motionMu.Unlock()
+			if alive {
+				continue
+			}
+			if newAt, drop, ok := s.checkRespawnLinkedDeferral(ctx, respawn, now, pendingAt); ok {
+				if drop {
+					continue
+				}
+				s.motionMu.Lock()
+				if s.creatureRespawns == nil {
+					s.creatureRespawns = make(map[uint32]creatureRespawn)
+				}
+				respawn.At = newAt
+				s.creatureRespawns[respawn.GUID] = respawn
+				s.motionMu.Unlock()
+				continue
+			}
+		}
 		if _, err := s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", respawn.Health, respawn.GUID); err != nil {
 			continue
 		}
@@ -2139,6 +2235,29 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		respawn := item.respawn
 		s.motionMu.Lock()
 		motion := s.findCreatureMotionLocked(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
+		alive := motion != nil && motion.Health > 0
+		s.motionMu.Unlock()
+		if alive {
+			continue
+		}
+		if newAt, drop, ok := s.checkRespawnLinkedDeferral(ctx, respawn, now, pendingAt); ok {
+			if drop {
+				continue
+			}
+			s.motionMu.Lock()
+			if s.instanceCreatureRespawns == nil {
+				s.instanceCreatureRespawns = make(map[instanceAdmissionKey]map[uint32]creatureRespawn)
+			}
+			if s.instanceCreatureRespawns[item.key] == nil {
+				s.instanceCreatureRespawns[item.key] = make(map[uint32]creatureRespawn)
+			}
+			respawn.At = newAt
+			s.instanceCreatureRespawns[item.key][respawn.GUID] = respawn
+			s.motionMu.Unlock()
+			continue
+		}
+		s.motionMu.Lock()
+		motion = s.findCreatureMotionLocked(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
 		if motion != nil {
 			motion.Health, motion.MaxHealth, motion.DynamicFlags = respawn.Health, respawn.Health, 0
 			motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
