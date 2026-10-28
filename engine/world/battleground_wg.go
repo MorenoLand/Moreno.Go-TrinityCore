@@ -26,6 +26,8 @@ const (
 	WGSouthTowerTimePenalty = 10 * time.Minute  // 10 minutes removed when all 3 south towers fall
 	WGStartGroupingDuration = 15 * time.Minute  // 15 minutes before war
 	wgMaxPlayersPerTeam     = 100               // Wintergrasp.PlayerMax default (World.cpp:1477)
+	wgMinPlayers            = 0                 // Wintergrasp.PlayerMin default (World.cpp:1478); the queue-invite gate below reads it
+	wgMinLevel              = 77                // Wintergrasp.PlayerMinLvl default (World.cpp:1479); the war-invite level leg below reads it
 	wgResurrectInterval     = 30 * time.Second  // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
 	wgInviteAcceptWindow    = 20 * time.Second  // m_TimeForAcceptInvite (BattlefieldWG.cpp:429)
 	wgKickDelay             = 10 * time.Second  // m_PlayersWillBeKick deadline (Battlefield.cpp:89, 253)
@@ -283,6 +285,7 @@ type wgBattlegroundState struct {
 	InvitedPlayers    map[uint64]wgInvite  // playerGUID -> team + accept deadline; mirrors Battlefield::m_InvitedPlayers (Battlefield.h:374)
 	PlayersWillBeKick map[uint64]time.Time // playerGUID -> kick deadline; mirrors Battlefield::m_PlayersWillBeKick
 	KickSweepTimer    time.Duration        // accumulator for the 1s wartime kick sweep (Battlefield::Update)
+	StartGrouping     bool                 // mirrors Battlefield::m_StartGrouping; set at grouping, reset by EndBattle
 	PlayerRanks       map[uint64]uint32    // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
 	PlayerKillsInRank map[uint64]uint32    // playerGUID -> kills in current rank towards next promotion (0..5)
 	Vehicles          map[uint64]uint32    // vehicleGUID -> team
@@ -445,13 +448,33 @@ func (wg *wgBattlegroundState) warAndInvitedCount(team uint32) int {
 // m_InvitedPlayers with a SendBfInvitePlayerToWar dialog
 // (BattlefieldHandler.cpp:36-44: battleId, zoneId, accept deadline).
 // The vacancy check lives in the callers, as in C++. Caller holds wg.mu.
-// The in-flight / arena / battleground guards and the min-level leg have
-// no Go state on this path and stay unmodeled.
+// The guards run in C++ order ahead of the invited check: in-flight
+// (the live TaxiPath flag, the in-tree flight gate used by combat.go
+// and spells.go) returns with nothing changed; in-arena or
+// in-battleground (an Active bgQueues entry InProgress) erases the
+// player from the WG queue and returns; below the min level
+// (Wintergrasp.PlayerMinLvl, 77) marks will-be-kick once and returns
+// without inviting.
 func (s *Server) inviteWGPlayerToWar(wg *wgBattlegroundState, sess *session, team uint32) bool {
 	if sess == nil || sess.player == nil {
 		return false
 	}
 	guid := sess.playerGUID
+	if sess.player.TaxiPath != "" {
+		return false
+	}
+	for i := range sess.bgQueues {
+		if e := &sess.bgQueues[i]; e.Active && e.Status == BGStatusInProgress {
+			delete(wg.PlayersInQueue, guid)
+			return false
+		}
+	}
+	if uint32(sess.player.Level) < wgMinLevel {
+		if _, marked := wg.PlayersWillBeKick[guid]; !marked {
+			wg.PlayersWillBeKick[guid] = time.Now().Add(wgKickDelay)
+		}
+		return false
+	}
 	if _, inWar := wg.PlayersInWar[guid]; inWar {
 		return false
 	}
@@ -539,6 +562,86 @@ func (s *Server) inviteWGQueueToWar(wg *wgBattlegroundState) {
 	}
 }
 
+// wgQueueCount counts accepted queue members of one team. The queue map is
+// team-flattened, so the count is a sweep, not a lookup.
+func (wg *wgBattlegroundState) wgQueueCount(team uint32) int {
+	count := 0
+	for _, t := range wg.PlayersInQueue {
+		if t == team {
+			count++
+		}
+	}
+	return count
+}
+
+// inviteWGPlayerToQueue mirrors Battlefield::InvitePlayerToQueue
+// (Battlefield.cpp:212-218): already-queued is a no-op, and the invite is
+// sent only while the own team's queue is at or below m_MinPlayer or the
+// other team's queue is at or above it (with the Wintergrasp.PlayerMin
+// default of 0 the second leg always holds, so the send is ungated in
+// practice — the gate is kept literal, not simplified away). The packet
+// is SMSG_BATTLEFIELD_MGR_QUEUE_INVITE (BattlefieldHandler.cpp:52-58:
+// battleId + warmup byte). The queue insert itself happens on the
+// client's accept (PlayerAcceptInviteToQueue, :366), already ported in
+// battleground.go, so this only sends. Caller holds wg.mu.
+func (s *Server) inviteWGPlayerToQueue(wg *wgBattlegroundState, sess *session, team uint32) {
+	if sess == nil || sess.player == nil {
+		return
+	}
+	if _, queued := wg.PlayersInQueue[sess.playerGUID]; queued {
+		return
+	}
+	other := WGTeamHorde
+	if team == WGTeamHorde {
+		other = WGTeamAlliance
+	}
+	if wg.wgQueueCount(team) <= wgMinPlayers || wg.wgQueueCount(other) >= wgMinPlayers {
+		packet := protocol.NewBuffer(5)
+		packet.WriteU32(WGBattleID)
+		packet.WriteU8(1)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_QUEUE_INVITE), packet.Bytes(), true)
+	}
+}
+
+// inviteWGZoneToQueue mirrors Battlefield::InvitePlayersInZoneToQueue
+// (Battlefield.cpp:204-210): a GUID-ordered sweep of the zone roster,
+// inviting each live zone member to the queue. Caller holds wg.mu.
+func (s *Server) inviteWGZoneToQueue(wg *wgBattlegroundState) {
+	zoneGUIDs := make([]uint64, 0, len(wg.PlayersInZone))
+	for guid := range wg.PlayersInZone {
+		zoneGUIDs = append(zoneGUIDs, guid)
+	}
+	sort.Slice(zoneGUIDs, func(i, j int) bool { return zoneGUIDs[i] < zoneGUIDs[j] })
+	for _, guid := range zoneGUIDs {
+		team := wg.PlayersInZone[guid]
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
+			continue
+		}
+		s.inviteWGPlayerToQueue(wg, sess, team)
+	}
+}
+
+// broadcastWGZoneMessage sends a system chat line to every live player in
+// the Wintergrasp zone, the Go stand-in for Battlefield::SendWarning
+// (Battlefield.cpp:448-452: stalker creature text, zone-range chat) used
+// where Go models no stalker creature. It follows the zone-roster
+// audience of updateWGWorldState, not the BG-queue audience of
+// broadcastBattlegroundMessage.
+func (s *Server) broadcastWGZoneMessage(message string) {
+	if s == nil {
+		return
+	}
+	payload := protocol.BuildChatMessageWithOptions(chatSystem, 0, 0, 0, message, "", false, "", 0)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == WGMapID && sess.player.Zone == WGZoneID {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+		}
+	}
+}
+
 // kickWGPlayerFromBattlefield mirrors Battlefield::KickPlayerFromBattlefield
 // (Battlefield.cpp:309-314): a player still in the zone is teleported to
 // KickPosition (BattlefieldWG.cpp:435). Call after releasing wg.mu: the
@@ -606,6 +709,9 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	}
 
 	wg.IsActive = false
+	// Battlefield::EndBattle (Battlefield.cpp:343) resets m_StartGrouping,
+	// so the next peace period's grouping sweep fires again at 15 minutes.
+	wg.StartGrouping = false
 	// OnBattleEnd reads the remaining battle timer before it is reset
 	// (DoCompleteOrIncrementAchievement(ACHIEVEMENTS_WIN_WG_TIMER_10) when
 	// !endByTimer && GetTimer() <= 10000); capture it here.
@@ -1156,6 +1262,21 @@ func (s *Server) TickWG(ctx context.Context, delta time.Duration) {
 	wg = s.getOrCreateWGState()
 	wg.mu.Lock()
 	var kickGUIDs []uint64
+	// Peacetime grouping (Battlefield::Update, Battlefield.cpp:147-152):
+	// once per peace period, when the timer drops to the 15-minute
+	// grouping window, invite the whole zone roster to the queue and
+	// fire OnStartGrouping (BattlefieldWG.cpp:789-792: SendWarning
+	// BATTLEFIELD_WG_TEXT_START_GROUPING, id 27). The check runs after
+	// the timer-expiry branch above, so a battle that just started or
+	// just ended cannot also trigger it in the same tick; EndBattle
+	// resets the flag and the fresh 150-minute peace timer is above
+	// the window.
+	grouping := false
+	if !wg.IsActive && !wg.StartGrouping && wg.Timer <= WGStartGroupingDuration {
+		wg.StartGrouping = true
+		s.inviteWGZoneToQueue(wg)
+		grouping = true
+	}
 	if wg.IsActive {
 		wg.KickSweepTimer -= delta
 		if wg.KickSweepTimer <= 0 {
@@ -1194,6 +1315,9 @@ func (s *Server) TickWG(ctx context.Context, delta time.Duration) {
 		if sess := s.findSessionByGUID(guid); sess != nil {
 			s.kickWGPlayerFromBattlefield(sess)
 		}
+	}
+	if grouping {
+		s.broadcastWGZoneMessage("Wintergrasp grouping has begun — the battle starts in 15 minutes!")
 	}
 	if len(queued) != 0 {
 		s.resurrectWGQueuedPlayers(ctx, queued)
@@ -1350,9 +1474,10 @@ func (s *Server) handleWGPlayerEnter(sess *session) {
 	// invites to the war (InvitePlayerToWar); a full battlefield marks
 	// the entrant for kick and invites them to the queue instead. Go
 	// invites (no direct war insert, so tenacity/tower loops only see
-	// accepters); the queue-invite leg stays unmodeled — Go sends no
-	// QUEUE_INVITE packet on any path and peacetime grouping is
-	// unmodeled — and the min-level leg has no Go WG config.
+	// accepters); in peacetime with 15 minutes or less left, the entrant
+	// is invited to the queue instead (:96-97). The war invite's
+	// in-flight, arena/BG, and min-level guards live in
+	// inviteWGPlayerToWar and apply on this path too.
 	wg.PlayersInZone[sess.playerGUID] = playerTeam
 	if wg.IsActive {
 		if _, inWar := wg.PlayersInWar[sess.playerGUID]; !inWar {
@@ -1361,9 +1486,12 @@ func (s *Server) handleWGPlayerEnter(sess *session) {
 					s.inviteWGPlayerToWar(wg, sess, playerTeam)
 				} else {
 					wg.PlayersWillBeKick[sess.playerGUID] = time.Now().Add(wgKickDelay)
+					s.inviteWGPlayerToQueue(wg, sess, playerTeam)
 				}
 			}
 		}
+	} else if wg.Timer <= WGStartGroupingDuration {
+		s.inviteWGPlayerToQueue(wg, sess, playerTeam)
 	}
 
 	// Apply continent/zone phase shift
