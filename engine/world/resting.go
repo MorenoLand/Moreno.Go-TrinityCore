@@ -86,8 +86,8 @@ func (s *Server) updateRestedBonuses(ctx context.Context, now time.Time) {
 		sess.lastRestBonusUpdate = time.Unix(now.Unix(), 0)
 		player := sess.player
 		oldBonus, oldRestState := uint32(player.RestBonus), player.RestState
-		bonus := player.RestBonus + float32(elapsed)*(float32(playerNextLevelXP(player.Level))/72000)*(0.125*float32(s.Config.RestInGameRate))
-		sess.setRestBonus(player, bonus)
+		bonus := player.RestBonus + float32(elapsed)*(float32(nextLevelXPFor(sess.server, ctx, player.Level))/72000)*(0.125*float32(s.Config.RestInGameRate))
+		sess.setRestBonus(player, bonus, nextLevelXPFor(sess.server, ctx, player.Level))
 		fields := make(map[int]uint32, 2)
 		if oldBonus != uint32(player.RestBonus) {
 			fields[playerFieldRestStateExperience] = uint32(player.RestBonus)

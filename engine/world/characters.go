@@ -1517,7 +1517,12 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	} else if state.PVPFlags&0x01 != 0 && state.PlayerFlags&playerFlagInPVP == 0 && s.pvpEnd.IsZero() {
 		s.pvpEnd = time.Now()
 	}
-	resting := playerRestingInZoneArea(uint8(team), zone.Flags, area.Flags, hostile, sanctuary) || s.inTavernResting()
+	// Player::UpdateZone (Player.cpp:7254): the capital-city rest arm reads
+	// zone->IsSanctuary() (AreaTableEntry, DBCStructure.h:198, including
+	// the ContinentID == 609 arm), not the area's sanctuary byte — the
+	// area value above feeds only the UpdateArea PvP byte.
+	zoneSanctuary := zone.Flags&wotlk.AreaFlagSanctuary != 0 || zone.ContinentID == 609
+	resting := playerRestingInZoneArea(uint8(team), zone.Flags, area.Flags, hostile, zoneSanctuary) || s.inTavernResting()
 	s.setRestingFlag(state, resting)
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
@@ -4342,6 +4347,12 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 		}
 	}
 	state := &stateCopy
+	// Player::SaveToDB (Player.cpp:19584/19709): logout_time is stamped
+	// with GameTime on every save, not only at logout — the offline rest
+	// bonus, aura and item-duration arms all read it as last-save time.
+	// The in-memory field keeps its loaded value: C++ keeps no logout-time
+	// member, it only writes the column.
+	state.LogoutTime = time.Now().Unix()
 	state.LogoutResting = IsPlayerRestingForLogout(state.PlayerFlags)
 	taxi := make([]string, len(state.TaxiMask))
 	for i, value := range state.TaxiMask {

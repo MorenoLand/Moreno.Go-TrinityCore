@@ -588,7 +588,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.validateChosenTitle(ctx, &state)
 	s.loadArenaTeamInfo(ctx, &state)
 	_ = s.loadFishingSteps(ctx, &state)
-	s.applyOfflineRestBonus(&state)
+	s.applyOfflineRestBonus(ctx, &state)
 	_ = s.updateOfflineRealtimeItemDurations(ctx, &state)
 	if s.updateOfflineItemLoadState(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
@@ -1960,7 +1960,7 @@ const (
 	restStateRafLinked    uint8 = 6
 )
 
-func (s *session) setRestBonus(state *playerState, bonus float32) {
+func (s *session) setRestBonus(state *playerState, bonus float32, nextLevelXP uint32) {
 	if state == nil {
 		return
 	}
@@ -1974,7 +1974,7 @@ func (s *session) setRestBonus(state *playerState, bonus float32) {
 	if bonus < 0 {
 		bonus = 0
 	}
-	maxRestBonus := float32(playerNextLevelXP(state.Level)) * 1.5 / 2
+	maxRestBonus := float32(nextLevelXP) * 1.5 / 2
 	if bonus > maxRestBonus {
 		bonus = maxRestBonus
 	}
@@ -1993,16 +1993,20 @@ func (s *session) setRestBonus(state *playerState, bonus float32) {
 	}
 }
 
-func (s *session) applyOfflineRestBonus(state *playerState) {
+func (s *session) applyOfflineRestBonus(ctx context.Context, state *playerState) {
 	if state == nil {
 		return
 	}
-	elapsed := time.Now().Unix() - state.LogoutTime
+	// Player::LoadFromDB (Player.cpp:17850): time_diff is uint32(now -
+	// logoutTime), so a future logout_time wraps to a huge span and the
+	// SetRestBonus clamp caps it at the max — mirrored here. A zero
+	// logout_time (never saved) still grants nothing.
+	timeDiff := uint32(time.Now().Unix() - state.LogoutTime)
 	maxLevel := uint8(80)
 	if s != nil && s.server != nil && s.server.Config.MaxPlayerLevel > 0 && s.server.Config.MaxPlayerLevel < 256 {
 		maxLevel = uint8(s.server.Config.MaxPlayerLevel)
 	}
-	if state.LogoutTime > 0 && elapsed > 0 && state.Level > 0 && int(state.Level) < len(xpCurve) && state.Level < maxLevel {
+	if state.LogoutTime > 0 && timeDiff > 0 && state.Level > 0 && int(state.Level) < len(xpCurve) && state.Level < maxLevel {
 		wildernessRate, tavernRate := float32(1), float32(1)
 		if s != nil && s.server != nil {
 			wildernessRate = float32(s.server.Config.RestOfflineInWildernessRate)
@@ -2012,10 +2016,10 @@ func (s *session) applyOfflineRestBonus(state *playerState) {
 		if state.LogoutResting {
 			bubble = float32(0.125) * tavernRate
 		}
-		nextLevelXP := float32(playerNextLevelXP(state.Level))
-		state.RestBonus += float32(elapsed) * (nextLevelXP / 72000) * bubble
+		nextLevelXP := float32(nextLevelXPFor(s.server, ctx, state.Level))
+		state.RestBonus += float32(timeDiff) * (nextLevelXP / 72000) * bubble
 	}
-	s.setRestBonus(state, state.RestBonus)
+	s.setRestBonus(state, state.RestBonus, nextLevelXPFor(s.server, ctx, state.Level))
 }
 
 func (s *session) loadFishingSteps(ctx context.Context, state *playerState) error {

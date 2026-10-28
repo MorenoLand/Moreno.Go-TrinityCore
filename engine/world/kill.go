@@ -1860,7 +1860,6 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	if victimGUID != 0 {
 		if recruitAFriend {
 			bonusXP = 2 * amount
-			s.setRestBonus(s.player, s.player.RestBonus)
 		} else {
 			if s.player.RestBonus > 0 {
 				bonusXP = uint32(s.player.RestBonus)
@@ -1868,7 +1867,7 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 					bonusXP = amount
 				}
 			}
-			s.setRestBonus(s.player, s.player.RestBonus-float32(bonusXP))
+			s.setRestBonus(s.player, s.player.RestBonus-float32(bonusXP), nextLevelXPFor(s.server, ctx, s.player.Level))
 		}
 	} else if recruitAFriend {
 		bonusXP = 2 * amount
