@@ -149,7 +149,7 @@ type Server struct {
 	pendingInstanceAdmissions map[instanceAdmissionKey]uint32
 	instanceEncounters        map[instanceAdmissionKey]map[uint64]struct{}
 	dungeonEncounterMu        sync.Mutex
-	dungeonEncounters         map[dungeonEncounterKey]dungeonEncounterCredit
+	dungeonEncounters         map[dungeonEncounterKey][]dungeonEncounterCredit
 	dungeonEncountersLoaded   bool
 	dungeonCreditSpellMu      sync.Mutex
 	dungeonCreditSpells       map[uint32]struct{}

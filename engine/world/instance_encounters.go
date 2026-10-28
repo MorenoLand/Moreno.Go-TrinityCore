@@ -32,7 +32,15 @@ const (
 // row's entry id) and lands under its (map, difficulty, credit type, credit
 // entry). The DBC Bit is the completedEncounters mask bit
 // (DBCStructure.h:605-615: field 4, "encounter index for creating completed
-// mask"). A failed load (missing DBC file, missing world table) leaves the
+// mask"). Rows sharing one key append in load order, not overwrite: C++
+// stores a DungeonEncounterList per (map, difficulty)
+// (ObjectMgr.cpp:6107-6108) and UpdateEncounterState ORs every matching
+// row's bit, stopping after the first row marked lastEncounterDungeon
+// (InstanceScript.cpp:744-754) — a single-value map would credit only the
+// last row when one kill or cast completes two encounters. C++ load-time
+// skips Go cannot replicate (invalid LFG dungeon id, duplicate final mark)
+// stay in the list: Go has no LFG dungeon table, so the break above is
+// the replicated half of that filter. A failed load (missing DBC file, missing world table) leaves the
 // map empty and marks the load done, so kill time never retries or logs per
 // kill; the table is re-read only on the next server start, matching the
 // other startup loaders. The kill-credit lookup below is the dungeon-boss
@@ -70,7 +78,7 @@ func (s *Server) loadDungeonEncounters(ctx context.Context) {
 		return
 	}
 	defer rows.Close()
-	credits := make(map[dungeonEncounterKey]dungeonEncounterCredit)
+	credits := make(map[dungeonEncounterKey][]dungeonEncounterCredit)
 	for rows.Next() {
 		var entry, creditType, creditEntry, lastDungeon uint32
 		if err := rows.Scan(&entry, &creditType, &creditEntry, &lastDungeon); err != nil {
@@ -80,7 +88,8 @@ func (s *Server) loadDungeonEncounters(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		credits[dungeonEncounterKey{MapID: dbc.mapID, Difficulty: dbc.difficulty, CreditType: creditType, CreditEntry: creditEntry}] = dungeonEncounterCredit{Bit: dbc.bit, LastEncounterDungeon: lastDungeon}
+		key := dungeonEncounterKey{MapID: dbc.mapID, Difficulty: dbc.difficulty, CreditType: creditType, CreditEntry: creditEntry}
+		credits[key] = append(credits[key], dungeonEncounterCredit{Bit: dbc.bit, LastEncounterDungeon: lastDungeon})
 	}
 	s.dungeonEncounters = credits
 }
@@ -118,11 +127,20 @@ func (s *session) creditDungeonEncounterKill(ctx context.Context, target combatT
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT difficulty, completedEncounters, data FROM instance WHERE id = ?", target.InstanceID).Scan(&difficulty, &mask, &data); err != nil {
 		return
 	}
-	credit, ok := credits[dungeonEncounterKey{MapID: target.Map, Difficulty: uint32(difficulty), CreditType: dungeonEncounterCreditKillCreature, CreditEntry: creatureEntry}]
-	if !ok || credit.Bit >= 32 {
+	creditList, ok := credits[dungeonEncounterKey{MapID: target.Map, Difficulty: uint32(difficulty), CreditType: dungeonEncounterCreditKillCreature, CreditEntry: creatureEntry}]
+	if !ok {
 		return
 	}
-	newMask := uint32(mask) | (1 << credit.Bit)
+	newMask := uint32(mask)
+	for _, credit := range creditList {
+		if credit.Bit >= 32 {
+			continue
+		}
+		newMask |= 1 << credit.Bit
+		if credit.LastEncounterDungeon != 0 {
+			break
+		}
+	}
 	if newMask == uint32(mask) {
 		return
 	}
@@ -191,11 +209,20 @@ func (s *Server) creditDungeonEncounterSpellCast(ctx context.Context, mapID, ins
 	if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT difficulty, completedEncounters, data FROM instance WHERE id = ?", instanceID).Scan(&difficulty, &mask, &data); err != nil {
 		return
 	}
-	credit, ok := credits[dungeonEncounterKey{MapID: mapID, Difficulty: uint32(difficulty), CreditType: dungeonEncounterCreditCastSpell, CreditEntry: spellID}]
-	if !ok || credit.Bit >= 32 {
+	creditList, ok := credits[dungeonEncounterKey{MapID: mapID, Difficulty: uint32(difficulty), CreditType: dungeonEncounterCreditCastSpell, CreditEntry: spellID}]
+	if !ok {
 		return
 	}
-	newMask := uint32(mask) | (1 << credit.Bit)
+	newMask := uint32(mask)
+	for _, credit := range creditList {
+		if credit.Bit >= 32 {
+			continue
+		}
+		newMask |= 1 << credit.Bit
+		if credit.LastEncounterDungeon != 0 {
+			break
+		}
+	}
 	if newMask == uint32(mask) {
 		return
 	}
