@@ -5321,9 +5321,24 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 			return true
 		}
 	}
-	slot, ok := s.freeInventorySlot(ctx, dstKey)
+	// HandleAutoStoreBagItemOpcode (ItemHandler.cpp:751-757): the
+	// destination search ignores the moved item itself
+	// (CanStoreItem_InBag, Player.cpp:10614-10617), so an item
+	// autostored into the bag it already sits in resolves to its own
+	// slot when that slot is the first available one — a no-op that
+	// answers EQUIP_ERR_NONE instead of moving, as in the bank path.
+	var slot uint8
+	if srcBagKey == dstKey {
+		slot, ok = s.freeInventorySlotExcept(ctx, dstKey, srcSlot)
+	} else {
+		slot, ok = s.freeInventorySlot(ctx, dstKey)
+	}
 	if !ok {
 		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+		return true
+	}
+	if srcBagKey == dstKey && slot == srcSlot {
+		s.sendEquipError(equipErrNone, uint64(itemGUID))
 		return true
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", dstKey, slot, s.playerGUID, itemGUID); err != nil {
@@ -6077,6 +6092,16 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		// Already wrapped check (ItemHandler.cpp:876: ITEM_FIELD_GIFTCREATOR set)
 		var existingGift uint32
 		if err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_gifts WHERE item_guid = ? LIMIT 1", targetGUID).Scan(&existingGift); err == nil && existingGift != 0 {
+			s.sendEquipError(equipErrWrappedCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+		// The same arm also fires on any non-empty gift creator: C++
+		// sets ITEM_FIELD_GIFTCREATOR on every traded item
+		// (TradeHandler.cpp:483/488), so a previously traded item
+		// cannot be wrapped even when its gift row is absent — the
+		// gift-row proxy alone let traded items through.
+		var targetGiftCreator int64
+		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(giftCreatorGuid, 0) FROM item_instance WHERE guid = ?", targetGUID).Scan(&targetGiftCreator); err == nil && targetGiftCreator != 0 {
 			s.sendEquipError(equipErrWrappedCantBeWrapped, uint64(targetGUID))
 			return true
 		}
@@ -7107,13 +7132,18 @@ func (s *session) socketEquippedGemLimitCount(ctx context.Context, category uint
 // handleSetAmmo processes CMSG_SET_AMMO (0x268).
 // Reference: WorldSession::HandleSetAmmoOpcode (ItemHandler.cpp:772).
 func (s *session) handleSetAmmo(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
 	// ItemHandler.cpp:766-770: setting ammo while dead answers
-	// EQUIP_ERR_YOU_ARE_DEAD before the packet is even read.
+	// EQUIP_ERR_YOU_ARE_DEAD before the packet is even read, so the
+	// dead gate runs ahead of the length gate — a dead player sending
+	// a short packet gets the error, not silence.
 	if s.isDeadOrGhost() {
 		s.sendEquipError(equipErrYouAreDead, 0)
+		return true
+	}
+	if len(payload) < 4 {
 		return true
 	}
 	r := protocol.NewReader(payload)
