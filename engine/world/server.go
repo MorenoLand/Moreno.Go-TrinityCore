@@ -1411,6 +1411,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateLFGBootVotes(now)
 			s.updateRestedBonuses(ctx, now)
 			if !s.respawnTimesLoaded {
+				s.cleanupExpiredInstanceSaves(ctx)
 				s.loadCreatureRespawnTimes(ctx)
 				s.respawnTimesLoaded = true
 			}

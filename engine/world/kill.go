@@ -2100,6 +2100,54 @@ func (s *Server) deleteRespawnRowsForInstance(ctx context.Context, mapID, instan
 	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_ALL_RESPAWNS", mapID, instanceID)
 }
 
+// cleanupExpiredInstanceSaves mirrors InstanceSaveManager::LoadInstances
+// (InstanceSaveMgr.cpp:266-290): at the first world tick, before
+// loadCreatureRespawnTimes seeds records, delete instance saves whose
+// own resettime passed or whose map/difficulty global reset passed,
+// their character/group binds, and respawn rows orphaned by the delete
+// (plus pre-existing orphans). Deleting the instance row first is what
+// keeps admissions from reusing an expired save: the bind queries join
+// the instance table, and a login left without a row falls back via
+// recoverLoginInstanceMapFailure. C++ additionally drops binds for
+// missing characters/groups and zeroes stale corpse/character
+// instance ids; Go tracks no corpse instance id and character deletion
+// already cascades its binds, so those arms are vacuous here. Runtime
+// expiry while the server runs stays unmodeled: Go keeps no reset
+// scheduler (resettime is read-only), so only startup expiry is
+// covered, matching the C++ server-down-across-a-reset case.
+func (s *Server) cleanupExpiredInstanceSaves(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	now := time.Now().Unix()
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT i.id, i.map FROM instance i
+		LEFT JOIN instance_reset ir ON ir.mapid = i.map AND ir.difficulty = i.difficulty
+		WHERE (i.resettime > 0 AND i.resettime < ?) OR (ir.resettime IS NOT NULL AND ir.resettime < ?)`, now, now)
+	if err != nil {
+		return
+	}
+	expired := make(map[uint32]uint32)
+	for rows.Next() {
+		var id, mapID int64
+		if err := rows.Scan(&id, &mapID); err != nil || id <= 0 || id > int64(^uint32(0)) {
+			continue
+		}
+		if _, ok := expired[uint32(id)]; !ok {
+			expired[uint32(id)] = uint32(mapID)
+		}
+	}
+	rows.Close()
+	for id, mapID := range expired {
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_INSTANCE_BY_INSTANCE", id)
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CHAR_INSTANCE_BY_INSTANCE", id)
+		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_GROUP_INSTANCE_BY_INSTANCE", id)
+		s.deleteRespawnRowsForInstance(ctx, mapID, id)
+	}
+	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM respawn WHERE instanceId > 0 AND instanceId NOT IN (SELECT id FROM instance)")
+	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_instance WHERE instance > 0 AND instance NOT IN (SELECT id FROM instance)")
+	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE instance > 0 AND instance NOT IN (SELECT id FROM instance)")
+}
+
 // loadCreatureRespawnTimes mirrors Map::LoadRespawnTimes (Map.cpp:4497):
 // rows saved by saveCreatureRespawnRow seed the in-memory respawn maps
 // at the first world tick, so a creature dead at shutdown revives at
