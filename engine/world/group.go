@@ -421,6 +421,30 @@ func groupIsFull(g *groupState) bool {
 	return len(g.Members) >= maxGroupSize
 }
 
+// groupSlotFull mirrors Group::IsFull (Group.cpp:2451-2453) for DB-persisted
+// groups: m_memberSlots persists offline members, while Go's Members roster
+// is online-only (logout detaches the slot), so len(Members) undercounts a
+// group with offline slots. For a DBID group the group_member rows are the
+// slot list (rows are added on join and deleted on leave), so the row count
+// is the C++ slot count; DBID-0 groups (runtime/BG/LFG) keep the runtime
+// count, as before.
+func (s *Server) groupSlotFull(ctx context.Context, g *groupState) bool {
+	if g == nil {
+		return false
+	}
+	count := len(g.Members)
+	if g.DBID != 0 && s != nil && s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		var n int64
+		if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_member WHERE guid = ?", g.DBID).Scan(&n); err == nil {
+			count = int(n)
+		}
+	}
+	if g.IsRaid {
+		return count >= maxRaidSize
+	}
+	return count >= maxGroupSize
+}
+
 // -----------------------------------------------------------------
 // Wire helpers
 // -----------------------------------------------------------------
@@ -888,7 +912,7 @@ func (s *Server) getGroupSessions(groupID uint64) []*session {
 
 // handleGroupInvite processes CMSG_GROUP_INVITE (0x06E).
 // TrinityCore: WorldSession::HandleGroupInviteOpcode.
-func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
+func (s *session) handleGroupInvite(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
@@ -917,13 +941,17 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpInvite, memberName, errBadPlayerNameS)
 	}
 
-	// Restrict invite to GMs (GroupHandler.cpp:103 — GM.AllowInvite, default false)
-	if !s.server.Config.GMAllowInvite && s.security == 0 && invitedSess.security > 0 {
+	// Restrict invite to GMs (GroupHandler.cpp:96 — GM.AllowInvite, default false).
+	// C++ gates on Player::IsGameMaster (Player.h:959, PLAYER_EXTRA_GM_ON),
+	// not the account security level: a sec>0 player with GM mode off is
+	// not a game master here, and a GM-on inviter is exempt even at sec 0.
+	if !s.server.Config.GMAllowInvite && !chatGMMode(s) && chatGMMode(invitedSess) {
 		return s.sendPartyResult(partyOpInvite, memberName, errBadPlayerNameS)
 	}
 
-	// Can't group with the opposite faction (AllowTwoSide.Interaction.Group, default false)
-	if s.security == 0 && !s.server.Config.AllowTwoSideInteractionGroup &&
+	// Can't group with the opposite faction (AllowTwoSide.Interaction.Group, default false).
+	// Same IsGameMaster form as the GM gate above (GroupHandler.cpp:103).
+	if !chatGMMode(s) && !s.server.Config.AllowTwoSideInteractionGroup &&
 		playerTeam(s.player.Race) != playerTeam(invitedSess.player.Race) {
 		return s.sendPartyResult(partyOpInvite, memberName, errPlayerWrongFaction)
 	}
@@ -952,21 +980,24 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpInvite, memberName, errInviteRestricted)
 	}
 
+	// Invited player already in a group or has a pending invite. C++ runs
+	// this check (GroupHandler.cpp:149-168) BEFORE the inviter's own group
+	// permission check, so a pending invitee inviting an already-grouped
+	// player gets ALREADY_IN_GROUP, not the pending arm's silent drop.
+	if invitedSess.groupID != 0 || invitedSess.pendingGroupLeader != 0 {
+		_ = s.sendPartyResult(partyOpInvite, memberName, errAlreadyInGroupS)
+		if invitedSess.groupID != 0 {
+			_ = invitedSess.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(0, s.player.Name), true)
+		}
+		return true
+	}
+
 	// The inviter is themselves only invited (GroupHandler.cpp:143-156): C++
 	// invites into that pending group — silently dropped while it is
 	// uncreated, ERR_NOT_LEADER once the inviter's inviter formed it.
 	if s.groupID == 0 && s.pendingGroupLeader != 0 {
 		if leaderSess := s.server.findSessionByGUID(s.pendingGroupLeader); leaderSess != nil && leaderSess.groupID != 0 {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
-		}
-		return true
-	}
-
-	// Invited player already in a group or has a pending invite
-	if invitedSess.groupID != 0 || invitedSess.pendingGroupLeader != 0 {
-		_ = s.sendPartyResult(partyOpInvite, memberName, errAlreadyInGroupS)
-		if invitedSess.groupID != 0 {
-			_ = invitedSess.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(0, s.player.Name), true)
 		}
 		return true
 	}
@@ -978,7 +1009,7 @@ func (s *session) handleGroupInvite(_ context.Context, payload []byte) bool {
 			s.groupID = 0
 		} else if !g.isLeaderOrAssistant(s.playerGUID) {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
-		} else if groupIsFull(g) {
+		} else if s.server.groupSlotFull(ctx, g) {
 			return s.sendPartyResult(partyOpInvite, "", errGroupFull)
 		}
 	}
@@ -1077,6 +1108,18 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 		// existing group does not (HandleGroupAcceptOpcode)
 		if leaderSess == nil || leaderSess.player == nil {
 			srv.groupsMu.Unlock()
+			// HandleGroupAcceptOpcode (GroupHandler.cpp:253-257): an
+			// uncreated group with an absent leader drops ALL its
+			// invites (Group::RemoveAllInvites), not just the
+			// acceptor's — a later reconnect must not resurrect the
+			// co-invitees' pending invites.
+			srv.sessionsMu.Lock()
+			for sess := range srv.sessions {
+				if sess.pendingGroupLeader == leaderGUID {
+					sess.pendingGroupLeader = 0
+				}
+			}
+			srv.sessionsMu.Unlock()
 			return true
 		}
 		// Create new group
@@ -1121,8 +1164,9 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	}
 
 	// Group::IsFull arm (HandleGroupAcceptOpcode:243-247) fires before the
-	// not-created handling, including when the leader is offline.
-	if groupIsFull(g) {
+	// not-created handling, including when the leader is offline. The slot
+	// count is DB-backed for persisted groups (see groupSlotFull).
+	if srv.groupSlotFull(ctx, g) {
 		srv.groupsMu.Unlock()
 		_ = s.sendPartyResult(partyOpInvite, "", errGroupFull)
 		return true
@@ -1449,7 +1493,13 @@ func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, nam
 		}
 		memberGUID = uint64(found)
 	}
-	if memberGUID == g.LeaderGUID {
+	// By-name vs by-GUID asymmetry (Player.cpp:24420-24457): the by-name
+	// handler calls CanUninviteFromGroup() with the default empty guid, so
+	// the leader-target block never fires and an offline leader is kicked
+	// with promotion (Group.cpp:710-720); only the GUID path blocks leader
+	// kicks. guid==0 identifies the by-name path here.
+	isLeader := memberGUID == g.LeaderGUID
+	if isLeader && guid != 0 {
 		return s.sendPartyResult(partyOpUninvite, "", errNotLeader)
 	}
 	if _, err := srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), memberGUID); err != nil {
@@ -1467,6 +1517,19 @@ func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, nam
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_member WHERE guid = ?`, g.DBID).Scan(&remaining); err == nil && remaining < 2 {
 		srv.disbandGroup(ctx, g, false)
 		return true
+	}
+	// Leader promotion mirrors removeGroupMemberByGUID: the first remaining
+	// CONNECTED member is promoted via ChangeLeader; with no connected
+	// candidate the leader GUID stays (C++ ChangeLeader finds nobody).
+	if isLeader {
+		for _, m := range g.Members {
+			if cs := srv.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+				if srv.setGroupLeader(g, m.GUID) {
+					return true
+				}
+				break
+			}
+		}
 	}
 	srv.broadcastGroupList(g)
 	return true
@@ -1894,8 +1957,15 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	// cancelable group (HandleGroupDisbandOpcode's grpInvite arm): withdraw
 	// every outstanding invite. An invitee's own disband is a silent no-op in
 	// C++ — the invite is not withdrawn.
+	// HandleGroupDisbandOpcode (GroupHandler.cpp:402-415) checks group-or-
+	// invite existence first, then the battleground gate — so a groupless
+	// invitee (or a player holding both incoming and outgoing invites)
+	// still answers ERR_INVITE_RESTRICTED from inside a battleground.
+	// hasOutgoingInvite is the Go shape of the player's own pending group
+	// (they invited others while groupless); it is scanned regardless of
+	// an incoming invite, unlike the old pending==0-only scan.
 	hasOutgoingInvite := false
-	if s.groupID == 0 && s.pendingGroupLeader == 0 {
+	if s.groupID == 0 {
 		s.server.sessionsMu.RLock()
 		for sess := range s.server.sessions {
 			if sess.pendingGroupLeader == s.playerGUID {
@@ -1905,7 +1975,7 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 		}
 		s.server.sessionsMu.RUnlock()
 	}
-	if s.groupID == 0 && !hasOutgoingInvite {
+	if s.groupID == 0 && s.pendingGroupLeader == 0 && !hasOutgoingInvite {
 		return true
 	}
 
@@ -1913,6 +1983,14 @@ func (s *session) handleGroupDisband(ctx context.Context, _ []byte) bool {
 	// a battleground — note the op is PARTY_OP_INVITE, not PARTY_OP_LEAVE
 	if s.bgData.InstanceID != 0 {
 		_ = s.sendPartyResult(partyOpInvite, "", errInviteRestricted)
+		return true
+	}
+
+	// The pending-group cancel arm (GroupHandler.cpp:426-430) fires only
+	// when the player LEADS their own pending group; a player who is
+	// merely an invitee of another group (even while holding outgoing
+	// invites of their own) gets no arm in C++, so no cancel here.
+	if hasOutgoingInvite && s.pendingGroupLeader != 0 {
 		return true
 	}
 
@@ -2561,8 +2639,20 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 		s.server.groupsMu.Unlock()
 		return true
 	}
+	bgRaid := grp.bgRaidInstance != 0
 
-	if grp.countInSubGroup(groupNr) >= 5 {
+	// HasFreeSlotSubGroup counts m_subGroupsCounts, which includes offline
+	// slots (Group.cpp:2565-2567); Go's Members roster is online-only, so
+	// for a persisted group the row count is the slot count. DBID-0 and
+	// BG-raid groups keep the runtime count.
+	subCount := grp.countInSubGroup(groupNr)
+	if !bgRaid && grp.DBID != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var n int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_member WHERE guid = ? AND subgroup = ?", grp.DBID, groupNr).Scan(&n); err == nil {
+			subCount = int(n)
+		}
+	}
+	if subCount >= 5 {
 		s.server.groupsMu.Unlock()
 		return true
 	}
@@ -2579,13 +2669,43 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 			break
 		}
 	}
-	bgRaid := grp.bgRaidInstance != 0
+	// ChangeMembersGroup "allows setting sub groups both for online or
+	// offline members" (Group.cpp:1898-1900), and the handler resolves an
+	// offline target via the character cache (GroupHandler.cpp:622-627).
+	// Go's roster is online-only, so an offline member is resolved from
+	// the group_member rows instead; a same-subgroup target moves nothing
+	// and broadcasts nothing, as in C++.
+	var offFound bool
+	var offGUID uint64
+	if !found && !bgRaid && grp.DBID != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT gm.memberGuid, gm.subgroup, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ?`, grp.DBID)
+		if err == nil {
+			for rows.Next() {
+				var mg, sg int64
+				var mn string
+				if rows.Scan(&mg, &sg, &mn) != nil {
+					continue
+				}
+				if strings.EqualFold(mn, name) {
+					if uint8(sg) != groupNr {
+						offFound = true
+						offGUID = uint64(mg)
+					}
+					break
+				}
+			}
+			rows.Close()
+		}
+	}
 	s.server.groupsMu.Unlock()
 
 	if found {
 		if !bgRaid && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_MEMBER_SUBGROUP"), groupNr, movedGUID)
 		}
+		s.server.broadcastGroupList(grp)
+	} else if offFound {
+		_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_GROUP_MEMBER_SUBGROUP"), groupNr, offGUID)
 		s.server.broadcastGroupList(grp)
 	}
 	return true
