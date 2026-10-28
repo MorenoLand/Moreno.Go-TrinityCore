@@ -1261,7 +1261,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+			s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
 		}
 	}
 

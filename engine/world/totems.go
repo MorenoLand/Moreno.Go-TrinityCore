@@ -949,7 +949,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
 		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+			s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
 		}
 	}
 
@@ -1138,7 +1138,7 @@ func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spel
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
 	}
 	srv, mapID, instanceID := s.server, s.player.Map, s.player.InstanceID
 	go func() {

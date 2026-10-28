@@ -156,12 +156,13 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 	// SendChatPacket / SendNonChatPacket fall through to PlayerDistWorker /
 	// SendMessageToSetInRange with GetRangeForChatType (CreatureTextMgr.cpp
 	// :285-290, :382; CreatureTextMgrImpl.h:170-173): MONSTER_YELL 300yd,
-	// everything else 25yd (SAY default). AREA/ZONE/MAP/WORLD rows keep the
-	// old map-wide fan-out (MAP is exact; AREA/ZONE over-deliver and WORLD
-	// under-delivers — Go models no per-player area/zone for those legs).
-	// MONSTER_PARTY rows keep it too: C++ sends those to the whisper
-	// target's group, which this path cannot address. A creature with no
-	// motion entry keeps the old fan-out rather than dropping the row.
+	// everything else 25yd (SAY default). AREA/ZONE/MAP rows now fan out
+	// instance-wide (MAP is exact; AREA/ZONE over-deliver, bounded to the
+	// instance — Go models no per-player area/zone for those legs). WORLD
+	// rows keep the world-wide fan-out (exact). MONSTER_PARTY rows keep it
+	// too: C++ sends those to the whisper target's group, which this path
+	// cannot address and which may span maps. A creature with no motion
+	// entry keeps the instance-wide fan-out rather than dropping the row.
 	motion := s.findCreatureMotion(mapID, instanceID, creatureGUID)
 	listenDist := 25.0
 	if chatType == 0x0E { // CHAT_MSG_MONSTER_YELL
@@ -176,8 +177,10 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 			_ = whisperSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), true)
 		} else if chosen.TextRange == 0 && motion != nil {
 			s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
-		} else {
+		} else if chosen.TextRange == 4 {
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
+		} else {
+			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
 		}
 	}
 
@@ -193,7 +196,7 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		if motion != nil {
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
 		} else {
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
+			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
 		}
 	}
 
@@ -208,7 +211,9 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 	}
 	if chosen.TextRange == 0 && chatType != 0x0D && motion != nil { // not MONSTER_PARTY
 		s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
-	} else {
+	} else if chosen.TextRange == 4 || chatType == 0x0D {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
+	} else {
+		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
 	}
 }

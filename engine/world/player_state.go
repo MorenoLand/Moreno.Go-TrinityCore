@@ -4586,7 +4586,7 @@ func (s *session) sendPlayerMountUpdate() {
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | flags, unitFieldMountDisplayID: s.player.MountDisplayID})
 	}
 	s.sendPlayerCollisionHeight()
 }
@@ -4607,7 +4607,7 @@ func (s *session) sendPlayerUnitFlagsUpdate() {
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | s.player.UnitFlags, unitFieldFlags2: unitFlag2RegeneratePower | s.player.UnitFlags2})
 	}
 }
 

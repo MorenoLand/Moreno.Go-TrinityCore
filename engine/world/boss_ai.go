@@ -284,7 +284,7 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToInstance(rec.Map, rec.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), rec.Map, rec.InstanceID, float32(x), float32(y), float32(z), nil)
 	}
 	// motionFor already fired the Eluna spawn pair (23+5) when it created
 	// the motion; the native AI reset still runs after, matching the
@@ -3153,7 +3153,7 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		if !wasInCombat {
 			s.broadcastAIReactionInInstance(mapID, m.InstanceID, targetGUID, 2)
 			startPkt := buildAttackStart(targetGUID, m.GUID)
-			s.broadcastToInstance(mapID, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, m.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		}
 	}
 }
@@ -3316,7 +3316,7 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 			log.WriteU32(spellEffectSummon)
 			log.WriteU32(1)
 			log.WritePackedGUID(summoned.GUID)
-			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 			return summoned
 		}
 		// stampOwnerFaction mirrors the Minion::InitStats creator/faction
@@ -3631,7 +3631,7 @@ func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMoti
 	log.WriteU32(eff.Effect)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	m.ObjectSlots[slot] = newGUID
 }
 
@@ -3694,7 +3694,7 @@ func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creature
 	log.WriteU32(eff.Effect)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 }
 
 // creatureEffectTeleportUnits mirrors Spell::EffectTeleportUnits
@@ -4544,7 +4544,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 		if vs != nil {
 			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, true)
 		}
-		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, vs)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, vs)
 		if !pctMode && !rawMode && !mechMode {
 			if vs != nil {
 				vs.removeGrievousBiteIfFullyHealed(guid)
@@ -4724,7 +4724,7 @@ func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMo
 		if vs != nil {
 			_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, true)
 		}
-		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, vs)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, vs)
 		if amount > 0 {
 			s.distributeHealingThreat(ctx, m.GUID, guid, uint32(amount), true, spell.ID)
 		}
@@ -4904,7 +4904,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 					if changed {
 						s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, m.GUID, map[int]uint32{unitFieldPower1 + int(powerType): next})
 						logPkt := buildSpellEnergizeLog(m.GUID, m.GUID, spell.ID, powerType, gain)
-						s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, nil)
+						s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 						s.distributeHealingThreat(ctx, m.GUID, m.GUID, uint32(gain), true, spell.ID)
 					}
 				}
@@ -4927,7 +4927,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 		log.WriteU32(t.powerType)
 		log.WriteF32(t.gainMultiplier)
 	}
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 }
 
 // creatureInstaKillVictim runs the creature-victim legs of a creature
@@ -5902,7 +5902,7 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 	}
 	s.motionMu.Unlock()
 	for _, st := range stopped {
-		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), nil)
+		s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), m.Map, m.InstanceID, st.guid)
 	}
 }
 
@@ -7501,7 +7501,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		}
 		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 		_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
-		s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, vs)
 		vs.sendPlayerUpdate()
 		if s != nil {
 			s.triggerPetDefensive(ctx, vs.player.Map, vs.player.InstanceID, guid, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
@@ -7727,7 +7727,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		}
 		if !damageImmune {
 			logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
-			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 		}
 		if killed {
 			s.procCreatureLethalDamageAuras(victimKey, spell.ID, damage, maxHealth)
@@ -8775,7 +8775,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 	}
 	logPkt := buildSpellNonMeleeDamageLog(victimGUID, m.GUID, auraSpell.ID, damage, overkill, uint8(schoolMask), absorbed, resisted, hitInfo, blocked)
 	_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, vs)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, vs)
 	vs.sendPlayerUpdate()
 	if s != nil {
 		s.triggerPetDefensive(ctx, vs.player.Map, vs.player.InstanceID, victimGUID, m.GUID, scripting.CreatureEventOnOwnerAttackedAt)
