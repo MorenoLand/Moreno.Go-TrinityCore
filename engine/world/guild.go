@@ -803,6 +803,17 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	if err := cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid); err == nil && maxRid.Valid {
 		lowestRank = uint32(maxRid.Int64)
 	}
+	// Guild::AddMember (Guild.cpp:2211-2217): try_emplace fails when the
+	// member already exists and AddMember returns false BEFORE SetInGuild,
+	// clearing the invited id, or SendLoginInfo — so a pre-existing row is
+	// a silent no-op with no in-memory mutation and the invitation left
+	// standing. Checking up front keeps the success-path order (LoginInfo
+	// before the DB insert) while fixing the failure path, which used to
+	// mutate the player and send login info and only then fail the INSERT.
+	var alreadyMember int
+	if err := cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member WHERE guildid = ? AND guid = ? LIMIT 1", guildID, s.playerGUID).Scan(&alreadyMember); err == nil {
+		return true
+	}
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
 	// Guild::AddMember (Guild.cpp:2221-2228): SetInGuild, clear the invited
@@ -849,7 +860,14 @@ func (s *session) handleGuildDecline(ctx context.Context) bool {
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
 	if s.player != nil {
+		// WorldSession::HandleGuildDeclineOpcode (GuildHandler.cpp:69-76):
+		// SetInGuild(0) sets PLAYER_GUILDID, which C++ pushes in the next
+		// update; every other Go GuildID mutation (accept/leave/remove)
+		// calls sendPlayerUpdate, but decline never did, so a guilded
+		// decliner's client kept the old guild id until some unrelated
+		// update happened.
 		s.player.GuildID = 0
+		s.sendPlayerUpdate()
 	}
 	return true
 }
@@ -1288,7 +1306,11 @@ func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
 	// Guild::HandleSetLeader (Guild.cpp:1367): only the leader can assign a
 	// new leader; a guilded non-leader gets GUILD_COMMAND_CHANGE_LEADER +
 	// ERR_GUILD_PERMISSIONS instead of the silent return the Go arm had.
-	if uint64(leaderGUID) != s.playerGUID {
+	// _IsLeader (Guild.cpp:2485-2492) is the leaderguid holder OR any
+	// rank-0 member, not the leaderguid holder alone — the raw comparison
+	// wrongly denied a rank-0 non-holder (the emblem arm already uses
+	// isGuildLeader for exactly this reason).
+	if !s.isGuildLeader(ctx, leaderGUID) {
 		s.sendGuildCommandResult(guildCmdChangeLeader, "", errGuildPermissions)
 		return true
 	}
