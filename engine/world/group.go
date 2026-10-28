@@ -3454,9 +3454,12 @@ func groupAuraEntries(auras []*activeAura, targetGUID uint64) (uint64, [64]group
 		} else {
 			flags |= protocol.AuraFlagNegative
 		}
-		if aura.DurationMs > 0 && !aura.HideDuration {
-			flags |= protocol.AuraFlagDuration
-		}
+		// No duration bit: party-member-stats packets write
+		// AuraApplication::GetFlags() (SpellAuras.h:69, _flags from
+		// _InitFlags), which never carries AFLAG_DURATION; that bit is
+		// OR'd only into a local in AuraApplication::BuildUpdatePacket
+		// (SpellAuras.cpp:237) for SMSG_AURA_UPDATE. A timed aura's
+		// group-stats flag must stay 0x20-clear.
 		entries[aura.Slot] = groupAuraEntry{SpellID: aura.SpellID, Flags: flags}
 		mask |= uint64(1) << aura.Slot
 	}
