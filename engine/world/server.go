@@ -1420,6 +1420,8 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerRegeneration(ctx, now)
 			s.flushGroupMemberStats(ctx, now)
 			s.updateLFGBootVotes(now)
+			s.updateLFGRoleCheckExpiry(now)
+			s.updateLFGProposalExpiry(now)
 			s.updateRestedBonuses(ctx, now)
 			if !s.respawnTimesLoaded {
 				s.cleanupExpiredInstanceSaves(ctx)

@@ -421,6 +421,90 @@ func (m *LFGManager) UpdateRoleCheck(groupID uint64, guid uint64, roles uint8) *
 	return rc
 }
 
+// ExpireRoleChecks mirrors the role-check arm of LFGMgr::Update
+// (LFGMgr.cpp:301-321): a check at or past cancelTime fails as
+// MISSING_ROLE and is erased. The per-member RestoreState calls have no
+// Go counterpart to apply: a grouped join queues nothing until the check
+// finishes, so erasing the check is the whole state restore. The caller
+// sends the per-member role-check updates and the leader's FAILED join
+// result; unlike the UpdateRoleCheck failure arm, expiry sends no
+// ROLECHECK_FAILED party update (C++ sends none on this arm).
+func (m *LFGManager) ExpireRoleChecks(now time.Time) []*LfgRoleCheck {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var expired []*LfgRoleCheck
+	for groupID, rc := range m.roleChecks {
+		if rc.CancelAt.After(now) {
+			continue
+		}
+		rc.State = LFGRoleCheckMissingRole
+		expired = append(expired, rc)
+		delete(m.roleChecks, groupID)
+	}
+	sort.Slice(expired, func(i, j int) bool { return expired[i].GroupID < expired[j].GroupID })
+	return expired
+}
+
+// AbortRoleCheck mirrors the ROLECHECK arm of LFGMgr::LeaveLfg
+// (LFGMgr.cpp:763-766): leaving during a live check aborts it via
+// UpdateRoleCheck with no player, which sets ABORTED and erases the
+// check. The caller sends the terminal notifies; no RoleChosen packet
+// goes out on this arm (C++ sendRoleChosen requires a player guid).
+func (m *LFGManager) AbortRoleCheck(groupID uint64) *LfgRoleCheck {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rc, ok := m.roleChecks[groupID]
+	if !ok {
+		return nil
+	}
+	rc.State = LFGRoleCheckAborted
+	delete(m.roleChecks, groupID)
+	return rc
+}
+
+// ExpireProposals mirrors the proposal arm of LFGMgr::Update
+// (LFGMgr.cpp:324-328) through RemoveProposal with PROPOSAL_FAILED
+// (LFGMgr.cpp:1306-1345): pending answers become DENY, the proposal
+// fails and is erased, and the queue loses every denied player plus
+// every agreeing player in a denied player's group (the C++ group
+// queue-entry removal, per player in Go's per-player queue). Agreeing
+// players outside a denied group keep their queue entry, re-marked
+// QUEUED (C++ re-adds them to the queue on this arm).
+func (m *LFGManager) ExpireProposals(now time.Time) []*LFGProposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var expired []*LFGProposal
+	for id, prop := range m.proposals {
+		if !prop.CancelTime.Before(now) {
+			continue
+		}
+		prop.State = LFGProposalFailed
+		deniedGroups := make(map[uint64]bool)
+		for _, player := range prop.Players {
+			if player.Accept == LFGAnswerPending {
+				player.Accept = LFGAnswerDeny
+			}
+			if player.Accept == LFGAnswerDeny && player.Group != 0 {
+				deniedGroups[player.Group] = true
+			}
+		}
+		for guid, player := range prop.Players {
+			if player.Accept == LFGAnswerDeny || deniedGroups[player.Group] {
+				delete(m.queue, guid)
+				continue
+			}
+			if entry, ok := m.queue[guid]; ok {
+				entry.State = LFGStateQueued
+				m.queue[guid] = entry
+			}
+		}
+		expired = append(expired, prop)
+		delete(m.proposals, id)
+	}
+	sort.Slice(expired, func(i, j int) bool { return expired[i].ID < expired[j].ID })
+	return expired
+}
+
 // lfgCheckGroupRoles mirrors LFGMgr::CheckGroupRoles (LFGMgr.cpp:944-1002):
 // every member must resolve to exactly one of tank/healer/dps with at most
 // one tank, one healer and three dps, covering the whole group. Multi-role
@@ -956,6 +1040,32 @@ func (s *session) handleLFGLeave() bool {
 	// never resets the group's LFG state on leave.
 	lfg := s.server.Features.LFG
 	if s.groupID != 0 && s.server != nil {
+		// LFGMgr::LeaveLfg (LFGMgr.cpp:763-766): the ROLECHECK arm
+		// aborts a live check instead of leaving the queue — members
+		// hold no queue entry while a check runs, so the queue-leave
+		// loop below would otherwise silently no-op. No RoleChosen
+		// packet goes out (C++ sends it only for a player answer);
+		// every member gets the ABORTED role-check update, the leader
+		// the FAILED join result, and the group the ROLECHECK_FAILED
+		// party update (the UpdateRoleCheck default arm, LFGMgr.cpp:858-866).
+		if rc := lfg.AbortRoleCheck(s.groupID); rc != nil {
+			guids := make([]uint64, 0, len(rc.Roles))
+			for guid := range rc.Roles {
+				guids = append(guids, guid)
+			}
+			sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+			for _, guid := range guids {
+				if ms := s.server.findSessionByGUID(guid); ms != nil {
+					_ = ms.sendLFGRoleCheckUpdate(rc)
+				}
+			}
+			if ls := s.server.findSessionByGUID(rc.Leader); ls != nil {
+				_ = ls.sendLFGJoinResult(LFGJoinFailed, LFGRoleCheckAborted)
+			}
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+				buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
+			return true
+		}
 		removed := false
 		for _, ms := range s.server.getGroupSessions(s.groupID) {
 			if lfg.Leave(ms.playerGUID) {
@@ -1348,6 +1458,93 @@ func (s *Server) updateLFGBootVotes(now time.Time) {
 			}
 			if ps := s.findSessionByGUID(pguid); ps != nil {
 				_ = ps.sendLFGBootProposalUpdate(boot)
+			}
+		}
+	}
+}
+
+// updateLFGRoleCheckExpiry mirrors the role-check arm of LFGMgr::Update
+// (LFGMgr.cpp:301-321): an unanswered check past cancelTime fails as
+// MISSING_ROLE — every member gets the role-check update carrying that
+// state and the leader the FAILED join result. No ROLECHECK_FAILED party
+// update goes out on this arm (C++ sends none here), and the whole sweep
+// is skipped while the dungeon finder and raid browser are both disabled
+// (the LFGMgr::Update early return, LFGMgr.cpp:294-296).
+func (s *Server) updateLFGRoleCheckExpiry(now time.Time) {
+	if s == nil || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	for _, rc := range s.Features.LFG.ExpireRoleChecks(now) {
+		guids := make([]uint64, 0, len(rc.Roles))
+		for guid := range rc.Roles {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, guid := range guids {
+			if ms := s.findSessionByGUID(guid); ms != nil {
+				_ = ms.sendLFGRoleCheckUpdate(rc)
+				if guid == rc.Leader {
+					_ = ms.sendLFGJoinResult(LFGJoinFailed, LFGRoleCheckMissingRole)
+				}
+			}
+		}
+	}
+}
+
+// updateLFGProposalExpiry mirrors the proposal arm of LFGMgr::Update
+// (LFGMgr.cpp:324-328) through RemoveProposal with PROPOSAL_FAILED:
+// every member gets the FAILED proposal update, denied players (and
+// agreeing players in a denied player's group) get the failure update
+// and lose their queue entry, and agreeing players outside a denied
+// group get the ADDED_TO_QUEUE re-add (C++ re-queues them on this arm).
+func (s *Server) updateLFGProposalExpiry(now time.Time) {
+	if s == nil || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	for _, prop := range s.Features.LFG.ExpireProposals(now) {
+		deniedGroups := make(map[uint64]bool)
+		for _, player := range prop.Players {
+			if player.Accept == LFGAnswerDeny && player.Group != 0 {
+				deniedGroups[player.Group] = true
+			}
+		}
+		guids := make([]uint64, 0, len(prop.Players))
+		for guid := range prop.Players {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, guid := range guids {
+			player := prop.Players[guid]
+			ms := s.findSessionByGUID(guid)
+			if ms == nil {
+				continue
+			}
+			_ = ms.sendLFGProposalUpdate(prop)
+			switch {
+			case player.Accept == LFGAnswerDeny:
+				if player.Group != 0 {
+					_ = ms.sendLFGUpdateParty(LFGUpdateProposalFailed, LFGQueueEntry{})
+				} else {
+					_ = ms.sendLFGUpdatePlayer(LFGUpdateProposalFailed, LFGQueueEntry{GUID: guid, State: LFGStateNone})
+				}
+			case player.Group != 0 && deniedGroups[player.Group]:
+				_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+			default:
+				entry := LFGQueueEntry{Dungeons: []uint32{prop.DungeonID}, State: LFGStateQueued}
+				if cur, ok := s.Features.LFG.Status(guid); ok {
+					entry = cur
+				}
+				if player.Group != 0 {
+					_ = ms.sendLFGUpdateParty(LFGUpdateAddedToQueue, entry)
+				} else {
+					_ = ms.sendLFGUpdatePlayer(LFGUpdateAddedToQueue, entry)
+				}
 			}
 		}
 	}
