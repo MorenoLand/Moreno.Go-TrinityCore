@@ -485,7 +485,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	visualBuf.WriteU32(179) // SpellVisualKit 179: Trainer Teach
 	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), s)
+		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), trainerGUID)
 	}
 
 	// 8. Play impact on player with sound chime (TC: npc->SendPlaySpellImpact(player->GetGUID(), 362))
@@ -494,7 +494,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	impactBuf.WriteU32(362) // SpellVisualKit 362: Spell Learn Chime & Impact
 	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
+		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), trainerGUID)
 	}
 
 	// 9. Check if trainerSpell is castable (C++ Trainer::Spell::IsCastable =

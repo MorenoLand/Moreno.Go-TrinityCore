@@ -1405,7 +1405,11 @@ func (s *session) completeAchievement(achievementID uint32) {
 	if !s.playerLoading && !s.hiddenAchievement(achievementID) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
+			if s.player != nil {
+				s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, 25.0, s)
+			} else {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
+			}
 		}
 		// AchievementMgr::SendAchievementEarned (AchievementMgr.cpp:684-698):
 		// realm-first achievements broadcast SMSG_SERVER_FIRST_ACHIEVEMENT

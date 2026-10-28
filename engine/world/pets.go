@@ -2345,7 +2345,7 @@ func (s *session) handleFeedPet(ctx context.Context, spellID uint32, itemGUID ui
 	log.WriteU32(feed.ItemEntry)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes())
 	}
 	// SpellEffects.cpp:4190: the DestroyItemCount result is ignored — the
 	// trigger spell fires even if the destroy failed.

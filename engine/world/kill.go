@@ -929,7 +929,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 					noLooter.WriteU8(0)
 					noLooter.WriteU8(0)
 					_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), true)
-					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), s)
+					s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes())
 				}
 			}
 		}
@@ -1520,7 +1520,7 @@ func (s *Server) grantCreatureKillReward(ctx context.Context, victim, killer *cr
 		noLooter.WriteU8(0)
 		noLooter.WriteU8(0)
 		_ = player.write(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), true)
-		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes(), player)
+		s.broadcastToVisibleSetFromSession(player, uint16(protocol.OpcodeSMSG_LOOT_LIST), noLooter.Bytes())
 	}
 	creatureEntry := uint32((victim.GUID >> 24) & 0xFFFFFF)
 	mobLevel := uint32(victim.Level)

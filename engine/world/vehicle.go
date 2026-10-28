@@ -723,7 +723,7 @@ func (s *session) sendPlayerVehicleData(vehicleID uint32) {
 	buf.WriteU32(vehicleID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PLAYER_VEHICLE_DATA), buf.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAYER_VEHICLE_DATA), buf.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_PLAYER_VEHICLE_DATA), buf.Bytes())
 	}
 }
 

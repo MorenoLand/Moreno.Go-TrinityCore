@@ -273,7 +273,7 @@ func (s *session) sendInterruptCastLog(interruptSpellID uint32, victimGUID uint6
 	log.WriteU32(interruptedSpellID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes())
 	}
 }
 

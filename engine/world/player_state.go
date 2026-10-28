@@ -4646,7 +4646,7 @@ func (s *session) sendPlayerDismount() {
 	packet.WritePackedGUID(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes())
 	}
 }
 

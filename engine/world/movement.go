@@ -1311,6 +1311,26 @@ func (s *Server) broadcastToVisibleSetForCreature(opcode uint16, payload []byte,
 	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
 }
 
+// broadcastToVisibleSetForCreatureSession centers a visibility-set fan-out
+// on a creature motion's position while excluding the source session, whose
+// own write is the self leg (trainer visual/impact: the NPC sender's set,
+// with the learning player covered by its direct write). When no motion is
+// registered the session-centered set is kept, so no recipient is dropped.
+func (s *Server) broadcastToVisibleSetForCreatureSession(sess *session, opcode uint16, payload []byte, guid uint64) {
+	if s == nil {
+		return
+	}
+	if sess == nil || sess.player == nil {
+		s.broadcastToNearby(opcode, payload, sess)
+		return
+	}
+	if m := s.findCreatureMotion(sess.player.Map, sess.player.InstanceID, guid); m != nil {
+		s.broadcastToVisibleSet(opcode, payload, sess.player.Map, sess.player.InstanceID, m.X, m.Y, m.Z, sess)
+		return
+	}
+	s.broadcastToVisibleSetFromSession(sess, opcode, payload)
+}
+
 // broadcastToSetWithin is the radius-parameterized form of
 // broadcastToVisibleSet: the same map/instance + distance gate, with the
 // caller's radius instead of the 100yd visibility range. CreatureTextMgr

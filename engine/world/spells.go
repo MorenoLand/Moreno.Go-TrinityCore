@@ -37861,7 +37861,7 @@ func (s *session) sendEnchantmentLog(targetGUID, casterGUID uint64, itemEntry, e
 	log.WriteU32(enchantID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ENCHANTMENTLOG), log.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ENCHANTMENTLOG), log.Bytes(), s)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_ENCHANTMENTLOG), log.Bytes())
 	}
 }
 
