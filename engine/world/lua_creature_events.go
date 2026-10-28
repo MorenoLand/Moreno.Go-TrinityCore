@@ -1308,7 +1308,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(guid)
 		destroyBuf.WriteU8(0)
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, nil)
 		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
 		if maxHealth == 0 {
 			maxHealth = 1

@@ -33641,7 +33641,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	}
 
 	removePkt := protocol.BuildAuraUpdate(key.GUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
-	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	s.server.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, key.Map, key.InstanceID, key.GUID)
 	// Unit::UpdateSpeed remove arm (Unit.cpp:8666): a dropped speed aura
 	// recomputes the creature's run rate.
 	if wasSpeedAura {
@@ -33857,7 +33857,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	}
 
 	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
-	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, key.Map, key.InstanceID, key.GUID)
 	// Unit::UpdateSpeed remove arm (Unit.cpp:8666): a dropped speed aura
 	// recomputes the creature's run rate.
 	if wasSpeedAura {

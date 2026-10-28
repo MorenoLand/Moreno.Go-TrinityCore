@@ -1158,10 +1158,12 @@ func (s *Server) expireSessionNoSlotTotem(mapID, instanceID uint32, guid uint64)
 		return
 	}
 	s.motionMu.Lock()
-	if s.findCreatureMotionLocked(mapID, instanceID, guid) == nil {
+	motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+	if motion == nil {
 		s.motionMu.Unlock()
 		return
 	}
+	tx, ty, tz := motion.X, motion.Y, motion.Z
 	delete(s.motionMapLocked(mapID, instanceID), guid)
 	s.motionMu.Unlock()
 	s.unregisterCreatureTotemGUID(guid)
@@ -1169,7 +1171,7 @@ func (s *Server) expireSessionNoSlotTotem(mapID, instanceID uint32, guid uint64)
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, nil)
 }
 
 func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *activeTotem) {

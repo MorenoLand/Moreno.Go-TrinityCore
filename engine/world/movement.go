@@ -1294,6 +1294,23 @@ func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, ins
 	s.broadcastToSetWithin(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, source)
 }
 
+// broadcastToVisibleSetForCreature centers a visibility-set fan-out on a
+// creature motion's position (AuraApplication::ClientUpdate and
+// Object::DestroyForPlayer both fan out to the target's visibility set, not
+// the whole instance). When no motion is registered for the GUID the
+// instance-wide fan-out is kept, so no recipient is dropped for an
+// unlocated target.
+func (s *Server) broadcastToVisibleSetForCreature(opcode uint16, payload []byte, mapID, instanceID uint32, guid uint64) {
+	if s == nil {
+		return
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, m.X, m.Y, m.Z, nil)
+		return
+	}
+	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
+}
+
 // broadcastToSetWithin is the radius-parameterized form of
 // broadcastToVisibleSet: the same map/instance + distance gate, with the
 // caller's radius instead of the 100yd visibility range. CreatureTextMgr

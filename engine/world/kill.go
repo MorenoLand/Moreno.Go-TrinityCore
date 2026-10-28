@@ -279,7 +279,7 @@ func (s *Server) processCreatureCorpseRemovals(ctx context.Context, now time.Tim
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(rawGUID)
 		destroyBuf.WriteU8(0)
-		s.broadcastToInstance(broadcastMap, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), broadcastMap, instanceID, item.respawn.X, item.respawn.Y, item.respawn.Z, nil)
 		s.clearLootState(broadcastMap, instanceID, rawGUID)
 		if broadcastMap != item.respawn.Map {
 			s.clearLootState(item.respawn.Map, instanceID, rawGUID)

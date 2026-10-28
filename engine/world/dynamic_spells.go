@@ -449,7 +449,7 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 		}
 	}
 	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
-	s.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, key.Map, key.InstanceID, key.GUID)
 }
 
 func (s *session) hasDynamicAreaAura(targetGUID uint64, spellID uint32) bool {
@@ -507,7 +507,7 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	// SMSG_DESTROY_OBJECT.
 	packet := protocol.NewBuffer(8)
 	packet.WriteU64(object.GUID)
-	s.broadcastToInstance(object.Map, object.InstanceID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
 }
 
 // removeDynamicAreaAuras mirrors DynamicObject::RemoveFromWorld's RemoveAura

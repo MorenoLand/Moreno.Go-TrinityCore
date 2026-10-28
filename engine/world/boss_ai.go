@@ -217,7 +217,7 @@ func (s *Server) despawnAtEvade(ctx context.Context, m *creatureMotion, delay ti
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(m.GUID)
 	destroyBuf.WriteU8(0)
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 	// Eluna::OnRemoveFromWorld (CreatureHooks.cpp:80-85,
 	// CREATURE_EVENT_ON_REMOVE (37)) fires from Creature::RemoveFromWorld
 	// (Creature.cpp:314) when a creature leaves the world.
@@ -5969,13 +5969,14 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			if tm == nil || !tm.IsTempSummon || guid == m.GUID {
 				continue
 			}
+			tx, ty, tz := tm.X, tm.Y, tm.Z
 			s.motionMu.Lock()
 			delete(s.motionMapLocked(m.Map, m.InstanceID), guid)
 			s.motionMu.Unlock()
 			destroyBuf := protocol.NewBuffer(9)
 			destroyBuf.WriteU64(guid)
 			destroyBuf.WriteU8(0)
-			s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, tx, ty, tz, nil)
 		}
 	}
 }

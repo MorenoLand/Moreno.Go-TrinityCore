@@ -1090,7 +1090,7 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 		casterGUID = s.playerGUID
 	}
 	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, casterGUID, slot, spellID, false, positive, 0, 0, 1, count)
-	s.server.broadcastToInstance(key.Map, key.InstanceID, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, nil)
+	s.server.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, key.Map, key.InstanceID, key.GUID)
 	return false
 }
 

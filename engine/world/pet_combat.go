@@ -696,6 +696,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 		return
 	}
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	tx, ty, tz := motion.X, motion.Y, motion.Z
 	ownerGUID, petID := motion.OwnerGUID, motion.PetID
 	s.motionMu.Lock()
 	if s.findCreatureMotionLocked(mapID, instanceID, guid) != motion {
@@ -709,7 +710,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
-	s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, nil)
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil && petID != 0 {
 		cdb := s.CharactersStore.DB
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID)
