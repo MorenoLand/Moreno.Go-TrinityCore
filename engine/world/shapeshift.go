@@ -401,6 +401,29 @@ func (s *session) removeOtherShapeshiftAuras(exceptSpellID uint32) {
 // (Unit::IsPolymorphed + RemoveAurasDueToSpell(GetTransformSpell()),
 // Unit.cpp:10574-10584 — the transform spell whose specific is
 // SPELL_SPECIFIC_MAGE_POLYMORPH).
+// isPolymorphed mirrors Unit::IsPolymorphed (Unit.cpp:10572-10584) with
+// the removePolymorphAura idiom: a live transform aura whose spell's
+// specific is SPELL_SPECIFIC_MAGE_POLYMORPH (Go records auras only for
+// known spells, subsuming the C++ GetSpellInfo null leg).
+func (s *session) isPolymorphed() bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraTransform {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellSpecific(spell, s.server.spellFirstRank) == spellSpecificMagePolymorph {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *session) removePolymorphAura() {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return

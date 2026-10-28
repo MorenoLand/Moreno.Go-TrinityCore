@@ -1725,34 +1725,50 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			}
 		}
 
-		// 1. Health regeneration (Player::Regenerate gate, Player.cpp:2064-2072:
+		// 1. Health regeneration (Player::RegenerateAll gate, Player.cpp:2066-2069:
 		// !IsInCombat() || IsPolymorphed() || m_baseHealthRegen ||
-		// HasAuraType(116) || HasAuraType(161); the spirit-based addValue
-		// (Player.cpp:2248-2258) also runs in combat when the player carries
-		// SPELL_AURA_MOD_REGEN_DURING_COMBAT (116): the aura amount is the
-		// percent of the spirit regen applied in combat (Player.cpp:2253-2254
-		// ApplyPct); the flat
-		// SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (161) bonus runs in and out
-		// of combat (Player.cpp:2265). The polymorphed addValue,
-		// m_baseHealthRegen, regen-percent / MOD_REGEN flat terms, and the
-		// sitting 1.5x stay unmodeled.
+		// HasAuraType(116) || HasAuraType(161). The polymorphed addValue is
+		// MaxHealth/3 per 2s tick (Player.cpp:2246); the spirit term
+		// (Player.cpp:2248-2261) runs in combat only with
+		// SPELL_AURA_MOD_REGEN_DURING_COMBAT (116), where ApplyPct sets it
+		// to amount percent of itself (Player.cpp:2258, Util.h:
+		// base = base * pct / 100). Out of combat the spirit term is
+		// scaled by SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) and gains the
+		// SPELL_AURA_MOD_REGEN (84) flat term * 0.4 (Player.cpp:2252-2255);
+		// a non-stand state (sit/sleep/kneel, Unit.cpp:10551-10555) scales
+		// the spirit term by 1.5 (Player.cpp:2260-2261) before the flat
+		// SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT (161) bonus, which runs in
+		// and out of combat (Player.cpp:2265).
 		inCombatRegen := inCombat && sess.hasAuraType(spellAuraModRegenDuringCombat)
 		inCombatFlatRegen := inCombat && sess.hasAuraType(spellAuraModHealthRegenInCombat)
 		// Player.cpp:2066: m_baseHealthRegen alone keeps the regen block
 		// running in combat, and RegenerateHealth adds m_baseHealthRegen/2.5
 		// per 2s tick (Player.cpp:2266) alongside the aura flat term.
+		// Go's ItemHealthRegenBonus is m_baseHealthRegen (ITEM_MOD_HEALTH_REGEN, 46).
 		itemHealthRegen := p.ItemHealthRegenBonus > 0
-		if (!inCombat || inCombatRegen || inCombatFlatRegen || itemHealthRegen) && p.Health < p.MaxHealth {
+		isPolymorphed := sess.isPolymorphed()
+		if (!inCombat || inCombatRegen || inCombatFlatRegen || itemHealthRegen || isPolymorphed) && p.Health < p.MaxHealth {
 			gainF := 0.0
-			if !inCombat || inCombatRegen {
+			if isPolymorphed {
+				gainF = float64(p.MaxHealth) / 3.0
+			} else if !inCombat || inCombatRegen {
 				gainF = s.octRegenHPPerSpirit(uint32(p.Class), uint32(p.Level), float64(p.Stats[4])) * octRegenLowLevelMultiplier(p.Level)
 				if inCombatRegen {
-					gainF *= (100 + float64(sess.getTotalAuraModifier(spellAuraModRegenDuringCombat))) / 100
+					gainF *= float64(sess.getTotalAuraModifier(spellAuraModRegenDuringCombat)) / 100
 				} else {
-					// Player::RegenerateHealth (Player.cpp:2252): out of combat
+					// Player::RegenerateHealth (Player.cpp:2252-2255): out of combat
 					// the spirit regen is scaled by the total
-					// SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) multiplier.
+					// SPELL_AURA_MOD_HEALTH_REGEN_PERCENT (88) multiplier,
+					// then the SPELL_AURA_MOD_REGEN (84) flat term adds
+					// amount * 2000ms/5000ms.
 					gainF *= float64(ResolveAuraPercentMultiplier(sess.gatedAuraModifierAmounts(spellAuraModHealthRegenPercent, sess.auraModifierCandidatesFiltered(spellAuraModHealthRegenPercent, nil))))
+					gainF += float64(sess.getTotalAuraModifier(spellAuraModRegen)) * 0.4
+				}
+				// Player.cpp:2260-2261: !IsStandState() — sit (1, 2, 4, 5, 6),
+				// sleep (3), kneel (8); stand (0), dead (7, already gated
+				// out) and submerged (9, never set in Go) do not scale.
+				if p.StandState == 1 || p.StandState == 2 || p.StandState == 3 || p.StandState == 4 || p.StandState == 5 || p.StandState == 6 || p.StandState == 8 {
+					gainF *= 1.5
 				}
 			}
 			gainF += float64(sess.getTotalAuraModifier(spellAuraModHealthRegenInCombat))
@@ -1796,6 +1812,25 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 					fields[unitFieldPower1+1] = p.Powers[1]
 					changed = true
 				}
+			} else if inCombat && !sess.hasAuraTypeWithAmount(spellAuraPreventRegeneratePower, 1) {
+				// Player::Regenerate POWER_RAGE in combat (Player.cpp:2175-2179):
+				// the decay arm is out-of-combat-only, but the 85 misc-rage
+				// flat arm still applies (no INTERRUPT_REGEN gate on it),
+				// gaining flat * 2000ms/5000ms per 2s tick.
+				flat, _ := sess.auraPowerRegenTerms(1)
+				gain := int64(float64(flat) * 0.4)
+				maxRage := sess.effectiveMaxPower(1)
+				if nv := int64(p.Powers[1]) + gain; gain != 0 && nv != int64(p.Powers[1]) {
+					if nv < 0 {
+						nv = 0
+					}
+					if nv > int64(maxRage) {
+						nv = int64(maxRage)
+					}
+					p.Powers[1] = uint32(nv)
+					fields[unitFieldPower1+1] = p.Powers[1]
+					changed = true
+				}
 			}
 		case 4: // Rogue: energy regenerates 20 per 2s tick
 			maxEnergy := sess.effectiveMaxPower(3)
@@ -1825,14 +1860,35 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		case 6: // Death Knight: runic power decays out of combat
 			if !inCombat && p.Powers[6] > 0 && !sess.hasAuraType(spellAuraInterruptRegen) && !sess.hasAuraTypeWithAmount(spellAuraPreventRegeneratePower, 6) {
 				// Player::Regenerate POWER_RUNIC_POWER
-				// (Player.cpp:2160-2167): -30 per 2s tick, scaled by the
-				// 110 misc-runic multiplier plus the 85 misc-runic flat arm
-				// * tickMs/5000 (Player.cpp:2163-2168). Same INTERRUPT_REGEN
-				// (94) skip gate as rage (Player.cpp:2161).
-				flat, mult := sess.auraPowerRegenTerms(6)
+				// (Player.cpp:2154-2160): -30 per 2s tick, scaled by the
+				// 110 misc-runic multiplier. The 85 misc-runic flat arm is
+				// skipped out of combat (Player.cpp:2177-2179: the flat arm
+				// runs only when power != POWER_RUNIC_POWER or in combat —
+				// Butchery requires combat). Same INTERRUPT_REGEN
+				// (94) skip gate as rage (Player.cpp:2155).
+				_, mult := sess.auraPowerRegenTerms(6)
 				maxRunic := sess.effectiveMaxPower(6)
-				decay := int64(float64(-30)*float64(mult) + float64(flat)*0.4)
+				decay := int64(float64(-30) * float64(mult))
 				if nv := int64(p.Powers[6]) + decay; decay != 0 && nv != int64(p.Powers[6]) {
+					if nv < 0 {
+						nv = 0
+					}
+					if nv > int64(maxRunic) {
+						nv = int64(maxRunic)
+					}
+					p.Powers[6] = uint32(nv)
+					fields[unitFieldPower1+6] = p.Powers[6]
+					changed = true
+				}
+			} else if inCombat && !sess.hasAuraTypeWithAmount(spellAuraPreventRegeneratePower, 6) {
+				// Player::Regenerate POWER_RUNIC_POWER in combat
+				// (Player.cpp:2175-2179): the decay arm is out-of-combat-only,
+				// but the 85 misc-runic flat arm applies (no INTERRUPT_REGEN
+				// gate on it), gaining flat * 2000ms/5000ms per 2s tick.
+				flat, _ := sess.auraPowerRegenTerms(6)
+				gain := int64(float64(flat) * 0.4)
+				maxRunic := sess.effectiveMaxPower(6)
+				if nv := int64(p.Powers[6]) + gain; gain != 0 && nv != int64(p.Powers[6]) {
 					if nv < 0 {
 						nv = 0
 					}
