@@ -3094,11 +3094,14 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	if motion == nil {
 		return true
 	}
-	// PetHandler.cpp:104-111: on a dead pet the spell arms (ACT_ENABLED /
-	// ACT_PASSIVE) survive only for spells carrying
-	// SPELL_ATTR0_CASTABLE_WHILE_DEAD (unknown spell ids drop too).
-	// Command, reaction and disabled arms take their normal paths — C++
-	// drops nothing else for a dead pet.
+	// PetHandler.cpp:104-111: on a dead pet the spell lookup runs only for
+	// ACT_ENABLED / ACT_PASSIVE, and a null lookup drops the packet — so
+	// command, reaction and disabled arms drop on a dead pet too, and
+	// enabled/passive arms survive only for spells carrying
+	// SPELL_ATTR0_CASTABLE_WHILE_DEAD (unknown spell ids drop as well).
+	if motion.Health == 0 && actFlag != actEnabled && actFlag != actPassive {
+		return true
+	}
 	if motion.Health == 0 && (actFlag == actEnabled || actFlag == actPassive) {
 		castableWhileDead := false
 		if s.server != nil && s.server.Data != nil {
@@ -3224,11 +3227,20 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
 		}
 	case actReaction:
+		// PetHandler.cpp:260-268: the reaction switch carries only
+		// REACT_PASSIVE / DEFENSIVE / AGGRESSIVE arms — any other value is
+		// a silent no-op (no state change, no AttackStop, no DB write).
+		if spellOrAction > reactAggressive {
+			break
+		}
 		if s.server != nil {
 			s.server.onPetSetReaction(ctx, s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
 		}
-		// Save react state (0 = passive, 1 = defensive, 2 = aggressive)
-		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		// Save react state (0 = passive, 1 = defensive, 2 = aggressive),
+		// but only for the player's own pet: C++ SetReactState is
+		// per-creature in-memory, so reacting a charmed creature must not
+		// overwrite the slot-0 pet's saved Reactstate.
+		if petGUID == s.player.PetGUID && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET Reactstate = ? WHERE owner = ? AND slot = 0", spellOrAction, s.playerGUID)
 		}
 		s.debug("pet reaction state changed", "account", s.accountName, "pet", petGUID, "react", spellOrAction)
@@ -3945,6 +3957,16 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 			s.sendPetNameInvalid(reason, newName, nil)
 			return true
 		}
+		// PetHandler.cpp:628-645 + 649-672: the declined forms validate
+		// before the transaction runs — a mismatch answers
+		// SMSG_PET_NAME_INVALID with PET_NAME_DECLENSION_DOESNT_MATCH_BASE_NAME
+		// (16) and the five declined strings, and the new name is never
+		// committed (Go used to UPDATE the row first, so a rejected rename
+		// stuck in the DB).
+		if isDeclined != 0 && !checkPetDeclinedNames(newName, declined) {
+			s.sendPetNameInvalid(petNameDeclension, newName, &declined)
+			return true
+		}
 		now := time.Now().Unix()
 		_, _ = cdb.ExecContext(ctx,
 			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
@@ -3958,19 +3980,6 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 		// carries (savetime).
 		if s.server != nil {
 			s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, petGUID, map[int]uint32{unitFieldPetNameTimestamp: uint32(now)})
-		}
-		// PetHandler.cpp:628-645: when the client sends declined names they
-		// must pass ObjectMgr::CheckDeclinedNames (ObjectMgr.cpp:8808) —
-		// GetMainPartOfName's ending table (Util.cpp:466) pads every ending
-		// with an embedded null wchar, so the suffix strip never matches a
-		// real name and the function is an identity; the check therefore
-		// passes exactly when all five declined forms equal the base name
-		// (and are valid UTF-8). A mismatch answers
-		// SMSG_PET_NAME_INVALID with PET_NAME_DECLENSION_DOESNT_MATCH_BASE_NAME
-		// (16) and the five declined strings, before any DB write.
-		if isDeclined != 0 && !checkPetDeclinedNames(newName, declined) {
-			s.sendPetNameInvalid(petNameDeclension, newName, &declined)
-			return true
 		}
 		// PetHandler.cpp:649-662: declined names persist in
 		// character_pet_declinedname (id, owner, genitive..prepositional).
