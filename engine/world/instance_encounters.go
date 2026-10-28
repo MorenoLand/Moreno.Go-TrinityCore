@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // dungeonEncounterKey identifies one DungeonEncounter credit row: the
@@ -125,4 +127,125 @@ func (s *session) creditDungeonEncounterKill(ctx context.Context, target combatT
 		return
 	}
 	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, target.InstanceID)
+}
+
+// loadDungeonCreditSpells mirrors ObjectMgr::LoadSpellScriptNames
+// (ObjectMgr.cpp:5765: SELECT spell_id, ScriptName FROM spell_script_names),
+// filtered to the dungeon-credit script: spell_gen_dungeon_credit is the
+// only spell script whose AfterHit arm credits an encounter
+// (spell_generic.cpp:1553-1580). A failed load leaves the set empty and
+// marks it done, like loadDungeonEncounters: the cast path never retries
+// or logs per cast.
+func (s *Server) loadDungeonCreditSpells(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.dungeonCreditSpellMu.Lock()
+	defer s.dungeonCreditSpellMu.Unlock()
+	if s.dungeonCreditSpellsLoaded {
+		return
+	}
+	s.dungeonCreditSpellsLoaded = true
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT spell_id FROM spell_script_names WHERE ScriptName = ?", "spell_gen_dungeon_credit")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	spells := make(map[uint32]struct{})
+	for rows.Next() {
+		var spellID uint32
+		if err := rows.Scan(&spellID); err != nil {
+			continue
+		}
+		spells[spellID] = struct{}{}
+	}
+	s.dungeonCreditSpells = spells
+}
+
+// creditDungeonEncounterSpellCast is the spell-cast twin of
+// creditDungeonEncounterKill: InstanceScript::UpdateEncounterStateForSpellCast
+// (InstanceScript.cpp:783-786) routes to UpdateEncounterState with
+// ENCOUNTER_CREDIT_CAST_SPELL (type 1), ORing 1 << Bit into the live mask;
+// Go writes the row directly, like the kill twin, because the row is the
+// only mask consumer.
+func (s *Server) creditDungeonEncounterSpellCast(ctx context.Context, mapID, instanceID, spellID uint32) {
+	if s == nil || instanceID == 0 {
+		return
+	}
+	s.loadDungeonEncounters(ctx)
+	s.dungeonEncounterMu.Lock()
+	credits := s.dungeonEncounters
+	s.dungeonEncounterMu.Unlock()
+	if len(credits) == 0 {
+		return
+	}
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	var difficulty int64
+	var mask int64
+	var data string
+	if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT difficulty, completedEncounters, data FROM instance WHERE id = ?", instanceID).Scan(&difficulty, &mask, &data); err != nil {
+		return
+	}
+	credit, ok := credits[dungeonEncounterKey{MapID: mapID, Difficulty: uint32(difficulty), CreditType: dungeonEncounterCreditCastSpell, CreditEntry: spellID}]
+	if !ok || credit.Bit >= 32 {
+		return
+	}
+	newMask := uint32(mask) | (1 << credit.Bit)
+	if newMask == uint32(mask) {
+		return
+	}
+	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", newMask, data, instanceID)
+}
+
+// creatureSpellHasLiveHit mirrors the AfterHit skip set in
+// Spell::PreprocessTarget / TargetInfo::DoDamageAndTriggers
+// (Spell.cpp:2346-2350, 2629-2650): a bounced reflect, evade, immune, or
+// miss verdict nulls _spellHitTarget, so AfterHit never fires for it; a
+// landed reflect retargets _spellHitTarget to the caster, so it counts.
+func creatureSpellHasLiveHit(hitTargets []uint64, reflected map[uint64]uint8, evaded, immune map[uint64]bool, missed map[uint64]uint8) bool {
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if status, ok := reflected[guid]; ok {
+			if status == protocol.SpellMissNone {
+				return true
+			}
+			continue
+		}
+		if evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// maybeCreditDungeonEncounterSpellCast is the spell_gen_dungeon_credit
+// AfterHit arm (spell_generic.cpp:1553-1580): the script's Load() gate
+// admits only TYPEID_UNIT casters, which the creature funnels satisfy by
+// construction — the player cast path never reaches this call — and the
+// _handled once-per-cast latch is the single call per cast, not one per
+// hit target. A wild (non-instance) caster has InstanceID 0 and credits
+// nothing, matching GetInstanceScript() returning null.
+func (s *Server) maybeCreditDungeonEncounterSpellCast(ctx context.Context, m *creatureMotion, spellID uint32, hitTargets []uint64, reflected map[uint64]uint8, evaded, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil || m.InstanceID == 0 {
+		return
+	}
+	if !creatureSpellHasLiveHit(hitTargets, reflected, evaded, immune, missed) {
+		return
+	}
+	s.loadDungeonCreditSpells(ctx)
+	s.dungeonCreditSpellMu.Lock()
+	_, bound := s.dungeonCreditSpells[spellID]
+	s.dungeonCreditSpellMu.Unlock()
+	if !bound {
+		return
+	}
+	s.creditDungeonEncounterSpellCast(ctx, m.Map, m.InstanceID, spellID)
 }

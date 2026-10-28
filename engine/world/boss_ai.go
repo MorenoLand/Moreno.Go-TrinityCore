@@ -2799,6 +2799,12 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580):
+	// once per cast, on the first live hit — the _handled latch — not per
+	// hit target, and never on a fully-missed cast.
+	if spellKnown {
+		s.maybeCreditDungeonEncounterSpellCast(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+	}
 	// Spell::DoTriggersOnSpellHit (Spell.cpp:2913-2957): the per-hit trigger
 	// consumer — ADD_TARGET_TRIGGER snapshot plus the spell_linked
 	// SPELL_LINK_HIT (type 1) rows — fires per hit target. Go's creature

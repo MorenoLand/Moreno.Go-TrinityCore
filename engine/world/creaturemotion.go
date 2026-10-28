@@ -4634,6 +4634,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			if s != nil {
 				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
+				// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),
+				// once per cast: the reflected map mirrors the aura block below
+				// (reflectedSet keys at None, trip statuses overriding).
+				{
+					reflected := make(map[uint64]uint8, len(reflectedSet))
+					for guid := range reflectedSet {
+						reflected[guid] = protocol.SpellMissNone
+					}
+					for _, trip := range reflectTrips {
+						if trip.victim != nil {
+							reflected[trip.victim.GUID] = trip.status
+						}
+					}
+					for _, trip := range creatureReflectTrips {
+						reflected[trip.guid] = trip.status
+					}
+					s.maybeCreditDungeonEncounterSpellCast(ctx, motion, spellID, hitTargets, reflected, evadedSet, immuneSet, missSet)
+				}
 			}
 
 			schoolMask := uint8(1)

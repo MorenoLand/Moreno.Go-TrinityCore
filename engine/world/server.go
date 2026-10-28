@@ -151,6 +151,9 @@ type Server struct {
 	dungeonEncounterMu        sync.Mutex
 	dungeonEncounters         map[dungeonEncounterKey]dungeonEncounterCredit
 	dungeonEncountersLoaded   bool
+	dungeonCreditSpellMu      sync.Mutex
+	dungeonCreditSpells       map[uint32]struct{}
+	dungeonCreditSpellsLoaded bool
 	inventoryMu               sync.Mutex
 	hiddenGameObjects         map[uint64]struct{}
 	auctionGetAllMu           sync.Mutex
