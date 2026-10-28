@@ -829,6 +829,19 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	}
 	var existingItemGUID int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, destSlot).Scan(&existingItemGUID)
+	// HandleAutoEquipItemOpcode (ItemHandler.cpp:173-271), occupied branch:
+	// Player::CanUnequipItem(dest, !pSrcItem->IsBag()) runs before the
+	// displaced item moves; the non-bag legs live in canUnequipLegs
+	// (Player.cpp:11634-11654) and the bag leg is vacuous here (a bag
+	// destination is always empty via chooseAutoEquipSlot).
+	if existingItemGUID != 0 {
+		var existingEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", existingItemGUID).Scan(&existingEntry)
+		if msg := s.canUnequipLegs(ctx, existingItemGUID, existingEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(existingItemGUID))
+			return true
+		}
+	}
 	s.swapInventoryCoordinates(ctx, itemGUID, srcBagKey, int64(srcSlot), existingItemGUID, 0, int64(destSlot))
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
@@ -905,6 +918,17 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 		s.sendEquipError(equipErrYouAreDead, uint64(itemGUID))
 		return true
 	}
+	// Player::SwapItem (Player.cpp:13166-13179), reached via
+	// HandleAutoEquipItemSlotOpcode (ItemHandler.cpp:121): the SRC
+	// CanUnequipItem legs run for equipment/bag positions before the
+	// move-case legs; the swap-gated bag leg follows at the destination
+	// lookup below, in C++ order.
+	if srcBag == 0 && (srcSlot < int64(equipSlotEnd) || (srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73)) {
+		if msg := s.canUnequipLegs(ctx, itemGUID, itemEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(itemGUID))
+			return true
+		}
+	}
 	var invType int64
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&invType)
@@ -928,11 +952,34 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	}
 	var dstItemGUID int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, dstSlot).Scan(&dstItemGUID)
+	// Player::SwapItem (Player.cpp:13166-13179): the SRC bag leg — a
+	// non-empty bag in a bag slot moves only to a bag position or
+	// against an empty bag (CanUnequipItem swap term, Player.cpp:11656).
+	dstIsBagPos := dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd
+	dstIsEmptyBag := dstItemGUID != 0 && s.itemIsBag(ctx, uint64(dstItemGUID)) && s.isBagEmpty(ctx, dstItemGUID)
+	if srcBag == 0 && ((srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73)) &&
+		!dstIsBagPos && !dstIsEmptyBag && s.itemIsNonemptyBag(ctx, uint64(itemGUID)) {
+		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+		return true
+	}
+	// Player::SwapItem (Player.cpp:13189-13199): the DST CanUnequipItem
+	// non-bag legs run before the DST bag leg below (Player.cpp:11634-11654
+	// order); the destination is always an equipment/bag position here.
+	if dstItemGUID != 0 {
+		var dstEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&dstEntry)
+		if msg := s.canUnequipLegs(ctx, dstItemGUID, dstEntry); msg != equipErrOk {
+			s.sendEquipError(msg, uint64(dstItemGUID))
+			return true
+		}
+	}
 	// Player::SwapItem (Player.cpp:13189-13213): displacing a non-empty bag
 	// answers EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS unless the dragged item
-	// itself sits at a bag position (it can trade places with the bag).
+	// itself sits at a bag position or is itself an empty bag (it can
+	// trade places with the bag).
 	if dstItemGUID != 0 && s.itemIsNonemptyBag(ctx, uint64(dstItemGUID)) &&
-		!(srcBag == 0 && ((srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73))) {
+		!(srcBag == 0 && ((srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73))) &&
+		!(itemGUID != 0 && s.itemIsBag(ctx, uint64(itemGUID)) && s.isBagEmpty(ctx, itemGUID)) {
 		s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
 		return true
 	}
