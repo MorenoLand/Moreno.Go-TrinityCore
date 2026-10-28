@@ -3381,7 +3381,7 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		_, _ = cdb.ExecContext(ctx, `INSERT INTO character_homebind (guid, mapId, zoneId, posX, posY, posZ) VALUES (?, ?, ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE mapId = VALUES(mapId), zoneId = VALUES(zoneId), posX = VALUES(posX), posY = VALUES(posY), posZ = VALUES(posZ)`,
 			guid, spawnMap, spawnZone, spawnX, spawnY, spawnZ)
-		_, err := cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, trans_x = 0, trans_y = 0, trans_z = 0, transguid = 0, cinematic = 1, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeFaction),
+		_, err := cdb.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, trans_x = 0, trans_y = 0, trans_z = 0, transguid = 0, at_login = (at_login | %d) & ~%d WHERE guid = ?", atLoginResurrect, atLoginChangeFaction),
 			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
 		if err != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
@@ -4712,34 +4712,55 @@ func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []by
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 
-	// Wire order (CharacterHandler.cpp:1200-1235): guid, name, then the 5
-	// declined cases (genitive, dative, accusative, instrumental, prepositional).
-	name, _ := r.ReadCString()
+	send := func(result uint32) bool {
+		buf := protocol.NewBuffer(12)
+		buf.WriteU32(result)
+		buf.WriteU64(guid)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
+		return true
+	}
+
+	// C++ parse order (CharacterHandler.cpp:1200-1255): the guid resolves
+	// and the stored name passes the Utf8toWStr + isCyrillicCharacter gates
+	// BEFORE the packet name and declined cases are read, and the packet
+	// name must match before the declined cases are read at all. A short
+	// packet in the tail throws (ByteBufferPositionException) and sends
+	// nothing, so tail read errors drop silently instead of answering ERROR.
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil || guid == 0 {
+		return send(1) // DECLINED_NAMES_RESULT_ERROR
+	}
+	var charName string
+	if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&charName); err != nil {
+		return send(1)
+	}
+	if !utf8.ValidString(charName) {
+		return send(1)
+	}
+	if first, _ := utf8.DecodeRuneInString(charName); !isCyrillicRune(first) {
+		return send(1)
+	}
+	name, err := r.ReadCString()
+	if err != nil {
+		return true
+	}
+	if name != charName {
+		return send(1)
+	}
 	var declined [5]string
 	for i := 0; i < 5; i++ {
-		declined[i], _ = r.ReadCString()
-	}
-
-	result := uint32(1) // DECLINED_NAMES_RESULT_ERROR
-	cdb := s.server.CharactersStore.DB
-	if cdb != nil && guid > 0 {
-		var charName string
-		if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&charName); err == nil {
-			if normalized, ok := declinedNamesAcceptable(charName, name, declined); ok {
-				_, _ = cdb.ExecContext(ctx,
-					`REPLACE INTO character_declinedname (guid, genitive, dative, accusative, instrumental, prepositional)
-					 VALUES (?, ?, ?, ?, ?, ?)`,
-					guid, normalized[0], normalized[1], normalized[2], normalized[3], normalized[4])
-				result = 0 // DECLINED_NAMES_RESULT_SUCCESS
-			}
+		if declined[i], err = r.ReadCString(); err != nil {
+			return true
 		}
 	}
-
-	buf := protocol.NewBuffer(12)
-	buf.WriteU32(result)
-	buf.WriteU64(guid)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
-	return true
+	if normalized, ok := declinedNamesAcceptable(charName, name, declined); ok {
+		_, _ = cdb.ExecContext(ctx,
+			`REPLACE INTO character_declinedname (guid, genitive, dative, accusative, instrumental, prepositional)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			guid, normalized[0], normalized[1], normalized[2], normalized[3], normalized[4])
+		return send(0) // DECLINED_NAMES_RESULT_SUCCESS
+	}
+	return send(1)
 }
 
 // declinedNamesAcceptable mirrors the HandleSetPlayerDeclinedNames gates

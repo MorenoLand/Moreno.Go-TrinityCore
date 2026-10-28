@@ -5518,14 +5518,13 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	// SendBarberShopResult(BARBER_SHOP_RESULT_NOT_ON_CHAIR) (=2).
 	foundChair := false
 	var chairHeight uint8
+	var bestDist2 float32
 	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		px, py, pz := s.player.X, s.player.Y, s.player.Z
 		s.scanNearbyGameObjectsAt(ctx, s.player.Map, s.player.InstanceID, px, py, 5.0, func(g nearbyGameObject) {
-			if foundChair {
-				return
-			}
 			dx, dy, dz := g.x-px, g.y-py, g.z-pz
-			if dx*dx+dy*dy+dz*dz > 25.0 {
+			dist2 := dx*dx + dy*dy + dz*dz
+			if dist2 > 25.0 {
 				return
 			}
 			var goType uint8
@@ -5535,7 +5534,14 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 				Scan(&goType, &data0); err != nil || goType != GameObjectTypeBarberChair {
 				return
 			}
+			// FindNearestGameObjectOfType (Object.cpp:2176) keeps the NEAREST
+			// chair, not the first visited: chairs of different heights within
+			// 5.0f must not shadow each other in scan order.
+			if foundChair && dist2 >= bestDist2 {
+				return
+			}
 			foundChair = true
+			bestDist2 = dist2
 			chairHeight = uint8(data0)
 		})
 	}
