@@ -541,12 +541,15 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 
-		// 1. Invites for the player
+		// 1. Invites for the player, in C++ GetPlayerInvites order
+		// (CalendarMgr.cpp:427-437: _invites map by event id, then
+		// per-event insertion/id order).
 		invRows, err := cdb.QueryContext(ctx,
 			`SELECT i.event, i.id, i.sender, i.status, i.rank, COALESCE(e.creator, i.sender), COALESCE(e.flags, 0)
 			 FROM calendar_invites i
 			 LEFT JOIN calendar_events e ON e.id = i.event
-			 WHERE i.invitee = ?`,
+			 WHERE i.invitee = ?
+			 ORDER BY i.event, i.id`,
 			s.playerGUID)
 		if err == nil {
 			defer invRows.Close()
@@ -586,12 +589,15 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 			}
 		}
 
-		// 3. Raid lockouts (bound permanent instances)
+		// 3. Raid lockouts (bound permanent instances), in C++
+		// HandleCalendarGetCalendar order (CalendarHandler.cpp:104-117:
+		// difficulty outer, bound-instance map id inner).
 		lockRows, err := cdb.QueryContext(ctx,
 			`SELECT i.map, i.difficulty, i.resettime, i.id
 			 FROM character_instance ci
 			 JOIN instance i ON i.id = ci.instance
-			 WHERE ci.guid = ? AND ci.permanent = 1`,
+			 WHERE ci.guid = ? AND ci.permanent = 1
+			 ORDER BY i.difficulty, i.map`,
 			s.playerGUID)
 		if err == nil {
 			defer lockRows.Close()
@@ -609,7 +615,7 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 
 		// 4. Raid global resets
 		resetRows, err := cdb.QueryContext(ctx,
-			`SELECT mapid, resettime FROM instance_reset`)
+			`SELECT mapid, resettime FROM instance_reset ORDER BY mapid, difficulty`)
 		if err == nil {
 			defer resetRows.Close()
 			sentMaps := make(map[int32]struct{})
@@ -621,7 +627,10 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 				}
 				// CalendarHandler.cpp:130-146: one entry per map, raids only;
 				// the duration is int32(resetTime - currTime), negative when
-				// the reset already passed.
+				// the reset already passed. C++ iterates an unordered_map
+				// (InstanceSaveMgr.h:147), so its first-per-map winner is
+				// arbitrary; the ORDER BY above just picks the lowest
+				// difficulty's reset deterministically instead.
 				if _, seen := sentMaps[r.mapID]; seen {
 					continue
 				}
@@ -1011,6 +1020,7 @@ func (s *session) handleCalendarArenaTeam(ctx context.Context, payload []byte) b
 		guid uint64
 	}
 	var members []memberInfo
+	teamMemberCount := -1
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var teamExists int
@@ -1019,6 +1029,8 @@ func (s *session) handleCalendarArenaTeam(ctx context.Context, payload []byte) b
 		if teamExists == 0 {
 			return true
 		}
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM arena_team_member WHERE arenateamid = ?", teamID).Scan(&teamMemberCount)
 		rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
 			`SELECT c.guid FROM characters c
 			 JOIN arena_team_member atm ON atm.guid = c.guid
@@ -1034,8 +1046,19 @@ func (s *session) handleCalendarArenaTeam(ctx context.Context, payload []byte) b
 		}
 	}
 
+	// ArenaTeam::MassInviteToEvent (ArenaTeam.cpp:585) writes
+	// Members.size()-1 as the count while listing every member except the
+	// requester — so when the requester is not a member the header says
+	// one fewer than the entries that follow. Reproduce the header
+	// literally: it coincides with len(members) in the normal
+	// requester-is-member case.
+	headerCount := uint32(len(members))
+	if teamMemberCount >= 0 {
+		headerCount = uint32(teamMemberCount - 1)
+	}
+
 	buf := protocol.NewBuffer(4 + len(members)*10)
-	buf.WriteU32(uint32(len(members)))
+	buf.WriteU32(headerCount)
 	for _, m := range members {
 		buf.WritePackedGUID(m.guid)
 		buf.WriteU8(0) // unk
@@ -1825,28 +1848,33 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 		// push_back and UpdateInvite come after), so the new invitee is
 		// not yet in the relatives set and never receives the INVITE
 		// packet — only the ALERT below. Read the relatives before the
-		// insert.
+		// insert. Guild announcements store nothing and send no INVITE
+		// packet (both arms are IsGuildAnnouncement-guarded); the ALERT
+		// below still fires for them.
+		isAnnouncement := evFlags&calendarFlagWithoutInvites != 0
 		inviteTargets := calendarEventRelativeSessions(ctx, s.server, eventID)
 
-		_, _ = cdb.ExecContext(ctx,
-			"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, '')",
-			nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, calendarDefaultResponseTime, CalendarRankPlayer)
+		if !isAnnouncement {
+			_, _ = cdb.ExecContext(ctx,
+				"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, '')",
+				nextInviteID, eventID, targetGUID, s.playerGUID, CalendarStatusInvited, calendarDefaultResponseTime, CalendarRankPlayer)
 
-		// CalendarMgr::AddInvite (CalendarMgr.cpp:147-160) via SendCalendarEventInvite
-		// (CalendarMgr.cpp:481-514): the invite packet goes to every event
-		// relative and is skipped entirely when the invitee is the event
-		// creator.
-		if evCreator != targetGUID {
-			invBuf := protocol.NewBuffer(32)
-			invBuf.WritePackedGUID(targetGUID)
-			invBuf.WriteU64(eventID)
-			invBuf.WriteU64(nextInviteID)
-			invBuf.WriteU8(targetLevel)
-			invBuf.WriteU8(CalendarStatusInvited)
-			invBuf.WriteU8(0)                                    // hasStatusTime (new invites carry 946684800)
-			invBuf.WriteU8(boolToU8(s.playerGUID != targetGUID)) // sender != invitee
-			for _, t := range inviteTargets {
-				_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
+			// CalendarMgr::AddInvite (CalendarMgr.cpp:147-160) via SendCalendarEventInvite
+			// (CalendarMgr.cpp:481-514): the invite packet goes to every event
+			// relative and is skipped entirely when the invitee is the event
+			// creator.
+			if evCreator != targetGUID {
+				invBuf := protocol.NewBuffer(32)
+				invBuf.WritePackedGUID(targetGUID)
+				invBuf.WriteU64(eventID)
+				invBuf.WriteU64(nextInviteID)
+				invBuf.WriteU8(targetLevel)
+				invBuf.WriteU8(CalendarStatusInvited)
+				invBuf.WriteU8(0)                                    // hasStatusTime (new invites carry 946684800)
+				invBuf.WriteU8(boolToU8(s.playerGUID != targetGUID)) // sender != invitee
+				for _, t := range inviteTargets {
+					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE), invBuf.Bytes(), true)
+				}
 			}
 		}
 
@@ -1878,6 +1906,13 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 				for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
 					_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 				}
+			}
+		} else if isAnnouncement {
+			// SendCalendarEventInviteAlert (CalendarMgr.cpp:581-598):
+			// announcements broadcast to the whole guild like guild
+			// events, even without the guild-event flag.
+			for _, t := range calendarGuildMemberSessions(s.server, calendarCreatorGuildID(ctx, cdb, evCreator)) {
+				_ = t.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)
 			}
 		} else if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_INVITE_ALERT), alertBuf.Bytes(), true)

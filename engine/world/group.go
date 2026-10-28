@@ -3356,10 +3356,11 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 			return true
 		}
 		// CalendarHandler.cpp:793: GetBoundInstance(mapId, difficulty,
-		// includeExpired = toggleExtend == 1) excludes an already-expired bind
-		// when toggling extend OFF — that arm is a no-op, not a resurrection
-		// of the bind to NORMAL.
-		if toggleExtend == 0 && curState == 0 {
+		// includeExpired = toggleExtend == 1) returns null for an
+		// already-expired bind unless the toggle is exactly 1 — any other
+		// value (including 2+) on an expired bind is a silent no-op, not a
+		// resurrection of the bind to NORMAL.
+		if toggleExtend != 1 && curState == 0 {
 			return true
 		}
 		// CalendarHandler.cpp:802-806: !toggleExtend or an already-expired
