@@ -39,15 +39,19 @@ func ticketAgeDays(t, now int64) float32 {
 }
 
 // oldestOpenTicketAge mirrors TicketMgr::GetOldestOpenTicket (TicketMgr.h:205):
-// the oldest !IsClosed() && !IsCompleted() ticket's age in days; 0 when none
-// (GmTicket::WritePacket, TicketMgr.cpp:135-137).
+// the id-ordered map's first !IsClosed() && !IsCompleted() ticket's age in
+// days; 0 when none (GmTicket::WritePacket, TicketMgr.cpp:135-137). It is
+// the lowest-id open uncompleted ticket, NOT the least-recently-modified
+// one — MIN(lastModifiedTime) picks a different ticket once an older ticket
+// is updated after a newer one exists. IsClosed is type-only, so no
+// closedBy filter belongs here.
 func (s *session) oldestOpenTicketAge(ctx context.Context, now int64) float32 {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0
 	}
 	var oldest int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-		"SELECT MIN(lastModifiedTime) FROM gm_ticket WHERE closedBy = 0 AND type = 0 AND completed = 0").Scan(&oldest); err != nil || oldest == 0 {
+		"SELECT lastModifiedTime FROM gm_ticket WHERE type = 0 AND completed = 0 ORDER BY id ASC LIMIT 1").Scan(&oldest); err != nil || oldest == 0 {
 		return 0
 	}
 	return ticketAgeDays(oldest, now)
@@ -245,6 +249,12 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 	y, _ := r.ReadF32()
 	z, _ := r.ReadF32()
 	message, _ := r.ReadCString()
+	// TicketHandler.cpp:69: an invalid hyperlink in the ticket text drops
+	// the create — C++ validates before reading needResponse and the
+	// chat-log tail, so a corrupt log cannot suppress the kick.
+	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
+		return true
+	}
 	needResponse, _ := r.ReadU32()
 	needMoreHelpBool, _ := r.ReadU8()
 
@@ -265,6 +275,13 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 		if decompressedSize, err := r.ReadU32(); err == nil && count > 0 && decompressedSize > 0 && decompressedSize < 0xFFFF {
 			if rest, err := r.Read(r.Remaining()); err == nil {
 				if data, err := ticketChatLogDecompress(rest, decompressedSize); err == nil {
+					// TicketHandler.cpp:88-97: C++ uncompresses into a
+					// buffer exactly decompressedSize long, so a stream
+					// yielding more than advertised fails (Z_BUF_ERROR)
+					// and drops the create; a shorter stream succeeds.
+					if len(data) > int(decompressedSize) {
+						return true
+					}
 					if idx := bytes.IndexByte(data, 0); idx >= 0 {
 						chatLog = string(data[:idx])
 					} else {
@@ -275,12 +292,6 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 				}
 			}
 		}
-	}
-
-	// TicketHandler.cpp:69: an invalid hyperlink in the ticket text drops
-	// the create.
-	if !s.validateHyperlinksAndMaybeKick(ctx, message) {
-		return true
 	}
 
 	// TicketHandler.cpp:102: an invalid hyperlink in the chat log drops
@@ -426,6 +437,13 @@ func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool
 // handleGMResponseResolve processes CMSG_GMRESPONSE_RESOLVE (0x4F0).
 // Reference: WorldSession::HandleGMResponseResolve (TicketHandler.cpp:272).
 func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) bool {
+	// STATUS_LOGGEDIN (Opcodes.cpp:1395): the reference never dispatches
+	// without a player, and playerGUID survives logout (the logout path
+	// clears playerLoaded/player but not playerGUID), so an unguarded
+	// resolve could close a logged-out character's ticket.
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	// TicketHandler.cpp:272: the resolve only acts on an existing open
 	// ticket; the survey prompt rolls against ChanceOfGMSurvey.
 	// TicketMgr::CloseTicket sets closedBy (+type), never completed.
