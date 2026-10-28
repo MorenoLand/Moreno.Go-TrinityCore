@@ -149,6 +149,7 @@ type mailItemRecord struct {
 	RandomPropertyID   uint32
 	RandomPropertySeed uint32
 	Charges            uint32
+	Unlocked           bool
 }
 
 func (s *session) sendNewMailNotification(ctx context.Context) {
@@ -382,16 +383,21 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	}
 	// Load attached items per drained mail.
 	for i := range mails {
-		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, ii.itemEntry, COALESCE(ii.count, 1), COALESCE(ii.durability, 0), COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0), COALESCE(ii.charges, '')
+		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, ii.itemEntry, COALESCE(ii.count, 1), COALESCE(ii.durability, 0), COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0), COALESCE(ii.charges, ''), COALESCE(ii.flags, 0)
 			FROM mail_items AS mi
 			LEFT JOIN item_instance AS ii ON ii.guid = mi.item_guid
 			WHERE mi.mail_id = ?`, mails[i].ID)
 		if iErr == nil {
 			for iRows.Next() {
-				var iGuid, iTmpl, iCount, iDur, randomPropertyID int64
+				var iGuid, iTmpl, iCount, iDur, randomPropertyID, iFlags int64
 				var enchantments, charges string
-				if iRows.Scan(&iGuid, &iTmpl, &iCount, &iDur, &enchantments, &randomPropertyID, &charges) == nil {
-					item := mailItemRecord{AttachID: uint32(iGuid), ItemEntry: uint32(iTmpl), Count: uint32(iCount), Durability: uint32(iDur), RandomPropertyID: uint32(int32(randomPropertyID))}
+				if iRows.Scan(&iGuid, &iTmpl, &iCount, &iDur, &enchantments, &randomPropertyID, &charges, &iFlags) == nil {
+					// Reference: MailPackets.cpp:37 (MailAttachedItem::Unlocked =
+					// !item->IsLocked()) + Item.h:101 (IsLocked() = !HasFlag(
+					// ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_UNLOCKED)) — an ordinary
+					// mailed item carries no UNLOCKED flag, so the wire byte is 0,
+					// not the 1 Go used to write unconditionally.
+					item := mailItemRecord{AttachID: uint32(iGuid), ItemEntry: uint32(iTmpl), Count: uint32(iCount), Durability: uint32(iDur), RandomPropertyID: uint32(int32(randomPropertyID)), Unlocked: iFlags&int64(itemFieldFlagUnlocked) != 0}
 					item.RandomPropertySeed, item.MaxDurability = 0, 0
 					seed, maxDurability := itemMailProperties(iTmpl)
 					item.MaxDurability = maxDurability
@@ -411,6 +417,14 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 						if value, err := strconv.ParseInt(chargeFields[0], 10, 32); err == nil {
 							item.Charges = uint32(int32(value))
 						}
+					} else {
+						// Reference: Item::Create (Item.cpp:289) seeds
+						// ITEM_FIELD_SPELL_CHARGES from the template's
+						// spellcharges_* at once, and Go's minted rows omit the
+						// charges string — so a short/absent string reads the
+						// template's spellcharges_1, the parseItemSpellCharges
+						// convention, instead of 0.
+						item.Charges = s.mailItemTemplateSpellCharge1(ctx, iTmpl)
 					}
 					mails[i].Items = append(mails[i].Items, item)
 				}
@@ -468,7 +482,11 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			msgBuf.WriteU32(it.Charges)
 			msgBuf.WriteU32(it.MaxDurability)
 			msgBuf.WriteU32(it.Durability)
-			msgBuf.WriteU8(1) // Unlocked
+			unlocked := uint8(0)
+			if it.Unlocked {
+				unlocked = 1
+			}
+			msgBuf.WriteU8(unlocked)
 		}
 		entryBytes := msgBuf.Bytes()
 		entrySize := 2 + len(entryBytes) // U16 length prefix + entry, the C++ GetPacketSize() shape
@@ -552,6 +570,20 @@ func (s *session) mailSenderCharacterExists(ctx context.Context, senderGUID uint
 // (a ByteBufferException), so the packet is dropped, never closed.
 func validMailPacketString(value string, maxBytes int) bool {
 	return len(value) <= maxBytes && utf8.ValidString(value) && !strings.Contains(value, "|")
+}
+
+// twoSideMailInteraction mirrors the RBAC_PERM_TWO_SIDE_INTERACTION_MAIL
+// (id 27) arm of WorldSession::HandleSendMail (MailHandler.cpp:148-152):
+// the sender's session permission alone lifts the cross-faction refusal —
+// there is no AllowTwoSide config leg on this path, unlike the guild,
+// calendar, and channel gates. A failed lookup reads as unprivileged, the
+// twoSideChannelInteraction convention.
+func (s *session) twoSideMailInteraction(ctx context.Context) bool {
+	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil || !s.authed || s.accountID == 0 {
+		return false
+	}
+	granted, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionTwoSideInteractionMail)
+	return err == nil && granted
 }
 
 func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
@@ -755,10 +787,9 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		attInfos[i] = attachmentInfo{entry: uint32(entry), flags: uint32(flags), duration: uint32(duration), templateFlags: uint32(templateFlags), found: true}
 	}
 	// Reference: MailHandler.cpp:148-152 — cross-faction mail is refused with
-	// MAIL_ERR_NOT_YOUR_TEAM unless every attachment is account-bound
-	// (the RBAC_PERM_TWO_SIDE_INTERACTION_MAIL arm has no Go permission
-	// wiring — standing delta).
-	if !accountBound && s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) {
+	// MAIL_ERR_NOT_YOUR_TEAM unless every attachment is account-bound or the
+	// sender holds RBAC_PERM_TWO_SIDE_INTERACTION_MAIL (id 27).
+	if !accountBound && s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) && !s.twoSideMailInteraction(ctx) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotYourTeam, 0, 0, 0), true)
 		return true
 	}
@@ -849,8 +880,8 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	// money-required quests.
 	s.questMoneyChanged(ctx)
 	// The GM-trade log arms (MailHandler.cpp:246-260: RBAC_PERM_LOG_GM_TRADE
-	// outCommand lines for mailed items/money) have no Go RBAC wiring — the
-	// same standing delta as the RBAC_PERM_TWO_SIDE_INTERACTION_MAIL arm.
+	// outCommand lines for mailed items/money) have no Go RBAC wiring — no
+	// GM-log sink exists in the tree.
 	// Reference: AchievementMgr::UpdateAchievementCriteria
 	// (AchievementMgr.cpp:759-765) — game masters earn no achievement
 	// credit; the GM gate lives inside the C++ criteria update.
@@ -1389,6 +1420,20 @@ func mailStoreEquipError(templateFound bool, maxCount int64, ownedCount, incomin
 		return uint32(equipErrInvFull)
 	}
 	return uint32(equipErrOk)
+}
+
+// mailItemTemplateSpellCharge1 reads the template spellcharges_1 term the
+// mail-list Charges byte falls back to when the instance charges string is
+// short or absent (see the list-item loop); a missing template reads as 0.
+func (s *session) mailItemTemplateSpellCharge1(ctx context.Context, itemEntry int64) uint32 {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	var charge int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spellcharges_1, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&charge); err != nil {
+		return 0
+	}
+	return uint32(int32(charge))
 }
 
 // mailItemTemplateMaxCount reads the item_template maxcount term the

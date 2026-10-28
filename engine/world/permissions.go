@@ -149,6 +149,9 @@ const permissionTwoSideInteractionChat uint32 = 25
 // permissionTwoSideInteractionChannel mirrors rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL (RBAC.h:79).
 const permissionTwoSideInteractionChannel uint32 = 26
 
+// permissionTwoSideInteractionMail mirrors rbac::RBAC_PERM_TWO_SIDE_INTERACTION_MAIL (RBAC.h:80).
+const permissionTwoSideInteractionMail uint32 = 27
+
 const permissionTwoSideWhoList uint32 = 28
 
 // permissionTwoSideAddFriend mirrors rbac::RBAC_PERM_TWO_SIDE_ADD_FRIEND (RBAC.h:82).
