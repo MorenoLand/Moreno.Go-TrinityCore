@@ -258,7 +258,7 @@ func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 		return nil
 	}
 	entry, ok := m.queue[guid]
-	if !ok || len(entry.Dungeons) == 0 {
+	if !ok || entry.State != LFGStateQueued || len(entry.Dungeons) == 0 {
 		return nil
 	}
 	m.nextProposalID++
@@ -310,14 +310,57 @@ func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment s
 	return LFGJoinOK, cloneLFGQueueEntry(entry)
 }
 
+// Leave drops a queued entry. Every other state keeps its entry: C++
+// LeaveLfg only removes from the queue on the QUEUED arm (LFGMgr.cpp:720);
+// the DUNGEON/FINISHED arm only flips state, the PROPOSAL arm is handled by
+// the proposal arms, and the ROLECHECK arm aborts the check. Callers that
+// need a state flip use SetState.
 func (m *LFGManager) Leave(guid uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.queue[guid]; !ok {
+	return m.leaveLocked(guid)
+}
+
+func (m *LFGManager) leaveLocked(guid uint64) bool {
+	entry, ok := m.queue[guid]
+	if !ok || entry.State != LFGStateQueued {
 		return false
 	}
 	delete(m.queue, guid)
 	return true
+}
+
+// SetState mirrors LfgPlayerData::SetState (LFGPlayerData.cpp:38-50):
+// DUNGEON flips state only, preserving roles and selected dungeons, while
+// NONE and FINISHED clear roles, selected dungeons and the comment. Go
+// keeps no separate PlayersStore, so a NONE entry is deleted outright —
+// every consumer treats a missing entry exactly like a NONE entry with
+// cleared fields. Other states create the entry on demand, like C++'s
+// PlayersStore operator[].
+func (m *LFGManager) SetState(guid uint64, state uint8) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setStateLocked(guid, state)
+}
+
+func (m *LFGManager) setStateLocked(guid uint64, state uint8) {
+	if state == LFGStateNone {
+		delete(m.queue, guid)
+		delete(m.comments, guid)
+		return
+	}
+	entry, ok := m.queue[guid]
+	if !ok {
+		entry = LFGQueueEntry{GUID: guid}
+	}
+	entry.State = state
+	if state == LFGStateFinishedDungeon {
+		entry.Roles = 0
+		entry.Dungeons = nil
+		entry.Comment = ""
+		delete(m.comments, guid)
+	}
+	m.queue[guid] = entry
 }
 
 // QueueGroup mirrors the FINISHED arm of LFGMgr::UpdateRoleCheck (LFGMgr.cpp:868-872): the finished group itself enters the queue (AddQueueData keyed by the group guid), and every member is marked queued with the role the check assigned (the SetState/SetRoles arms, LFGMgr.cpp:858-864). The per-member entries let Leave and status reads work per player; FindGroups treats the group entry as the unit and never double-counts its members as solos.
@@ -1010,9 +1053,13 @@ func (m *LFGManager) UpdateProposal(proposalID uint32, guid uint64, accept bool)
 			}
 		}
 		// LFGMgr::UpdateProposal (LFGMgr.cpp:1291-1293): players leave the
-		// queue when the proposal succeeds.
+		// queue when the proposal succeeds, but their PlayersStore entry
+		// survives as DUNGEON with roles and selected dungeons intact
+		// (LFGPlayerData::SetState clears nothing on DUNGEON) — only the
+		// queue units go, so GetLfgStatus still reports the dungeon and
+		// the random-dungeon cooldown arm still sees the selection.
 		for pguid := range prop.Players {
-			delete(m.queue, pguid)
+			m.setStateLocked(pguid, LFGStateDungeon)
 			m.deleteGroupEntriesContainingLocked(pguid)
 		}
 		delete(m.proposals, proposalID)
@@ -1085,8 +1132,9 @@ type lfgQueueStatus struct {
 // one status per queue unit — a group entry sent to every member, a solo
 // entry to its player — with the first selected dungeon, the queued
 // seconds, and the role-derived wait. Queue data survives a pending
-// proposal until success, so state is deliberately not filtered: C++
-// sends the status to proposal members too. The bestCompatible refresh
+// proposal until success, so proposal members still get a status; post-
+// success DUNGEON/FINISHED entries are PlayersStore state, not queue units,
+// and get none. The bestCompatible refresh
 // (LFGQueue.cpp:631-632) has no twin: Go's matcher recomputes combos
 // every tick and keeps no cached compatible string to refresh.
 func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
@@ -1132,10 +1180,14 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 		})
 	}
 	var soloGUIDs []uint64
-	for guid := range m.queue {
-		if !grouped[guid] {
-			soloGUIDs = append(soloGUIDs, guid)
+	for guid, entry := range m.queue {
+		if grouped[guid] {
+			continue
 		}
+		if entry.State != LFGStateQueued && entry.State != LFGStateProposal {
+			continue
+		}
+		soloGUIDs = append(soloGUIDs, guid)
 	}
 	sort.Slice(soloGUIDs, func(i, j int) bool { return soloGUIDs[i] < soloGUIDs[j] })
 	for _, guid := range soloGUIDs {
@@ -1636,8 +1688,29 @@ func (s *session) handleLFGLeave() bool {
 				buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
 			return true
 		}
+		// LFGMgr::LeaveLfg (LFGMgr.cpp:726-748): the QUEUED arm restores
+		// a mid-dungeon re-queued group to its dungeon state — Go's
+		// group state never leaves DUNGEON on re-queue, so an LFG group
+		// in DUNGEON/FINISHED with a dungeon is the restore case, and
+		// only QUEUED member entries flip; members still in DUNGEON keep
+		// their state and, with nothing queued, no packet goes out (the
+		// DUNGEON arm, LFGMgr.cpp:783-786, guid == gguid).
+		restore := false
+		var restoreState uint8
+		if g := s.server.getGroup(s.groupID); g != nil && g.IsLFG && g.LFGDungeonID != 0 &&
+			(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon) {
+			restore = true
+			restoreState = g.LFGState
+		}
 		removed := false
 		for _, ms := range s.server.getGroupSessions(s.groupID) {
+			if restore {
+				if entry, ok := lfg.Status(ms.playerGUID); ok && entry.State == LFGStateQueued {
+					lfg.SetState(ms.playerGUID, restoreState)
+					removed = true
+					continue
+				}
+			}
 			if lfg.Leave(ms.playerGUID) {
 				removed = true
 			}
@@ -1652,6 +1725,12 @@ func (s *session) handleLFGLeave() bool {
 		for _, ms := range s.server.getGroupSessions(s.groupID) {
 			_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: ms.playerGUID, State: LFGStateNone})
 		}
+		return true
+	}
+	if entry, ok := lfg.Status(s.playerGUID); ok && (entry.State == LFGStateDungeon || entry.State == LFGStateFinishedDungeon) {
+		// LFGMgr::LeaveLfg (LFGMgr.cpp:783-786): the DUNGEON/FINISHED arm
+		// clears a solo player's state and sends nothing.
+		lfg.SetState(s.playerGUID, LFGStateNone)
 		return true
 	}
 	if !lfg.Leave(s.playerGUID) {
@@ -3617,6 +3696,16 @@ func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
 		_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, dungeonID, LFGStateFinishedDungeon)
 	}
 	for _, m := range members {
+		// LFGMgr::FinishDungeon (LFGMgr.cpp:1615-1626): a player already
+		// FINISHED is skipped entirely, and every other member flips to
+		// FINISHED — which clears roles and selected dungeons
+		// (LFGPlayerData::SetState) — before any reward is computed.
+		if s.Features != nil && s.Features.LFG != nil {
+			if entry, ok := s.Features.LFG.Status(m.GUID); ok && entry.State == LFGStateFinishedDungeon {
+				continue
+			}
+			s.Features.LFG.SetState(m.GUID, LFGStateFinishedDungeon)
+		}
 		if sess := s.findSessionByGUID(m.GUID); sess != nil {
 			// LFGMgr::FinishDungeon (LFGMgr.cpp:1664-1673): the only LFG
 			// achievement criteria the C++ server fires is
