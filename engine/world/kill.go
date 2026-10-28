@@ -943,6 +943,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 	// permanently binds every player in the instance (and their group).
 	s.maybePermBindInstance(ctx, target, creatureEntry)
 
+	// KillRewarder::Reward step 5 (KillRewarder.cpp:285-288): a
+	// dungeon-boss kill credits the instance encounter mask.
+	s.creditDungeonEncounterKill(ctx, target, creatureEntry)
+
 	// Eluna CREATURE_EVENT_ON_DIED (4), with the event-23 On_Reset pre-fire
 	// (Eluna::JustDied, CreatureHooks.cpp:143-152). The motion is already
 	// at Health 0 with the lootable flag set by every kill path, matching

@@ -148,6 +148,9 @@ type Server struct {
 	instanceAdmissionMu       sync.Mutex
 	pendingInstanceAdmissions map[instanceAdmissionKey]uint32
 	instanceEncounters        map[instanceAdmissionKey]map[uint64]struct{}
+	dungeonEncounterMu        sync.Mutex
+	dungeonEncounters         map[dungeonEncounterKey]dungeonEncounterCredit
+	dungeonEncountersLoaded   bool
 	inventoryMu               sync.Mutex
 	hiddenGameObjects         map[uint64]struct{}
 	auctionGetAllMu           sync.Mutex
@@ -855,6 +858,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.loadVehicleSeatAddons(ctx)
 	s.loadVehicleAccessories(ctx)
+	s.loadDungeonEncounters(ctx)
 	s.loadContinentTransports(ctx)
 	s.loadWorldStates(ctx)
 	s.loadBattlegroundTemplates(ctx)
