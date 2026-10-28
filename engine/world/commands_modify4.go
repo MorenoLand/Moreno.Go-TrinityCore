@@ -177,11 +177,16 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 	oldTotal := totalReputationStanding(*entry)
 	entry.Standing = standing - rep.BaseStanding
 	entry.Flags |= factionFlagVisible // SetVisible
+	newTotal := totalReputationStanding(*entry)
+	// SetOneFactionReputation (ReputationMgr.cpp:403): the hostile arm also
+	// runs on the absolute-set path, gated on the raw standing.
+	if reputationAutoWar(entry.Flags, newTotal, entry.Standing) {
+		entry.Flags |= factionFlagAtWar
+	}
 	guid := s.playerGUIDOf(target)
 	if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
 		_, _ = chars.DB.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", guid, factionID, entry.Standing, entry.Flags)
 	}
-	newTotal := totalReputationStanding(*entry)
 	increased := reputationRank(int64(newTotal)) > reputationRank(int64(oldTotal))
 	_ = target.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{*entry}, increased), true)
 	if newTotal > 0 {

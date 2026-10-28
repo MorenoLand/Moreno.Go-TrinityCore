@@ -4658,7 +4658,8 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 	// PetHandler.cpp:864-884: the client sends at most 24 talents, rounded up
 	// to a 30-entry cap.
 	const maxPreviewPetTalents = 30
-	for i := uint32(0); i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
+	var i uint32
+	for i = 0; i < talentCount && i < maxPreviewPetTalents && r.Remaining() >= 8; i++ {
 		talentID, _ := r.ReadU32()
 		rank, _ := r.ReadU32()
 		// Pet::learnSpell (Pet.cpp:1486-1497) answers SMSG_PET_LEARNED_SPELL
@@ -4668,6 +4669,12 @@ func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []by
 		if s.learnPetTalent(ctx, petNumber, petGUID, talentID, rank) {
 			s.sendPetSpells(ctx, petNumber, 0, 1)
 		}
+	}
+	// A short tail is a C++ stream throw: the handler aborts before
+	// SendTalentsInfoData, so talents learned so far stay learned but no
+	// talents packet goes out. Reaching the cap still sends (rfinish).
+	if i < talentCount && i < maxPreviewPetTalents {
+		return true
 	}
 	// PetHandler.cpp:882: SendTalentsInfoData(true) runs unconditionally
 	// after the loop, even when nothing was learned.

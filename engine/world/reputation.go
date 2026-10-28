@@ -12,6 +12,15 @@ func totalReputationStanding(reputation playerReputation) int32 {
 	return reputation.Base + reputation.Standing
 }
 
+// reputationAutoWar mirrors the SetOneFactionReputation hostile arm
+// (ReputationMgr.cpp:403) plus the SetAtWar peace-forced gate (:478-484):
+// a new total rank at or below HOSTILE declares war unless the faction is
+// peace-forced, non-rival, and its RAW standing ranks above HATED. The
+// pointer overload carries no invisible/hidden check, unlike the load fold.
+func reputationAutoWar(flags uint8, totalStanding, rawStanding int32) bool {
+	return reputationRank(int64(totalStanding)) <= 1 && !(flags&factionFlagPeaceForced != 0 && flags&factionFlagRival == 0 && reputationRank(int64(rawStanding)) > 0)
+}
+
 // reputationStanding mirrors ReputationMgr::GetReputation
 // (ReputationMgr.cpp:119): base reputation plus recorded standing for the
 // faction, 0 when the faction has no recorded state.
@@ -342,8 +351,19 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	for i := range s.player.Reputations {
 		if s.player.Reputations[i].FactionID == factionID {
 			oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[i])))
-			s.player.Reputations[i].Standing += amount
-			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.playerGUID, factionID)
+			// SetOneFactionReputation (ReputationMgr.cpp:374): the total
+			// clamps to [-42000, 42999] and stores net of the base.
+			newTotal := currentTotal + amount
+			if newTotal > 42999 {
+				newTotal = 42999
+			} else if newTotal < -42000 {
+				newTotal = -42000
+			}
+			s.player.Reputations[i].Standing = newTotal - s.player.Reputations[i].Base
+			if reputationAutoWar(s.player.Reputations[i].Flags, newTotal, s.player.Reputations[i].Standing) {
+				s.player.Reputations[i].Flags |= factionFlagAtWar
+			}
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ?, flags = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.player.Reputations[i].Flags, s.playerGUID, factionID)
 			totalStanding := totalReputationStanding(s.player.Reputations[i])
 			// ReputationMgr::SetReputation (ReputationMgr.cpp:369): the changed
 			// faction is reported to the client immediately via SendState as
@@ -369,17 +389,56 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 			return
 		}
 	}
+	// A first-seen faction starts from its DBC row (ListID, base, default
+	// flags) like the GM path, not a ListID-0 phantom: the total clamps,
+	// SetVisible applies (ReputationMgr.cpp:445-458), and the hostile arm
+	// can declare war. A DBC miss keeps the legacy phantom row rather than
+	// dropping the gain outright.
 	rep := playerReputation{
 		FactionID: factionID,
 		Standing:  amount,
 		Flags:     factionFlagVisible,
 	}
+	dbcBacked := false
+	oldRank := reputationRank(0)
+	if s.server != nil && s.server.Data != nil {
+		if dbcRep, found, dbcErr := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class); dbcErr == nil && found && dbcRep.ReputationList >= 0 {
+			dbcBacked = true
+			total := dbcRep.BaseStanding + amount
+			if total > 42999 {
+				total = 42999
+			} else if total < -42000 {
+				total = -42000
+			}
+			rep = playerReputation{
+				FactionID: factionID,
+				ListID:    uint32(dbcRep.ReputationList),
+				Base:      dbcRep.BaseStanding,
+				Standing:  total - dbcRep.BaseStanding,
+				Flags:     dbcRep.DefaultFlags,
+			}
+			if rep.Flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || rep.Flags&factionFlagSpecial != 0 {
+				rep.Flags |= factionFlagVisible
+			}
+			if reputationAutoWar(rep.Flags, total, rep.Standing) {
+				rep.Flags |= factionFlagAtWar
+			}
+			oldRank = reputationRank(int64(dbcRep.BaseStanding))
+		}
+	}
+	if !dbcBacked {
+		if rep.Standing > 42999 {
+			rep.Standing = 42999
+		} else if rep.Standing < -42000 {
+			rep.Standing = -42000
+		}
+	}
 	s.player.Reputations = append(s.player.Reputations, rep)
-	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, rep.Standing, rep.Flags)
 	// ReputationMgr::SetReputation (ReputationMgr.cpp:369): new factions are
 	// reported immediately as well ("only this faction gets reported to
 	// client, even if it has no own visible standing").
-	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(amount)) > reputationRank(0)), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(totalReputationStanding(rep))) > oldRank), true)
 	s.questReputationChanged(ctx, factionID)
 }
 
