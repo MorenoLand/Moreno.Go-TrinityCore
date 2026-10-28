@@ -280,7 +280,17 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	}
 	rows.Close()
 	if len(members) < 2 {
-		return
+		// GroupMgr::LoadGroups (GroupMgr.cpp) deletes groups with fewer
+		// than 2 group_member ROWS, counting raw rows before ghost
+		// members are stripped; a group whose rows survive that delete
+		// still loads with one surviving member, and _LoadBoundInstances
+		// then treats its player as grouped. Gate on the raw row count,
+		// not the surviving-member count, so a ghost-member group still
+		// attaches its survivor (a true 1-row group stays unloaded).
+		var rawMembers int64
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_member WHERE guid = ?", dbGroupID).Scan(&rawMembers); err != nil || rawMembers < 2 {
+			return
+		}
 	}
 	runtimeID := int64(0)
 	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM groups AS g WHERE g.guid <= ? AND g.guid IN (SELECT gm.guid FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid GROUP BY gm.guid HAVING COUNT(*) > 1)`, dbGroupID).Scan(&runtimeID)

@@ -72,6 +72,16 @@ func (s *session) recoverLoginMapCreationFailure(ctx context.Context, state *pla
 		return nil
 	}
 	if active {
+		// LoadFromDB zeroes the login instanceId when the winning bind
+		// (GetInstanceSave, Player.cpp:19081: a group bind overrides a
+		// personal bind) names a different instance (Player.cpp:17744),
+		// so a mismatched login never takes the entrance arm: resolve
+		// routes it to the bound instance at its saved coordinates.
+		// Relocating here would strand it in that instance at the
+		// deleted instance's entrance instead.
+		if s.loginInstanceBindMismatch(ctx, *state, mapEntry) {
+			return nil
+		}
 		if location, ok := s.mapEntranceTriggerLocation(ctx, state.Map); ok {
 			state.Zone, state.X, state.Y, state.Z = location.Zone, location.X, location.Y, location.Z
 			s.debug("saved instance save unavailable; moved to map entrance trigger", "guid", state.GUID, "map", mapEntry.ID, "instance", state.InstanceID)
@@ -79,6 +89,52 @@ func (s *session) recoverLoginMapCreationFailure(ctx context.Context, state *pla
 		}
 	}
 	return s.recoverLoginInstanceMapFailure(ctx, state)
+}
+
+// loginInstanceBindMismatch mirrors the LoadFromDB zeroing arm
+// (Player.cpp:17744-17747) over GetInstanceSave (Player.cpp:19081-19091):
+// a group bind, when one exists for this map and difficulty, overrides a
+// personal bind, so only the winning bind's instance is compared against
+// the saved login instance. A DB error fails open (false): the entrance
+// relocation stands and the login handler's resolve reports the error.
+func (s *session) loginInstanceBindMismatch(ctx context.Context, state playerState, mapEntry wotlk.MapEntry) bool {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || state.InstanceID == 0 {
+		return false
+	}
+	if group := s.server.findGroupByID(s.groupID); group != nil && group.DBID != 0 && !group.isBGGroup() {
+		groupDifficulty := uint32(group.DungeonDiff)
+		if mapEntry.IsRaid() {
+			groupDifficulty = uint32(group.RaidDiff)
+		}
+		if _, downscaled, groupModeFound, modeErr := s.server.Data.DownscaledMapDifficulty(state.Map, groupDifficulty); modeErr == nil && groupModeFound {
+			groupDifficulty = downscaled
+		}
+		var groupInstanceID int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT i.id FROM group_instance AS gi
+			JOIN instance AS i ON i.id = gi.instance WHERE gi.guid = ? AND i.map = ? AND i.difficulty = ? LIMIT 1`, group.DBID, state.Map, groupDifficulty).Scan(&groupInstanceID)
+		if err == nil {
+			return groupInstanceID != int64(state.InstanceID)
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false
+		}
+	}
+	playerDifficulty := uint32(state.DungeonDifficulty)
+	if mapEntry.IsRaid() {
+		playerDifficulty = uint32(state.RaidDifficulty)
+	}
+	if _, downscaled, found, err := s.server.Data.DownscaledMapDifficulty(state.Map, playerDifficulty); err == nil && found {
+		playerDifficulty = downscaled
+	}
+	var characterInstanceID, characterDifficulty, characterPermanent int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT i.id, i.difficulty, ci.permanent FROM character_instance AS ci
+		JOIN instance AS i ON i.id = ci.instance WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ? AND ci.extendState <> 0 LIMIT 1`, state.GUID, state.Map, playerDifficulty).Scan(&characterInstanceID, &characterDifficulty, &characterPermanent)
+	_ = characterDifficulty
+	_ = characterPermanent
+	if err != nil {
+		return false
+	}
+	return characterInstanceID != int64(state.InstanceID)
 }
 
 func (s *session) recoverLoginInstanceMapFailure(ctx context.Context, state *playerState) error {
