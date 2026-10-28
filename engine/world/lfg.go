@@ -1670,6 +1670,17 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 							s.server.deliverLFGProposal(prop)
 						}
 					}
+				} else if rc.State != LFGRoleCheckInitializing {
+					// LFGMgr::UpdateRoleCheck default arm (LFGMgr.cpp:858-866):
+					// the check leader gets the FAILED join result and every
+					// member gets the ROLECHECK_FAILED party update. Unreachable
+					// through the join gate today (a real role always passes the
+					// single-member check), but the C++ arm is unconditional.
+					if ls := s.server.findSessionByGUID(rc.Leader); ls != nil {
+						_ = ls.sendLFGJoinResult(LFGJoinFailed, rc.State)
+					}
+					s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+						buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
 				}
 			}
 			return true
@@ -1829,11 +1840,24 @@ func (s *session) handleLFGGetStatus() bool {
 		return true
 	}
 	entry, _ := s.server.Features.LFG.Status(s.playerGUID)
+	// LFGMgr::JoinLfg grouped branch (LFGMgr.cpp:620-627): every member's
+	// player data flips to ROLECHECK with the check's dungeons selected, but
+	// Go's StartRoleCheck creates no per-member queue entry, so a GetStatus
+	// during the check read NONE/empty instead of ROLECHECK + dungeons.
+	// Synthesize the player-data read from the live check; once it resolves
+	// the check leaves the store and the queue entry is authoritative again.
+	if s.groupID != 0 {
+		if rc := s.server.Features.LFG.GetRoleCheck(s.groupID); rc != nil {
+			if _, member := rc.Roles[s.playerGUID]; member {
+				entry = LFGQueueEntry{GUID: s.playerGUID, State: LFGStateRoleCheck, Dungeons: append([]uint32(nil), rc.Dungeons...)}
+			}
+		}
+	}
 	// HandleLfgGetStatus (LFGHandler.cpp:277): grouped players receive the
 	// party update first, then the player update with dungeons cleared;
 	// solo players receive the player update first, then the cleared party
-	// update. The group-queue model has no Go counterpart, so the party
-	// send carries the player's own queue entry (documented delta).
+	// update. C++ GetLfgStatus reads the player's own player data, so the
+	// party send carrying the player's own entry matches C++ exactly.
 	// LFGMgr::GetLfgStatus (LFGMgr.cpp:2202-2206) builds the update with the
 	// 4-arg ctor whose comment defaults to "" — both packets carry an empty
 	// comment, only the second has dungeons cleared.
