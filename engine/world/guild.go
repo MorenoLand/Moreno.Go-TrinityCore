@@ -2907,6 +2907,32 @@ func (s *session) consumeGuildBankMoneyWithdraw(ctx context.Context, guildID uin
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET money = money + ? WHERE guid = ?", amount, s.playerGUID)
 }
 
+// guildBankWithdrawAllowed is the read-only half of
+// guildConsumeBankWithdraw: Guild::BankMoveItemData::HasWithdrawRights
+// (Guild.cpp:864-876) gates on _GetMemberRemainingSlots != 0, which for a
+// non-guildmaster rank needs VIEW_TAB on the tab plus a positive
+// (SlotPerDay - withdrawn) difference (Guild.cpp:2586-2596). It consumes
+// nothing; phase 2 still performs the increment on the success path.
+func guildBankWithdrawAllowed(ctx context.Context, q guildMoveQueryer, playerGUID uint64, guildID uint32, tabID uint8) bool {
+	if tabID >= guildBankMaxTabs {
+		return false
+	}
+	var rank uint32
+	if err := q.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", playerGUID, guildID).Scan(&rank); err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true
+	}
+	var gbright, slotPerDay uint32
+	if err := q.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay); err != nil || gbright&0x01 == 0 || slotPerDay == 0 {
+		return false
+	}
+	var withdrawn uint32
+	_ = q.QueryRowContext(ctx, "SELECT "+fmt.Sprintf("tab%d", tabID)+" FROM guild_member_withdraw WHERE guid = ?", playerGUID).Scan(&withdrawn)
+	return int32(slotPerDay)-int32(withdrawn) > 0
+}
+
 // guildBankWithdrawMoneyForRepair mirrors Guild::HandleMemberWithdrawMoney
 // (Guild.cpp:1724) with repair=true: the repair cost is drawn from the guild
 // bank and consumes the member's daily money-withdraw allowance, but no money
@@ -3965,6 +3991,20 @@ func (s *session) guildMoveItem(ctx context.Context, guildID uint32, sourceLoc g
 		} else if readErr != sql.ErrNoRows {
 			return guildMoveOutcome{}, false
 		}
+	}
+	// Guild::_MoveItems steps 3-4 (Guild.cpp:2683-2698) run before any
+	// store planning, in order: destination store rights, then source
+	// withdraw rights. Both were previously enforced only later — the
+	// cross-tab deposit gate after planning, the withdraw gate in the
+	// phase-2 transaction — so a denied move could leak a planning error
+	// packet (a split BANK_FULL, a swap-fallback error) where C++ returns
+	// silently at step 3/4. The withdraw leg here is read-only; phase 2
+	// still performs the increment on the success path.
+	if destination != nil && destination.Bank && sourceLoc.Bank && sourceLoc.Tab != destination.Tab && !s.checkGuildBankRights(ctx, guildID, destination.Tab, true) {
+		return guildMoveOutcome{}, false
+	}
+	if destination != nil && sourceLoc.Bank && (!destination.Bank || sourceLoc.Tab != destination.Tab) && !guildBankWithdrawAllowed(ctx, cdb, s.playerGUID, guildID, sourceLoc.Tab) {
+		return guildMoveOutcome{}, false
 	}
 	var placements []guildMovePlacement
 	var storeErr uint8
