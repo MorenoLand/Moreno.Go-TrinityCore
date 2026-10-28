@@ -4754,8 +4754,10 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if !s.server.kickDuplicateAccountSessions(account.ID, s) {
 		return false
 	}
+	// LOGIN_UPD_LAST_IP (WorldSocket.cpp:588) is a fire-and-forget Execute:
+	// a failed write must not strand the login with no auth response.
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
-		return true
+		s.debug("account last_ip update failed", "account", accountName, "error", err)
 	}
 	s.authed = true
 	s.accountID = account.ID
@@ -4931,7 +4933,8 @@ func (s *Server) checkQueue(sess *session, ctx context.Context, account *account
 		return false
 	}
 	// World::HasRecentlyDisconnected (World.cpp:382): an account that dropped
-	// within DisconnectToleranceInterval skips the queue on re-login.
+	// (non-queued disconnect, World.cpp:3114) skips the queue on re-login;
+	// the C++ expiry arm never fires, so the skip lasts for server lifetime.
 	if s.recentlyDisconnected(account.ID) {
 		sess.debug("queue skipped: recent disconnect", "account", account.ID)
 		return false
@@ -4959,20 +4962,17 @@ func (s *Server) checkQueue(sess *session, ctx context.Context, account *account
 }
 
 // recentlyDisconnected mirrors World::HasRecentlyDisconnected (World.cpp:382):
-// expired entries are pruned, then a live entry for the account skips the queue.
+// the C++ expiry arm is dead code — difftime(disconnectTime, now) is negative
+// for any past disconnect, hence always < tolerance, so an entry is never
+// pruned and any previously disconnected account skips the queue for the
+// life of the server (tolerance 0 disables the check entirely, as in C++).
 func (s *Server) recentlyDisconnected(accountID uint32) bool {
 	tolerance := s.Config.DisconnectToleranceInterval
 	if tolerance == 0 || accountID == 0 {
 		return false
 	}
-	now := time.Now().Unix()
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	for id, t := range s.disconnectTimes {
-		if now-t >= int64(tolerance) {
-			delete(s.disconnectTimes, id)
-		}
-	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
 	_, ok := s.disconnectTimes[accountID]
 	return ok
 }
@@ -5343,6 +5343,12 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	}
 	if locale.Valid {
 		result.Locale = uint8(locale.Int64)
+	}
+	// AccountInfo ctor (WorldSocket.cpp:267, Common.h:82-94): Locale >=
+	// TOTAL_LOCALES (9, ruRU is the last valid index) clamps to LOCALE_enUS,
+	// so locale lookups read the enUS row instead of falling back to base text.
+	if result.Locale >= uint8(len(localeNames)) {
+		result.Locale = 0
 	}
 	result.Locked = locked != 0
 	// WorldSocket.cpp:283 (AccountInfo ctor): the expansion column is taken raw —
