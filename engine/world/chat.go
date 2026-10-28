@@ -113,12 +113,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
-	// C++ (ChatHandler.cpp:231-232): messages over 255 bytes are dropped before
-	// any further processing.
-	if len(message) > 255 {
-		s.debug("chat rejected", "account", s.accountName, "reason", "message too long")
-		return true
-	}
 	// Reference: ChatHandler.cpp:116-139 — the LANG_ADDON type gate and the
 	// CONFIG_ADDON_CHANNEL disabled check run before every other arm (the
 	// mute/speak-time legs, the 1852 GM-silence gate, the warden response):
@@ -131,6 +125,34 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if language == languageAddon && (s.server == nil || !s.server.Config.AddonChannel) {
 		s.debug("chat rejected", "account", s.accountName, "reason", "addon channel disabled")
 		return true
+	}
+	// C++ (ChatHandler.cpp:68-116): the universal-language gate, the language
+	// description lookup, and the skill/aura gate all run before the mute and
+	// speak-time legs and before command parsing, and they apply to AFK/DND
+	// too except for the universal gate itself: AFK/DND in universal pass,
+	// but AFK/DND in an unknown or unlearned language do not. LANG_UNIVERSAL
+	// has a description with skill 0 (ObjectMgr.cpp lang_description), so it
+	// counts as known here once the universal gate above has passed it.
+	if language != languageAddon {
+		if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
+			s.sendNotification("Unknown language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
+			return true
+		}
+		skill, known := languageSkill(language)
+		if language == languageUniversal {
+			known, skill = true, 0
+		}
+		if !known {
+			s.sendNotification("Unknown language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
+			return true
+		}
+		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
+			s.sendNotification("You don't know that language")
+			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
+			return true
+		}
 	}
 	// C++ (ChatHandler.cpp:179-193): the mute gate, speak-time update, and
 	// GM-silence aura gate all run before the warden response and command
@@ -154,6 +176,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID != chatWhisper && s.hasAura(1852) {
 		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
 		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
+		return true
+	}
+	// C++ (ChatHandler.cpp:228-232): the message is parsed after the silence
+	// gate, and over-255-byte messages drop there — after a mute or silence
+	// notification has already fired, not before it.
+	if len(message) > 255 {
+		s.debug("chat rejected", "account", s.accountName, "reason", "message too long")
 		return true
 	}
 	// Reference: WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:228-232) —
@@ -239,26 +268,6 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		// ChatStrictLinkChecking.Kick.
 		if !s.validateHyperlinksAndMaybeKick(ctx, message) {
 			s.debug("chat rejected", "account", s.accountName, "reason", "invalid hyperlink")
-			return true
-		}
-	}
-	languageSkillID, languageKnown := languageSkill(language)
-	s.debug("chat language checked", "account", s.accountName, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
-	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
-		if language == languageUniversal {
-			s.sendNotification("Unknown language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
-			return true
-		}
-		skill, known := languageSkill(language)
-		if !known {
-			s.sendNotification("Unknown language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
-			return true
-		}
-		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
-			s.sendNotification("You don't know that language")
-			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
 			return true
 		}
 	}
@@ -1269,7 +1278,16 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 				continue
 			}
 		} else if chatType == chatParty || chatType == chatPartyLeader {
-			if chatGroupID == 0 || value.groupID != chatGroupID {
+			// C++ (ChatHandler.cpp:395-408): party chat broadcasts through the
+			// resolved group object, whose member list still holds players
+			// stashed into a battleground raid (setBGGroupStash only swaps
+			// the session's current group) — filtering on the session's
+			// current groupID dropped every in-BG member, including the
+			// sender's own echo.
+			if chatGroup == nil {
+				continue
+			}
+			if _, ok := chatGroup.memberSubGroup(value.playerGUID); !ok {
 				continue
 			}
 			if senderSubGroupKnown {
@@ -1282,7 +1300,10 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			// broadcast to the group only (ChatHandler.cpp:470-528) — the
 			// raid-group / leader / assistant gates already ran in
 			// resolveGroupChat before broadcast.
-			if chatGroupID == 0 || value.groupID != chatGroupID {
+			if chatGroup == nil {
+				continue
+			}
+			if _, ok := chatGroup.memberSubGroup(value.playerGUID); !ok {
 				continue
 			}
 		} else if chatType == chatBattleground || chatType == chatBattleLeader {
@@ -1290,7 +1311,10 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			// (ChatHandler.cpp:517-551) broadcast to the whole group with no
 			// subgroup restriction; the BG-group / leader gates already ran
 			// in resolveGroupChat before broadcast.
-			if chatGroupID == 0 || value.groupID != chatGroupID {
+			if chatGroup == nil {
+				continue
+			}
+			if _, ok := chatGroup.memberSubGroup(value.playerGUID); !ok {
 				continue
 			}
 		} else if chatType == chatGuild || chatType == chatOfficer {
