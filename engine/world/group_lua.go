@@ -411,8 +411,13 @@ func (s *Server) luaRemoveGroupMember(ctx context.Context, g *groupState, guid u
 	// Group::RemoveMember (Group.cpp:588-589): LFG vote kicks are completed
 	// in scripts, so the arm returns before any removal —
 	// !m_memberSlots.empty() evaluated pre-removal, which is always true
-	// for the member verified present above.
+	// for the member verified present above. The script arm still fires
+	// first (LFGScripts.cpp:182-192): a kick on an LFG group starts a
+	// boot vote instead of removing the member. The Lua bridge carries
+	// no kicker, so InitBoot runs with an empty kicker — C++ sets
+	// votes[Empty] = AGREE the same way.
 	if isLFG && method == groupRemoveMethodKick {
+		s.initLFGBoot(g, 0, guid, "")
 		return true
 	}
 	// Group.cpp:629-746: the bool reports the size arm, not the

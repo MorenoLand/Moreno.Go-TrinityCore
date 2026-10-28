@@ -1562,6 +1562,15 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
 			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
 		}
+		// LFGScripts::OnDisband (RemoveGroupData, LFGMgr.cpp:2010-2030):
+		// the members still in the group when it dissolves drop to NONE
+		// with a REMOVED send; the removed member already got the
+		// OnRemoveMember arms above.
+		remaining := make([]uint64, 0, len(g.Members))
+		for _, m := range g.Members {
+			remaining = append(remaining, m.GUID)
+		}
+		srv.lfgGroupDisbanded(g, remaining)
 		srv.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
 		return true
 	}
@@ -1816,6 +1825,8 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bo
 	// Eluna GROUP_EVENT_ON_DISBAND (5): C++ Group::Disband fires
 	// OnGroupDisband first, before the per-member detach (Group.cpp:859).
 	s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+	// LFGScripts::OnDisband (RemoveGroupData, LFGMgr.cpp:2010-2030).
+	s.lfgGroupDisbanded(g, members)
 	// Group::RemoveAllInvites (Group.cpp:375-382): pendingGroupLeader points
 	// at the inviter, so any invite issued by a member of the disbanded group
 	// is withdrawn — accepting afterwards would otherwise form a new group

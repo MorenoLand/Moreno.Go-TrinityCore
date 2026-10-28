@@ -1989,16 +1989,78 @@ func (s *Server) lfgSelectedRandomDungeon(guid uint64) bool {
 	return dungeon.TypeID == LFGDungeonTypeRandom || dungeon.Flags&lfgFlagSeasonal != 0
 }
 
-// lfgGroupMemberRemoved mirrors the LFGMgr-state-free arms of
-// LFGGroupScript::OnRemoveMember (LFGScripts.cpp:183-228): the Dungeon
-// Deserter cast on mid-dungeon leaves, the Dungeon Cooldown aura strip on
-// KICK_LFG removals, the SMSG_LFG_UPDATE_PARTY ping, and the teleport-out of
-// the dungeon. The per-group data writes (SetGroup/RemovePlayerFromGroup/
-// RemoveGroupData) and SendLfgOfferContinue have no Go counterpart and stay
-// documented no-bridge: Go keeps no per-group LFG data.
+// lfgGroupMemberRemoved mirrors LFGGroupScript::OnRemoveMember
+// (LFGScripts.cpp:183-228): the LeaveLfg arms for the removed player, the
+// Dungeon Deserter cast on mid-dungeon leaves, the Dungeon Cooldown aura
+// strip on KICK_LFG removals, the SMSG_LFG_UPDATE_PARTY ping, and the
+// teleport-out of the dungeon. The KICK arm (InitBoot) never reaches here:
+// Group::RemoveMember returns before removal for LFG+KICK (Group.cpp:588),
+// and Go starts the boot at the uninvite handlers and the Lua bridge
+// instead. The per-group data writes (SetGroup/RemovePlayerFromGroup) have
+// no Go counterpart — group membership lives in groupState.Members — and
+// SendLfgOfferContinue has no Go sender yet, so the leader offer on
+// non-FINISHED removals stays an open gap.
 func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method uint8) {
 	if s == nil || g == nil || !g.IsLFG || target == nil || target.player == nil {
 		return
+	}
+	// LFGMgr::LeaveLfg (LFGMgr.cpp:714-800) switches on the removed
+	// player's own entry state and runs before the general-path arms.
+	// Go tracks PROPOSAL on player entries, not on groupState, so the
+	// OnRemoveMember PROPOSAL check (group state + DEFAULT method) is
+	// proxied on the removed player's entry: a grouped member's entry is
+	// PROPOSAL exactly while their group has an active proposal.
+	if s.Features != nil && s.Features.LFG != nil {
+		if entry, ok := s.Features.LFG.Status(target.playerGUID); ok {
+			switch entry.State {
+			case LFGStateProposal:
+				if method == groupRemoveMethodDefault {
+					return
+				}
+				// LEAVE/KICK_LFG during a proposal reach LeaveLfg's
+				// PROPOSAL arm (mark DENY + RemoveProposal declined);
+				// the proposal flow has no removal hook, so the entry
+				// is left for it and only the general arms below run.
+			case LFGStateQueued:
+				// LeaveLfg QUEUED arm: the whole queued group leaves
+				// the queue. Exclude is 0 because C++ runs LeaveLfg
+				// before RemovePlayerFromGroup, so the removed player
+				// is still group LFG membership and flips + gets the
+				// REMOVED send like everyone else. Restore mirrors the
+				// OnAddMember arm: Go's group state never leaves
+				// DUNGEON on re-queue, so it is the OldState.
+				restore := g.IsLFG && g.LFGDungeonID != 0 &&
+					(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+				affected := s.Features.LFG.LeaveQueuedGroup(g.ID, 0, restore, g.LFGState)
+				inAffected := false
+				for _, guid := range affected {
+					if guid == target.playerGUID {
+						inAffected = true
+					}
+					if ms := s.findSessionByGUID(guid); ms != nil {
+						_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+					}
+				}
+				if !inAffected {
+					// Not in the queue entry's role map: C++ flips
+					// every group player, so flip the removed player
+					// directly instead of leaving a stale QUEUED entry.
+					if restore {
+						s.Features.LFG.SetState(target.playerGUID, g.LFGState)
+					} else {
+						s.Features.LFG.SetState(target.playerGUID, LFGStateNone)
+					}
+					_ = target.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+				}
+			case LFGStateDungeon, LFGStateFinishedDungeon:
+				// LeaveLfg DUNGEON/FINISHED arm: the removed player
+				// (not the group, not a disconnect — logout never
+				// reaches this hook) drops to NONE; Go's SetState
+				// (NONE) deletes the entry, which is C++'s
+				// clear-roles/dungeons/comment.
+				s.Features.LFG.SetState(target.playerGUID, LFGStateNone)
+			}
+		}
 	}
 	if method == groupRemoveMethodLeave && g.LFGState == LFGStateDungeon &&
 		len(g.Members) >= lfgGroupKickVotesNeeded {
@@ -2009,6 +2071,41 @@ func (s *Server) lfgGroupMemberRemoved(g *groupState, target *session, method ui
 	_ = target.sendLFGUpdateParty(LFGUpdateLeaderUnk1, LFGQueueEntry{})
 	if target.isDungeonMap(target.player.Map) {
 		target.teleportToBGEntryPoint()
+	}
+}
+
+// lfgGroupDisbanded mirrors LFGMgr::RemoveGroupData (LFGMgr.cpp:2010-2030)
+// as fired by Group::Disband's OnGroupDisband: every listed member's player
+// entry drops to NONE with a REMOVED_FROM_QUEUE update-party, unless the
+// member is mid-proposal (the C++ group-state PROPOSAL skip, proxied per
+// member — Go tracks PROPOSAL on player entries, not on groupState). A
+// group with no LFG footprint (no member entry and no dungeon/finished
+// group state) has no C++ GroupsStore row, so RemoveGroupData returns
+// early and nothing is sent.
+func (s *Server) lfgGroupDisbanded(g *groupState, memberGUIDs []uint64) {
+	if s == nil || g == nil || !g.IsLFG || s.Features == nil || s.Features.LFG == nil {
+		return
+	}
+	footprint := g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon
+	if !footprint {
+		for _, guid := range memberGUIDs {
+			if _, ok := s.Features.LFG.Status(guid); ok {
+				footprint = true
+				break
+			}
+		}
+	}
+	if !footprint {
+		return
+	}
+	for _, guid := range memberGUIDs {
+		if entry, ok := s.Features.LFG.Status(guid); ok && entry.State == LFGStateProposal {
+			continue
+		}
+		s.Features.LFG.SetState(guid, LFGStateNone)
+		if ms := s.findSessionByGUID(guid); ms != nil {
+			_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+		}
 	}
 }
 
