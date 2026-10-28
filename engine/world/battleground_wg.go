@@ -1672,16 +1672,69 @@ func (s *Server) wgSpiritHealerTimeLeftMs() uint32 {
 	return uint32(left / time.Millisecond)
 }
 
+// wgResurrectGuide resolves the SPELL_SPIRIT_HEAL caster and graveyard for
+// one queued ghost: the graveyard is the one holding the guide the ghost
+// queued at (BfGraveyard::HasNpc, Battlefield.cpp:760-770), and the caster
+// is that graveyard's control-team guide (Resurrect, :711-712). A neutral
+// or never-assigned control guide falls back to the queued-at guide — Go
+// assigns a guide only when a ghost first queues at it, so an unassigned
+// control guide has no Go GUID, but the queued-at guide stands at the same
+// graveyard. The boolean reports whether the graveyard resolved; without
+// it the caller centers the cast on the ghost.
+func wgResurrectGuide(guides [WGMaxGraveyards][2]uint64, graves [WGMaxGraveyards]wgGraveyardState, spiritGUID uint64) (uint64, uint8, bool) {
+	for gy := uint8(0); gy < WGMaxGraveyards; gy++ {
+		if guides[gy][WGTeamAlliance] == spiritGUID || guides[gy][WGTeamHorde] == spiritGUID {
+			if control := graves[gy].TeamControl; control == WGTeamAlliance || control == WGTeamHorde {
+				if guide := guides[gy][control]; guide != 0 {
+					return guide, gy, true
+				}
+			}
+			return spiritGUID, gy, true
+		}
+	}
+	return spiritGUID, 0, false
+}
+
+// broadcastWGSpiritHeal sends the guide's SPELL_SPIRIT_HEAL SMSG_SPELL_GO
+// (Battlefield.cpp:712, triggered self-cast: GO only, no SPELL_START) to
+// the guide's visibility set. Guides never enter motion, so no motion
+// lookup can place them; the cast centers on the graveyard SafeLoc —
+// where the guide stands — and falls back to the ghost's position when
+// the graveyard or its SafeLoc row does not resolve. safeLocID comes from
+// the caller's graveyard snapshot, so no lock is taken here.
+func (s *Server) broadcastWGSpiritHeal(guideGUID uint64, safeLocID uint32, gyOK bool, sess *session) {
+	if s == nil || sess == nil || sess.player == nil || guideGUID == 0 {
+		return
+	}
+	mapID, instanceID := WGMapID, sess.player.InstanceID
+	x, y, z := sess.player.X, sess.player.Y, sess.player.Z
+	if gyOK && s.Data != nil {
+		if loc, found, err := s.Data.WorldSafeLoc(safeLocID); err == nil && found {
+			x, y, z = loc.X, loc.Y, loc.Z
+		}
+	}
+	pkt := protocol.NewBuffer(16)
+	pkt.WritePackedGUID(guideGUID)
+	pkt.WritePackedGUID(guideGUID)
+	pkt.WriteU8(1)
+	pkt.WriteU32(22012) // SPELL_SPIRIT_HEAL (Battleground.h:133)
+	pkt.WriteU32(0)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt.Bytes(), mapID, instanceID, x, y, z, nil)
+}
+
 // resurrectWGQueuedPlayers mirrors BfGraveyard::Resurrect
-// (Battlefield.cpp:697-723): the queued ghosts gain the resurrection visual,
-// ResurrectPlayer(1.0), 6962 + SPELL_SPIRIT_HEAL_MANA (44535), and their
-// corpses become bones. C++ also has the graveyard's spirit guide cast
-// SPELL_SPIRIT_HEAL (22012) on itself; Go omits that cast — the guide
-// creature is not resolved — following the BG wave-resurrect convention.
+// (Battlefield.cpp:697-723): the graveyard's spirit guide casts
+// SPELL_SPIRIT_HEAL (22012) on itself for each in-world queued ghost, then
+// the ghost gains the resurrection visual, ResurrectPlayer(1.0),
+// 6962 + SPELL_SPIRIT_HEAL_MANA (44535), and its corpse becomes bones.
 // The no-longer-a-ghost skip is Go-original: C++ has no such check, but the
 // queue only ever holds ghosts.
 func (s *Server) resurrectWGQueuedPlayers(ctx context.Context, queued map[uint64]uint64) {
-	for pGUID := range queued {
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	guides, graves := wg.SpiritGuides, wg.Graveyards
+	wg.mu.Unlock()
+	for pGUID, spiritGUID := range queued {
 		sess := s.findSessionByGUID(pGUID)
 		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
 			continue
@@ -1689,6 +1742,12 @@ func (s *Server) resurrectWGQueuedPlayers(ctx context.Context, queued map[uint64
 		if sess.player.PlayerFlags&playerFlagGhost == 0 {
 			continue
 		}
+		guideGUID, gy, gyOK := wgResurrectGuide(guides, graves, spiritGUID)
+		var safeLocID uint32
+		if gyOK {
+			safeLocID = graves[gy].SafeLocID
+		}
+		s.broadcastWGSpiritHeal(guideGUID, safeLocID, gyOK, sess)
 		sess.applyAura(24171) // SPELL_RESURRECTION_VISUAL
 		sess.resurrectPlayer(ctx, 1.0)
 		sess.applyAura(6962)
@@ -1820,6 +1879,14 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	// the invited and will-be-kick entries alongside the rosters.
 	delete(wg.InvitedPlayers, sess.playerGUID)
 	delete(wg.PlayersWillBeKick, sess.playerGUID)
+	// Battlefield::HandlePlayerLeaveZone (Battlefield.cpp:129) also drops
+	// the revive-queue entry; BfGraveyard::RemovePlayer (:688-694) strips
+	// SPELL_WAITING_FOR_RESURRECT with it, so a ghost that leaves the zone
+	// is not resurrected by the next wave and keeps no waiting aura.
+	_, queued := wg.ReviveQueue[sess.playerGUID]
+	if queued {
+		delete(wg.ReviveQueue, sess.playerGUID)
+	}
 
 	sess.removeAura(WGSpellRecruit)
 	sess.removeAura(WGSpellCorporal)
@@ -1829,6 +1896,9 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	sess.removeAura(WGSpellGreatHonor)
 	sess.removeAura(WGSpellGreaterHonor)
 	sess.removeAura(WGSpellGreatestHonor)
+	if queued {
+		sess.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
+	}
 	wg.mu.Unlock()
 
 	s.UpdateWGTenacity()

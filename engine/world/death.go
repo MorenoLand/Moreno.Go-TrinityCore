@@ -1655,7 +1655,7 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 	if s.lastSpiritWave.IsZero() {
 		s.lastSpiritWave = now
 	}
-	var visuals []uint64
+	var visuals []spiritWaveDue
 	if now.Sub(s.lastSpiritWave) >= 30*time.Second {
 		s.lastSpiritWave = now
 		if len(s.spiritReviveQueue) != 0 {
@@ -1663,7 +1663,7 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 				s.spiritResurrectPending = make(map[uint64]spiritWavePending)
 			}
 			for pGUID, spiritGUID := range s.spiritReviveQueue {
-				visuals = append(visuals, pGUID)
+				visuals = append(visuals, spiritWaveDue{playerGUID: pGUID, spiritGUID: spiritGUID})
 				s.spiritResurrectPending[pGUID] = spiritWavePending{spiritGUID: spiritGUID, waveAt: now}
 			}
 			s.spiritReviveQueue = make(map[uint64]uint64)
@@ -1678,8 +1678,17 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 	}
 	s.spiritWaveMu.Unlock()
 
-	for _, pGUID := range visuals {
-		if sess := s.findSessionByGUID(pGUID); sess != nil && sess.worldReady.Load() && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
+	// Battleground.cpp:305-312: the healer casts SPELL_SPIRIT_HEAL on
+	// itself once per healer — the !sh guard fires it for the first
+	// in-world ghost at that healer only, ahead of that ghost's visual.
+	// A zero spirit GUID (the repop auto-queue arm) has no healer to cast.
+	castGuides := make(map[uint64]bool)
+	for _, item := range visuals {
+		if sess := s.findSessionByGUID(item.playerGUID); sess != nil && sess.worldReady.Load() && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
+			if item.spiritGUID != 0 && !castGuides[item.spiritGUID] {
+				castGuides[item.spiritGUID] = true
+				s.broadcastSpiritHealCast(item.spiritGUID, sess)
+			}
 			// Battleground.cpp:312: the resurrection visual lands as a triggered
 			// CastSpell, not an aura — use the instant visual-cast path.
 			sess.castVisualSpell(24171) // SPELL_RESURRECTION_VISUAL
@@ -1697,6 +1706,29 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 		sess.spawnCorpseBones(ctx)
 		sess.debug("spirit wave resurrected ghost", "account", sess.accountName, "guid", item.playerGUID, "spirit", item.spiritGUID)
 	}
+}
+
+// broadcastSpiritHealCast sends a spirit healer's SPELL_SPIRIT_HEAL
+// SMSG_SPELL_GO (Battleground.cpp:311, triggered self-cast: GO only, no
+// SPELL_START) to the healer's visibility set: the healer's motion
+// position when it has one, else the ghost's position — the ghost queued
+// at the healer, so it stands where the healer stands.
+func (s *Server) broadcastSpiritHealCast(spiritGUID uint64, sess *session) {
+	if s == nil || sess == nil || sess.player == nil || spiritGUID == 0 {
+		return
+	}
+	mapID, instanceID := sess.player.Map, sess.player.InstanceID
+	x, y, z := sess.player.X, sess.player.Y, sess.player.Z
+	if m := s.findCreatureMotion(mapID, instanceID, spiritGUID); m != nil {
+		x, y, z = m.X, m.Y, m.Z
+	}
+	pkt := protocol.NewBuffer(16)
+	pkt.WritePackedGUID(spiritGUID)
+	pkt.WritePackedGUID(spiritGUID)
+	pkt.WriteU8(1)
+	pkt.WriteU32(22012) // SPELL_SPIRIT_HEAL (Battleground.h:133)
+	pkt.WriteU32(0)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt.Bytes(), mapID, instanceID, x, y, z, nil)
 }
 
 // spiritWavePending records a wave's visual pass for one ghost: the spirit
