@@ -121,16 +121,16 @@ func (s *Server) autoBalanceModifyDealDamageOnMap(motion *creatureMotion, target
 		return damage
 	}
 	if cfg.DungeonsOnly {
-		attackerDungeon := false
+		attackerDungeon, attackerBG := false, false
 		if entry, found, err := s.Data.Map(motion.Map); err == nil && found {
 			attackerDungeon = entry.IsDungeon()
+			attackerBG = entry.IsBattleground()
 		}
-		targetDungeon := false
+		targetDungeon, targetBG := false, false
 		if entry, found, err := s.Data.Map(targetMapID); err == nil && found {
 			targetDungeon = entry.IsDungeon()
+			targetBG = entry.IsBattleground()
 		}
-		_, _, _, attackerBG := battlegroundTypeForMap(motion.Map)
-		_, _, _, targetBG := battlegroundTypeForMap(targetMapID)
 		if !((targetDungeon && attackerDungeon) || (attackerBG && targetBG)) {
 			return damage
 		}
@@ -361,8 +361,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	if err != nil || !found {
 		return
 	}
-	_, _, _, inBG := battlegroundTypeForMap(motion.Map)
-	if cfg.DungeonsOnly && !mapEntry.IsDungeon() && !inBG {
+	if cfg.DungeonsOnly && !mapEntry.IsDungeon() && !mapEntry.IsBattleground() {
 		return
 	}
 	if motion.PetID != 0 && motion.UnitFlags&unitFlagPlayerControlled != 0 {
@@ -395,6 +394,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 		isHeroic = raidDiff == 2 || raidDiff == 3
 	}
 	maxPlayers := autoBalanceInstanceMaxPlayers(ctx, s, mapEntry, difficulty)
+	instanceMaxPlayers := maxPlayers
 
 	forcedNumPlayers := s.autoBalanceForcedNumPlayers(motion.Entry)
 	if forcedNumPlayers > 0 {
@@ -441,7 +441,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	s.autoBalanceMu.Lock()
 	info.instancePlayerCount = uint32(curCount)
 	s.autoBalanceMu.Unlock()
-	if curCount <= 0 {
+	if uint32(curCount) == 0 {
 		return
 	}
 
@@ -496,7 +496,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 		inflectionValue := float64(maxPlayers)
 		if isHeroic {
 			if mapEntry.IsRaid() {
-				switch maxPlayers {
+				switch instanceMaxPlayers {
 				case 10:
 					inflectionValue *= cfg.InflectionPointRaid10MHeroic
 				case 25:
@@ -508,7 +508,7 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 				inflectionValue *= cfg.InflectionPointHeroic
 			}
 		} else if mapEntry.IsRaid() {
-			switch maxPlayers {
+			switch instanceMaxPlayers {
 			case 10:
 				inflectionValue *= cfg.InflectionPointRaid10M
 			case 25:
