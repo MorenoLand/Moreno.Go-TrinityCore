@@ -1027,12 +1027,12 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		if targetFound && targetHealth == 0 && owner != nil {
 			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
 				stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 				motion.TargetGUID = next
 				motion.InCombat = true
 				motion.Moving = true
 				startPkt := buildAttackStart(motion.GUID, next)
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 				return
 			}
 		}
@@ -1050,7 +1050,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.PetCommand = PetCommandFollow
 		}
 		stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		return
 	}
 
@@ -1084,7 +1084,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 				motion.PetCommand = PetCommandFollow
 			}
 			stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 			return
 		}
 	}

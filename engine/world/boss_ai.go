@@ -3092,8 +3092,8 @@ func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMot
 // threat to the hit target's threat list, toward the caster. The gates and
 // the switch/attack-start tail mirror the session twin applySpellThreat;
 // the redirect leg stays unbridged (creature casters carry no redirect
-// registry) and the ATTACK_START packet rides broadcastToInstance (no
-// caster session exists on this path).
+// registry) and the ATTACK_START packet rides the attacker's visibility
+// set (no caster session exists on this path).
 func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return

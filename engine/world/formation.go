@@ -189,7 +189,7 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 		s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, member.GUID, 2)
 		startPkt := buildAttackStart(member.GUID, targetGUID)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, targetSess)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, member.X, member.Y, member.Z, targetSess)
 	}
 }
 

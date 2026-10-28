@@ -1163,7 +1163,7 @@ func (s *Server) removeCreatureAttackers(mapID, instanceID uint32, guid uint64) 
 		m.TargetGUID = 0
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(attackerGUID, guid, false)
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, attackerGUID)
 		if fresh := s.findCreatureMotion(mapID, instanceID, attackerGUID); fresh != nil {
 			s.clearCreatureVisualTarget(fresh)
 		}

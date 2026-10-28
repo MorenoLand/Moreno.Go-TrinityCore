@@ -1402,7 +1402,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		logPkt := buildSpellNonMeleeDamageLog(p.GUID, motion.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 		_ = p.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 		if s != nil {
-			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, p.Sess)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, p.Sess)
 		}
 		p.Sess.lastCombatTime = now
 		if p.Sess.player.UnitFlags&unitFlagInCombat == 0 {
@@ -1553,8 +1553,8 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 // creature-victim legs (split, share, DamageTaken hooks, rage, strips,
 // taken procs, stand-up, OnHitBySpell/SpellHitTarget hooks, triggers,
 // leech heal). Differences from the player twin are structural, not
-// C++-driven: the damage log fans out via broadcastToInstance (a creature
-// victim has no session to write to), the tap leg is skipped (a wild
+// C++-driven: the damage log fans out via the caster's visibility set (a
+// creature victim has no session to write to), the tap leg is skipped (a wild
 // attacker taps nothing, Unit.cpp:872-876), and the threat/engage legs
 // are skipped (the pet branch's threat amount is session-driven and does
 // not transfer to a wild caster). The share leg runs through the wire
@@ -1766,7 +1766,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	// (Spell.cpp:2538 first arm).
 	if !damageImmune {
 		logPkt := buildSpellNonMeleeDamageLog(victimGUID, motion.GUID, spellID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
-		s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 	}
 	if killed {
 		// Unit::DealDamage (Unit.cpp:738-748 + :882-889): the TAKE_DAMAGE
@@ -2647,7 +2647,7 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 // reflect return trip: the stand-up target is the reflector, the damage log
 // goes to the reflector's viewers, and a player reflector takes kill credit.
 // A creature reflector stands via standCreatureMotionUp, its log fans out via
-// broadcastToInstance (it has no session to write to, like the creature-victim
+// the caster's visibility set (it has no session to write to, like the creature-victim
 // twin), and it takes no kill credit (the creature-victim twin credits
 // nobody either); the share leg runs through shareVehicle, which reads no
 // session fields when victimIsPlayer is false.
@@ -3242,7 +3242,7 @@ func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motio
 			}
 		},
 		deliverLog: func(payload []byte) {
-			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		},
 		shareVehicle: vehicle,
 	})

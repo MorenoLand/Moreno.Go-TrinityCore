@@ -1691,7 +1691,7 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		if dyn.InstanceID != 0 {
-			s.broadcastToInstance(dyn.Map, dyn.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+			s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn.Map, dyn.InstanceID, dyn.X, dyn.Y, dyn.Z, nil)
 		} else {
 			s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
 		}
@@ -1881,8 +1881,8 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 	}
 	s.spawnDynamicGameObject(dyn)
 	// The summon-object spell log carries the caster creature's GUID,
-	// broadcast to the instance (the player-path bridge writes it to the
-	// caster session and nearby players instead).
+	// fanned out to the caster's visibility set (Spell::SendLogExecute =
+	// SendMessageToSet(true), Spell.cpp:4523).
 	log := protocol.NewBuffer(32)
 	log.WritePackedGUID(m.GUID)
 	log.WriteU32(spell.ID)
@@ -1890,7 +1890,7 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 	log.WriteU32(spellEffectTransmitted)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToInstance(m.Map, m.InstanceID, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 }
 
 // cancelFishingBobber mirrors the channeled arm of Spell::cancel

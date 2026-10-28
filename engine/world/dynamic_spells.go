@@ -152,7 +152,7 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToInstance(object.Map, object.InstanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
 	}
 }
 

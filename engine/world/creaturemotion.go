@@ -1077,9 +1077,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, playerSess)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, playerSess)
 			} else {
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 			}
 			if motion.BossAI != nil {
 				if playerSess != nil {
@@ -2050,7 +2050,7 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		s.motionMu.Unlock()
 		if engaged {
 			startPkt := buildAttackStart(rawGUID, lastCharmer)
-			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+			s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, rawGUID)
 		}
 	}
 	if lastCharmer != 0 && !engaged {
@@ -2254,7 +2254,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.ThreatMgr.ClearThreat()
 	}
 	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
-	s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID)
 	// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
 	// evade drops the creature from everyone else's threat table too, so no
@@ -2980,7 +2980,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// attackers, like the creature:AttackStop() Lua bridge; gated
 			// on an actual stop (C++ !m_attacking early-return).
 			motion.AlreadyCallAssistance = false
-			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 		}
 		motion.TargetGUID = 0
 		motion.Moving = false
@@ -3075,7 +3075,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), nil)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, victim, motion.ThreatMgr.SortedEntries())
 			}
 		} else if dirty {
@@ -4633,7 +4633,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			}
 			if s != nil {
-				s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, target.Sess)
 				// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),
 				// once per cast: the reflected map mirrors the aura block below
 				// (reflectedSet keys at None, trip statuses overriding).
@@ -5897,7 +5897,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			startPkt := buildAttackStart(motion.GUID, p.GUID)
 			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, p.Sess)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, p.Sess)
 			if motion.BossAI != nil {
 				if p.Sess != nil {
 					s.beginInstanceEncounter(motion, p.Sess.player)

@@ -166,13 +166,14 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 		summoned.PhaseMask = summoner.currentPlayerPhaseMask()
 	}
 	// Re-create the object client-side: the create block goes to the
-	// whole instance (respawnEvadedCreature pattern), not just nearby
-	// players — C++ AddToWorld notifies the full map.
+	// creature's visibility set (WorldObject::BuildUpdate fans out "for
+	// all visible players", Object.cpp:3620; C++ AddToWorld itself sends
+	// no packet — Creature.cpp:283-304).
 	s.applyCreatureMotionToSpawn(playerState{Map: mapID, InstanceID: instanceID}, &spawn)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToInstance(mapID, instanceID, packet.Opcode, packet.Payload.Bytes(), nil)
+		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, spawn.X, spawn.Y, spawn.Z, nil)
 	}
 	if origin.SummonerMotion != nil {
 		s.fireCreatureSummoned(ctx, origin.SummonerMotion, scripting.CreatureEventOnJustSummonedCreature, summoned)
@@ -692,7 +693,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(guid, victim, false)
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
 		return []any{true}, nil
 	}
 	// SetNoCallAssistance is Creature::SetNoCallAssistance
@@ -1200,7 +1201,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.AlreadyCallAssistance = false
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(guid, target, false)
-		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
 		s.clearCreatureVisualTarget(motion)
 		return nil, nil
 	}
@@ -1245,7 +1246,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		if victim != 0 {
 			stopPkt := buildAttackStop(guid, victim, false)
-			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
 		}
 		s.clearCreatureVisualTarget(motion)
 		s.removeCreatureAttackers(mapID, instanceID, guid)
