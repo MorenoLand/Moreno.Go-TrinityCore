@@ -429,12 +429,41 @@ func (s *Server) resetInstanceGlobal(ctx context.Context, key instanceResetKey) 
 	}
 }
 
+// instanceHasLivePlayers mirrors InstanceMap::SetResetSchedule's
+// !HavePlayers gate (Map.cpp:4194-4204): the type-0 reset event for a
+// normal instance is only armed while the map is empty. Entering
+// cancels it (Map.cpp:3966) and leaving re-arms it (Map.cpp:4006),
+// so a normal instance is never reset while players are inside.
+// Go keeps no loaded maps; a worldReady session admitted to the
+// map/instance pair (the hasActiveWorldportInstance signal) is the
+// occupancy equivalent, GMs included as in C++ HavePlayers.
+func (s *Server) instanceHasLivePlayers(mapID, instanceID uint32) bool {
+	if s == nil {
+		return false
+	}
+	target := uint64(mapID)<<32 | uint64(instanceID)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() {
+			continue
+		}
+		if sess.worldInstance.Load() == target {
+			return true
+		}
+	}
+	return false
+}
+
 // sweepExpiredInstanceSaves mirrors the type-0 queue event of
 // InstanceSaveManager::Update (InstanceSaveMgr.cpp:526-530) feeding
 // _ResetInstance: normal dungeon saves whose own resettime passed are
 // deleted with their binds and respawn rows. It never touches
 // instanceValid (see the file header): players inside keep playing
 // until they leave, as C++ keeps them in the map until it unloads.
+// A save with live players inside is skipped: leaving re-arms the
+// C++ event at the original (already past) reset time, so the next
+// 60s sweep after the map empties is the equivalent firing.
 func (s *Server) sweepExpiredInstanceSaves(ctx context.Context, nowUnix int64) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return
@@ -457,6 +486,9 @@ func (s *Server) sweepExpiredInstanceSaves(ctx context.Context, nowUnix int64) {
 	}
 	rows.Close()
 	for _, save := range expired {
+		if s.instanceHasLivePlayers(save.mapID, save.id) {
+			continue
+		}
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_INSTANCE_BY_INSTANCE", save.id)
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CHAR_INSTANCE_BY_INSTANCE", save.id)
 		_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_GROUP_INSTANCE_BY_INSTANCE", save.id)
