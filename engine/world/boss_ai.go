@@ -4080,6 +4080,13 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 					}
 				}
 			}
+			// A driven vehicle is not a player session, but C++ still knocks
+			// its driver back (vehicle guid, Unit::KnockbackFrom) — without
+			// this arm the packet never left the server and the driver's
+			// knockback ack loop never ran.
+			if s.sendDrivenVehicleKnockBack(m.Map, m.InstanceID, guid, fromX, fromY, speedXY, speedZ) {
+				continue
+			}
 			continue
 		}
 		if targetSess.rooted || targetSess.hasAuraType(spellAuraModStun) {
@@ -4129,6 +4136,61 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
 		}
 	}
+}
+
+// sendDrivenVehicleKnockBack mirrors the non-player arm of Unit::KnockbackFrom
+// (Unit.cpp:12510-12547) for a driven vehicle: a knockback spell whose hit
+// target is the vehicle base sends SMSG_MOVE_KNOCK_BACK with the VEHICLE guid
+// to the driving player (GetCharmer + GetUnitBeingMoved == this), never the
+// driver guid — the client then acks with the vehicle guid, which
+// HandleMoveKnockBackAck accepts as the mover. The ROOT/STUN gate runs on
+// the vehicle unit state (no Go vehicle-state model, so it is unevaluated
+// here, not borrowed from the driver), and InterruptNonMeleeSpells hits the
+// vehicle's casts only, so the driver's casts are left alone. The flying
+// re-enable leg reads the DRIVER's auras and carries the driver guid
+// (Player::SetCanFly, Player.cpp:26852-26866). Returns false when the hit
+// target is not a driven vehicle on this map/instance.
+func (s *Server) sendDrivenVehicleKnockBack(mapID, instanceID uint32, vehicleGUID uint64, fromX, fromY float64, speedXY, speedZ float32) bool {
+	if s == nil {
+		return false
+	}
+	kit := s.getVehicleKit(mapID, instanceID, vehicleGUID)
+	if kit == nil {
+		return false
+	}
+	driver := s.findSessionByGUID(kit.CharmerGUID())
+	if driver == nil || driver.player == nil || !driver.controlsVehicle() || driver.player.VehicleGUID != vehicleGUID {
+		return false
+	}
+	tm := s.findCreatureMotion(mapID, instanceID, vehicleGUID)
+	if tm == nil {
+		return false
+	}
+	ddx := float64(tm.X) - fromX
+	ddy := float64(tm.Y) - fromY
+	var vcos, vsin float64
+	if math.Abs(ddx) < 0.001 && math.Abs(ddy) < 0.001 {
+		angle := rand.Float64() * 2 * math.Pi
+		vcos, vsin = math.Cos(angle), math.Sin(angle)
+	} else {
+		dist := math.Hypot(ddx, ddy)
+		vcos, vsin = ddx/dist, ddy/dist
+	}
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(vehicleGUID)
+	packet.WriteU32(0)
+	packet.WriteF32(float32(vcos))
+	packet.WriteF32(float32(vsin))
+	packet.WriteF32(speedXY)
+	packet.WriteF32(-speedZ)
+	_ = driver.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+	if driver.hasAuraType(spellAuraFly) || driver.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+		fly := protocol.NewBuffer(packedGUIDSize(driver.playerGUID) + 4)
+		fly.WritePackedGUID(driver.playerGUID)
+		fly.WriteU32(0)
+		_ = driver.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+	}
+	return true
 }
 
 // creatureResurrectLog writes the SMSG_SPELLLOGEXECUTE resurrect log for

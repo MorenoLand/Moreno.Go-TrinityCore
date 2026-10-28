@@ -40040,6 +40040,18 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 		}
 		targetSess := s.server.findSessionByGUID(targetGUID)
 		if targetSess == nil || targetSess.player == nil {
+			// Player caster, so the affecting-player world-boss/dungeon-boss
+			// gate (SpellEffects.cpp:4552-4562) applies to a vehicle target
+			// too; the driven-vehicle arm is the same Unit::KnockbackFrom
+			// leg as the creature-caster twin.
+			if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+				if tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.server.autoBalanceIsDungeonBoss(ctx, tm.Entry) {
+					continue
+				}
+			}
+			if s.server.sendDrivenVehicleKnockBack(s.player.Map, s.player.InstanceID, targetGUID, fromX, fromY, speedXY, speedZ) {
+				continue
+			}
 			continue
 		}
 		// Spells with SPELL_EFFECT_KNOCK_BACK (like Thunderstorm) can't
