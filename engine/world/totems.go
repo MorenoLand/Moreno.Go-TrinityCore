@@ -10,10 +10,13 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-// Totem slot constants matching WoW 3.3.5 / TrinityCore (SharedDefines.h).
+// Totem slot constants on the client-wire order: Totem::InitStats
+// (Totem.cpp:80-84) sends Slot = SummonSlot - SUMMON_SLOT_TOTEM_FIRE, and
+// HandleTotemDestroyed (SpellHandler.cpp:585-586) adds FIRE back, so wire
+// slot 0 is fire and 1 is earth (SharedDefines.h:3324-3337).
 const (
-	TotemSlotEarth uint8 = 0
-	TotemSlotFire  uint8 = 1
+	TotemSlotFire  uint8 = 0
+	TotemSlotEarth uint8 = 1
 	TotemSlotWater uint8 = 2
 	TotemSlotAir   uint8 = 3
 )
@@ -717,8 +720,8 @@ func (s *session) totemEnemySessionHostile(other *session) bool {
 // (ObjectMgr.cpp:1747-1753) reads player_totem_model keyed by
 // (SummonSlot, race) (SharedDefines.h:3325-3334); with no row the totem
 // keeps its template model ("Set to default", Totem.cpp:90-92). The Go
-// slot ids are Earth=0/Fire=1/Water=2/Air=3; the C++ SummonSlot ids are
-// Fire=1/Earth=2/Water=3/Air=4.
+// slot ids are the wire ids Fire=0/Earth=1/Water=2/Air=3; the C++
+// SummonSlot ids are Fire=1/Earth=2/Water=3/Air=4.
 func (s *session) totemDisplayForRace(ctx context.Context, slot uint8, entry uint32) uint32 {
 	var model int64
 	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
