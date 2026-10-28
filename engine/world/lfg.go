@@ -1248,6 +1248,9 @@ type lfgQueueStatus struct {
 	waitHealer int32
 	waitDps    int32
 	queuedTime uint32
+	tanks      uint8
+	healers    uint8
+	dps        uint8
 	recipients []uint64
 }
 
@@ -1260,6 +1263,26 @@ type lfgQueueStatus struct {
 // and get none. The bestCompatible refresh
 // (LFGQueue.cpp:631-632) has no twin: Go's matcher recomputes combos
 // every tick and keeps no cached compatible string to refresh.
+// lfgRemainingNeeds mirrors LFGQueue::UpdateBestCompatibleInQueue
+// (LFGQueue.cpp:714-742): the needs bytes start at the 1/1/3 constants and
+// drop once per best-compatible role, tank first, then healer, anything else
+// counting as DPS (a leader-only role lands in the DPS arm). Go has no
+// cross-entry best-compatible set, so the entry's own roles stand in for it;
+// uint8 subtraction wraps exactly as C++'s does on a surplus role.
+func lfgRemainingNeeds(roles map[uint64]uint8) (tanks, healers, dps uint8) {
+	tanks, healers, dps = lfgTanksNeeded, lfgHealersNeeded, lfgDPSNeeded
+	for _, role := range roles {
+		if role&LFGRoleTank != 0 {
+			tanks--
+		} else if role&LFGRoleHealer != 0 {
+			healers--
+		} else {
+			dps--
+		}
+	}
+	return tanks, healers, dps
+}
+
 func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1291,6 +1314,7 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 		if queued < 0 {
 			queued = 0
 		}
+		tanks, healers, dps := lfgRemainingNeeds(entry.Roles)
 		out = append(out, lfgQueueStatus{
 			dungeonID:  dungeonID,
 			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
@@ -1299,6 +1323,9 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 			waitHealer: lfgWaitTimeOf(m.waitHealer, dungeonID),
 			waitDps:    lfgWaitTimeOf(m.waitDps, dungeonID),
 			queuedTime: uint32(queued),
+			tanks:      tanks,
+			healers:    healers,
+			dps:        dps,
 			recipients: guids,
 		})
 	}
@@ -1324,6 +1351,7 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 			queued = 0
 		}
 		role := entry.Roles &^ LFGRoleLeader
+		tanks, healers, dps := lfgRemainingNeeds(map[uint64]uint8{guid: entry.Roles})
 		out = append(out, lfgQueueStatus{
 			dungeonID:  dungeonID,
 			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
@@ -1332,6 +1360,9 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 			waitHealer: lfgWaitTimeOf(m.waitHealer, dungeonID),
 			waitDps:    lfgWaitTimeOf(m.waitDps, dungeonID),
 			queuedTime: uint32(queued),
+			tanks:      tanks,
+			healers:    healers,
+			dps:        dps,
 			recipients: []uint64{guid},
 		})
 	}
@@ -1340,8 +1371,8 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 
 // sendLFGQueueStatus mirrors WorldSession::SendLfgQueueStatus
 // (LFGHandler.cpp:455-478): the packet writes the average wait before
-// the role wait, and the needs bytes are the LfgQueueData ctor constants,
-// not queue-derived counts.
+// the role wait, and the needs bytes are the LfgQueueData remaining counts
+// (LFGQueue.cpp:714-742), not the 1/1/3 ctor constants.
 func (s *session) sendLFGQueueStatus(status lfgQueueStatus) error {
 	packet := protocol.NewBuffer(4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 4)
 	packet.WriteU32(status.dungeonID)
@@ -1350,9 +1381,9 @@ func (s *session) sendLFGQueueStatus(status lfgQueueStatus) error {
 	packet.WriteI32(status.waitTank)
 	packet.WriteI32(status.waitHealer)
 	packet.WriteI32(status.waitDps)
-	packet.WriteU8(lfgTanksNeeded)
-	packet.WriteU8(lfgHealersNeeded)
-	packet.WriteU8(lfgDPSNeeded)
+	packet.WriteU8(status.tanks)
+	packet.WriteU8(status.healers)
+	packet.WriteU8(status.dps)
 	packet.WriteU32(status.queuedTime)
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_QUEUE_STATUS), packet.Bytes(), true)
 }
@@ -3200,9 +3231,26 @@ func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
 	} else {
 		packet.WriteU8(0)
 	}
-	packet.WriteU8(uint8(len(roleCheck.Dungeons)))
-	for _, d := range roleCheck.Dungeons {
-		packet.WriteU32(d)
+	// SendLfgRoleCheckUpdate (LFGHandler.cpp:391-417): the dungeon list
+	// is the role check's std::set, ascending, with each id converted
+	// through GetLFGDungeonEntry (LFGMgr.cpp:2279-2286) to the DBC entry
+	// (id + type<<24), 0 when the DBC row is missing. The random-dungeon
+	// arm needs no special case: a random join holds exactly one dungeon.
+	dungeons := append([]uint32(nil), roleCheck.Dungeons...)
+	sort.Slice(dungeons, func(i, j int) bool { return dungeons[i] < dungeons[j] })
+	packet.WriteU8(uint8(len(dungeons)))
+	for _, d := range dungeons {
+		entry := d
+		if s != nil && s.server != nil && s.server.Data != nil {
+			if dungeon, found, err := s.server.Data.LFGDungeon(d & 0x00FFFFFF); err == nil {
+				if found {
+					entry = dungeon.Entry()
+				} else {
+					entry = 0
+				}
+			}
+		}
+		packet.WriteU32(entry)
 	}
 	packet.WriteU8(uint8(len(roleCheck.Roles)))
 
@@ -3215,7 +3263,10 @@ func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
 		packet.WriteU8(0)
 	}
 	packet.WriteU32(uint32(leaderRoles))
-	leaderLevel := uint8(80)
+	// C++ writes 0 for a player with no live session
+	// (FindConnectedPlayer null, LFGHandler.cpp:412); the old Go
+	// default of 80 fabricated a max-level member.
+	leaderLevel := uint8(0)
 	if s.server != nil {
 		if ls := s.server.findSessionByGUID(roleCheck.Leader); ls != nil && ls.player != nil {
 			leaderLevel = ls.player.Level
@@ -3223,11 +3274,17 @@ func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
 	}
 	packet.WriteU8(leaderLevel)
 
-	// Other members
-	for pguid, roles := range roleCheck.Roles {
-		if pguid == roleCheck.Leader {
-			continue
+	// Other members in ascending guid order, as C++ iterates the
+	// std::map; the old Go map iteration order was random per packet.
+	otherGUIDs := make([]uint64, 0, len(roleCheck.Roles))
+	for pguid := range roleCheck.Roles {
+		if pguid != roleCheck.Leader {
+			otherGUIDs = append(otherGUIDs, pguid)
 		}
+	}
+	sort.Slice(otherGUIDs, func(i, j int) bool { return otherGUIDs[i] < otherGUIDs[j] })
+	for _, pguid := range otherGUIDs {
+		roles := roleCheck.Roles[pguid]
 		packet.WriteU64(pguid)
 		if roles > 0 {
 			packet.WriteU8(1)
@@ -3235,7 +3292,7 @@ func (s *session) sendLFGRoleCheckUpdate(roleCheck *LfgRoleCheck) error {
 			packet.WriteU8(0)
 		}
 		packet.WriteU32(uint32(roles))
-		level := uint8(80)
+		level := uint8(0)
 		if s.server != nil {
 			if ms := s.server.findSessionByGUID(pguid); ms != nil && ms.player != nil {
 				level = ms.player.Level
