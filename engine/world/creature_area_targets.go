@@ -3202,7 +3202,7 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 			if reflector.Sess != nil {
 				_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, true)
 			}
-			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, reflector.Sess)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, reflector.Sess)
 		},
 		killCredit: func(ctx context.Context, target combatTarget) {
 			if reflector.Sess != nil {

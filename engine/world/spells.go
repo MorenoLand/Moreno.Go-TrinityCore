@@ -10750,7 +10750,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (Spell.cpp:4385-4389); the rune/ammo blocks ride along.
 		nearbyFlags := castFlags &^ protocol.SpellCastFlagPowerLeftSelf
 		nearbyPacket := protocol.BuildSpellGoWithPower(casterGUID, s.playerGUID, castID, spellID, nearbyFlags, castTimeStamp, packetHitTargets, missStatus, spellGoPacketTarget(spell, target), nil, goExtras)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	if isFishingSpell(spellID) {
 		// SpellEffects.cpp:4979: the bobber lifetime derives from the
@@ -17871,7 +17871,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if castFlags&protocol.SpellCastFlagPowerLeftSelf != 0 {
 				nearbyPacket = protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, goHitTargets, goMissStatus, goTarget, nil, goExtras)
 			}
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 
@@ -20618,7 +20618,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		s.server.broadcastAIReactionInInstance(mapID, s.player.InstanceID, guid, 2)
 		startPkt := buildAttackStart(guid, s.playerGUID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	_ = ctx
 }
@@ -35012,7 +35012,7 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	return true
 }

@@ -298,7 +298,7 @@ func (s *session) startAttackOn(ctx context.Context, victim uint64) {
 	startPayload := buildAttackStart(s.playerGUID, victim)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	// Unit::Attack's controlled-pet notify (Unit.cpp:5752-5760) fires for
 	// spell-driven attack starts too (EffectCharge calls Attack directly,
@@ -452,7 +452,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	startPayload := buildAttackStart(s.playerGUID, victim)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	s.notifyPetsOwnerAttacked(ctx, victim)
 	return true
@@ -1820,7 +1820,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID, scripting.CreatureEventOnOwnerAttacked)
 	}
 
@@ -2113,7 +2113,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
@@ -2495,7 +2495,7 @@ func (s *session) sendAttackStop(victim uint64, nowDead bool) error {
 	payload := buildAttackStop(s.playerGUID, victim, nowDead)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	return nil
 }
@@ -3076,7 +3076,7 @@ func (s *session) stopAttacksForFaction(ctx context.Context, factionID uint32) {
 	for _, guid := range stops {
 		packet := buildAttackStop(guid, s.playerGUID, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), packet, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), packet, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), packet, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 
@@ -3773,7 +3773,7 @@ func (s *session) stopControlledPetCombat() {
 	s.server.motionMu.Unlock()
 	stopPkt := buildAttackStop(s.player.PetGUID, victim, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s)
+	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 }
 
 // DuelCompleteType mirrors TrinityCore's DuelCompleteType enum.
@@ -3812,7 +3812,7 @@ func (s *session) castVisualSpell(spellID uint32) {
 	castPkt.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 

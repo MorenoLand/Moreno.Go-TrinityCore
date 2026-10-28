@@ -6898,7 +6898,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	if hitInfo&0x01 == 0 {
 		logPacket := buildSpellNonMeleeDamageLog(target.GUID, caster.GUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, true)
-		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPacket, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	if damage == 0 {
 		// A missed or deflected hit never reaches Unit::DealDamage in C++

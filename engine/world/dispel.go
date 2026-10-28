@@ -1509,7 +1509,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 		failPkt := buildDispelFailed(casterGUID, targetGUID, spell.ID, failList)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 
@@ -1520,7 +1520,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
 		}
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 
@@ -2491,7 +2491,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 		failPkt := buildDispelFailed(s.playerGUID, targetGUID, spell.ID, failList)
 		_ = s.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 
@@ -2502,7 +2502,7 @@ func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64,
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, true)
 		}
 		if s.server != nil {
-			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, s)
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		}
 	}
 }
