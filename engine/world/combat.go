@@ -3929,7 +3929,8 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 				if target == s || target == partner || !target.authed || !target.worldReady.Load() || target.player == nil {
 					continue
 				}
-				if target.player.Map == s.player.Map {
+				if target.player.Map == s.player.Map && target.player.InstanceID == s.player.InstanceID &&
+					distance3D(target.player.X, target.player.Y, target.player.Z, s.player.X, s.player.Y, s.player.Z) <= 100.0 {
 					_ = target.write(uint16(protocol.OpcodeSMSG_DUEL_WINNER), winnerPkt, true)
 				}
 			}

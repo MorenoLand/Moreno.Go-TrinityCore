@@ -2071,7 +2071,7 @@ func (s *session) broadcastLoginMovementState(opcode protocol.Opcode, movementFl
 	s.setLastMovementInfo(info)
 	packet := protocol.NewBuffer(112)
 	writeMovementInfo(packet, info)
-	s.server.broadcastToNearby(uint16(opcode), packet.Bytes(), s)
+	s.server.broadcastToVisibleSetFromSession(s, uint16(opcode), packet.Bytes())
 }
 
 func packedGUIDSize(guid uint64) int {

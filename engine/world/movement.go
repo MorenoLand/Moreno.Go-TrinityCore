@@ -1270,6 +1270,9 @@ func (s *session) discardMovementAck(payload []byte) bool {
 // position on this opcode.
 
 func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
+	if source != nil && source.player == nil {
+		return
+	}
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
