@@ -94,7 +94,7 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		s.setRestingFlag(s.player, true)
 		// WorldSession::HandleAreaTriggerOpcode (MiscHandler.cpp:686-695):
 		// inn rest clears the FFA PvP byte flag on FFA realms.
-		if (s.server.Config.GameType == 4 || s.server.Config.GameType == 6) && s.player.PVPFlags&pvpFlagFFA != 0 {
+		if s.server.Config.GameType == 16 && s.player.PVPFlags&pvpFlagFFA != 0 {
 			s.player.PVPFlags &^= pvpFlagFFA
 		}
 		s.sendPlayerUpdate()

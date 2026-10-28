@@ -434,7 +434,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
 	}
-	if s.server.Config.GameType == 1 || s.server.Config.GameType == 4 || s.server.Config.GameType == 8 {
+	if s.server.Config.GameType == 1 || s.server.Config.GameType == 8 || s.server.Config.GameType == 16 {
 		var accRace uint8
 		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT race FROM characters WHERE account = ? LIMIT 1", s.accountID).Scan(&accRace)
 		if err == nil {

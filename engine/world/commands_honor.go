@@ -224,8 +224,8 @@ func (s *session) rewardHonorKill(ctx context.Context, victim *session) {
 	if victim.hasAuraType(spellAuraNoPVPCredit) {
 		return
 	}
-	if teamForRace(s.player.Race) == teamForRace(victim.player.Race) && s.server.Config.GameType != 4 {
-		return // same team, not an FFA-PvP realm (World::IsFFAPvPRealm = GameType 4)
+	if teamForRace(s.player.Race) == teamForRace(victim.player.Race) && s.server.Config.GameType != 16 {
+		return // same team, not an FFA-PvP realm (World::IsFFAPvPRealm = GameType 16)
 	}
 	killerLevel := s.player.Level
 	killerGrey := uint8(grayLevel(uint32(killerLevel)))

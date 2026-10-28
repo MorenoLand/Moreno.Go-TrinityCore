@@ -3801,11 +3801,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
 	}
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
-	pvpFlags := state.PVPFlags
-	if s.Config.GameType == 4 || s.Config.GameType == 6 {
-		pvpFlags |= 0x01
-	}
-	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(pvpFlags)<<8 | uint32(state.ShapeshiftForm)<<24
+	values[unitFieldBytes2] = uint32(state.SheathState) | uint32(state.PVPFlags)<<8 | uint32(state.ShapeshiftForm)<<24
 	// Player::SetSheath (Player.cpp:9655-9682): the sheath state drives the
 	// three UNIT_VIRTUAL_ITEM_SLOT_ID values alongside the sheath byte.
 	values[unitVirtualItemSlotID] = state.VirtualItemSlots[0]
@@ -4463,11 +4459,7 @@ func (s *Server) buildPlayerValuesUpdateForRecipient(guid uint64, fields map[int
 			_, hasFaction := fields[unitFieldFaction]
 			if hasBytes2 || hasFaction {
 				if !hasBytes2 {
-					pvpFlags := source.PVPFlags
-					if s.Config.GameType == 4 || s.Config.GameType == 6 {
-						pvpFlags |= 0x01
-					}
-					bytes2 = uint32(source.SheathState) | uint32(pvpFlags)<<8
+					bytes2 = uint32(source.SheathState) | uint32(source.PVPFlags)<<8
 				}
 				if adjustedBytes2, faction, override := s.resolvePlayerGroupFactionFields(*source, *recipient, bytes2, partyMember, false); override {
 					if hasBytes2 {
