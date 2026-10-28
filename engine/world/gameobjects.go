@@ -1632,7 +1632,7 @@ func (s *Server) broadcastGameObjectCustomAnim(mapID uint32, guid uint64, anim u
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
 	buf.WriteU32(anim)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_CUSTOM_ANIM), buf.Bytes())
+	s.broadcastToVisibleSetForGameObjectOnMap(uint16(protocol.OpcodeSMSG_GAMEOBJECT_CUSTOM_ANIM), buf.Bytes(), mapID, guid)
 }
 
 func (s *Server) broadcastGameObjectResetState(mapID uint32, guid uint64) {
@@ -1641,7 +1641,7 @@ func (s *Server) broadcastGameObjectResetState(mapID uint32, guid uint64) {
 	}
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(guid)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_RESET_STATE), buf.Bytes())
+	s.broadcastToVisibleSetForGameObjectOnMap(uint16(protocol.OpcodeSMSG_GAMEOBJECT_RESET_STATE), buf.Bytes(), mapID, guid)
 }
 
 func (s *Server) broadcastGameObjectDespawn(mapID uint32, guid uint64) {
@@ -1650,7 +1650,16 @@ func (s *Server) broadcastGameObjectDespawn(mapID uint32, guid uint64) {
 	}
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(guid)
-	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes())
+	s.broadcastToVisibleSetForGameObjectOnMap(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, guid)
+}
+
+func (s *Server) broadcastGameObjectDespawnAt(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+	if s == nil {
+		return
+	}
+	buf := protocol.NewBuffer(8)
+	buf.WriteU64(guid)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, instanceID, x, y, z, nil)
 }
 
 func (s *Server) nextDynamicGameObjectLowGUID() uint32 {
@@ -1690,11 +1699,7 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		if dyn.InstanceID != 0 {
-			s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn.Map, dyn.InstanceID, dyn.X, dyn.Y, dyn.Z, nil)
-		} else {
-			s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
-		}
+		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn.Map, dyn.InstanceID, dyn.X, dyn.Y, dyn.Z, nil)
 	}
 	// Eluna GAMEOBJECT_EVENT_ON_ADD (event 12), fired from
 	// GameObject::AddToWorld (GameObject.cpp:233): (event, gameobject).
@@ -1971,12 +1976,16 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	}
 	s.objectsMu.Lock()
 	var mapID uint32
+	var instanceID uint32
+	var x, y, z float32
 	var ownerGUID uint64
 	var fishingHandled bool
 	var goType uint8
 	removed := false
 	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
 		mapID = dyn.Map
+		instanceID = dyn.InstanceID
+		x, y, z = dyn.X, dyn.Y, dyn.Z
 		ownerGUID = dyn.OwnerGUID
 		fishingHandled = dyn.FishingHandled
 		goType = dyn.Type
@@ -1998,7 +2007,11 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)
 		}
 	}
-	s.broadcastGameObjectDespawn(mapID, guid)
+	if removed {
+		s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z)
+	} else {
+		s.broadcastGameObjectDespawn(mapID, guid)
+	}
 	// Eluna GAMEOBJECT_EVENT_ON_REMOVE (event 13), fired from
 	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
 	// Only dynamic despawns have a live server-side object — static template

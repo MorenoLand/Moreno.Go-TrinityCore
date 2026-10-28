@@ -452,6 +452,34 @@ func (s *Server) broadcastToVisibleSetForGameObject(opcode uint16, payload []byt
 	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
 }
 
+func (s *Server) gameObjectPositionOnMap(mapID uint32, guid uint64) (instanceID uint32, x, y, z float32, ok bool) {
+	if s == nil {
+		return 0, 0, 0, 0, false
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
+	if st := s.dynamicGameObjects[guid]; st != nil && st.Map == mapID {
+		return st.InstanceID, st.X, st.Y, st.Z, true
+	}
+	for key, states := range s.instanceGameObjects {
+		if key.MapID != mapID {
+			continue
+		}
+		if st := states[guid]; st != nil {
+			return key.InstanceID, st.X, st.Y, st.Z, true
+		}
+	}
+	return 0, 0, 0, 0, false
+}
+
+func (s *Server) broadcastToVisibleSetForGameObjectOnMap(opcode uint16, payload []byte, mapID uint32, guid uint64) {
+	if instanceID, x, y, z, ok := s.gameObjectPositionOnMap(mapID, guid); ok {
+		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
+		return
+	}
+	s.broadcastToMap(mapID, opcode, payload)
+}
+
 func (s *Server) broadcastGameObjectCustomAnimInInstance(mapID, instanceID uint32, guid uint64, anim uint32) {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)

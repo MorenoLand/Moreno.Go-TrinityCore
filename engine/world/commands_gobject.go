@@ -276,7 +276,11 @@ func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID u
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.server.broadcastToMap(row.mapID, packet.Opcode, packet.Payload.Bytes())
+		if s.player != nil {
+			s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), row.mapID, s.player.InstanceID, row.x, row.y, row.z, nil)
+		} else {
+			s.server.broadcastToMap(row.mapID, packet.Opcode, packet.Payload.Bytes())
+		}
 	}
 }
 
