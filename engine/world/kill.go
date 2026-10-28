@@ -2873,6 +2873,11 @@ func (s *session) applyLevelUp(ctx context.Context, oldHP, oldMana uint32) {
 	oldStats := s.player.Stats
 	oldLevel := s.player.Level
 	s.player.Level++
+	// Player::GiveLevel (Player.cpp:2730) zeroes the level played-time
+	// counter; flush the lazy accumulator first so pre-level-up seconds
+	// stay on the old level instead of leaking into the new one.
+	s.updatePlayedTime(time.Now())
+	s.player.LevelPlayedTime = 0
 	s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
 	// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
 	s.autoBalanceOnLevelChanged()

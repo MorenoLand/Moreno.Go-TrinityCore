@@ -3279,20 +3279,20 @@ func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte
 
 	accept := payload[0]
 	if accept != 0 {
-		buf := protocol.NewBuffer(4)
-		buf.WriteU32(0)
-		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_SAVE_CREATED), buf.Bytes(), true)
-
-		// Player::BindToInstance() (Player.cpp:19189) returns without
-		// binding when the pending save is gone (reset between the warning
-		// and the answer) — the packet above is still sent, but no bind
-		// row and no calendar lockout may follow a deleted save.
+		// Player::BindToInstance() (Player.cpp:19189-19196) sends
+		// SMSG_INSTANCE_SAVE_CREATED only when the pending save still
+		// exists — a save reset between the warning and the answer sends
+		// nothing and binds nothing.
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			var saveID int64
 			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM instance WHERE id = ?", instanceID).Scan(&saveID); err != nil {
 				return true
 			}
 		}
+
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_SAVE_CREATED), buf.Bytes(), true)
 
 		if !s.isMapAdmissionGM() {
 			var resetTime uint32 = 7 * 86400
