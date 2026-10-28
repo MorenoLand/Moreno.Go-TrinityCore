@@ -1076,6 +1076,22 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 		refreshGroupMaxEnchantingLevel(srv, g)
 		srv.groups[g.ID] = g
 		leaderSess.groupID = g.ID
+		// Group::Create (Group.cpp:187-224) stores the group row and
+		// AddMember(leader) stores the leader row at creation; without
+		// them a runtime group never reloads (loadPlayerGroup keys on
+		// group_member) and its members vanish at restart. The id is
+		// MAX+1 under groupsMu, matching the calendar/auction pattern;
+		// a failed groups-row insert leaves DBID 0 and the group stays
+		// runtime-only, like the BG/LFG DBID-0 paths.
+		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+			var nextID int64
+			if err := srv.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM `groups`").Scan(&nextID); err == nil && nextID > 0 {
+				if _, err := srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP"), uint32(nextID), leaderGUID, g.LootMethod, g.LooterGUID, g.LootThreshold, 0, 0, 0, 0, 0, 0, 0, 0, g.GroupType, g.DungeonDiff, g.RaidDiff, g.MasterLooter); err == nil {
+					g.DBID = uint32(nextID)
+					_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), g.DBID, leaderGUID, 0, 0, 0)
+				}
+			}
+		}
 		// Group::Create (Group.cpp:158) sets PLAYER_FLAGS_GROUP_LEADER on
 		// the leader at creation; the update packet goes out after the
 		// group lock is released, like setGroupLeader.
@@ -1117,6 +1133,11 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	s.groupID = g.ID
 	groupObj := groupLuaObject(s.server, g)
 	srv.groupsMu.Unlock()
+	// Group::AddMember (Group.cpp:465) inserts the member row for every
+	// non-BG join; DBID 0 (BG raids, LFG groups by design) skips it.
+	if g.DBID != 0 && srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+		_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), g.DBID, s.playerGUID, 0, subGroup, 0)
+	}
 	if createdLeaderSess != nil {
 		createdLeaderSess.sendPlayerUpdate()
 	}

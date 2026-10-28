@@ -369,11 +369,13 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	groupSource.Members = append(groupSource.Members, groupMember{GUID: target.guid, Name: target.name, SubGroup: subGroup})
 	s.server.groupsMu.Unlock()
 	target.online.groupID = groupSource.ID
-	// Group::_addMember DB persist (Group.cpp:465).
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	// Group::_addMember DB persist (Group.cpp:465): non-BG groups only.
+	// A BG raid or LFG group (DBID 0, no groups row) previously wrote
+	// a guid-0 orphan row.
+	if groupSource.DBID != 0 && !groupSource.isBGGroup() && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), groupSource.DBID, target.guid, 0, subGroup, 0)
 	}
-	s.server.broadcastGroupList(groupSource) // Group::BroadcastGroupUpdate
+	s.server.broadcastGroupList(groupSource)                                         // Group::BroadcastGroupUpdate
 	s.sendSysMessage(fmt.Sprintf("%s joined %s's group.", target.name, source.name)) // LANG_GROUP_PLAYER_JOINED (1146)
 }
 
