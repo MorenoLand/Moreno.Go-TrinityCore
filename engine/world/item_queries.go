@@ -2,7 +2,6 @@ package world
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -122,15 +121,14 @@ func (s *session) handleItemQuerySingle(ctx context.Context, payload []byte) boo
 		return true
 	}
 	data, err := s.loadItemQueryData(ctx, entry)
-	if errors.Is(err, sql.ErrNoRows) {
-		s.debug("item query unknown", "account", s.accountName, "entry", entry)
-		return s.write(uint16(protocol.OpcodeSMSG_ITEM_QUERY_SINGLE_RESPONSE), buildItemQueryResponse(itemQueryData{Entry: entry}, false), true) == nil
-	}
 	if err != nil {
+		// HandleItemQuerySingleOpcode (ItemHandler.cpp:316-335) is an
+		// in-memory lookup that always answers: unknown entry sends the
+		// 0x80000000 deny, never silence. The creature and gameobject
+		// query arms answer the deny on any load error; the item arm
+		// dropped on non-NoRows errors instead — same deny here.
 		s.debug("item query failed", "account", s.accountName, "entry", entry, "error", err)
-		// HandleItemQuerySingleOpcode (ItemHandler.cpp:316-335) is an in-memory
-		// lookup with no disconnect arm — drop, conn open.
-		return true
+		return s.write(uint16(protocol.OpcodeSMSG_ITEM_QUERY_SINGLE_RESPONSE), buildItemQueryResponse(itemQueryData{Entry: entry}, false), true) == nil
 	}
 	s.debug("item query response", "account", s.accountName, "entry", entry, "name", data.Name)
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_QUERY_SINGLE_RESPONSE), buildItemQueryResponse(data, true), true) == nil

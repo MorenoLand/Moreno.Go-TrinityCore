@@ -1895,7 +1895,11 @@ func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool 
 	if err != nil {
 		return true
 	}
-	_, _ = r.ReadU64() // skip guid
+	if _, err := r.ReadU64(); err != nil {
+		// C++ reads (and skips) the guid: a short tail throws and the
+		// packet is skipped with no response (WorldSession.cpp:425-432).
+		return true
+	}
 
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
@@ -1909,6 +1913,12 @@ func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool 
 		}
 	}
 
+	// LoadItemSetNames (ObjectMgr.cpp) and the item_template load both
+	// clamp InventoryType >= MAX_INVTYPE (29) to INVTYPE_NON_EQUIP (0);
+	// the query response carries the clamped value, never the raw row.
+	if invType < 0 || invType >= 29 {
+		invType = 0
+	}
 	buf := protocol.NewBuffer(len(name) + 16)
 	buf.WriteU32(itemID)
 	buf.WriteCString(name)
