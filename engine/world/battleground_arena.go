@@ -1280,9 +1280,17 @@ func (s *Server) buildArenaPvPLogDataPacket(arena *arenaBattlegroundState) []byt
 		buf.WriteU8(0) // Not ended
 	}
 
-	// Player Scores
+	// Player Scores, GUID-ascending: C++ PlayerScores is
+	// std::map<uint32, BattlegroundScore*> (Battleground.h:339), and
+	// BuildPvPLogDataPacket iterates it in key order (Battleground.cpp:1221).
 	buf.WriteU32(uint32(numScores))
-	for _, sc := range arena.Scores {
+	guids := make([]uint64, 0, numScores)
+	for guid := range arena.Scores {
+		guids = append(guids, guid)
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	for _, guid := range guids {
+		sc := arena.Scores[guid]
 		buf.WriteU64(sc.GUID)
 		buf.WriteU32(sc.KillingBlows)
 		buf.WriteU8(sc.TeamID)

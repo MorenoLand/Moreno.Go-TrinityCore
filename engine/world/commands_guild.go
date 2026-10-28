@@ -128,6 +128,9 @@ func guildLowestRankID(ctx context.Context, cdb *sql.DB, guildID uint32) uint8 {
 
 // broadcastGuildEventTo delivers a guild event packet to every online guild
 // member, the Go shape of Guild::_BroadcastEvent (Guild.cpp:2430).
+// C++ Guild::BroadcastPacket (Guild.cpp:2155) reaches every connected roster
+// member via FindConnectedPlayer, which carries no IsInWorld gate, so no
+// worldReady gate here either.
 func (s *session) broadcastGuildEventTo(guildID uint32, payload []byte) {
 	if s.server == nil {
 		return
@@ -135,7 +138,7 @@ func (s *session) broadcastGuildEventTo(guildID uint32, payload []byte) {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
-		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != guildID {
+		if target.player == nil || target.player.GuildID != guildID {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), payload, true)
@@ -238,7 +241,7 @@ func (s *session) disbandGuildRows(ctx context.Context, guildID uint32) {
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for target := range s.server.sessions {
-		if !target.worldReady.Load() || target.player == nil || target.player.GuildID != guildID {
+		if target.player == nil || target.player.GuildID != guildID {
 			continue
 		}
 		target.player.GuildID = 0

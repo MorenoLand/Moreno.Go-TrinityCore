@@ -439,7 +439,7 @@ func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) {
 	s.server.sessionsMu.RLock()
 	var guids []uint64
 	for sess := range s.server.sessions {
-		if sess.player != nil {
+		if sess.player != nil && sess.worldReady.Load() {
 			guids = append(guids, sess.playerGUID)
 		}
 	}
