@@ -1746,7 +1746,7 @@ func (s *Server) fireKilledByCreatureHook(ctx context.Context, killer *creatureM
 // (ReplaceArgument). Player::GiveXP (Player.cpp:2658) fires it after the
 // dead/no-XP-gain/loot-recipient guards, before the max-level early return
 // and before the AutoBalance/xp_boost PlayerScript hooks, so the Go call
-// sits at the top of grantXPWithVictimGroup. The victim is the kill target
+// sits in grantXPWithVictimGroup right after those guards. The victim is the kill target
 // creature object, or nil for quest/exploration XP (C++ pushes a nil Unit).
 func (s *session) fireGiveXPHook(ctx context.Context, amount uint32, victimGUID uint64) uint32 {
 	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
@@ -1809,6 +1809,27 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, victimGUID uint64, grouped bool) {
 	if s.player == nil || amount == 0 {
 		return
+	}
+	// Player::GiveXP (Player.cpp:2642-2656): the dead, NO_XP_GAIN and
+	// loot-recipient guards run before OnGivePlayerXP, so a gated grant
+	// fires no hook below. The dead arm excepts battleground members
+	// (GetBattlegroundId, Player.h:1908); the group path already zeroes
+	// dead shares upstream (KillRewarder::_RewardXP IsAlive arm), so the
+	// exception only bites solo and non-kill grants. The loot arm is
+	// creature-only (TYPEID_UNIT) and reads the tap model
+	// (Creature::hasLootRecipient, Creature.h:218); an unresolvable victim
+	// fails open — C++ always holds the victim object at GiveXP time, so
+	// a missing motion is a Go-model gap, not a no-recipient arm.
+	if s.isDeadOrGhost() && s.bgData.InstanceID == 0 {
+		return
+	}
+	if s.player.PlayerFlags&playerFlagNoXPGain != 0 {
+		return
+	}
+	if victimGUID != 0 {
+		if motion := s.findCreatureMotion(victimGUID); motion != nil && motion.TapPlayerGUID == 0 && motion.TapGroupID == 0 {
+			return
+		}
 	}
 	// Eluna::OnGiveXP (PlayerHooks.cpp:228): fires before the PlayerScript
 	// hooks below; a numeric handler return rewrites the amount.

@@ -29,6 +29,7 @@ const (
 	characterFlagLockedByBilling uint32 = 0x01000000
 	characterFlagDeclined        uint32 = 0x02000000
 	playerFlagGhost              uint32 = 0x00000010
+	playerFlagNoXPGain           uint32 = 0x02000000 // PLAYER_FLAGS_NO_XP_GAIN (Player.h:358)
 	playerFlagOutOfBounds        uint32 = 0x00004000 // PLAYER_FLAGS_IS_OUT_OF_BOUNDS (Player.h:347) — cleared by Player::RepopAtGraveyard
 	playerFlagInPVP              uint32 = 0x00000200
 	playerFlagPVPTimer           uint32 = 0x00040000
@@ -526,7 +527,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation,
 		float32(0), float32(0), float32(0), float32(0), uint32(0), "",
 		cinematic,
-		uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0),
+		uint32(0), uint32(0), float32(0), uint32(time.Now().Unix()), uint8(0), uint32(0), uint32(0),
 		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
 		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
 		uint64(0), watchedFaction, drunkenness, uint32(1),
@@ -1479,7 +1480,10 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 		}
 		hostile = hostile || pvpRealm || inBattleground || area.Flags&wotlk.AreaFlagWintergrasp != 0
 	}
-	sanctuary := area.Flags&wotlk.AreaFlagSanctuary != 0
+	// AreaTableEntry::IsSanctuary (DBCStructure.h:198): the sanctuary flag
+	// or ContinentID 609 — the UpdateArea PvP byte reads the area form
+	// (Player.cpp:7177), while the rest arm below reads the zone form.
+	sanctuary := area.Flags&wotlk.AreaFlagSanctuary != 0 || area.ContinentID == 609
 	wasSanctuary := oldFlags&0x08 != 0
 	if sanctuary {
 		state.PVPFlags |= 0x08
