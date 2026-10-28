@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -2242,45 +2243,57 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 			}
 		}
 
-		if proposal.Group != 0 {
-			grp := s.server.getGroup(proposal.Group)
-			if grp != nil {
-				s.server.groupsMu.Lock()
-				grp.IsLFG = true
-				grp.LFGDungeonID = proposal.DungeonID
-				grp.LFGState = LFGStateDungeon
-				grp.LFGKicksLeft = lfgGroupMaxKicks
-				dbGroupID := grp.DBID
-				s.server.groupsMu.Unlock()
-				if dbGroupID == 0 {
-					dbGroupID = uint32(proposal.Group)
-				}
-				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, proposal.DungeonID, LFGStateDungeon)
+		// LFGMgr::MakeNewGroup (LFGMgr.cpp:1011-1151): ONE group for the
+		// whole proposal — the first connected player in leader, tank,
+		// healer, dps order creates it (Group::Create), every later
+		// player is removed from any other group (Group::RemoveMember)
+		// and added (Group::AddMember, roles via SetLfgRoles). The old
+		// arms broke both halves: the Group != 0 arm set LFG flags on
+		// the existing group but added no proposal player to it, and
+		// the Group == 0 arm created one single-member group per
+		// player instead of one shared group. A grouped proposal rides
+		// the existing group; a missing group falls through to
+		// creation, like C++'s proposal.group ? GetGroupByGUID : new.
+		var diff uint8
+		if dungeon, found, derr := s.server.Data.LFGDungeon(proposal.DungeonID); derr == nil && found {
+			diff = uint8(dungeon.Difficulty)
+		}
+		ordered := make([]uint64, 0, len(proposal.Players))
+		if _, ok := proposal.Players[proposal.Leader]; ok {
+			ordered = append(ordered, proposal.Leader)
+		}
+		for _, role := range []uint8{LFGRoleTank, LFGRoleHealer, LFGRoleDamage} {
+			for pguid, pdata := range proposal.Players {
+				if pguid != proposal.Leader && pdata.Role&^LFGRoleLeader == role {
+					ordered = append(ordered, pguid)
 				}
 			}
 		}
-
-		// LFGMgr::MakeNewGroup (LFGMgr.cpp:1050-1145): a proposal formed from
-		// the queue (Group == 0) creates a new LFG group for its players —
-		// new Group, ConvertToLFG, Create(player), SetLfgRoles — with the
-		// dungeon difficulty from the LFG dungeon data and the group update
-		// broadcast after creation. Grouped proposals ride the existing
-		// Group != 0 arm above. lfg_data persistence follows the
-		// deliberate DBID-0 design (no group roster persistence); the
-		// proposal.Group != 0 arm above keeps its existing write.
-		if proposal.Group == 0 {
-			var diff uint8
-			if dungeon, found, derr := s.server.Data.LFGDungeon(proposal.DungeonID); derr == nil && found {
-				diff = uint8(dungeon.Difficulty)
-			}
-			for pguid, pdata := range proposal.Players {
-				ps := s.server.findSessionByGUID(pguid)
-				if ps == nil || ps.player == nil || ps.groupID != 0 {
-					continue
+		for pguid := range proposal.Players {
+			seen := false
+			for _, g := range ordered {
+				if g == pguid {
+					seen = true
+					break
 				}
+			}
+			if !seen {
+				ordered = append(ordered, pguid)
+			}
+		}
+		var grp *groupState
+		if proposal.Group != 0 {
+			grp = s.server.getGroup(proposal.Group)
+		}
+		for _, pguid := range ordered {
+			pdata := proposal.Players[pguid]
+			ps := s.server.findSessionByGUID(pguid)
+			if ps == nil || ps.player == nil {
+				continue
+			}
+			if grp == nil {
 				s.server.groupsMu.Lock()
-				g := &groupState{
+				grp = &groupState{
 					ID:            newGroupID(),
 					LeaderGUID:    pguid,
 					LootMethod:    3,
@@ -2293,14 +2306,72 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 					LFGKicksLeft:  lfgGroupMaxKicks,
 					Members:       []groupMember{{GUID: pguid, Name: ps.player.Name, Roles: pdata.Role}},
 				}
-				s.server.groups[g.ID] = g
-				ps.groupID = g.ID
+				s.server.groups[grp.ID] = grp
+				ps.groupID = grp.ID
 				// Group::Create (Group.cpp:158) sets PLAYER_FLAGS_GROUP_LEADER
 				// on the leader at creation.
 				ps.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(ps.player.PlayerFlags, true)
 				s.server.groupsMu.Unlock()
-				s.server.broadcastGroupList(g)
+				continue
 			}
+			if ps.groupID != 0 && ps.groupID != grp.ID {
+				if old := s.server.getGroup(ps.groupID); old != nil {
+					_ = ps.removeFromGroup(ctx, old, ps, groupRemoveMethodDefault)
+				} else {
+					ps.groupID = 0
+				}
+			}
+			s.server.groupsMu.Lock()
+			added := true
+			for i := range grp.Members {
+				if grp.Members[i].GUID == pguid {
+					grp.Members[i].Roles = pdata.Role
+					added = false
+					break
+				}
+			}
+			if added {
+				grp.Members = append(grp.Members, groupMember{GUID: pguid, Name: ps.player.Name, Roles: pdata.Role})
+				refreshGroupMaxEnchantingLevel(s.server, grp)
+				ps.groupID = grp.ID
+				if pguid == grp.LeaderGUID {
+					ps.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(ps.player.PlayerFlags, true)
+				}
+			}
+			dbID := grp.DBID
+			s.server.groupsMu.Unlock()
+			// Group::AddMember (Group.cpp:465) inserts the member row
+			// for every non-BG join; DBID 0 (BG raids, LFG groups by
+			// design) skips it, matching the invite-accept arm.
+			if added && dbID != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), dbID, pguid, 0, 0, 0)
+			}
+		}
+		if grp != nil {
+			s.server.groupsMu.Lock()
+			grp.IsLFG = true
+			grp.LFGDungeonID = proposal.DungeonID
+			grp.LFGState = LFGStateDungeon
+			grp.LFGKicksLeft = lfgGroupMaxKicks
+			grp.DungeonDiff = diff
+			dbGroupID := grp.DBID
+			s.server.groupsMu.Unlock()
+			// The lfg_data write keeps the old Group != 0 arm's shape:
+			// a DB-loaded group writes under its DB id, a runtime
+			// group under the proposal group id; a freshly created
+			// group (Group == 0, DBID 0) writes nothing, preserving
+			// the deliberate DBID-0 design.
+			if proposal.Group != 0 {
+				if dbGroupID == 0 {
+					dbGroupID = uint32(proposal.Group)
+				}
+				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "REPLACE INTO lfg_data (guid, dungeon, state) VALUES (?, ?, ?)", dbGroupID, proposal.DungeonID, LFGStateDungeon)
+				}
+			}
+			// MakeNewGroup ends with grp->SendUpdate(): one list
+			// broadcast for the whole proposal, not one per member.
+			s.server.broadcastGroupList(grp)
 		}
 
 		for pguid := range proposal.Players {
@@ -2310,6 +2381,20 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				// on proposal accept.
 				if s.server.lfgSelectedRandomDungeon(pguid) {
 					ps.applyAura(lfgSpellDungeonCooldown)
+				}
+				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1543-1548): a player
+				// already on the dungeon's map is not teleported (the
+				// call errors instead of moving them); the cooldown above
+				// still applies, since MakeNewGroup grants it before the
+				// teleport pass. The !isNew playersToTeleport skip is
+				// vacuous here: every Go-formed proposal is isNew (solo
+				// proposals are new groups, grouped proposals have no
+				// live former), so it needs an IsNew field only when a
+				// queue matcher lands.
+				if ps.player != nil {
+					if mapID, _, _, _, _ := ps.getLFGDungeonEntrance(proposal.DungeonID); mapID != 0 && ps.player.Map == mapID {
+						continue
+					}
 				}
 				ps.teleportToLFGDungeon(proposal.DungeonID, false)
 			}
