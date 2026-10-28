@@ -302,13 +302,10 @@ func (s *session) handleFatigueTick(ctx context.Context, now time.Time) {
 		s.lastFatigueTick = now
 		s.fatigueTimer -= diffMs
 
-		if s.fatigueTimer <= 0 {
+		if s.fatigueTimer < 0 {
 			// Fatigue timer depleted (Player.cpp:914-924):
 			// Reset timer to 1 second so damage ticks every 1000ms
 			s.fatigueTimer += 1000
-			if s.fatigueTimer < 0 {
-				s.fatigueTimer = 0
-			}
 			if s.player.Health > 0 && !isGhost {
 				// Player.cpp:916-917: GetMaxHealth()/5 + urand(0, level-1)
 				damage := s.player.MaxHealth/5 + uint32(rand.Intn(int(s.player.Level)))
@@ -329,7 +326,7 @@ func (s *session) handleFatigueTick(ctx context.Context, now time.Time) {
 		}
 		s.lastFatigueTick = now
 		s.fatigueTimer += 10 * diffMs
-		if s.fatigueTimer >= maxFatigueTimerMs || (s.player.Health == 0 && !isGhost) {
+		if s.fatigueTimer >= maxFatigueTimerMs || s.player.Health == 0 {
 			s.fatigueTimer = -1
 			s.stopMirrorTimer(mirrorTimerFatigue)
 		}
