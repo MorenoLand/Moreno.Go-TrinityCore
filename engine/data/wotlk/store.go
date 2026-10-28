@@ -444,6 +444,27 @@ func (s *Store) CreatureFamilyPetFoodMask(familyID uint32) (uint32, bool, error)
 	return mask, err == nil, err
 }
 
+// CreatureFamilyPetTalentType mirrors CreatureFamilyEntry.PetTalentType
+// (DBCStructure.h:502, column 8): the hunter-pet talent tree index
+// (ferocity/tenacity/cunning), or a negative value for non-hunter families.
+// Player::LearnPetTalent (Player.cpp:25600-25606) rejects a null family row
+// and any negative PetTalentType before the PetTalentMask gate.
+func (s *Store) CreatureFamilyPetTalentType(familyID uint32) (int32, bool, error) {
+	if familyID == 0 {
+		return 0, false, nil
+	}
+	file, err := s.File("CreatureFamily")
+	if err != nil {
+		return 0, false, err
+	}
+	record, found := file.Find(familyID)
+	if !found {
+		return 0, false, nil
+	}
+	talentType, err := record.Int32(8)
+	return talentType, err == nil, err
+}
+
 func (s *Store) CreatureFamilyScale(familyID uint32) (minScale float32, minScaleLevel uint32, maxScale float32, maxScaleLevel uint32, found bool, err error) {
 	if familyID == 0 {
 		return 0, 0, 0, 0, false, nil
@@ -1932,11 +1953,12 @@ func (s *Store) Talent(id uint32) (TalentEntry, bool, error) {
 }
 
 // TalentTabEntry mirrors TrinityCore's TalentTabEntry (DBCStructure.h:1680).
-// Only the ClassMask column (20) is bridged here; PetTalentMask (21) is read
-// inline by PetTalentSpells.
+// ClassMask is column (20); PetTalentMask is column (21), read inline by
+// PetTalentSpells and by the pet-talent family gate in learnPetTalent.
 type TalentTabEntry struct {
-	ID        uint32
-	ClassMask uint32
+	ID            uint32
+	ClassMask     uint32
+	PetTalentMask uint32
 }
 
 // TalentTab loads a talent-tab record by ID from TalentTab.dbc.
@@ -1953,7 +1975,11 @@ func (s *Store) TalentTab(id uint32) (TalentTabEntry, bool, error) {
 	if err != nil {
 		return TalentTabEntry{}, false, err
 	}
-	return TalentTabEntry{ID: id, ClassMask: classMask}, true, nil
+	petTalentMask, err := record.Uint32(21)
+	if err != nil {
+		return TalentTabEntry{}, false, err
+	}
+	return TalentTabEntry{ID: id, ClassMask: classMask, PetTalentMask: petTalentMask}, true, nil
 }
 
 // TalentsByTab enumerates every talent record in one tree from Talent.dbc.

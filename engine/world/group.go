@@ -3342,6 +3342,25 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 		return true
 	}
 
+	// Player::GetBoundInstance (Player.cpp:19067-19080) runs the requested
+	// difficulty through GetDownscaledMapDifficultyData first and looks the
+	// bind up under the DOWNSCALED difficulty — a map with a single mode
+	// (e.g. a TBC raid with only difficulty 0) toggles its difficulty-0 bind
+	// when the client sends difficulty 1, and a request whose difficulty
+	// downscales to no MapDifficulty row at all finds no bind even if a
+	// character_instance row exists at the raw difficulty. Previously Go
+	// queried the raw difficulty, so single-mode binds never toggled and
+	// no-DBC-row binds toggled wrongly. DBC-unavailable keeps the legacy
+	// raw lookup rather than dropping the toggle.
+	lookupDifficulty := difficulty
+	if s.server != nil && s.server.Data != nil {
+		if _, downscaled, found, dErr := s.server.Data.DownscaledMapDifficulty(mapID, difficulty); dErr == nil {
+			if !found {
+				return true
+			}
+			lookupDifficulty = downscaled
+		}
+	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		// CalendarHandler.cpp:793-800: GetBoundInstance(mapId, difficulty,
@@ -3351,7 +3370,7 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 		err := cdb.QueryRowContext(ctx, `SELECT ci.extendState, ci.permanent 
 			FROM character_instance ci JOIN instance i ON i.id = ci.instance 
 			WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ?`,
-			s.playerGUID, mapID, difficulty).Scan(&curState, &permanent)
+			s.playerGUID, mapID, lookupDifficulty).Scan(&curState, &permanent)
 		if err != nil || permanent == 0 {
 			return true
 		}
@@ -3374,7 +3393,7 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 		}
 		_, _ = cdb.ExecContext(ctx, `UPDATE character_instance SET extendState = ? 
 			WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)`,
-			newState, s.playerGUID, mapID, difficulty)
+			newState, s.playerGUID, mapID, lookupDifficulty)
 		// The C++ handler ends here — BindToInstance writes the row and fires
 		// OnPlayerBindToInstance (no Go hook); it sends no calendar or raid
 		// packets (the SendCalendarRaidLockoutUpdated call in the old code was

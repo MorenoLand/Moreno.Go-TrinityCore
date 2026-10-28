@@ -3726,10 +3726,12 @@ const maxPetTalentScanRanks = 5
 // are unlearned like Pet::learnSpell's rank-chain arm, and the learned
 // spell is added to the live motion's spell list so later HasSpell checks
 // see it. The prereq-talent and tier spent-points gates below mirror
-// Player.cpp:25627-25673. Free-talent-point accounting
-// (Pet::GetFreeTalentPoints) and the family PetTalentMask gate have no Go
-// model yet (no usedTalentCount, no CreatureFamily entry) and stay
-// documented deviations.
+// Player.cpp:25627-25673. The free-talent-point gate, the family
+// PetTalentType gate and the tab PetTalentMask gate (Player.cpp:25573-25606,
+// 25622-25624) are ported below; the owner-aura bonus in
+// Pet::GetMaxTalentPointsForLevel (SPELL_AURA_MOD_PET_TALENT_POINTS) stays a
+// documented deviation (no owner-aura total on this path), so the cap is
+// the base (level-16)/4 for level >= 20, matching sendTalentsInfo.
 func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID uint64, talentID uint32, talentRank uint32) bool {
 	if petNumber == 0 || talentRank >= maxPetTalentRank || s == nil || s.server == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
@@ -3741,6 +3743,29 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	}
 	motion := s.controlledPetMotion(petGUID)
 	if motion == nil {
+		return false
+	}
+	// Player.cpp:25589-25606: the talent tab must exist, the pet's creature
+	// family (creature_template.family) must resolve to a CreatureFamily row
+	// with a non-negative PetTalentType, and the family's tree bit must sit
+	// in the tab's PetTalentMask — otherwise the learn is a silent no-op
+	// (this is the anti-cheat gate against learning another family's tree).
+	tabEntry, tabOK, tabErr := s.server.Data.TalentTab(tEntry.TabID)
+	if tabErr != nil || !tabOK {
+		return false
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var family int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", motion.Entry).Scan(&family); err != nil || family <= 0 {
+		return false
+	}
+	petTalentType, famOK, famErr := s.server.Data.CreatureFamilyPetTalentType(uint32(family))
+	if famErr != nil || !famOK || petTalentType < 0 {
+		return false
+	}
+	if (uint32(1)<<uint32(petTalentType))&tabEntry.PetTalentMask == 0 {
 		return false
 	}
 	known := [maxPetTalentScanRanks]bool{}
@@ -3763,6 +3788,35 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		}
 	}
 	if int(talentRank) <= curMax {
+		return false
+	}
+	// Player.cpp:25573-25579 + 25622-25624: learning needs free points
+	// (Pet::GetFreeTalentPoints, the UNIT_FIELD_BYTES_1 pet-talents byte set
+	// by Pet::InitTalentForLevel / addSpell / removeSpell) covering the
+	// incremental cost talentRank-curtalent_maxrank+1, where
+	// curtalent_maxrank is curMax+1 (0 when nothing is known) — so the
+	// needed points are talentRank-curMax in Go's -1-based curMax. The free
+	// count is recomputed from the live spell list exactly as C++ maintains
+	// m_usedTalentCount: GetMaxTalentPointsForLevel (level >= 20:
+	// (level-16)/4) minus the TalentSpellCost sum over known spells, where
+	// the owner-aura MOD_PET_TALENT_POINTS bonus is the documented residual
+	// above. Previously this gate was absent entirely, so a pet could learn
+	// past its point cap.
+	var maxPoints uint32
+	if motion.Level >= 20 {
+		maxPoints = (motion.Level - 16) / 4
+	}
+	var usedPoints uint32
+	for _, sp := range motion.Spells {
+		if cost, costErr := s.server.Data.TalentSpellCost(sp); costErr == nil {
+			usedPoints += cost
+		}
+	}
+	var freePoints uint32
+	if maxPoints > usedPoints {
+		freePoints = maxPoints - usedPoints
+	}
+	if freePoints < uint32(int(talentRank)-curMax) {
 		return false
 	}
 	// Player.cpp:25627-25641: a talent with PrereqTalent learns only when the
