@@ -88,7 +88,7 @@ const (
 	LFGTeleportErrorPlayerDead      uint32 = 1
 	LFGTeleportErrorFalling         uint32 = 2
 	LFGTeleportErrorInVehicle       uint32 = 3
-	LFGTeleportErrorFatigue         uint32 = 0 // LFGMgr.h:91 = 0 ("Original - 4"): the fatigue arm assigns 0, so the != OK check never fires — no SMSG_LFG_TELEPORT_DENIED, teleport proceeds.
+	LFGTeleportErrorFatigue         uint32 = 0 // LFGMgr.h:91 = 0 ("Original - 4"): the != OK send never fires, but the else-if chain still skips the teleport block — a fatigued player is blocked silently, not teleported.
 	LFGTeleportErrorInvalidLocation uint32 = 6
 	LFGTeleportErrorCharming        uint32 = 8
 
@@ -4288,7 +4288,19 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 			s.server.broadcastGroupList(grp)
 		}
 
+		// LFGMgr::MakeNewGroup (LFGMgr.cpp:1150-1152): the teleport pass
+		// runs TeleportPlayer(player, false) for every playersToTeleport
+		// member, so the full in-leg error chain applies here too — the
+		// old code teleported dead/falling/fatigued/vehicled/charmed/
+		// frozen members outright. playersToTeleport is built by
+		// iterating proposal.players, a std::map, so the pass runs in
+		// ascending GUID order, not Go map order.
+		teleportOrder := make([]uint64, 0, len(proposal.Players))
 		for pguid := range proposal.Players {
+			teleportOrder = append(teleportOrder, pguid)
+		}
+		sort.Slice(teleportOrder, func(i, j int) bool { return teleportOrder[i] < teleportOrder[j] })
+		for _, pguid := range teleportOrder {
 			if ps := s.server.findSessionByGUID(pguid); ps != nil {
 				// LFGMgr::MakeNewGroup (LFGMgr.cpp:1136-1141): the member
 				// loop grants the Dungeon Cooldown aura for a first
@@ -4298,21 +4310,38 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				if s.server.lfgFirstSelectedDungeonIsRandom(pguid) {
 					ps.applyAura(lfgSpellDungeonCooldown)
 				}
-				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1543-1548): a player
-				// already on the dungeon's map is not teleported; the
-				// cooldown above still applies, since MakeNewGroup
-				// grants it before the teleport pass. Players outside
-				// playersToTeleport (the !isNew skip: members already
-				// in the riding group) stay put.
+				// Players outside playersToTeleport (the !isNew skip:
+				// members already in the riding group) stay put.
 				if !teleportSet[pguid] {
 					continue
 				}
-				if ps.player != nil {
-					if mapID, _, _, _, _ := ps.getLFGDungeonEntrance(proposal.DungeonID); mapID != 0 && ps.player.Map == mapID {
-						continue
-					}
+				if ps.player == nil {
+					continue
 				}
-				ps.teleportToLFGDungeon(proposal.DungeonID, false)
+				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1531-1542): the
+				// error chain runs before the map block, so a blocked
+				// member reports its error instead of teleporting
+				// (fatigue silently: the C++ code is 0).
+				if teleportErr, proceed := ps.lfgTeleportInError(); !proceed {
+					if teleportErr != LFGTeleportErrorOK {
+						ps.sendLFGTeleportDenied(teleportErr)
+					}
+					continue
+				}
+				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1543-1548, 1568-1570):
+				// a member already on the dungeon map is not teleported
+				// and reports INVALID_LOCATION; the cooldown above still
+				// applies, since MakeNewGroup grants it before the
+				// teleport pass.
+				if mapID, _, _, _, _ := ps.getLFGDungeonEntrance(proposal.DungeonID); mapID != 0 && ps.player.Map == mapID {
+					ps.sendLFGTeleportDenied(LFGTeleportErrorInvalidLocation)
+					continue
+				}
+				// LFGMgr::TeleportPlayer (LFGMgr.cpp:1572-1578): a failed
+				// TeleportTo reports INVALID_LOCATION.
+				if !ps.teleportToLFGDungeon(proposal.DungeonID, false) {
+					ps.sendLFGTeleportDenied(LFGTeleportErrorInvalidLocation)
+				}
 			}
 		}
 		return true
@@ -4418,6 +4447,49 @@ func (s *session) hasCharmedCreature() bool {
 	return false
 }
 
+// lfgTeleportInError mirrors the LFGMgr::TeleportPlayer in-leg error chain
+// (LFGMgr.cpp:1531-1542). It returns the C++ error code and whether the
+// teleport block runs: dead, falling, fatigued, vehicled, charmed and
+// freeze-blocked players all skip the teleport. FATIGUE is 0 in C++
+// (LFGMgr.h:91, "Original - 4"), so the final != OK send never fires for
+// it — the player is blocked silently, not teleported. Unit::IsFalling
+// (Unit.cpp:13313) covers MOVEMENTFLAG_FALLING_FAR as well as FALLING,
+// so the falling arm reads isFallingFar too; spline falling and the
+// server-driven UNIT_STATE_JUMPING arm (MotionMaster JumpTo/MoveJump
+// only) have no Go player state and stay out.
+func (s *session) lfgTeleportInError() (uint32, bool) {
+	if s.player == nil {
+		return LFGTeleportErrorInvalidLocation, false
+	}
+	if s.player.Health == 0 || (s.player.PlayerFlags&playerFlagGhost != 0) {
+		return LFGTeleportErrorPlayerDead, false
+	}
+	if s.isFalling || s.isFallingFar {
+		return LFGTeleportErrorFalling, false
+	}
+	if s.isFatigueActive() {
+		return LFGTeleportErrorFatigue, false
+	}
+	if s.player.VehicleGUID != 0 {
+		return LFGTeleportErrorInVehicle, false
+	}
+	if s.hasCharmedCreature() { // GetCharmedGUID (LFGMgr.cpp:1538)
+		return LFGTeleportErrorCharming, false
+	}
+	if s.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:1540)
+		return LFGTeleportErrorInvalidLocation, false
+	}
+	return LFGTeleportErrorOK, true
+}
+
+// sendLFGTeleportDenied mirrors WorldSession::SendLfgTeleportError
+// (LFGHandler.cpp:621-628): SMSG_LFG_TELEPORT_DENIED carrying the error.
+func (s *session) sendLFGTeleportDenied(teleportErr uint32) {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(teleportErr)
+	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+}
+
 // handleLfgTeleport processes CMSG_LFG_TELEPORT (0x370).
 // Reference: WorldSession::HandleLfgTeleportOpcode (LFGHandler.cpp:144).
 func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
@@ -4459,42 +4531,26 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// Reference: LFGMgr::TeleportPlayer (LFGMgr.cpp:1529-1582)
-	teleportErr := LFGTeleportErrorOK
-	if s.player.Health == 0 || (s.player.PlayerFlags&playerFlagGhost != 0) {
-		teleportErr = LFGTeleportErrorPlayerDead
-	} else if s.isFalling {
-		teleportErr = LFGTeleportErrorFalling
-	} else if s.isFatigueActive() {
-		teleportErr = LFGTeleportErrorFatigue
-	} else if s.player.VehicleGUID != 0 {
-		teleportErr = LFGTeleportErrorInVehicle
-	} else if s.hasCharmedCreature() { // GetCharmedGUID (LFGMgr.cpp:1538)
-		teleportErr = LFGTeleportErrorCharming
-	} else if s.hasAura(9454) { // Freeze debuff (LFGMgr.cpp:1540)
-		teleportErr = LFGTeleportErrorInvalidLocation
-	}
-
-	if teleportErr != LFGTeleportErrorOK {
-		packet := protocol.NewBuffer(4)
-		packet.WriteU32(teleportErr)
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1531-1542): the in-leg error
+	// chain runs before the map/destination block; a blocked player is
+	// not teleported, and the denied packet goes out only for a nonzero
+	// error (FATIGUE is 0 in C++, so it blocks silently).
+	if teleportErr, proceed := s.lfgTeleportInError(); !proceed {
+		if teleportErr != LFGTeleportErrorOK {
+			s.sendLFGTeleportDenied(teleportErr)
+		}
 		return true
 	}
 
 	if dungeonMap != 0 && s.player.Map == dungeonMap {
-		packet := protocol.NewBuffer(4)
-		packet.WriteU32(LFGTeleportErrorInvalidLocation)
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+		s.sendLFGTeleportDenied(LFGTeleportErrorInvalidLocation)
 		return true
 	}
 
 	// LFGMgr::TeleportPlayer (LFGMgr.cpp:1572-1578): a failed TeleportTo
 	// reports LFG_TELEPORTERROR_INVALID_LOCATION.
 	if !s.teleportToLFGDungeon(lfgDungeonID, true) {
-		packet := protocol.NewBuffer(4)
-		packet.WriteU32(LFGTeleportErrorInvalidLocation)
-		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+		s.sendLFGTeleportDenied(LFGTeleportErrorInvalidLocation)
 	}
 	return true
 }
