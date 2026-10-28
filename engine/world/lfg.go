@@ -2161,6 +2161,225 @@ func (s *Server) lfgGroupDisbanded(g *groupState, memberGUIDs []uint64) {
 	}
 }
 
+// lfgGroupQueued reports whether the group holds a QUEUED group-queue entry,
+// the group-state proxy for the QUEUED arm of LFGMgr::LeaveLfg (LFGMgr.cpp:723-751)
+// when the caller must not drop the entry speculatively (LeaveQueuedGroup deletes it).
+func (m *LFGManager) lfgGroupQueued(groupID uint64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.groupQueue[groupID]
+	return ok && entry.State == LFGStateQueued
+}
+
+// lfgInDungeonMap mirrors LFGMgr::inLfgDungeonMap (LFGMgr.cpp:2266-2277) for a
+// live group: the group's dungeon (GetDungeon(gguid, true), the masked id)
+// resolves to a dungeon whose map and difficulty match the player's current
+// map and difficulty setting. The downscaled-instance edge (a map created at
+// a lower difficulty than the player's setting) has no Go model — the
+// instance difficulty is not stored on the player — so the setting is the
+// comparison, matching the non-downscaled common case.
+func (s *session) lfgInDungeonMap(g *groupState) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || g == nil || !g.IsLFG || g.LFGDungeonID == 0 {
+		return false
+	}
+	dungeon, found, err := s.server.Data.LFGDungeon(g.LFGDungeonID & 0x00FFFFFF)
+	if err != nil || !found || dungeon.MapID < 0 {
+		return false
+	}
+	if uint32(dungeon.MapID) != s.player.Map {
+		return false
+	}
+	diff := uint32(s.player.DungeonDifficulty)
+	if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && entry.IsRaid() {
+		diff = uint32(s.player.RaidDifficulty)
+	}
+	return dungeon.Difficulty == diff
+}
+
+// lfgEntryInDungeonMap is the groupless analog of inLfgDungeonMap: a player
+// with no live group but a surviving DUNGEON entry (a group disbanded while
+// they were offline leaves their entry untouched — disband clears listed
+// members only) is "in" the dungeon when the entry's first dungeon resolves
+// to the current map at the player's difficulty. It is the Go shape of the
+// C++ desync the groupless arm guards (LFGScripts.cpp:93-100): LFG data
+// still names a dungeon, but no valid group exists. FINISHED entries carry
+// no dungeons (SetState clears them), so they never qualify here.
+func (s *session) lfgEntryInDungeonMap(entry LFGQueueEntry) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	if entry.State != LFGStateDungeon || len(entry.Dungeons) == 0 {
+		return false
+	}
+	dungeon, found, err := s.server.Data.LFGDungeon(entry.Dungeons[0] & 0x00FFFFFF)
+	if err != nil || !found || dungeon.MapID < 0 {
+		return false
+	}
+	if uint32(dungeon.MapID) != s.player.Map {
+		return false
+	}
+	diff := uint32(s.player.DungeonDifficulty)
+	if mapEntry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapEntry.IsRaid() {
+		diff = uint32(s.player.RaidDifficulty)
+	}
+	return dungeon.Difficulty == diff
+}
+
+// leaveLFGPlayerForMapChange runs LFGMgr::LeaveLfg (LFGMgr.cpp:714-788) for a
+// groupless player at a map change: QUEUED drops the queue entry with the
+// player REMOVED send, PROPOSAL declines via the proposal's decline notify,
+// DUNGEON/FINISHED clears the state silently; NONE is a no-op. A groupless
+// player holds no group-keyed role check, so the ROLECHECK arm cannot fire.
+func (s *session) leaveLFGPlayerForMapChange() {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		return
+	}
+	lfg := s.server.Features.LFG
+	entry, ok := lfg.Status(s.playerGUID)
+	if !ok {
+		return
+	}
+	switch entry.State {
+	case LFGStateProposal:
+		if prop := lfg.DeclineProposalForPlayer(s.playerGUID); prop != nil {
+			s.server.sendLFGProposalDeclined(prop)
+		}
+	case LFGStateQueued:
+		if lfg.Leave(s.playerGUID) {
+			_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+		}
+	case LFGStateDungeon, LFGStateFinishedDungeon:
+		lfg.SetState(s.playerGUID, LFGStateNone)
+	}
+}
+
+// leaveLFGGroupForMapChange runs the group-guid arm of LFGMgr::LeaveLfg
+// (LFGMgr.cpp:714-788) before the map-change disband: ROLECHECK aborts the
+// live check with the handleLFGLeave abort notifies, PROPOSAL declines via
+// the group leader with the decline notify, QUEUED drops the group queue
+// entry with REMOVED sends; DUNGEON/FINISHED/NONE are no-ops for a group
+// guid (the DUNGEON arm only clears a lone player guid).
+func (s *session) leaveLFGGroupForMapChange(g *groupState, leaderGUID uint64) {
+	if s == nil || s.server == nil || g == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		return
+	}
+	lfg := s.server.Features.LFG
+	if rc := lfg.AbortRoleCheck(g.ID); rc != nil {
+		guids := make([]uint64, 0, len(rc.Roles))
+		for guid := range rc.Roles {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, guid := range guids {
+			if ms := s.server.findSessionByGUID(guid); ms != nil {
+				_ = ms.sendLFGRoleCheckUpdate(rc)
+			}
+		}
+		if ls := s.server.findSessionByGUID(rc.Leader); ls != nil {
+			_ = ls.sendLFGJoinResult(LFGJoinFailed, LFGRoleCheckAborted)
+		}
+		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY),
+			buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
+		return
+	}
+	if prop := lfg.DeclineProposalForPlayer(leaderGUID); prop != nil {
+		s.server.sendLFGProposalDeclined(prop)
+		return
+	}
+	if !lfg.lfgGroupQueued(g.ID) {
+		return
+	}
+	restore := g.IsLFG && g.LFGDungeonID != 0 &&
+		(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon)
+	affected := lfg.LeaveQueuedGroup(g.ID, 0, restore, g.LFGState)
+	inAffected := false
+	for _, guid := range affected {
+		if guid == s.playerGUID {
+			inAffected = true
+		}
+		if ms := s.server.findSessionByGUID(guid); ms != nil {
+			_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+		}
+	}
+	if !inAffected {
+		if restore {
+			lfg.SetState(s.playerGUID, g.LFGState)
+		} else {
+			lfg.SetState(s.playerGUID, LFGStateNone)
+		}
+		_ = s.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{})
+	}
+}
+
+// lfgOnMapChanged mirrors LFGPlayerScript::OnMapChanged (LFGScripts.cpp:93-131)
+// at Go's map-change completion points: the tail of completeWorldPort and the
+// login enter-world path in handlePlayerLogin. allowTeleport is false at
+// login: the groupless homebind redirect needs placement-stage handling, not
+// a teleport in the middle of the login packet flow, so login runs only the
+// LeaveLfg + aura legs (a documented residual, not a silent skip).
+//
+// The in-dungeon branch's name-query sends have no Go twin and are skipped
+// deliberately: the client already learns group members' names from
+// SMSG_GROUP_LIST and requests names on demand (handleNameQuery), so the
+// proactive send is redundant. The single-member disband arm is gated to
+// LFG groups: C++'s count-1 survivors are exactly the LFG/BG/BF
+// RemoveMember exceptions (Group.cpp:725-739), Go's BG groups never survive
+// at 1 (the shared removeFromGroup disband), and a non-LFG 1-member Go list
+// is a logout-detach artifact whose offline members are still DB members —
+// disbanding it would dissolve a group C++ keeps. For LFG groups the list
+// is the membership (DBID-0 by design, offline members never rejoin), so a
+// 1-member LFG group is real, and the solo-proposal group is the reachable
+// case: its sole member leaving the dungeon map disbands it.
+func (s *session) lfgOnMapChanged(ctx context.Context, allowTeleport bool) {
+	if s == nil || s.server == nil || s.player == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		return
+	}
+	lfg := s.server.Features.LFG
+	var grp *groupState
+	var memberGUIDs []uint64
+	var leaderGUID uint64
+	var isLFG bool
+	if s.groupID != 0 {
+		s.server.groupsMu.RLock()
+		if g := s.server.groups[s.groupID]; g != nil {
+			grp = g
+			leaderGUID = g.LeaderGUID
+			isLFG = g.IsLFG
+			for _, m := range g.Members {
+				memberGUIDs = append(memberGUIDs, m.GUID)
+			}
+		}
+		s.server.groupsMu.RUnlock()
+	}
+	if grp != nil && s.lfgInDungeonMap(grp) {
+		if s.server.lfgSelectedRandomDungeon(s.playerGUID) {
+			s.applyAuraWithDuration(lfgSpellLuckOfTheDraw, 7200000)
+		}
+		return
+	}
+	if grp == nil {
+		if entry, ok := lfg.Status(s.playerGUID); ok && s.lfgEntryInDungeonMap(entry) {
+			s.leaveLFGPlayerForMapChange()
+			s.removeAura(lfgSpellLuckOfTheDraw)
+			if allowTeleport {
+				s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, 0)
+			}
+			return
+		}
+	}
+	s.removeAura(lfgSpellLuckOfTheDraw)
+	if grp == nil || !isLFG || len(memberGUIDs) != 1 || memberGUIDs[0] != s.playerGUID || s.playerLoading {
+		return
+	}
+	s.leaveLFGGroupForMapChange(grp, leaderGUID)
+	s.server.groupsMu.RLock()
+	stillGrouped := s.server.groups[grp.ID] == grp
+	s.server.groupsMu.RUnlock()
+	if stillGrouped {
+		s.server.disbandGroup(ctx, grp, false)
+	}
+}
+
 // lfgPlayerBoot mirrors lfg::LfgPlayerBoot (LFGMgr.h:260-267): one active
 // kick vote on an LFG group.
 type lfgPlayerBoot struct {

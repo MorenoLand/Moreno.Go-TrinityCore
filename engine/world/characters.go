@@ -1116,6 +1116,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.triggerMapEntryEvent(ctx)
 	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
+	s.lfgOnMapChanged(ctx, false)
 	zoneID, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, state.Zone)
 	state.Zone = zoneID
 	s.player.Zone = state.Zone
@@ -1827,6 +1828,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	// instance and enters the new one.
 	s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
 	s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
+	s.lfgOnMapChanged(ctx, true)
 	return true
 }
 
