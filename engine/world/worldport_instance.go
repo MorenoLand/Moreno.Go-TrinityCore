@@ -71,27 +71,6 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		selection.InstanceID, selection.Difficulty = uint32(characterInstanceID), uint32(characterDifficulty)
 		return selection, true, nil
 	}
-	if s.initialLoginPending && state.InstanceID != 0 {
-		var savedMap, savedDifficulty int64
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, difficulty FROM instance WHERE id = ?", state.InstanceID).Scan(&savedMap, &savedDifficulty)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return selection, false, err
-		}
-		active := s.hasActiveWorldportInstance(state.Map, state.InstanceID)
-		if savedMap == int64(state.Map) && ((characterBound && characterInstanceID == int64(state.InstanceID)) || active) {
-			selection.InstanceID, selection.Difficulty = state.InstanceID, uint32(savedDifficulty)
-			selection.GroupPermanent, err = s.groupInstancePermanent(ctx, selection)
-			if err != nil {
-				return selection, false, err
-			}
-			return selection, true, nil
-		}
-		if errors.Is(err, sql.ErrNoRows) && active {
-			selection.InstanceID, selection.Difficulty = state.InstanceID, playerDifficulty
-			return selection, true, nil
-		}
-		return selection, false, nil
-	}
 	group := s.server.findGroupByID(s.groupID)
 	canBindGroup := group != nil && group.DBID != 0 && !group.isBGGroup()
 	groupDBID := uint32(0)
@@ -104,6 +83,40 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		}
 		if _, downscaled, groupModeFound, modeErr := s.server.Data.DownscaledMapDifficulty(state.Map, groupDifficulty); modeErr == nil && groupModeFound {
 			groupDifficulty = downscaled
+		}
+	}
+	if s.initialLoginPending && state.InstanceID != 0 {
+		var savedMap, savedDifficulty int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, difficulty FROM instance WHERE id = ?", state.InstanceID).Scan(&savedMap, &savedDifficulty)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return selection, false, err
+		}
+		active := s.hasActiveWorldportInstance(state.Map, state.InstanceID)
+		boundMismatch := characterBound && characterInstanceID != int64(state.InstanceID)
+		groupBoundMismatch := false
+		if !boundMismatch && canBindGroup {
+			var loginGroupInstanceID int64
+			groupErr := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT i.id FROM group_instance AS gi
+				JOIN instance AS i ON i.id = gi.instance WHERE gi.guid = ? AND i.map = ? AND i.difficulty = ? LIMIT 1`, groupDBID, state.Map, groupDifficulty).Scan(&loginGroupInstanceID)
+			if groupErr != nil && !errors.Is(groupErr, sql.ErrNoRows) {
+				return selection, false, groupErr
+			}
+			groupBoundMismatch = groupErr == nil && loginGroupInstanceID != int64(state.InstanceID)
+		}
+		if savedMap == int64(state.Map) && !boundMismatch && !groupBoundMismatch && ((characterBound && characterInstanceID == int64(state.InstanceID)) || active) {
+			selection.InstanceID, selection.Difficulty = state.InstanceID, uint32(savedDifficulty)
+			selection.GroupPermanent, err = s.groupInstancePermanent(ctx, selection)
+			if err != nil {
+				return selection, false, err
+			}
+			return selection, true, nil
+		}
+		if errors.Is(err, sql.ErrNoRows) && !boundMismatch && !groupBoundMismatch && active {
+			selection.InstanceID, selection.Difficulty = state.InstanceID, playerDifficulty
+			return selection, true, nil
+		}
+		if !boundMismatch && !groupBoundMismatch {
+			return selection, false, nil
 		}
 	}
 	var groupInstanceID, groupBoundDifficulty, groupPermanent int64
