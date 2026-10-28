@@ -4352,6 +4352,12 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 	// CHAR_INS_ARENA_TEAM_MEMBER; personal rating starts at the
 	// CONFIG_ARENA_START_PERSONAL_RATING default of 1000 (World.cpp:1218).
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1000)", teamID, captainGUID)
+	// ArenaTeam::Create runs AddMember(captain), which sets the online
+	// captain's live slot fields (ArenaTeam.cpp:175-178); the DB rows
+	// alone leave the client showing no team until relog.
+	if captSess := s.server.findSessionByGUID(captainGUID); captSess != nil {
+		setLiveArenaTeamSlot(captSess, teamType, teamID, true)
+	}
 	// LANG_ARENA_CREATE (864).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" created with id %d (type %dv%d, captain guid %d).", name, teamID, teamType, teamType, captainGUID))
 	s.debug("arena team created", "id", teamID, "name", name, "captain", captainName)

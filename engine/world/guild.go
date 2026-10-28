@@ -5264,7 +5264,8 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 
 	var ownerGUID int64
 	var guildName string
-	err = cdb.QueryRowContext(ctx, "SELECT ownerguid, name FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &guildName)
+	var petitionType uint32
+	err = cdb.QueryRowContext(ctx, "SELECT ownerguid, name, type FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &guildName, &petitionType)
 	if err != nil || ownerGUID == 0 || guildName == "" {
 		return true
 	}
@@ -5280,6 +5281,13 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, petitionGUID).Scan(&hasCharter)
 	if hasCharter == 0 {
 		return true
+	}
+
+	// PetitionsHandler.cpp:640-730: a non-guild charter is an arena
+	// charter — it must never fall through to the guild creation below
+	// (previously an arena turn-in with 9+ signatures created a guild).
+	if petitionType != uint32(charterTypeGuild) {
+		return s.turnInArenaPetition(ctx, r, petitionGUID, guildName, petitionType)
 	}
 
 	// Owner already in guild
@@ -5390,6 +5398,122 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	s.sendPlayerUpdate()
 	s.sendGuildCommandResult(guildCmdCreate, guildName, errGuildCommandSuccess)
 
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(petitionTurnOk)
+	_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)
+	return true
+}
+
+// turnInArenaPetition runs the arena branch of
+// WorldSession::HandleTurnInPetitionOpcode (PetitionsHandler.cpp:640-730):
+// bracket check, already-in-team and name-taken gates, type-1 signature
+// threshold, emblem fields from the packet tail, ArenaTeam::Create plus
+// AddMember for the captain and each signer, then the shared TURN_IN OK.
+// The signatures are copied before creation because AddMember's
+// RemovePetitionsAndSigns leg deletes this petition's rows.
+func (s *session) turnInArenaPetition(ctx context.Context, r *protocol.Buffer, petitionGUID uint64, teamName string, petitionType uint32) bool {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	// Check for valid arena bracket (2v2, 3v3, 5v5) == C++ GetSlotByType.
+	slot := arenaTeamSlotByType(petitionType)
+	if slot == 0xFF {
+		return true
+	}
+
+	// Check if player is already in an arena team of this slot.
+	if arenaTeamIDForSlot(ctx, cdb, s.playerGUID, petitionType) != 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, teamName, "", alreadyInArenaTeam)
+		return true
+	}
+
+	// Check if arena team name is already taken (case-insensitive ==
+	// ArenaTeamMgr::GetArenaTeamByName, StringEqualI).
+	var nameTaken int64
+	_ = cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE UPPER(name) = UPPER(?) LIMIT 1", teamName).Scan(&nameTaken)
+	if nameTaken > 0 {
+		s.sendArenaTeamCommandResult(arenaTeamCreateS, teamName, "", arenaTeamNameExistsS)
+		return true
+	}
+
+	// Signatures, copied before creation; requiredSignatures == type - 1.
+	var signers []int64
+	rows, _ := cdb.QueryContext(ctx, "SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
+	if rows != nil {
+		for rows.Next() {
+			var signerGUID int64
+			if err := rows.Scan(&signerGUID); err == nil && signerGUID != int64(s.playerGUID) {
+				signers = append(signers, signerGUID)
+			}
+		}
+		rows.Close()
+	}
+	if len(signers) < int(petitionType)-1 {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(petitionTurnNeedMoreSignatures)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)
+		return true
+	}
+
+	// Receive the rest of the packet in arena team creation case.
+	background, err1 := r.ReadU32()
+	icon, err2 := r.ReadU32()
+	iconColor, err3 := r.ReadU32()
+	border, err4 := r.ReadU32()
+	borderColor, err5 := r.ReadU32()
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+		return true
+	}
+
+	// ArenaTeam::Create + ArenaTeamMgr::GenerateArenaTeamId (MAX+1 twin).
+	var teamID uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(arenaTeamId), 0) + 1 FROM arena_team").Scan(&teamID); err != nil {
+		return true
+	}
+	// Stats.Rating starts at CONFIG_ARENA_START_RATING (1500 default; Go
+	// carries no config field for it, and 1500 is the rating fallback the
+	// arena code already uses).
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, 1500, ?, ?, ?, ?, ?)", teamID, teamName, s.playerGUID, petitionType, background, icon, iconColor, border, borderColor); err != nil {
+		return true
+	}
+
+	// ArenaTeam::Create runs AddMember(captain), whose
+	// RemovePetitionsAndSigns leg deletes this petition's rows — the
+	// signers list above is already copied, and the cleanup below is
+	// idempotent.
+	personalRating := arenaTeamJoinPersonalRating(s.server.Config.ArenaStartPersonalRating, 1500)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, s.playerGUID, personalRating)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", s.playerGUID, petitionType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", s.playerGUID, petitionType)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", s.playerGUID, petitionType)
+	setLiveArenaTeamSlot(s, petitionType, teamID, true)
+
+	// Add members from the copied signatures; AddMember skips a signer
+	// already in a team of this slot.
+	for _, signerGUID := range signers {
+		if arenaTeamIDForSlot(ctx, cdb, uint64(signerGUID), petitionType) != 0 {
+			continue
+		}
+		if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, signerGUID, personalRating); err != nil {
+			continue
+		}
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", signerGUID, petitionType)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", signerGUID, petitionType)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", signerGUID, petitionType)
+		if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil {
+			setLiveArenaTeamSlot(signerSess, petitionType, teamID, false)
+		}
+	}
+
+	// Clean up petition and charter item, as in the guild path.
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, petitionGUID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", petitionGUID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE petitionguid = ?", petitionGUID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE petitionguid = ?", petitionGUID)
+
+	_ = s.sendInventoryItems(ctx)
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(petitionTurnOk)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)

@@ -245,6 +245,85 @@ func arenaTeamSlotByType(aType uint32) uint32 {
 	return 0xFF
 }
 
+// setLiveArenaTeamSlot mirrors Player::SetInArenaTeam plus the
+// ARENA_TEAM_MEMBER leg of ArenaTeam::AddMember (Player.cpp:7101-7110,
+// ArenaTeam.cpp:175-178): the joiner's slot gains the team id, the team
+// type, and the member flag (0 captain, 1 member). C++ sets no other
+// field here — the slot was empty by the already-in-team gate, so the
+// games/personal fields stay at their zero values.
+func setLiveArenaTeamSlot(ms *session, aType, teamID uint32, captain bool) {
+	if ms == nil || ms.player == nil {
+		return
+	}
+	slot := arenaTeamSlotByType(aType)
+	if slot == 0xFF {
+		return
+	}
+	base := slot * 7
+	ms.player.ArenaTeamInfo[base] = teamID
+	ms.player.ArenaTeamInfo[base+1] = aType
+	if captain {
+		ms.player.ArenaTeamInfo[base+2] = 0
+	} else {
+		ms.player.ArenaTeamInfo[base+2] = 1
+	}
+	ms.sendPlayerUpdate()
+}
+
+// setLiveArenaTeamMemberFlag mirrors the single-field leg of
+// ArenaTeam::SetCaptain (ArenaTeam.cpp:287-303): only the member flag
+// flips, old captain to 1, new captain to 0.
+func setLiveArenaTeamMemberFlag(ms *session, aType uint32, captain bool) {
+	if ms == nil || ms.player == nil {
+		return
+	}
+	slot := arenaTeamSlotByType(aType)
+	if slot == 0xFF {
+		return
+	}
+	if captain {
+		ms.player.ArenaTeamInfo[slot*7+2] = 0
+	} else {
+		ms.player.ArenaTeamInfo[slot*7+2] = 1
+	}
+	ms.sendPlayerUpdate()
+}
+
+// clearLiveArenaTeamSlot mirrors the field-clearing leg of
+// ArenaTeam::DelMember (ArenaTeam.cpp:353-357): all seven slot fields
+// go back to zero.
+func clearLiveArenaTeamSlot(ms *session, aType uint32) {
+	if ms == nil || ms.player == nil {
+		return
+	}
+	slot := arenaTeamSlotByType(aType)
+	if slot == 0xFF {
+		return
+	}
+	for i := 0; i < 7; i++ {
+		ms.player.ArenaTeamInfo[slot*7+uint32(i)] = 0
+	}
+	ms.sendPlayerUpdate()
+}
+
+// arenaTeamJoinPersonalRating mirrors the personal-rating leg of
+// ArenaTeam::AddMember (ArenaTeam.cpp:126-131): CONFIG_ARENA_START_PERSONAL_RATING
+// wins when positive (1000 default); otherwise the joiner inherits 1000
+// only when the team rating is at least 1000, else 0. The uint16 cast
+// caps an oversized config.
+func arenaTeamJoinPersonalRating(startRating int32, teamRating uint32) uint32 {
+	if startRating > 0 {
+		if startRating > 0xFFFF {
+			return 0xFFFF
+		}
+		return uint32(startRating)
+	}
+	if teamRating >= 1000 {
+		return 1000
+	}
+	return 0
+}
+
 // arenaTeamIDForSlot returns the arena team id the character holds for the
 // given team type's slot, or 0. Mirrors Player::GetArenaTeamId(slot).
 func arenaTeamIDForSlot(ctx context.Context, cdb *sql.DB, guid uint64, aType uint32) uint32 {
@@ -407,19 +486,7 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", s.playerGUID, aType)
 
-	// Personal rating == C++ ArenaTeam::AddMember (ArenaTeam.cpp:126-131):
-	// CONFIG_ARENA_START_PERSONAL_RATING wins when positive (1000 default);
-	// otherwise the joiner inherits 1000 only when the team rating is at
-	// least 1000, else 0. The uint16 cast caps an oversized config.
-	personalRating := uint32(0)
-	if startRating := s.server.Config.ArenaStartPersonalRating; startRating > 0 {
-		personalRating = uint32(startRating)
-		if personalRating > 0xFFFF {
-			personalRating = 0xFFFF
-		}
-	} else if teamRating >= 1000 {
-		personalRating = 1000
-	}
+	personalRating := arenaTeamJoinPersonalRating(s.server.Config.ArenaStartPersonalRating, teamRating)
 	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, s.playerGUID, personalRating); err != nil {
 		s.sendArenaTeamCommandResult(arenaTeamCreateS, "", "", arenaTeamInternal)
 		return true
@@ -427,6 +494,11 @@ func (s *session) handleArenaTeamAccept(ctx context.Context, payload []byte) boo
 
 	// Player::SetArenaTeamIdInvited(0) on the online player == C++ AddMember.
 	s.arenaTeamInvited = 0
+
+	// ArenaTeam::AddMember (ArenaTeam.cpp:175-178) sets the joiner's live
+	// slot fields; the DB row alone leaves the client showing no team
+	// until relog.
+	setLiveArenaTeamSlot(s, aType, teamID, s.playerGUID == uint64(captainGUID))
 
 	// BroadcastEvent(ERR_ARENA_TEAM_JOIN_SS) == C++ (ArenaTeamHandler.cpp:200):
 	// the new member row is in the table, so the fan-out reaches every online
@@ -533,6 +605,9 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 				if rows.Scan(&mGUID) == nil {
 					if ms := s.server.findSessionByGUID(uint64(mGUID)); ms != nil && ms.player != nil {
 						ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+						// ArenaTeam::Disband runs DelMember per member
+						// (ArenaTeam.cpp:374-383), clearing each live slot.
+						clearLiveArenaTeamSlot(ms, aType)
 					}
 				}
 			}
@@ -553,6 +628,9 @@ func (s *session) handleArenaTeamLeave(ctx context.Context, payload []byte) bool
 	s.clearArenaTeamGroupQueues(ctx, cdb, teamID, uint8(aType), s.groupID, false)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, s.playerGUID)
 	s.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+	// ArenaTeam::DelMember (ArenaTeam.cpp:353-357) clears the leaver's
+	// live slot fields.
+	clearLiveArenaTeamSlot(s, aType)
 	// BroadcastEvent(ERR_ARENA_TEAM_LEAVE_SS) == C++ (ArenaTeamHandler.cpp:260):
 	// the leaver's row is gone, so the fan-out reaches only remaining members.
 	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaveSS, s.playerGUID, s.player.Name, teamName)
@@ -643,6 +721,9 @@ func (s *session) handleArenaTeamRemove(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, memberGUID)
 	if ms := s.server.findSessionByGUID(uint64(memberGUID)); ms != nil && ms.player != nil {
 		ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+		// ArenaTeam::DelMember (ArenaTeam.cpp:353-357) clears the removed
+		// member's live slot fields.
+		clearLiveArenaTeamSlot(ms, aType)
 	}
 	// BroadcastEvent(ERR_ARENA_TEAM_REMOVE_SSS) == C++
 	// (ArenaTeamHandler.cpp:358): removed member's row is gone, so the
@@ -708,6 +789,9 @@ func (s *session) handleArenaTeamDisband(ctx context.Context, payload []byte) bo
 			if rows.Scan(&mGUID) == nil {
 				if ms := s.server.findSessionByGUID(uint64(mGUID)); ms != nil && ms.player != nil {
 					ms.sendArenaTeamCommandResult(arenaTeamQuitS, teamName, "", 0)
+					// ArenaTeam::Disband runs DelMember per member
+					// (ArenaTeam.cpp:374-383), clearing each live slot.
+					clearLiveArenaTeamSlot(ms, aType)
 				}
 			}
 		}
@@ -778,6 +862,14 @@ func (s *session) handleArenaTeamLeader(ctx context.Context, payload []byte) boo
 	// (ERR_ARENA_TEAM_LEADER_CHANGED_SSS) == C++
 	// (ArenaTeamHandler.cpp:401): old captain, new captain, team name.
 	_, _ = cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", memberGUID, teamID)
+	// ArenaTeam::SetCaptain (ArenaTeam.cpp:287-303) flips the member flag
+	// on both captains' live slot fields.
+	if oldSess := s.server.findSessionByGUID(uint64(captainGUID)); oldSess != nil {
+		setLiveArenaTeamMemberFlag(oldSess, aType, false)
+	}
+	if newSess := s.server.findSessionByGUID(uint64(memberGUID)); newSess != nil {
+		setLiveArenaTeamMemberFlag(newSess, aType, true)
+	}
 	s.broadcastArenaTeamEvent(ctx, cdb, teamID, arenaTeamEventLeaderChangedSSS, 0, s.player.Name, name, teamName)
 	s.debug("arena team leader changed", "team", teamID, "captain", memberGUID)
 	return true
