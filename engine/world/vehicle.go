@@ -163,22 +163,47 @@ func (v *VehicleKit) GetAvailableSeatCount() uint8 {
 func (v *VehicleKit) GetNextEmptySeat(currSeatID int8, forward bool) (int8, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	n := int8(len(v.Seats))
-	if n == 0 {
+	if len(v.Seats) == 0 {
 		return -1, false
 	}
-	step := int8(1)
+	// Vehicle::GetNextEmptySeat (Vehicle.cpp:319-345) walks the SeatMap
+	// (std::map, ascending seat id) from the current seat, wrapping at
+	// the ends, and returns end at once when the current seat is absent
+	// from the map. The old index-modulo walk assumed dense 0..n-1 keys,
+	// so a kit whose Vehicle.dbc row skips a SeatIDs slot (createVehicleKit
+	// `continue`s on a 0 id) never reached seats past the gap, and it
+	// never returned the start seat itself when empty and enterable.
+	// HasPendingEventForSeat has no Go model and stays unmodeled.
+	keys := make([]int8, 0, len(v.Seats))
+	for id := range v.Seats {
+		keys = append(keys, id)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	start := -1
+	for i, id := range keys {
+		if id == currSeatID {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return -1, false
+	}
+	step := 1
 	if !forward {
 		step = -1
 	}
-	cur := currSeatID
-	for i := int8(0); i < n; i++ {
-		cur = (cur + step + n) % n
-		if s, ok := v.Seats[cur]; ok && s.IsEmpty() && s.SeatInfo != nil && (s.SeatInfo.CanEnterOrExit() || s.SeatInfo.IsUsableByOverride()) {
-			return cur, true
+	cur := start
+	for {
+		s := v.Seats[keys[cur]]
+		if s != nil && s.IsEmpty() && s.SeatInfo != nil && (s.SeatInfo.CanEnterOrExit() || s.SeatInfo.IsUsableByOverride()) {
+			return keys[cur], true
+		}
+		cur = (cur + step + len(keys)) % len(keys)
+		if cur == start {
+			return -1, false
 		}
 	}
-	return -1, false
 }
 
 // AddPassenger attempts to board a passenger onto the vehicle at seatID (-1 for first available).
@@ -195,9 +220,18 @@ func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8, wasUnselect
 	}
 
 	if seatID < 0 {
-		for id := int8(0); id < int8(len(v.Seats)); id++ {
-			s, exists := v.Seats[id]
-			if exists && s.IsEmpty() && s.SeatInfo != nil && (s.SeatInfo.CanEnterOrExit() || s.SeatInfo.IsUsableByOverride()) {
+		// Vehicle::AddPassenger (Vehicle.cpp:453-460) scans the SeatMap in
+		// key order for the first empty enterable seat; the old 0..len-1
+		// scan missed seats past a skipped SeatIDs slot, same gap as
+		// GetNextEmptySeat above.
+		keys := make([]int8, 0, len(v.Seats))
+		for id := range v.Seats {
+			keys = append(keys, id)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, id := range keys {
+			s := v.Seats[id]
+			if s != nil && s.IsEmpty() && s.SeatInfo != nil && (s.SeatInfo.CanEnterOrExit() || s.SeatInfo.IsUsableByOverride()) {
 				seatID = id
 				break
 			}
@@ -1031,6 +1065,14 @@ func (s *session) exitVehicle(ctx context.Context) {
 				}
 			}
 		}
+	}
+
+	// Unit::_ExitVehicle (Unit.cpp:13199-13200): a player leaving a vehicle
+	// mid-mounted-duel forfeits it — DuelComplete(DUEL_FLED), partner as
+	// winner — matching the out-of-bounds fled arm's endDuel(false,
+	// duelPartner, true) call. Runs after RemovePassenger above, as in C++.
+	if s.duelPartner != 0 && s.duelMounted {
+		s.endDuel(false, s.duelPartner, true)
 	}
 
 	// VehicleAI::OnCharmed (CombatAI.cpp:295-306): when the last passenger
