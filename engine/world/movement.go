@@ -762,7 +762,17 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	} else {
 		broadcastInfo.Time = uint32(moveTime)
 	}
-	s.setLastMovementInfo(broadcastInfo)
+	// MovementHandler.cpp:389 — the generic path stores the packet on the
+	// MOVER's m_movementInfo, so a driven vehicle's packet belongs to the
+	// vehicle, not the player: the session store stands in for the player's
+	// own info (knockback/not-active/dismiss all assign _player), and the
+	// player-scoped readers (KillPlayer flying check, player:IsFlying,
+	// archer victim flying, movementInfoForCreate) must keep reading the
+	// frozen pre-boarding flags. The broadcast below still carries the
+	// vehicle packet to the set.
+	if !vehicleMover {
+		s.setLastMovementInfo(broadcastInfo)
+	}
 	packet := protocol.NewBuffer(len(payload))
 	writeMovementInfo(packet, broadcastInfo)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), broadcastInfo, s)
@@ -1571,10 +1581,14 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return true
 	}
-	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped.
-	s.movementMu.Lock()
-	s.lastMovementInfo.Time += timeSkipped
-	s.movementMu.Unlock()
+	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped,
+	// so while driving the skipped time belongs to the vehicle's info, not
+	// the player-scoped store (same gate as the set-can-fly flag copy).
+	if !s.controlsVehicle() {
+		s.movementMu.Lock()
+		s.lastMovementInfo.Time += timeSkipped
+		s.movementMu.Unlock()
+	}
 	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(moverGUID)
 	buf.WriteU32(timeSkipped)
