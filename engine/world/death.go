@@ -2731,6 +2731,13 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 		s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
 	}
 	if s.inWintergraspBattlefield() {
+		// BattlefieldWG::OnCreatureCreate spirit-guide assignment (see
+		// assignWGSpiritGuide): Go has no creature-create dispatch for
+		// DB spawns, so the guide is assigned when a ghost first queues
+		// at it -- the ghost stands at the guide, so the player's
+		// current area is the guide's area.
+		_, areaID := s.server.zoneAndAreaID(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Zone)
+		s.server.assignWGSpiritGuide(guid, areaID)
 		// BfGraveyard::AddPlayer (Battlefield.cpp:618-627): the waiting
 		// aura lands only on a fresh queue insert.
 		if s.server.queueWGSpiritRevive(s.playerGUID, guid) {

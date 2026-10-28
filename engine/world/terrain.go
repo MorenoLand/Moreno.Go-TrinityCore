@@ -374,25 +374,6 @@ func (s *session) wgForZone(zoneID uint32) *wgBattlegroundState {
 	return wg
 }
 
-// wgWorkshopForAreaID maps the four park/graveyard areas to Go workshop slots
-// the way BattlefieldWG::GetData(area) resolves them through
-// GetSpiritGraveyardId (BattlefieldWG.cpp:1134-1149): "Graveyards and
-// Workshops are controlled by the same team", so the workshop's TeamControl
-// is the faithful GetData value.
-func wgWorkshopForAreaID(areaID uint32) uint8 {
-	switch areaID {
-	case 4538: // AREA_THE_SUNKEN_RING (SharedDefines.h:3835)
-		return WGWorkshopNE
-	case 4539: // AREA_THE_BROKEN_TEMPLATE (SharedDefines.h:3836)
-		return WGWorkshopNW
-	case 4611: // AREA_WESTPARK_WORKSHOP (SharedDefines.h:3839)
-		return WGWorkshopSW
-	case 4612: // AREA_EASTPARK_WORKSHOP (SharedDefines.h:3840)
-		return WGWorkshopSE
-	}
-	return WGMaxWorkshops
-}
-
 // spellAreaExtraConditionFits mirrors the extra-conditions switch at the tail
 // of SpellArea::IsFitToRequirements (SpellMgr.cpp:718-781): after the
 // gender/race/area/quest/aura terms, these spells carry extra player-gated
@@ -428,13 +409,19 @@ func (s *session) spellAreaExtraConditionFits(spellID, zoneID, areaID uint32) bo
 		}
 		// bf->GetTypeId() == BATTLEFIELD_WG is structural: the Go WG state is
 		// always the WG battlefield. C++ passes newArea (the rule's area) to
-		// GetData; the Go path carries the same areaID.
-		workshopID := wgWorkshopForAreaID(areaID)
-		if workshopID >= WGMaxWorkshops {
+		// GetData, which resolves through the graveyard, not the workshop
+		// (BattlefieldWG.cpp:1134-1149): GetSpiritGraveyardId maps the
+		// area to a graveyard, and the graveyard's control is the crossed
+		// workshop's team -- workshop GiveControlTo flips GY[WorkshopId]
+		// (BattlefieldWG.cpp:1800-1801), so the Eastpark area reads the
+		// Sunken Ring workshop's team, not Eastspark's. Reading workshop
+		// control directly inverts all four areas.
+		gy, ok := wgSpiritGraveyardID(areaID)
+		if !ok {
 			return false
 		}
 		wg.mu.Lock()
-		team := wg.Workshops[workshopID].TeamControl
+		team := wg.Graveyards[gy].TeamControl
 		wg.mu.Unlock()
 		if team == WGTeamHorde {
 			return spellID == 56618

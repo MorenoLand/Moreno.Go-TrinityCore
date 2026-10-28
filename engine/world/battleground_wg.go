@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -111,6 +112,15 @@ const (
 	WGGraveyardAlliance uint8 = 6
 	WGMaxGraveyards           = 7
 
+	// Wintergrasp sub-area IDs (SharedDefines.h AreaId enum, :3834-3840)
+	// for the spirit-graveyard mapping below; WGZoneID already carries
+	// AREA_WINTERGRASP (4197).
+	WGAreaSunkenRing      uint32 = 4538
+	WGAreaBrokenTemplate  uint32 = 4539
+	WGAreaFortress        uint32 = 4575
+	WGAreaChilledQuagmire uint32 = 4589
+	WGAreaWestpark        uint32 = 4611
+	WGAreaEastpark        uint32 = 4612
 	// Tower WorldStates
 	WGWorldStateTowerShadowsight uint32 = 3704 // West South Tower
 	WGWorldStateTowerWintersEdge uint32 = 3705 // South South Tower
@@ -235,9 +245,10 @@ type wgWorkshopState struct {
 // Graveyard definition: one entry per WGGraveyard row
 // (BattlefieldWG.cpp:53-64: position, WorldSafeLocs ID, gossip text ID,
 // starting controller). TeamControl is the BfGraveyard::m_ControlTeam
-// value; the spirit-guide/resurrect-queue halves of BfGraveyard are not
-// modeled per graveyard (Go keeps the single battlefield-level
-// ReviveQueue), so only control is tracked here.
+// value; the spirit guides live in wgBattlegroundState.SpiritGuides
+// (BfGraveyard::m_SpiritGuide, one guide GUID per graveyard per team),
+// while the resurrect queue itself stays battlefield-level (ReviveQueue)
+// with per-graveyard attribution resolved through that table.
 type wgGraveyardState struct {
 	ID           uint8
 	SafeLocID    uint32
@@ -301,8 +312,12 @@ type wgBattlegroundState struct {
 	// HandleBattlefieldEnable / ToggleBattlefield).
 	Enabled bool
 
-	Workshops         [WGMaxWorkshops]wgWorkshopState
-	Graveyards        [WGMaxGraveyards]wgGraveyardState
+	Workshops  [WGMaxWorkshops]wgWorkshopState
+	Graveyards [WGMaxGraveyards]wgGraveyardState
+	// SpiritGuides mirrors BfGraveyard::m_SpiritGuide per graveyard
+	// (Battlefield.cpp:668): [graveyard][team] guide GUIDs, set by
+	// assignWGSpiritGuide; 0 means no guide assigned yet.
+	SpiritGuides      [WGMaxGraveyards][2]uint64
 	Towers            [WGMaxTowers]wgTowerState
 	Gates             [2]wgGateState // 0: Fortress Gate, 1: Vault Gate
 	Walls             []wgWallState
@@ -331,8 +346,9 @@ type wgBattlegroundState struct {
 	// ReviveQueue is the Wintergrasp spirit-healer revive queue
 	// (playerGUID -> spirit-guide GUID). C++ fans the queue out per
 	// graveyard (BfGraveyard::m_ResurrectQueue, Battlefield.cpp:605-627);
-	// Go keeps the single battlefield-level queue: the Graveyards list
-	// tracks control only, not per-graveyard queues.
+	// Go keeps the single battlefield-level queue, with per-graveyard
+	// attribution resolved through SpiritGuides (a queued player's
+	// guide identifies its graveyard, as in AddPlayerToResurrectQueue).
 	ReviveQueue map[uint64]uint64
 	// LastResurrectTimer mirrors Battlefield::m_LastResurrectTimer
 	// (Battlefield.cpp:62,191-199): time until the next 30-second
@@ -405,6 +421,155 @@ func (wg *wgBattlegroundState) initGraveyards() {
 func (wg *wgBattlegroundState) updateGraveyardsFromWorkshops() {
 	for w := uint8(0); w < WGWorkshopKeepWest; w++ {
 		wg.Graveyards[w].TeamControl = wg.Workshops[w].TeamControl
+	}
+}
+
+// wgSpiritGraveyardID mirrors BattlefieldWG::GetSpiritGraveyardId
+// (BattlefieldWG.cpp:794-815): the area a spirit guide stands in selects
+// its graveyard. The boolean reports whether the area matched: C++ logs
+// an error and returns 0 (the NE graveyard) for unknown areas, but a Go
+// caller that cannot resolve the terrain area must not mis-attribute a
+// guide to NE, so unknown areas report false and the caller skips.
+func wgSpiritGraveyardID(areaID uint32) (uint8, bool) {
+	switch areaID {
+	case WGAreaFortress:
+		return WGGraveyardKeep, true
+	case WGAreaSunkenRing:
+		return WGGraveyardNE, true
+	case WGAreaBrokenTemplate:
+		return WGGraveyardNW, true
+	case WGAreaWestpark:
+		return WGGraveyardSW, true
+	case WGAreaEastpark:
+		return WGGraveyardSE, true
+	case WGZoneID:
+		return WGGraveyardAlliance, true
+	case WGAreaChilledQuagmire:
+		return WGGraveyardHorde, true
+	}
+	return WGGraveyardNE, false
+}
+
+// assignWGSpiritGuide mirrors the spirit-guide arm of
+// BattlefieldWG::OnCreatureCreate (BattlefieldWG.cpp:823-832): a dwarven
+// guide (31842) serves Alliance, a taunka guide (31841) Horde, and the
+// area it stands in selects its graveyard (BfGraveyard::SetSpirit,
+// Battlefield.cpp:660-670, stores the guide per graveyard per team).
+// Go has no creature-create dispatch for DB spawns -- spirit guides never
+// enter the motion system -- so assignment fires when a ghost first
+// queues at the guide, which covers every guide that can ever hold a
+// queue: a guide with no queue needs no attribution. Non-guide entries
+// and unmapped areas leave the table untouched.
+func (s *Server) assignWGSpiritGuide(spiritGUID uint64, areaID uint32) {
+	var team uint32
+	switch uint32((spiritGUID >> 24) & 0xFFFFFF) {
+	case WGCreatureSpiritGuideAlliance:
+		team = WGTeamAlliance
+	case WGCreatureSpiritGuideHorde:
+		team = WGTeamHorde
+	default:
+		return
+	}
+	gy, ok := wgSpiritGraveyardID(areaID)
+	if !ok {
+		return
+	}
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	wg.SpiritGuides[gy][team] = spiritGUID
+	wg.mu.Unlock()
+}
+
+// wgGraveyardForSpiritGuide resolves a queued spirit guide back to its
+// graveyard -- the AddPlayerToResurrectQueue lookup
+// (Battlefield.cpp:605-616), which finds the graveyard holding the guide
+// (BfGraveyard::HasNpc, :760-770). Caller holds wg.mu.
+func (wg *wgBattlegroundState) wgGraveyardForSpiritGuide(spiritGUID uint64) (uint8, bool) {
+	for gy := uint8(0); gy < WGMaxGraveyards; gy++ {
+		if wg.SpiritGuides[gy][WGTeamAlliance] == spiritGUID || wg.SpiritGuides[gy][WGTeamHorde] == spiritGUID {
+			return gy, true
+		}
+	}
+	return 0, false
+}
+
+// queuedDeadAtGraveyard collects the queued ghosts attributed to one
+// graveyard, in ascending GUID order (C++ iterates the GuidSet, so the
+// relocation order is GUID order). Caller holds wg.mu. Queued players
+// whose guide was never assigned (unmapped area) are skipped: with no
+// attribution they cannot be proven to belong to this graveyard.
+func (wg *wgBattlegroundState) queuedDeadAtGraveyard(gy uint8) []uint64 {
+	var out []uint64
+	for playerGUID, spiritGUID := range wg.ReviveQueue {
+		if atGY, ok := wg.wgGraveyardForSpiritGuide(spiritGUID); ok && atGY == gy {
+			out = append(out, playerGUID)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// closestWGGraveyard mirrors Battlefield::GetClosestGraveyard
+// (Battlefield.cpp:579-600): among the graveyards controlled by the
+// player's team, the nearest by 2D distance from the graveyard's
+// WorldSafeLocs position (BfGraveyard::GetDistance, :677-681). Squared
+// distances compare in the same order as C++'s GetDistance2d. No
+// team-controlled graveyard, or no resolvable SafeLocs row, reports
+// not-found (C++ returns nullptr).
+func (s *Server) closestWGGraveyard(team uint32, x, y float32) (wotlk.WorldSafeLoc, bool) {
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	graves := wg.Graveyards
+	wg.mu.Unlock()
+	if s.Data == nil {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	var best wotlk.WorldSafeLoc
+	bestDist := float32(-1)
+	for i := range graves {
+		if graves[i].TeamControl != team {
+			continue
+		}
+		loc, found, err := s.Data.WorldSafeLoc(graves[i].SafeLocID)
+		if err != nil || !found {
+			continue
+		}
+		dx, dy := loc.X-x, loc.Y-y
+		if dist := dx*dx + dy*dy; bestDist < 0 || dist < bestDist {
+			best, bestDist = loc, dist
+		}
+	}
+	if bestDist < 0 {
+		return wotlk.WorldSafeLoc{}, false
+	}
+	return best, true
+}
+
+// relocateWGDeadPlayers mirrors BfGraveyard::RelocateDeadPlayers
+// (Battlefield.cpp:745-770): ghosts queued at a graveyard that just
+// changed control teleport to the closest graveyard their team still
+// controls, on the same map, keeping orientation. C++ computes the
+// closest grave for the first queued player and reuses it for the rest
+// (closestGrave cached across the loop); a player with no
+// team-controlled grave is skipped without poisoning the cache, so
+// later players still get a computed grave. Caller holds no lock: the
+// teleport's zone-change path takes wg.mu.
+func (s *Server) relocateWGDeadPlayers(playerGUIDs []uint64) {
+	var grave wotlk.WorldSafeLoc
+	haveGrave := false
+	for _, playerGUID := range playerGUIDs {
+		sess := s.findSessionByGUID(playerGUID)
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		if !haveGrave {
+			loc, found := s.closestWGGraveyard(teamForRace(sess.player.Race), sess.player.X, sess.player.Y)
+			if !found {
+				continue
+			}
+			grave, haveGrave = loc, true
+		}
+		sess.teleportTo(WGMapID, grave.X, grave.Y, grave.Z, sess.player.Orientation)
 	}
 }
 
@@ -1207,18 +1372,20 @@ func (s *Server) DestroyWGBuilding(entry uint32) bool {
 func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName string) bool {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
-	defer wg.mu.Unlock()
 
 	if int(workshopID) >= len(wg.Workshops) {
+		wg.mu.Unlock()
 		return false
 	}
 	// Keep workshops cannot be captured
 	if workshopID == WGWorkshopKeepWest || workshopID == WGWorkshopKeepEast {
+		wg.mu.Unlock()
 		return false
 	}
 
 	ws := &wg.Workshops[workshopID]
 	if ws.TeamControl == team {
+		wg.mu.Unlock()
 		return true // already controlled
 	}
 	// WintergraspWorkshop::GiveControlTo(TEAM_NEUTRAL)
@@ -1244,10 +1411,13 @@ func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName s
 	// (they also return false above). The index is the workshop enum
 	// ID, crossed against the graveyard enum exactly as in C++ — see
 	// updateGraveyardsFromWorkshops. The BfGraveyard::GiveControlTo
-	// RelocateDeadPlayers leg has no Go twin: Go's revive queue is
-	// battlefield-level, not per-graveyard (see ReviveQueue).
+	// RelocateDeadPlayers leg runs below: ghosts queued at the flipped
+	// graveyard (attributed through the SpiritGuides table) teleport
+	// to the closest graveyard their team still controls.
+	var relocate []uint64
 	if workshopID < WGWorkshopKeepWest {
 		wg.Graveyards[workshopID].TeamControl = team
+		relocate = wg.queuedDeadAtGraveyard(workshopID)
 	}
 	s.updateWGWorldState(ws.WorldState, uint32(wgBuildingState(0, team)))
 	wg.updateVehicleLimits()
@@ -1259,6 +1429,10 @@ func (s *Server) CaptureWGWorkshop(workshopID uint8, team uint32, capturerName s
 		teamName = "Horde"
 	}
 	s.broadcastWGZoneMessage(fmt.Sprintf("%s has captured %s for the %s!", capturerName, ws.Name, teamName))
+	// Teleports run after unlock: the teleport's zone-change path takes
+	// wg.mu (same ordering as the TickWG kick sweep).
+	wg.mu.Unlock()
+	s.relocateWGDeadPlayers(relocate)
 	return true
 }
 
