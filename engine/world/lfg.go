@@ -3417,6 +3417,12 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 	// every dungeon including randoms (LFGMgr.cpp:272 fills
 	// CachedDungeonMapStore[0] with all ids).
 	for _, dungeon := range allDungeons {
+		// LFGMgr::LoadLFGDungeons (LFGMgr.cpp:205-215) stores only
+		// DUNGEON/HEROIC/RAID/RANDOM rows; GetLockedDungeons iterates
+		// CachedDungeonMapStore[0], which holds exactly those rows.
+		if !wotlk.IsSupportedLFGType(dungeon.TypeID) {
+			continue
+		}
 		mapID := uint32(dungeon.MapID)
 		bk := boundKey{mapID: mapID, difficulty: dungeon.Difficulty}
 		isRaid := dungeon.TypeID == LFGDungeonTypeRaid
@@ -3434,7 +3440,7 @@ func (s *session) getLockedDungeons(guid uint64) map[uint32]uint32 {
 			lockData = LFGLockStatusRaidLocked
 		} else if uint32(level) < dungeon.MinLevel {
 			lockData = LFGLockStatusTooLowLevel
-		} else if dungeon.MaxLevel > 0 && uint32(level) > dungeon.MaxLevel {
+		} else if uint32(level) > dungeon.MaxLevel {
 			lockData = LFGLockStatusTooHighLevel
 		} else if dungeon.Flags&lfgFlagSeasonal != 0 && !s.server.lfgSeasonActive(dungeon.ID) {
 			lockData = LFGLockStatusNotInSeason
@@ -3651,13 +3657,21 @@ func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []
 		allDungeons, err := s.server.Data.LFGDungeons()
 		if err == nil {
 			for _, d := range allDungeons {
+				// LFGMgr::LoadLFGDungeons (LFGMgr.cpp:205-215) stores only
+				// DUNGEON/HEROIC/RAID/RANDOM rows; other DBC types never
+				// reach GetRandomAndSeasonalDungeons or GetLockedDungeons.
+				if !wotlk.IsSupportedLFGType(d.TypeID) {
+					continue
+				}
 				// LFGMgr::GetRandomAndSeasonalDungeons (LFGMgr.cpp:2288-2297):
 				// seasonal dungeons join the list while their season is active.
+				// C++ has no maxlevel-0 exemption: level <= maxlevel is
+				// absolute, so a maxlevel-0 row lists for nobody.
 				if d.TypeID == LFGDungeonTypeRandom ||
 					(d.Flags&lfgFlagSeasonal != 0 && s.server.lfgSeasonActive(d.ID)) {
 					if d.ExpansionLevel <= uint32(s.accountExpansion) &&
 						d.MinLevel <= uint32(s.player.Level) &&
-						(d.MaxLevel == 0 || uint32(s.player.Level) <= d.MaxLevel) {
+						uint32(s.player.Level) <= d.MaxLevel {
 						randomDungeons = append(randomDungeons, d)
 					}
 				}
