@@ -2226,6 +2226,15 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	if !explicitUnitTarget {
 		return true
 	}
+	// A gameobject guid in the unit slot is not a unit target: C++
+	// carries the GO guid separately, so GetUnitTarget() is null and
+	// this block is never entered (Spell.cpp:5370). Without this, the
+	// arms below resolve the GO guid through getCombatTarget's
+	// low-24-bit DB leg or the guid-entry template leg and can fizzle
+	// the cast on an unrelated creature's death, type, or auras.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return true
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1637-1638):
 	// SPELL_ATTR1_CANT_TARGET_SELF with caster == target.
 	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == motion.GUID {

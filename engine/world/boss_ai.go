@@ -678,8 +678,10 @@ func takeCreatureSpellPower(spell wotlk.Spell, m *creatureMotion, cost int32) {
 // Unit.cpp:614-618), SPELL_RANGE_RANGED entries add the melee range to the
 // DBC min, and the caster+target reach rangeMod lands on the max (and on
 // the min when it is positive and the entry is not ranged-flagged). The
-// GO-target (Spell.cpp:6565-6569) and dest (6571-6577) arms are vacuous —
-// creature casts carry no GO or dest targets in Go — and the
+// A GO guid returns true outright (unit arm vacuous; the GO
+// interact-distance arm, Spell.cpp:6565-6569, has no Go model for a
+// creature caster), and dest (6571-6577) arms are vacuous — creature
+// casts carry no dest targets in Go — and the
 // FacingCasterFlags INFRONT arm (6563-6565) is player-only. Standing
 // no-bridges: the both-moving +8/3 term (no movement state on this path),
 // the REQ_AMMO ranged-weapon arm (player-only, Spell.cpp:6628),
@@ -697,6 +699,15 @@ func (s *Server) checkCreatureSpellRange(m *creatureMotion, spellInfo wotlk.Spel
 		return true
 	}
 	if targetGUID == 0 || targetGUID == m.GUID {
+		return true
+	}
+	// A gameobject guid has no unit-target arm in C++ (Spell.cpp:6556
+	// runs only for GetUnitTarget() != null); the GO arm is the
+	// interact-distance check (6565-6569), which has no Go model for
+	// a creature caster. Without this, aiThreatUnitPos's
+	// motion-reconstruction leg can range-check an unrelated creature
+	// sharing the GO guid's low 24 bits and entry.
+	if uint16(targetGUID>>48) == 0xF110 {
 		return true
 	}
 	x, y, z, reach, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true)
@@ -1096,6 +1107,14 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	}
 	// C++ only enters the block for m_targets.GetUnitTarget() != null.
 	if targetGUID == 0 {
+		return true
+	}
+	// A gameobject guid in the unit slot is not a unit target: C++
+	// carries the GO guid separately, so GetUnitTarget() is null and
+	// this block is never entered (Spell.cpp:5370). Without this, the
+	// dead arm's motion-reconstruction leg and the type-mask
+	// guid-entry leg can read an unrelated creature for the GO guid.
+	if uint16(targetGUID>>48) == 0xF110 {
 		return true
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1637-1638):
