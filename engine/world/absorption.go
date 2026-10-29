@@ -295,6 +295,62 @@ func (s *Server) creatureIgnoreTargetResistArmorForSpell(key creatureAuraKey, ar
 	return armor
 }
 
+// creatureIgnoreResistPctForSpell mirrors the attacker's ignore-resist legs of
+// Unit::CalcSpellResistedDamage (Unit.cpp:1749-1760) for creature casters: the
+// SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) amounts whose misc mask
+// overlaps the spell's school mask and whose aura spell affects the cast spell,
+// plus the SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) misc-masked sum, capped at
+// 100 only — negative amounts boost the resisted portion, like C++ and the
+// player-side casterIgnoreResistPct. An unknown spell skips the 270 leg.
+func (s *Server) creatureIgnoreResistPctForSpell(key creatureAuraKey, spell wotlk.Spell, spellKnown bool, schoolMask uint32) int32 {
+	if s == nil || key.GUID == 0 {
+		return 0
+	}
+	var pct int32
+	for _, amount := range s.creatureAuraTypeAmountsByMiscMask(key, spellAuraModIgnoreTargetResist, schoolMask) {
+		pct += amount
+	}
+	if spellKnown && s.Data != nil {
+		s.auraMu.Lock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			auraSpell, found, err := s.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			for index, effect := range auraSpell.Effects {
+				if effect.Aura != spellAuraModAbilityIgnoreTargetResist || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				if uint32(effect.MiscValue)&schoolMask == 0 {
+					continue
+				}
+				if !spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+					continue
+				}
+				amount := int32(0)
+				if index < len(aura.Amounts) {
+					amount = aura.Amounts[index]
+				}
+				if amount == 0 {
+					amount = int32(aura.Amount)
+				}
+				if amount == 0 {
+					amount = effect.BasePoints
+				}
+				pct += amount
+			}
+		}
+		s.auraMu.Unlock()
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
 // absorbIgnoreBypass returns the portion of damage that runs past the
 // victim's absorb shields under the attacker's absorb-ignore pct (the
 // CalculatePct arm of Unit::CalcAbsorbResist, Unit.cpp:1853-1855).

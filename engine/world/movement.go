@@ -1923,7 +1923,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	// then the school-absorb/mana-shield loops. The ignore-resist sub-arm
 	// runs on the self attacker too: with a null spellInfo the 270
 	// affect-gated leg is empty (IsAffectedOnSpell(nullptr) is false) and
-	// only the 269 misc-mask sum applies, clamped 0..100
+	// only the 269 misc-mask sum applies, capped at 100 only
 	// (Unit.cpp:1741-1755). The 194 absorb-ignore pct bypasses the shields
 	// (Unit.cpp:1839-1855); the 245 leg needs a spell and is empty.
 	absorb := uint32(0)
@@ -1944,9 +1944,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		for _, amount := range s.auraTypeModifiersByMiscMask(spellAuraModIgnoreTargetResist, uint32(schoolMask)) {
 			ignoreResist += amount
 		}
-		if ignoreResist < 0 {
-			ignoreResist = 0
-		} else if ignoreResist > 100 {
+		if ignoreResist > 100 {
 			ignoreResist = 100
 		}
 		preResistDmg := damage

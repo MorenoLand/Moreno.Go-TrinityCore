@@ -6842,7 +6842,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			armor := s.server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(caster), armorValue, petSpell, petSpellKnown)
 			petResistInput.hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(caster.Level, 1)), target.Level, damage)
 		}
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, 0, petResistInput, petPenetration)
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(caster.Level, 1)), target.Level, !isPlayerVictim, false, s.server.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(caster), petSpell, petSpellKnown, uint32(schoolMask)), petResistInput, petPenetration)
 	}
 	if isPlayerVictim {
 		if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil && damage > 0 {

@@ -6412,16 +6412,25 @@ func (s *Server) creatureEffectEnvironmentalDamage(ctx context.Context, m *creat
 		var resisted uint32
 		if schoolMask > 1 {
 			resistances = s.petFoldedResistances(key, resistances)
+			mask123 := uint32(schoolMask)
+			if mask123&0x7E != 0 {
+				mask123 &^= 1
+			}
+			var targetResistMod int32
+			for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, mask123) {
+				targetResistMod += amount
+			}
 			isHybrid := spell.SchoolMask&1 != 0 && spell.SchoolMask&0x7E != 0
 			hybridArmorReduced := uint32(0)
 			if isHybrid {
 				hybridArmorReduced = calcArmorReducedDamage(float64(victimArmor), uint8(m.Level), uint8(level), damage, 0)
 			}
-			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(m.Level), uint8(level), true, false, 0, spellResistInput{
+			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(m.Level), uint8(level), true, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybrid,
 				hybridArmorReduced: hybridArmorReduced,
+				targetResistMod:    targetResistMod,
 			})
 		}
 		var absorbed uint32
@@ -7413,7 +7422,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 					armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), spell, true)
 					hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
 				}
-				resisted, damage = calcMagicSpellResistance(damage, schoolMask, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, 0, spellResistInput{
+				resisted, damage = calcMagicSpellResistance(damage, schoolMask, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, uint32(schoolMask)), spellResistInput{
 					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
 					hybrid:             isHybridSpell,
@@ -7642,7 +7651,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 					hybridArmorReduced = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
 				}
 				resistances := s.petFoldedResistances(victimKey, stats.Resistances)
-				resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, 0, spellResistInput{
+				resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, s.creatureIgnoreResistPctForSpell(casterKey, spell, true, uint32(schoolMask)), spellResistInput{
 					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
 					hybrid:             isHybrid,
@@ -8685,7 +8694,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), auraSpell, true)
 				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
 			}
-			resisted, damage = calcMagicSpellResistance(damage, uint8(schoolMask), vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, 0, spellResistInput{
+			resisted, damage = calcMagicSpellResistance(damage, uint8(schoolMask), vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), auraSpell, true, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  auraSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             auraSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridSpell,

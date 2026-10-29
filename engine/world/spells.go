@@ -1499,8 +1499,8 @@ func (s *session) totalAuraModifierByAffectMaskAndSchool(auraType uint32, spell 
 // SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST (270) amounts — MiscValue
 // overlapping schoolMask and the aura spell affecting the cast spell — plus
 // the SPELL_AURA_MOD_IGNORE_TARGET_RESIST (269) misc-masked sum, capped at
-// 100. Creature casters have no affect-mask aura evaluation, so a nil
-// session (no live player caster) reports 0.
+// 100. A nil session (no live player caster) reports 0 here; creature
+// casters use creatureIgnoreResistPctForSpell instead.
 func (s *session) casterIgnoreResistPct(spellID uint32, schoolMask uint32) int32 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
@@ -24165,6 +24165,24 @@ func tickCasterTargetResistMod(server *Server, tickCaster *session, mapID, insta
 	return 0
 }
 
+// tickCasterIgnoreResistPct mirrors tickCasterTargetResistMod for the
+// ignored-resistance arm of Unit::CalcSpellResistedDamage (Unit.cpp:1749-1760):
+// a resolved player caster session contributes its casterIgnoreResistPct; a nil
+// session falls back to the wild caster motion's creature ignore-resist legs;
+// a fully unresolved caster contributes nothing, like C++'s null-attacker skip.
+func tickCasterIgnoreResistPct(server *Server, tickCaster *session, mapID, instanceID uint32, aura *activeAura, spell wotlk.Spell, spellKnown bool) int32 {
+	if tickCaster != nil {
+		return tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask))
+	}
+	if server == nil || aura == nil || aura.CasterGUID == 0 {
+		return 0
+	}
+	if m := server.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil {
+		return server.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, spellKnown, uint32(aura.SchoolMask))
+	}
+	return 0
+}
+
 // spellBinaryResistApplies mirrors the gate around the binary-spell resist
 // arm of WorldObject::MagicSpellHitResult (Object.cpp:2580-2592): inside the
 // !positive && !ATTR4_IGNORE_RESISTANCES block, a spell carrying at least one
@@ -29985,7 +30003,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 					hybridArmorReduced = dmg
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCasterIgnoreResistPct(ts.server, tickCaster, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown), spellResistInput{
 				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridTick,
@@ -30553,7 +30571,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 					hybridArmorReduced = dmg
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, resistCasterLevel, ts.player.Level, false, false, tickCasterIgnoreResistPct(ts.server, tickCaster, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown), spellResistInput{
 				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridTick,
@@ -31868,7 +31886,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					hybridArmorReduced = dmg
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCasterIgnoreResistPct(s.server, tickCaster, key.Map, key.InstanceID, aura, tickSpell, tickKnown), spellResistInput{
 				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridTick,
@@ -32581,7 +32599,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					hybridArmorReduced = dmg
 				}
 			}
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), resistances, resistCasterLevel, target.Level, true, false, tickCasterIgnoreResistPct(s.server, tickCaster, key.Map, key.InstanceID, aura, tickSpell, tickKnown), spellResistInput{
 				ignoreResistances:  tickKnown && tickSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             tickKnown && tickSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridTick,

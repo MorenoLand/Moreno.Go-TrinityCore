@@ -1287,7 +1287,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 				armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(motion), float64(p.Sess.player.Armor), inlineSpell, inlineSpellKnown)
 				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, damage)
 			}
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, 0, spellResistInput{
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, p.Sess.player.Resistances, uint8(maxUint32(motion.Level, 1)), p.Sess.player.Level, false, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(motion), inlineSpell, inlineSpellKnown, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  inlineSpellKnown && inlineSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             inlineSpellKnown && inlineSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridSpell,
@@ -1701,7 +1701,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 				hybridArmorReduced = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
 			}
 			resistances := s.petFoldedResistances(victimKey, stats.Resistances)
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, 0, spellResistInput{
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, s.creatureIgnoreResistPctForSpell(casterKey, inlineSpell, inlineSpellKnown, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  inlineSpellKnown && inlineSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             inlineSpellKnown && inlineSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybrid,
@@ -2896,7 +2896,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), damage)
 			}
 			resistances := s.petFoldedResistances(motionKey, stats.Resistances)
-			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), true, false, 0, spellResistInput{
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(maxUint32(motion.Level, 1)), uint8(motion.Level), true, false, s.creatureIgnoreResistPctForSpell(motionKey, spell, spell.ID != 0, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  spell.ID != 0 && spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             spell.ID != 0 && spell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybrid,
