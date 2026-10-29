@@ -137,6 +137,29 @@ func (s *session) isFriendlyToTarget(targetGUID uint64, targetSess *session) boo
 	return false
 }
 
+// isFriendlyToCreatureTarget mirrors the faction-reaction arm of
+// Unit::IsFriendlyTo for a creature target, the twin of the carve-out in
+// getDispellableAuraListForCreature: the own pet is friendly, and any other
+// creature resolves through the faction-template reaction
+// (isFriendlyFaction), not the pet-only heuristic of isFriendlyToTarget.
+// Callers that key CalcDispelChance offensiveness or a sanctuary arm on
+// IsFriendlyTo (SpellEffects.cpp:4749, Spell.cpp:5545) need this; the
+// pet-only read treated every friendly NPC as hostile, adding the target's
+// MOD_DISPEL_RESIST total to friendly mechanic dispels and fizzling
+// friendly-target cleanses cast from sanctuary.
+func (s *session) isFriendlyToCreatureTarget(targetGUID uint64) bool {
+	if s.player != nil && s.player.PetGUID != 0 && s.player.PetGUID == targetGUID {
+		return true
+	}
+	if s.server != nil && s.player != nil {
+		if motion := s.findCreatureMotion(targetGUID); motion != nil {
+			caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+			return s.server.isFriendlyFaction(motion.Faction, caster)
+		}
+	}
+	return false
+}
+
 // dispelResistTotalLocked sums the target's SPELL_AURA_MOD_DISPEL_RESIST
 // total — the applied-aura arm plus the passive-spellbook bridge — mirroring
 // the second half of Aura::CalcDispelChance (SpellAuras.cpp:1228-1229).
@@ -314,7 +337,12 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 
 		// Auras whose dispel removes individual charges only appear in the
 		// dispel list while they still have charges (Unit.cpp:4622-4625).
-		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
+		// The steal pre-cast arm (Spell.cpp:5957-5984) scans visible auras
+		// with no charges gate — only positivity, dispel mask, passive and
+		// NOT_STEALABLE — so a zero-charge ATTR7 aura still lets the cast
+		// proceed (the effect twin keeps the gate and removes nothing).
+		// stealMode+keepResisted is that pre-cast path (stealableAuraList).
+		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 && !(stealMode && keepResisted) {
 			continue
 		}
 
@@ -452,7 +480,12 @@ func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelM
 
 		// Auras whose dispel removes individual charges only appear in the
 		// dispel list while they still have charges (Unit.cpp:4622-4625).
-		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 {
+		// The steal pre-cast arm (Spell.cpp:5957-5984) scans visible auras
+		// with no charges gate — only positivity, dispel mask, passive and
+		// NOT_STEALABLE — so a zero-charge ATTR7 aura still lets the cast
+		// proceed (the effect twin keeps the gate and removes nothing).
+		// stealMode+keepResisted is that pre-cast path (stealableAuraList).
+		if found && sp.AttributesEx7&spellAttr7DispelCharges != 0 && aura.RemainingCharges == 0 && !(stealMode && keepResisted) {
 			continue
 		}
 
@@ -832,10 +865,15 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 	// the UNIT_BYTE2_FLAG_SANCTUARY bridge (pvpFlagSanctuary, also used by the
 	// explicit-target PvP gates); creature targets carry no per-creature
 	// bytes2 model in Go, so only the caster side applies for them.
-	// Friendliness matches the dispel-list scan below: non-player targets
-	// other than the own pet count as hostile, like
-	// getDispellableAuraListForCreature does.
-	if !s.isFriendlyToTarget(targetGUID, targetSess) {
+	// The sanctuary arm keys on IsFriendlyTo (Spell.cpp:5545): a player
+	// target resolves through the session team/duel read, a creature
+	// target through the faction reaction — the pet-only heuristic would
+	// fizzle a friendly NPC's cleanse cast from sanctuary.
+	targetFriendly := s.isFriendlyToTarget(targetGUID, targetSess)
+	if targetSess == nil && targetGUID != 0 {
+		targetFriendly = s.isFriendlyToCreatureTarget(targetGUID)
+	}
+	if !targetFriendly {
 		targetSanctuary := false
 		if targetSess != nil && targetSess.player != nil {
 			targetSanctuary = targetSess.player.PVPFlags&pvpFlagSanctuary != 0
@@ -2621,7 +2659,9 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 		// Creature-side CalcDispelChance: same per-aura 100-minus-resist roll
 		// as the creature dispel path (SpellEffects.cpp:4749), two passes so
 		// the caster-mod fold runs without auraMu held.
-		offensive := !s.isFriendlyToTarget(targetGUID, nil)
+		// SpellEffects.cpp:4749 keys offensiveness on IsFriendlyTo(m_caster)
+		// — the faction reaction, not the pet-only heuristic.
+		offensive := !s.isFriendlyToCreatureTarget(targetGUID)
 		resistTotal := int32(0)
 		if offensive {
 			for _, ra := range auras {
