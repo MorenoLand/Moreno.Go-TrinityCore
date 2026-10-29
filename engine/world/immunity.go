@@ -470,13 +470,23 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 	}
 
 	// Unit.cpp:7864-7868 — IMMUNITY_DISPEL: the list holds dispel types
-	// written by SPELL_AURA_DISPEL_IMMUNITY (76) effects
+	// written by SPELL_AURA_DISPEL_IMMUNITY (41) effects
 	// (SpellInfo::_LoadImmunityInfo, SpellInfo.cpp:2786-2788 — misc is the
 	// dispel type), derived here live from the active auras.
-	if spell.DispelType != 0 && s.server != nil && s.server.Data != nil {
+	if spell.DispelType != 0 {
 		dispelImmune := false
 		for _, aura := range s.activeAuras {
 			if aura == nil {
+				continue
+			}
+			// Stored leg: the recorded effect's row survives a missing
+			// DBC row, as in the school fold above; the mask-gated scan
+			// below covers the remaining effects when the row is known.
+			if aura.AuraType == spellAuraDispelImmunity && uint32(aura.MiscValue) == spell.DispelType {
+				dispelImmune = true
+				break
+			}
+			if s.server == nil || s.server.Data == nil {
 				continue
 			}
 			auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
@@ -2058,6 +2068,51 @@ func creatureLiveEffectStateImmunity(srv *Server, key creatureAuraKey) (map[uint
 	return effectGrants, stateGrants
 }
 
+// creatureLiveDispelImmune is the creature-target live-aura fold for the
+// whole-spell IMMUNITY_DISPEL arm (Unit.cpp:7865-7869): C++ writes one
+// m_spellImmune[IMMUNITY_DISPEL] row per SPELL_AURA_DISPEL_IMMUNITY (41)
+// effect when the aura applies (SpellInfo::ApplyAllSpellImmunitiesTo,
+// SpellInfo.cpp:2893-2894), for any Unit, so the creature arm must fold
+// live 41 auras exactly like the player arm does — not script rows only.
+// The arm carries no positivity/friendly/pierce gate in C++, so none is
+// added here. The stored leg covers the recorded effect when the granting
+// spell row is unknown; the mask-gated DBC leg covers the rest. Dispel
+// types are set members, not a bitmask, so the scan tests equality per
+// effect rather than OR-ing misc values (auraEffectMiscMask would corrupt
+// them: 1|2 == 3 would false-match dispel type 3).
+
+func creatureLiveDispelImmune(srv *Server, key creatureAuraKey, dispelType uint32) bool {
+	if srv == nil || dispelType == 0 {
+		return false
+	}
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		if aura.AuraType == spellAuraDispelImmunity && uint32(aura.MiscValue) == dispelType {
+			return true
+		}
+		if srv.Data == nil {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if eff.Effect == spellEffectApplyAura && eff.Aura == spellAuraDispelImmunity && uint32(eff.MiscValue) == dispelType {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // creatureImmuneToSpellEffect mirrors the creature-target per-effect
 // immunity chain: Totem::IsImmunedToSpellEffect (Totem.cpp:183-204),
 // Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341), then
@@ -2180,7 +2235,8 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 // template writers — spell-level mechanic and the school fold. IMMUNITY_ID
 // rows come from the script bridge and from spell_linked_spell negative
 // rows written at aura apply (SpellAuras.cpp:1337-1342); IMMUNITY_DISPEL
-// has no template writer, so that arm stays vacuous here.
+// has no template writer, so the script arm stays vacuous without a live
+// 41 aura — the live fold below covers that case.
 func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
 	// Unit::IsImmunedToSpell checks IMMUNITY_ID before the
 	// UNAFFECTED_BY_INVULNERABILITY gate (Unit.cpp:7858-7862): a
@@ -2196,6 +2252,12 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	// Script-written m_spellImmune rows (Unit.cpp:7865-7876):
 	// IMMUNITY_DISPEL holds the spell's dispel type.
 	if spell.DispelType != 0 && scriptImmuneHas(scriptRows, immunityOpDispel, spell.DispelType) {
+		return true
+	}
+	// Live 41 auras (SpellInfo.cpp:2893-2894): the player whole-spell arm
+	// folds these, the creature arm did not — a creature carrying a live
+	// dispel-immunity aura still took the dispel spell in full.
+	if spell.DispelType != 0 && creatureLiveDispelImmune(srv, key, spell.DispelType) {
 		return true
 	}
 	// The friendly verdict defers to the callback even when caster is nil: the
