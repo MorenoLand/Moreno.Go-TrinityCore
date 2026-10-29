@@ -11631,9 +11631,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area instakill effect kills its
 				// own ally selection, not the merged enemy list.
 				instaList := hitTargets
-				instaSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
-					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
-				instaRefCentered := refCenteredFriendlyTargets != nil && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))
+				instaSwitched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+				instaRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
 				if instaRefCentered {
 					instaSwitched = true
 				}
@@ -11781,11 +11781,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				dmgList := hitTargets
 				dmgSwitched := false
 				dmgRefCentered := false
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
-					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB)))) {
+				if friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff))) {
 					dmgList = friendlyEffectTargets
 					dmgSwitched = true
-				} else if refCenteredFriendlyTargets != nil && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB)) {
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
 					// Friendly-area + 37/61 combo: the friendly-area branch above
 					// kept only the caster-centered list, so a 37/61 damage effect
 					// rode the enemy list. The ref-centered list computed at
@@ -12522,9 +12522,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// with a friendly-area target heals its own ally selection,
 				// not the merged enemy list.
 				healList := hitTargets
-				healSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
-					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
-				healRefCentered := refCenteredFriendlyTargets != nil && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))
+				healSwitched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+				healRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
 				if healRefCentered {
 					healSwitched = true
 				}
@@ -12673,9 +12673,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779): same split as
 				// the heal arm above.
 				healList := hitTargets
-				mechSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
-					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
-				mechRefCentered := refCenteredFriendlyTargets != nil && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))
+				mechSwitched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+				mechRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
 				if mechRefCentered {
 					mechSwitched = true
 				}
@@ -12781,9 +12781,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// own ally selection, with one caster energize per reflected
 				// ally trip (Spell.cpp:2350).
 				energizeList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					energizeList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						energizeList = append(energizeList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					energizeList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						energizeList = append(energizeList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					energizeList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						energizeList = append(energizeList, s.playerGUID)
 					}
 				}
@@ -12812,9 +12822,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// its own ally selection, with one caster energize per reflected
 				// ally trip (Spell.cpp:2350).
 				energizePctList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					energizePctList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						energizePctList = append(energizePctList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					energizePctList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						energizePctList = append(energizePctList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					energizePctList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						energizePctList = append(energizePctList, s.playerGUID)
 					}
 				}
@@ -12838,9 +12858,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// ally selection, with one caster burn per reflected ally
 				// trip (Spell.cpp:2350).
 				burnTargets := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					burnTargets = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						burnTargets = append(burnTargets, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					burnTargets = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						burnTargets = append(burnTargets, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					burnTargets = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						burnTargets = append(burnTargets, s.playerGUID)
 					}
 				}
@@ -12899,9 +12929,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// own ally selection, not the merged enemy list, with one
 					// caster firing per reflected ally trip (Spell.cpp:2350).
 					triggerList := hitTargets
-					if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 						triggerList = friendlyEffectTargets
 						for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+							triggerList = append(triggerList, s.playerGUID)
+						}
+					} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+						triggerList = refCenteredFriendlyTargets
+						for range refCenteredAllyTrips {
+							triggerList = append(triggerList, s.playerGUID)
+						}
+					} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+						triggerList = friendlyEffectTargets
+						for range reflectedAllyTrips {
 							triggerList = append(triggerList, s.playerGUID)
 						}
 					}
@@ -12930,9 +12970,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// playerGUID gate while the caster's own friendly-list entry
 				// banks, with one caster entry per reflected ally trip.
 				extraAttacksList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					extraAttacksList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						extraAttacksList = append(extraAttacksList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					extraAttacksList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						extraAttacksList = append(extraAttacksList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					extraAttacksList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						extraAttacksList = append(extraAttacksList, s.playerGUID)
 					}
 				}
@@ -12965,9 +13015,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// empty friendly list keeps the helper's HIT arm, the same
 				// arm the empty base list fired.
 				missileList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					missileList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						missileList = append(missileList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					missileList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						missileList = append(missileList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					missileList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						missileList = append(missileList, s.playerGUID)
 					}
 				}
@@ -12990,9 +13050,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// friendly-area effect teaches its own ally selection, with
 				// one caster entry per reflected ally trip (Spell.cpp:2350).
 				skillList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					skillList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						skillList = append(skillList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					skillList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						skillList = append(skillList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					skillList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						skillList = append(skillList, s.playerGUID)
 					}
 				}
@@ -13025,9 +13095,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// the bank, the same ally accumulates — with one caster
 					// entry per reflected ally trip (Spell.cpp:2350).
 					comboList := hitTargets
-					if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 						comboList = friendlyEffectTargets
 						for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+							comboList = append(comboList, s.playerGUID)
+						}
+					} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+						comboList = refCenteredFriendlyTargets
+						for range refCenteredAllyTrips {
+							comboList = append(comboList, s.playerGUID)
+						}
+					} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+						comboList = friendlyEffectTargets
+						for range reflectedAllyTrips {
 							comboList = append(comboList, s.playerGUID)
 						}
 					}
@@ -13080,7 +13160,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// CanHaveThreatList is false for players in C++ just as
 				// the Go helper's creature-motion lookup finds none.
 				threatList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					threatList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					threatList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					threatList = friendlyEffectTargets
 				}
 				for _, effectTarget := range threatList {
@@ -13092,9 +13176,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// ally selection, with one caster heal per reflected ally trip
 				// (Spell.cpp:2350).
 				maxHealthList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					maxHealthList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						maxHealthList = append(maxHealthList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					maxHealthList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						maxHealthList = append(maxHealthList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					maxHealthList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						maxHealthList = append(maxHealthList, s.playerGUID)
 					}
 				}
@@ -13118,7 +13212,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// selection, not the merged enemy list — the same switch
 				// as the heal arms above. For a pure friendly-area spell
 				// hitTargets already is that selection.
-				friendlyAuraEffect := isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)
+				friendlyAuraEffect := effectHasFriendlyAreaLeg(eff)
 				auraList := hitTargets
 				friendlyAuraList := friendlyAreaSpell
 				if friendlyEffectTargets != nil && friendlyAuraEffect {
@@ -13221,7 +13315,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// trips loop: teleportEffectUnitTargets skips the caster GUID,
 				// so a trip whose unitTarget is the caster is vacuous.
 				teleList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					teleList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					teleList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					teleList = friendlyEffectTargets
 				}
 				if spellID == 8690 || spellID == 556 {
@@ -13343,7 +13441,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// merged enemy list. Ally trips are vacuous: a trip's
 				// unitTarget is the player caster, never a pet.
 				dismissList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					dismissList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					dismissList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dismissList = friendlyEffectTargets
 				}
 				for _, effectTarget := range dismissList {
@@ -13368,7 +13470,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area dispel effect dispels its
 				// own ally selection, not the merged enemy list.
 				dispelList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					dispelList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					dispelList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dispelList = friendlyEffectTargets
 				}
 				for _, effectTarget := range dispelList {
@@ -13399,9 +13505,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the dispel arm above.
 				dispelMechanicList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					dispelMechanicList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					dispelMechanicList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					dispelMechanicList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
 					}
 				}
@@ -13421,7 +13537,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				killCreditList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					killCreditList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					killCreditList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					killCreditList = friendlyEffectTargets
 				}
 				for _, effectTarget := range killCreditList {
@@ -13446,7 +13566,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				killCreditGroupList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					killCreditGroupList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					killCreditGroupList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					killCreditGroupList = friendlyEffectTargets
 				}
 				for _, effectTarget := range killCreditGroupList {
@@ -13548,9 +13672,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area teleport effect runs on its
 				// own ally selection, not the merged enemy list.
 				teleList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					teleList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						teleList = append(teleList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					teleList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						teleList = append(teleList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					teleList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						teleList = append(teleList, s.playerGUID)
 					}
 				}
@@ -13588,7 +13722,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// covered by the launch-phase trip mechanism, so no trip
 				// append here.
 				leapBackList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					leapBackList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					leapBackList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					leapBackList = friendlyEffectTargets
 				}
 				hasUnitTarget := false
@@ -13606,9 +13744,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area pull effect runs on its
 				// own ally selection, not the merged enemy list.
 				pullList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					pullList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						pullList = append(pullList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					pullList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						pullList = append(pullList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					pullList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						pullList = append(pullList, s.playerGUID)
 					}
 				}
@@ -13628,9 +13776,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area pull effect runs on its
 				// own ally selection, not the merged enemy list.
 				pullDestList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					pullDestList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						pullDestList = append(pullDestList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					pullDestList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						pullDestList = append(pullDestList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					pullDestList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						pullDestList = append(pullDestList, s.playerGUID)
 					}
 				}
@@ -13647,9 +13805,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area sound effect plays for its
 				// own ally selection, not the merged enemy list.
 				soundList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					soundList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						soundList = append(soundList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					soundList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						soundList = append(soundList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					soundList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						soundList = append(soundList, s.playerGUID)
 					}
 				}
@@ -13659,9 +13827,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area music effect plays for its
 				// own ally selection, not the merged enemy list.
 				musicList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					musicList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						musicList = append(musicList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					musicList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						musicList = append(musicList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					musicList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						musicList = append(musicList, s.playerGUID)
 					}
 				}
@@ -13672,7 +13850,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area script effect runs on its
 				// own ally selection, not the merged enemy list.
 				scriptList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					scriptList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					scriptList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					scriptList = friendlyEffectTargets
 				}
 				for _, effectTarget := range scriptList {
@@ -13723,9 +13905,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// helper's target == caster gate keeps every non-caster
 				// entry a no-op.
 				tamedList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					tamedList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						tamedList = append(tamedList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					tamedList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						tamedList = append(tamedList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					tamedList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						tamedList = append(tamedList, s.playerGUID)
 					}
 				}
@@ -13861,7 +14053,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area reputation effect runs on its
 				// own ally selection, not the merged enemy list.
 				repList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					repList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					repList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					repList = friendlyEffectTargets
 				}
 				if eff.MiscValue != 0 && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
@@ -13904,7 +14100,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area quest-complete effect runs on its
 				// own ally selection, not the merged enemy list.
 				questList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					questList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					questList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
 				}
 				if eff.MiscValue != 0 {
@@ -13936,7 +14136,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area health-leech effect runs on its
 				// own ally selection, not the merged enemy list.
 				leechList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					leechList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					leechList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					leechList = friendlyEffectTargets
 				}
 				s.handleEffectHealthLeech(effCtx, spell, spellID, leechList, effectIndex, eff)
@@ -13986,9 +14190,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the power-burn arm above.
 				drainTargets := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					drainTargets = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						drainTargets = append(drainTargets, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					drainTargets = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						drainTargets = append(drainTargets, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					drainTargets = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						drainTargets = append(drainTargets, s.playerGUID)
 					}
 				}
@@ -14040,7 +14254,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area force-cast effect runs on its
 				// own ally selection, not the merged enemy list.
 				forceList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					forceList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					forceList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					forceList = friendlyEffectTargets
 				}
 				s.handleEffectForceCast(effCtx, spell, spellID, eff, forceList)
@@ -14072,9 +14290,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area knockback effect runs on its
 				// own ally selection, not the merged enemy list.
 				knockList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					knockList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						knockList = append(knockList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					knockList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						knockList = append(knockList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					knockList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						knockList = append(knockList, s.playerGUID)
 					}
 				}
@@ -14095,7 +14323,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				durabList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					durabList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					durabList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					durabList = friendlyEffectTargets
 				}
 				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, durabList, casterLevel)
@@ -14116,7 +14348,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area quest effect runs on its
 				// own ally selection, not the merged enemy list.
 				questList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					questList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					questList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
 				}
 				s.handleEffectQuestClear(effCtx, eff, questList)
@@ -14137,7 +14373,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area quest effect runs on its
 				// own ally selection, not the merged enemy list.
 				questList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					questList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					questList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
 				}
 				s.handleEffectQuestFail(effCtx, eff, questList)
@@ -14157,7 +14397,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area quest effect runs on its
 				// own ally selection, not the merged enemy list.
 				questList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					questList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					questList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
 				}
 				s.handleEffectQuestStart(effCtx, eff, questList)
@@ -14179,9 +14423,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the dispel arm above.
 				removeAuraList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					removeAuraList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						removeAuraList = append(removeAuraList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					removeAuraList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						removeAuraList = append(removeAuraList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					removeAuraList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						removeAuraList = append(removeAuraList, s.playerGUID)
 					}
 				}
@@ -14206,7 +14460,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// only, so a trip whose unitTarget is the player caster finds
 				// no motion (same vacuous arm as the threat case).
 				threatPctList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					threatPctList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					threatPctList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					threatPctList = friendlyEffectTargets
 				}
 				s.handleEffectModifyThreatPercent(effCtx, spell, eff, threatPctList)
@@ -14220,9 +14478,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area honor effect runs on its
 				// own ally selection, not the merged enemy list.
 				honorList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					honorList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						honorList = append(honorList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					honorList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						honorList = append(honorList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					honorList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						honorList = append(honorList, s.playerGUID)
 					}
 				}
@@ -14256,7 +14524,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// only, so a trip whose unitTarget is the player caster finds
 				// no motion.
 				distractList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					distractList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					distractList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					distractList = friendlyEffectTargets
 				}
 				s.handleEffectDistract(effCtx, spell, eff, distractList, target)
@@ -14284,7 +14556,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area sanctuary effect runs on its
 				// own ally selection, not the merged enemy list.
 				sanctList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					sanctList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					sanctList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					sanctList = friendlyEffectTargets
 				}
 				s.handleEffectSanctuary(effCtx, sanctList)
@@ -14342,7 +14618,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				enchantList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					enchantList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					enchantList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					enchantList = friendlyEffectTargets
 				}
 				s.handleEffectEnchantHeldItem(effCtx, spell, eff, enchantList, casterLevel)
@@ -14379,7 +14659,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				inebriateList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					inebriateList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					inebriateList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					inebriateList = friendlyEffectTargets
 				}
 				s.handleEffectInebriate(effCtx, spell, eff, inebriateList, castItemEntry, casterLevel)
@@ -14416,7 +14700,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				unlearnList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					unlearnList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					unlearnList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					unlearnList = friendlyEffectTargets
 				}
 				s.handleEffectUnlearnSpecialization(effCtx, eff, unlearnList)
@@ -14447,7 +14735,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// No ally trips loop: the helper serves only the caster's own
 				// pet GUID, and a trip's unitTarget is the caster player.
 				renameList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					renameList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					renameList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					renameList = friendlyEffectTargets
 				}
 				s.handleEffectAllowRenamePet(effCtx, renameList)
@@ -14469,9 +14761,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area redirect effect runs on its
 				// own ally selection, not the merged enemy list.
 				redirectList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					redirectList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						redirectList = append(redirectList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					redirectList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						redirectList = append(redirectList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					redirectList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						redirectList = append(redirectList, s.playerGUID)
 					}
 				}
@@ -14524,9 +14826,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area environmental effect runs on
 				// its own ally selection, not the merged enemy list.
 				envList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 					envList = friendlyEffectTargets
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						envList = append(envList, s.playerGUID)
+					}
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					envList = refCenteredFriendlyTargets
+					for range refCenteredAllyTrips {
+						envList = append(envList, s.playerGUID)
+					}
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+					envList = friendlyEffectTargets
+					for range reflectedAllyTrips {
 						envList = append(envList, s.playerGUID)
 					}
 				}
@@ -14544,7 +14856,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area effect runs on its
 				// own ally selection, not the merged enemy list.
 				bindList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+					bindList = friendlyEffectTargets
+				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+					bindList = refCenteredFriendlyTargets
+				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					bindList = friendlyEffectTargets
 				}
 				s.handleEffectBind(effCtx, eff, target, bindList, s.playerGUID)
@@ -20323,7 +20639,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// mixed effects keep the merged list, matching the launch path's documented
 		// residual.
 		seedTargets := selectionTargets
-		if triggeredFriendlyEffectTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+		if triggeredFriendlyEffectTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && (effectHasFriendlyAreaLeg(eff)) {
 			seedTargets = triggeredFriendlyEffectTargets
 		}
 		for _, selGUID := range seedTargets {
