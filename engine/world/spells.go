@@ -18355,7 +18355,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		guid      uint64
 		jumpIndex int
 		reflected bool
+		// originGUID is the pre-reflect target (== guid unless reflected):
+		// DoTargetSpellHit's gates read the TargetInfo unit, not the
+		// reflect-resolved recipient, so arrival arms resolve against it.
+		originGUID uint64
 	}
+	// Spell::_cast (Spell.cpp:3475) takes the delayed branch for
+	// (Speed > 0 && !channeled) || SPELL_ATTR4_UNK4 with no triggered
+	// gate, so triggered casts take it too; the funnel below has no
+	// arrival timer, so its delayed-branch arrival arms collapse to
+	// the synchronous filter ahead of the per-target effect loop.
+	// triggeredLaunchMs is the _cast-equivalent launch anchor (C++
+	// reconstructs it as GameTimeMS - TimeDelay; TimeDelay is 0 for
+	// UNK4-only spells and unmodeled for triggered Speed > 0).
+	triggeredDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
+	triggeredLaunchMs := gameTimeMS()
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -18434,6 +18448,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if target == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
 				target = s.playerGUID
 			}
+			origin := target
 			reflected := false
 			if miss, ok := triggeredMiss[target]; ok {
 				if miss == protocol.SpellMissImmune {
@@ -18476,7 +18491,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					target = s.playerGUID
 				}
 			}
-			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, reflected: reflected})
+			effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, originGUID: origin, reflected: reflected})
 		}
 		// Per-effect chain threading (Spell.cpp:1582-1624): only the chaining
 		// effect reaches the jump targets (C++ adds them with that effect's
@@ -18512,6 +18527,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					continue
 				}
 				target := jumpGUID
+				origin := target
 				reflected := false
 				if miss, ok := triggeredMiss[target]; ok {
 					if miss == protocol.SpellMissImmune {
@@ -18552,7 +18568,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 				}
 				jumpOrder++
-				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder, reflected: reflected})
+				effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: jumpOrder, originGUID: origin, reflected: reflected})
 			}
 			chainMult = s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 		}
@@ -18570,6 +18586,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if _, dup := seedSet[chainUnitPrimary]; !dup {
 				target := chainUnitPrimary
+				origin := target
 				reflected := false
 				take := true
 				if miss, ok := triggeredMiss[target]; ok {
@@ -18581,7 +18598,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 				}
 				if take {
-					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, reflected: reflected})
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, originGUID: origin, reflected: reflected})
 				}
 			}
 		}
@@ -18600,6 +18617,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if _, dup := seedSet[plainObjectPrimary]; !dup {
 				target := plainObjectPrimary
+				origin := target
 				reflected := false
 				take := true
 				if miss, ok := triggeredMiss[target]; ok {
@@ -18611,9 +18629,29 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 				}
 				if take {
-					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, reflected: reflected})
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, originGUID: origin, reflected: reflected})
 				}
 			}
+		}
+		// Spell::TargetInfo::DoTargetSpellHit (Spell.cpp:2402-2404): on the
+		// delayed branch a non-positive spell drops a target sanctuaried at
+		// or after launch, silently ("No missinfo in that case"). This is
+		// the same position DoTargetSpellHit holds after PreprocessTarget:
+		// the aura-break pass above already ran, and the GO packet already
+		// went out, matching C++ SPELL_GO at _cast preceding arrival. The
+		// arm reads the TargetInfo unit, so a reflected entry resolves
+		// against its origin, not the caster it retargeted to. The alive
+		// latch (:2430) stays out: Go latches no IsAlive at launch, and a
+		// Health == 0 drop would break dead-target spells.
+		if triggeredDelayedBranch && !spellIsPositive(spell) {
+			kept := effectTargets[:0]
+			for _, et := range effectTargets {
+				if s.sanctuaryTimeFor(et.originGUID) >= triggeredLaunchMs {
+					continue
+				}
+				kept = append(kept, et)
+			}
+			effectTargets = kept
 		}
 		// Spell::DoEffectOnLaunchTarget AOE legs (Spell.cpp:7749-7758) run
 		// per effect for area-targeting damage effects: the victim's
