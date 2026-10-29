@@ -21075,6 +21075,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// GO anchor records no unit primary (the chainUnitPrimary rule).
 	chainJumpsByEffect := make(map[int][]uint64)
 	chainPrimaryByEffect := make(map[int]uint64)
+	chainSecondPrimaryByEffect := make(map[int]uint64)
+	chainSecondTargetByEffect := make(map[int]uint32)
 	if targetGUID != 0 {
 		_, _, _, winMask := chainSpellJumps(s, spell)
 		for i, eff := range spell.Effects {
@@ -21117,8 +21119,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
 			// A second TARGET-object leg unions here too: DEFAULT never marks
 			// the effect processed (Spell.cpp:866-900), so the B leg's chain
-			// arm runs beside A's with its own check type. A nearby second
-			// leg stays with the next strip (mixed second legs).
+			// arm runs beside A's with its own check type; the mixed
+			// second legs follow below.
 			if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
 				secondAnchor := targetGUID
 				if spellTarget.UnitGUID != 0 {
@@ -21135,6 +21137,60 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if !dup {
 						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
 					}
+				}
+			}
+			// A mixed second leg unions here too: a DEFAULT first slot never
+			// marks the effect processed, and a DEFAULT second slot still runs
+			// even when the first slot is NEARBY (Spell.cpp:866-900), so an
+			// A-object+B-nearby effect chains its nearby leg from its own
+			// scoped pick with its own check type, and an A-nearby+B-object
+			// effect chains its object leg from the wire target. NEARBY+NEARBY
+			// pairs stay out: a NEARBY first slot marks the effect processed,
+			// so the second NEARBY slot never runs (same :866-900 arm). A
+			// second nearby pick records as this effect's second primary (the
+			// chain block above threads only the first leg's primary); a second
+			// object leg's wire primary records the same way, and the plain
+			// block below covers it when no chain primary was set.
+			if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), eff.ImplicitTargetB); ok && pick != 0 {
+					if uint16(pick>>48) != 0xF110 {
+						chainSecondPrimaryByEffect[i] = pick
+						chainSecondTargetByEffect[i] = eff.ImplicitTargetB
+					}
+					for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, pick, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+						dup := false
+						for _, listed := range chainJumpsByEffect[i] {
+							if listed == jumpGUID {
+								dup = true
+								break
+							}
+						}
+						if !dup {
+							chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+						}
+					}
+				}
+			}
+			if nearbyUnitTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				secondAnchor := targetGUID
+				if spellTarget.UnitGUID != 0 {
+					secondAnchor = spellTarget.UnitGUID
+				}
+				for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+					dup := false
+					for _, listed := range chainJumpsByEffect[i] {
+						if listed == jumpGUID {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+					}
+				}
+				if secondAnchor != 0 && uint16(secondAnchor>>48) != 0xF110 {
+					chainSecondPrimaryByEffect[i] = secondAnchor
+					chainSecondTargetByEffect[i] = eff.ImplicitTargetB
 				}
 			}
 		}
@@ -21698,6 +21754,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, primary)
 		}
 	}
+	// Non-winning second-leg primaries rejoin the same way (each leg
+	// adds its own primary, Spell.cpp:1575/:1036); dedup keeps the
+	// already-listed cases (a second primary equal to the first leg's
+	// primary or the plain primary) unchanged.
+	for i := range spell.Effects {
+		secondPrimary, ok := chainSecondPrimaryByEffect[i]
+		if !ok || secondPrimary == 0 {
+			continue
+		}
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[secondPrimary]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, secondPrimary)
+		}
+	}
 	// The plain object primary rejoins the same way: the area/cone
 	// switch dropped it from the roll list and the GO packet even though
 	// C++ holds it as a merged entry (Spell.cpp:1575, AddUnitTarget
@@ -21973,6 +22046,26 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// Non-winning second-leg primaries break auras like any merged
+	// entry; one already broken as the first leg's primary, the chain
+	// primary, or the plain primary breaks once, via that leg.
+	for i := range spell.Effects {
+		secondPrimary, ok := chainSecondPrimaryByEffect[i]
+		if !ok || secondPrimary == 0 {
+			continue
+		}
+		if first, ok := chainPrimaryByEffect[i]; ok && secondPrimary == first {
+			continue
+		}
+		if secondPrimary == chainUnitPrimary || secondPrimary == plainObjectPrimary {
+			continue
+		}
+		if _, dup := selectionSet[secondPrimary]; !dup {
+			if _, missed := triggeredMiss[secondPrimary]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, secondPrimary)
+			}
+		}
+	}
 	// The rejoined plain primary breaks auras like any merged entry
 	// (PreprocessTarget runs per m_UniqueTargetInfo entry, Spell.cpp:2334);
 	// a primary already in the selection list breaks once, via that list,
@@ -22022,6 +22115,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		if primary, ok := chainPrimaryByEffect[i]; ok {
 			brokenSet[primary] = struct{}{}
+		}
+		if secondPrimary, ok := chainSecondPrimaryByEffect[i]; ok {
+			brokenSet[secondPrimary] = struct{}{}
 		}
 	}
 	if chainUnitPrimary != 0 {
@@ -22349,6 +22445,43 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if _, dup := seedSet[winSecondPrimary]; !dup {
 				target := winSecondPrimary
+				origin := target
+				reflected := false
+				take := true
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+						reflected = true
+						target = s.playerGUID
+					} else {
+						take = false
+					}
+				}
+				if take {
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, originGUID: origin, reflected: reflected})
+				}
+			}
+		}
+		// A non-winning second leg threads its own primary into its own
+		// effect only (Spell.cpp:1575/:1036 add each leg's primary with
+		// the effect's own mask), mirroring the winner's second-leg block
+		// above: the chain block threaded the first leg's primary, and the
+		// plain block below threads the wire primary only when no chain
+		// primary was set, so a nearby-first effect's wire primary and an
+		// object-first effect's nearby pick would otherwise never reach
+		// the effect. Dedup vs the seed and miss handling mirror the chain
+		// block; a second primary equal to the first leg's primary rides
+		// the chain block instead, and an object second leg with no chain
+		// primary rides the plain block instead.
+		secondPrimary, secondOK := chainSecondPrimaryByEffect[effectIndex]
+		secondTarget, _ := chainSecondTargetByEffect[effectIndex]
+		firstPrimary, firstOK := chainPrimaryByEffect[effectIndex]
+		if secondOK && secondPrimary != 0 && !(firstOK && secondPrimary == firstPrimary) && !(targetObjectTarget(secondTarget) && chainUnitPrimary == 0) {
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
+			if _, dup := seedSet[secondPrimary]; !dup {
+				target := secondPrimary
 				origin := target
 				reflected := false
 				take := true

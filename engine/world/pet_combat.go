@@ -4127,9 +4127,71 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			// A second TARGET-object leg searches here too: DEFAULT never
 			// marks the effect processed (Spell.cpp:866-900), so the B leg's
-			// chain arm runs beside A's with its own check type. A nearby
-			// second leg stays with the next strip (mixed second legs).
+			// chain arm runs beside A's with its own check type; the mixed
+			// second legs follow below.
 			if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				secondAnchor := targetGUID
+				if target.UnitGUID != 0 {
+					secondAnchor = target.UnitGUID
+				}
+				for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+					if jumpGUID == 0 {
+						continue
+					}
+					alreadyHit := false
+					for _, hitGUID := range hitTargets {
+						if hitGUID == jumpGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if alreadyHit {
+						continue
+					}
+					ownHits = append(ownHits, jumpGUID)
+					hitTargets = append(hitTargets, jumpGUID)
+				}
+			}
+			// A mixed second leg searches here too: a DEFAULT first slot never
+			// marks the effect processed, and a DEFAULT second slot still runs
+			// even when the first slot is NEARBY (Spell.cpp:866-900), so an
+			// A-object+B-nearby effect chains its nearby leg from its own
+			// scoped pick with its own check type, and an A-nearby+B-object
+			// effect chains its object leg from the wire target. NEARBY+NEARBY
+			// pairs stay out: a NEARBY first slot marks the effect processed,
+			// so the second NEARBY slot never runs (same :866-900 arm).
+			if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				if pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, 1<<uint(i), eff.ImplicitTargetB); ok && pick != 0 {
+					pickInList := false
+					for _, guid := range hitTargets {
+						if guid == pick {
+							pickInList = true
+							break
+						}
+					}
+					if !pickInList {
+						hitTargets = append(hitTargets, pick)
+					}
+					for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, pick, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+						if jumpGUID == 0 {
+							continue
+						}
+						alreadyHit := false
+						for _, hitGUID := range hitTargets {
+							if hitGUID == jumpGUID {
+								alreadyHit = true
+								break
+							}
+						}
+						if alreadyHit {
+							continue
+						}
+						ownHits = append(ownHits, jumpGUID)
+						hitTargets = append(hitTargets, jumpGUID)
+					}
+				}
+			}
+			if nearbyUnitTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
 				secondAnchor := targetGUID
 				if target.UnitGUID != 0 {
 					secondAnchor = target.UnitGUID
