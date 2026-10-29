@@ -68,6 +68,21 @@ func (s *session) isTotalImmune() bool {
 	return false
 }
 
+// playerGOImmunityBlocked is the GameObject-immunity predicate for the
+// player GO gates (Spell.cpp:5181-5186, SpellEffects.cpp:1969,
+// GameObject.cpp:1493): C++ reads the raw UNIT_FLAG_IMMUNE bit, which the
+// session apply/remove funnels now maintain on every 39 effect. Funnels
+// that predate the bit (login restore) can leave a live 39 aura with the
+// bit unset, so the live-aura scan ORs in as a belt-and-braces twin;
+// a misc-0 39 effect sets the bit while the scan misses it, so neither
+// leg alone matches C++.
+func (s *session) playerGOImmunityBlocked() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	return s.player.UnitFlags&unitFlagImmune != 0 || s.isTotalImmune()
+}
+
 // isImmuneToDamage determines whether the player is immune to damage of the given schoolMask.
 // Mirrors TrinityCore Unit::IsImmunedToDamage(SpellSchoolMask) (Unit.cpp:7800-7816):
 // full-coverage OR over the live SPELL_AURA_SCHOOL_IMMUNITY (39) misc values

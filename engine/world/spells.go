@@ -2210,10 +2210,32 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// cooldown/cheat/GCD/ended-BG/outdoors arms before the unit-caster
 	// block; internal C++ order is allow-only-ability -> cooldowns ->
 	// cheat -> GCD -> ended-BG -> outdoors/indoors. The GO-immunity arm
-	// (5181-5186, DONT_REPORT for CannotBeUsedUnderImmunity GOs under
-	// UNIT_FLAG_IMMUNE) is unbridged: nothing in Go ever sets the
-	// 0x80000000 immunity unit flag, and the per-type noDamageImmune
-	// gameobject_template fields have no Go model.
+	// (5181-5186) sits ahead of the cooldown block: a player caster under
+	// UNIT_FLAG_IMMUNE casting on a CannotBeUsedUnderImmunity GO fails
+	// silently (SPELL_FAILED_DONT_REPORT). C++ gates on ToPlayer, so
+	// this player-cast path is the only twin — there is no
+	// creature-caster arm (SpellEffects.cpp:1969 returns early on a
+	// non-player caster, GameObject.cpp:1493 gates on playerUser).
+	if target.Flags&protocol.SpellTargetFlagGameObject != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 && s.playerGOImmunityBlocked() {
+		goGUID := target.UnitGUID
+		entry := uint32((goGUID >> 24) & 0xFFFFFF)
+		lowGUID := uint32(goGUID & 0x00FFFFFF)
+		var goType uint8
+		haveType := false
+		if goState, _ := s.server.getOrLoadGameObjectState(ctx, goGUID, lowGUID, entry, s.player.Map, s.player.InstanceID); goState != nil {
+			goType, haveType = goState.Type, true
+		} else if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var t int64
+			if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+				"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err == nil {
+				goType, haveType = uint8(t), true
+			}
+		}
+		if haveType && goCannotBeUsedUnderImmunity(goType, s.loadGameObjectTemplateData(ctx, entry)) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+			return true
+		}
+	}
 	// CheckCast allow-only-ability gate (Spell::CheckCast, Spell.cpp:5193-5195):
 	// SPELL_AURA_ALLOW_ONLY_ABILITY (Bladestorm, Killing Spree —
 	// AuraEffect::HandleAuraAllowOnlyAbility, SpellAuraEffects.cpp:2423-2441)
@@ -4859,9 +4881,10 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// Spell::EffectOpenLock head gate (SpellEffects.cpp:1969): a GO whose
 	// template CannotBeUsedUnderImmunity matches cannot be opened while the
 	// caster is immune (UNIT_FLAG_IMMUNE) — silent return before the BG
-	// arms, the lock check, SendLoot and the skill-up leg. Immunity itself
-	// rides the live-aura twin like the CMSG path (gameobjects.go).
-	if haveType && goCannotBeUsedUnderImmunity(goType, goTpl) && s.isTotalImmune() {
+	// arms, the lock check, SendLoot and the skill-up leg. Immunity reads
+	// the maintained flag bit OR the live-aura scan
+	// (playerGOImmunityBlocked), like the CMSG path (gameobjects.go).
+	if haveType && goCannotBeUsedUnderImmunity(goType, goTpl) && s.playerGOImmunityBlocked() {
 		return
 	}
 	// Spell::EffectOpenLock skill-up leg (SpellEffects.cpp:2038-2056): a

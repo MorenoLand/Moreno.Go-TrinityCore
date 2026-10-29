@@ -733,11 +733,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// CannotBeUsedUnderImmunity gate, the mounted dismount, and
 	// PlayerTalkClass->ClearMenus() all run before the gossip hooks and the
 	// template-cooldown gate, for every GO type. The immunity gate reads the
-	// raw UNIT_FLAG_IMMUNE flag in C++; Go models the same immunity through
-	// live auras, so isTotalImmune() is the established twin (used the same
-	// way by canUseBattlegroundObject).
+	// raw UNIT_FLAG_IMMUNE flag in C++; Go reads the maintained flag bit
+	// OR the live-aura scan (playerGOImmunityBlocked) for funnels that
+	// predate the bit.
 	goTpl := s.loadGameObjectTemplateData(ctx, entry)
-	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
+	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.playerGOImmunityBlocked() {
 		return true
 	}
 	if !goIsUsableMounted(goState.Type, goTpl) {
@@ -1004,7 +1004,7 @@ func (s *session) activateGameObjectUse(ctx context.Context, guid uint64) {
 	// PlayerTalkClass->ClearMenus() run for every GO type before the gossip
 	// hooks and the template-cooldown gate.
 	goTpl := s.loadGameObjectTemplateData(ctx, entry)
-	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.isTotalImmune() {
+	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.playerGOImmunityBlocked() {
 		return
 	}
 	if !goIsUsableMounted(goState.Type, goTpl) {

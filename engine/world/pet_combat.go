@@ -5814,6 +5814,24 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		for _, e := range scPurge {
 			s.expireSingleCastEntry(e)
 		}
+		// Pet-cast twin of the player apply funnel's immunity arms, per
+		// fresh-apply effect (merges never re-run the C++ handlers):
+		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+		// (SpellInfo.cpp:2860-2920) plus the HandleAuraModSchoolImmunity
+		// flag arms and UNIT_FLAG_IMMUNE set (SpellAuraEffects.cpp:3185-3199).
+		dispelAurasOnImmunityApply(targetSess, spell, effect)
+		if effect.Aura == spellAuraSchoolImmunity && (effect.MiscValue == spellSchoolMaskNormal ||
+			(spell.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+				spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+		}
+		if effect.Aura == spellAuraSchoolImmunity && targetSess.player != nil {
+			targetSess.player.UnitFlags |= unitFlagImmune
+			targetSess.sendPlayerUnitFlagsUpdate()
+			if targetSess.server != nil {
+				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
+			}
+		}
 		wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 		packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
@@ -5962,6 +5980,24 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	}
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
+	}
+	// Pet-cast twin of the creature apply funnel's immunity arms, per
+	// fresh-apply effect (merges never re-run the C++ handlers):
+	// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+	// (SpellInfo.cpp:2860-2920) plus the HandleAuraModSchoolImmunity
+	// flag arms and UNIT_FLAG_IMMUNE set (SpellAuraEffects.cpp:3185-3199).
+	s.server.dispelCreatureAurasOnImmunityApply(targetKey, spell, effect)
+	if effect.Aura == spellAuraSchoolImmunity {
+		if motion := s.findCreatureMotion(targetGUID); motion != nil {
+			if effect.MiscValue == spellSchoolMaskNormal ||
+				(spell.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+					spell.AttributesEx1&spellAttr2DamageReducedShield != 0) {
+				s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagImmuneOrLostSelection)
+			}
+			motion.UnitFlags |= unitFlagImmune
+			s.server.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: motion.UnitFlags})
+			s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
+		}
 	}
 	// Guardian::UpdateStats on pet aura apply (StatSystem.cpp:1266-1282 via
 	// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310): the pet-cast
