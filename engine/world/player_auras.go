@@ -259,6 +259,28 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if id == 8326 || id == 20584 {
 			state.PlayerFlags |= playerFlagGhost
 		}
+		// AuraEffect::HandleAuraModSchoolImmunity apply leg
+		// (SpellAuraEffects.cpp:3191-3192): a restored 39 effect sets
+		// UNIT_FLAG_IMMUNE, like the live funnels. Placed here, after
+		// every continue that can still drop the row (offline fade,
+		// duplicate mount), so only auras that actually land set the
+		// bit. The bit is a fold over live 39 auras, so it is
+		// order-independent across the restore rows — unlike the dispel
+		// and flag-aura strip arms, which C++ runs per aura at its own
+		// _AddAura position and therefore cannot be swept after the
+		// load (a flag aura restored after the immunity aura survives
+		// in C++). state flows into s.player below, so no unit-flags
+		// packet is needed at login.
+		if s.server.Data != nil {
+			if spell, found, _ := s.server.Data.Spell(id); found {
+				for index, effect := range spell.Effects {
+					if effectMask&(1<<uint(index)) != 0 && effect.Aura == spellAuraSchoolImmunity {
+						state.UnitFlags |= unitFlagImmune
+						break
+					}
+				}
+			}
+		}
 		s.auras[id] = struct{}{}
 		s.auraSlots[id] = aura.Slot
 		s.activeAuras[id] = aura

@@ -25085,6 +25085,36 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	for _, e := range scPurge {
 		s.expireSingleCastEntry(e)
 	}
+	// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+	// (SpellInfo.cpp:2860-2920) plus AuraEffect::HandleAuraModSchoolImmunity
+	// (SpellAuraEffects.cpp:3185-3199): the self-apply funnel's twin of
+	// the applyAuraToTarget fresh-apply arms. This path always replaces
+	// the previous aura (never RefreshDuration-merges), so the arms run
+	// on every call, per effect, after the aura is stored. A 39 effect
+	// dispels the target's conflicting auras when its spell carries
+	// ATTR1_DISPEL_AURAS_ON_IMMUNITY; a NORMAL-school 39 effect, or a
+	// 39 spell carrying both ATTR1_DISPEL_AURAS_ON_IMMUNITY and
+	// ATTR2_DAMAGE_REDUCED_SHIELD, drops the target's
+	// IMMUNE_OR_LOST_SELECTION auras; every 39 effect sets
+	// UNIT_FLAG_IMMUNE and re-evaluates threat suppression. The remove
+	// legs live in the shared removeAuraWithMode.
+	if s.server != nil && s.server.Data != nil && s.player != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			for _, eff := range sp.Effects {
+				dispelAurasOnImmunityApply(s, sp, eff)
+				if eff.Aura == spellAuraSchoolImmunity {
+					if eff.MiscValue == spellSchoolMaskNormal ||
+						(sp.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+							sp.AttributesEx1&spellAttr2DamageReducedShield != 0) {
+						s.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+					}
+					s.player.UnitFlags |= unitFlagImmune
+					s.sendPlayerUnitFlagsUpdate()
+					s.server.suppressThreatForSchoolImmuneVictim(s.player.Map, s.player.InstanceID, s.playerGUID, s.isImmuneToDamage(spellSchoolMaskNormal))
+				}
+			}
+		}
+	}
 
 	if s.activeAuraHasEffect(aura, spellAuraModParryPercent) {
 		s.updatePlayerParryPercentage(s.player, s.player.Level)
