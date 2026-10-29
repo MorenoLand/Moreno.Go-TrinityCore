@@ -61,7 +61,7 @@ func (s *session) isTotalImmune() bool {
 	defer s.castMu.Unlock()
 
 	for _, aura := range s.activeAuras {
-		if aura != nil && aura.AuraType == spellAuraSchoolImmunity {
+		if aura != nil && aura.AuraType == spellAuraSchoolImmunity && uint32(aura.MiscValue)&0x7F != 0 {
 			return true
 		}
 	}
@@ -323,18 +323,37 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 		return true
 	}
 
-	// Check SPELL_AURA_SCHOOL_IMMUNITY or SPELL_AURA_DAMAGE_IMMUNITY
-	for _, aura := range s.activeAuras {
-		if aura == nil {
-			continue
-		}
-		if aura.AuraType == spellAuraDamageImmunity {
-			return true
-		}
-		if aura.AuraType == spellAuraSchoolImmunity {
-			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
-				return true
+	// Unit.cpp:7900-7922 school fold over the live aura-39 rows: the
+	// gate is the effect's MiscValue (SpellInfo::_LoadImmunityInfo,
+	// SpellInfo.cpp:2785), not the granting spell's SchoolMask, full
+	// coverage is required, and the positivity/friendly/pierce gates
+	// apply. IMMUNITY_DAMAGE has no arm in IsImmunedToSpell (damage
+	// immunity is consulted only by IsImmunedToDamage), so a live
+	// aura-40 row no longer blocks whole-spell application here.
+	if schoolMask := spell.SchoolMask; schoolMask != 0 {
+		var schoolImmunityMask uint32
+		for _, aura := range s.activeAuras {
+			if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+				continue
 			}
+			misc := uint32(aura.MiscValue)
+			if misc&schoolMask == 0 {
+				continue
+			}
+			immuneSpell, found := wotlk.Spell{}, false
+			if s.server != nil && s.server.Data != nil {
+				if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+					immuneSpell, found = sp, true
+				}
+			}
+			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
+				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
+					schoolImmunityMask |= misc
+				}
+			}
+		}
+		if schoolImmunityMask&schoolMask == schoolMask {
+			return true
 		}
 	}
 
@@ -1567,6 +1586,37 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 					}
 				}
 			}
+		}
+		// Live aura-39 rows (m_spellImmune[IMMUNITY_SCHOOL] via
+		// ApplyAllSpellImmunitiesTo, SpellInfo.cpp:2860-2867): the
+		// damage path already folds these (creatureImmuneToDamageSpell)
+		// but the whole-spell fold above only covered template and
+		// script rows, so a creature carrying a live school-immunity
+		// aura reported no whole-spell immunity. MiscValue gate, same
+		// positivity/friendly/pierce gates as the script rows.
+		if srv != nil {
+			srv.auraMu.Lock()
+			for _, aura := range srv.activeCreatureAuras[key] {
+				if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+					continue
+				}
+				misc := uint32(aura.MiscValue)
+				if misc&schoolMask == 0 {
+					continue
+				}
+				immuneSpell, immuneKnown := wotlk.Spell{}, false
+				if srv.Data != nil {
+					if sp, found, err := srv.Data.Spell(aura.SpellID); err == nil && found {
+						immuneSpell, immuneKnown = sp, true
+					}
+				}
+				if (immuneKnown && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || !friendly {
+					if !canSpellPierceImmuneAura(spell, immuneSpell) {
+						schoolImmunityMask |= misc
+					}
+				}
+			}
+			srv.auraMu.Unlock()
 		}
 		if schoolImmunityMask&schoolMask == schoolMask {
 			return true
