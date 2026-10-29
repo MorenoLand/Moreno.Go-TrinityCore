@@ -23978,6 +23978,22 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 			hostile = s.server.isHostileFaction(tgt.Faction, caster)
 		}
 	}
+	// WorldObject::SpellHitResult (Object.cpp:2620-2627): the immunity
+	// arms run ahead of the reflect roll. The primary-target callers
+	// pre-check immunity, but chain-jump callers do not — an immune jump
+	// target carrying reflect auras must report IMMUNE here, never roll
+	// (or consume) reflect.
+	if targetSess != nil {
+		if targetSess.isImmuneToSpell(spell, s) || (spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask)) {
+			return protocol.SpellMissImmune
+		}
+	} else if s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, tgt.Faction) || (spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(tgt), spell, spell.SchoolMask)) {
+				return protocol.SpellMissImmune
+			}
+		}
+	}
 	// WorldObject::SpellHitResult (Object.cpp): positive spells can't miss
 	// non-hostile targets — chain-heal jumps never miss or resist.
 	if spellIsPositive(spell) && !hostile {
@@ -24084,11 +24100,24 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 			targetSess = s.server.findSessionByGUID(guid)
 		}
 		if targetSess != nil {
+			// WorldObject::SpellHitResult (Object.cpp:2620-2627): the
+			// immunity arms run ahead of the reflect roll on every other
+			// path (unit, triggered, creature, pet) — an immune AoE
+			// target reports IMMUNE and never rolls (or consumes) its
+			// reflect aura, same as AddUnitTarget per target.
+			if targetSess.isImmuneToSpell(spell, s) || (spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask)) {
+				misses = append(misses, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissImmune})
+				continue
+			}
 			if spellReflectOffered(spell, s, guid, targetSess) && targetSess.checkSpellReflection(spell) {
 				reflected = true
 			}
 		} else if s.server != nil {
 			if tgt, ok := s.getCombatTarget(ctx, guid); ok {
+				if s.creatureTargetImmuneToSpell(ctx, guid, spell, s, tgt.Faction) || (spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForTarget(tgt), spell, spell.SchoolMask)) {
+					misses = append(misses, protocol.SpellMissStatus{TargetGUID: guid, Reason: protocol.SpellMissImmune})
+					continue
+				}
 				// WorldObject::SpellHitResult (Object.cpp:2637-2639):
 				// an evading creature reports SPELL_MISS_EVADE ahead of
 				// the reflect roll — it leaves the kept list with an

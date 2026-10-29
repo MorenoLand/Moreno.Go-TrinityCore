@@ -600,7 +600,9 @@ func (s *session) checkSpellReflection(spell wotlk.Spell) bool {
 				seen23920 = true
 			}
 		case spellAuraReflectSpellsSchool:
-			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+			// GetTotalAuraModifierByMiscMask (Unit.cpp): the gate is the
+			// effect's MiscValue, not the aura spell's school mask.
+			if uint32(aura.MiscValue)&spell.SchoolMask != 0 {
 				chance += int32(aura.Amount)
 			}
 		}
@@ -659,7 +661,9 @@ func (srv *Server) creatureCheckSpellReflection(key creatureAuraKey, spell wotlk
 		case spellAuraReflectSpells:
 			chance += int32(aura.Amount)
 		case spellAuraReflectSpellsSchool:
-			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+			// GetTotalAuraModifierByMiscMask (Unit.cpp): the gate is the
+			// effect's MiscValue, not the aura spell's school mask.
+			if uint32(aura.MiscValue)&spell.SchoolMask != 0 {
 				chance += int32(aura.Amount)
 			}
 		}
