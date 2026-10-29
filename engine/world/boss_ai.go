@@ -4383,6 +4383,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 		return
 	}
 	base := eff.CalcValueForLevel(spell, casterLevel(m))
+	base = s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), base)
 	if base < 0 && !rawMode {
 		return
 	}
@@ -4860,6 +4861,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		base := eff.CalcValueForLevel(spell, casterLevel(m))
+		base = s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), base)
 		if base < 0 {
 			continue
 		}
@@ -5204,6 +5206,7 @@ func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMoti
 	}
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
 		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
 		return
 	}
@@ -5299,6 +5302,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 	}
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
 		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, []int32{damage, damage, damage})
 		return
 	}
@@ -5411,10 +5415,11 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		if eff.Effect == spellEffectForceCastWithValue {
+			scaled := s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
 			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
-				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{damage, damage, damage})
+				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{scaled, scaled, scaled})
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, []int32{damage, damage, damage})
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, []int32{scaled, scaled, scaled})
 			}
 			continue
 		}
@@ -6678,6 +6683,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 			}
 			if eff.Effect == spellEffectTriggerMissileWithValue {
 				damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+				damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
 				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, []int32{damage, damage, damage})
 			} else {
 				s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
@@ -6693,6 +6699,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 	}
 	if eff.Effect == spellEffectTriggerMissileWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
 		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
 		return
 	}
@@ -7021,7 +7028,8 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 					continue
 				}
 				amount := uint32(0)
-				if bp := eff.CalcValueForLevel(spell, casterLevel(m)); bp > 0 {
+				bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
+				if bp > 0 {
 					amount = uint32(bp)
 				}
 				os.applyAuraToTarget(ctx, guid, spell, eff, i, durationMs, eff.AuraPeriod, amount, spell.SchoolMask, castMerged, false, m.GUID, false, 0, false, nil)
@@ -7210,7 +7218,8 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			continue
 		}
 		amount := uint32(0)
-		if bp := eff.CalcValueForLevel(spell, casterLevel(m)); bp > 0 {
+		bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
+		if bp > 0 {
 			amount = uint32(bp)
 		}
 		positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6

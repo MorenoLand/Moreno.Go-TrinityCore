@@ -24844,6 +24844,18 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// charge fold above.
 	applyResilience := s.casterCanApplyResilience(casterGUID)
 
+	// The CalcValue level-scaling term (SpellInfo.cpp:459-511) for auras
+	// this caster applies: player casters and unresolvable caster GUIDs
+	// keep the unscaled value, while a resolved creature caster scales
+	// unless player-controlled. Resolved here, before castMu is taken,
+	// so the motion-map lookup never nests inside the cast lock.
+	casterControlled := true
+	if s.server != nil && s.player != nil && s.server.findSessionByGUID(casterGUID) == nil {
+		if cm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); cm != nil {
+			casterControlled = creatureIsPlayerControlled(cm)
+		}
+	}
+
 	s.castMu.Lock()
 	if s.activeAuras == nil {
 		s.activeAuras = make(map[uint32]*activeAura)
@@ -24903,6 +24915,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					// — rolled and level-scaled — while the base amount stays
 					// the raw DBC base (SpellAuraEffects.cpp:386).
 					rolled := effect.CalcValueForLevel(sp, auraCasterLevel)
+					rolled = s.server.scaledEffectValue(sp, effect, auraCasterLevel, casterControlled, rolled)
 					effectAmount = uint32(rolled)
 					amounts[index] = rolled
 					baseAmounts[index] = effect.BasePoints

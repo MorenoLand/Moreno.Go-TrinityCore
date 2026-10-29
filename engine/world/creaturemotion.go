@@ -6443,6 +6443,18 @@ func (s *Server) npcEffectValueScale(spell wotlk.Spell, effect wotlk.SpellEffect
 	return float64(casterScaler) / float64(spellScaler)
 }
 
+// scaledEffectValue folds the CalcValue level-scaling term into a
+// creature-cast effect value: the npcEffectValueScale ratio, or the
+// value unchanged when the term does not apply (player-controlled
+// caster, matching spell level, per-level points, non-scaling effect,
+// or a missing DBC row).
+func (s *Server) scaledEffectValue(spell wotlk.Spell, effect wotlk.SpellEffect, casterLevel uint32, controlledByPlayer bool, value int32) int32 {
+	if scale := s.npcEffectValueScale(spell, effect, casterLevel, controlledByPlayer); scale != 1 {
+		return int32(float64(value) * scale)
+	}
+	return value
+}
+
 func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool) (uint32, bool) {
 	var damage uint32
 	found := false
