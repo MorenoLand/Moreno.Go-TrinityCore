@@ -1967,6 +1967,68 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+		// effect, so a non-winning ChainTarget > 1 nearby effect chains from
+		// its own scoped pick (creatureChainNearbyPick, that effect's check
+		// type + conditions) with its own jump count - the winning block above
+		// searched only the largest ChainTarget. The pick joins hitTargets
+		// deduped (AddUnitTarget merge, Spell.cpp:2117) ahead of the verdict
+		// loop below, and jumps join the same way; a missing pick chains
+		// nothing (the session rejoin precedent). Creature casters have no
+		// spell-mod owner, so the ChainTarget fold is a pass-through. The
+		// winning effect is skipped: its jumps are already listed.
+		if spellKnown {
+			_, _, _, winMask := chainSpellJumps(nil, spellInfo)
+			for i, eff := range spellInfo.Effects {
+				if eff.Effect == 0 && eff.Aura == 0 {
+					continue
+				}
+				nearbyTarget := uint32(0)
+				if nearbyUnitTarget(eff.ImplicitTargetA) {
+					nearbyTarget = eff.ImplicitTargetA
+				} else if nearbyUnitTarget(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+					nearbyTarget = eff.ImplicitTargetB
+				} else {
+					continue
+				}
+				if eff.ChainTargets <= 1 {
+					continue
+				}
+				if winMask == 1<<uint(i) {
+					continue
+				}
+				pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, 1<<uint(i), nearbyTarget)
+				if !ok || pick == 0 {
+					continue
+				}
+				inList := false
+				for _, guid := range hitTargets {
+					if guid == pick {
+						inList = true
+						break
+					}
+				}
+				if !inList {
+					hitTargets = append(hitTargets, pick)
+				}
+				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, pick, uint32(eff.ChainTargets-1), false, chainCheckType(nearbyTarget), 1<<uint(i)) {
+					if jumpGUID == 0 {
+						continue
+					}
+					alreadyHit := false
+					for _, guid := range hitTargets {
+						if guid == jumpGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if !alreadyHit {
+						hitTargets = append(hitTargets, jumpGUID)
+					}
+				}
+			}
+		}
+
 		// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
 		// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
 		// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a

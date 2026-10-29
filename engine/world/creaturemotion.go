@@ -4345,6 +4345,81 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+			// effect, so a non-winning ChainTarget > 1 nearby effect chains from
+			// its own scoped pick (creatureChainNearbyPick, that effect's check
+			// type + conditions) with its own jump count - the winning block above
+			// searched only the largest ChainTarget. The pick and jumps join on
+			// the cone leg's pattern (player to areaHits, live motion to
+			// areaCreatureHits, static spawn to the packet only) ahead of the
+			// verdicts below; a missing pick chains nothing (the session rejoin
+			// precedent). Creature casters have no spell-mod owner, so the
+			// ChainTarget fold is a pass-through. The winning effect is skipped:
+			// its jumps are already listed.
+			if inlineSpellKnown {
+				_, _, _, winMask := chainSpellJumps(nil, inlineSpell)
+				joinInlineChainGUID := func(guid uint64) {
+					if guid == 0 {
+						return
+					}
+					for _, hitGUID := range hitTargets {
+						if hitGUID == guid {
+							return
+						}
+					}
+					playerJoined := false
+					for i := range players {
+						if players[i].GUID == guid {
+							areaHits = append(areaHits, &players[i])
+							playerJoined = true
+							break
+						}
+					}
+					if !playerJoined {
+						if pickSess := s.findSessionByGUID(guid); pickSess != nil && pickSess.player != nil {
+							p := pickSess.player
+							areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+							playerJoined = true
+						}
+					}
+					if playerJoined {
+						hitTargets = append(hitTargets, guid)
+					} else if s.findCreatureMotion(motion.Map, motion.InstanceID, guid) != nil {
+						areaCreatureHits = append(areaCreatureHits, guid)
+						hitTargets = append(hitTargets, guid)
+					} else {
+						hitTargets = append(hitTargets, guid)
+					}
+				}
+				for i, eff := range inlineSpell.Effects {
+					if eff.Effect == 0 && eff.Aura == 0 {
+						continue
+					}
+					nearbyTarget := uint32(0)
+					if nearbyUnitTarget(eff.ImplicitTargetA) {
+						nearbyTarget = eff.ImplicitTargetA
+					} else if nearbyUnitTarget(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+						nearbyTarget = eff.ImplicitTargetB
+					} else {
+						continue
+					}
+					if eff.ChainTargets <= 1 {
+						continue
+					}
+					if winMask == 1<<uint(i) {
+						continue
+					}
+					pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, 1<<uint(i), nearbyTarget)
+					if !ok || pick == 0 {
+						continue
+					}
+					joinInlineChainGUID(pick)
+					for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, pick, uint32(eff.ChainTargets-1), false, chainCheckType(nearbyTarget), 1<<uint(i)) {
+						joinInlineChainGUID(jumpGUID)
+					}
+				}
+			}
+
 			// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a
 			// creature caster: TARGET_UNIT_CHANNEL_TARGET (77) adds the live
 			// channel's object unit, independent of the wire victim — the
