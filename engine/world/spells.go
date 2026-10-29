@@ -4882,8 +4882,7 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// template CannotBeUsedUnderImmunity matches cannot be opened while the
 	// caster is immune (UNIT_FLAG_IMMUNE) — silent return before the BG
 	// arms, the lock check, SendLoot and the skill-up leg. Immunity reads
-	// the maintained flag bit OR the live-aura scan
-	// (playerGOImmunityBlocked), like the CMSG path (gameobjects.go).
+	// the maintained flag bit (playerGOImmunityBlocked), like the CMSG path (gameobjects.go).
 	if haveType && goCannotBeUsedUnderImmunity(goType, goTpl) && s.playerGOImmunityBlocked() {
 		return
 	}

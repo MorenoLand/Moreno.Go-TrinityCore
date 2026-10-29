@@ -345,11 +345,24 @@ func (s *session) loadGlyphAuras(state *playerState) {
 			state.Glyphs[state.ActiveTalentGroup][index] = 0
 			continue
 		}
-		if _, exists := s.activeAuras[glyph.SpellID]; exists {
-			continue
-		}
 		spell, found, err := s.server.Data.Spell(glyph.SpellID)
 		if err != nil || !found {
+			continue
+		}
+		// AuraEffect::HandleAuraModSchoolImmunity apply leg
+		// (SpellAuraEffects.cpp:3191-3192): C++ lands glyph auras via
+		// CastSpell (Player::_LoadGlyphAuras), so any 39 effect sets
+		// UNIT_FLAG_IMMUNE even though this synthesis bypasses the
+		// live apply funnel. The fold scans every effect, not just
+		// the first one the record below keeps, and runs before the
+		// duplicate skip because C++ casts unconditionally.
+		for _, effect := range spell.Effects {
+			if effect.Aura == spellAuraSchoolImmunity {
+				state.UnitFlags |= unitFlagImmune
+				break
+			}
+		}
+		if _, exists := s.activeAuras[glyph.SpellID]; exists {
 			continue
 		}
 		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, EffectMask: 0x01, ApplyResilience: true, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}

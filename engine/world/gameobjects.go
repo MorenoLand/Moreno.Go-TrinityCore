@@ -734,8 +734,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// PlayerTalkClass->ClearMenus() all run before the gossip hooks and the
 	// template-cooldown gate, for every GO type. The immunity gate reads the
 	// raw UNIT_FLAG_IMMUNE flag in C++; Go reads the maintained flag bit
-	// OR the live-aura scan (playerGOImmunityBlocked) for funnels that
-	// predate the bit.
+	// (playerGOImmunityBlocked).
 	goTpl := s.loadGameObjectTemplateData(ctx, entry)
 	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.playerGOImmunityBlocked() {
 		return true
