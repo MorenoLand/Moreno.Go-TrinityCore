@@ -56,6 +56,22 @@ func isRefCenteredAreaTargetType(target uint32) bool {
 	}
 }
 
+// hasRefCenteredAreaEffect reports whether any active effect of the spell uses a
+// ref-centered area implicit target (37/61), mirroring hasFriendlyAreaEffect's
+// second-slot skip: a 37/61 effect of a spell that also carries a friendly-area
+// effect needs its own ref-centered list, not the caster-centered one.
+func hasRefCenteredAreaEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if isRefCenteredAreaTargetType(eff.ImplicitTargetA) || (isRefCenteredAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
+			return true
+		}
+	}
+	return false
+}
+
 // isFriendlyConeTargetType reports the values Spell::SelectImplicitConeTargets
 // (Spell.cpp:1176) resolves with TARGET_CHECK_ALLY/ENTRY.
 func isFriendlyConeTargetType(target uint32) bool {
