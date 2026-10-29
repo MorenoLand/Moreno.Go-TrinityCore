@@ -1347,6 +1347,27 @@ func (s *Server) dispelCreatureAurasOnImmunityApply(key creatureAuraKey, spell w
 	}
 }
 
+// spellHasSchoolImmunityFlagArm reports whether the spell carries a
+// school-immunity (39) effect and both attributes of the second flag-aura
+// arm of AuraEffect::HandleAuraModSchoolImmunity
+// (SpellAuraEffects.cpp:3188-3190): ATTR1_DISPEL_AURAS_ON_IMMUNITY plus
+// ATTR2_DAMAGE_REDUCED_SHIELD. Unlike the NORMAL-school arm, this arm is
+// unguarded by apply, so it also runs on remove — the remove funnels use
+// this scan because a stored activeAura's AuraType is only its last
+// applied effect, not the spell's full effect list.
+func spellHasSchoolImmunityFlagArm(spell wotlk.Spell) bool {
+	if spell.AttributesEx&spellAttr1DispelAurasOnImmunity == 0 ||
+		spell.AttributesEx1&spellAttr2DamageReducedShield == 0 {
+		return false
+	}
+	for _, eff := range spell.Effects {
+		if eff.Aura == spellAuraSchoolImmunity {
+			return true
+		}
+	}
+	return false
+}
+
 // spellTargetFullyEffectImmune reduces the AddUnitTarget effect-immune
 // strip (Spell.cpp:2108-2112) to its IMMUNE2 consequence: true when the
 // spell has at least one effect and every non-zero effect is per-effect

@@ -25579,6 +25579,21 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if wasAllowOnlyAbility && s.player != nil && !s.hasAuraType(spellAuraAllowOnlyAbility) {
 		s.player.PlayerFlags &^= playerFlagAllowOnlyAbility
 	}
+	// AuraEffect::HandleAuraModSchoolImmunity remove leg
+	// (SpellAuraEffects.cpp:3188-3190): the second flag-aura arm is
+	// unguarded by apply, so dropping a school-immunity aura whose spell
+	// carries both ATTR1_DISPEL_AURAS_ON_IMMUNITY and
+	// ATTR2_DAMAGE_REDUCED_SHIELD still strips the target's
+	// IMMUNE_OR_LOST_SELECTION auras (the BG flag-drop arm). The
+	// NORMAL-school arm does not run here (C++ gates it on apply), and
+	// the aura is already erased above, matching C++ _UnapplyAura's
+	// erase-before-handlers order (Unit.cpp:3548). No remaining-aura
+	// gate: C++ has none on these arms.
+	if auraWasPresent && s.server != nil && s.server.Data != nil {
+		if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found && spellHasSchoolImmunityFlagArm(rspell) {
+			s.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+		}
+	}
 	if wasPreparation && s.player != nil && !s.hasAuraType(spellAuraArenaPreparation) {
 		s.player.UnitFlags &^= unitFlagPreparation
 	}
@@ -28298,6 +28313,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// no-stack purge (C++ _AddAura order: RemoveAurasDueToAura, then the
 		// aura-apply handlers that call ApplyAllSpellImmunitiesTo).
 		dispelAurasOnImmunityApply(targetSess, spell, eff)
+		// AuraEffect::HandleAuraModSchoolImmunity flag-aura arms
+		// (SpellAuraEffects.cpp:3185-3190): the player-target twin of
+		// the creature arms — a NORMAL-school immunity effect, or an
+		// immunity spell carrying both ATTR1_DISPEL_AURAS_ON_IMMUNITY
+		// and ATTR2_DAMAGE_REDUCED_SHIELD, drops the target's
+		// IMMUNE_OR_LOST_SELECTION auras (the BG flag-drop arm).
+		if eff.Aura == spellAuraSchoolImmunity && (eff.MiscValue == spellSchoolMaskNormal ||
+			(spell.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+				spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
+			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
+		}
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
 		}
@@ -34261,6 +34287,22 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
 	if wasFeignDeath {
 		s.clearCreatureFeignDeath(key)
+	}
+	// AuraEffect::HandleAuraModSchoolImmunity remove leg
+	// (SpellAuraEffects.cpp:3188-3190): the creature-target twin of the
+	// player remove leg — the second flag-aura arm is unguarded by apply,
+	// so dropping a school-immunity aura whose spell carries both
+	// ATTR1_DISPEL_AURAS_ON_IMMUNITY and ATTR2_DAMAGE_REDUCED_SHIELD
+	// still strips the creature's IMMUNE_OR_LOST_SELECTION auras. The
+	// NORMAL-school arm does not run here (C++ gates it on apply), and
+	// the aura is already erased above, matching C++ _UnapplyAura's
+	// erase-before-handlers order (Unit.cpp:3548).
+	if auraWasPresent && s.Data != nil {
+		if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found && spellHasSchoolImmunityFlagArm(rspell) {
+			if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
+			}
+		}
 	}
 	// AuraEffect::HandleAuraControlVehicle remove leg
 	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a
