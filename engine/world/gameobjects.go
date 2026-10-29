@@ -912,7 +912,11 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 			if owner == nil || owner.player == nil {
 				return true
 			}
-			if s.groupID == 0 || owner.groupID == 0 || s.groupID != owner.groupID {
+			// Player::IsInSameRaidWith (Player.cpp:2543-2545) passes for
+			// the caster themselves (p == this) even with no group, so a
+			// solo owner using their own partyOnly spellcaster is allowed;
+			// the raw groupID comparison blocked exactly that case.
+			if !sameRaidGroup(s, owner) {
 				return true
 			}
 		}
@@ -1245,6 +1249,16 @@ func (s *session) useFlagstandGameObject(ctx context.Context, guid uint64, entry
 	if !s.canUseBattlegroundObject(guid) {
 		return
 	}
+	// Battleground* bg = player->GetBattleground(): Go dispatches on the BG
+	// map the player stands on. Only Arathi Basin has flagstand entries
+	// outside the delegates' lists; other maps' flag entries are all
+	// intercepted above, so a non-AB flagstand here is a silent no-op.
+	// The bg-nil return precedes the vehicle and stealth arms in C++
+	// (GameObject.cpp:1962-1974), so a stray non-AB flagstand click must
+	// not strip stealth on its way out.
+	if s.player.Map != ABMapID {
+		return
+	}
 	// player->GetVehicle() (GameObject.cpp:1967, 2008).
 	if s.player.VehicleGUID != 0 {
 		return
@@ -1253,14 +1267,6 @@ func (s *session) useFlagstandGameObject(ctx context.Context, guid uint64, entry
 	// (GameObject.cpp:1973-1974, 2013-2014).
 	s.removeAurasByType(spellAuraStealth)
 	s.removeAurasByType(spellAuraInvisibility)
-
-	// Battleground* bg = player->GetBattleground(): Go dispatches on the BG
-	// map the player stands on. Only Arathi Basin has flagstand entries
-	// outside the delegates' lists; other maps' flag entries are all
-	// intercepted above, so a non-AB flagstand here is a silent no-op.
-	if s.player.Map != ABMapID {
-		return
-	}
 	ab := s.server.getOrCreateABState(s.player.Map)
 	nodeID, ok := abNodeIDNearPlayer(ab, s)
 	if !ok {

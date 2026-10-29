@@ -2107,6 +2107,12 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 		// the despawn the bobber lingered, still catchable once the bite
 		// timer fired.
 		s.cancelFishingBobber()
+		// GameObject::Use GAMEOBJECT_TYPE_FISHINGNODE ends every branch
+		// with player->FinishSpell(CURRENT_CHANNELED_SPELL)
+		// (GameObject.cpp:1799); the success path already mirrors it with
+		// interruptCurrentCast, but the too-early path left the fishing
+		// channel running with no bobber until its duration expired.
+		s.interruptCurrentCast()
 		return true
 	}
 	// Player::SendLoot's shouldLootRelease lambda (Player.cpp:8538-8543): a
