@@ -1129,6 +1129,29 @@ func isAreaEnemyTargetType(target uint32) bool {
 	}
 }
 
+// effectHasAreaEnemyLeg reports whether one effect's own implicit targets
+// select area enemies (15/16/24/54/104 on a selecting slot, or effect 27
+// with 18) — the same per-effect selection the aura trip gate uses. A
+// reflected AoE target's TargetInfo carries only the bits of the effects
+// that selected it, so HandleLaunchPhase (Spell.cpp:7717-7725) and
+// DoProcessTargetContainer (Spell.cpp:3561) fire an effect on the
+// reflector's _spellHitTarget (the caster, Spell.cpp:2350) only for an
+// effect with such a leg; a single-target or friendly effect sharing the
+// cast takes nothing from the trip.
+// areaEnemyTrips returns trips unchanged for an effect with an area-enemy
+// leg and nil otherwise, so a trip loop gated through it fires only for
+// the effects C++ would fire on the reflected targets.
+func effectHasAreaEnemyLeg(eff wotlk.SpellEffect) bool {
+	return isAreaEnemyTargetType(eff.ImplicitTargetA) || (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && (eff.ImplicitTargetA == 18 || eff.ImplicitTargetB == 18))
+}
+
+func areaEnemyTrips(eff wotlk.SpellEffect, trips []uint64) []uint64 {
+	if effectHasAreaEnemyLeg(eff) {
+		return trips
+	}
+	return nil
+}
+
 // spellEffectTargetsUnit mirrors SpellEffectInfo::GetUsedTargetObjectType()
 // (the static _data table, SpellInfo.cpp:610-614) reporting true when the
 // effect's used target object type is TARGET_OBJECT_TYPE_UNIT (SpellInfo.h:103).
@@ -11282,11 +11305,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		for _, eff := range spell.Effects {
 			switch eff.Effect {
 			case spellEffectInterruptCast:
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.handleEffectInterruptCast(ctx, s.playerGUID, spell, eff)
 				}
 			case spellEffectLeapBack:
-				if s.player != nil {
+				if effectHasAreaEnemyLeg(eff) && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
 				}
 			}
@@ -12739,7 +12762,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
 				// fires on the caster once per reflected target.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, s.playerGUID)
 				}
 			case spellEffectEnergizePct:
@@ -12770,7 +12793,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
 				// fires on the caster once per reflected target.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, s.playerGUID)
 				}
 			case spellEffectPowerBurn:
@@ -12791,7 +12814,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						burnTargets = append(burnTargets, s.playerGUID)
 					}
 				}
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					burnTargets = append(burnTargets, s.playerGUID)
 				}
 				for _, effectTarget := range burnTargets {
@@ -12857,7 +12880,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 					// triggered spell fires on the caster once per reflected target.
-					for range reflectedAoETrips {
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
 						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, s.playerGUID)
 					}
 				}
@@ -12896,7 +12919,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// no-op (and log nothing), exactly like C++'s per-TargetInfo
 				// iteration — this resolves the census' per-trip banking
 				// question, it does not stack per trip.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					if s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
 					}
@@ -12926,7 +12949,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// keeps the HIT_TARGET arm (the empty-list HIT arm must not
 				// fire per trip). Triggered casts ride the triggered funnel,
 				// never this dispatch, so no trip recursion.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.runTriggerMissileEffect(ctx, spell, eff, []uint64{s.playerGUID})
 				}
 			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
@@ -12951,7 +12974,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target. The helper re-reads the caster's pure skill value
 				// and re-applies the same step/value/max, so repeated trips
 				// are idempotent, matching C++'s per-TargetInfo SetSkill.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.applySkillStepEffect(ctx, spell, eff, casterLevel, s.playerGUID)
 				}
 			case spellEffectAddComboPoints: // 80: SPELL_EFFECT_ADD_COMBO_POINTS
@@ -12998,7 +13021,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// runs them after all base hits, so a mixed hit+reflected cast
 					// ends banked on the caster instead of the last
 					// selection-order target.
-					for range reflectedAoETrips {
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
 						if s.playerGUID != comboGainTarget {
 							comboGainTarget = s.playerGUID
 							comboGain = gain
@@ -13050,7 +13073,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the max-health
 				// heal fires on the caster once per reflected target.
-				for range reflectedAoETrips {
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 			case 6, 27, 35: // Apply Aura
