@@ -15059,6 +15059,34 @@ func spellMechanicMask(spell wotlk.Spell) uint32 {
 	return mask
 }
 
+// spellTakenMechanicMask mirrors the mechanic-mask input of the Taken arms:
+// SpellInfo::GetAllEffectsMechanicMask plus the MeleeDamageBonusTaken
+// Shred/Maul arm (Unit.cpp:8196-8200), which ORs MECHANIC_BLEED (15) into
+// the mask for Druid-family spells with SpellFamilyFlags[0] & 0x8800.
+// Weapon-damage spells are the only Taken callers that can carry those
+// flags, so the gate on spellHasWeaponDamageEffect keeps the OR off the
+// pure SpellDamageBonusTaken path, which has no such arm.
+func spellTakenMechanicMask(spell wotlk.Spell) uint32 {
+	mask := spellMechanicMask(spell)
+	if spellHasWeaponDamageEffect(spell) && spell.SpellFamilyName == spellFamilyDruid && spell.SpellFamilyFlags[0]&0x8800 != 0 {
+		mask |= 1 << 15 // MECHANIC_BLEED
+	}
+	return mask
+}
+
+// mechanicTakenMatch mirrors the predicate of Unit::SpellDamageBonusTaken
+// (Unit.cpp:7060-7066) and Unit::MeleeDamageBonusTaken (Unit.cpp:8203-8211):
+// a MOD_MECHANIC_DAMAGE_TAKEN_PERCENT aura applies when the mechanic mask
+// holds the bit for the aura's MiscValue, which is a mechanic index, not a
+// mask — the generic misc-mask readers (MiscValue & mask) both miss true
+// matches (BLEED index 15 vs bit 1<<15) and admit false ones (index 3 vs a
+// CHARM bit). Values outside the 0-31 mechanic range never match.
+func mechanicTakenMatch(mechanicMask uint32) func(miscValue int32) bool {
+	return func(miscValue int32) bool {
+		return miscValue >= 0 && miscValue < 32 && mechanicMask&(1<<uint(miscValue)) != 0
+	}
+}
+
 // spellMechanicMaskByEffectMask mirrors SpellInfo::GetSpellMechanicMaskByEffectMask
 // (SpellInfo.cpp:1914): the spell-level mechanic plus the mechanic of every
 // effect inside effectMask — no Effect!=0 gate, unlike spellMechanicMask. The
@@ -15194,8 +15222,8 @@ func spellDamageBonusTaken(damage uint32, spell wotlk.Spell, schoolMask uint32, 
 		return damage
 	}
 	takenTotalMod := float32(1)
-	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
-		takenTotalMod *= ResolveAuraPercentMultiplier(victim.auraTypeModifiersByMiscMask(spellAuraModMechanicDamageTakenPercent, mechanicMask))
+	if mechanicMask := spellTakenMechanicMask(spell); mechanicMask != 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(victim.gatedAuraModifierAmounts(spellAuraModMechanicDamageTakenPercent, victim.auraModifierCandidatesFiltered(spellAuraModMechanicDamageTakenPercent, mechanicTakenMatch(mechanicMask))))
 	}
 	for _, pct := range cheatDeathTakenPcts(victim) {
 		takenTotalMod += takenTotalMod * pct / 100
@@ -15720,6 +15748,57 @@ func creatureAuraModifiersByMiscMask(s *Server, key creatureAuraKey, auraType, m
 	return gatedCreatureAuraModifierAmounts(s, auraType, cands)
 }
 
+// creatureAuraModifiersByMechanicMask is the creature-side twin of the
+// mechanic predicate in Unit::SpellDamageBonusTaken (Unit.cpp:7060-7066):
+// like creatureAuraModifiersByMiscMask but matching a mechanic mask against
+// the aura effect's MiscValue as a mechanic index (bit 1<<MiscValue), not
+// as a mask — the generic reader misses BLEED-index auras and admits false
+// low-bit matches. Stack-group gating matches the misc-mask twin.
+func creatureAuraModifiersByMechanicMask(s *Server, key creatureAuraKey, auraType uint32, mechanicMask uint32) []int32 {
+	if s == nil || s.Data == nil || mechanicMask == 0 || key.GUID == 0 {
+		return nil
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	cands := make([]auraModifierCandidate, 0)
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		usedStoredAmount := false
+		for index, effect := range spell.Effects {
+			if index >= len(aura.Amounts) || effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 || effect.MiscValue < 0 || effect.MiscValue >= 32 || mechanicMask&(1<<uint(effect.MiscValue)) == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 && aura.AuraType == auraType && aura.MiscValue >= 0 && aura.MiscValue < 32 && mechanicMask&(1<<uint(aura.MiscValue)) != 0 && !usedStoredAmount {
+				amount = int32(aura.Amount)
+				usedStoredAmount = true
+			}
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
+		}
+	}
+	return gatedCreatureAuraModifierAmounts(s, auraType, cands)
+}
+
 // aoeDamageAvoidanceMultiplier mirrors Unit::CalculateAOEAvoidance
 // (Unit.cpp:12397-12404): the product of (1 + amount/100) over the victim's
 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE auras whose misc mask intersects the
@@ -15862,8 +15941,8 @@ func creatureDamageFromCasterMultiplier(server *Server, key creatureAuraKey, spe
 // session even when the victim is a creature.
 func creatureSpellDamageBonusTaken(server *Server, damage uint32, spell wotlk.Spell, schoolMask uint32, key creatureAuraKey, caster *session, meleePctMod float64) uint32 {
 	takenTotalMod := float32(1)
-	if mechanicMask := spellMechanicMask(spell); mechanicMask != 0 {
-		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModMechanicDamageTakenPercent, mechanicMask))
+	if mechanicMask := spellTakenMechanicMask(spell); mechanicMask != 0 {
+		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMechanicMask(server, key, spellAuraModMechanicDamageTakenPercent, mechanicMask))
 	}
 	if spell.AttributesEx4&spellAttr4FixedDamage == 0 {
 		takenTotalMod *= ResolveAuraPercentMultiplier(creatureAuraModifiersByMiscMask(server, key, spellAuraModDamagePercentTaken, schoolMask))
