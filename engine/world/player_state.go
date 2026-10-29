@@ -149,6 +149,7 @@ const (
 	unitFlagNonAttackable                  uint32 = 0x00000002 // UNIT_FLAG_NON_ATTACKABLE (UnitDefines.h:125)
 	unitFlagImmuneToNPC                    uint32 = 0x00000200 // UNIT_FLAG_IMMUNE_TO_NPC (UnitDefines.h:133)
 	unitFlagImmuneToPC                     uint32 = 0x00000100 // UNIT_FLAG_IMMUNE_TO_PC (UnitDefines.h:132)
+	unitFlagImmune                         uint32 = 0x80000000 // UNIT_FLAG_IMMUNE (UnitDefines.h:155)
 	unitFlagNotAttackable1                 uint32 = 0x00000080 // UNIT_FLAG_NOT_ATTACKABLE_1 (UnitDefines.h:131)
 	unitFlagUnk29                          uint32 = 0x20000000 // UNIT_FLAG_UNK_29 (UnitDefines.h:153)
 	unitFlag2FeignDeath                    uint32 = 0x00000001 // UNIT_FLAG2_FEIGN_DEATH (UnitDefines.h:161)

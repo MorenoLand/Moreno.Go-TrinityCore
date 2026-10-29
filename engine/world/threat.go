@@ -45,6 +45,14 @@ type ThreatManager struct {
 	// map only covers victims with an existing entry — a new entry starts
 	// at 0 and picks the modifier up on the next aura apply/remove/change.
 	tempMods map[uint64]int32
+	// suppressed mirrors ThreatReference ONLINE_STATE_SUPPRESSED for the
+	// school-immunity apply path (ThreatManager::EvaluateSuppressed,
+	// ThreatManager.cpp:290-304): victims marked here are skipped by
+	// victim selection until a taunt re-evaluates them (a taunted victim
+	// is never suppressed, ShouldBeSuppressed:112-115). The confuse /
+	// breakable-stun legs of ShouldBeSuppressed and the offline leg
+	// remain unmodeled.
+	suppressed map[uint64]bool
 	// needClientUpdate mirrors ThreatManager::_needClientUpdate
 	// (set at ThreatManager.cpp:49/61/141/793, consumed at 522-525):
 	// any threat value change that does not switch the victim (AddThreat,
@@ -250,6 +258,49 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 	motion.ThreatMgr.ClearTaunt(casterGUID)
 }
 
+// isSuppressedLocked reports whether the victim's reference is suppressed
+// on this list. A taunted victim is never suppressed
+// (ThreatReference::ShouldBeSuppressed, ThreatManager.cpp:112-115), so a
+// live taunt exempts the victim even while the flag stands — the C++
+// EvaluateSuppressed(true) tail of TauntUpdate re-evaluates the same way.
+// Callers hold tm.mu.
+func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
+	if tm.isTauntedLocked(victim) {
+		return false
+	}
+	return tm.suppressed[victim]
+}
+
+// SuppressVictim marks the victim's reference suppressed on this list,
+// the per-list half of ThreatManager::EvaluateSuppressed
+// (ThreatManager.cpp:290-304) as called from
+// AuraEffect::HandleAuraModSchoolImmunity apply
+// (SpellAuraEffects.cpp:3192). Only an existing entry is marked; the
+// current victim switches on the next Update tick, matching C++
+// UpdateVictim cadence (no eager reselect here). A victim that is not
+// damage-immune to the attacker's melee school is never marked — the
+// caller gates on ShouldBeSuppressed's immunity leg.
+func (tm *ThreatManager) SuppressVictim(victim uint64) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if _, ok := tm.entries[victim]; !ok {
+		return
+	}
+	if tm.isTauntedLocked(victim) {
+		return
+	}
+	if tm.suppressed == nil {
+		tm.suppressed = make(map[uint64]bool)
+	}
+	if !tm.suppressed[victim] {
+		tm.suppressed[victim] = true
+		tm.needClientUpdate = true
+	}
+}
+
 // isTauntedLocked reports whether the victim holds a live taunt state,
 // lazily expiring elapsed auras. Callers hold tm.mu.
 func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
@@ -352,9 +403,11 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 
 // reselectVictimLocked mirrors ThreatManager::ReselectVictim
 // (ThreatManager.cpp:531-585) with the CompareReferencesLT comparator
-// (593-601). Callers hold tm.mu. The online/suppressed/offline leg of the
-// comparator has no Go model (refs are removed explicitly on death/evade),
-// and DETAUNT has no Go aura model, so the state precedence reduces to
+// (593-601). Callers hold tm.mu. The offline leg of the comparator has no
+// Go model (refs are removed explicitly on death/evade); the suppressed
+// leg is modeled for the school-immunity apply path (SuppressVictim) and
+// skipped here unless the victim is taunted, matching IsAvailable. DETAUNT
+// has no Go aura model, so the state precedence reduces to
 // TAUNT > NONE; among equal states the 110%/130% + melee dance is exact,
 // including the sorted-walk early-outs.
 func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 {
@@ -364,7 +417,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	// Fixated target is always preferred (ReselectVictim:540-541); a stale
 	// fixate whose entry is gone falls through like !IsAvailable().
 	if tm.fixateGUID != 0 {
-		if _, ok := tm.entries[tm.fixateGUID]; ok {
+		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isSuppressedLocked(tm.fixateGUID) {
 			return tm.fixateGUID
 		}
 		tm.fixateGUID = 0
@@ -377,7 +430,15 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	}
 	cands := make([]candidate, 0, len(tm.entries))
 	for guid := range tm.entries {
+		if tm.isSuppressedLocked(guid) {
+			continue
+		}
 		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
+	}
+	// C++ returns null when the highest reference is unavailable
+	// (ReselectVictim:553-554); every entry suppressed means the same.
+	if len(cands) == 0 {
+		return 0
 	}
 	// Comparator order: taunt state precedence (TAUNT > NONE), then threat
 	// descending — the heap order ReselectVictim walks.
@@ -390,6 +451,9 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 
 	old := tm.currentVictim
 	if _, ok := tm.entries[old]; !ok {
+		old = 0
+	}
+	if tm.isSuppressedLocked(old) {
 		old = 0
 	}
 	highest := cands[0]
@@ -824,6 +888,7 @@ func (tm *ThreatManager) ClearThreat() {
 	defer tm.mu.Unlock()
 	tm.entries = make(map[uint64]float32)
 	tm.tempMods = make(map[uint64]int32)
+	tm.suppressed = make(map[uint64]bool)
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)

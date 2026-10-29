@@ -7382,6 +7382,15 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 				spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
 			s.removeCreatureAurasWithInterruptFlags(target, auraInterruptFlagImmuneOrLostSelection)
 		}
+		// AuraEffect::HandleAuraModSchoolImmunity (SpellAuraEffects.cpp:3191-3192),
+		// boss-AI apply funnel twin of the session apply legs: every 39
+		// effect application sets UNIT_FLAG_IMMUNE and re-evaluates
+		// threat suppression on the target's attackers.
+		if eff.Aura == spellAuraSchoolImmunity && target != nil {
+			target.UnitFlags |= unitFlagImmune
+			s.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: target.UnitFlags})
+			s.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s, targetKey, spellSchoolMaskNormal))
+		}
 		if spellHasSpeedAura(spell) {
 			s.refreshCreatureRunSpeed(targetKey, targetGUID)
 		}

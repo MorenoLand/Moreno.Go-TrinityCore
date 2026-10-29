@@ -25194,6 +25194,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	wasConvertRune := false
 	wasUnattackable := false
 	wasAllowOnlyAbility := false
+	wasSchoolImmunity := false
 	wasForcedReaction := false
 	forcedReactionFaction := uint32(0)
 	forcedReactionRank := uint32(0)
@@ -25314,6 +25315,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// clears only when no other 93 aura remains.
 			wasUnattackable = s.activeAuraHasEffect(aura, spellAuraModUnattackable)
 			wasAllowOnlyAbility = aura.AuraType == spellAuraAllowOnlyAbility
+			wasSchoolImmunity = s.activeAuraHasEffect(aura, spellAuraSchoolImmunity)
 			// AuraEffect::HandleArenaPreparation remove leg
 			// (SpellAuraEffects.cpp:4279-4285): the preparation flag clears
 			// only when no other aura of that type remains.
@@ -25593,6 +25595,16 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found && spellHasSchoolImmunityFlagArm(rspell) {
 			s.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		}
+	}
+	// AuraEffect::HandleAuraModSchoolImmunity remove leg
+	// (SpellAuraEffects.cpp:3194-3199): the flag clears only when no 39
+	// aura remains on the target (the HasAuraType gate); the aura is
+	// already erased above, so the live fold reads the remaining set.
+	// Unlike the flag-aura arms, this leg is gated on the removed aura
+	// carrying a 39 effect, matching the per-effect handler dispatch.
+	if wasSchoolImmunity && s.player != nil && !s.hasLiveAuraEffectType(spellAuraSchoolImmunity) {
+		s.player.UnitFlags &^= unitFlagImmune
+		s.sendPlayerUnitFlagsUpdate()
 	}
 	if wasPreparation && s.player != nil && !s.hasAuraType(spellAuraArenaPreparation) {
 		s.player.UnitFlags &^= unitFlagPreparation
@@ -28324,6 +28336,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
 			targetSess.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		}
+		// AuraEffect::HandleAuraModSchoolImmunity (SpellAuraEffects.cpp:3191-3192):
+		// every 39 effect application sets UNIT_FLAG_IMMUNE and
+		// re-evaluates threat suppression on the target's attackers.
+		// The flag clears on remove only when no 39 aura remains (leg below).
+		if eff.Aura == spellAuraSchoolImmunity && targetSess.player != nil {
+			targetSess.player.UnitFlags |= unitFlagImmune
+			targetSess.sendPlayerUnitFlagsUpdate()
+			if targetSess.server != nil {
+				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
+			}
+		}
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
 		}
@@ -29105,6 +29128,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
 			s.server.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
 		}
+	}
+	// AuraEffect::HandleAuraModSchoolImmunity (SpellAuraEffects.cpp:3191-3192),
+	// creature-target twin of the player leg above.
+	if eff.Aura == spellAuraSchoolImmunity && s.server != nil {
+		if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+			m.UnitFlags |= unitFlagImmune
+			s.server.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: m.UnitFlags})
+		}
+		s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
 	}
 	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
 	// creature's run rate — previously snares never slowed creatures.
@@ -34193,6 +34225,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	wasQuestTame := false
 	questTameCaster := uint64(0)
 	wasSpeedAura := false
+	wasSchoolImmunity := false
 	// Pre-erase snapshot of the removed aura's stored effect amounts: the
 	// 34/132 remove halves read them like C++ reads the erased AuraEffect's
 	// GetAmount() (SpellAuraEffects.cpp:3658), not DBC base points.
@@ -34227,6 +34260,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 				// the aura is deleted.
 				if s.Data != nil {
 					if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found {
+						wasSchoolImmunity = spellHasAura(rspell, spellAuraSchoolImmunity)
 						removedLinkedTriggers = linkedTriggersOfSpell(s.Data, rspell)
 						removedLinkedParentCaster = aura.CasterGUID
 						// The quest-tame arm of AuraEffect::HandleAuraDummy AT
@@ -34302,6 +34336,16 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 			if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
 				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
 			}
+		}
+	}
+	// AuraEffect::HandleAuraModSchoolImmunity remove leg
+	// (SpellAuraEffects.cpp:3194-3199), creature-target twin of the
+	// player leg above: the flag clears only when no live 39 effect
+	// remains on the creature.
+	if wasSchoolImmunity && auraWasPresent && !s.creatureHasLiveAuraEffectType(key, spellAuraSchoolImmunity) {
+		if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+			m.UnitFlags &^= unitFlagImmune
+			s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{unitFieldFlags: m.UnitFlags})
 		}
 	}
 	// AuraEffect::HandleAuraControlVehicle remove leg

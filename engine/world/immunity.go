@@ -601,6 +601,94 @@ func (srv *Server) creatureIsIsolated(key creatureAuraKey) bool {
 	return false
 }
 
+// hasLiveAuraEffectType reports whether any live active aura on the player
+// carries an effect of the given aura type. Unlike hasAuraType's
+// activeAuras leg (stored last-effect AuraType only) and its spellbook
+// scan (live auras only in C++), this folds the stored type and the
+// spell-effect scan over the live set — the Unit::HasAuraType gate the
+// AuraEffect remove legs use (e.g. HandleAuraModSchoolImmunity's
+// HasAuraType(39) flag-clear gate, SpellAuraEffects.cpp:3196-3198).
+func (s *session) hasLiveAuraEffectType(auraType uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if s.activeAuraHasEffect(aura, auraType) {
+			return true
+		}
+	}
+	return false
+}
+
+// creatureHasLiveAuraEffectType is the creature-target twin: whether any
+// live creature aura carries an effect of the given type, folding the
+// stored type and the spell-effect scan like activeAuraHasEffect does for
+// players. creatureHasAuraType's stored-type-only fold would miss a
+// multi-effect aura whose school-immunity effect is not its last effect.
+func (s *Server) creatureHasLiveAuraEffectType(key creatureAuraKey, auraType uint32) bool {
+	if s == nil || key.GUID == 0 {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == auraType {
+			return true
+		}
+		if s.Data == nil {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// suppressThreatForSchoolImmuneVictim is the fan-out half of the
+// EvaluateSuppressed() call in AuraEffect::HandleAuraModSchoolImmunity
+// apply (SpellAuraEffects.cpp:3192): the C++ call runs on the target's
+// manager over its refs on attackers' lists
+// (ThreatManager.cpp:290-304), and ShouldBeSuppressed's first leg
+// (ThreatManager.cpp:112-116) suppresses the ref when the victim is
+// immune to the attacker's melee damage. Go models melee damage at
+// NORMAL school throughout, so the caller gates on NORMAL-school damage
+// immunity; attackers are the threat-list owners in the victim's
+// map/instance. The confuse and breakable-stun legs of
+// ShouldBeSuppressed are not evaluated here.
+func (s *Server) suppressThreatForSchoolImmuneVictim(mapID, instanceID uint32, victimGUID uint64, victimDamageImmune bool) {
+	if s == nil || victimGUID == 0 || !victimDamageImmune {
+		return
+	}
+	s.motionMu.Lock()
+	motions := make([]*creatureMotion, 0, len(s.motionMapLocked(mapID, instanceID)))
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m != nil {
+			motions = append(motions, m)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, m := range motions {
+		if m.ThreatMgr != nil {
+			m.ThreatMgr.SuppressVictim(victimGUID)
+		}
+	}
+}
+
 // hasAuraInLock checks if the session has an aura while castMu is already held.
 func (s *session) hasAuraInLock(spellID uint32) bool {
 	if s.auras != nil {
