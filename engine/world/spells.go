@@ -20179,6 +20179,37 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			selectionTargets = hitTargets
 		}
 	}
+	// Per-effect partitions for mixed spells the switch above never
+	// reaches: a harmful spell pairing a friendly-area effect with
+	// single-target effects (no area-enemy arm, so neither the
+	// area-enemy nor the friendly-area branch runs), an entry/cone/GO
+	// spell carrying a friendly-area or 37/61 effect, and a nearby
+	// spell (whose switch skip leaves every partition nil) all still
+	// select those effects' own targets in C++ (Spell.cpp:758-779,
+	// per-effect SelectSpellTargets with no spell-level area gate).
+	// The branches above already filled their own partitions; this
+	// only fills the ones still nil, so the seed switch, roll list,
+	// aura-break pass, and AoE-cap divisor below see the same lists
+	// the area branches produce. The branch-equivalence guards keep
+	// the friendly-area branch (hitTargets already IS that list) and
+	// the ref-centered branch (hitTargets already IS that list) from
+	// duplicating their lists into the roll targets; nearby spells
+	// take both partitions because the nearby pick is only one
+	// effect's selection, not the spell's. Non-nil even when empty,
+	// like the branch computations, so an empty selection seeds
+	// nobody rather than falling back to the merged list.
+	if triggeredFriendlyEffectTargets == nil && hasFriendlyAreaEffect(spell) && (!isFriendlyAreaSpell(spell) || nearbySelected) {
+		triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, spellTarget)
+		if triggeredFriendlyEffectTargets == nil {
+			triggeredFriendlyEffectTargets = []uint64{}
+		}
+	}
+	if triggeredRefCenteredFriendlyTargets == nil && hasRefCenteredAreaEffect(spell) && ((!isFriendlyLastTargetAreaSpell(spell) && !isFriendlyTargetAreaRaidClassSpell(spell)) || nearbySelected) {
+		triggeredRefCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, []uint64{spellTarget.UnitGUID})
+		if triggeredRefCenteredFriendlyTargets == nil {
+			triggeredRefCenteredFriendlyTargets = []uint64{}
+		}
+	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575) holds the wire GO
 	// in the separate m_UniqueGOTargetInfo, so the area/cone switch above —
 	// which replaces only the unit list — never drops it in C++; on this flat
@@ -20595,6 +20626,50 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// PreprocessTarget runs once per merged m_UniqueTargetInfo entry
+	// (Spell.cpp:2334), and the friendly/ref-centered partitions are
+	// entries too (their effects selected them, Spell.cpp:758-779) —
+	// not just the selection list above. A genuine ally breaks nothing
+	// (breakHitBySpellAuras skips friendly targets, mirroring the
+	// IsValidAttackTarget arm of PreprocessSpellHit, Spell.cpp:2743),
+	// but a partition member attackable under that gate — e.g. a
+	// neutral-faction creature the friendly selection accepts as
+	// non-hostile — loses its HITBYSPELL auras like any other hit
+	// target. Deduped against the selection list, jumps, and primaries
+	// above so each entry breaks once.
+	brokenSet := make(map[uint64]struct{}, len(selectionTargets)+len(chainJumpGUIDs)+2)
+	for _, guid := range selectionTargets {
+		brokenSet[guid] = struct{}{}
+	}
+	for _, guid := range chainJumpGUIDs {
+		brokenSet[guid] = struct{}{}
+	}
+	if chainUnitPrimary != 0 {
+		brokenSet[chainUnitPrimary] = struct{}{}
+	}
+	if plainObjectPrimary != 0 {
+		brokenSet[plainObjectPrimary] = struct{}{}
+	}
+	for _, partGUID := range triggeredFriendlyEffectTargets {
+		if _, dup := brokenSet[partGUID]; dup {
+			continue
+		}
+		brokenSet[partGUID] = struct{}{}
+		if _, missed := triggeredMiss[partGUID]; missed {
+			continue
+		}
+		s.breakHitBySpellAuras(ctx, spell, partGUID)
+	}
+	for _, partGUID := range triggeredRefCenteredFriendlyTargets {
+		if _, dup := brokenSet[partGUID]; dup {
+			continue
+		}
+		brokenSet[partGUID] = struct{}{}
+		if _, missed := triggeredMiss[partGUID]; missed {
+			continue
+		}
+		s.breakHitBySpellAuras(ctx, spell, partGUID)
+	}
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
 	// ModStackAmount(+1) merge, later effects only refresh their amounts.
@@ -20930,8 +21005,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// spell's chain jumps count toward the 10-target cap even
 			// though the area replacement stripped them from hitTargets;
 			// merged jumps count once (Spell.cpp:2117).
-			counted := make(map[uint64]struct{}, len(hitTargets)+len(chainJumpGUIDs))
-			for _, guid := range hitTargets {
+			// targetAmount is the whole m_UniqueTargetInfo size
+			// (Spell.cpp:7761), and triggeredRollTargets already IS that
+			// union on this path — hitTargets plus the friendly and
+			// ref-centered partitions, chain jumps, and rejoined
+			// primaries, deduped at construction — hits and misses
+			// alike. The old count (hitTargets + jumps + primaries)
+			// missed the partitions, so a friendly/ref-seeded damage
+			// effect of a mixed spell undercounted the cap whenever
+			// allies pushed the total past 10. The caster skip is the
+			// pre-existing per-effect approximation, same residual as
+			// the launch path: a caster selected only by another effect
+			// still counts in C++.
+			counted := make(map[uint64]struct{}, len(triggeredRollTargets))
+			for _, guid := range triggeredRollTargets {
 				if guid == 0 || guid == s.playerGUID {
 					continue
 				}
@@ -20940,35 +21027,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 				counted[guid] = struct{}{}
 				aoeCapDivisor++
-			}
-			for _, guid := range chainJumpGUIDs {
-				if guid == 0 || guid == s.playerGUID {
-					continue
-				}
-				if _, dup := counted[guid]; dup {
-					continue
-				}
-				counted[guid] = struct{}{}
-				aoeCapDivisor++
-			}
-			// The rejoined primary counts too: targetAmount is the whole
-			// m_UniqueTargetInfo size (Spell.cpp:7755), and the primary is
-			// a merged entry (Spell.cpp:1575), not a jump.
-			if chainUnitPrimary != 0 && chainUnitPrimary != s.playerGUID {
-				if _, dup := counted[chainUnitPrimary]; !dup {
-					counted[chainUnitPrimary] = struct{}{}
-					aoeCapDivisor++
-				}
-			}
-			// The plain primary counts too: targetAmount is the whole
-			// m_UniqueTargetInfo size (Spell.cpp:7755), and the primary
-			// is a merged entry (Spell.cpp:1575), not a jump; dedup
-			// folds it with the chain primary when both are set.
-			if plainObjectPrimary != 0 && plainObjectPrimary != s.playerGUID {
-				if _, dup := counted[plainObjectPrimary]; !dup {
-					counted[plainObjectPrimary] = struct{}{}
-					aoeCapDivisor++
-				}
 			}
 			if aoeCapDivisor <= 10 {
 				aoeCapDivisor = 0
