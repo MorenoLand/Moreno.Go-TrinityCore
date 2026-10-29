@@ -371,6 +371,47 @@ func (s *session) isImmuneToSpellNoHarmfulGate(spell wotlk.Spell, caster *sessio
 	return s.isImmuneToSpellFiltered(spell, caster, false)
 }
 
+// removeOwnBanishOnImmuneMiss is the spell_warl_banish BeforeHit arm
+// (spell_warlock.cpp:155-167, registered at :170): a Banish cast whose
+// hit resolves SPELL_MISS_IMMUNE removes the caster's own Banish aura
+// from the target. GetAura(Id, casterGUID) matches the exact spell ID
+// and caster only, so another caster's Banish and the other rank's
+// Banish survive; the script returns on any other miss, so IMMUNE2,
+// reflect, and evade never remove. The miss stands (hitTargets stays
+// empty), so the recast cancels instead of refreshing.
+func (s *session) removeOwnBanishOnImmuneMiss(spellID uint32, targetGUID uint64, casterGUID uint64) {
+	if s == nil || s.server == nil || casterGUID == 0 || (spellID != 710 && spellID != 18647) {
+		return
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
+		targetSess.castMu.Lock()
+		own := false
+		if aura := targetSess.activeAuras[spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID {
+			own = true
+		}
+		targetSess.castMu.Unlock()
+		if own {
+			targetSess.removeAuraWithMode(spellID, auraRemoveByDefault)
+		}
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	key := creatureAuraKeyForPlayer(*s.player, targetGUID)
+	s.server.auraMu.Lock()
+	own := false
+	if auras, ok := s.server.activeCreatureAuras[key]; ok {
+		if aura := auras[spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID {
+			own = true
+		}
+	}
+	s.server.auraMu.Unlock()
+	if own {
+		s.server.removeCreatureAuraWithMode(key, spellID, auraRemoveByDefault)
+	}
+}
+
 // spellPiercesImmunityGrant runs the school fold's pierce test for a
 // hardcoded immunity arm: whether spell pierces the immunity granted by
 // grantID's aura (SpellInfo::CanPierceImmuneAura, SpellInfo.cpp:1336-1361).

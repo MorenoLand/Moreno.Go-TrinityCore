@@ -9678,6 +9678,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				targetSess.player.UnitFlags |= unitFlagInCombat
 				targetSess.lastCombatTime = time.Now()
 			}
+			s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
 		} else if targetSess != nil && spellHasOnlyDamageEffects(spell) && targetSess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
 			// WorldObject::SpellHitResult (Object.cpp:2624-2627): damage
 			// immunity reports SPELL_MISS_IMMUNE at hit resolution for
@@ -9698,6 +9699,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// creatures on a missed harmful cast either.)
 			hitTargets = nil
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
 		} else if targetSess == nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, spell.SchoolMask) {
 			// Object.cpp:2624-2627 for creature victims: damage immunity
 			// reports SPELL_MISS_IMMUNE at hit resolution for spells with
@@ -9807,6 +9809,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if targetSess != nil && targetSess.isImmuneToSpell(spell, s) {
 			hitTargets = nil
+			s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
 			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 			// C++ m_canReflect (Spell.cpp:622) does not depend on
@@ -9833,6 +9836,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			if s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
 				hitTargets = nil
+				s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 			} else if s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 				// WorldObject::SpellHitResult (Object.cpp:2637-2639): an
@@ -18100,6 +18104,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		if miss := s.triggeredSpellHitResult(ctx, spell, guid); miss != protocol.SpellMissNone {
 			triggeredMiss[guid] = miss
+			if miss == protocol.SpellMissImmune {
+				s.removeOwnBanishOnImmuneMiss(spell.ID, guid, auraCasterGUID)
+			}
 			triggeredMissGUIDs = append(triggeredMissGUIDs, guid)
 			if miss == protocol.SpellMissReflect {
 				// ProcReflectDelayed (Spell.cpp:2181): at outbound-missile
