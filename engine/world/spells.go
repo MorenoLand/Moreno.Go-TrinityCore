@@ -11416,7 +11416,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch eff.Effect {
 			case 1: // SPELL_EFFECT_INSTAKILL
 				damageEffectSeen = true
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area instakill effect kills its
+				// own ally selection, not the merged enemy list.
+				instaList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					instaList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						instaList = append(instaList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range instaList {
 					if effectTarget != 0 {
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
@@ -11456,6 +11466,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// fixed_bonus exactly like 17/58, differing only via the
 				// normalized flag into the Unit::CalculateDamage swing
 				// (spellWeaponSwingDamage).
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area damage effect damages its
+				// own ally selection, not the merged enemy list.
+				dmgList := hitTargets
+				dmgSwitched := false
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					dmgList = friendlyEffectTargets
+					dmgSwitched = true
+				}
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -11468,7 +11487,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if eff.Effect == 2 && spell.SpellFamilyName == spellFamilyGeneric && s.server != nil &&
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
 					count := 0
-					for _, effectTarget := range hitTargets {
+					for _, effectTarget := range dmgList {
 						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 							count++
 						}
@@ -11495,7 +11514,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				aoeCapDivisor := 0
 				if isAreaDamageEffect {
-					for _, effectTarget := range hitTargets {
+					for _, effectTarget := range dmgList {
 						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 							aoeCapDivisor++
 						}
@@ -11516,7 +11535,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// accumulated per hit target (DoEffectOnLaunchTarget,
 				// Spell.cpp:7771-7774).
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
-				for _, effectTarget := range hitTargets {
+				for _, effectTarget := range dmgList {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
@@ -11879,6 +11898,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true, false)
+				}
+				// Friendly-area damage only: a reflected ally's _spellHitTarget
+				// is the caster (Spell.cpp:2350), so the trip damages the
+				// caster once per reflected ally, with the same unscaled
+				// damage + area avoidance as the enemy-trip loop above.
+				// An enemy-area damage effect keeps only the enemy-trip
+				// loop: an ally is not in its effect mask.
+				if dmgSwitched {
+					for range reflectedAllyTrips {
+						allyReflectedDamage := damage
+						if weaponDamageEffect {
+							allyReflectedDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, 0)
+						}
+						if isAreaDamageEffect && allyReflectedDamage > 0 {
+							if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, s.playerGUID, aoeSchoolMask); avoid != 1 {
+								allyReflectedDamage = uint32(float64(allyReflectedDamage) * avoid)
+							}
+						}
+						s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, allyReflectedDamage, effectIndex, false, true, false)
+					}
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
 				// Spell::EffectHeal (SpellEffects.cpp:1399): the damage<0
@@ -12582,7 +12621,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// being a pet — !unitTarget || !unitTarget->IsPet() returns
 				// without dismissing, so a cast whose unit target is not a
 				// pet dismisses nothing.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area dismiss effect runs on its
+				// own ally selection (an ally's pet is a pet), not the
+				// merged enemy list. Ally trips are vacuous: a trip's
+				// unitTarget is the player caster, never a pet.
+				dismissList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					dismissList = friendlyEffectTargets
+				}
+				for _, effectTarget := range dismissList {
 					if effectTarget == 0 {
 						continue
 					}
@@ -12817,8 +12865,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// a unit target — Spell::EffectLeapBack returns early on
 				// !unitTarget. Unit::JumpTo has no Go spline model
 				// (documented no-bridge, boss_ai.go).
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area leap-back effect has a unit
+				// target when its own ally selection is non-empty, not when
+				// the merged enemy list is. Reflected-ally trips are already
+				// covered by the launch-phase trip mechanism, so no trip
+				// append here.
+				leapBackList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					leapBackList = friendlyEffectTargets
+				}
 				hasUnitTarget := false
-				for _, effectTarget := range hitTargets {
+				for _, effectTarget := range leapBackList {
 					if effectTarget != 0 {
 						hasUnitTarget = true
 						break
@@ -12943,7 +13001,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// The pet is created from the effect's MiscValue creature
 				// entry (Unit::CreateTamedPetFrom, Unit.cpp:11103) — the
 				// wild-creature target of effect 150 plays no role here.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area tamed-pet effect runs on
+				// its own ally selection, not the merged enemy list; the
+				// helper's target == caster gate keeps every non-caster
+				// entry a no-op.
+				tamedList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					tamedList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						tamedList = append(tamedList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range tamedList {
 					if effectTarget == 0 {
 						continue
 					}
