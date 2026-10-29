@@ -3684,7 +3684,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// no triggered gate. C++ tests the loss before CheckCast; the pet
 	// path collapses prepare+_cast, so it lands here after the CheckCast
 	// gates and before the _cast arms, like the creature path.
-	if targetGUID != 0 && targetGUID != motion.GUID && !s.server.creatureCastTargetResolves(motion, targetGUID) {
+	if targetGUID != 0 && targetGUID != motion.GUID && !s.server.creatureCastTargetResolves(ctx, motion, targetGUID) {
 		return true
 	}
 	// Spell::_cast diminishing-returns recheck (Spell.cpp:3378-3399,

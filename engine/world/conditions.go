@@ -319,7 +319,11 @@ func (s *session) checkSpellCastConditions(ctx context.Context, spellID uint32, 
 	}
 	var creatureEntry uint32
 	var creatureGUID uint64
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+	// A gameobject guid carries the GO bit of the unit wire mask, but
+	// its low 24 bits + entry would resolve through the motion lookup's
+	// reconstruction leg to an unrelated creature; GO targets keep the
+	// documented unmet degradation (creatureEntry/creatureGUID stay 0).
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
 		creatureGUID = target.UnitGUID
 		if s.server != nil {
 			s.server.motionMu.Lock()
@@ -382,6 +386,10 @@ func (s *session) checkSpellCastConditions(ctx context.Context, spellID uint32, 
 type creatureConditionTarget struct {
 	motion *creatureMotion
 	sess   *session
+	// goTarget marks a gameobject object target (ConditionMgr.cpp:133-138
+	// carries it as target 1, not null): unit arms fail on it via the
+	// null ToUnit arm, while CONDITION_NONE still meets.
+	goTarget bool
 }
 
 // checkCreatureSpellCastConditions mirrors the Spell::CheckCast conditions
@@ -411,6 +419,15 @@ func (s *Server) checkCreatureSpellCastConditions(ctx context.Context, m *creatu
 		case 1:
 			if targetGUID == 0 {
 				return creatureConditionTarget{}, false
+			}
+			// A gameobject guid is not a unit target, but the conditions
+			// block is not inside the unit-target block (Spell.cpp:5337
+			// runs ahead of 5370), so C++ evaluates it against the GO
+			// object itself — never against an unrelated creature sharing
+			// the GO guid's low 24 bits and entry, which the motion
+			// lookup's reconstruction leg would otherwise return.
+			if uint16(targetGUID>>48) == 0xF110 {
+				return creatureConditionTarget{goTarget: true}, true
 			}
 			if targetGUID == m.GUID {
 				return creatureConditionTarget{motion: m}, true
@@ -484,6 +501,14 @@ func (s *Server) evalCreatureConditionTarget(ctx context.Context, row conditionR
 	if tgt.sess != nil {
 		row.ConditionTarget = 0
 		return tgt.sess.evalCondition(ctx, row, 0, 0)
+	}
+	if tgt.goTarget {
+		// Unit arms (AURA, LEVEL, ALIVE, HP_VAL, HP_PCT, the player-only
+		// family) fail on a GO via the null ToUnit arm
+		// (ConditionMgr.cpp:146-456); MAPID/ZONEID/AREAID have no GO
+		// position model here and fail closed, like ZONEID/AREAID
+		// already do on creature motions. CONDITION_NONE meets.
+		return row.ConditionType == 0, nil
 	}
 	m := tgt.motion
 	if m == nil {

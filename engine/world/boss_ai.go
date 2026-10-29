@@ -870,12 +870,23 @@ func (s *Server) creatureFriendlyToTarget(m *creatureMotion, targetGUID uint64) 
 // the caster's map/instance (C++ only sees in-map objects); any other unit
 // resolves through the creature motion map. Self casts and target-less
 // casts never reach this helper (GetObjectTargetGUID()==0 skips the arm).
-func (s *Server) creatureCastTargetResolves(m *creatureMotion, targetGUID uint64) bool {
+func (s *Server) creatureCastTargetResolves(ctx context.Context, m *creatureMotion, targetGUID uint64) bool {
 	if s == nil || m == nil {
 		return true
 	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 		return ts.player.Map == m.Map && ts.player.InstanceID == m.InstanceID
+	}
+	// The lost-target arm tests the object target of any type
+	// (Spell.cpp:3288-3293: GetObjectTargetGUID() && !GetObjectTarget()),
+	// so a gameobject target resolves through the GO anchor legs (live
+	// state, else the static spawn row) — never through the creature
+	// motion lookup, whose low+entry reconstruction leg would cancel a
+	// cast on a live GO with no colliding creature, or pass one on a
+	// despawned GO with a colliding creature.
+	if uint16(targetGUID>>48) == 0xF110 {
+		_, _, _, ok := s.gameObjectAnchorPosition(ctx, targetGUID, m.Map, m.InstanceID)
+		return ok
 	}
 	return s.findCreatureMotion(m.Map, m.InstanceID, targetGUID) != nil
 }
@@ -1621,7 +1632,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// target-less casts are exempt (GetObjectTargetGUID()==0 skips the
 		// arm). Runs for triggered casts too — the arm has no triggered
 		// gate.
-		if targetGUID != 0 && targetGUID != m.GUID && !s.creatureCastTargetResolves(m, targetGUID) {
+		if targetGUID != 0 && targetGUID != m.GUID && !s.creatureCastTargetResolves(ctx, m, targetGUID) {
 			return
 		}
 		// Spell::_cast creature SetInFront leg (Spell.cpp:3404-3409,
