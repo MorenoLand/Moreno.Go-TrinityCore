@@ -20760,6 +20760,58 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			chainUnitPrimary = anchor
 		}
 	}
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+	// effect (Spell.cpp:758-900), so a non-winning ChainTarget > 1 effect
+	// chains from its own primary with its own check type and conditions,
+	// not from the winning effect's list: a TARGET-object effect anchors
+	// on the wire target, a NEARBY effect on its own scoped pick (the
+	// launch block's non-winning loop precedent). The winning effect
+	// keeps its list above; a missing nearby pick chains nothing, and a
+	// GO anchor records no unit primary (the chainUnitPrimary rule).
+	chainJumpsByEffect := make(map[int][]uint64)
+	chainPrimaryByEffect := make(map[int]uint64)
+	if targetGUID != 0 {
+		_, _, _, winMask := chainSpellJumps(s, spell)
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 && eff.Aura == 0 {
+				continue
+			}
+			chainTarget := uint32(0)
+			if chainSelectionEligibleTarget(eff.ImplicitTargetA) {
+				chainTarget = eff.ImplicitTargetA
+			} else if chainSelectionEligibleTarget(eff.ImplicitTargetB) {
+				chainTarget = eff.ImplicitTargetB
+			} else {
+				continue
+			}
+			if winMask == 1<<uint(i) {
+				continue
+			}
+			modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
+			if modded <= 1 {
+				continue
+			}
+			anchor := targetGUID
+			switch chainTarget {
+			case 6, 21, 25, 35, 45, 57, 90, 95:
+				if spellTarget.UnitGUID != 0 {
+					anchor = spellTarget.UnitGUID
+				}
+			case 2, 3, 4, 38, 58:
+				pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
+				if !ok || pick == 0 {
+					continue
+				}
+				anchor = pick
+			default:
+				continue
+			}
+			if uint16(anchor>>48) != 0xF110 {
+				chainPrimaryByEffect[i] = anchor
+			}
+			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
+		}
+	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) adds
 	// the explicit unit target via AddUnitTarget for every TARGET-object
 	// effect regardless of ChainTarget, so a spell with no chaining
@@ -21184,6 +21236,26 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, jumpGUID)
 		}
 	}
+	// Non-winning chain effects rejoin the same way: their own jumps
+	// are merged entries too (Spell.cpp:1619), in effect order so the
+	// roll/GO order stays deterministic across the map below.
+	for i := range spell.Effects {
+		jumps, ok := chainJumpsByEffect[i]
+		if !ok {
+			continue
+		}
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		for _, jumpGUID := range jumps {
+			if _, dup := seen[jumpGUID]; dup {
+				continue
+			}
+			seen[jumpGUID] = struct{}{}
+			triggeredRollTargets = append(triggeredRollTargets, jumpGUID)
+		}
+	}
 	// The wire unit primary rejoins the same way: the area/cone switch
 	// replaced hitTargets, dropping it from the roll list and the GO
 	// packet even though C++ holds it as a merged entry (Spell.cpp:1575,
@@ -21197,6 +21269,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		if _, dup := seen[chainUnitPrimary]; !dup {
 			triggeredRollTargets = append(triggeredRollTargets, chainUnitPrimary)
+		}
+	}
+	// Non-winning chain primaries rejoin the same way (TARGET-object
+	// primaries dedup against the plain primary below; NEARBY primaries
+	// are the new entries — nearbyPrimaries only covers ChainTarget <= 1).
+	for i := range spell.Effects {
+		primary, ok := chainPrimaryByEffect[i]
+		if !ok || primary == 0 {
+			continue
+		}
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[primary]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, primary)
 		}
 	}
 	// The plain object primary rejoins the same way: the area/cone
@@ -21422,6 +21510,27 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		s.breakHitBySpellAuras(ctx, spell, jumpGUID)
 	}
+	// Non-winning jumps break once each: a jump shared with the winning
+	// list (or another effect's list) breaks via that list, not twice.
+	seenJumpBreak := make(map[uint64]struct{}, len(chainJumpGUIDs))
+	for _, guid := range chainJumpGUIDs {
+		seenJumpBreak[guid] = struct{}{}
+	}
+	for i := range spell.Effects {
+		for _, jumpGUID := range chainJumpsByEffect[i] {
+			if _, dup := seenJumpBreak[jumpGUID]; dup {
+				continue
+			}
+			seenJumpBreak[jumpGUID] = struct{}{}
+			if _, dup := selectionSet[jumpGUID]; dup {
+				continue
+			}
+			if _, missed := triggeredMiss[jumpGUID]; missed {
+				continue
+			}
+			s.breakHitBySpellAuras(ctx, spell, jumpGUID)
+		}
+	}
 	// The rejoined primary breaks auras like any merged entry
 	// (PreprocessTarget runs per m_UniqueTargetInfo entry, Spell.cpp:2334);
 	// a primary already in the selection list breaks once, via that list.
@@ -21429,6 +21538,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if _, dup := selectionSet[chainUnitPrimary]; !dup {
 			if _, missed := triggeredMiss[chainUnitPrimary]; !missed {
 				s.breakHitBySpellAuras(ctx, spell, chainUnitPrimary)
+			}
+		}
+	}
+	for i := range spell.Effects {
+		primary, ok := chainPrimaryByEffect[i]
+		if !ok || primary == chainUnitPrimary || primary == plainObjectPrimary {
+			continue
+		}
+		if _, dup := selectionSet[primary]; !dup {
+			if _, missed := triggeredMiss[primary]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, primary)
 			}
 		}
 	}
@@ -21474,6 +21594,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 	for _, guid := range chainJumpGUIDs {
 		brokenSet[guid] = struct{}{}
+	}
+	for i := range spell.Effects {
+		for _, guid := range chainJumpsByEffect[i] {
+			brokenSet[guid] = struct{}{}
+		}
+		if primary, ok := chainPrimaryByEffect[i]; ok {
+			brokenSet[primary] = struct{}{}
+		}
 	}
 	if chainUnitPrimary != 0 {
 		brokenSet[chainUnitPrimary] = struct{}{}
@@ -21664,15 +21792,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// Per-effect chain threading (Spell.cpp:1582-1624): only the chaining
 		// effect reaches the jump targets (C++ adds them with that effect's
 		// mask, Spell.cpp:1619), and each effect jumps at most its own
-		// ChainTarget-1 (the shared list carries the largest). The falloff is
+		// ChainTarget-1 (a non-winning effect threads its own list; the
+		// winning effect keeps the shared list). The falloff is
 		// EffectChainAmplitude with SPELLMOD_DAMAGE_MULTIPLIER applied once per
 		// effect (Spell.cpp:7717-7718), accumulated per hit jump
 		// (Spell.cpp:7771-7774).
 		chainMult := 1.0
-		if jumpCap := int(eff.ChainTargets) - 1; jumpCap > 0 && len(chainJumpGUIDs) > 0 &&
+		effJumps := chainJumpGUIDs
+		if jumps, ok := chainJumpsByEffect[effectIndex]; ok {
+			effJumps = jumps
+		}
+		if jumpCap := int(eff.ChainTargets) - 1; jumpCap > 0 && len(effJumps) > 0 &&
 			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
-			if jumpCap > len(chainJumpGUIDs) {
-				jumpCap = len(chainJumpGUIDs)
+			if jumpCap > len(effJumps) {
+				jumpCap = len(effJumps)
 			}
 			// The per-jump falloff exponent counts hit jumps only
 			// (Spell.cpp:7771-7774): an immune jump never reaches
@@ -21690,7 +21823,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				seedSet[seedGUID] = struct{}{}
 			}
 			jumpOrder := 0
-			for _, jumpGUID := range chainJumpGUIDs[:jumpCap] {
+			for _, jumpGUID := range effJumps[:jumpCap] {
 				if _, dup := seedSet[jumpGUID]; dup {
 					continue
 				}
@@ -21747,13 +21880,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// ChainTarget is 1 and even when the shared search found no jumps.
 		// Dedup vs the seed keeps primaries already in the area/friendly
 		// list single-listed; miss handling mirrors the jumps above.
-		if chainUnitPrimary != 0 && (chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
+		effPrimary := chainUnitPrimary
+		if primary, ok := chainPrimaryByEffect[effectIndex]; ok {
+			effPrimary = primary
+		}
+		if effPrimary != 0 && (chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
 			seedSet := make(map[uint64]struct{}, len(seedTargets))
 			for _, seedGUID := range seedTargets {
 				seedSet[seedGUID] = struct{}{}
 			}
-			if _, dup := seedSet[chainUnitPrimary]; !dup {
-				target := chainUnitPrimary
+			if _, dup := seedSet[effPrimary]; !dup {
+				target := effPrimary
 				origin := target
 				reflected := false
 				take := true
