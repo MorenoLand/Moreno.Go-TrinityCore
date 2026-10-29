@@ -22870,6 +22870,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if len(effectTargets) > 0 && (eff.Effect == spellEffectDummy || eff.Effect == spellEffectHealthLeech) {
 			effectGUIDs := make([]uint64, 0, len(effectTargets))
 			for _, et := range effectTargets {
+				// Unit-only legs (see the loop-top GO filter below): a
+				// GO guid here leeched an unrelated creature through
+				// the low-24-bit combat-target lookup.
+				if uint16(et.guid>>48) == 0xF110 {
+					continue
+				}
 				effectGUIDs = append(effectGUIDs, et.guid)
 			}
 			if eff.Effect == spellEffectDummy {
@@ -23204,6 +23210,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		var powerDrainLog []takeTargetPowerEntry
 		for _, et := range effectTargets {
 			effectTarget, jumpIndex := et.guid, et.jumpIndex
+			// Spell::GOTargetInfo::DoTargetSpellHit (Spell.cpp:2663) runs
+			// unit handlers with a null unitTarget, so a GO guid in the
+			// mixed seed never reaches a unit effect in C++: EffectSchoolDMG
+			// (:322), EffectHeal (:1393) and EffectInstaKill (:274) all
+			// return on a null unitTarget. The funnel's single seed list
+			// mixes GO-area/cone picks and the wire GO with units, so
+			// without this gate a GO guid damaged an unrelated creature
+			// through the low-24-bit combat-target lookup, or healed the
+			// caster through executeSpellHeal's caster-default session.
+			// OpenLock is the loop's only GO-legitimate arm (its helper
+			// gates on the GO itself), so it keeps GO entries.
+			if eff.Effect != spellEffectOpenLock && uint16(effectTarget>>48) == 0xF110 {
+				continue
+			}
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
 				s.executeSpellInstantKill(ctx, effectTarget, spellID)
 			} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
@@ -23240,6 +23260,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// (the launch path already excludes trips this way).
 					shareCount := 0
 					for _, et := range effectTargets {
+						if uint16(et.guid>>48) == 0xF110 {
+							continue
+						}
 						if !et.reflected {
 							shareCount++
 						}
