@@ -288,12 +288,21 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 	nowUnix := time.Now().Unix()
 	cooldownEnd := nowUnix + int64((durationMs+999)/1000)
 
-	// Track school lockout end timestamp on session
+	// SpellHistory::LockSpellSchool (SpellHistory.cpp:520-525) writes one
+	// millisecond-exact end per set school bit, not one entry keyed by the
+	// whole mask: a narrower re-lock narrows only its own bits, and the
+	// per-spell cooldown entries above stay second-granular (the
+	// player.Cooldowns model) while the lockout map itself is exact.
+	lockoutEndMs := time.Now().UnixMilli() + int64(durationMs)
 	s.castMu.Lock()
 	if s.schoolLockouts == nil {
 		s.schoolLockouts = make(map[uint32]int64)
 	}
-	s.schoolLockouts[schoolMask] = cooldownEnd
+	for bit := uint32(0); bit < 7; bit++ {
+		if schoolMask&(1<<bit) != 0 {
+			s.schoolLockouts[1<<bit] = lockoutEndMs
+		}
+	}
 	s.castMu.Unlock()
 
 	if s.server != nil && s.server.Data != nil {
@@ -332,13 +341,22 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 					}
 				}
 				if entryIdx < 0 && spellInfo.Category != 0 {
+					// GetRemainingCooldown (SpellHistory.cpp:503-508)
+					// reads a single _categoryCooldowns pointer — the
+					// entry last AddCooldown'd for the category — not
+					// the maximum over same-category entries, so the
+					// last matching entry decides, expired or not.
+					var lastCatEnd int64
+					catFound := false
 					for i := range s.player.Cooldowns {
 						cd := &s.player.Cooldowns[i]
-						if cd.Category == spellInfo.Category && cd.CategoryEnd > nowUnix {
-							if catMs := (cd.CategoryEnd - nowUnix) * 1000; catMs > remainingMs {
-								remainingMs = catMs
-							}
+						if cd.Category == spellInfo.Category {
+							lastCatEnd = cd.CategoryEnd
+							catFound = true
 						}
+					}
+					if catFound && lastCatEnd > nowUnix {
+						remainingMs = (lastCatEnd - nowUnix) * 1000
 					}
 				}
 				if remainingMs >= int64(durationMs) {
@@ -377,9 +395,9 @@ func (s *session) isSchoolLocked(spell wotlk.Spell) bool {
 	if len(s.schoolLockouts) == 0 {
 		return false
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	for mask, lockoutEnd := range s.schoolLockouts {
-		if lockoutEnd > nowUnix && (mask&spell.SchoolMask != 0) {
+		if lockoutEnd > nowMs && (mask&spell.SchoolMask != 0) {
 			return true
 		}
 	}

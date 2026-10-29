@@ -1889,6 +1889,58 @@ func (s *session) updatePetOnLevelUp(ctx context.Context) bool {
 	return true
 }
 
+// refreshActivePetOnResummon mirrors the same-pet arm of Spell::EffectSummonPet
+// (SpellEffects.cpp:3036-3056): re-casting a summon spell while the same pet
+// is already active teleports the pet to the owner's close point instead of
+// re-summoning it; a SUMMON_PET pet is restored to full health and power and
+// has all its cooldowns reset, and a controlled pet's spell list is
+// re-initialized (PetSpellInitialize). A dead pet stays dead: the C++ arm
+// returns before any of this, and the effect sends no summon log on this
+// arm, so callers still return 0.
+func (s *session) refreshActivePetOnResummon(ctx context.Context, petID uint32, entry uint32, petType uint8, reactState uint8) {
+	if s == nil || s.server == nil || s.player == nil || s.player.PetGUID == 0 {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil || motion.Health == 0 {
+		s.server.motionMu.Unlock()
+		return
+	}
+	reach := motion.CombatReach
+	if reach == 0 {
+		reach = 1.5
+	}
+	petO := s.player.Orientation
+	petX := s.player.X + (reach+petFollowDistance)*float32(math.Cos(float64(petO)+math.Pi/2))
+	petY := s.player.Y + (reach+petFollowDistance)*float32(math.Sin(float64(petO)+math.Pi/2))
+	petZ := s.player.Z
+	motion.X, motion.Y, motion.Z = petX, petY, petZ
+	restore := petType == petTypeSummon
+	if restore {
+		motion.Health = motion.MaxHealth
+		motion.Mana = motion.MaxMana
+		if motion.PowerType < uint32(len(motion.Powers)) {
+			motion.Powers[motion.PowerType] = motion.MaxPowers[motion.PowerType]
+		}
+		motion.SpellCooldowns = make(map[uint32]time.Time)
+		motion.SpellCategoryCooldowns = make(map[uint32]time.Time)
+		motion.SpellCooldownCategories = make(map[uint32]uint32)
+		motion.SpellCooldownCategoryEnds = make(map[uint32]time.Time)
+	}
+	maxHealth, maxMana := motion.MaxHealth, motion.MaxMana
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.server.motionMu.Unlock()
+	s.server.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, petX, petY, petZ)
+	if restore {
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET curhealth = ?, curmana = ? WHERE id = ? AND owner = ?", maxHealth, maxMana, petID, s.playerGUID)
+		}
+	}
+	s.sendPetSpells(ctx, petID, entry, reactState)
+}
+
 func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32) uint64 {
 	if s.player == nil {
 		return 0
@@ -1911,7 +1963,8 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		}
 		if s.player.PetGUID != 0 {
 			if s.activePetNumber() == uint32(petID) {
-				return 0 // already active
+				s.refreshActivePetOnResummon(ctx, uint32(petID), uint32(pEntry), uint8(petType), uint8(reactState))
+				return 0
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
@@ -1936,7 +1989,8 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	if err == nil && petID > 0 {
 		if s.player.PetGUID != 0 {
 			if s.activePetNumber() == uint32(petID) {
-				return 0 // already active
+				s.refreshActivePetOnResummon(ctx, uint32(petID), entry, uint8(petType), uint8(reactState))
+				return 0
 			}
 			s.unsummonPet(ctx, petSaveNotInSlot)
 		}
