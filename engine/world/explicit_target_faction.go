@@ -283,7 +283,11 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 //   - a wire unit target is adopted only when its object type fits the spell's
 //     explicit mask (explicitWireTargetFitsMask); a mismatched wire unit target
 //     is dropped like C++'s RemoveObjectTarget (Spell.cpp:668-678). Gameobject
-//     wire targets never adopt as units (they ride the GOTargetInfo path);
+//     wire targets never adopt as units (they ride the GOTargetInfo path),
+//     and the guid type decides, not the flag: a GO guid sent with only the
+//     Unit flag is kept as the GO target when the mask takes gameobjects,
+//     dropped otherwise — never adopted as a unit, so the faction/blocked
+//     gates never run on a getCombatTarget reconstruction of it;
 //     corpse wire targets have no Go model.
 //   - the selection/self fallbacks run only when NO wire object target was sent
 //     at all (Spell.cpp:668 — the else branch): the selection additionally needs
@@ -326,10 +330,18 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 // mirrored in, and a non-zero SpellCastResult plus debug detail on failure.
 func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) (uint64, protocol.SpellTargetData, uint8, string) {
 	adoptedUnit := uint64(0)
-	wireUnit := target.UnitGUID != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 &&
-		target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet) != 0
 	wireObject := target.UnitGUID != 0 && target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet|
 		protocol.SpellTargetFlagGameObject|protocol.SpellTargetFlagCorpseEnemy|protocol.SpellTargetFlagCorpseAlly) != 0
+	// A gameobject guid is never a unit target in C++: SpellCastTargets::Update
+	// resolves the shared wire guid slot by guid type (Spell.cpp:462), so a GO
+	// guid sent with only the Unit flag still resolves to the GameObject, and
+	// InitExplicitTargets keeps it as the GO object target or removes it
+	// (Spell.cpp:668-678) — it is never adopted as the unit target, and the
+	// CheckExplicitTarget unit gates never run on it (SpellInfo.cpp:1793,
+	// ToUnit null). The guid type, not the flag, decides adoption.
+	wireGO := wireObject && uint16(target.UnitGUID>>48) == 0xF110
+	wireUnit := !wireGO && target.UnitGUID != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 &&
+		target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet) != 0
 	switch {
 	case wireUnit && explicitWireTargetFitsMask(spell, target):
 		adoptedUnit = target.UnitGUID
@@ -355,6 +367,21 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 	} else if wireUnit {
 		target.UnitGUID = 0
 		target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet
+	} else if wireGO {
+		// Lying-flags GO wire target (Unit/Minipet flag, GO guid): C++ keeps
+		// it as the GO object target when the explicit mask takes gameobjects,
+		// removes it otherwise (Spell.cpp:668-678). The flags are normalized
+		// to the guid type so the flag-gated GO readers downstream
+		// (spellGameObjectTargetGUID, the wire-GO append) see the same object
+		// C++ resolved by guid type; a properly-flagged GO wire target
+		// already rides this shape.
+		if spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+			target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet | protocol.SpellTargetFlagCorpseEnemy | protocol.SpellTargetFlagCorpseAlly
+			target.Flags |= protocol.SpellTargetFlagGameObject
+		} else {
+			target.UnitGUID = 0
+			target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet | protocol.SpellTargetFlagGameObject | protocol.SpellTargetFlagCorpseEnemy | protocol.SpellTargetFlagCorpseAlly
+		}
 	} else if wireObject && target.Flags&protocol.SpellTargetFlagGameObject == 0 {
 		// Corpse wire target: C++ removes it (Spell.cpp:674-675) — the
 		// explicit mask never carries corpse bits — and Go has no

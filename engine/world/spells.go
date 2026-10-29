@@ -4502,6 +4502,17 @@ func (s *session) checkPowerBurnDrainCast(spell wotlk.Spell, target protocol.Spe
 // the guid maps to no unit. The UNIT_FLAG_PET_IN_COMBAT half of the C++ OR
 // has no Go model.
 func (s *session) unitTargetInCombat(guid uint64) bool {
+	// A gameobject guid is not a unit target in C++: the CANT_TARGET_IN_COMBAT
+	// arm sits inside CheckTarget's unitTarget block (SpellInfo.cpp:1645-1651,
+	// ToUnit null for a GO), so it never runs for one. Without this, the
+	// findCreatureMotionLocked low+entry leg below could judge an unrelated
+	// creature sharing the GO guid's low 24 bits and entry and wrongly fail
+	// the cast with TARGET_AFFECTING_COMBAT. Reached with a kept GO guid via
+	// the item path (target.UnitGUID keeps the GO object target) and the pet
+	// path; the gauntlet path passes adopted units only.
+	if uint16(guid>>48) == 0xF110 {
+		return false
+	}
 	if s.player != nil && guid == s.playerGUID {
 		return s.attackTarget != 0 || s.player.UnitFlags&unitFlagInCombat != 0
 	}
