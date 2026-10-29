@@ -14684,7 +14684,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// caster. With no object target the dest stays the
 					// caster position (Spell.cpp:1314) — a no-op for the
 					// caster, but non-caster unit targets still gather there.
-					if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+					if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
 						if obj, found := s.getCombatTarget(effCtx, target.UnitGUID); found {
 							ori := obj.Orientation
 							if ori == 0 {
@@ -15050,7 +15050,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				hasUnitTarget := false
 				for _, effectTarget := range leapBackList {
-					if effectTarget != 0 {
+					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 {
 						hasUnitTarget = true
 						break
 					}
@@ -44431,6 +44431,13 @@ func spellIsLootCrafting(spell wotlk.Spell) bool {
 // The m_preGeneratedPath arm has no Go consumer (no path model).
 func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spell wotlk.Spell) {
 	if targetGUID == 0 || s == nil || s.player == nil {
+		return
+	}
+	// Spell::EffectCharge (SpellEffects.cpp:4493) returns on a null
+	// unitTarget, and GOTargetInfo::DoTargetSpellHit (Spell.cpp:2663)
+	// passes null for GO targets — but getCombatTarget's DB leg would
+	// resolve a GO guid's low 24 bits to an unrelated creature row.
+	if uint16(targetGUID>>48) == 0xF110 {
 		return
 	}
 	s.lastFallTime, s.lastFallZ = 0, s.player.Z
