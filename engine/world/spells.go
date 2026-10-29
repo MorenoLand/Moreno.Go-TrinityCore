@@ -9738,6 +9738,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// rolls must not compute it again as a partition (the roll block would
 	// roll it twice).
 	refCenteredBranch := false
+	goAreaBranchRan, goConeBranchRan := false, false
 	wireGOMask := spellGOWireEffectMask(spell)
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	if areaSpell {
@@ -9857,6 +9858,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// consumer downstream.
 		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
 		hitTargets = areaTargets
+		goAreaBranchRan = true
 		for guid, mask := range areaMasks {
 			noteGOEffectMask(guid, mask)
 		}
@@ -9866,6 +9868,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// front cone becomes a target; an empty cone never fails the cast.
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		hitTargets = coneTargets
+		goConeBranchRan = true
 		for guid, mask := range coneMasks {
 			noteGOEffectMask(guid, mask)
 		}
@@ -9899,6 +9902,44 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				noteGOEffectMask(goPick, nearbyGOMask)
 			}
 		}
+	}
+	// Spell::SelectImplicitAreaTargets / SelectImplicitConeTargets
+	// (Spell.cpp:1227/1176) run per effect, so a GO-area (51/52) or
+	// GO-cone (108) leg selects its picks even when an earlier else-if
+	// branch won the spell-level selection (area-enemy, friendly-area,
+	// nearby, entry-area, friendly-cone, or the other GO branch) — the
+	// launch twin of the triggered funnel's partition. The branch-ran
+	// guards keep a pure GO-area/cone spell on its own branch's single
+	// selection (same helper, same cap) instead of scanning twice.
+	// Picks join hitTargets (channeled check, roll list, GO packet,
+	// effect fan-out) deduped, with their per-leg effect masks, like
+	// the 40 rejoin above; GO guids take no unit hit roll (the
+	// rollAreaTargetReflect keep below), no AoE-cap/threat share, and
+	// unit damage/heal arms skip them (guards below).
+	rejoinLaunchGOs := func(targets []uint64, masks map[uint64]uint32) {
+		for guid, mask := range masks {
+			noteGOEffectMask(guid, mask)
+		}
+		for _, guid := range targets {
+			seenGO := false
+			for _, listed := range hitTargets {
+				if listed == guid {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				hitTargets = append(hitTargets, guid)
+			}
+		}
+	}
+	if isGOAreaSpell(spell) && !goAreaBranchRan {
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
+		rejoinLaunchGOs(areaTargets, areaMasks)
+	}
+	if isGOConeSpell(spell) && !goConeBranchRan {
+		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
+		rejoinLaunchGOs(coneTargets, coneMasks)
 	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-800): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
@@ -13125,7 +13166,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
 					count := 0
 					for _, effectTarget := range dmgList {
-						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
+						if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							count++
 						}
 					}
@@ -13177,7 +13218,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// list, yet C++ counts that TargetInfo).
 					seenCap := make(map[uint64]struct{})
 					countCap := func(guid uint64) {
-						if guid != 0 {
+						// m_UniqueTargetInfo holds unit targets only (Spell.cpp:7761);
+						// GO guids ride the flat list via AddGOTarget, never the divisor.
+						if guid != 0 && uint16(guid>>48) != 0xF110 {
 							if _, dup := seenCap[guid]; !dup {
 								seenCap[guid] = struct{}{}
 								aoeCapDivisor++
@@ -13240,6 +13283,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Spell.cpp:7771-7774).
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 				for _, effectTarget := range dmgList {
+					// GOTargetInfo targets never take unit damage (Spell.cpp:2193;
+					// SchoolDMG :322 null-returns on a null unitTarget): a GO guid riding
+					// the flat list must not resolve through the combat-target fallback
+					// to an unrelated creature.
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
@@ -13808,6 +13858,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range healList {
+					// GOTargetInfo targets never take unit heals (Spell.cpp:2193;
+					// Heal :1393 null-returns on a null unitTarget): a GO guid riding the
+					// flat list must not default to the caster's session and heal the caster.
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					targetHeal := heal
 					if eff.Effect == spellEffectHealPct {
 						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
@@ -13952,6 +14008,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range healList {
+					// GOTargetInfo targets never take unit heals (Spell.cpp:2193;
+					// Heal :1393 null-returns on a null unitTarget): a GO guid riding the
+					// flat list must not default to the caster's session and heal the caster.
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
 						continue
 					}
@@ -28572,6 +28634,15 @@ func (s *session) rollAreaPartitionReflect(ctx context.Context, spell wotlk.Spel
 func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, targets []uint64) (kept []uint64, trips []uint64, misses []protocol.SpellMissStatus) {
 	kept = make([]uint64, 0, len(targets))
 	for _, guid := range targets {
+		// GOTargetInfo targets never roll SpellHitResult (Spell.cpp:2193
+		// AddGOTarget, no miss roll): a GO guid riding a mixed spell's
+		// area list keeps its place unconditionally — the combat-target
+		// fallback below could otherwise resolve it to an unrelated
+		// creature row and drop or trip it on a bogus verdict.
+		if uint16(guid>>48) == 0xF110 {
+			kept = append(kept, guid)
+			continue
+		}
 		// WorldObject::SpellHitResult (Object.cpp:2635): this == victim
 		// reports SPELL_MISS_NONE ahead of the reflect roll -- the caster
 		// never reflects its own cast (the ally partition of a mixed spell
