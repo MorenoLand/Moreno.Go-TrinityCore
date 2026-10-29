@@ -899,6 +899,15 @@ func (s *Server) creatureUnitTargetPos(m *creatureMotion, targetGUID uint64) (fl
 	if s == nil || m == nil || targetGUID == 0 {
 		return 0, 0, false
 	}
+	// C++ ObjectAccessor::GetUnit(*caster, guid) (Spell.cpp:3404-3409
+	// SetInFront leg) resolves unit guids only — a gameobject guid
+	// returns null, so it never faces. Go's motion lookup would
+	// otherwise resolve one through its low+entry reconstruction leg
+	// (gameobjects.go:413 shares the entry/counter layout) and face a
+	// colliding creature.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return 0, 0, false
+	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.Map == m.Map && ts.player.InstanceID == m.InstanceID {
 		return ts.player.X, ts.player.Y, true
 	}

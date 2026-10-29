@@ -4375,8 +4375,13 @@ func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, ta
 				continue
 			}
 		case spellEffectLearnPetSpell:
-			if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
-				continue // C++ only gates when a unit target is present (Spell.cpp:5599)
+			if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 || uint16(target.UnitGUID>>48) == 0xF110 {
+				continue // C++ only gates when a unit target is present (Spell.cpp:5599):
+				// the wire slot is shared (ReadSpellTargetData reads one
+				// guid for any UnitWireMask flag, GO included), but a GO
+				// guid leaves m_targets.GetUnitTarget() null, so the gate
+				// skips instead of false-rejecting BAD_TARGETS via
+				// petNumberForGUID's high-bit gate.
 			}
 			if s.petNumberForGUID(target.UnitGUID) == 0 {
 				return spellFailedBadTargets
