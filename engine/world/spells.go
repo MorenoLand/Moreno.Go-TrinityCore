@@ -14321,7 +14321,7 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 				addPct(int32(rank * 2))
 			}
 		case 7377: // Twisted Faith: Shadow Word: Pain on the victim
-			if s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+			if s.targetHasFamilyAuraEffectByCaster(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000, s.playerGUID) {
 				addPct(ae.amount)
 			}
 		case 7598, 7599, 7600, 7601, 7602: // Marked for Death: Hunter's Mark
@@ -14360,11 +14360,11 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 	case spellFamilyPriest:
 		if spell.SpellFamilyFlags[0]&0x800000 != 0 { // Mind Flay
 			if amt, ok := s.auraEffectAmount(55687, 0); ok && // Glyph of Shadow Word: Pain
-				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+				s.targetHasFamilyAuraEffectByCaster(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000, s.playerGUID) {
 				addPct(amt)
 			}
 			if ae, ok2 := s.classScriptAuraByMisc(spell, 2848); ok2 && // Twisted Faith, Mind Flay part
-				s.targetHasFamilyAuraEffect(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000) {
+				s.targetHasFamilyAuraEffectByCaster(ctx, targetGUID, spellAuraPeriodicDamage, spellFamilyPriest, 0x8000, s.playerGUID) {
 				addPct(ae.amount)
 			}
 		} else if spell.SpellFamilyFlags[0]&0x80 != 0 { // Smite
@@ -14580,7 +14580,7 @@ func (s *session) spellHealingDoneFlat(spell wotlk.Spell, target *session, effIn
 	// before the spellpower base and the of-stat/of-AP legs.
 	advertised += s.healingDoneAuraModifier(uint32(spell.SchoolMask))
 	if s.player != nil {
-		advertised = int32(s.player.SpellPower)
+		advertised += int32(s.player.SpellPower)
 		// Unit::SpellBaseHealingBonusDone (Unit.cpp:7783-7795): the of-stat
 		// (175) and of-attack-power (238) percent legs ride the same
 		// advertised benefit the spellpower base does.
@@ -14774,6 +14774,17 @@ func (s *session) spellHealingBonusDone(spell wotlk.Spell, heal uint32, target *
 	if spell.SpellFamilyName == spellFamilyPotion {
 		return heal
 	}
+	// Unit.cpp:7584-7586 — no bonus healing for SPELL_DAMAGE_CLASS_NONE
+	// spells without a spell_bonus_data row: only DoneTotalMod applies,
+	// the flat leg and the spellmod tail are skipped (damage twin + pet
+	// twin already carry this arm; DmgClass is DefenseType, SpellInfo.cpp).
+	if _, hasBonus := s.spellBonusRow(spell.ID); !hasBonus && spell.DefenseType == spellDamageClassNone {
+		tmp := float64(heal) * s.spellHealingPctDone(spell, target)
+		if tmp < 0 {
+			tmp = 0
+		}
+		return uint32(tmp)
+	}
 	flat := s.spellHealingDoneFlat(spell, target, effIndex, isDot, stack)
 	// Unit.cpp:7560-7581 — the ap_bonus/ap_dot_bonus attack-power arm rides
 	// DoneTotal with the Impurity-adjusted ApCoeffMod.
@@ -14895,6 +14906,15 @@ func (s *session) spellHealingBonusDoneCreatureVictim(ctx context.Context, spell
 				}
 			}
 		}
+	}
+	// Unit.cpp:7584-7586 — DmgClass-NONE early-out, same as the player
+	// variant: DoneTotalMod only, flat discarded, spellmod tail skipped.
+	if _, hasBonus := s.spellBonusRow(spell.ID); !hasBonus && spell.DefenseType == spellDamageClassNone {
+		tmp := float64(heal) * pct
+		if tmp < 0 {
+			tmp = 0
+		}
+		return uint32(tmp)
 	}
 	tmp := float64(int32(heal)+flat) * pct
 	if tmp < 0 {
