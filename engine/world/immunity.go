@@ -239,6 +239,71 @@ func mechanicImmuneMaskGranted(spell wotlk.Spell) uint32 {
 	return mask
 }
 
+// addPlayerSpellImmuneRow is the player twin of addCreatureSpellImmuneRow
+// (Unit::ApplySpellImmune, Unit.cpp:8268): it appends grantingSpellID under
+// key (op<<32|immType) unless already present, so a refreshed aura re-firing
+// the linked apply arm cannot stack duplicate rows. It takes only
+// spellImmuneMu, never castMu, so callers holding castMu keep the
+// castMu -> spellImmuneMu order the immunity eval uses.
+func (s *session) addPlayerSpellImmuneRow(op, immType, grantingSpellID uint32) {
+	if s == nil {
+		return
+	}
+	s.spellImmuneMu.Lock()
+	defer s.spellImmuneMu.Unlock()
+	if s.spellImmuneRows == nil {
+		s.spellImmuneRows = map[uint64][]uint32{}
+	}
+	k := uint64(op)<<32 | uint64(immType)
+	for _, id := range s.spellImmuneRows[k] {
+		if id == grantingSpellID {
+			return
+		}
+	}
+	s.spellImmuneRows[k] = append(s.spellImmuneRows[k], grantingSpellID)
+}
+
+// removePlayerSpellImmuneRows is the apply=false twin of
+// addPlayerSpellImmuneRow: it erases every row under (op<<32|immType)
+// granted by grantingSpellID, matching C++'s equal_range erase of entries
+// whose value is the granting spell (Unit.cpp:8272-8280).
+func (s *session) removePlayerSpellImmuneRows(op, immType, grantingSpellID uint32) {
+	if s == nil {
+		return
+	}
+	s.spellImmuneMu.Lock()
+	defer s.spellImmuneMu.Unlock()
+	if s.spellImmuneRows == nil {
+		return
+	}
+	k := uint64(op)<<32 | uint64(immType)
+	ids := s.spellImmuneRows[k]
+	kept := ids[:0]
+	for _, id := range ids {
+		if id != grantingSpellID {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		delete(s.spellImmuneRows, k)
+	} else {
+		s.spellImmuneRows[k] = kept
+	}
+}
+
+// playerSpellImmuneHas reports whether the player rows contain any entry
+// for (op, immType) — the Go twin of m_spellImmune[op].count(immType) > 0.
+// Callers hold castMu (the immunity eval) or no lock (the linked arms use
+// the row writers, not this read).
+func (s *session) playerSpellImmuneHas(op, immType uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.spellImmuneMu.Lock()
+	defer s.spellImmuneMu.Unlock()
+	return len(s.spellImmuneRows[uint64(op)<<32|uint64(immType)]) > 0
+}
+
 // isImmuneToSpell determines whether the player is immune to the effects of an incoming spell.
 // Mirrors TrinityCore Unit::IsImmunedToSpell (Unit.cpp:7852-7922), the
 // whole-spell immunity gate C++ consults in Unit::AddAura (Unit.cpp:12282)
@@ -246,15 +311,14 @@ func mechanicImmuneMaskGranted(spell wotlk.Spell) uint32 {
 // (Cyclone/Banish, Divine Shield, Blessing of Protection, Anti-Magic Shell,
 // Cloak of Shadows, school/damage aura scan) are the Go engine's live
 // approximations of the C++ state/mechanic immunity model; the
-// UNAFFECTED_BY_INVULNERABILITY arm keeps its C++ position ahead of all of
-// them (Unit.cpp:7861-7862 — even Banish's mechanic list sits below it), and
-// the structured arms (IMMUNITY_DISPEL / IMMUNITY_MECHANIC / the
-// all-effects fold / the school fold) run after them in C++ order.
-// IMMUNITY_ID stays a documented gap: its only player-relevant writer is the
-// spell_linked_spell negative row at aura apply (SpellAuras.cpp:1337-1342),
-// and Go has no player-side ApplySpellImmune model (the creature twin
-// writes ScriptSpellImmune rows; fireSpellLinkedTriggers bridges only
-// the aura-removal arm).
+// UNAFFECTED_BY_INVULNERABILITY arm keeps its C++ position ahead of the
+// state/mechanic arms (Unit.cpp:7861-7862 — even Banish's mechanic list sits
+// below it), and the structured arms (IMMUNITY_DISPEL / IMMUNITY_MECHANIC /
+// the all-effects fold / the school fold) run after them in C++ order. The
+// IMMUNITY_ID arm sits ahead of the gate, as in C++ (:7858-7862): its only
+// player-side writer is the spell_linked_spell negative row at aura apply
+// (SpellAuras.cpp:1341), stored in spellImmuneRows and cleared at remove
+// (:1371-1372); the creature twin writes ScriptSpellImmune rows.
 func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 	return s.isImmuneToSpellFiltered(spell, caster, true)
 }
@@ -276,6 +340,13 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
+
+	// Unit.cpp:7858-7862 — IMMUNITY_ID ahead of the
+	// UNAFFECTED_BY_INVULNERABILITY gate: a single-spell immunity blocks
+	// even a piercing spell, while the dispel arm below sits behind it.
+	if s.playerSpellImmuneHas(immunityOpID, spell.ID) {
+		return true
+	}
 
 	// Unit.cpp:7861-7862 — invulnerability-piercing spells are never immune,
 	// ahead of every state/mechanic list.

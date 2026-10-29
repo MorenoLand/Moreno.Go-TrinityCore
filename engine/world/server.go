@@ -473,6 +473,13 @@ type session struct {
 	auras                        map[uint32]struct{}
 	auraSlots                    map[uint32]uint8
 	activeAuras                  map[uint32]*activeAura
+	// spellImmuneRows mirrors Unit::m_spellImmune (Unit.cpp:8268) for the
+	// player: key (op<<32|type), value = granting spell ids. The creature
+	// twin is motion.ScriptSpellImmune; this holds only rows written by
+	// spell_linked_spell negative apply arms (SpellAuras.cpp:1341) until a
+	// player-side script bridge needs more. Guarded by spellImmuneMu.
+	spellImmuneRows map[uint64][]uint32
+	spellImmuneMu   sync.Mutex
 	// factionNativeAfterRemove mirrors Unit::RestoreFaction in the
 	// AuraEffect::HandleAuraModFaction remove leg (SpellAuraEffects.cpp:4808):
 	// removing a 243 aura restores the native faction unconditionally, even
