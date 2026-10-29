@@ -3507,7 +3507,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if destFailed {
 		return true
 	}
-	if targetGUID != 0 && targetGUID != motion.GUID &&
+	// A gameobject guid is not a unit target in C++ (Spell.cpp:5370),
+	// so the unit-target LOS arm never runs for it; without this,
+	// aiThreatUnitPos's findCreatureMotionLocked low+entry leg can
+	// LOS-check an unrelated creature sharing the GO guid's bits.
+	if targetGUID != 0 && targetGUID != motion.GUID && uint16(targetGUID>>48) != 0xF110 &&
 		spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 		spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 		if x, y, z, _, _, found := s.server.aiThreatUnitPos(motion, targetGUID, nil, true); found {

@@ -3505,7 +3505,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Spell::CheckCast unit-target LOS arm (Spell.cpp:5391-5401), same
 					// twin: the wire victim must be within LOS unless the spell
 					// exempts LOS checks. Defaults to true without terrain data.
-					if target.GUID != 0 && target.GUID != motion.GUID &&
+					// A gameobject guid is not a unit target in C++ (Spell.cpp:5370),
+					// so the unit-target LOS arm never runs for it; without this,
+					// aiThreatUnitPos's findCreatureMotionLocked low+entry leg can
+					// LOS-check an unrelated creature sharing the GO guid's bits.
+					if target.GUID != 0 && target.GUID != motion.GUID && uint16(target.GUID>>48) != 0xF110 &&
 						spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 						spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 						if x, y, z, _, _, found := s.aiThreatUnitPos(motion, target.GUID, nil, true); found {

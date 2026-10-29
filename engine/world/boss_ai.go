@@ -800,6 +800,15 @@ func (s *Server) checkCreatureSpellBehindFacing(m *creatureMotion, spellInfo wot
 	if targetGUID == 0 || targetGUID == m.GUID {
 		return true
 	}
+	// A gameobject guid in the unit slot is not a unit target in C++:
+	// GetUnitTarget() is null for it, so the behind/facing arms inside
+	// the unit-target block (Spell.cpp:5370-5384) never run. Without
+	// this, findCreatureMotionLocked's low+entry reconstruction leg can
+	// read an unrelated creature sharing the GO guid's low 24 bits and
+	// entry, and its orientation can wrongly fizzle the cast.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return true
+	}
 	var o, tx, ty float32
 	found := false
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
@@ -1401,7 +1410,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		if destFailed {
 			return
 		}
-		if targetGUID != 0 && targetGUID != m.GUID &&
+		// A gameobject guid is not a unit target in C++ (Spell.cpp:5370),
+		// so the unit-target LOS arm never runs for it; without this,
+		// aiThreatUnitPos's findCreatureMotionLocked low+entry leg can
+		// LOS-check an unrelated creature sharing the GO guid's bits.
+		if targetGUID != 0 && targetGUID != m.GUID && uint16(targetGUID>>48) != 0xF110 &&
 			spellInfo.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 			spellInfo.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
 			if x, y, z, _, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true); found {

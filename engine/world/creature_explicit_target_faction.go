@@ -36,6 +36,15 @@ func (s *Server) checkCreatureExplicitTargetFaction(m *creatureMotion, attacker 
 	if s == nil || m == nil || targetGUID == 0 {
 		return true
 	}
+	// A gameobject guid is not a unit target in C++: the faction arms
+	// run only inside target->ToUnit() (SpellInfo.cpp:1793-1811), so a
+	// GO target passes outright. Without this, the attack/assist arms'
+	// findCreatureMotionLocked low+entry reconstruction leg can judge
+	// an unrelated creature sharing the GO guid's low 24 bits and entry
+	// and wrongly fizzle the cast with BAD_TARGETS.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return true
+	}
 	mask := spellExplicitUnitTargetMask(spell)
 	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitMinipet|targetFlagUnitPassenger) == 0 {
 		return true
