@@ -4467,6 +4467,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, uint32(eff.ChainTargets-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
 						joinInlineChainGUID(jumpGUID)
 					}
+					// A second TARGET-object leg searches here too: DEFAULT never
+					// marks the effect processed (Spell.cpp:866-900), so the B
+					// leg's chain arm runs beside A's with its own check type.
+					if targetObjectTarget(eff.ImplicitTargetA) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetA != eff.ImplicitTargetB {
+						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, uint32(eff.ChainTargets-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+							joinInlineChainGUID(jumpGUID)
+						}
+					}
 				}
 				// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
 				// leg, so a winning effect carrying one TARGET-object leg and one

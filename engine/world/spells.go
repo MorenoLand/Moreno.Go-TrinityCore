@@ -11469,59 +11469,68 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if winMask == 1<<uint(i) {
 				continue
 			}
-			jump := 0
-			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, target.UnitGUID, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
-				alreadyListed := false
-				for _, guid := range hitTargets {
-					if guid == extraGUID {
-						alreadyListed = true
-						break
-					}
-				}
-				if alreadyListed {
-					continue
-				}
-				alreadyVerdicted := false
-				for _, miss := range missStatus {
-					if miss.TargetGUID == extraGUID {
-						alreadyVerdicted = true
-						break
-					}
-				}
-				if alreadyVerdicted {
-					continue
-				}
-				if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
-					switch outcome {
-					case 1:
-						jump++
-						hitTargets = append(hitTargets, extraGUID)
-						if _, indexed := chainJumpIndex[extraGUID]; !indexed {
-							chainJumpIndex[extraGUID] = jump
+			// Two TARGET-object legs search here, not just the first: DEFAULT
+			// never marks the effect processed (Spell.cpp:866-900), so the B
+			// leg's chain arm runs beside A's with its own check type.
+			objectLegs := []uint32{chainTarget}
+			if targetObjectTarget(eff.ImplicitTargetA) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetA != eff.ImplicitTargetB {
+				objectLegs = append(objectLegs, eff.ImplicitTargetB)
+			}
+			for _, chainTarget := range objectLegs {
+				jump := 0
+				for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, target.UnitGUID, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
+					alreadyListed := false
+					for _, guid := range hitTargets {
+						if guid == extraGUID {
+							alreadyListed = true
+							break
 						}
-					case 2:
-						jump++
-						reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
-					case 3:
 					}
-					continue
-				}
-				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
-					entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
-					if missInfo == protocol.SpellMissReflect {
-						entry.ReflectStatus = s.spellReflectReturnStatus(spell)
-						if entry.ReflectStatus == protocol.SpellMissNone {
+					if alreadyListed {
+						continue
+					}
+					alreadyVerdicted := false
+					for _, miss := range missStatus {
+						if miss.TargetGUID == extraGUID {
+							alreadyVerdicted = true
+							break
+						}
+					}
+					if alreadyVerdicted {
+						continue
+					}
+					if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+						switch outcome {
+						case 1:
+							jump++
+							hitTargets = append(hitTargets, extraGUID)
+							if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+								chainJumpIndex[extraGUID] = jump
+							}
+						case 2:
 							jump++
 							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						case 3:
 						}
+						continue
 					}
-					missStatus = append(missStatus, entry)
-					continue
-				}
-				jump++
-				hitTargets = append(hitTargets, extraGUID)
-				if _, indexed := chainJumpIndex[extraGUID]; !indexed {
-					chainJumpIndex[extraGUID] = jump
+					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+						entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
+						if missInfo == protocol.SpellMissReflect {
+							entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+							if entry.ReflectStatus == protocol.SpellMissNone {
+								jump++
+								reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+							}
+						}
+						missStatus = append(missStatus, entry)
+						continue
+					}
+					jump++
+					hitTargets = append(hitTargets, extraGUID)
+					if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+						chainJumpIndex[extraGUID] = jump
+					}
 				}
 			}
 		}
@@ -21106,6 +21115,28 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				chainPrimaryByEffect[i] = anchor
 			}
 			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
+			// A second TARGET-object leg unions here too: DEFAULT never marks
+			// the effect processed (Spell.cpp:866-900), so the B leg's chain
+			// arm runs beside A's with its own check type. A nearby second
+			// leg stays with the next strip (mixed second legs).
+			if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				secondAnchor := targetGUID
+				if spellTarget.UnitGUID != 0 {
+					secondAnchor = spellTarget.UnitGUID
+				}
+				for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+					dup := false
+					for _, listed := range chainJumpsByEffect[i] {
+						if listed == jumpGUID {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+					}
+				}
+			}
 		}
 	}
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per

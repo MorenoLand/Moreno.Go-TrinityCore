@@ -4125,6 +4125,33 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				ownHits = append(ownHits, jumpGUID)
 				hitTargets = append(hitTargets, jumpGUID)
 			}
+			// A second TARGET-object leg searches here too: DEFAULT never
+			// marks the effect processed (Spell.cpp:866-900), so the B leg's
+			// chain arm runs beside A's with its own check type. A nearby
+			// second leg stays with the next strip (mixed second legs).
+			if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+				secondAnchor := targetGUID
+				if target.UnitGUID != 0 {
+					secondAnchor = target.UnitGUID
+				}
+				for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+					if jumpGUID == 0 {
+						continue
+					}
+					alreadyHit := false
+					for _, hitGUID := range hitTargets {
+						if hitGUID == jumpGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if alreadyHit {
+						continue
+					}
+					ownHits = append(ownHits, jumpGUID)
+					hitTargets = append(hitTargets, jumpGUID)
+				}
+			}
 			chainHitsByEffect[i] = ownHits
 		}
 		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per

@@ -390,17 +390,19 @@ func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal b
 }
 
 // winningSecondChainLeg returns the winning effect's second chain leg
-// when the effect carries one TARGET-object leg and one NEARBY leg
-// (Spell.cpp:758-779 selects TargetA and TargetB separately, each ending
-// in its own chain arm at :1173/:1575). The winning blocks pick the first
-// eligible leg (A else B), so a mixed winning effect chained only its
-// first leg while the second leg's search never ran. Same-kind pairs stay
-// out: object+object shares one anchor (a later strip) and nearby+nearby
-// pairs are shadowed by the second-slot rule (implicitTargetSecondSlotSkipped)
-// when both slots select NEARBY. A mixed pair never skips: DEFAULT never
-// marks the effect processed (Spell.cpp:866-900), so the object leg always
-// runs beside the nearby leg. Returns false unless both legs are
-// chain-eligible and of opposite kinds.
+// when the effect carries two chain-eligible legs and the second leg's
+// search never ran: one TARGET-object leg and one NEARBY leg, or two
+// TARGET-object legs with differing check types (Spell.cpp:758-779 selects
+// TargetA and TargetB separately, each ending in its own chain arm at
+// :1173/:1575). The winning blocks pick the first eligible leg (A else B),
+// so such a winning effect chained only its first leg. Two TARGET-object
+// legs share one anchor (the wire target) but run separate chain searches
+// with their own check types and chain-heal flags — DEFAULT never marks the
+// effect processed (Spell.cpp:866-900), so both object arms run. Nearby+
+// nearby pairs stay out: a NEARBY first slot marks the effect processed, so
+// the second NEARBY slot never runs (same :866-900 arm) and A-only chaining
+// is correct there, not a gap. Returns false when the legs are identical
+// (one search already covers both) or the second leg is not chain-eligible.
 func winningSecondChainLeg(spell wotlk.Spell, effectMask uint32) (uint32, bool) {
 	for i, eff := range spell.Effects {
 		if effectMask != 1<<uint(i) {
@@ -421,6 +423,9 @@ func winningSecondChainLeg(spell wotlk.Spell, effectMask uint32) (uint32, bool) 
 			return 0, false
 		}
 		if (targetObjectTarget(first) && nearbyUnitTarget(second)) || (nearbyUnitTarget(first) && targetObjectTarget(second)) {
+			return second, true
+		}
+		if targetObjectTarget(first) && targetObjectTarget(second) && first != second {
 			return second, true
 		}
 		return 0, false
