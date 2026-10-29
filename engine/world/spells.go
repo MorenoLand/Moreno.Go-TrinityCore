@@ -12655,6 +12655,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					s.handleCreateTamedPet(effCtx, spellID, effectTarget, eff)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// The helper gates on target == caster, hunter, no pet yet:
+				// the first trip creates, later trips no-op via PetGUID.
+				for range reflectedAoETrips {
+					s.handleCreateTamedPet(effCtx, spellID, s.playerGUID, eff)
+				}
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				if primaryLive {
 					s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
@@ -12986,6 +12993,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// damage/10 with no scaling; damage<=50 scales via
 				// Trinity::Honor::hk_honor_at_level; larger damage is flat.
 				s.handleEffectAddHonor(effCtx, spell, eff, hitTargets, castItemEntry != 0)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.handleEffectAddHonor(effCtx, spell, eff, []uint64{s.playerGUID}, castItemEntry != 0)
+				}
 			case spellEffectTradeSkill: // 47: SPELL_EFFECT_TRADE_SKILL (EffectTradeSkill, SpellEffects.cpp:2692)
 				// The C++ body is entirely commented out — explicit no-op so
 				// the effect stops hitting the unhandled-effect debug arm.
@@ -13071,6 +13083,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: the target's equipped main-hand weapon gains the
 				// MiscValue enchantment in the temp slot.
 				s.handleEffectEnchantHeldItem(effCtx, spell, eff, hitTargets, casterLevel)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// The helper's identical-enchant early return makes repeated trips
+				// idempotent (Item.cpp:835 same id + duration writes nothing).
+				for range reflectedAoETrips {
+					s.handleEffectEnchantHeldItem(effCtx, spell, eff, []uint64{s.playerGUID}, casterLevel)
+				}
 			case spellEffectForceDeselect: // 93: SPELL_EFFECT_FORCE_DESELECT (EffectForceDeselect, SpellEffects.cpp:4396)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// SMSG_BREAK_TARGET + SMSG_CLEAR_TARGET go to hostile players
@@ -13089,6 +13108,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (capped at 100, with a 25% Drunken Vomit cast when the cap
 				// is hit from below).
 				s.handleEffectInebriate(effCtx, spell, eff, hitTargets, castItemEntry, casterLevel)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// Drunkenness accumulates toward the 100 cap exactly as in C++
+				// (SpellEffects.cpp:4143-4160), including the cap vomit roll.
+				for range reflectedAoETrips {
+					s.handleEffectInebriate(effCtx, spell, eff, []uint64{s.playerGUID}, castItemEntry, casterLevel)
+				}
 			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
 				// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
 				// SpellEffects.cpp:4215). C++ runs this once at
@@ -13107,6 +13133,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: the target unlearns the effect's TriggerSpell
 				// (Player::RemoveSpell).
 				s.handleEffectUnlearnSpecialization(effCtx, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// RemoveSpell is idempotent once the spell is gone.
+				for range reflectedAoETrips {
+					s.handleEffectUnlearnSpecialization(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectTriggerRitualOfSummoning: // 151: SPELL_EFFECT_TRIGGER_SPELL_2 (EffectTriggerRitualOfSummoning, SpellEffects.cpp:1106)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// finish() the current spell, then trigger-cast the effect's
@@ -13133,6 +13165,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// managers are creature-side only, so the registry lives on
 				// the session (spell_threat.go).
 				s.handleEffectRedirectThreat(spell, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// The registry is keyed (spellId, victim), so repeated trips
+				// overwrite the same caster entry; the self-entry participates
+				// in the 100-cap flatten exactly as in C++ (ThreatManager.cpp:829-845).
+				for range reflectedAoETrips {
+					s.handleEffectRedirectThreat(spell, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectActivateRune: // 146: SPELL_EFFECT_ACTIVATE_RUNE (EffectActivateRune, SpellEffects.cpp:5318)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH; the arm fires
 				// in the launch block above, before SendSpellGo, so the
@@ -13170,6 +13210,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: players take Player::EnvironmentalDamage (fire),
 				// unit targets only get the non-melee damage log.
 				s.handleEffectEnvironmentalDamage(effCtx, spell, eff, spellID, uint8(spell.SchoolMask), hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.handleEffectEnvironmentalDamage(effCtx, spell, eff, spellID, uint8(spell.SchoolMask), []uint64{s.playerGUID})
+				}
 			case spellEffectBind: // 11: SPELL_EFFECT_BIND (EffectBind, SpellEffects.cpp:5695)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per player
 				// target: sets the homebind, sends bind point update +
