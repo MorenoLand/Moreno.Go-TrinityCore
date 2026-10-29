@@ -25,47 +25,36 @@ const (
 )
 
 // getMeleeHitPct returns the bonus melee hit percentage from gear rating.
-// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HIT_MELEE) (Player.cpp:8800).
+// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HIT_MELEE)
+// (Player.cpp:5535) via GetRatingMultiplier (Player.cpp:5518-5532): the
+// gtCombatRatings curve times the class scalar, not a linear level scaling
+// (the gt curve is strongly non-linear: e.g. spell hit is 12.62 per 1% at
+// level 70 versus 26.23 at level 80).
 func (s *session) getMeleeHitPct() float64 {
+	return s.ratingBonusValue(CombatRatingHitMelee)
+}
+
+// ratingBonusValue mirrors Player::GetRatingBonusValue through the shared
+// playerCombatRatingBonus helper (gtCombatRatings + class scalar, level
+// clamped to GT_MAX_LEVEL there). Level 0 keeps the file's standing fallback
+// to 80: GetLevel() never yields 0 in C++, so the fallback only guards
+// unloaded state.
+func (s *session) ratingBonusValue(cr uint8) float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	rating := float64(s.player.CombatRatings[CombatRatingHitMelee])
-	if rating <= 0 {
-		return 0
-	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
+	lvl := s.player.Level
+	if lvl == 0 {
 		lvl = 80
 	}
-	// At level 80: 32.789989 rating = 1.0% hit (from gtCombatRatings.dbc)
-	ratingPerPct := 32.789989 * (lvl / 80.0)
-	if ratingPerPct < 5.0 {
-		ratingPerPct = 5.0
-	}
-	return rating / ratingPerPct
+	return float64(s.playerCombatRatingBonus(s.player, lvl, int(cr)))
 }
 
 // getRangedHitPct returns the bonus ranged hit percentage from gear rating.
-// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HIT_RANGED) (Player.cpp:8800).
+// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HIT_RANGED)
+// (Player.cpp:5535) via GetRatingMultiplier (Player.cpp:5518-5532).
 func (s *session) getRangedHitPct() float64 {
-	if s == nil || s.player == nil {
-		return 0
-	}
-	rating := float64(s.player.CombatRatings[CombatRatingHitRanged])
-	if rating <= 0 {
-		return 0
-	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
-	// At level 80: 32.789989 rating = 1.0% hit (from gtCombatRatings.dbc)
-	ratingPerPct := 32.789989 * (lvl / 80.0)
-	if ratingPerPct < 5.0 {
-		ratingPerPct = 5.0
-	}
-	return rating / ratingPerPct
+	return s.ratingBonusValue(CombatRatingHitRanged)
 }
 
 // getMeleeCritFromAgility returns the melee crit percentage contributed by Agility.
@@ -174,23 +163,12 @@ func (s *session) getMeleeCritPct() float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
 
 	// 1. Agility contribution
 	critPct := s.getMeleeCritFromAgility()
 
-	// 2. Melee Crit Rating (CR_CRIT_MELEE = 8): 45.905987 rating per 1.0% crit at level 80
-	rating := float64(s.player.CombatRatings[CombatRatingCritMelee])
-	if rating > 0 {
-		ratingPerPct := 45.905987 * (lvl / 80.0)
-		if ratingPerPct < 5.0 {
-			ratingPerPct = 5.0
-		}
-		critPct += rating / ratingPerPct
-	}
+	// 2. Melee Crit Rating (CR_CRIT_MELEE = 8) via GetRatingBonusValue.
+	critPct += s.ratingBonusValue(CombatRatingCritMelee)
 	return critPct
 }
 
@@ -202,68 +180,27 @@ func (s *session) getRangedCritPct() float64 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
 
 	// 1. Agility contribution for ranged: same Gt-table value as melee crit
 	critPct := s.getMeleeCritFromAgility()
 
-	// 2. Ranged Crit Rating (CR_CRIT_RANGED = 9): 45.905987 rating per 1.0% crit at level 80
-	rating := float64(s.player.CombatRatings[CombatRatingCritRanged])
-	if rating > 0 {
-		ratingPerPct := 45.905987 * (lvl / 80.0)
-		if ratingPerPct < 5.0 {
-			ratingPerPct = 5.0
-		}
-		critPct += rating / ratingPerPct
-	}
+	// 2. Ranged Crit Rating (CR_CRIT_RANGED = 9) via GetRatingBonusValue.
+	critPct += s.ratingBonusValue(CombatRatingCritRanged)
 	return critPct
 }
 
 // getMeleeHastePct returns the melee haste percentage from gear rating.
-// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HASTE_MELEE) (Player.cpp:8800).
+// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HASTE_MELEE)
+// (Player.cpp:5535) via GetRatingMultiplier (Player.cpp:5518-5532).
 func (s *session) getMeleeHastePct() float64 {
-	if s == nil || s.player == nil {
-		return 0
-	}
-	rating := float64(s.player.CombatRatings[CombatRatingHasteMelee])
-	if rating <= 0 {
-		return 0
-	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
-	// At level 80: 32.789989 rating = 1.0% haste (from gtCombatRatings.dbc)
-	ratingPerPct := 32.789989 * (lvl / 80.0)
-	if ratingPerPct < 5.0 {
-		ratingPerPct = 5.0
-	}
-	return rating / ratingPerPct
+	return s.ratingBonusValue(CombatRatingHasteMelee)
 }
 
 // getRangedHastePct returns the ranged haste percentage from gear rating.
-// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HASTE_RANGED) (Player.cpp:8800).
+// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HASTE_RANGED)
+// (Player.cpp:5535) via GetRatingMultiplier (Player.cpp:5518-5532).
 func (s *session) getRangedHastePct() float64 {
-	if s == nil || s.player == nil {
-		return 0
-	}
-	rating := float64(s.player.CombatRatings[CombatRatingHasteRanged])
-	if rating <= 0 {
-		return 0
-	}
-	lvl := float64(s.player.Level)
-	if lvl <= 0 {
-		lvl = 80
-	}
-	// At level 80: 32.789989 rating = 1.0% haste (from gtCombatRatings.dbc)
-	ratingPerPct := 32.789989 * (lvl / 80.0)
-	if ratingPerPct < 5.0 {
-		ratingPerPct = 5.0
-	}
-	return rating / ratingPerPct
+	return s.ratingBonusValue(CombatRatingHasteRanged)
 }
 
 // getHastedMeleeSpeed modifies base attack speed by melee haste.
@@ -334,20 +271,10 @@ func (s *session) getExpertise(ctx context.Context, attackType protocol.WeaponAt
 	if s == nil || s.player == nil || attackType == protocol.RangedAttack {
 		return 0
 	}
-	expertise := float32(0)
-	rating := float64(s.player.CombatRatings[CombatRatingExpertise])
-	if rating > 0 {
-		lvl := float64(s.player.Level)
-		if lvl <= 0 {
-			lvl = 80
-		}
-		// At level 80: 8.197496 rating = 1.0 expertise skill point (from gtCombatRatings.dbc)
-		ratingPerPoint := 8.197496 * (lvl / 80.0)
-		if ratingPerPoint < 1.0 {
-			ratingPerPoint = 1.0
-		}
-		expertise += float32(rating / ratingPerPoint)
-	}
+	// StatSystem.cpp:877 truncates the rating bonus to int32 before the aura
+	// sum; the stored field is uint32, so the total stays integral and the
+	// /4.0 reduction below matches GetExpertiseDodgeOrParryReduction exactly.
+	expertise := float32(int32(s.ratingBonusValue(CombatRatingExpertise)))
 	expertise += s.playerAuraModifierWeaponFit(ctx, spellAuraModExpertise, attackType)
 	if expertise < 0 {
 		return 0
@@ -374,19 +301,7 @@ func (s *session) getArmorPenPct(ctx context.Context, attType protocol.WeaponAtt
 	if s == nil || s.player == nil {
 		return 0
 	}
-	var ratingPct float64
-	if rating := float64(s.player.CombatRatings[CombatRatingArmorPenetration]); rating > 0 {
-		lvl := float64(s.player.Level)
-		if lvl <= 0 {
-			lvl = 80
-		}
-		// At level 80: 15.3953 rating = 1.0% ArP (from gtCombatRatings.dbc in 3.3.5)
-		ratingPerPct := 15.3953 * (lvl / 80.0)
-		if ratingPerPct < 2.0 {
-			ratingPerPct = 2.0
-		}
-		ratingPct = rating / ratingPerPct
-	}
+	ratingPct := s.ratingBonusValue(CombatRatingArmorPenetration)
 	var auraPct float64
 	for _, amt := range s.damageDoneAuraAmounts(ctx, spellAuraModArmorPenetrationPct, 0, attType) {
 		auraPct += float64(amt)
