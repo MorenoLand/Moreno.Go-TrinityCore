@@ -440,6 +440,31 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	// Spell.cpp:5123: the defined bonus is distributed among all unique
 	// targets, misses included (their shares are wasted, Spell.cpp:5125).
 	totalTargets := len(hitTargets) + len(missGUIDs)
+	// Same whole-list rule as the AoE-cap divisor (Spell.cpp:7761): a
+	// TARGET_UNIT_CASTER sibling effect's TargetInfo dilutes the division
+	// even though it rides neither the hit list nor the miss list (the
+	// caster never misses itself and the single-target selection seeds no
+	// list), so it is counted here when absent from both.
+	if spellHasCasterTargetEffect(spell) {
+		casterCounted := false
+		for _, guid := range hitTargets {
+			if guid == s.playerGUID {
+				casterCounted = true
+				break
+			}
+		}
+		if !casterCounted {
+			for _, guid := range missGUIDs {
+				if guid == s.playerGUID {
+					casterCounted = true
+					break
+				}
+			}
+		}
+		if !casterCounted {
+			totalTargets++
+		}
+	}
 	if totalTargets <= 0 {
 		return
 	}

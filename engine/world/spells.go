@@ -1094,6 +1094,24 @@ func isSelfCastOnly(spell wotlk.Spell) bool {
 	return hasEffect
 }
 
+// spellHasCasterTargetEffect reports whether any active effect selects the
+// caster unit (TARGET_UNIT_CASTER, Spell.cpp:1507):
+// SelectImplicitCasterObjectTargets AddUnitTargets the caster with
+// checkIfValid=false, so the caster holds a TargetInfo in m_UniqueTargetInfo
+// even when no area, friendly, miss, or trip list selected it. Whole-list
+// divisors (Spell.cpp:7761) must count that entry.
+func spellHasCasterTargetEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == targetUnitCaster || eff.ImplicitTargetB == targetUnitCaster {
+			return true
+		}
+	}
+	return false
+}
+
 func isAreaEnemySpell(spell wotlk.Spell) bool {
 	if !isHarmfulSpell(spell) {
 		return false
@@ -13025,6 +13043,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for _, guid := range refCenteredAllyTrips {
 						countCap(guid)
 					}
+					// A TARGET_UNIT_CASTER sibling single-target effect
+					// gives the caster a TargetInfo that rides none of
+					// the union lists above (not a partition, miss set,
+					// or trip: the caster never misses itself and the
+					// single-target selection seeds no list), so without
+					// this the divisor undercounts by 1 when the total
+					// tops 10. countCap dedupes, so a caster already
+					// riding a list is not double-counted.
+					if spellHasCasterTargetEffect(spell) {
+						countCap(s.playerGUID)
+					}
 					if aoeCapDivisor <= 10 {
 						aoeCapDivisor = 0
 					}
@@ -22631,6 +22660,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				counted[guid] = struct{}{}
 				aoeCapDivisor++
 			}
+			// Same caster-selected remainder as the launch path: a
+			// TARGET_UNIT_CASTER sibling effect's TargetInfo rides no
+			// roll list, so it is counted here when absent.
+			if spellHasCasterTargetEffect(spell) {
+				if _, dup := counted[s.playerGUID]; !dup {
+					counted[s.playerGUID] = struct{}{}
+					aoeCapDivisor++
+				}
+			}
 			if aoeCapDivisor <= 10 {
 				aoeCapDivisor = 0
 			}
@@ -23124,6 +23162,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 								}
 								weaponCounted[guid] = struct{}{}
 								weaponCapDivisor++
+							}
+							// Same caster-selected remainder as the
+							// effect-2 divisor above.
+							if spellHasCasterTargetEffect(spell) {
+								if _, dup := weaponCounted[s.playerGUID]; !dup {
+									weaponCounted[s.playerGUID] = struct{}{}
+									weaponCapDivisor++
+								}
 							}
 							if weaponCapDivisor > 10 {
 								targetDamage = targetDamage * 10 / uint32(weaponCapDivisor)
