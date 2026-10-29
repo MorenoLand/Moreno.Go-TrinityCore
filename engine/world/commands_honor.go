@@ -194,16 +194,28 @@ func (s *session) updateHonorFields() {
 
 // rewardHonorPoints mirrors the victim==nullptr, explicit-honor path of
 // Player::RewardHonor (Player.cpp:6865) used by HandleHonorAddCommand:
-// RewardHonor(nullptr, 1, amount). The arena guards are moot: the Go tree has
-// no arena model, so a session can never be in one.
+// RewardHonor(nullptr, 1, amount). The InArena arm is enforced via
+// inArenaNow (quest_reward_grant.go): a null victim in an arena returns
+// false before UpdateHonorFields runs.
 func (t *session) rewardHonorPoints(ctx context.Context, amount uint32) {
 	if t.player == nil {
+		return
+	}
+	if t.inArenaNow() {
 		return
 	}
 	if t.hasAura(honorAuraInactiveID) {
 		return
 	}
 	t.updateHonorFields()
+	// Player::RewardHonor (Player.cpp:6906-6910): honor_f <= 0 with a null
+	// victim returns false after UpdateHonorFields has run — no
+	// SMSG_PVP_CREDIT, no points, no today contribution. A positive amount
+	// that the world rate zeroes still sends the packet (the check runs
+	// before the rate fold), so only the pre-rate amount gates here.
+	if amount == 0 {
+		return
+	}
 	honor := int32(float64(amount) * t.honorRate())
 	t.grantHonor(ctx, honor, 0, 0)
 }
@@ -212,9 +224,15 @@ func (t *session) rewardHonorPoints(ctx context.Context, amount uint32) {
 // (Player.cpp:6865) used by HandleHonorAddKillCommand:
 // GetSession()->GetPlayer()->RewardHonor(target, 1). Only the player-victim
 // branch is ported; creature victims have no command-target bridge (see
-// handleHonorAddKill). The arena guards are moot (no Go arena model).
+// handleHonorAddKill). The InArena arm is enforced via inArenaNow: an arena
+// kill grants nothing (same-BG-team returns false, different-team returns
+// true only to enable on-kill spell procs, which this void tail does not
+// plumb), and the UpdateHonorFields roll does not run either.
 func (s *session) rewardHonorKill(ctx context.Context, victim *session) {
 	if s.player == nil || victim == nil || victim.player == nil || victim == s {
+		return
+	}
+	if s.inArenaNow() {
 		return
 	}
 	if s.hasAura(honorAuraInactiveID) {

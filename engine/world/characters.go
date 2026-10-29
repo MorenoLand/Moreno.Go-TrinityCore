@@ -918,6 +918,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.breathTimer = -1
 	s.fatigueTimer = -1
 	s.player = &state
+	// Player::LoadFromDB (Player.cpp:17883-17884): the honor rollover clock
+	// starts at logout time and UpdateHonorFields runs at load, before any
+	// login packet reads the today/yesterday fields.
+	s.updateHonorFields()
 	s.grantEarnedAchievementTitles()
 	s.restoreBattlegroundLoginQueue(state)
 	s.visiblePlayersMu.Lock()
@@ -4352,6 +4356,10 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 	// Eluna PLAYER_EVENT_ON_SAVE (25): Eluna::OnSave (PlayerHooks.cpp:361-366),
 	// (event, player), void (CallAllFunctions). Player::SaveToDB
 	// (Player.cpp:19528) fires it when !create, before the statements.
+	// Player::SaveToDB (Player.cpp:19522) runs UpdateHonorFields before
+	// that hook, so the rolled today/yesterday values — not the stale
+	// pre-rollover ones — reach the characters row.
+	s.updateHonorFields()
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventSave, s.luaPlayer())
 	s.updatePlayedTime(time.Now())
 	stateCopy := *s.player
