@@ -24183,6 +24183,36 @@ func tickCasterIgnoreResistPct(server *Server, tickCaster *session, mapID, insta
 	return 0
 }
 
+// tickCasterArmorLegs mirrors the attacker arms of
+// Unit::CalcArmorReducedDamage (Unit.cpp:1632-1675) for periodic ticks
+// (SpellAuraEffects.cpp:5180, 5265) and power-burn ticks
+// (CalculateSpellDamageTaken, Unit.cpp:999-1000): a resolved player caster
+// session contributes its 123/270/269 ignore-armor legs plus spellmod and
+// ArP; a wild creature caster contributes its 123/270/269 legs; a fully
+// unresolved caster contributes nothing, like C++'s null-attacker skip (the
+// armor curve then keys on the caller's attLevel, as C++'s attackerLevel
+// fallback). An unknown spell runs the null-spellInfo arm (123 + 269 only),
+// matching the direct-spell unknown-spell convention. A pet caster's
+// spell-mod owner (Object.cpp:2246-2261) is not resolved here — the
+// direct-spell creature paths share that gap.
+func tickCasterArmorLegs(server *Server, mapID, instanceID uint32, aura *activeAura, spell wotlk.Spell, spellKnown bool, armor float64, ctx context.Context) (float64, float64) {
+	if server == nil || aura == nil || armor <= 0 {
+		return armor, 0
+	}
+	if casterSess := server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+		if spellKnown {
+			armor = casterSess.ignoreTargetResistArmor(armor, spell)
+		} else {
+			armor = casterSess.ignoreTargetResistArmorSwing(armor)
+		}
+		return armor, casterSess.getArmorPenPct(ctx, spellWeaponAttackType(spell))
+	}
+	if m := server.findCreatureMotion(mapID, instanceID, aura.CasterGUID); m != nil {
+		return server.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), armor, spell, spellKnown), 0
+	}
+	return armor, 0
+}
+
 // spellBinaryResistApplies mirrors the gate around the binary-spell resist
 // arm of WorldObject::MagicSpellHitResult (Object.cpp:2580-2592): inside the
 // !positive && !ATTR4_IGNORE_RESISTANCES block, a spell carrying at least one
@@ -29948,15 +29978,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// Armor mitigation (SpellAuraEffects.cpp:5177-5182) — physical
 		// schools only; Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000)
-		// skips the armor leg for FIXED_DAMAGE spells, as the resilience
-		// leg below already does. The AOE-avoidance leg (5184-5188) runs
+		// runs even for FIXED_DAMAGE spells: the tick handler gates only on
+		// IsDamageReducedByArmor, while avoidance and resilience below skip
+		// fixed damage. The AOE-avoidance leg (5184-5188) runs
 		// below, between armor and resilience. Hybrid (melee+magic) spells skip
 		// this arm: C++ strips the NORMAL bit at load (SpellMgr.cpp:2830),
 		// so IsDamageReducedByArmor is false for them, and the armor
 		// comparison moves into CalcSpellResistedDamage (Unit.cpp:1764-1770).
 		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
-		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick && (!tickKnown || tickSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown, float64(ts.player.Armor), context.Background())
+			dmg = calcArmorReducedDamage(armor, attLevel, ts.player.Level, dmg, arp)
 		}
 		// AOE avoidance (SpellAuraEffects.cpp:5184-5188): after armor,
 		// before resilience; area-targeting / area-aura / persistent-area
@@ -29994,11 +30026,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-resilience damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridTick {
 				if ts.player.Armor > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+					armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown, float64(ts.player.Armor), context.Background())
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, ts.player.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
@@ -30529,8 +30562,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// is false for them, and the armor comparison moves into
 		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
 		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
-		if !fixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick {
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridTick && (!tickKnown || tickSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
+			armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown, float64(ts.player.Armor), context.Background())
+			dmg = calcArmorReducedDamage(armor, attLevel, ts.player.Level, dmg, arp)
 		}
 		// AOE avoidance (HandlePeriodicHealthLeechAuraTick runs the
 		// damage-tick tail: armor -> avoidance -> resilience): area effects
@@ -30562,11 +30596,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-resilience damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridTick {
 				if ts.player.Armor > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), attLevel, ts.player.Level, dmg)
+					armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, tickSpell, tickKnown, float64(ts.player.Armor), context.Background())
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, ts.player.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
@@ -30926,11 +30961,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
-		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridBurn {
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridBurn && (!burnSpellKnown || burnSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			// Unit.cpp:1693 — the burn tick only runs with a live caster
 			// session (nil burnCaster returns above), so the armor curve
 			// keys on its live level, like C++'s attacker->GetLevel().
-			dmg = calcArmorReducedDamage(float64(ts.player.Armor), burnCaster.player.Level, ts.player.Level, dmg)
+			armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, burnSpell, burnSpellKnown, float64(ts.player.Armor), context.Background())
+			dmg = calcArmorReducedDamage(armor, burnCaster.player.Level, ts.player.Level, dmg, arp)
 		}
 		burnResisted := uint32(0)
 		burnPreResistDmg := dmg
@@ -30942,11 +30978,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-resilience damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridBurn {
 				if ts.player.Armor > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(float64(ts.player.Armor), burnCaster.player.Level, ts.player.Level, dmg)
+					armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, burnSpell, burnSpellKnown, float64(ts.player.Armor), context.Background())
+					hybridArmorReduced = calcArmorReducedDamage(armor, burnCaster.player.Level, ts.player.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
@@ -31815,7 +31852,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// and the armor comparison moves into CalcSpellResistedDamage
 		// (Unit.cpp:1764-1770).
 		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
-		if !fixedDamage && aura.SchoolMask&1 != 0 && !isHybridTick {
+		if aura.SchoolMask&1 != 0 && !isHybridTick && (!tickKnown || tickSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
 				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
@@ -31824,7 +31861,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+				armor, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, tickSpell, tickKnown, armor, ctx)
+				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg, arp)
 			}
 		}
 		// AOE avoidance (SpellAuraEffects.cpp:5184-5188): after armor,
@@ -31870,7 +31908,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-mitigation damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridTick {
 				armor := float64(target.Armor)
@@ -31881,7 +31919,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					armor = 0
 				}
 				if armor > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+					armor, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, tickSpell, tickKnown, armor, ctx)
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
@@ -32534,7 +32573,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// is false for them, and the armor comparison moves into
 		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
 		isHybridTick := tickKnown && tickSpell.SchoolMask&1 != 0 && tickSpell.SchoolMask&0x7E != 0
-		if !fixedDamage && aura.SchoolMask&1 != 0 && !isHybridTick {
+		if aura.SchoolMask&1 != 0 && !isHybridTick && (!tickKnown || tickSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			armor := float64(target.Armor)
 			if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
 				armor = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
@@ -32543,7 +32582,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armor = 0
 			}
 			if armor > 0 {
-				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+				armor, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, tickSpell, tickKnown, armor, ctx)
+				dmg = calcArmorReducedDamage(armor, attLevel, target.Level, dmg, arp)
 			}
 		}
 		// AOE avoidance (HandlePeriodicHealthLeechAuraTick runs the
@@ -32583,7 +32623,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-mitigation damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridTick {
 				armor := float64(target.Armor)
@@ -32594,7 +32634,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					armor = 0
 				}
 				if armor > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg)
+					armor, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, tickSpell, tickKnown, armor, ctx)
+					hybridArmorReduced = calcArmorReducedDamage(armor, attLevel, target.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
@@ -33009,7 +33050,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// is false for them, and the armor comparison moves into
 		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
 		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
-		if !burnFixedDamage && aura.SchoolMask&1 != 0 && !isHybridBurn {
+		if !burnFixedDamage && aura.SchoolMask&1 != 0 && !isHybridBurn && (!burnSpellKnown || burnSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
 			// Unit.cpp:1693 — the burn tick only runs with a live caster
 			// session (nil burnCaster returns above), so the armor curve
 			// keys on its live level, like C++'s attacker->GetLevel().
@@ -33020,7 +33061,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				armorValue = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
 			}
 			if armorValue > 0 {
-				dmg = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg)
+				armorValue, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, burnSpell, burnSpellKnown, armorValue, ctx)
+				dmg = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg, arp)
 			}
 		}
 		burnResisted := uint32(0)
@@ -33037,7 +33079,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
 			// armor figure is evaluated on the post-mitigation damage, like
 			// the C++ leg inside DealDamage; it uses the tick pipeline's
-			// armor model (the simplified calcArmorReducedDamage form).
+			// armor model (the caster's ignore-armor legs land first, tickCasterArmorLegs).
 			hybridArmorReduced := uint32(0)
 			if isHybridBurn {
 				armorValue := float64(target.Armor)
@@ -33045,7 +33087,8 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 					armorValue = s.server.liveCreatureArmor(key, tm, float64(target.Armor))
 				}
 				if armorValue > 0 {
-					hybridArmorReduced = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg)
+					armorValue, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, burnSpell, burnSpellKnown, armorValue, ctx)
+					hybridArmorReduced = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}

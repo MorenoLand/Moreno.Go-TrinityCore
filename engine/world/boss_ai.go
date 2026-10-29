@@ -6423,7 +6423,9 @@ func (s *Server) creatureEffectEnvironmentalDamage(ctx context.Context, m *creat
 			isHybrid := spell.SchoolMask&1 != 0 && spell.SchoolMask&0x7E != 0
 			hybridArmorReduced := uint32(0)
 			if isHybrid {
-				hybridArmorReduced = calcArmorReducedDamage(float64(victimArmor), uint8(m.Level), uint8(level), damage, 0)
+				armor := s.liveCreatureArmor(key, motion, float64(victimArmor))
+				armor = s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), armor, spell, true)
+				hybridArmorReduced = calcArmorReducedDamage(armor, uint8(m.Level), uint8(level), damage)
 			}
 			resisted, _ = calcMagicSpellResistance(damage, schoolMask, resistances, uint8(m.Level), uint8(level), true, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, uint32(schoolMask)), spellResistInput{
 				ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
