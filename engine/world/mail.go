@@ -1011,6 +1011,12 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 		}
 		s.player.Money = newMoney
 		s.questMoneyChanged(ctx)
+		// Reference: Player::SetMoney (Player.cpp:22842-22846) fires
+		// ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED on every
+		// money gain; the loot gold path (loot.go addLootMoney) fires
+		// the same criteria, but mail take-money never did, so a
+		// record mail payout never advanced the highest-gold tracker.
+		s.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, s.player.Money)
 		s.sendPlayerMoneyUpdate()
 		s.sendPlayerUpdate()
 	}
@@ -1155,6 +1161,12 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	}
 	if codPayment {
 		s.player.Money = newMoney
+		// Reference: Player::ModifyMoney(-COD) -> SetMoney -> MoneyChanged
+		// (Player.cpp:16859-16887) rescans required-money quests on every
+		// money change; the COD charge dropped the balance without the
+		// scan, so a complete required-money quest never flipped back
+		// to incomplete when the payment broke its threshold.
+		s.questMoneyChanged(ctx)
 		if senderExists {
 			s.sendMailNotify(uint64(senderGUID))
 		}
@@ -1195,8 +1207,18 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 		// Reference: MailHandler.cpp:329-349 — delete shouldn't show up for
 		// COD mails; refuse with MAIL_ERR_INTERNAL_ERROR instead of deleting.
 		var cod int64
-		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(cod, 0) FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&cod); err == nil && cod > 0 {
+		mailErr := cdb.QueryRowContext(ctx, "SELECT COALESCE(cod, 0) FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&cod)
+		if mailErr == nil && cod > 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailDeleted, mailErrInternalError, 0, 0, 0), true)
+			return true
+		}
+		if mailErr != nil {
+			// Reference: MailHandler.cpp:329-349 — GetMail is
+			// player-scoped, so a foreign or missing mail id answers
+			// MAIL_OK with nothing deleted. The unscoped deletes below
+			// used to wipe that mail's attached items and mail_items
+			// rows even though its mail row survived.
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailDeleted, mailOk, 0, 0, 0), true)
 			return true
 		}
 		// Reference: Player::_SaveMail MAIL_STATE_DELETED arm (Player.cpp:20090+):
