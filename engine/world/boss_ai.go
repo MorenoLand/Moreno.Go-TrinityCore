@@ -6960,6 +6960,27 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			durationMs = uint32(dur)
 		}
 	}
+	// Aura::CalcMaxDuration (SpellAuras.cpp:871-886) folds
+	// SPELLMOD_DURATION through the caster's spell-mod owner before any
+	// target-side leg: spellModOwnerSession mirrors GetSpellModOwner
+	// (Object.cpp:2246-2261), so a pet/totem caster's owner player folds
+	// here and a wild caster stands on the raw DBC duration, matching
+	// the persistent-area-aura fold above. The owner-session branch
+	// below then runs the DR + ModSpellDuration target legs inside
+	// applyAuraToTarget on this pre-folded base.
+	if durationMs > 0 {
+		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+			if modded := modOwner.applySpellMod(spell, spellModDuration, int32(durationMs)); modded > 0 {
+				durationMs = uint32(modded)
+			} else {
+				// A non-positive CalcMaxDuration expires the aura
+				// immediately in C++; the downstream paths arm no
+				// expiry timer for a 0 duration, so skip the apply
+				// rather than leaving a permanent aura behind.
+				return
+			}
+		}
+	}
 	for _, guid := range hitTargets {
 		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
 			continue

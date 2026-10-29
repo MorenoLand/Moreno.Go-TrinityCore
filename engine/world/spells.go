@@ -26502,16 +26502,36 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 		}
 	}
 	// Spell::DoSpellEffectHit (Spell.cpp:2888-2891): haste compresses the
-	// applied aura's duration — ModSpellDurationTime for auras of channeled
-	// spells, and the UNIT_MOD_CAST_SPEED multiply for auras of spells
-	// carrying SPELL_ATTR5_HASTE_AFFECT_DURATION or affected by a
+	// applied aura's duration through two distinct arms. A channeled
+	// spell runs WorldObject::ModSpellDurationTime (Object.cpp:2475-2500),
+	// which returns early for channeled spells WITHOUT
+	// SPELL_ATTR5_HASTE_AFFECT_DURATION, then folds SPELLMOD_CASTING_TIME
+	// and multiplies by UNIT_MOD_CAST_SPEED gated on
+	// !(ATTR0_ABILITY || ATTR0_TRADESPELL || ATTR3_NO_DONE_BONUS) with a
+	// SpellFamilyName for player casters (the REQ_AMMO ranged-attack-speed
+	// arm has no Go model, as in foldPeriodicPeriod). A non-channeled
+	// spell takes the else-if arm instead: a raw UNIT_MOD_CAST_SPEED
+	// multiply, ungated and without the spellmod leg, when it carries
+	// SPELL_ATTR5_HASTE_AFFECT_DURATION or is affected by a
 	// SPELL_AURA_PERIODIC_HASTE (316) aura on the caster
-	// (hasPeriodicHasteAura). The compression math (multiply by the full
-	// UNIT_MOD_CAST_SPEED factor, unitModCastSpeedFactor) is the same
-	// ModSpellDurationTime fold startChannel uses.
-	if durationMs > 0 && (isChanneledSpell(spell) || spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell)) {
-		if f := s.unitModCastSpeedFactor(); f != 1.0 {
-			durationMs = uint32(float64(durationMs) * f)
+	// (hasPeriodicHasteAura).
+	if durationMs > 0 {
+		if isChanneledSpell(spell) {
+			if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 {
+				if modded := s.applySpellMod(spell, spellModCastingTime, int32(durationMs)); modded > 0 {
+					durationMs = uint32(modded)
+				}
+				if spell.Attributes&spellAttr0Ability == 0 && spell.Attributes&spellAttr0Tradespell == 0 &&
+					spell.AttributesEx3&spellAttr3NoDoneBonus == 0 && spell.SpellFamilyName != 0 {
+					if f := s.unitModCastSpeedFactor(); f != 1.0 {
+						durationMs = uint32(float64(durationMs) * f)
+					}
+				}
+			}
+		} else if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(spell) {
+			if f := s.unitModCastSpeedFactor(); f != 1.0 {
+				durationMs = uint32(float64(durationMs) * f)
+			}
 		}
 	}
 	if durationMs == 0 && eff.AuraPeriod > 0 {
@@ -35987,11 +36007,16 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		}
 	}
 
-	// In WotLK 3.3.5, channeled spells scale with spell haste: duration and tick interval are compressed
-	// Mirrors Unit::ModSpellDurationTime via Spell::handle_immediate (Spell.cpp:3580-3585):
-	// the modded duration compresses by (1 + haste), matching the C++ order (mod first, then haste).
+	// WorldObject::ModSpellDurationTime (Object.cpp:2475-2480) returns early
+	// for channeled spells WITHOUT SPELL_ATTR5_HASTE_AFFECT_DURATION, so
+	// only ATTR5 channels compress: Spell::handle_immediate (Spell.cpp:3580-3585)
+	// runs the same function on the channel duration, and
+	// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:610) runs it on
+	// the tick amplitude. Duration and period compress together here so
+	// the tick count is preserved, and the modded duration compresses by
+	// (1 + haste), matching the C++ order (mod first, then haste).
 	hastePct := s.getSpellHastePct()
-	if hastePct > 0 {
+	if spell.AttributesEx5&spellAttr5HasteAffectDuration != 0 && hastePct > 0 {
 		// The infinite arm keeps its -1 duration; only the tick period
 		// compresses (C++ runs ModSpellDurationTime on duration > 0 only).
 		if !infinite {
