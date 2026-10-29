@@ -185,24 +185,29 @@ func (s *session) calculateSpellCastTime(spell wotlk.Spell) uint32 {
 		// unless another >=1000 effect remains); Go reads the live aura set
 		// on every cast, so no cached flag can go stale.
 		if s.hasInstantCastAura() {
-			return 0
-		}
-		// AuraEffect::HandleModCombatSpeedPct's cast-time arm
-		// (SpellAuraEffects.cpp:3962/3967) via Unit::ApplyCastTimePercentMod
-		// (Unit.cpp:10867): live 193/252 effects multiply UNIT_MOD_CAST_SPEED
-		// (combatSlowCastFactor), composing with the rating-haste divisor.
-		if slowFactor := s.combatSlowCastFactor(); slowFactor != 1 {
-			castTime = int32(float64(castTime) * slowFactor)
-		}
-		// AuraEffect::HandleModCastingSpeed's sub-1000 arm
-		// (SpellAuraEffects.cpp:3929-3936): live 65/216 effects multiply
-		// UNIT_MOD_CAST_SPEED (castingSpeedCastFactor), composing with the
-		// combat-slow and rating-haste legs.
-		if castFactor := s.castingSpeedCastFactor(); castFactor != 1 {
-			castTime = int32(float64(castTime) * castFactor)
-		}
-		if hastePct := s.getSpellHastePct(); hastePct > 0 {
-			castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
+			// No early return: SpellInfo::CalcCastTime
+			// (SpellInfo.cpp:3102) adds the REQ_AMMO +500 AFTER
+			// ModSpellCastTime, so an instant-zeroed ranged cast still
+			// costs 500ms; the +500 arm below runs for it.
+			castTime = 0
+		} else {
+			// AuraEffect::HandleModCombatSpeedPct's cast-time arm
+			// (SpellAuraEffects.cpp:3962/3967) via Unit::ApplyCastTimePercentMod
+			// (Unit.cpp:10867): live 193/252 effects multiply UNIT_MOD_CAST_SPEED
+			// (combatSlowCastFactor), composing with the rating-haste divisor.
+			if slowFactor := s.combatSlowCastFactor(); slowFactor != 1 {
+				castTime = int32(float64(castTime) * slowFactor)
+			}
+			// AuraEffect::HandleModCastingSpeed's sub-1000 arm
+			// (SpellAuraEffects.cpp:3929-3936): live 65/216 effects multiply
+			// UNIT_MOD_CAST_SPEED (castingSpeedCastFactor), composing with the
+			// combat-slow and rating-haste legs.
+			if castFactor := s.castingSpeedCastFactor(); castFactor != 1 {
+				castTime = int32(float64(castTime) * castFactor)
+			}
+			if hastePct := s.getSpellHastePct(); hastePct > 0 {
+				castTime = int32(float64(castTime) / (1.0 + hastePct/100.0))
+			}
 		}
 	case reqAmmo:
 		// Ranged-attack-speed branch (Object.cpp:2470) — no Go ranged-haste infra, no-op.

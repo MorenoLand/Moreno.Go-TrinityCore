@@ -265,6 +265,96 @@ func (s *Server) creatureCastingSpeedCastFactor(key creatureAuraKey) float64 {
 	return factor
 }
 
+// creatureCombatSlowLiveAmounts mirrors the exclusive gate of
+// AuraEffect::HandleModCombatSpeedPct (SpellAuraEffects.cpp:3950-3971)
+// for creature auras — the creature twin of combatSlowLiveAmounts
+// (aura_haste.go:67): SPELL_AURA_MELEE_SLOW (193) and
+// SPELL_AURA_MOD_SPEED_SLOW_ALL (252) both feed
+// Unit::ApplyCastTimePercentMod, and the rival scan is type-193-only, so
+// a 193 effect is gated by other 193 effects in a shared exclusive group
+// while 252 effects never gate each other (they always stack). An effect
+// is dormant when a rival's |amount| >= its own (ties lose, C++ :3957).
+func (s *Server) creatureCombatSlowLiveAmounts(key creatureAuraKey) []int32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return nil
+	}
+	var cands []statCandidate
+	s.auraMu.Lock()
+	order := 0
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			order++
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			order++
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraMeleeSlow && effect.Aura != spellAuraModSpeedSlowAll {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			cands = append(cands, statCandidate{
+				order:       order,
+				spellID:     aura.SpellID,
+				effectIndex: index,
+				amount:      aura.Amounts[index],
+				firstRank:   s.spellFirstRank(aura.SpellID),
+				auraType:    effect.Aura,
+			})
+		}
+		order++
+	}
+	s.auraMu.Unlock()
+	if len(cands) == 0 {
+		return nil
+	}
+	cache := s.petAuraStackGroups()
+	var live []int32
+	for _, c := range cands {
+		rivalMax := int32(0)
+		for _, r := range cands {
+			if r.auraType != spellAuraMeleeSlow {
+				continue
+			}
+			if r.spellID == c.spellID && r.effectIndex == c.effectIndex && r.order == c.order {
+				continue
+			}
+			if !sharesExclusiveSameEffectGroup(c.firstRank, r.firstRank, cache) {
+				continue
+			}
+			if absAuraAmount(r.amount) > absAuraAmount(rivalMax) {
+				rivalMax = r.amount
+			}
+		}
+		if absAuraAmount(rivalMax) >= absAuraAmount(c.amount) {
+			continue
+		}
+		live = append(live, c.amount)
+	}
+	return live
+}
+
+// creatureCombatSlowCastFactor mirrors the cast-time arm of
+// AuraEffect::HandleModCombatSpeedPct (SpellAuraEffects.cpp:3962/3967)
+// via Unit::ApplyCastTimePercentMod (Unit.cpp:10867) for creature auras —
+// the creature twin of combatSlowCastFactor (aura_haste.go:142).
+func (s *Server) creatureCombatSlowCastFactor(key creatureAuraKey) float64 {
+	factor := 1.0
+	for _, a := range s.creatureCombatSlowLiveAmounts(key) {
+		if a > 0 {
+			factor /= 1.0 + float64(a)/100.0
+		} else {
+			factor *= 1.0 + float64(-a)/100.0
+		}
+	}
+	return factor
+}
+
 // creatureAuraTypeAmountsByMiscMask mirrors the per-effect iteration of
 // Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4977) for creature auras:
 // the live amount of each active effect of auraType whose DBC MiscValue

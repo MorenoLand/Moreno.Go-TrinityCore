@@ -1448,12 +1448,12 @@ func (s *Server) aiSpellCastTimeMs(spell wotlk.Spell) uint32 {
 // (CombatAI.cpp:163-165) reads the current spell's m_casttime, which
 // Spell::prepare filled via SpellInfo::CalcCastTime (SpellInfo.cpp:3091)
 // folded through WorldObject::ModSpellCastTime (Object.cpp:2448-2476).
-// Beyond the DBC base: a creature under an instant-cast aura (>=1000
-// amount) casts at 0; the SPELL_ATTR0_REQ_AMMO non-autorepeat +500 arm
-// (CalcCastTime:3102) applies; the SPELL_ATTR0_ABILITY / TRADESPELL /
-// ATTR3_NO_DONE_BONUS arms skip the cast-speed factor; otherwise the
-// creature's UNIT_MOD_CAST_SPEED (cast-speed aura factor,
-// creatureCastingSpeedCastFactor) multiplies. Go's npcbot spell-cast-time
+// Beyond the DBC base: inside the first branch (not ABILITY / TRADESPELL /
+// NO_DONE_BONUS) an instant-cast aura (>=1000 amount) zeroes the cast,
+// otherwise the creature's UNIT_MOD_CAST_SPEED multiplies — the 65/216
+// cast-speed factor composed with the 193/252 combat-slow factor; the
+// SPELL_ATTR0_REQ_AMMO non-autorepeat +500 arm (CalcCastTime:3102) runs
+// after that multiply, so it also applies to an instant-zeroed cast. Go's npcbot spell-cast-time
 // mods (IsNPCBot arm) have no twin, and player SPELLMOD_CASTING_TIME is
 // null for creature casters (GetSpellModOwner), so both stay unmodeled.
 func (s *Server) creatureAISpellCastTimeMs(key creatureAuraKey, spell wotlk.Spell) uint32 {
@@ -1465,14 +1465,25 @@ func (s *Server) creatureAISpellCastTimeMs(key creatureAuraKey, spell wotlk.Spel
 		return 0
 	}
 	castTime := value
-	if s.creatureCanInstantCast(key) {
-		return 0
+	if spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 {
+		// WorldObject::ModSpellCastTime (Object.cpp:2468-2471): the
+		// instant-cast flag zeroes the cast time only inside this
+		// first branch; an ability/tradespell/no-done-bonus spell keeps
+		// its base here (the ranged-speed/cooking else-if arms have no
+		// Go creature twin). UNIT_MOD_CAST_SPEED composes the 65/216
+		// cast-speed factor with the 193/252 combat-slow factor in a
+		// single multiply (Unit::ApplyCastTimePercentMod, Unit.cpp:10867).
+		if s.creatureCanInstantCast(key) {
+			castTime = 0
+		} else {
+			castTime = int32(float64(castTime) * s.creatureCastingSpeedCastFactor(key) * s.creatureCombatSlowCastFactor(key))
+		}
 	}
+	// SpellInfo::CalcCastTime (SpellInfo.cpp:3102): the +500 REQ_AMMO
+	// arm runs AFTER ModSpellCastTime, so the speed factor never scales
+	// it — and it still applies to an instant-zeroed cast.
 	if spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
 		castTime += 500
-	}
-	if spell.Attributes&(spellAttr0Ability|spellAttr0Tradespell) == 0 && spell.AttributesEx3&spellAttr3NoDoneBonus == 0 {
-		castTime = int32(float64(castTime) * s.creatureCastingSpeedCastFactor(key))
 	}
 	if castTime < 0 {
 		return 0
