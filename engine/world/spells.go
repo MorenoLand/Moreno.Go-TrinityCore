@@ -11506,7 +11506,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// enemy lists never contain the caster (IsValidAttackTarget
 				// rejects self), so the skip there is vacuous except for the
 				// reflected case, which keeps its own arm.
-				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell
+				// Self-cast-only damage (TARGET_UNIT_CASTER, Spell.cpp:1507-1510:
+				// the caster selection skips validity checks, SpellHitResult
+				// returns NONE for self at Object.cpp:2631, EffectSchoolDMG
+				// has no self gate, and DoDamageAndTriggers deals the damage
+				// to the caster): the retained playerGUID skip is wrong here
+				// too, so a self-cast damage spell damages its caster.
+				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell)
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -11564,6 +11570,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if guid != 0 && (guid != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							aoeCapDivisor++
 						}
+					}
+					// Reflected-target divisor: a clean reflect keeps its
+					// TargetInfo in m_UniqueTargetInfo (Spell.cpp:7761 counts
+					// the whole list), but Go removed the reflector from
+					// both lists and excluded its REFLECT+NONE entry from
+					// the miss sets, so trips count here: the switched
+					// partition counts its own ally trips, the unswitched
+					// count adds enemy trips plus ally trips (same
+					// whole-list logic as the friendly-hits extension
+					// below; trips are disjoint from both lists and miss
+					// sets by construction, so no dedup is needed).
+					if dmgSwitched {
+						aoeCapDivisor += len(reflectedAllyTrips)
+					} else {
+						aoeCapDivisor += len(reflectedAoETrips) + len(reflectedAllyTrips)
 					}
 					// Unswitched mixed-spell divisor: C++ targetAmount is the
 					// whole m_UniqueTargetInfo (every effect's targets, Spell.cpp:
@@ -11963,6 +11984,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							aoeReflectedDamage = uint32(float64(aoeReflectedDamage) * avoid)
 						}
 					}
+					// Same AoE cap as the main loop (Spell.cpp:7761): the
+					// reflected TargetInfo's launch damage is capped by
+					// the whole-list targetAmount, trips included.
+					if aoeCapDivisor > 0 && aoeReflectedDamage > 0 {
+						aoeReflectedDamage = aoeReflectedDamage * 10 / uint32(aoeCapDivisor)
+					}
 					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true, false)
 				}
 				// Friendly-area damage only: a reflected ally's _spellHitTarget
@@ -11981,6 +12008,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							if avoid := s.aoeDamageAvoidanceMultiplier(effCtx, s.playerGUID, aoeSchoolMask); avoid != 1 {
 								allyReflectedDamage = uint32(float64(allyReflectedDamage) * avoid)
 							}
+						}
+						// Same AoE cap as the main loop (Spell.cpp:7761).
+						if aoeCapDivisor > 0 && allyReflectedDamage > 0 {
+							allyReflectedDamage = allyReflectedDamage * 10 / uint32(aoeCapDivisor)
 						}
 						s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, allyReflectedDamage, effectIndex, false, true, false)
 					}
