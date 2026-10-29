@@ -505,32 +505,23 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 	// (SpellInfo.cpp:2594-2724, mechanicImmuneMask147) — the raw misc bits
 	// are NOT a mechanic mask in C++, and the ATTR5 usable-while bits never
 	// enter these rows (they feed _allowedMechanicMask only), so the eval
-	// uses mechanicImmuneMaskGranted, not spellAllowedMechanicMask.
+	// uses mechanicImmuneMaskGranted, not spellAllowedMechanicMask. The
+	// scan is per mask-covered effect (auraMechanicImmuneMask), not the
+	// stored type: C++ writes one IMMUNITY_MECHANIC row per 77/147 effect
+	// (SpellInfo.cpp:2883-2891), so a mechanic effect that is not the
+	// record's stored type still grants at spell level.
 	if spell.Mechanic != 0 && s.server != nil && s.server.Data != nil {
 		mechanicImmune := false
 		for _, aura := range s.activeAuras {
 			if aura == nil {
 				continue
 			}
-			switch aura.AuraType {
-			case spellAuraMechanicImmunity:
-				auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
-				if err != nil || !found {
-					continue
-				}
-				if mechanicImmuneMaskGranted(auraSpell)&(1<<spell.Mechanic) != 0 {
-					mechanicImmune = true
-				}
-			case spellAuraMechanicImmunityMask:
-				auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
-				if err != nil || !found {
-					continue
-				}
-				if mechanicImmuneMask147(auraSpell)&(1<<spell.Mechanic) != 0 {
-					mechanicImmune = true
-				}
+			auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
 			}
-			if mechanicImmune {
+			if auraMechanicImmuneMask(aura, auraSpell, found)&(1<<spell.Mechanic) != 0 {
+				mechanicImmune = true
 				break
 			}
 		}
@@ -562,37 +553,14 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 		return true
 	}
 
-	// Unit.cpp:7900-7922 — school fold over the IMMUNITY_SCHOOL list
-	// (aura-39 writers, SpellInfo.cpp:2785): an entry counts only when its
-	// mask overlaps the spell's, the positivity/friendly gates pass, and the
-	// spell cannot pierce the immune aura.
-	if schoolMask := spell.SchoolMask; schoolMask != 0 && s.server != nil && s.server.Data != nil {
-		var schoolImmunityMask uint32
-		for _, a := range snap {
-			if a.auraType != spellAuraSchoolImmunity {
-				continue
-			}
-			mask := uint32(a.misc)
-			if mask&schoolMask == 0 {
-				continue
-			}
-			immuneSpell, found, err := s.server.Data.Spell(a.spellID)
-			if err != nil {
-				continue
-			}
-			// (immuneSpellInfo && !IsPositive()) || !IsPositive() || !caster || !IsFriendlyTo(caster)
-			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
-				// C++ CanPierceImmuneAura(nullptr) is false — an
-				// unresolvable immune aura cannot be pierced.
-				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
-					schoolImmunityMask |= mask
-				}
-			}
-		}
-		if schoolImmunityMask&schoolMask == schoolMask {
-			return true
-		}
-	}
+	// No second school fold here: the activeAuras fold above is the same
+	// Unit.cpp:7900-7922 read with identical positivity/friendly/pierce
+	// gates and full-coverage test, and its per-aura misc is a superset of
+	// any snapshot entry's stored misc (stored leg plus mask-covered DBC
+	// 39 effects, and it still counts the stored leg when the granting
+	// spell is unresolvable, where the snapshot fold skipped the entry) —
+	// so a snapshot fold could only fire where the earlier fold already
+	// returned true. C++ itself reads the school list once, at the end.
 
 	return false
 }
@@ -713,6 +681,28 @@ func auraHasEffectType(aura *activeAura, spell wotlk.Spell, spellFound bool, aur
 		}
 	}
 	return false
+}
+
+// auraMechanicImmuneMask is the mask-gated mechanic-immunity fold C++
+// whole-spell and per-effect evals read from m_spellImmune[IMMUNITY_MECHANIC]
+// (SpellInfo.cpp:2883-2891 writes one row per 77/147 effect): the union of
+// mechanicImmuneMaskForEffect over the record's mask-covered effects. A
+// stored-type gate would miss a mechanic effect that is not the record's
+// stored type; the stored effect itself is always mask-covered (live apply
+// accumulates the mask, self-apply covers every aura effect), so the gated
+// scan is exact on those paths and narrower — correctly — on single-effect
+// records (dynobj, steal, pet-owner), whose other effects are not live.
+func auraMechanicImmuneMask(aura *activeAura, spell wotlk.Spell, spellFound bool) uint32 {
+	if aura == nil || !spellFound {
+		return 0
+	}
+	var mask uint32
+	for index, eff := range spell.Effects {
+		if aura.EffectMask&(1<<uint(index)) != 0 {
+			mask |= mechanicImmuneMaskForEffect(spell, eff)
+		}
+	}
+	return mask
 }
 
 // hasLiveAuraEffectType reports whether any live active aura on the player
@@ -1128,7 +1118,7 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 		switch aura.AuraType {
 		case spellAuraEffectImmunity, spellAuraMechanicImmunity,
 			spellAuraMechanicImmunityMask, spellAuraStateImmunity,
-			spellAuraModImmuneAuraApplySchool, spellAuraSchoolImmunity:
+			spellAuraModImmuneAuraApplySchool:
 			auras = append(auras, immuneAura{aura.AuraType, aura.MiscValue, aura.SpellID})
 		}
 		// A record keeps only its first effect's stored type/misc, so a
@@ -1930,22 +1920,21 @@ func creatureLiveMechanicImmunityMasks(srv *Server, key creatureAuraKey) (uint32
 		if aura == nil {
 			continue
 		}
-		switch aura.AuraType {
-		case spellAuraMechanicImmunity:
-			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
-			if err != nil || !found {
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		// Mask-gated, not stored-type: a 77/147 effect that is not the
+		// record's stored type still writes its IMMUNITY_MECHANIC row in
+		// C++ (SpellInfo.cpp:2883-2891).
+		mask |= auraMechanicImmuneMask(aura, auraSpell, found)
+		for index, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 || eff.Aura != spellAuraMechanicImmunityMask {
 				continue
 			}
-			mask |= mechanicImmuneMaskGranted(auraSpell)
-		case spellAuraMechanicImmunityMask:
-			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
-			if err != nil || !found {
-				continue
-			}
-			mask |= mechanicImmuneMask147(auraSpell)
-			_, spellEffects := mechanicMask147SpellGrants(auraSpell)
-			for _, eff := range spellEffects {
-				effectGrants[eff] = true
+			_, spellEffects := mechanicMask147Grants(auraSpell.ID, eff)
+			for _, se := range spellEffects {
+				effectGrants[se] = true
 			}
 		}
 	}
