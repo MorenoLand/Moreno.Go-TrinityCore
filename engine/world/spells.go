@@ -7367,8 +7367,8 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 	}
 	// finishSpellCast serves player-initiated casts (m_triggeredByAuraSpell
 	// is null), so the non-triggered DR group applies
-	// (getDiminishingReturnsGroup(..., false), SpellInfo.cpp:2242).
-	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic, false)
+	// (getDiminishingReturnsGroup(spell, false), SpellInfo.cpp:2242).
+	group := getDiminishingReturnsGroup(spell, false)
 	if group == DiminishingNone {
 		return false
 	}
@@ -7398,7 +7398,7 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		if err != nil || !found {
 			continue
 		}
-		if getDiminishingReturnsGroup(aura.SpellID, auraSpell.Mechanic, false) != group {
+		if getDiminishingReturnsGroup(auraSpell, false) != group {
 			continue
 		}
 		// Aura::GetDuration is the live remaining duration

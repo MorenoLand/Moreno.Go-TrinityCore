@@ -57,16 +57,35 @@ type diminishingReturn struct {
 	hitTime  time.Time
 }
 
-// getDiminishingReturnsGroup resolves the diminishing returns group for a spell ID and mechanic.
-// Mirrors TrinityCore SpellInfo::diminishingGroupCompute (SpellInfo.cpp:2276-2433).
-// The triggered flag selects the aura-proc variant (SpellInfo.cpp:2424/2428):
-// mechanic-STUN resolves to DIMINISHING_STUN (random proc stuns) and
-// mechanic-ROOT to DIMINISHING_ROOT (random proc roots) when the cast was
-// triggered by an aura (Spell::m_triggeredByAuraSpell != null,
-// Spell.cpp:2798); the explicit spell-ID overrides above ignore the flag.
-func getDiminishingReturnsGroup(spellID, mechanic uint32, triggered bool) DiminishingGroup {
+// getDiminishingReturnsGroup resolves the diminishing returns group for a spell.
+// Mirrors TrinityCore SpellInfo::diminishingGroupCompute (SpellInfo.cpp:2242-2433),
+// in implemented order: IsPositive, any SPELL_AURA_MOD_TAUNT effect, the
+// spell-ID table, the family switch, then the all-effects mechanic mask.
+// (C++ orders family before mechanic and has no ID table; the table runs
+// first here so listed ranks keep their current group where a family arm
+// would resolve differently.) The triggered flag selects the aura-proc
+// variant (SpellInfo.cpp:2424/2428): mechanic-STUN resolves to
+// DIMINISHING_STUN (random proc stuns) and mechanic-ROOT to DIMINISHING_ROOT
+// (random proc roots) when the cast was triggered by an aura
+// (Spell::m_triggeredByAuraSpell != null, Spell.cpp:2798).
+func getDiminishingReturnsGroup(spell wotlk.Spell, triggered bool) DiminishingGroup {
+	// SpellInfo::IsPositive (SpellInfo.cpp:2244): positive spells never
+	// diminish. The apply path gates per effect; the bounce path relies
+	// on this arm (spellIsPositive mirrors the CU_NEGATIVE mask).
+	if spellIsPositive(spell) {
+		return DiminishingNone
+	}
+	// Any SPELL_AURA_MOD_TAUNT effect puts the spell in the taunt group
+	// (SpellInfo.cpp:2248-2252), ahead of the family switch: Mocking Blow,
+	// Challenging Shout and Challenging Roar carry the effect but no
+	// taunt spell ID, so the ID table below cannot reach them.
+	for _, eff := range spell.Effects {
+		if eff.Effect != 0 && eff.Aura == spellAuraModTaunt {
+			return DiminishingTaunt
+		}
+	}
 	// Specific spell overrides matching TrinityCore
-	switch spellID {
+	switch spell.ID {
 	// Cyclone
 	case 33786:
 		return DiminishingCyclone
@@ -167,40 +186,208 @@ func getDiminishingReturnsGroup(spellID, mechanic uint32, triggered bool) Dimini
 		return DiminishingLimitOnly
 	}
 
-	// Mechanic based resolution fallback (SpellInfo.cpp:2406-2433)
-	switch mechanic {
-	case 1: // MECHANIC_CHARM
-		return DiminishingMindControl
-	case 2, 14, 17, 20, 30: // MECHANIC_DISORIENTED, KNOCKOUT, POLYMORPH, SHACKLE, SAPPED
-		return DiminishingDisorient
-	case 3: // MECHANIC_DISARM
-		return DiminishingDisarm
-	case 5: // MECHANIC_FEAR
-		return DiminishingFear
-	case 7, 13: // MECHANIC_ROOT, FREEZE
-		// SpellInfo.cpp:2428 — random proc roots (Frostbite, Shattered
-		// Barrier) track DIMINISHING_ROOT when triggered by an aura.
-		if triggered {
+	// Family switch (SpellInfo.cpp:2255-2404), in C++ arm order within
+	// each family. These arms run after the ID table so listed ranks
+	// keep their current group; they matter for unlisted ranks and for
+	// the LIMITONLY debuffs (Faerie Fire, Hunter's Mark, Curse of
+	// Elements, Mark of Blood), which carry no CC mechanic and previously
+	// resolved to NONE, losing their PvP duration cap entirely.
+	switch spell.SpellFamilyName {
+	case spellFamilyGeneric:
+		// Pet charge effects (Infernal Awakening, Demon Charge)
+		if spell.SpellVisual[0] == 2816 && spell.SpellIconID == 15 {
+			return DiminishingControlledStun
+		}
+		// Frost Tomb, Black Plague, Screams of the Dead, Crystallize,
+		// ToC Icehowl Arctic Breath: explicitly no diminishing.
+		switch spell.ID {
+		case 48400, 64155, 51750, 48179:
+			return DiminishingNone
+		}
+		if spell.SpellVisual[0] == 14153 {
+			return DiminishingNone
+		}
+	case 1: // SPELLFAMILY_UNK1: event spells never diminish.
+		return DiminishingNone
+	case spellFamilyMage:
+		// Frostbite
+		if spell.SpellFamilyFlags[1]&0x80000000 != 0 {
 			return DiminishingRoot
 		}
-		return DiminishingControlledRoot
-	case 9: // MECHANIC_SILENCE
+		// Shattered Barrier
+		if spell.SpellVisual[0] == 12297 {
+			return DiminishingRoot
+		}
+		// Deep Freeze
+		if spell.SpellIconID == 2939 && spell.SpellVisual[0] == 9963 {
+			return DiminishingControlledStun
+		}
+		// Frost Nova / Freeze (Water Elemental)
+		if spell.SpellIconID == 193 {
+			return DiminishingControlledRoot
+		}
+		// Dragon's Breath
+		if spell.SpellFamilyFlags[0]&0x800000 != 0 {
+			return DiminishingDragonsBreath
+		}
+	case spellFamilyWarrior:
+		// Hamstring - limit duration to 10s in PvP
+		if spell.SpellFamilyFlags[0]&0x2 != 0 {
+			return DiminishingLimitOnly
+		}
+		// Charge Stun (own diminishing)
+		if spell.SpellFamilyFlags[0]&0x01000000 != 0 {
+			return DiminishingCharge
+		}
+	case spellFamilyWarlock:
+		// Curses/etc
+		if spell.SpellFamilyFlags[0]&0x80000000 != 0 || spell.SpellFamilyFlags[1]&0x200 != 0 {
+			return DiminishingLimitOnly
+		}
+		// Seduction
+		if spell.SpellFamilyFlags[1]&0x10000000 != 0 {
+			return DiminishingFear
+		}
+	case spellFamilyDruid:
+		// Pounce
+		if spell.SpellFamilyFlags[0]&0x20000 != 0 {
+			return DiminishingOpeningStun
+		}
+		// Cyclone
+		if spell.SpellFamilyFlags[1]&0x20 != 0 {
+			return DiminishingCyclone
+		}
+		// Entangling Roots / Nature's Grasp
+		if spell.SpellFamilyFlags[0]&0x00000200 != 0 {
+			return DiminishingControlledRoot
+		}
+		// Faerie Fire
+		if spell.SpellFamilyFlags[0]&0x400 != 0 {
+			return DiminishingLimitOnly
+		}
+	case spellFamilyRogue:
+		// Gouge
+		if spell.SpellFamilyFlags[0]&0x8 != 0 {
+			return DiminishingDisorient
+		}
+		// Blind
+		if spell.SpellFamilyFlags[0]&0x1000000 != 0 {
+			return DiminishingFear
+		}
+		// Cheap Shot
+		if spell.SpellFamilyFlags[0]&0x400 != 0 {
+			return DiminishingOpeningStun
+		}
+		// Crippling poison - Limit to 10 seconds in PvP (No SpellFamilyFlags)
+		if spell.SpellIconID == 163 {
+			return DiminishingLimitOnly
+		}
+	case spellFamilyHunter:
+		// Hunter's Mark
+		if spell.SpellFamilyFlags[0]&0x400 != 0 && spell.SpellIconID == 538 {
+			return DiminishingLimitOnly
+		}
+		// Scatter Shot (own diminishing)
+		if spell.SpellFamilyFlags[0]&0x40000 != 0 && spell.SpellIconID == 132 {
+			return DiminishingScatterShot
+		}
+		// Entrapment (own diminishing)
+		if spell.SpellVisual[0] == 7484 && spell.SpellIconID == 20 {
+			return DiminishingEntrapment
+		}
+		// Wyvern Sting mechanic is MECHANIC_SLEEP but the diminishing is DIMINISHING_DISORIENT
+		if spell.SpellFamilyFlags[1]&0x1000 != 0 && spell.SpellIconID == 1721 {
+			return DiminishingDisorient
+		}
+		// Freezing Arrow
+		if spell.SpellFamilyFlags[0]&0x8 != 0 {
+			return DiminishingDisorient
+		}
+	case spellFamilyPaladin:
+		// Judgement of Justice - limit duration to 10s in PvP
+		if spell.SpellFamilyFlags[0]&0x100000 != 0 {
+			return DiminishingLimitOnly
+		}
+		// Turn Evil
+		if spell.SpellFamilyFlags[1]&0x804000 != 0 && spell.SpellIconID == 309 {
+			return DiminishingFear
+		}
+	case spellFamilyShaman:
+		// Storm, Earth and Fire - Earthgrab
+		if spell.SpellFamilyFlags[2]&0x4000 != 0 {
+			return DiminishingNone
+		}
+	case spellFamilyDeathKnight:
+		// Hungering Cold (no flags)
+		if spell.SpellIconID == 2797 {
+			return DiminishingDisorient
+		}
+		// Mark of Blood
+		if spell.SpellFamilyFlags[0]&0x10000000 != 0 && spell.SpellIconID == 2285 {
+			return DiminishingLimitOnly
+		}
+	}
+
+	// Mechanic fallback on the all-effects mask (SpellInfo.cpp:2406-2433,
+	// GetAllEffectsMechanicMask): the spell-level mechanic plus every
+	// effect mechanic, in C++ priority order. The old single-mechanic
+	// switch missed effect-only mechanics and resolved multi-mechanic
+	// spells by the spell-level value alone.
+	mechanicMask := uint32(0)
+	if spell.Mechanic != 0 && spell.Mechanic < 32 {
+		mechanicMask |= uint32(1) << spell.Mechanic
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect != 0 && eff.Mechanic != 0 && eff.Mechanic < 32 {
+			mechanicMask |= uint32(1) << eff.Mechanic
+		}
+	}
+	switch {
+	case mechanicMask&(1<<1) != 0: // MECHANIC_CHARM
+		return DiminishingMindControl
+	case mechanicMask&(1<<9) != 0: // MECHANIC_SILENCE
 		return DiminishingSilence
-	case 10: // MECHANIC_SLEEP
+	case mechanicMask&(1<<10) != 0: // MECHANIC_SLEEP
 		return DiminishingSleep
-	case 11: // MECHANIC_SNARE
-		return DiminishingLimitOnly
-	case 12: // MECHANIC_STUN
-		// SpellInfo.cpp:2424 — random proc stuns (Impact, Blackout) track
+	case mechanicMask&(1<<30|1<<17|1<<20) != 0: // MECHANIC_SAPPED, POLYMORPH, SHACKLE
+		return DiminishingDisorient
+	case mechanicMask&(1<<14) != 0 && spell.SpellIconID != 292: // MECHANIC_KNOCKOUT, except Blast Wave
+		return DiminishingDisorient
+	case mechanicMask&(1<<3) != 0: // MECHANIC_DISARM
+		return DiminishingDisarm
+	case mechanicMask&(1<<5) != 0: // MECHANIC_FEAR
+		return DiminishingFear
+	case mechanicMask&(1<<12) != 0: // MECHANIC_STUN
+		// SpellInfo.cpp:2424 - random proc stuns (Impact, Blackout) track
 		// DIMINISHING_STUN when triggered by an aura.
 		if triggered {
 			return DiminishingStun
 		}
 		return DiminishingControlledStun
-	case 18: // MECHANIC_BANISH
+	case mechanicMask&(1<<18) != 0: // MECHANIC_BANISH
 		return DiminishingBanish
-	case 24: // MECHANIC_HORROR
+	case mechanicMask&(1<<7) != 0: // MECHANIC_ROOT
+		// SpellInfo.cpp:2428 - random proc roots (Frostbite, Shattered
+		// Barrier) track DIMINISHING_ROOT when triggered by an aura.
+		if triggered {
+			return DiminishingRoot
+		}
+		return DiminishingControlledRoot
+	case mechanicMask&(1<<24) != 0: // MECHANIC_HORROR
 		return DiminishingHorror
+	// No C++ mask arm exists for these mechanics; the nets below preserve
+	// the previous single-mechanic behavior for unlisted ranks (a named
+	// DBC case would be needed before dropping them: C++ returns NONE
+	// here, so a long SNARE would lose its 10s PvP cap).
+	case mechanicMask&(1<<2) != 0: // MECHANIC_DISORIENTED
+		return DiminishingDisorient
+	case mechanicMask&(1<<13) != 0: // MECHANIC_FREEZE
+		if triggered {
+			return DiminishingRoot
+		}
+		return DiminishingControlledRoot
+	case mechanicMask&(1<<11) != 0: // MECHANIC_SNARE
+		return DiminishingLimitOnly
 	default:
 		return DiminishingNone
 	}
@@ -377,7 +564,7 @@ func (s *session) clearDiminishings() {
 // The triggered flag selects the aura-proc DR group variant
 // (Spell::PreprocessSpellHit, Spell.cpp:2798 — m_triggeredByAuraSpell != null).
 func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint32, isPvP, triggered bool) (DiminishingGroup, uint32, bool) {
-	group := getDiminishingReturnsGroup(spell.ID, spell.Mechanic, triggered)
+	group := getDiminishingReturnsGroup(spell, triggered)
 	if group == DiminishingNone || durationMs == 0 {
 		return DiminishingNone, durationMs, true
 	}
