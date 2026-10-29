@@ -1470,6 +1470,49 @@ func creatureLiveMechanicImmunityMasks(srv *Server, key creatureAuraKey) (uint32
 	return mask, effectGrants
 }
 
+// creatureLiveEffectStateImmunity is the creature-target analog of the
+// live 37/38 arms in immunedToSpellEffectEval: the effect ids granted by
+// the target's live SPELL_AURA_EFFECT_IMMUNITY (37) auras and the aura
+// ids granted by live SPELL_AURA_STATE_IMMUNITY (38) auras, plus the
+// SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) AuraTypeImmune inserts
+// (mechanicMask147SpellGrants, SpellInfo.cpp:2594-2742). C++ writes
+// these rows into m_spellImmune[IMMUNITY_EFFECT / IMMUNITY_STATE] for
+// any Unit when the aura applies (SpellInfo.cpp:2913-2920), so the
+// creature eval must fold them exactly like the player eval does;
+// the 37 arm is ungated (Unit.cpp:7962-7966) while the 38/147-state
+// arms live under the ATTR3 gate in Unit.cpp:7977-7980, so the caller
+// applies the two sets at different points.
+func creatureLiveEffectStateImmunity(srv *Server, key creatureAuraKey) (map[uint32]bool, map[uint32]bool) {
+	if srv == nil || srv.Data == nil {
+		return nil, nil
+	}
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	effectGrants := make(map[uint32]bool)
+	stateGrants := make(map[uint32]bool)
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraEffectImmunity:
+			effectGrants[uint32(aura.MiscValue)] = true
+		case spellAuraStateImmunity:
+			stateGrants[uint32(aura.MiscValue)] = true
+		case spellAuraMechanicImmunityMask:
+			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			auraTypes, _ := mechanicMask147SpellGrants(auraSpell)
+			for _, at := range auraTypes {
+				stateGrants[at] = true
+			}
+		}
+	}
+	return effectGrants, stateGrants
+}
+
 // creatureImmuneToSpellEffect mirrors the creature-target per-effect
 // immunity chain: Totem::IsImmunedToSpellEffect (Totem.cpp:183-204),
 // Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341), then
@@ -1501,6 +1544,13 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 		return true
 	}
 	if eff.Mechanic != 0 && scriptImmuneHas(scriptRows, immunityOpMechanic, eff.Mechanic) {
+		return true
+	}
+	// Live 37 auras (SpellInfo.cpp:2918-2920, Unit.cpp:7962-7966):
+	// a live SPELL_AURA_EFFECT_IMMUNITY aura whose MiscValue is this
+	// effect's id blocks the effect, ungated like the script row above.
+	liveEffectGrants, liveStateGrants := creatureLiveEffectStateImmunity(srv, key)
+	if liveEffectGrants[eff.Effect] {
 		return true
 	}
 	// Totem::IsImmunedToSpellEffect (Totem.cpp:183-194): immune to all
@@ -1556,6 +1606,12 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 		// IMMUNITY_STATE script row (Unit.cpp:7977-7980): the aura id
 		// itself is the immunity type.
 		if scriptImmuneHas(scriptRows, immunityOpState, eff.Aura) {
+			return true
+		}
+		// Live 38 auras (SpellInfo.cpp:2913-2916, Unit.cpp:7977-7980)
+		// and the 147 AuraTypeImmune inserts, folded under the same
+		// ATTR3/aura gate as the script row above.
+		if liveStateGrants[eff.Aura] {
 			return true
 		}
 		// SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) arm
