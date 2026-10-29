@@ -1424,6 +1424,52 @@ func (s *Server) creatureImmuneAuraApplySchoolMask(key creatureAuraKey) uint32 {
 	return mask
 }
 
+// creatureLiveMechanicImmunityMasks is the creature-target analog of the
+// player-side live mechanic arms (the 77/147 scan in isImmuneToSpellFiltered
+// and immunedToSpellEffectEval): the union of the mechanic masks granted by
+// the target's live SPELL_AURA_MECHANIC_IMMUNITY (77) and
+// SPELL_AURA_MECHANIC_IMMUNITY_MASK (147) auras, plus the 147 spell-effect
+// grants. C++ writes these rows into m_spellImmune[IMMUNITY_MECHANIC /
+// IMMUNITY_EFFECT] for any Unit when the aura applies
+// (SpellInfo::ApplyAllSpellImmunitiesTo, SpellInfo.cpp:2883-2891 and the 147
+// table at :2594-2724), so the creature evals must fold them exactly like
+// the player evals do. Live-mask bits are mechanic ids (C++
+// GetMechanicImmunityMask, Unit.cpp:7945), unlike the template mask whose
+// bits are mechanic-1 (Creature.cpp:2299-2301).
+func creatureLiveMechanicImmunityMasks(srv *Server, key creatureAuraKey) (uint32, map[uint32]bool) {
+	if srv == nil || srv.Data == nil {
+		return 0, nil
+	}
+	srv.auraMu.Lock()
+	defer srv.auraMu.Unlock()
+	var mask uint32
+	effectGrants := make(map[uint32]bool)
+	for _, aura := range srv.activeCreatureAuras[key] {
+		if aura == nil {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraMechanicImmunity:
+			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			mask |= mechanicImmuneMaskGranted(auraSpell)
+		case spellAuraMechanicImmunityMask:
+			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			mask |= mechanicImmuneMask147(auraSpell)
+			_, spellEffects := mechanicMask147SpellGrants(auraSpell)
+			for _, eff := range spellEffects {
+				effectGrants[eff] = true
+			}
+		}
+	}
+	return mask, effectGrants
+}
+
 // creatureImmuneToSpellEffect mirrors the creature-target per-effect
 // immunity chain: Totem::IsImmunedToSpellEffect (Totem.cpp:183-204),
 // Creature::IsImmunedToSpellEffect (Creature.cpp:2336-2341), then
@@ -1492,6 +1538,14 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 	// IMMUNITY_MECHANIC (Unit.cpp:7968-7973): the template mask stores bit
 	// (i-1) for mechanic i (Creature.cpp:2299-2301).
 	if eff.Mechanic != 0 && stats.MechanicImmuneMask&(1<<(eff.Mechanic-1)) != 0 {
+		return true
+	}
+	// Live 77/147 auras (SpellInfo.cpp:2883-2891, :2594-2724): the
+	// template/script rows above miss a mechanic-immunity aura applied
+	// after spawn — the player per-effect eval folds these, the creature
+	// eval did not, so a creature under a live 77/147 aura still took the
+	// mechanic's effects through this path.
+	if liveMask, liveEffectGrants := creatureLiveMechanicImmunityMasks(srv, key); (eff.Mechanic != 0 && liveMask&(1<<eff.Mechanic) != 0) || liveEffectGrants[eff.Effect] {
 		return true
 	}
 	// IMMUNITY_STATE (Unit.cpp:7977-7989): the NO_TAUNT arm's MOD_TAUNT row.
@@ -1565,6 +1619,15 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	if spell.Mechanic != 0 && (stats.MechanicImmuneMask&(1<<(spell.Mechanic-1)) != 0 ||
 		scriptImmuneHas(scriptRows, immunityOpMechanic, spell.Mechanic)) {
 		return true
+	}
+	// Live 77/147 auras at spell level (SpellInfo.cpp:2883-2891): the
+	// player whole-spell arm folds these, the creature arm did not — a
+	// spell whose spell-level mechanic (not any effect mechanic) is covered
+	// only by a live aura slipped past the all-effects fold above.
+	if spell.Mechanic != 0 {
+		if liveMask, _ := creatureLiveMechanicImmunityMasks(srv, key); liveMask&(1<<spell.Mechanic) != 0 {
+			return true
+		}
 	}
 	// School fold (Unit.cpp:7888-7919): each template IMMUNITY_SCHOOL row
 	// is a single-school bit (Creature.cpp:2303-2312) with the placeholder
