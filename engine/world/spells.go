@@ -11189,6 +11189,36 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// Spell::HandleLaunchPhase (Spell.cpp:7685-7731) + DoEffectOnLaunchTarget
+	// (Spell.cpp:7740-7743): LAUNCH_TARGET effects run per TargetInfo, and a
+	// clean-reflect TargetInfo resolves its unit to the caster — so each
+	// reflected AoE target runs the launch arms on the caster at launch time.
+	// This is the launch-phase trip mechanism the reflected-trip census parked:
+	// it runs here, ahead of the delayed arrival revalidation and ahead of the
+	// empty-list early return below (an all-reflected cast still launches),
+	// not in applyEffects — at arrival the caster may already be casting
+	// something else, which a launch-time interrupt could never touch. Only
+	// the two LAUNCH arms with a caster-visible leg ride here: interrupt (68;
+	// the helper's Executing shield covers the causing cast itself, as in C++
+	// where the launching spell is still PREPARING, and every interrupt spell
+	// is instant so the PREPARING + cast-time leg cannot select it) and
+	// leap-back (138; fall-info reset only — JumpTo has no Go spline model).
+	// Single-target reflects need no pass: their hitTargets entry already is
+	// the caster, so the applyEffects base arms cover them.
+	if len(reflectedAoETrips) > 0 {
+		for _, eff := range spell.Effects {
+			switch eff.Effect {
+			case spellEffectInterruptCast:
+				for range reflectedAoETrips {
+					s.handleEffectInterruptCast(ctx, s.playerGUID, spell, eff)
+				}
+			case spellEffectLeapBack:
+				if s.player != nil {
+					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+				}
+			}
+		}
+	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
 		// Spell::DoProcessTargetContainer(m_UniqueItemInfo) (Spell.cpp:3734):
 		// an item-target open-lock cast holds no unit or GO target, so the
@@ -12827,6 +12857,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
 				s.handleEffectHealthLeech(effCtx, spell, spellID, hitTargets, effectIndex, eff)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target — the helper's self-arm (no self skip: C++ has
+				// none, unitTarget == caster on a trip), so each trip
+				// damages the caster and heals a fraction back, not
+				// idempotent across trips.
+				for range reflectedAoETrips {
+					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff)
+				}
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				// Spell::EffectPowerDrain (SpellEffects.cpp:1265-1307) name-by-name:
 				// the drain amount carries the full SpellDamageBonusDone leg
@@ -19296,7 +19335,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// leech spell dealt nothing and healed nothing. The
 				// client arm's helper runs once per effect over the
 				// miss-filtered effect targets; its own gates (skip
-				// zero/self targets, caster-alive self-heal) ride along.
+				// zero targets, caster-alive self-heal) ride along, and
+				// a caster entry runs the self-arm (damage + fractional
+				// heal) per Spell::EffectHealthLeech, which has no self
+				// gate.
 				// Chain-jump scaling is not carried (the helper takes
 				// no jump index; leech spells do not chain).
 				s.handleEffectHealthLeech(ctx, spell, spellID, effectGUIDs, effectIndex, eff)
@@ -41983,9 +42025,15 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 	}
 	damageAmount := uint32(amount)
 	for _, target := range hitTargets {
-		if target == 0 || target == s.playerGUID {
+		if target == 0 {
 			continue
 		}
+		// No self skip: Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553)
+		// carries no unitTarget == caster gate — on a reflected trip (or a
+		// reflected single target, whose hitTargets entry already is the
+		// caster) unitTarget IS the caster, so the arm damages the caster
+		// and heals a fraction back through the same body below. The old
+		// skip dropped reflected and self-cast leeches entirely.
 		// SpellEffects.cpp:1548 (-GetHealthGain(-damage)): the leech heal is the
 		// damage the target actually lost — post-absorb, overkill excluded —
 		// scaled by the effect value multiplier, not the rolled damage.
