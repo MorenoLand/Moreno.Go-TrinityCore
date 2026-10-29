@@ -12211,6 +12211,46 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			threatHits = append(threatHits, guid)
 		}
 	}
+	// Spell::AddUnitTarget (Spell.cpp:2117-2190) creates exactly one
+	// TargetInfo per GUID, and on reflect it keeps the reflector as the
+	// entry (MissCondition=REFLECT) -- it never creates a caster
+	// TargetInfo; the caster takes effects only as _spellHitTarget
+	// (Spell.cpp:2350). Go's doReflect retarget (caster in hitTargets)
+	// is therefore not a TargetInfo: counting it dilutes the divisor by
+	// 1 and takes a share (positive: a spurious forward leg) C++ never
+	// gives. The reflector itself already counts via missGUIDs. Drop
+	// the retarget entry unless the caster is genuinely selected
+	// elsewhere -- a TARGET_UNIT_CASTER effect or a partition list -- in
+	// which case the single merged entry stands for that TargetInfo.
+	if isReflected {
+		casterSelected := spellHasCasterTargetEffect(spell)
+		if !casterSelected {
+			for _, guid := range friendlyEffectTargets {
+				if guid == s.playerGUID {
+					casterSelected = true
+					break
+				}
+			}
+		}
+		if !casterSelected {
+			for _, guid := range refCenteredFriendlyTargets {
+				if guid == s.playerGUID {
+					casterSelected = true
+					break
+				}
+			}
+		}
+		if !casterSelected {
+			noRetarget := make([]uint64, 0, len(threatHits))
+			for _, guid := range threatHits {
+				if guid == s.playerGUID {
+					continue
+				}
+				noRetarget = append(noRetarget, guid)
+			}
+			threatHits = noRetarget
+		}
+	}
 	s.handleSpellInitialThreat(ctx, spell, threatHits, missGUIDs)
 
 	// m_UniqueTargetInfo is non-empty while the ally partition holds targets:
