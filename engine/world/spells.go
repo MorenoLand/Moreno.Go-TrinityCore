@@ -8339,7 +8339,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if !spellIsPositive(spell) && s.sanctuaryTimeFor(armGUID) >= launchMs {
 			continue
 		}
-		if s.server != nil && s.player != nil && uint16(armGUID>>48) == 0xF130 &&
+		if s.server != nil && s.player != nil && (uint16(armGUID>>48) == 0xF130 || uint16(armGUID>>48) == 0xF140 || uint16(armGUID>>48) == 0xF150) &&
 			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, armGUID) {
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
@@ -8347,7 +8347,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if s.server != nil && s.player != nil && armGUID != s.playerGUID &&
 			tgt.UnitFlags&unitFlagNonAttackable != 0 {
 			charmerOrOwner := armGUID
-			if uint16(armGUID>>48) == 0xF130 {
+			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
 				charmerOrOwner = s.creatureCharmerOrOwnerGUID(armGUID)
 			}
 			if charmerOrOwner != s.playerGUID {
@@ -8364,7 +8364,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 				}
 				continue
 			}
-			if uint16(armGUID>>48) == 0xF130 && s.creatureTargetImmuneToSpell(ctx, armGUID, spell, s, tgt.Faction) {
+			if high := uint16(armGUID >> 48); (high == 0xF130 || high == 0xF140 || high == 0xF150) && s.creatureTargetImmuneToSpell(ctx, armGUID, spell, s, tgt.Faction) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
 				continue
 			}
