@@ -12114,15 +12114,46 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
 					}
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): each
+				// reflected target's TargetInfo carries _spellHitTarget =
+				// caster, so the bank arm runs on the caster once per trip.
+				// grantExtraAttacks' pending guard is C++'s m_extraAttacks
+				// early return, so the first trip banks and later trips
+				// no-op (and log nothing), exactly like C++'s per-TargetInfo
+				// iteration — this resolves the census' per-trip banking
+				// question, it does not stack per trip.
+				for range reflectedAoETrips {
+					if s.grantExtraAttacks(amount) {
+						s.sendExtraAttacksLog(spellID, effectIndex, amount)
+					}
+				}
 			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
 				// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996-1043)
 				// — per-target legs ride runTriggerMissileEffect (the
 				// HIT_TARGET / HIT handle-mode split is structural there).
 				s.runTriggerMissileEffect(ctx, spell, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm fires per reflected TargetInfo on the
+				// caster, gated by the same NeedsToBeTriggeredByCaster leg
+				// inside runTriggerMissileEffect. The single-element list
+				// keeps the HIT_TARGET arm (the empty-list HIT arm must not
+				// fire per trip). Triggered casts ride the triggered funnel,
+				// never this dispatch, so no trip recursion.
+				for range reflectedAoETrips {
+					s.runTriggerMissileEffect(ctx, spell, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
 				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
 				for _, effectTarget := range hitTargets {
 					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target. The helper re-reads the caster's pure skill value
+				// and re-applies the same step/value/max, so repeated trips
+				// are idempotent, matching C++'s per-TargetInfo SetSkill.
+				for range reflectedAoETrips {
+					s.applySkillStepEffect(ctx, spell, eff, casterLevel, s.playerGUID)
 				}
 			case spellEffectAddComboPoints: // 80: SPELL_EFFECT_ADD_COMBO_POINTS
 				// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789)
@@ -12291,6 +12322,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else {
 						s.teleportEffectUnitTargets(hitTargets, s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 					}
+					// No reflected AoE trip for effect 5: every branch above
+					// already teleports the caster (teleportSpellEffectCaster),
+					// and teleportEffectUnitTargets explicitly skips the
+					// caster GUID, so a trip targeting the caster is a
+					// duplicate of an already-covered arm, not a gap.
 				}
 			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
 				// Spell::EffectActivateSpec — ActivateSpec(damage-1) on the
@@ -12421,6 +12457,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if primaryLive {
 					s.handleEffectCharge(effCtx, targetGUID, spell)
 				}
+				// No reflected AoE trip: the charge movement is the
+				// LAUNCH_TARGET arm (once per cast, not per TargetInfo),
+				// and the trip's only arm is the HIT_TARGET self-Attack
+				// leg for non-positive player-caster spells
+				// (SpellEffects.cpp:4524-4527) — degenerate on a trip
+				// whose unitTarget is the caster. Calling the helper per
+				// trip would fabricate a self-charge move plus a
+				// startAttackOn(self) that C++ never performs.
 			case 85: // SPELL_EFFECT_SUMMON_PLAYER (EffectSummonPlayer, SpellEffects.cpp:3922)
 				// Spell::SelectEffectTypeImplicitTargets special case
 				// (Spell.cpp:1708-1746): the summon target is the caster's
@@ -12473,6 +12517,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						continue
 					}
 					s.handleEffectTeleUnitsFaceCaster(effCtx, effectTarget, eff)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target — not a no-op like TeleportUnits, because the close
+				// point is computed from the caster's then-current position
+				// and orientation, so each trip hops the caster forward by
+				// the radius plus both combat reaches and flips its facing
+				// (C++ NearTeleportTo with unitTarget == m_caster). The
+				// helper's in-flight gate is the C++ IsInFlight gate.
+				for range reflectedAoETrips {
+					s.handleEffectTeleUnitsFaceCaster(effCtx, s.playerGUID, eff)
 				}
 			case spellEffectStuck: // 84: SPELL_EFFECT_STUCK (EffectStuck, SpellEffects.cpp:3876)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
@@ -12679,6 +12734,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							ts.completeQuestFromSpell(effCtx, uint32(eff.MiscValue))
 						}
 					}
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563):
+					// the HIT_TARGET arm runs on the caster once per
+					// reflected target. completeQuestFromSpell returns
+					// after the first matching log slot and the tracking
+					// mark is set-semantics, so repeated trips are
+					// idempotent.
+					for range reflectedAoETrips {
+						s.completeQuestFromSpell(effCtx, uint32(eff.MiscValue))
+					}
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
 				s.handleEffectHealthLeech(effCtx, spell, spellID, hitTargets, effectIndex, eff)
@@ -12757,23 +12821,65 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
 				s.handleEffectForceCast(effCtx, spell, spellID, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target, so the caster is forced to cast the triggered
+				// spell on itself (unitTarget == m_caster in C++). The
+				// forced casts ride the triggered funnel, never this
+				// dispatch, so no trip recursion.
+				for range reflectedAoETrips {
+					s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
 				// not per unit target.
 				s.handleEffectSelfResurrect(effCtx, spell, eff)
 			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
 				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
+				// No reflected AoE trip: a LAUNCH arm runs once per cast,
+				// never per TargetInfo, and the base case already runs it.
 				s.handleEffectChargeDest(effCtx, target)
 			case spellEffectKnockBack, spellEffectKnockBackDest: // 98/144: SPELL_EFFECT_KNOCK_BACK* (EffectKnockBack, SpellEffects.cpp:4552)
 				s.handleEffectKnockBack(effCtx, spell, eff, hitTargets, target)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target. The helper's on-point random angle is the
+				// existing convention for a target sitting on the knock
+				// point (here the caster itself), and its ROOT/STUN gate
+				// plus non-melee interrupt are the C++ arms; the executing
+				// cast is shielded by the helper's Executing check, so a
+				// trip cannot interrupt the spell that caused it.
+				for range reflectedAoETrips {
+					s.handleEffectKnockBack(effCtx, spell, eff, []uint64{s.playerGUID}, target)
+				}
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct: // 111/115: SPELL_EFFECT_DURABILITY_DAMAGE* (EffectDurabilityDamage*, SpellEffects.cpp:4857)
 				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, hitTargets, casterLevel)
 			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
 				s.handleEffectQuestClear(effCtx, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected
+				// target. The helper's status gate (never-done quests skip)
+				// makes repeated trips idempotent.
+				for range reflectedAoETrips {
+					s.handleEffectQuestClear(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectQuestFail: // 147: SPELL_EFFECT_QUEST_FAIL (EffectQuestFail, SpellEffects.cpp:5283)
 				s.handleEffectQuestFail(effCtx, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as
+				// above; the helper's incomplete-only gate makes repeated
+				// trips idempotent (a failed quest fails no twice).
+				for range reflectedAoETrips {
+					s.handleEffectQuestFail(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectQuestStart: // 150: SPELL_EFFECT_QUEST_START (EffectQuestStart, SpellEffects.cpp:5294)
 				s.handleEffectQuestStart(effCtx, eff, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as
+				// above; the helper's CanTakeQuest gate makes repeated
+				// trips idempotent (an already-logged quest is not
+				// re-added, and its details packet is gated on CanTake).
+				for range reflectedAoETrips {
+					s.handleEffectQuestStart(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectRemoveAura: // 164: SPELL_EFFECT_REMOVE_AURA (EffectRemoveAura, SpellEffects.cpp:5611)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: RemoveAurasDueToSpell(TriggerSpell) on the target.
