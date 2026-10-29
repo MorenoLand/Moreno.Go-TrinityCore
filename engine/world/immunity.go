@@ -252,7 +252,8 @@ func mechanicImmuneMaskGranted(spell wotlk.Spell) uint32 {
 // all-effects fold / the school fold) run after them in C++ order.
 // IMMUNITY_ID stays a documented gap: its only player-relevant writer is the
 // spell_linked_spell negative row at aura apply (SpellAuras.cpp:1337-1342),
-// and Go has no ApplySpellImmune model (fireSpellLinkedTriggers bridges only
+// and Go has no player-side ApplySpellImmune model (the creature twin
+// writes ScriptSpellImmune rows; fireSpellLinkedTriggers bridges only
 // the aura-removal arm).
 func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 	return s.isImmuneToSpellFiltered(spell, caster, true)
@@ -1268,6 +1269,63 @@ func scriptImmuneHas(rows map[uint64][]uint32, op, immType uint32) bool {
 	return len(rows[uint64(op)<<32|uint64(immType)]) > 0
 }
 
+// addCreatureSpellImmuneRow is the non-script twin of the Lua
+// creature:ApplySpellImmune bridge (Unit::ApplySpellImmune, Unit.cpp:8268):
+// it appends grantingSpellID under key (op<<32|immType) unless already
+// present, so a refreshed aura re-firing the linked apply arm cannot stack
+// duplicate rows. Callers hold no motionMu.
+func (srv *Server) addCreatureSpellImmuneRow(key creatureAuraKey, op, immType, grantingSpellID uint32) {
+	if srv == nil {
+		return
+	}
+	srv.motionMu.Lock()
+	defer srv.motionMu.Unlock()
+	motion := srv.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+	if motion == nil {
+		return
+	}
+	k := uint64(op)<<32 | uint64(immType)
+	if motion.ScriptSpellImmune == nil {
+		motion.ScriptSpellImmune = map[uint64][]uint32{}
+	}
+	for _, id := range motion.ScriptSpellImmune[k] {
+		if id == grantingSpellID {
+			return
+		}
+	}
+	motion.ScriptSpellImmune[k] = append(motion.ScriptSpellImmune[k], grantingSpellID)
+}
+
+// removeCreatureSpellImmuneRows is the apply=false twin of
+// addCreatureSpellImmuneRow: it erases every row under
+// (op<<32|immType) granted by grantingSpellID, matching C++'s
+// equal_range erase of entries whose value is the granting spell
+// (Unit.cpp:8272-8280). Callers hold no motionMu.
+func (srv *Server) removeCreatureSpellImmuneRows(key creatureAuraKey, op, immType, grantingSpellID uint32) {
+	if srv == nil {
+		return
+	}
+	srv.motionMu.Lock()
+	defer srv.motionMu.Unlock()
+	motion := srv.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || motion.ScriptSpellImmune == nil {
+		return
+	}
+	k := uint64(op)<<32 | uint64(immType)
+	ids := motion.ScriptSpellImmune[k]
+	kept := ids[:0]
+	for _, id := range ids {
+		if id != grantingSpellID {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		delete(motion.ScriptSpellImmune, k)
+	} else {
+		motion.ScriptSpellImmune[k] = kept
+	}
+}
+
 // creatureImmuneToDamageSpell is the creature-target analog of
 // isImmuneToDamageSpell: Unit::IsImmunedToDamage(SpellInfo const*)
 // (Unit.cpp:7818-7860) applies to any Unit, but Go's player-only
@@ -1633,19 +1691,23 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 // (Creature.cpp:2315-2333): the all-effects per-effect fold, then the
 // Unit::IsImmunedToSpell arms (Unit.cpp:7852-7922) reachable from the
 // template writers — spell-level mechanic and the school fold. IMMUNITY_ID
-// has no writer model (spell_linked_spell negative rows unbridged) and
-// IMMUNITY_DISPEL has no template writer, so both arms are vacuous here.
+// rows come from the script bridge and from spell_linked_spell negative
+// rows written at aura apply (SpellAuras.cpp:1337-1342); IMMUNITY_DISPEL
+// has no template writer, so that arm stays vacuous here.
 func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
-	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
-		return false
-	}
-	// Script-written m_spellImmune rows (Unit.cpp:7857-7876):
-	// IMMUNITY_ID holds the spell id itself; IMMUNITY_DISPEL the
-	// spell's dispel type.
+	// Unit::IsImmunedToSpell checks IMMUNITY_ID before the
+	// UNAFFECTED_BY_INVULNERABILITY gate (Unit.cpp:7858-7862): a
+	// single-spell immunity blocks even a piercing spell, while the
+	// dispel arm below sits behind the gate (:7865-7869).
 	scriptRows := scriptSpellImmuneRows(srv, key)
 	if scriptImmuneHas(scriptRows, immunityOpID, spell.ID) {
 		return true
 	}
+	if spell.Attributes&spellAttr0UnaffectedByInvulnerability != 0 {
+		return false
+	}
+	// Script-written m_spellImmune rows (Unit.cpp:7865-7876):
+	// IMMUNITY_DISPEL holds the spell's dispel type.
 	if spell.DispelType != 0 && scriptImmuneHas(scriptRows, immunityOpDispel, spell.DispelType) {
 		return true
 	}

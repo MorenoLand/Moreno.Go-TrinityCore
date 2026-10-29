@@ -167,9 +167,13 @@ func (s *Server) applyCreatureSpellAreaRows(key creatureAuraKey, auraSpellID uin
 // Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1336-1350)
 // for creature targets: rows of spell_linked_spell with type 2
 // (SPELL_LINK_AURA) keyed by the applied aura fire on application.
-// Negative ids ApplySpellImmune the linked spell on the target — Go has no
-// ApplySpellImmune model (immunity.go), so that arm stays unbridged, like the
-// player twin. Positive ids AddAura the linked spell on the creature target
+// Negative ids ApplySpellImmune the linked spell on the target
+// (SpellAuras.cpp:1341-1342): Go writes that row into the motion's
+// ScriptSpellImmune map under (IMMUNITY_ID<<32|linked spell) with the
+// applied aura as granting spell, so the whole-spell eval blocks the
+// linked spell while the aura lasts; the append-if-absent write makes a
+// refresh re-fire harmless (C++ skips the block on reapply, :1332).
+// Positive ids AddAura the linked spell on the creature target
 // from the aura's caster: Go runs them through the session's aura apply path
 // (which carries the creature-target branch) with the recorded caster, the
 // same model as the player twin (applyAuraLinkedAurasAtApply in spells.go).
@@ -178,7 +182,7 @@ func (s *Server) applyCreatureSpellAreaRows(key creatureAuraKey, auraSpellID uin
 // else the spell's SpellLevel. The onReapply stack-amount propagate arm
 // (SpellAuras.cpp:1381) has no linked-aura registry in Go and stays open,
 // like the player twin.
-func (s *session) applyCreatureLinkedApplyArms(ctx context.Context, targetGUID uint64, spellID uint32, casterGUID uint64) {
+func (s *session) applyCreatureLinkedApplyArms(ctx context.Context, targetKey creatureAuraKey, targetGUID uint64, spellID uint32, casterGUID uint64) {
 	if s == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
@@ -187,7 +191,11 @@ func (s *session) applyCreatureLinkedApplyArms(ctx context.Context, targetGUID u
 		caster = s.playerGUID
 	}
 	for _, id := range spellLinkedEffects(ctx, s.server.WorldStore.DB, int32(spellID), spellLinkAuraType) {
-		if id <= 0 {
+		if id < 0 {
+			s.server.addCreatureSpellImmuneRow(targetKey, immunityOpID, uint32(-id), spellID)
+			continue
+		}
+		if id == 0 {
 			continue
 		}
 		linked, found, err := s.server.Data.Spell(uint32(id))

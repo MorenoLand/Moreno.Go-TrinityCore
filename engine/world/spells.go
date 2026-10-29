@@ -29058,7 +29058,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// remove side was bridged first (11:47 tick); the apply side was missing.
 	if s.server != nil {
 		s.server.applyCreatureSpellAreaRows(targetKey, spell.ID)
-		s.applyCreatureLinkedApplyArms(ctx, targetGUID, spell.ID, casterGUID)
+		s.applyCreatureLinkedApplyArms(ctx, targetKey, targetGUID, spell.ID, casterGUID)
 	}
 	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
 	// creature's run rate — previously snares never slowed creatures.
@@ -29362,8 +29362,9 @@ func (s *session) applyAuraSpellAreaRows(ctx context.Context, auraSpellID uint32
 // Aura::HandleAuraSpecificMods' spell_linked block (SpellAuras.cpp:1336-1350):
 // rows of spell_linked_spell with type 2 (SPELL_LINK_AURA) keyed by the
 // applied aura fire here. Negative ids ApplySpellImmune the linked spell on
-// the target — Go has no ApplySpellImmune model (immunity.go), so that arm
-// stays unbridged. Positive ids AddAura the linked spell on the target from
+// the target — Go has no player-side ApplySpellImmune model (immunity.go),
+// so that arm stays unbridged for players (the creature twin writes
+// ScriptSpellImmune rows). Positive ids AddAura the linked spell on the target from
 // the caster: Go runs it through the direct aura path on the caster's session
 // (falling back to the applying session when the caster is offline) with the
 // recorded caster, like the Prayer of Mending jump (procs.go). The onReapply
@@ -29421,7 +29422,7 @@ func (s *session) applyAuraLinkedAurasAtApply(ctx context.Context, spellID uint3
 // fully triggered with the removed aura's caster as original caster
 // (CastSpellExtraArgs(ObjectGuid), SpellDefines.h:189 — TRIGGERED_FULL_MASK).
 // The +spellID type-2 (SPELL_LINK_AURA) rows: negative ids would clear the
-// apply-time immunity (no ApplySpellImmune model in Go); positive ids remove
+// apply-time immunity (no player-side ApplySpellImmune model in Go); positive ids remove
 // the linked aura with the same remove mode — C++ passes removeMode through
 // (target->RemoveAura(*itr, GetCasterGUID(), 0, removeMode)). Go's remove
 // keys on spell ID only, so the caster match is vacuous. C++ gates the
@@ -34302,7 +34303,9 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 // gated on removeMode != AURA_REMOVE_BY_DEATH. The Go twin runs it through
 // the creature cast funnel when the motion still resolves; the original
 // caster has no Go record twin (an active aura records one CasterGUID).
-// The +spellID type-2 (SPELL_LINK_AURA) rows: positive ids remove the linked
+// The +spellID type-2 (SPELL_LINK_AURA) rows: negative ids clear the
+// apply-time immunity (SpellAuras.cpp:1371-1372) by erasing the rows the
+// applied aura granted; positive ids remove the linked
 // aura with the same remove mode — C++ passes removeMode through
 // (target->RemoveAura(*itr, GetCasterGUID(), 0, removeMode)).
 func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint32, mode auraRemoveMode) {
@@ -34326,7 +34329,9 @@ func (s *Server) applyCreatureLinkedRemoveArms(key creatureAuraKey, spellID uint
 		}
 	}
 	for _, id := range spellLinkedEffects(ctx, db, int32(spellID), spellLinkAuraType) {
-		if id > 0 {
+		if id < 0 {
+			s.removeCreatureSpellImmuneRows(key, immunityOpID, uint32(-id), spellID)
+		} else if id > 0 {
 			s.removeCreatureAuraWithMode(key, uint32(id), mode)
 		}
 	}
