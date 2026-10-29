@@ -12177,6 +12177,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							comboGain += gain
 						}
 					}
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// HIT_TARGET arm runs on the caster once per reflected target;
+					// AddComboPointGain (Spell.h:513-522) restarts the bank on a new
+					// target and accumulates on the same one, so trips bank on the
+					// caster exactly like consecutive same-target hits. Order
+					// residual: C++ interleaves trips in selection order while Go
+					// runs them after all base hits, so a mixed hit+reflected cast
+					// ends banked on the caster instead of the last
+					// selection-order target.
+					for range reflectedAoETrips {
+						if s.playerGUID != comboGainTarget {
+							comboGainTarget = s.playerGUID
+							comboGain = gain
+						} else {
+							comboGain += gain
+						}
+					}
 				}
 			case 3:
 				if spellID == spellRaiseAllyInitial {
@@ -12434,12 +12451,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					s.handleEffectKillCredit(effCtx, effectTarget, eff.MiscValue)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target;
+				// the helper resolves the caster GUID to the caster session.
+				for range reflectedAoETrips {
+					s.handleEffectKillCredit(effCtx, s.playerGUID, eff.MiscValue)
+				}
 			case spellEffectKillCreditGroup: // 134: group kill credit (EffectKillCredit)
 				for _, effectTarget := range hitTargets {
 					if effectTarget == 0 {
 						continue
 					}
 					s.handleEffectKillCreditGroup(effCtx, effectTarget, spellID, eff.MiscValue)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as above;
+				// the group arm credits the caster's group at reward distance.
+				for range reflectedAoETrips {
+					s.handleEffectKillCreditGroup(effCtx, s.playerGUID, spellID, eff.MiscValue)
 				}
 			case spellEffectSpiritHeal: // 117: SPELL_EFFECT_SPIRIT_HEAL
 				// Spell::EffectSpiritHeal (SpellEffects.cpp:5107-5124) is a
@@ -12506,6 +12534,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					s.handleEffectLeap(effCtx, effectTarget, target)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target;
+				// the helper's dest-location + in-flight gates are the C++
+				// HasDst + IsInFlight gates, and repeated trips re-land the
+				// caster on the same destination (idempotent).
+				for range reflectedAoETrips {
+					s.handleEffectLeap(effCtx, s.playerGUID, target)
+				}
 			case spellEffectJump, spellEffectJumpDest: // 41/42: EffectJump/EffectJumpDest (SpellEffects.cpp:1159-1197)
 				// Both arms are Unit::MoveJump spline motion with no other
 				// effect; Go has no MotionMaster spline model (documented
@@ -12551,8 +12587,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectPullTowards: // 124: SPELL_EFFECT_PULL_TOWARDS (EffectPullTowards, SpellEffects.cpp:4667)
 				s.handleEffectPullTowards(hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// The self-target arm degenerates exactly as in C++: the
+				// caster-to-target angle is zero, so the trip lands the caster
+				// at its combat reach along +X, matching GetFirstCollisionPosition
+				// with GetRelativeAngle(self) cancelling the orientation
+				// (Object.cpp:3386-3392) under the near-teleport bridge.
+				for range reflectedAoETrips {
+					s.handleEffectPullTowards([]uint64{s.playerGUID})
+				}
 			case spellEffectPullTowardsDest: // 145: SPELL_EFFECT_PULL_TOWARDS_DEST (EffectPullTowardsDest, SpellEffects.cpp:4697)
 				s.handleEffectPullTowardsDest(target, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as above;
+				// the helper's dest-location + < 0.001 gates are the C++ HasDst
+				// + distXY gates, and repeated trips re-land the caster on the
+				// same destination (idempotent).
+				for range reflectedAoETrips {
+					s.handleEffectPullTowardsDest(target, []uint64{s.playerGUID})
+				}
 			case spellEffectPlaySound: // 131: SPELL_EFFECT_PLAY_SOUND (EffectPlaySound, SpellEffects.cpp:5578)
 				s.handleEffectPlaySound(eff, hitTargets)
 			case spellEffectPlayMusic: // 132: SPELL_EFFECT_PLAY_MUSIC (EffectPlayMusic, SpellEffects.cpp:5537)
@@ -12564,6 +12617,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						continue
 					}
 					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// Arm-by-arm safety: Mug (41931) and RP-GG drop (57349) are
+				// caster-inventory arms in C++ (SpellEffects.cpp:3654-3685,
+				// 3718-3725), so each trip faithfully consumes/destroys once
+				// more; Shadow Flame is target-gated (alive, no cloak) and fires
+				// on the caster; Burn self-gates (unitTarget != m_caster) and
+				// the RP-GG pickup is creature-only, so both no-op on trips;
+				// Stoneclaw casts on the hit unit's totems, i.e. the caster's.
+				for range reflectedAoETrips {
+					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
 				// Same SelectEffectTypeImplicitTargets special case as effect
@@ -12714,6 +12779,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
 						}
 					}
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// HIT_TARGET arm runs on the caster once per reflected target,
+					// inside the same MiscValue + faction-entry gates as the base
+					// loop above.
+					for range reflectedAoETrips {
+						if ts := s.server.findSessionByGUID(s.playerGUID); ts != nil && ts.player != nil {
+							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+						}
+					}
 				}
 			case spellEffectQuestComplete: // 16: SPELL_EFFECT_QUEST_COMPLETE (EffectQuestComplete, SpellEffects.cpp:4371-4389)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
@@ -12854,6 +12928,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct: // 111/115: SPELL_EFFECT_DURABILITY_DAMAGE* (EffectDurabilityDamage*, SpellEffects.cpp:4857)
 				s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, hitTargets, casterLevel)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target;
+				// the helper resolves player sessions only, so the caster's own
+				// items take the damage once per trip (slot/-1/-2 arms as base).
+				for range reflectedAoETrips {
+					s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, []uint64{s.playerGUID}, casterLevel)
+				}
 			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
 				s.handleEffectQuestClear(effCtx, eff, hitTargets)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -12944,6 +13025,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (CombatStop); otherwise the unit's threat is zeroed on every
 				// enemy threat list carrying it.
 				s.handleEffectSanctuary(effCtx, hitTargets)
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// HIT_TARGET arm runs on the caster once per reflected target.
+				// The helper's stopPlayerCombat does not interrupt the causing
+				// cast (CombatStop(false, false), includingCast=false), and the
+				// sanctuary timestamp lands on the caster ahead of the split,
+				// so repeated trips are idempotent.
+				for range reflectedAoETrips {
+					s.handleEffectSanctuary(effCtx, []uint64{s.playerGUID})
+				}
 			case spellEffectSummonObjectWild: // 76: SPELL_EFFECT_SUMMON_OBJECT_WILD (EffectSummonObjectWild, SpellEffects.cpp:3552)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
 				// a wild (ownerless) game object spawns at the spell
