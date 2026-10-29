@@ -12093,7 +12093,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// burn per reflected target, joining the same take-power log (the
 				// append writes past len(hitTargets), never into its visible
 				// contents, as in the heal arms).
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area burn effect burns its own
+				// ally selection, with one caster burn per reflected ally
+				// trip (Spell.cpp:2350).
 				burnTargets := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					burnTargets = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						burnTargets = append(burnTargets, s.playerGUID)
+					}
+				}
 				for range reflectedAoETrips {
 					burnTargets = append(burnTargets, s.playerGUID)
 				}
@@ -12506,7 +12516,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Spell::EffectDispel (SpellEffects.cpp:2429) runs per unit
 				// target: a multi-target dispel (e.g. Mass Dispel 32375, 15yd
 				// radius) dispels every hit target, not just hitTargets[0].
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area dispel effect dispels its
+				// own ally selection, not the merged enemy list.
+				dispelList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					dispelList = friendlyEffectTargets
+				}
+				for _, effectTarget := range dispelList {
 					if effectTarget == 0 {
 						continue
 					}
@@ -12521,10 +12538,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for range reflectedAoETrips {
 					s.handleEffectDispel(effCtx, s.playerGUID, spell, eff, true)
 				}
+				// Reflected ally trips (Spell.cpp:2350): a reflected ally's
+				// _spellHitTarget is the caster, so the dispel lands on the
+				// caster once per reflected ally, with the same reflected
+				// positivity flip as the enemy trips above.
+				for range reflectedAllyTrips {
+					s.handleEffectDispel(effCtx, s.playerGUID, spell, eff, true)
+				}
 			case spellEffectDispelMechanic: // 108: SPELL_EFFECT_DISPEL_MECHANIC
 				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733) is also
 				// per unit target.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the dispel arm above.
+				dispelMechanicList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					dispelMechanicList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range dispelMechanicList {
 					if effectTarget == 0 {
 						continue
 					}
@@ -12956,7 +12989,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// drain per reflected target, joining the same take-power log; the
 				// loop's self-drain arm already covers effectTarget == caster (no
 				// gain, zero gain multiplier).
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the power-burn arm above.
 				drainTargets := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					drainTargets = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						drainTargets = append(drainTargets, s.playerGUID)
+					}
+				}
 				for range reflectedAoETrips {
 					drainTargets = append(drainTargets, s.playerGUID)
 				}
@@ -13071,7 +13112,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectRemoveAura: // 164: SPELL_EFFECT_REMOVE_AURA (EffectRemoveAura, SpellEffects.cpp:5611)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: RemoveAurasDueToSpell(TriggerSpell) on the target.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the dispel arm above.
+				removeAuraList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					removeAuraList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						removeAuraList = append(removeAuraList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range removeAuraList {
 					if effectTarget == 0 {
 						continue
 					}
