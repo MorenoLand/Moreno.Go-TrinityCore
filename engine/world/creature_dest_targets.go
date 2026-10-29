@@ -118,8 +118,9 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 		}
 	}
 	// SelectImplicitTargetDestTargets anchors on the wire object target
-	// (Spell.cpp:1433-1436); on this path that is the explicit unit target
-	// (Unit::CastSpell sets it before _cast).
+	// (Spell.cpp:1433-1436); on this path that is the explicit object
+	// target (Unit::CastSpell sets it before _cast) — a unit via the
+	// threat-position lookup, a gameobject via the GO anchor leg below.
 	var unitX, unitY, unitZ, unitO float32
 	hasUnitTarget := false
 	if targetGUID != 0 {
@@ -127,6 +128,24 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 			unitX, unitY, unitZ = ux, uy, uz
 			unitO = s.creatureDestTargetOrientation(m, targetGUID)
 			hasUnitTarget = true
+		}
+	}
+	// Spell::SelectImplicitTargetDestTargets anchors on the wire object
+	// target (Spell.cpp:1433), any WorldObject, not just units — the
+	// player-path twin already anchors GO wire targets this way, but
+	// the creature resolver kept the caster seed for a GO target. A
+	// live GO state wins, else the static DB row plus its orientation,
+	// mirroring the player leg; an unresolvable GO keeps the seed
+	// fallback the target-dest arm below documents.
+	if !hasUnitTarget && uint16(targetGUID>>48) == 0xF110 {
+		if st := s.gameObjectState(m.Map, m.InstanceID, targetGUID); st != nil {
+			unitX, unitY, unitZ, unitO, hasUnitTarget = st.X, st.Y, st.Z, st.Orientation, true
+		} else if gx, gy, gz, ok := s.gameObjectAnchorPosition(ctx, targetGUID, m.Map, m.InstanceID); ok {
+			var ori float64
+			if s.WorldStore != nil && s.WorldStore.DB != nil {
+				_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT orientation FROM gameobject WHERE guid = ?", uint32(targetGUID&0xFFFFFF)).Scan(&ori)
+			}
+			unitX, unitY, unitZ, unitO, hasUnitTarget = gx, gy, gz, float32(ori), true
 		}
 	}
 	// TARGET_DEST_NEARBY_ENTRY (46) scans per effect in the loop below:
