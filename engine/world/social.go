@@ -317,6 +317,10 @@ func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, le
 	status := friendStatusOnline
 	if !target.whoSeeAllSecurityLevels && int(target.security) > s.Config.GMInWhoListLevel {
 		status = friendStatusOffline
+		// SocialMgr::GetFriendInfo returns early on this gate with
+		// Area/Level/Class still zero-initialized, so the broadcast
+		// packet carries zeros, not the subject's real zone/level/class.
+		zone, level, class = 0, 0, 0
 	} else if target.player.PlayerFlags&playerFlagDND != 0 {
 		status = friendStatusDND
 	} else if target.player.PlayerFlags&playerFlagAFK != 0 {
@@ -463,8 +467,9 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 	// Online or offline? TrinityCore reports FRIEND_ADDED_ONLINE only when
 	// the target is online AND globally visible to the requester
 	// (Player::IsVisibleGloballyFor).
+	friendSess := s.server.findSessionByGUID(friendGUID)
 	result := friendsResultAddedOffline
-	if friendSess := s.server.findSessionByGUID(friendGUID); friendSess != nil && friendSess.worldReady.Load() && isVisibleGloballyFor(s, friendSess) {
+	if friendSess != nil && friendSess.worldReady.Load() && isVisibleGloballyFor(s, friendSess) {
 		result = friendsResultAddedOnline
 	}
 
@@ -475,12 +480,13 @@ func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// TrinityCore: SendFriendStatus (SocialMgr.cpp:260-266) echoes the note
-	// via GetFriendInfo, which returns before the note lookup when the added
-	// friend is offline (SocialMgr.cpp:212) — the ADDED_OFFLINE arm carries
-	// an empty note even though the note is stored.
+	// TrinityCore: SendFriendStatus echoes the note via GetFriendInfo, whose
+	// note lookup (SocialMgr.cpp:212) runs before the visibility gates and
+	// only the offline early-return leaves it empty — so ADDED_OFFLINE
+	// carries the stored note whenever the target is online but invisible,
+	// and an empty note only when the target is truly offline.
 	note := friendNote
-	if result == friendsResultAddedOffline {
+	if friendSess == nil {
 		note = ""
 	}
 	_ = s.sendFriendStatus(result, friendGUID, note)
