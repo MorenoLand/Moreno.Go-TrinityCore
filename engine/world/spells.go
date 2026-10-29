@@ -2596,8 +2596,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	targetGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-			targetGUID = target.UnitGUID
-		} else if s.selection != 0 {
+			// A gameobject wire guid is not a unit target: GetUnitTarget
+			// returns m_objectTarget->ToUnit(), null for a GO (Spell.cpp:248),
+			// so the CheckTarget block below (Spell.cpp:5370) never runs for
+			// one, and a provided GO target is removed, never replaced by
+			// selection (InitExplicitTargets, Spell.cpp:668-678). Without
+			// this, targetCreatureEntry's guid-entry leg and getCombatTarget's
+			// DB leg resolve the GO guid to an unrelated creature and the
+			// pickpocket/disarm/only-players/creature-type/aura/LOS arms judge
+			// it. Selection is raw client input (handleSetSelection, no type
+			// check), so it gets the same guard.
+			if uint16(target.UnitGUID>>48) != 0xF110 {
+				targetGUID = target.UnitGUID
+			}
+		} else if s.selection != 0 && uint16(s.selection>>48) != 0xF110 {
 			targetGUID = s.selection
 		}
 	} else {
