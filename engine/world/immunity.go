@@ -1287,6 +1287,31 @@ func creatureImmuneToDamage(srv *Server, key creatureAuraKey, schoolMask uint32)
 	return creatureImmuneToDamageSpell(srv, key, wotlk.Spell{}, schoolMask)
 }
 
+// cachedTemplateSchoolImmuneMask is the template leg of
+// Unit::IsImmunedToDamage (Unit.cpp:7800-7816): Creature::
+// LoadTemplateImmunities (Creature.cpp:2279-2313) writes the template
+// SpellSchoolImmuneMask rows into m_spellImmune[IMMUNITY_SCHOOL], so the
+// damage fold reads them alongside script and live-aura rows. Cache-only
+// read: live motions are seated from loadCreatureStats, so the cache is
+// warm; a miss returns 0 (today's behavior), never a DB query — this
+// path carries no ctx. Hunter pets inherit no template immunities
+// (Creature.cpp:2293), matched by the in-tree motion PetType test.
+func (srv *Server) cachedTemplateSchoolImmuneMask(key creatureAuraKey) uint32 {
+	if srv == nil {
+		return 0
+	}
+	motion := srv.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if motion == nil || (motion.OwnerGUID != 0 && motion.PetType == petTypeHunter) {
+		return 0
+	}
+	srv.statsMu.RLock()
+	defer srv.statsMu.RUnlock()
+	if st, ok := srv.creatureStatsCache[motion.Entry]; ok {
+		return st.SpellSchoolImmuneMask
+	}
+	return 0
+}
+
 func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, schoolMask uint32) bool {
 	if srv == nil || schoolMask == 0 {
 		return false
@@ -1339,6 +1364,15 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 		if scriptDamageMask&schoolMask == schoolMask {
 			return true
 		}
+	}
+
+	// Template IMMUNITY_SCHOOL rows (Creature::LoadTemplateImmunities,
+	// Creature.cpp:2303-2312): single-school bits with the placeholder
+	// spell id, so the immuneSpellInfo is nil and the row can never be
+	// pierced (SpellInfo.cpp:1339, Go's zero-spell twin) — the bits count
+	// unconditionally once the attribute gates above have passed.
+	if templateMask := srv.cachedTemplateSchoolImmuneMask(key); templateMask&schoolMask == schoolMask {
+		return true
 	}
 
 	srv.auraMu.Lock()

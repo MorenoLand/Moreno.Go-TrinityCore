@@ -1997,8 +1997,17 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				outcome = protocol.MeleeHitImmune
 			}
 		}
-	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
-		outcome = protocol.MeleeHitEvade
+	} else if !isPlayerVictim && s.server != nil {
+		// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
+		// immune check runs on any victim ahead of the outcome roll, so a
+		// pet/creature victim with NORMAL-school damage immunity reports
+		// IS_IMMUNE, ahead of the evade leg below — the melee twin of
+		// this arm; the ranged path previously checked players only.
+		if creatureImmuneToDamage(s.server, creatureAuraKeyForTarget(target), 1) {
+			outcome = protocol.MeleeHitImmune
+		} else if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
+			outcome = protocol.MeleeHitEvade
+		}
 	}
 
 	minDmg := s.player.MinRangedDamage
