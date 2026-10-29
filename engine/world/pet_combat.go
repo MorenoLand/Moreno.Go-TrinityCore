@@ -46,6 +46,68 @@ func PetCanPaySpell(spell wotlk.Spell, current, maxPower, maxHealth uint32) bool
 	return current >= cost
 }
 
+// petCanPayFullCost is the PetCanPaySpell predicate over a precomputed
+// full cost (petSpellPowerCost): health-as-power needs current strictly
+// above the cost (Spell::CheckPower, Spell.cpp:6651-6656), other powers
+// need current at or above it (Spell.cpp:6673-6674).
+func petCanPayFullCost(spell wotlk.Spell, current, cost uint32) bool {
+	if spell.PowerType == petPowerTypeHealth {
+		return current > cost
+	}
+	return current >= cost
+}
+
+// petSpellPowerCost mirrors SpellInfo::CalcPowerCost (SpellInfo.cpp:3154-3241)
+// for pet casters: the ResolvePetSpellPowerCost base (flat ManaCost plus the
+// ManaCostPercentage of max power), the pet's own
+// SPELL_AURA_MOD_POWER_COST_SCHOOL flat add (73) and
+// MOD_POWER_COST_SCHOOL_PCT multiplier (72) by first school, and the owner's
+// SPELLMOD_COST (GetSpellModOwner returns the owner player for pets,
+// Object.cpp:2251-2258; the session here is the owner). C++ order: flat,
+// then spellmod, then the multiplier; pets are player-controlled so the NPC
+// scaler never runs, and the Shiv attack-time leg stays out (no attack-time
+// input on the pet path). Drain-all-power spells cost the current power, as
+// in C++ (SpellInfo.cpp:3161-3174). Callers compute this outside motionMu:
+// the aura sums read under auraMu, which the tree never nests inside motionMu.
+func (s *session) petSpellPowerCost(motion *creatureMotion, spell wotlk.Spell, current, maximum uint32) uint32 {
+	if motion == nil {
+		return 0
+	}
+	if spell.AttributesEx&spellAttr1DrainAllPower != 0 {
+		if spell.PowerType != petPowerTypeHealth && spell.PowerType >= 7 {
+			return 0
+		}
+		return current
+	}
+	cost := int32(ResolvePetSpellPowerCost(spell, maximum, motion.MaxHealth))
+	var school uint32
+	for i := uint32(0); i < 7; i++ {
+		if spell.SchoolMask&(1<<i) != 0 {
+			school = i
+			break
+		}
+	}
+	if s != nil && s.server != nil {
+		for _, mod := range s.server.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(motion), spellAuraModPowerCostSchool, 1<<school) {
+			cost += mod
+		}
+	}
+	if s != nil {
+		cost = s.applySpellMod(spell, spellModCost, cost)
+	}
+	var pct int32
+	if s != nil && s.server != nil {
+		for _, mod := range s.server.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(motion), spellAuraModPowerCostSchoolPct, 1<<school) {
+			pct += mod
+		}
+	}
+	cost = int32(float64(cost) * (1.0 + float64(pct)/100.0))
+	if cost < 0 {
+		cost = 0
+	}
+	return uint32(cost)
+}
+
 func petSpellPowerState(motion *creatureMotion, powerType uint32) (uint32, uint32, int, bool, bool) {
 	if motion == nil {
 		return 0, 0, 0, false, false
@@ -70,7 +132,7 @@ func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, 
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
 		return false
 	}
-	if !PetCanPaySpell(spell, current, maximum, motion.MaxHealth) {
+	if cost := s.petSpellPowerCost(motion, spell, current, maximum); !petCanPayFullCost(spell, current, cost) {
 		failure := petSpellFailedNoPower
 		if healthPower {
 			failure = petSpellFailedCasterAuraState
@@ -87,16 +149,26 @@ func (s *session) takePetSpellPower(motion *creatureMotion, spell wotlk.Spell, c
 	}
 	s.server.motionMu.Lock()
 	current, maximum, field, valid, healthPower := petSpellPowerState(motion, spell.PowerType)
+	s.server.motionMu.Unlock()
 	if !valid {
-		s.server.motionMu.Unlock()
 		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
 		return 0, false, false
 	}
 	cost := uint32(0)
 	if !ignoreCost {
-		cost = ResolvePetSpellPowerCost(spell, maximum, motion.MaxHealth)
+		cost = s.petSpellPowerCost(motion, spell, current, maximum)
 	}
-	if !ignoreCost && !PetCanPaySpell(spell, current, maximum, motion.MaxHealth) {
+	// Re-lock for the atomic pay-check-plus-drain: the cost above reads
+	// aura state under auraMu, which the tree never nests inside motionMu,
+	// so only the check and the drain hold motionMu.
+	s.server.motionMu.Lock()
+	current, _, _, valid, _ = petSpellPowerState(motion, spell.PowerType)
+	if !valid {
+		s.server.motionMu.Unlock()
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
+		return 0, false, false
+	}
+	if !ignoreCost && !petCanPayFullCost(spell, current, cost) {
 		s.server.motionMu.Unlock()
 		failure := petSpellFailedNoPower
 		if healthPower {

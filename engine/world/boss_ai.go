@@ -522,9 +522,12 @@ func creaturePower(m *creatureMotion, powerType uint32) uint32 {
 // ManaCostPercentage of the power's max (POWER_HEALTH from max health,
 // POWER_MANA from create mana, rage/focus/energy/happiness from max power),
 // and the SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION GtNPCManaCostScaler for
-// non-player-controlled casters. The UNIT_FIELD_POWER_COST_MODIFIER flat add,
-// the Shiv energy leg, SPELLMOD_COST, the cost multiplier, and the npcbot
-// legs are player/aura-side and stay 0 for creatures; RUNE/RUNIC_POWER pct
+// non-player-controlled casters, plus the caster's own
+// SPELL_AURA_MOD_POWER_COST_SCHOOL flat add (73) and
+// MOD_POWER_COST_SCHOOL_PCT multiplier (72), folded in C++ order (flat
+// before the NPC scaler, multiplier after it). The Shiv energy leg,
+// SPELLMOD_COST (no owner-session plumbing on the creature path; the pet
+// cast path wires it), and the npcbot legs stay out; RUNE/RUNIC_POWER pct
 // costs are unimplemented in C++ too ("Not implemented yet!").
 func (s *Server) creatureSpellPowerCost(spell wotlk.Spell, m *creatureMotion) int32 {
 	powerType := spell.PowerType
@@ -557,6 +560,21 @@ func (s *Server) creatureSpellPowerCost(spell wotlk.Spell, m *creatureMotion) in
 		}
 		powerCost += int32(uint64(base) * uint64(spell.ManaCostPct) / 100)
 	}
+	// Flat mod from the caster's own auras by first school
+	// (SpellInfo.cpp:3199-3200): UNIT_FIELD_POWER_COST_MODIFIER is fed by
+	// SPELL_AURA_MOD_POWER_COST_SCHOOL for any unit caster, so a creature
+	// carrying such an aura pays it like a player does. Runs before the
+	// NPC scaler, matching C++ order.
+	var school uint32
+	for i := uint32(0); i < 7; i++ {
+		if spell.SchoolMask&(1<<i) != 0 {
+			school = i
+			break
+		}
+	}
+	for _, mod := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModPowerCostSchool, 1<<school) {
+		powerCost += mod
+	}
 	// GtNPCManaCostScaler (SpellInfo.cpp:3228-3235): NPC spells carrying
 	// SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION scale by the caster/spell level
 	// ratio. C++ gates on !IsControlledByPlayer — pets and charmed
@@ -568,6 +586,15 @@ func (s *Server) creatureSpellPowerCost(spell wotlk.Spell, m *creatureMotion) in
 			}
 		}
 	}
+	// PCT mod from the caster's own auras by school (SpellInfo.cpp:3237-3240):
+	// UNIT_FIELD_POWER_COST_MULTIPLIER is fed by
+	// SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT. Runs after the NPC scaler,
+	// matching C++ order (scaler 3228-3235, multiplier last).
+	var pct int32
+	for _, mod := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModPowerCostSchoolPct, 1<<school) {
+		pct += mod
+	}
+	powerCost = int32(float32(powerCost) * (1.0 + float32(pct)/100.0))
 	if powerCost < 0 {
 		powerCost = 0
 	}
