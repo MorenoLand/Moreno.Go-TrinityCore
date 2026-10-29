@@ -40145,8 +40145,12 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 
 		if s.server.Data != nil {
 			if spell, found, err := s.server.Data.Spell(click.spellID); err == nil && found {
+				clickTargetFlags := protocol.SpellTargetFlagUnit
+				if targetUnit != 0 && uint16(targetUnit>>48) == 0xF110 {
+					clickTargetFlags = protocol.SpellTargetFlagGameObject
+				}
 				targetData := protocol.SpellTargetData{
-					Flags:    protocol.SpellTargetFlagUnitWireMask,
+					Flags:    clickTargetFlags,
 					UnitGUID: targetUnit,
 				}
 				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0, 0, nil)
