@@ -6256,7 +6256,7 @@ func (s *Server) creatureEffectReputation(ctx context.Context, m *creatureMotion
 		if targetSess == nil || targetSess.player == nil {
 			continue
 		}
-		targetSess.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, uint32(m.Level)))
+		targetSess.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, uint32(m.Level)), false)
 	}
 }
 

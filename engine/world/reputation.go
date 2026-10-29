@@ -53,13 +53,16 @@ const (
 )
 
 // reputationGainPctMod mirrors Player::CalculateReputationGain's aura fold
-// (Player.cpp:6653-6659): the live 156 modifier plus the faction-specific
-// 190 modifier whose effect MiscValue names this faction (the kill-only
-// source gate has no Go model — all giveReputation callers share the sink).
-// C++ applies it as percent = 100 + repMod for gains, 100 - repMod for
-// losses (CalculatePct at the end). The quest-bonus, low-level rate and
-// RepRewardRate legs have no Go model.
-func (s *session) reputationGainPctMod(factionID uint32) (mod int32) {
+// (Player.cpp:6653-6659): the live 156 modifier plus, when
+// includeFactionSpecific is set, the faction-specific 190 modifier whose
+// effect MiscValue names this faction. C++ gates 190 to kills
+// ("faction specific auras only seem to apply to kills"); spell and quest
+// sources fold 156 only, while the battleground team-reward arm applies
+// both (Battleground.cpp:640-658, AddPct twice). C++ applies it as
+// percent = 100 + repMod for gains, 100 - repMod for losses (CalculatePct
+// at the end). The quest-bonus, low-level rate and RepRewardRate legs have
+// no Go model.
+func (s *session) reputationGainPctMod(factionID uint32, includeFactionSpecific bool) (mod int32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
@@ -79,7 +82,7 @@ func (s *session) reputationGainPctMod(factionID uint32) (mod int32) {
 			case spellAuraModReputationGain:
 				mod += aura.Amounts[index]
 			case spellAuraModFactionReputationGain:
-				if uint32(effect.MiscValue) == factionID {
+				if includeFactionSpecific && uint32(effect.MiscValue) == factionID {
 					mod += aura.Amounts[index]
 				}
 			}
@@ -304,14 +307,68 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 	return true
 }
 
-func (s *session) giveReputation(ctx context.Context, factionID uint32, amount int32) {
+// sendFactionVisiblePacket mirrors ReputationMgr::SendVisible
+// (ReputationMgr.cpp:445-460): SMSG_SET_FACTION_VISIBLE carries the
+// faction's ReputationList id. Called on the SetVisible transition inside
+// SetOneFactionReputation, before the standing packet SendState sends.
+func (s *session) sendFactionVisiblePacket(listID uint32) {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(listID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_VISIBLE), packet.Bytes(), true)
+}
+
+// factionVisibleGated mirrors the SetVisible gate (ReputationMgr.cpp:445-460):
+// always-invisible or hidden factions can never be made visible, except
+// when flagged SPECIAL.
+func factionVisibleGated(flags uint8) bool {
+	return flags&(factionFlagInvisibleForced|factionFlagHidden) != 0 && flags&factionFlagSpecial == 0
+}
+
+// fireReputationCriteria mirrors the criteria arms of
+// SetOneFactionReputation (ReputationMgr.cpp:405-410) as dispatched by
+// AchievementMgr::UpdateAchievementCriteria: GAIN_REPUTATION sets the
+// faction's standing when positive, while the honored/revered/exalted arms
+// set the absolute counts of factions at each rank and KNOWN_FACTIONS
+// sets the absolute visible-faction count (AchievementMgr.cpp:967-1020).
+// The counts are absolute, not per-gain increments: C++ SetCriteriaProgress
+// rewrites the count, so repeated gains at the same rank must not inflate it.
+func (s *session) fireReputationCriteria(factionID uint32, totalStanding int32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if totalStanding > 0 {
+		s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(totalStanding))
+	}
+	var honored, revered, exalted, visible uint32
+	for _, rep := range s.player.Reputations {
+		total := totalReputationStanding(rep)
+		if rep.Flags&factionFlagVisible != 0 {
+			visible++
+		}
+		if total >= 9000 {
+			honored++
+		}
+		if total >= 21000 {
+			revered++
+		}
+		if total >= 42000 {
+			exalted++
+		}
+	}
+	s.setAchievementCriteria(criteriaTypeHonoredRep, 0, honored)
+	s.setAchievementCriteria(criteriaTypeReveredRep, 0, revered)
+	s.setAchievementCriteria(criteriaTypeExaltedRep, 0, exalted)
+	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, visible)
+}
+
+func (s *session) giveReputation(ctx context.Context, factionID uint32, amount int32, includeFactionSpecific bool) {
 	if s.player == nil || factionID == 0 || amount == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	// Player::CalculateReputationGain (Player.cpp:6657): percent += rep > 0 ?
 	// repMod : -repMod, then CalculatePct(rep, percent); a zero or negative
 	// percent grants nothing.
-	if mod := s.reputationGainPctMod(factionID); mod != 0 {
+	if mod := s.reputationGainPctMod(factionID, includeFactionSpecific); mod != 0 {
 		percent := int64(100 + mod)
 		if amount < 0 {
 			percent = int64(100 - mod)
@@ -360,29 +417,31 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 				newTotal = -42000
 			}
 			s.player.Reputations[i].Standing = newTotal - s.player.Reputations[i].Base
+			// SetOneFactionReputation (ReputationMgr.cpp:401) calls
+			// SetVisible: a gain makes a non-visible faction visible
+			// (gated factions excepted), announced before the standing
+			// packet. The load seeds every DBC faction row, so this
+			// existing-row arm is the common first-gain path, not the
+			// first-seen arm below.
+			becameVisible := false
+			if !factionVisibleGated(s.player.Reputations[i].Flags) && s.player.Reputations[i].Flags&factionFlagVisible == 0 {
+				s.player.Reputations[i].Flags |= factionFlagVisible
+				becameVisible = true
+			}
 			if reputationAutoWar(s.player.Reputations[i].Flags, newTotal, s.player.Reputations[i].Standing) {
 				s.player.Reputations[i].Flags |= factionFlagAtWar
 			}
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ?, flags = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.player.Reputations[i].Flags, s.playerGUID, factionID)
 			totalStanding := totalReputationStanding(s.player.Reputations[i])
+			if becameVisible {
+				s.sendFactionVisiblePacket(s.player.Reputations[i].ListID)
+			}
 			// ReputationMgr::SetReputation (ReputationMgr.cpp:369): the changed
 			// faction is reported to the client immediately via SendState as
 			// SMSG_SET_FACTION_STANDING; _sendFactionIncreased is the rank
 			// step-up (ReputationMgr.cpp:405-406).
 			_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{s.player.Reputations[i]}, reputationRank(int64(totalStanding)) > oldRank), true)
-			if totalStanding > 0 {
-				s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(totalStanding))
-				if totalStanding >= 9000 {
-					s.updateAchievementCriteria(criteriaTypeHonoredRep, factionID, 1)
-				}
-				if totalStanding >= 21000 {
-					s.updateAchievementCriteria(criteriaTypeReveredRep, factionID, 1)
-				}
-				// Reference GAIN_EXALTED_REPUTATION: any faction at 42000+ counts.
-				if totalStanding >= 42000 {
-					s.updateAchievementCriteria(criteriaTypeExaltedRep, factionID, 1)
-				}
-			}
+			s.fireReputationCriteria(factionID, totalStanding)
 			// Player::SetReputation (ReputationMgr.cpp:302) runs the quest
 			// ReputationChanged scan after the standing lands.
 			s.questReputationChanged(ctx, factionID)
@@ -400,10 +459,12 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 		Flags:     factionFlagVisible,
 	}
 	dbcBacked := false
+	becameVisible := false
 	oldRank := reputationRank(0)
 	if s.server != nil && s.server.Data != nil {
 		if dbcRep, found, dbcErr := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class); dbcErr == nil && found && dbcRep.ReputationList >= 0 {
 			dbcBacked = true
+			becameVisible = dbcRep.DefaultFlags&factionFlagVisible == 0 && !factionVisibleGated(dbcRep.DefaultFlags)
 			total := dbcRep.BaseStanding + amount
 			if total > 42999 {
 				total = 42999
@@ -435,10 +496,14 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	}
 	s.player.Reputations = append(s.player.Reputations, rep)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, rep.Standing, rep.Flags)
+	if becameVisible {
+		s.sendFactionVisiblePacket(rep.ListID)
+	}
 	// ReputationMgr::SetReputation (ReputationMgr.cpp:369): new factions are
 	// reported immediately as well ("only this faction gets reported to
 	// client, even if it has no own visible standing").
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(totalReputationStanding(rep))) > oldRank), true)
+	s.fireReputationCriteria(factionID, totalReputationStanding(rep))
 	s.questReputationChanged(ctx, factionID)
 }
 
@@ -739,14 +804,14 @@ func (s *session) championingFaction(targetMapID uint32) uint32 {
 // calculateKillReputationGain mirrors Player::CalculateReputationGain
 // (Player.cpp:6651-6726) for REPUTATION_SOURCE_KILL: the 156 aura modifier
 // folds into percent, plus the faction-specific 190 modifier which C++ gates
-// to kills (both already in reputationGainPctMod). The low-level kill rate
-// (World.cpp:562, "Rate.Reputation.LowLevel.Kill", default 1.0) has no Go
-// config, so the gray-level reduction arm is a no-op like the quest path.
+// to kills. The low-level kill rate (World.cpp:562,
+// "Rate.Reputation.LowLevel.Kill", default 1.0) has no Go config, so the
+// gray-level reduction arm is a no-op like the quest path.
 // Player.cpp:6724: the recruit-a-friend bonus folds percent for every source
 // except REPUTATION_SOURCE_SPELL (the kill path is SOURCE_KILL).
 func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32 {
 	percent := float32(100)
-	if mod := s.reputationGainPctMod(factionID); mod != 0 {
+	if mod := s.reputationGainPctMod(factionID, true); mod != 0 {
 		if rep > 0 {
 			percent += float32(mod)
 		} else {

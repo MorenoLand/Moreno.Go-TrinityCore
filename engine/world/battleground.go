@@ -2635,7 +2635,7 @@ func (s *Server) rewardBGEndReputation(mapID, team uint32, factionID uint32, rep
 	}
 	for _, sess := range s.bgRewardTargets(mapID) {
 		if teamForRace(sess.player.Race) == team {
-			sess.giveReputation(context.Background(), factionID, int32(rep))
+			sess.giveReputation(context.Background(), factionID, int32(rep), true)
 		}
 	}
 }

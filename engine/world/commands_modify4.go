@@ -176,7 +176,14 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 	entry := &target.player.Reputations[index]
 	oldTotal := totalReputationStanding(*entry)
 	entry.Standing = standing - rep.BaseStanding
-	entry.Flags |= factionFlagVisible // SetVisible
+	// SetOneFactionReputation (ReputationMgr.cpp:401) calls SetVisible,
+	// gated: always-invisible or hidden factions without SPECIAL never
+	// become visible, even on the GM absolute-set path.
+	becameVisible := false
+	if !factionVisibleGated(entry.Flags) && entry.Flags&factionFlagVisible == 0 {
+		entry.Flags |= factionFlagVisible
+		becameVisible = true
+	}
 	newTotal := totalReputationStanding(*entry)
 	// SetOneFactionReputation (ReputationMgr.cpp:403): the hostile arm also
 	// runs on the absolute-set path, gated on the raw standing.
@@ -188,20 +195,15 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 		_, _ = chars.DB.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", guid, factionID, entry.Standing, entry.Flags)
 	}
 	increased := reputationRank(int64(newTotal)) > reputationRank(int64(oldTotal))
-	_ = target.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{*entry}, increased), true)
-	if newTotal > 0 {
-		target.setAchievementCriteria(criteriaTypeKnownFactions, factionID, 1)
-		target.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(newTotal))
-		if newTotal >= 9000 {
-			target.updateAchievementCriteria(criteriaTypeHonoredRep, factionID, 1)
-		}
-		if newTotal >= 21000 {
-			target.updateAchievementCriteria(criteriaTypeReveredRep, factionID, 1)
-		}
-		if newTotal >= 42000 {
-			target.updateAchievementCriteria(criteriaTypeExaltedRep, factionID, 1)
-		}
+	if becameVisible {
+		target.sendFactionVisiblePacket(entry.ListID)
 	}
+	_ = target.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{*entry}, increased), true)
+	target.fireReputationCriteria(factionID, int32(newTotal))
+	// SetOneFactionReputation (ReputationMgr.cpp:405) runs
+	// ReputationChanged: the quest-log rep-objective scan, like the
+	// additive sink.
+	target.questReputationChanged(ctx, factionID)
 	// LANG_COMMAND_MODIFY_REP: the handler's message, like the C++.
 	s.sendSysMessage(fmt.Sprintf("You change %s faction's reputation (id %d) for %s to %d.", factionName, factionID, target.player.Name, newTotal))
 }

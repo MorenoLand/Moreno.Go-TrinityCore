@@ -12281,7 +12281,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							continue
 						}
 						if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
-							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
+							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
 						}
 					}
 				}
@@ -19099,7 +19099,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// gate, rolled value via CalcValueForLevel).
 				if eff.MiscValue != 0 && s.server != nil && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
 					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
-						ts.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
+						ts.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
 					}
 				}
 			} else if eff.Effect == spellEffectQuestComplete {

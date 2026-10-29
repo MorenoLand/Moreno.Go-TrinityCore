@@ -1372,7 +1372,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.playerLoading = false
 	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
-	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
+	// KNOWN_FACTIONS counts visible factions (AchievementMgr.cpp:1017,
+	// GetVisibleFactionCount), not every seeded row.
+	visibleFactions := uint32(0)
+	for _, rep := range state.Reputations {
+		if rep.Flags&factionFlagVisible != 0 {
+			visibleFactions++
+		}
+	}
+	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, visibleFactions)
 	if s.player.repopOnLogin {
 		s.buildPlayerRepop(ctx, false)
 		s.repopAtGraveyard(ctx)
