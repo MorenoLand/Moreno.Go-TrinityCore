@@ -5906,7 +5906,7 @@ func (s *Server) creatureApplyHealAbsorb(key creatureAuraKey, schoolMask, heal u
 	}
 	s.auraMu.Unlock()
 	for _, id := range exhausted {
-		s.removeCreatureAura(key, id)
+		s.removeCreatureAuraWithMode(key, id, auraRemoveByEnemySpell)
 	}
 	return absorbed
 }

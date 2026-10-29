@@ -23378,7 +23378,7 @@ func (s *session) applyHealAbsorb(schoolMask uint32, heal uint32) uint32 {
 	}
 	s.castMu.Unlock()
 	for _, id := range exhausted {
-		s.removeAura(id)
+		s.removeAuraWithMode(id, auraRemoveByEnemySpell)
 	}
 	return absorbed
 }
@@ -26576,7 +26576,7 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 		if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 53 || eff.Aura == 8) {
 			tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 			amount += tickBonus
-		} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
+		} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield {
 			shieldBonus := uint32(math.Round(float64(s.player.SpellPower) * 0.8068))
 			amount += shieldBonus
 		}

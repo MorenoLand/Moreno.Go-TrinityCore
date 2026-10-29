@@ -9,10 +9,15 @@ import (
 
 // Absorption aura types from TrinityCore SpellAuraDefines.h
 const (
-	SpellAuraSchoolAbsorb uint32 = 69  // SPELL_AURA_SCHOOL_ABSORB (Power Word: Shield, Ice Barrier, Sacred Shield)
-	SpellAuraManaShield   uint32 = 97  // SPELL_AURA_MANA_SHIELD (Mana Shield, SpellAuraDefines.h:177)
-	SpellAuraMagicAbsorb  uint32 = 256 // SPELL_AURA_MAGIC_ABSORB (Anti-Magic Shell)
+	SpellAuraSchoolAbsorb uint32 = 69 // SPELL_AURA_SCHOOL_ABSORB (Power Word: Shield, Ice Barrier, Sacred Shield)
+	SpellAuraManaShield   uint32 = 97 // SPELL_AURA_MANA_SHIELD (Mana Shield, SpellAuraDefines.h:177)
 )
+
+// NOTE: there is no SPELL_AURA_MAGIC_ABSORB in this C++ tree — 256 is
+// SPELL_AURA_NO_REAGENT_USE (SpellAuraDefines.h:336), and Anti-Magic Shell
+// (48707) is a SPELL_AURA_SCHOOL_ABSORB (69) aura with a script absorb
+// handler (spell_dk.cpp). A former 256 absorb leg is therefore removed,
+// not kept as an Anti-Magic Shell model.
 
 // absorbAuraPriority returns the priority order for damage absorption shields.
 // Within SPELL_AURA_SCHOOL_ABSORB (69) it mirrors TrinityCore's
@@ -25,11 +30,10 @@ const (
 //  6. Sacrifice — warlock family, icon 693
 //  7. other school-specific absorbs
 //
-// The 256 (Anti-Magic Shell) and 97 (Mana Shield) slots keep the Go tree's
-// existing combined-list positions — C++ consumes those aura types in
-// separate CalcAbsorbResist loops (Unit.cpp:1864 vs 1914), so the merged
-// pass is already a Go-side approximation; generic 69s stay ahead of mana
-// shield, matching C++.
+// The 97 (Mana Shield) slot keeps the Go tree's existing combined-list
+// position — C++ consumes 69 and 97 in separate CalcAbsorbResist loops
+// (Unit.cpp:1864 vs 1914), so the merged pass is already a Go-side
+// approximation; generic 69s stay ahead of mana shield, matching C++.
 func (s *Server) absorbAuraPriority(aura *activeAura) int {
 	if aura == nil {
 		return 99
@@ -68,8 +72,6 @@ func (s *Server) absorbAuraPriority(aura *activeAura) int {
 		return 9
 	}
 	switch aura.AuraType {
-	case SpellAuraMagicAbsorb:
-		return 8
 	case SpellAuraManaShield:
 		return 10
 	default:
@@ -426,8 +428,13 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 
 			// 1. School Absorb (SPELL_AURA_SCHOOL_ABSORB = 69)
 			if aura.AuraType == SpellAuraSchoolAbsorb {
-				// SchoolMask == 0 absorbs all schools, otherwise bitmask match
-				if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
+				// C++ gates on the absorb effect's MiscValue, not the aura
+				// spell's school (Unit.cpp:1881): Power Word: Shield and
+				// Ice Barrier carry MiscValue 127 (all schools) on a holy /
+				// frost spell, so gating on SchoolMask left them absorbing
+				// only their own spell school. A zero MiscValue absorbs
+				// nothing, like C++ — there is no all-schools fallback.
+				if aura.MiscValue&int32(schoolMask) != 0 {
 					absorbThis := aura.Amount
 					if absorbThis > remainingDamage {
 						absorbThis = remainingDamage
@@ -442,52 +449,50 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				continue
 			}
 
-			// 2. Magic Absorb (SPELL_AURA_MAGIC_ABSORB = 256)
-			// Absorbs non-physical magical damage (Anti-Magic Shell)
-			if aura.AuraType == SpellAuraMagicAbsorb && schoolMask&1 == 0 {
-				if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
-					absorbThis := aura.Amount
-					if absorbThis > remainingDamage {
-						absorbThis = remainingDamage
-					}
-					aura.Amount -= absorbThis
-					remainingDamage -= absorbThis
-					absorbed += absorbThis
-					if aura.Amount == 0 {
-						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
-					}
-				}
-				continue
-			}
-
-			// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 97)
+			// 2. Mana Shield (SPELL_AURA_MANA_SHIELD = 97)
 			// Each point absorbed drains the spell's value multiplier mana
 			// (Unit.cpp:1945-1948: int32(manaReduction * CalcValueMultiplier);
 			// Mana Shield's DBC value is 2.0, talent-folded via
 			// SPELLMOD_VALUE_MULTIPLIER). A zero multiplier leaves the mana
 			// cost unchanged, mirroring the C++ if (float manaMultiplier).
 			if aura.AuraType == SpellAuraManaShield && s.player.Powers[0] > 0 {
+				// The mana-shield loop gates on the effect MiscValue like
+				// the 69 loop (Unit.cpp:1922); the old code had no school
+				// gate at all.
+				if aura.MiscValue&int32(schoolMask) == 0 {
+					continue
+				}
 				mult := s.calcValueMultiplierForAura(aura.SpellID, SpellAuraManaShield,
 					s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, aura.CasterGUID))
 				if mult == 0 {
 					mult = 1
 				}
-				currMana := s.player.Powers[0]
-				neededMana := uint32(math.Ceil(float64(remainingDamage) * float64(mult)))
-				absorbPossible := remainingDamage
-				if currMana < neededMana {
-					absorbPossible = uint32(float64(currMana) / float64(mult))
+				// Unit.cpp:1938-1953, exactly: the candidate is the
+				// shield amount clamped to the running damage, the mana
+				// cost truncates (int32 cast, not Ceil), and a mana
+				// shortfall scales the absorb by the paid fraction,
+				// truncating again. The old Ceil cost under-absorbed
+				// whenever mana covered the truncated cost but not the
+				// ceiling (e.g. 3 damage at 1.5x with 4 mana: C++ absorbs
+				// 3, the old code 2).
+				absorbCandidate := aura.Amount
+				if absorbCandidate > remainingDamage {
+					absorbCandidate = remainingDamage
 				}
-				if absorbPossible > aura.Amount {
-					absorbPossible = aura.Amount
+				manaReduction := int32(float64(absorbCandidate) * float64(mult))
+				if manaReduction < 0 {
+					manaReduction = 0
+				}
+				manaTaken := s.player.Powers[0]
+				if manaTaken > uint32(manaReduction) {
+					manaTaken = uint32(manaReduction)
+				}
+				absorbPossible := absorbCandidate
+				if manaReduction > 0 && manaTaken < uint32(manaReduction) {
+					absorbPossible = uint32(float64(absorbCandidate) * (float64(manaTaken) / float64(manaReduction)))
 				}
 				if absorbPossible > 0 {
-					manaDrain := uint32(math.Ceil(float64(absorbPossible) * float64(mult)))
-					if manaDrain > s.player.Powers[0] {
-						s.player.Powers[0] = 0
-					} else {
-						s.player.Powers[0] -= manaDrain
-					}
+					s.player.Powers[0] -= manaTaken
 					aura.Amount -= absorbPossible
 					remainingDamage -= absorbPossible
 					absorbed += absorbPossible
@@ -547,8 +552,11 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 				if remainingDamage == 0 {
 					break
 				}
-				if aura.AuraType == SpellAuraSchoolAbsorb || (aura.AuraType == SpellAuraMagicAbsorb && schoolMask&1 == 0) {
-					if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
+				if aura.AuraType == SpellAuraSchoolAbsorb {
+					// C++ gates on the absorb effect's MiscValue
+					// (Unit.cpp:1881), not the aura spell's school — see
+					// the player leg above. 256 is not an absorb type.
+					if aura.MiscValue&int32(schoolMask) != 0 {
 						absorbThis := aura.Amount
 						if absorbThis > remainingDamage {
 							absorbThis = remainingDamage
@@ -572,14 +580,18 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 				// (Unit.cpp:1949), and the school-mask gate (Unit.cpp:1922)
 				// applies like the 69 arm's.
 				if aura.AuraType == SpellAuraManaShield && motion != nil && motion.Powers[0] > 0 {
-					if aura.SchoolMask != 0 && (aura.SchoolMask&uint32(schoolMask)) == 0 {
+					// Unit.cpp:1922 gates on the effect MiscValue, not the
+					// spell school, and Unit.cpp:1945 truncates the mana
+					// cost (int32 cast), so the Ceil cost below is replaced
+					// with the truncated cost like the player leg.
+					if aura.MiscValue&int32(schoolMask) == 0 {
 						continue
 					}
 					absorbPossible := aura.Amount
 					if absorbPossible > remainingDamage {
 						absorbPossible = remainingDamage
 					}
-					neededMana := uint32(math.Ceil(float64(absorbPossible) * 1.5))
+					neededMana := uint32(int32(float64(absorbPossible) * 1.5))
 					manaTaken := motion.Powers[0]
 					if manaTaken > neededMana {
 						manaTaken = neededMana
