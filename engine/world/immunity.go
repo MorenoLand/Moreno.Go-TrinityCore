@@ -371,6 +371,23 @@ func (s *session) isImmuneToSpellNoHarmfulGate(spell wotlk.Spell, caster *sessio
 	return s.isImmuneToSpellFiltered(spell, caster, false)
 }
 
+// spellPiercesImmunityGrant runs the school fold's pierce test for a
+// hardcoded immunity arm: whether spell pierces the immunity granted by
+// grantID's aura (SpellInfo::CanPierceImmuneAura, SpellInfo.cpp:1336-1361).
+// An unresolvable granting spell cannot be pierced (the zero-Spell twin of
+// a nil immuneSpellInfo), so the arm keeps its old behavior where the DBC
+// row is absent.
+func (s *session) spellPiercesImmunityGrant(spell wotlk.Spell, grantID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	grant, found, err := s.server.Data.Spell(grantID)
+	if err != nil || !found {
+		return false
+	}
+	return canSpellPierceImmuneAura(spell, grant)
+}
+
 func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, requireHarmful bool) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -395,15 +412,33 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 	harmful := isHarmfulSpell(spell)
 
 	// Cyclone (33786) and Banish (710, 18647) make the unit immune to ALL spells (beneficial or harmful)
-	// except Banish itself on a banished target
+	// except Banish itself on a banished target. C++ has no arm for them in
+	// IsImmunedToSpell (Unit.cpp:7852-7922) — their immunity arrives via the
+	// school fold below (39 rows) — so these arms run through the same
+	// CanPierceImmuneAura test the fold uses (SpellInfo.cpp:1336-1361):
+	// a school-piercing spell still reports immune when the granting
+	// spell's mechanic is IMMUNE_SHIELD/INVULNERABILITY/BANISH, and an
+	// unresolvable granting spell cannot be pierced, preserving the old
+	// behavior where the DBC row is absent.
 	if _, ok := s.auras[33786]; ok {
-		return true
+		if !s.spellPiercesImmunityGrant(spell, 33786) {
+			return true
+		}
 	}
 	if _, ok := s.activeAuras[33786]; ok {
-		return true
+		if !s.spellPiercesImmunityGrant(spell, 33786) {
+			return true
+		}
 	}
-	if (s.hasAuraInLock(710) || s.hasAuraInLock(18647)) && spell.ID != 710 && spell.ID != 18647 {
-		return true
+	if s.hasAuraInLock(710) && spell.ID != 710 && spell.ID != 18647 {
+		if !s.spellPiercesImmunityGrant(spell, 710) {
+			return true
+		}
+	}
+	if s.hasAuraInLock(18647) && spell.ID != 710 && spell.ID != 18647 {
+		if !s.spellPiercesImmunityGrant(spell, 18647) {
+			return true
+		}
 	}
 
 	// Unit.cpp:7864-7876 run ahead of the requireHarmful bail: C++ checks
