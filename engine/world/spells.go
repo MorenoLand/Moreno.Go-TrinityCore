@@ -8436,6 +8436,60 @@ func (s *session) sanctuaryTimeFor(guid uint64) uint32 {
 	return s.server.creatureLastSanctuaryTime(s.player.Map, s.player.InstanceID, guid)
 }
 
+// revalidateUnk4ArrivalTargets runs the arrival-tick arms of
+// Spell::handle_delayed that carry no Speed gate, for a UNK4-only spell
+// (Speed == 0) that fell through to the immediate path: C++ still takes
+// the delayed branch for it (Spell::_cast, Spell.cpp:3475), so its
+// handle_delayed tick runs on a later event pass, while Go applies its
+// effects synchronously. Go has no world-tick deferral primitive for
+// spells, so the arrival check collapses to the latest synchronous
+// point, immediately before applyEffects: a 0ms timer would only yield
+// the goroutine, not create a tick boundary, while reordering the
+// cast-item/combo legs. Only the ungated arms run here — the immunity
+// (Spell.cpp:2720), NON_ATTACKABLE (:2740-2741) and duel-end
+// (:2743-2745) arms are all Speed-gated and stay out for Speed == 0:
+//   - evade (PreprocessSpellHit, Spell.cpp:2715-2717): no gate; read on
+//     the effect recipient (PreprocessTarget passes _spellHitTarget,
+//     which is the caster for a clean reflect, so a reflected cast's
+//     evade arm is vacuous for a player caster); drops with
+//     SMSG_SPELLLOGMISS (PreprocessTarget, Spell.cpp:2366-2372).
+//   - sanctuary (DoTargetSpellHit, Spell.cpp:2402-2404): state-gated on
+//     SPELL_STATE_DELAYED, which the UNK4 branch holds, and non-positive
+//     only; read on the TargetGUID unit (the reflector for a reflected
+//     cast); drops silently ("No missinfo in that case").
+//
+// The alive arm (DoTargetSpellHit, Spell.cpp:2430) stays out: Go latches
+// no IsAlive at launch, and a naive Health == 0 drop would break
+// dead-target spells (resurrection); death between launch and apply is
+// left to the per-effect handlers, which already guard dead targets.
+func (s *session) revalidateUnk4ArrivalTargets(spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
+	if len(targets) == 0 {
+		return targets
+	}
+	live := make([]uint64, 0, len(targets))
+	for _, guid := range targets {
+		if s.server != nil && s.player != nil {
+			if high := uint16(guid >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
+				if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, guid) {
+					s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
+					continue
+				}
+			}
+		}
+		if !spellIsPositive(spell) {
+			armGUID := guid
+			if isReflected && guid == s.playerGUID {
+				armGUID = reflectSourceGUID
+			}
+			if s.sanctuaryTimeFor(armGUID) >= launchMs {
+				continue
+			}
+		}
+		live = append(live, guid)
+	}
+	return live
+}
+
 const (
 	invTypeAmmo   uint32 = 24 // INVTYPE_AMMO (ItemTemplate.h:285)
 	invTypeThrown uint32 = 25 // INVTYPE_THROWN (ItemTemplate.h:286)
@@ -13123,6 +13177,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.procSpellCastPhaseAuraTriggers(ctx, spell)
 			return
 		}
+	}
+
+	// A UNK4-only spell (isDelayedBranch via SPELL_ATTR4_UNK4,
+	// Speed == 0) fell through to this immediate path, but C++ takes
+	// the delayed branch for it (Spell::_cast, Spell.cpp:3475) and its
+	// handle_delayed tick runs on a later event pass. Run the ungated
+	// arrival arms here, at the latest synchronous point before the
+	// effects land; launchMs is the _cast-equivalent anchor (the
+	// delayed branch's launchMs with its zero travel time). didHit is
+	// left at its launch value, matching the delayed branch, which
+	// likewise does not recompute it after revalidation.
+	if isDelayedBranch && spell.Speed == 0 {
+		hitTargets = s.revalidateUnk4ArrivalTargets(spell, hitTargets, gameTimeMS(), isReflected, reflectSourceGUID)
 	}
 
 	applyEffects(ctx)
