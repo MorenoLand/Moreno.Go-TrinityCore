@@ -484,37 +484,6 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 		}
 	}
 
-	// Arms below stay behind the bail: the Divine Shield/Blessing of
-	// Protection/Anti-Magic Shell/Cloak of Shadows arms are harmful-only
-	// approximations, and the school/all-effects folds are still
-	// bail-gated (residual, not moved here).
-	if requireHarmful && !harmful {
-		return false
-	}
-
-	// Harmful spell immunities:
-	// Divine Shield (642) and Ice Block (45438) make the caster immune to all harmful spells
-	if s.hasAuraInLock(642) || s.hasAuraInLock(45438) {
-		return true
-	}
-
-	// Blessing of Protection (1022, 5599, 10278) makes target immune to physical spells
-	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 {
-		if s.hasAuraInLock(1022) || s.hasAuraInLock(5599) || s.hasAuraInLock(10278) {
-			return true
-		}
-	}
-
-	// Anti-Magic Shell (48707) grants immunity to harmful magical debuffs
-	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(48707) {
-		return true
-	}
-
-	// Cloak of Shadows (31224) grants immunity to harmful magical spells
-	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(31224) {
-		return true
-	}
-
 	// Unit.cpp:7900-7922 school fold over the live aura-39 rows: the
 	// gate is the effect's MiscValue (SpellInfo::_LoadImmunityInfo,
 	// SpellInfo.cpp:2785), not the granting spell's SchoolMask, full
@@ -571,6 +540,43 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 		}
 	}
 	if anyEffect && immuneToAllEffects {
+		return true
+	}
+
+	// Unit.cpp:7880-7922 order: the per-effect loop and the school fold
+	// run with no positivity/harmfulness gate (only their own gates: the
+	// 267 harmful leg inside the per-effect eval, and the
+	// immune-spell-positive / spell-positive / caster / friendly gate in
+	// the school fold), so both folds above already ran ahead of this
+	// bail. Only the hardcoded arms below stay behind it: the Divine
+	// Shield/Blessing of Protection/Anti-Magic Shell/Cloak of Shadows
+	// arms are harmful-only approximations with no C++ IsImmunedToSpell
+	// counterpart, and letting them fire on non-harmful spells would
+	// over-block the friendly-positive cases the school gate exempts.
+	if requireHarmful && !harmful {
+		return false
+	}
+
+	// Harmful spell immunities:
+	// Divine Shield (642) and Ice Block (45438) make the caster immune to all harmful spells
+	if s.hasAuraInLock(642) || s.hasAuraInLock(45438) {
+		return true
+	}
+
+	// Blessing of Protection (1022, 5599, 10278) makes target immune to physical spells
+	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 {
+		if s.hasAuraInLock(1022) || s.hasAuraInLock(5599) || s.hasAuraInLock(10278) {
+			return true
+		}
+	}
+
+	// Anti-Magic Shell (48707) grants immunity to harmful magical debuffs
+	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(48707) {
+		return true
+	}
+
+	// Cloak of Shadows (31224) grants immunity to harmful magical spells
+	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(31224) {
 		return true
 	}
 
