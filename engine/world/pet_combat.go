@@ -1350,11 +1350,11 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	// 5% base + SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) +
 	// SPELL_AURA_MOD_CRIT_PCT (290) from the pet's creature aura store,
 	// gated on !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the flag zeroes the
-	// whole base, so the adjustment is -500 plus the aura totals.
+	// whole base, so the adjustment is -500 flat and the aura totals are dropped.
 	attackerCritAdjustBP := s.creatureAuraTypeSum(petKey, spellAuraModWeaponCritPercent)*100 +
 		s.creatureAuraTypeSum(petKey, spellAuraModCritPct)*100
 	if motion.FlagsExtra&0x00020000 != 0 {
-		attackerCritAdjustBP -= 500
+		attackerCritAdjustBP = -500
 	}
 	if isTargetPlayer && targetSess != nil && targetSess.player != nil {
 		victimDodgeBP = int32(math.Round(float64(targetSess.player.DodgePercentage) * 100))
@@ -1386,9 +1386,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// (critDone + flats, Unit.cpp:2871); 197 applies after resilience.
 		victimFlatCritTakenBP = int32(math.Round(float64(targetSess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
 			int32(math.Round(targetSess.victimCritChanceForCaster(motion.GUID)*100))
-		resilBaseBP := int32(500) + victimFlatCritTakenBP
+		resilBaseBP := int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP
 		targetSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
-		critReductionBP = int32(500) + victimFlatCritTakenBP - resilBaseBP
+		critReductionBP = int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP - resilBaseBP
 		victimSpellWeaponCritBP = int32(math.Round(float64(targetSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
 		if attackerInFront := hasInArc(targetSess.player.Orientation, targetSess.player.X, targetSess.player.Y, motion.X, motion.Y, math.Pi); !attackerInFront && !targetSess.hasAuraType(spellAuraIgnoreHitDirection) {
 			canParry = false
@@ -1466,9 +1466,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// vehicle victim takes no resilience (Unit.cpp:12342-12343).
 			if isPetVictim && vm.OwnerGUID != 0 && s.creatureVictimTakesResilience(vm) {
 				if ownerSess := s.findSessionByGUID(vm.OwnerGUID); ownerSess != nil {
-					resilBaseBP := int32(500) + victimFlatCritTakenBP
+					resilBaseBP := int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP
 					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
-					critReductionBP = int32(500) + victimFlatCritTakenBP - resilBaseBP
+					critReductionBP = int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP - resilBaseBP
 				}
 			}
 		}

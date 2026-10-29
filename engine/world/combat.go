@@ -1013,7 +1013,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	isDualWielding := s.haveOffhandWeapon()
 	canBlock := false
-	canParry := target.Level >= 10 || isPlayerVictim
+	// Creature victims parry at any level (Unit::GetUnitParryChance, Unit.cpp:2722-2728,
+	// has no level gate); the front-arc, NO_PARRY-flag and totem arms below clear it.
+	canParry := true
 	canDodge := true
 	var critReductionBP int32
 	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the victim-side
@@ -1136,6 +1138,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// is gated on !victim->IsTotem() — totems never dodge.
 	if !isPlayerVictim && s.server != nil && s.server.isTotemGUID(target.GUID) {
 		canDodge = false
+		canParry = false
 	}
 
 	// A victim mid cast or CC'd (confused/stunned/fleeing) cannot
@@ -3419,7 +3422,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	// plus 0.04% per point of defense-skill difference against the attacker
 	// (5 skill per level = 20 basis points per level).
 	dodgeChance := int32(0)
-	if canDodge && (isPlayerVictim || victimLevel >= 10) {
+	if canDodge {
 		if isPlayerVictim && victimDodgeBP >= 0 {
 			dodgeChance = victimDodgeBP
 			dodgeChance += leveldif * 20
@@ -3443,7 +3446,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 
 	// 3. Parry chance: TrinityCore Unit::GetUnitParryChance (Unit.cpp:2708).
 	parryChance := int32(0)
-	if canParry && (isPlayerVictim || victimLevel >= 10) {
+	if canParry {
 		if isPlayerVictim && victimParryBP >= 0 {
 			// PLAYER_PARRY_PERCENTAGE already folds base 5%, the
 			// defense-skill term, aura 47 and parry rating

@@ -5414,12 +5414,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// 5% base + SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) +
 			// SPELL_AURA_MOD_CRIT_PCT (290), gated on
 			// !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the flag zeroes the
-			// whole base, so the adjustment is -500 plus the aura totals.
+			// whole base, so the adjustment is -500 flat and the aura totals are dropped.
 			attackerKey := creatureAuraKeyForMotion(motion)
 			attackerCritAdjustBP := s.creatureAuraTypeSum(attackerKey, spellAuraModWeaponCritPercent)*100 +
 				s.creatureAuraTypeSum(attackerKey, spellAuraModCritPct)*100
 			if motion.FlagsExtra&0x00020000 != 0 {
-				attackerCritAdjustBP -= 500
+				attackerCritAdjustBP = -500
 			}
 			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
 			// victim-side 187/308 flats (pre-resilience) and 197 total
