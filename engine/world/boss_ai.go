@@ -2089,6 +2089,60 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 
+		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+		// leg, so a winning effect carrying one TARGET-object leg and one
+		// NEARBY leg chains from both primaries (Spell.cpp:758-779 selects
+		// TargetA and TargetB separately, each ending in its own chain arm
+		// at :1173/:1575) — the winning block above searched only the first
+		// eligible leg (A else B), and the non-winning loops skip the winner.
+		// The second leg's pick (nearby) and jumps join hitTargets deduped
+		// ahead of the verdict loop below; a missing pick or wire victim
+		// chains nothing (the non-winning precedent: no family-pick
+		// fallback; the object leg anchors strictly on the wire target,
+		// never on a nearby pick).
+		if spellKnown {
+			if jumps, _, _, winMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
+				if secondTarget, ok := winningSecondChainLeg(spellInfo, winMask); ok {
+					anchor := uint64(0)
+					if targetObjectTarget(secondTarget) {
+						anchor = spellTarget.UnitGUID
+					} else {
+						pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, winMask, secondTarget)
+						if ok && pick != 0 {
+							anchor = pick
+							inList := false
+							for _, guid := range hitTargets {
+								if guid == pick {
+									inList = true
+									break
+								}
+							}
+							if !inList {
+								hitTargets = append(hitTargets, pick)
+							}
+						}
+					}
+					if anchor != 0 {
+						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask) {
+							if jumpGUID == 0 {
+								continue
+							}
+							alreadyHit := false
+							for _, guid := range hitTargets {
+								if guid == jumpGUID {
+									alreadyHit = true
+									break
+								}
+							}
+							if !alreadyHit {
+								hitTargets = append(hitTargets, jumpGUID)
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
 		// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary
 		// via SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) even when a

@@ -4127,6 +4127,59 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			chainHitsByEffect[i] = ownHits
 		}
+		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+		// leg, so a winning effect carrying one TARGET-object leg and one
+		// NEARBY leg chains from both primaries (Spell.cpp:758-779 selects
+		// TargetA and TargetB separately, each ending in its own chain arm
+		// at :1173/:1575) — the winning block above searched only the first
+		// eligible leg (A else B), and the non-winning loop skips the winner.
+		// The second leg's jumps join the winner's shared list (chainHits)
+		// and hitTargets deduped; a nearby second pick joins hitTargets
+		// like the non-winning loop's pick, and a missing pick or wire
+		// victim chains nothing (no family-pick fallback; the object leg
+		// anchors strictly on the wire target, never on a nearby pick).
+		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok {
+				anchor := uint64(0)
+				if targetObjectTarget(secondTarget) {
+					anchor = target.UnitGUID
+				} else {
+					pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, winMask, secondTarget)
+					if ok && pick != 0 {
+						anchor = pick
+						pickInList := false
+						for _, guid := range hitTargets {
+							if guid == pick {
+								pickInList = true
+								break
+							}
+						}
+						if !pickInList {
+							hitTargets = append(hitTargets, pick)
+						}
+					}
+				}
+				if anchor != 0 {
+					for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask) {
+						if jumpGUID == 0 {
+							continue
+						}
+						alreadyHit := false
+						for _, hitGUID := range hitTargets {
+							if hitGUID == jumpGUID {
+								alreadyHit = true
+								break
+							}
+						}
+						if alreadyHit {
+							continue
+						}
+						chainHits = append(chainHits, jumpGUID)
+						hitTargets = append(hitTargets, jumpGUID)
+					}
+				}
+			}
+		}
 	}
 	// Per-effect chain lists for the legs below: the winning effect keeps
 	// the shared list, every other chain effect takes its own search.

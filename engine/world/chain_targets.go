@@ -389,6 +389,45 @@ func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal b
 	return jumps, isChainHeal, chainCheckType(winTarget), effectMask
 }
 
+// winningSecondChainLeg returns the winning effect's second chain leg
+// when the effect carries one TARGET-object leg and one NEARBY leg
+// (Spell.cpp:758-779 selects TargetA and TargetB separately, each ending
+// in its own chain arm at :1173/:1575). The winning blocks pick the first
+// eligible leg (A else B), so a mixed winning effect chained only its
+// first leg while the second leg's search never ran. Same-kind pairs stay
+// out: object+object shares one anchor (a later strip) and nearby+nearby
+// pairs are shadowed by the second-slot rule (implicitTargetSecondSlotSkipped)
+// when both slots select NEARBY. A mixed pair never skips: DEFAULT never
+// marks the effect processed (Spell.cpp:866-900), so the object leg always
+// runs beside the nearby leg. Returns false unless both legs are
+// chain-eligible and of opposite kinds.
+func winningSecondChainLeg(spell wotlk.Spell, effectMask uint32) (uint32, bool) {
+	for i, eff := range spell.Effects {
+		if effectMask != 1<<uint(i) {
+			continue
+		}
+		first := eff.ImplicitTargetA
+		if !chainSelectionEligibleTarget(first) {
+			first = eff.ImplicitTargetB
+		}
+		if !chainSelectionEligibleTarget(first) {
+			return 0, false
+		}
+		second := eff.ImplicitTargetB
+		if first == eff.ImplicitTargetB {
+			second = eff.ImplicitTargetA
+		}
+		if !chainSelectionEligibleTarget(second) {
+			return 0, false
+		}
+		if (targetObjectTarget(first) && nearbyUnitTarget(second)) || (nearbyUnitTarget(first) && targetObjectTarget(second)) {
+			return second, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
 // spellChainNearbyPick ports the nearby-pick half of
 // Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) + SearchNearbyTarget
 // (Spell.cpp:1869) for the WINNING chain effect only. C++ selects per effect

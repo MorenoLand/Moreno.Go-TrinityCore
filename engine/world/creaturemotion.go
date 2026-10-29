@@ -4468,6 +4468,36 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						joinInlineChainGUID(jumpGUID)
 					}
 				}
+				// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+				// leg, so a winning effect carrying one TARGET-object leg and one
+				// NEARBY leg chains from both primaries (Spell.cpp:758-779 selects
+				// TargetA and TargetB separately, each ending in its own chain arm
+				// at :1173/:1575) — the winning block above searched only the first
+				// eligible leg (A else B), and the non-winning loops skip the winner.
+				// The second leg's pick (nearby) and jumps join on the cone leg's
+				// pattern via joinInlineChainGUID ahead of the verdicts below; a
+				// missing pick or wire victim chains nothing (the non-winning
+				// precedent: no family-pick fallback; the object leg anchors
+				// strictly on the wire victim, never on a nearby pick).
+				if jumps, _, _, winMask := chainSpellJumps(nil, inlineSpell); jumps > 0 {
+					if secondTarget, ok := winningSecondChainLeg(inlineSpell, winMask); ok {
+						anchor := uint64(0)
+						if targetObjectTarget(secondTarget) {
+							anchor = spellTarget.UnitGUID
+						} else {
+							pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, winMask, secondTarget)
+							if ok && pick != 0 {
+								anchor = pick
+								joinInlineChainGUID(pick)
+							}
+						}
+						if anchor != 0 {
+							for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask) {
+								joinInlineChainGUID(jumpGUID)
+							}
+						}
+					}
+				}
 			}
 
 			// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a

@@ -11527,6 +11527,208 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+	// leg, so a winning effect carrying one TARGET-object leg and one
+	// NEARBY leg chains from both primaries (Spell.cpp:758-779 selects
+	// TargetA and TargetB separately, each ending in its own chain arm
+	// at :1173/:1575) — the winning blocks above searched only the first
+	// eligible leg (A else B), and the non-winning loops skip the winner.
+	// This block searches the winner's second leg when it is NEARBY: the
+	// scoped pick joins via the wire arms and its jumps via the same arms
+	// as the non-winning nearby loop (dedup vs hitTargets/missStatus,
+	// merged-entry single verdict, first-wins chainJumpIndex); a missing
+	// pick chains nothing.
+	if areaSpell || friendlyListSpell || unitNearbySpell {
+		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok && nearbyUnitTarget(secondTarget) {
+				pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+				if ok && pick != 0 {
+					primaryInList := false
+					for _, guid := range hitTargets {
+						if guid == pick {
+							primaryInList = true
+							break
+						}
+					}
+					primaryVerdicted := false
+					for _, miss := range missStatus {
+						if miss.TargetGUID == pick {
+							primaryVerdicted = true
+							break
+						}
+					}
+					if !primaryInList && !primaryVerdicted {
+						var primarySess *session
+						if s.server != nil {
+							primarySess = s.server.findSessionByGUID(pick)
+						}
+						var primaryFaction uint32
+						if tgt, ok := s.getCombatTarget(ctx, pick); ok {
+							primaryFaction = tgt.Faction
+						}
+						if outcome := partitionJumpOutcome(pick); outcome != 0 {
+							switch outcome {
+							case 1:
+								hitTargets = append(hitTargets, pick)
+							case 2:
+								reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+							case 3:
+							}
+						} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+						} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, pick, spell, s, primaryFaction) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+						} else if primarySess != nil && spellHasOnlyDamageEffects(spell) && primarySess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+						} else if primarySess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, pick), spell, spell.SchoolMask) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+						} else if missInfo := s.spellTargetMissResult(ctx, pick, spell); missInfo != protocol.SpellMissNone {
+							entry := protocol.SpellMissStatus{TargetGUID: pick, Reason: missInfo}
+							if missInfo == protocol.SpellMissReflect {
+								entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+								if entry.ReflectStatus == protocol.SpellMissNone {
+									reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+								}
+							}
+							missStatus = append(missStatus, entry)
+						} else if primarySess != nil && s.spellTargetFullyEffectImmune(spell, primarySess) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune2})
+						} else if primarySess == nil && s.creatureTargetFullyEffectImmune(ctx, pick, spell, s, primaryFaction) {
+							missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune2})
+						} else {
+							hitTargets = append(hitTargets, pick)
+						}
+					}
+					jump := 0
+					for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, pick, jumps, false, chainCheckType(secondTarget), winMask) {
+						alreadyListed := false
+						for _, guid := range hitTargets {
+							if guid == extraGUID {
+								alreadyListed = true
+								break
+							}
+						}
+						if alreadyListed {
+							continue
+						}
+						alreadyVerdicted := false
+						for _, miss := range missStatus {
+							if miss.TargetGUID == extraGUID {
+								alreadyVerdicted = true
+								break
+							}
+						}
+						if alreadyVerdicted {
+							continue
+						}
+						if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+							switch outcome {
+							case 1:
+								jump++
+								hitTargets = append(hitTargets, extraGUID)
+								if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+									chainJumpIndex[extraGUID] = jump
+								}
+							case 2:
+								jump++
+								reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+							case 3:
+							}
+							continue
+						}
+						if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+							entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
+							if missInfo == protocol.SpellMissReflect {
+								entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+								if entry.ReflectStatus == protocol.SpellMissNone {
+									jump++
+									reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+								}
+							}
+							missStatus = append(missStatus, entry)
+							continue
+						}
+						jump++
+						hitTargets = append(hitTargets, extraGUID)
+						if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+							chainJumpIndex[extraGUID] = jump
+						}
+					}
+				}
+			}
+		}
+	}
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+	// leg, so a winning effect carrying one TARGET-object leg and one
+	// NEARBY leg chains from both primaries — the winning blocks above
+	// searched only the first eligible leg, and the non-winning loops
+	// skip the winner. This block searches the winner's second leg when
+	// it is TARGET-object: it chains from the wire target with its own
+	// check type and chain-heal flag, and its jumps join like the
+	// non-winning object loop. The wire primary itself rides the
+	// TARGET-object rejoin above, so no primary join here.
+	if target.UnitGUID != 0 {
+		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok && targetObjectTarget(secondTarget) {
+				jump := 0
+				for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, target.UnitGUID, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask) {
+					alreadyListed := false
+					for _, guid := range hitTargets {
+						if guid == extraGUID {
+							alreadyListed = true
+							break
+						}
+					}
+					if alreadyListed {
+						continue
+					}
+					alreadyVerdicted := false
+					for _, miss := range missStatus {
+						if miss.TargetGUID == extraGUID {
+							alreadyVerdicted = true
+							break
+						}
+					}
+					if alreadyVerdicted {
+						continue
+					}
+					if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+						switch outcome {
+						case 1:
+							jump++
+							hitTargets = append(hitTargets, extraGUID)
+							if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+								chainJumpIndex[extraGUID] = jump
+							}
+						case 2:
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						case 3:
+						}
+						continue
+					}
+					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+						entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
+						if missInfo == protocol.SpellMissReflect {
+							entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+							if entry.ReflectStatus == protocol.SpellMissNone {
+								jump++
+								reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+							}
+						}
+						missStatus = append(missStatus, entry)
+						continue
+					}
+					jump++
+					hitTargets = append(hitTargets, extraGUID)
+					if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+						chainJumpIndex[extraGUID] = jump
+					}
+				}
+			}
+		}
+	}
+
 	// Spell::prepare (Spell.cpp:3040-3056) fills m_auraScaleMask for
 	// player-cast, non-passive, SpellLevel-carrying, non-channeled,
 	// non-triggered buff spells; the AddUnitTarget min-level arm
@@ -20906,6 +21108,77 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
 		}
 	}
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+	// leg, so a winning effect carrying one TARGET-object leg and one
+	// NEARBY leg chains from both primaries (Spell.cpp:758-779 selects
+	// TargetA and TargetB separately, each ending in its own chain arm
+	// at :1173/:1575) — the winning block above searched only the first
+	// eligible leg (A else B), and the non-winning loop skips the winner.
+	// The second leg's jumps join the shared list (roll/GO/threat/break
+	// rejoin below via chainJumpGUIDs) and the winner's own list
+	// (chainJumpsByEffect, so the effect loop threads them with the first
+	// leg's jumps, capped per leg); its primary threads into the winner's
+	// effect below. A missing nearby pick or wire victim chains nothing
+	// (the non-winning precedent: no family-pick fallback, the pick must
+	// pass this leg's own check type + conditions; the object leg anchors
+	// strictly on the wire target, never on a nearby pick).
+	winSecondIndex := -1
+	winSecondTarget := uint32(0)
+	winSecondPrimary := uint64(0)
+	if targetGUID != 0 {
+		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok {
+				for i := range spell.Effects {
+					if winMask == 1<<uint(i) {
+						winSecondIndex = i
+						break
+					}
+				}
+				winSecondTarget = secondTarget
+				anchor := uint64(0)
+				if targetObjectTarget(secondTarget) {
+					anchor = spellTarget.UnitGUID
+					if anchor != 0 {
+						winSecondPrimary = anchor
+					}
+				} else {
+					pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+					if ok && pick != 0 {
+						anchor = pick
+						winSecondPrimary = pick
+					}
+				}
+				if anchor != 0 && winSecondIndex >= 0 {
+					secondJumps := s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask)
+					union := append([]uint64{}, chainJumpGUIDs...)
+					for _, jumpGUID := range secondJumps {
+						dup := false
+						for _, listed := range union {
+							if listed == jumpGUID {
+								dup = true
+								break
+							}
+						}
+						if !dup {
+							union = append(union, jumpGUID)
+						}
+						inList := false
+						for _, listed := range hitTargets {
+							if listed == jumpGUID {
+								inList = true
+								break
+							}
+						}
+						if !inList {
+							hitTargets = append(hitTargets, jumpGUID)
+							chainJumpGUIDs = append(chainJumpGUIDs, jumpGUID)
+						}
+					}
+					chainJumpsByEffect[winSecondIndex] = union
+				}
+			}
+		}
+	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) adds
 	// the explicit unit target via AddUnitTarget for every TARGET-object
 	// effect regardless of ChainTarget, so a spell with no chaining
@@ -21365,6 +21638,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, chainUnitPrimary)
 		}
 	}
+	// The winner's second-leg primary rejoins the same way (each leg
+	// adds its own primary, Spell.cpp:1575/:1036); dedup keeps the
+	// already-listed cases (a wire primary rejoined below, a pick
+	// already in the list) unchanged.
+	if winSecondPrimary != 0 {
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[winSecondPrimary]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, winSecondPrimary)
+		}
+	}
 	// Non-winning chain primaries rejoin the same way (TARGET-object
 	// primaries dedup against the plain primary below; NEARBY primaries
 	// are the new entries — nearbyPrimaries only covers ChainTarget <= 1).
@@ -21635,6 +21921,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// The winner's second-leg primary breaks auras like any merged
+	// entry; one already broken as the chain or plain primary breaks
+	// once, via that leg.
+	if winSecondPrimary != 0 && winSecondPrimary != chainUnitPrimary && winSecondPrimary != plainObjectPrimary {
+		if _, dup := selectionSet[winSecondPrimary]; !dup {
+			if _, missed := triggeredMiss[winSecondPrimary]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, winSecondPrimary)
+			}
+		}
+	}
 	for i := range spell.Effects {
 		primary, ok := chainPrimaryByEffect[i]
 		if !ok || primary == chainUnitPrimary || primary == plainObjectPrimary {
@@ -21896,7 +22192,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if jumps, ok := chainJumpsByEffect[effectIndex]; ok {
 			effJumps = jumps
 		}
-		if jumpCap := int(eff.ChainTargets) - 1; jumpCap > 0 && len(effJumps) > 0 &&
+		jumpCap := int(eff.ChainTargets) - 1
+		if effectIndex == winSecondIndex {
+			jumpCap *= 2
+		}
+		if jumpCap > 0 && len(effJumps) > 0 &&
 			(chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
 			if jumpCap > len(effJumps) {
 				jumpCap = len(effJumps)
@@ -21985,6 +22285,39 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if _, dup := seedSet[effPrimary]; !dup {
 				target := effPrimary
+				origin := target
+				reflected := false
+				take := true
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+						reflected = true
+						target = s.playerGUID
+					} else {
+						take = false
+					}
+				}
+				if take {
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, originGUID: origin, reflected: reflected})
+				}
+			}
+		}
+		// The winner's second leg threads its own primary into the
+		// winner's effect only (Spell.cpp:1575/:1036 add each leg's
+		// primary with the effect's own mask): the chain block above
+		// threaded the first leg's primary, and the plain block below
+		// threads the wire primary only when no chain primary was set,
+		// so a nearby-first winner's wire primary and an object-first
+		// winner's nearby pick would otherwise never reach the winner's
+		// effect. Dedup vs the seed and miss handling mirror the chain
+		// block; an object second leg with no chain primary rides the
+		// plain block instead, so it is skipped here.
+		if effectIndex == winSecondIndex && winSecondPrimary != 0 && winSecondPrimary != chainUnitPrimary && !(targetObjectTarget(winSecondTarget) && chainUnitPrimary == 0) {
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
+			if _, dup := seedSet[winSecondPrimary]; !dup {
+				target := winSecondPrimary
 				origin := target
 				reflected := false
 				take := true
