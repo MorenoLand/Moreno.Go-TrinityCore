@@ -2028,6 +2028,66 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+		// effect, so a non-winning ChainTarget > 1 TARGET-object effect
+		// chains from the wire target (SelectImplicitTargetObjectTargets,
+		// Spell.cpp:1575) with its own check type and jump count — the
+		// nearby loop above covers only NEARBY effects, and the winning
+		// block searched only the largest ChainTarget. The object arm
+		// runs regardless of the nearby arm (DEFAULT category never marks
+		// the effect processed, Spell.cpp:866-900), so an effect carrying
+		// both an object leg and a nearby leg chains from both primaries:
+		// the nearby loop already searched its nearby leg, this loop adds
+		// its object leg. Jumps join hitTargets deduped (AddUnitTarget
+		// merge, Spell.cpp:2117) ahead of the verdict loop below; the wire
+		// primary itself rejoins in the block below. A missing wire target
+		// chains nothing. Creature casters have no spell-mod owner, so the
+		// ChainTarget fold is a pass-through. The winning effect is
+		// skipped: its jumps are already listed.
+		if spellKnown {
+			_, _, _, winMask := chainSpellJumps(nil, spellInfo)
+			for i, eff := range spellInfo.Effects {
+				if eff.Effect == 0 && eff.Aura == 0 {
+					continue
+				}
+				chainTarget := uint32(0)
+				if targetObjectTarget(eff.ImplicitTargetA) {
+					chainTarget = eff.ImplicitTargetA
+				} else if targetObjectTarget(eff.ImplicitTargetB) {
+					chainTarget = eff.ImplicitTargetB
+				} else {
+					continue
+				}
+				if eff.ChainTargets <= 1 {
+					continue
+				}
+				if winMask == 1<<uint(i) {
+					continue
+				}
+				anchor := targetGUID
+				if spellTarget.UnitGUID != 0 {
+					anchor = spellTarget.UnitGUID
+				}
+				if anchor == 0 {
+					continue
+				}
+				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, anchor, uint32(eff.ChainTargets-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
+					if jumpGUID == 0 {
+						continue
+					}
+					alreadyHit := false
+					for _, guid := range hitTargets {
+						if guid == jumpGUID {
+							alreadyHit = true
+							break
+						}
+					}
+					if !alreadyHit {
+						hitTargets = append(hitTargets, jumpGUID)
+					}
+				}
+			}
+		}
 
 		// Spell::SelectSpellTargets (Spell.cpp:758-900) selects per effect, so a
 		// TARGET-object effect (6/21/25/35/45/57/90/95) adds the wire unit primary

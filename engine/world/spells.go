@@ -11432,6 +11432,100 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624) runs per
+	// effect, so a non-winning ChainTarget > 1 TARGET-object effect
+	// chains from the wire target (SelectImplicitTargetObjectTargets,
+	// Spell.cpp:1575) with its own check type, conditions, and jump
+	// count — the loop above covers only NEARBY effects, and the winning
+	// chain blocks searched only the largest ChainTarget. The object arm
+	// runs regardless of the nearby arm (DEFAULT category never marks the
+	// effect processed, Spell.cpp:866-900), so an effect carrying both
+	// legs chains from both primaries. Unlike the nearby loop this loop
+	// carries no branch gate: a plain wire-target spell runs no
+	// area/list/nearby branch, so gating it would leave its non-winning
+	// object chains unsearched. Jumps join via the same wire arms as the
+	// nearby loop's jumps (dedup vs hitTargets/missStatus, merged-entry
+	// single verdict, first-wins chainJumpIndex); a missing wire target
+	// chains nothing. The winning effect is skipped: its jumps are
+	// already in hitTargets from its chain block.
+	if target.UnitGUID != 0 {
+		_, _, _, winMask := chainSpellJumps(s, spell)
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 && eff.Aura == 0 {
+				continue
+			}
+			chainTarget := uint32(0)
+			if targetObjectTarget(eff.ImplicitTargetA) {
+				chainTarget = eff.ImplicitTargetA
+			} else if targetObjectTarget(eff.ImplicitTargetB) {
+				chainTarget = eff.ImplicitTargetB
+			} else {
+				continue
+			}
+			modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
+			if modded <= 1 {
+				continue
+			}
+			if winMask == 1<<uint(i) {
+				continue
+			}
+			jump := 0
+			for _, extraGUID := range s.spellSearchChainTargets(ctx, spell, spellID, target.UnitGUID, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
+				alreadyListed := false
+				for _, guid := range hitTargets {
+					if guid == extraGUID {
+						alreadyListed = true
+						break
+					}
+				}
+				if alreadyListed {
+					continue
+				}
+				alreadyVerdicted := false
+				for _, miss := range missStatus {
+					if miss.TargetGUID == extraGUID {
+						alreadyVerdicted = true
+						break
+					}
+				}
+				if alreadyVerdicted {
+					continue
+				}
+				if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+					switch outcome {
+					case 1:
+						jump++
+						hitTargets = append(hitTargets, extraGUID)
+						if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+							chainJumpIndex[extraGUID] = jump
+						}
+					case 2:
+						jump++
+						reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+					case 3:
+					}
+					continue
+				}
+				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
+					entry := protocol.SpellMissStatus{TargetGUID: extraGUID, Reason: missInfo}
+					if missInfo == protocol.SpellMissReflect {
+						entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+						if entry.ReflectStatus == protocol.SpellMissNone {
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						}
+					}
+					missStatus = append(missStatus, entry)
+					continue
+				}
+				jump++
+				hitTargets = append(hitTargets, extraGUID)
+				if _, indexed := chainJumpIndex[extraGUID]; !indexed {
+					chainJumpIndex[extraGUID] = jump
+				}
+			}
+		}
+	}
 
 	// Spell::prepare (Spell.cpp:3040-3056) fills m_auraScaleMask for
 	// player-cast, non-passive, SpellLevel-carrying, non-channeled,

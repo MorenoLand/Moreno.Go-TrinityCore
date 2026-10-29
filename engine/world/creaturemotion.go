@@ -4418,6 +4418,56 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						joinInlineChainGUID(jumpGUID)
 					}
 				}
+				// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624)
+				// runs per effect, so a non-winning ChainTarget > 1
+				// TARGET-object effect chains from the wire victim
+				// (SelectImplicitTargetObjectTargets, Spell.cpp:1575) with
+				// its own check type and jump count — the nearby loop
+				// above covers only NEARBY effects, and the winning block
+				// searched only the largest ChainTarget. The object arm
+				// runs regardless of the nearby arm (DEFAULT category never
+				// marks the effect processed, Spell.cpp:866-900), so an
+				// effect carrying both legs chains from both primaries:
+				// the nearby loop already searched its nearby leg, this
+				// loop adds its object leg. Jumps join on the cone leg's
+				// pattern via joinInlineChainGUID ahead of the verdicts
+				// below; the wire victim itself rejoins in the block
+				// below. A missing wire victim chains nothing. Creature
+				// casters have no spell-mod owner, so the ChainTarget fold
+				// is a pass-through. The winning effect is skipped: its
+				// jumps are already listed.
+				for i, eff := range inlineSpell.Effects {
+					if eff.Effect == 0 && eff.Aura == 0 {
+						continue
+					}
+					chainTarget := uint32(0)
+					if targetObjectTarget(eff.ImplicitTargetA) {
+						chainTarget = eff.ImplicitTargetA
+					} else if targetObjectTarget(eff.ImplicitTargetB) {
+						chainTarget = eff.ImplicitTargetB
+					} else {
+						continue
+					}
+					if eff.ChainTargets <= 1 {
+						continue
+					}
+					if winMask == 1<<uint(i) {
+						continue
+					}
+					anchor := uint64(0)
+					if len(hitTargets) > 0 {
+						anchor = hitTargets[0]
+					}
+					if spellTarget.UnitGUID != 0 {
+						anchor = spellTarget.UnitGUID
+					}
+					if anchor == 0 {
+						continue
+					}
+					for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, uint32(eff.ChainTargets-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i)) {
+						joinInlineChainGUID(jumpGUID)
+					}
+				}
 			}
 
 			// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a
