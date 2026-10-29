@@ -13215,18 +13215,38 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				friendlyAuraEffect := effectHasFriendlyAreaLeg(eff)
 				auraList := hitTargets
 				friendlyAuraList := friendlyAreaSpell
-				if friendlyEffectTargets != nil && friendlyAuraEffect {
+				// Ref-centered leg (37/61): the aura applies to its own
+				// ref-centered ally selection, not the merged enemy list
+				// and not the caster-centered friendly list — the same
+				// switch as the heal arms above. The pure-ref fallback
+				// (no friendly-area effect in the spell) rides
+				// friendlyEffectTargets, which already holds the ref
+				// list there.
+				auraSwitched := friendlyEffectTargets != nil && (friendlyAuraEffect ||
+					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+				auraRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
+				if auraRefCentered {
+					auraSwitched = true
+				}
+				if auraSwitched {
 					auraList = friendlyEffectTargets
-					friendlyAuraList = true
+					if auraRefCentered {
+						auraList = refCenteredFriendlyTargets
+					}
 					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
 					// _spellHitTarget is the caster — the aura lands on the
 					// caster once per reflected ally; the ally itself takes
-					// nothing. The append only ever writes past
-					// len(friendlyEffectTargets), never into its visible
-					// contents, and each arm rebuilds auraList fresh.
-					for range reflectedAllyTrips {
+					// nothing. The append only ever writes past the switched
+					// list's length, never into its visible contents, and
+					// each arm rebuilds auraList fresh.
+					auraTrips := reflectedAllyTrips
+					if auraRefCentered {
+						auraTrips = refCenteredAllyTrips
+					}
+					for range auraTrips {
 						auraList = append(auraList, s.playerGUID)
 					}
+					friendlyAuraList = true
 				}
 				for _, effectTarget := range auraList {
 					auraTarget := s.playerGUID
@@ -13234,8 +13254,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						auraTarget = effectTarget
 					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
 						auraTarget = s.playerGUID
-					} else if friendlyAuraList && friendlyAuraEffect && effectTarget != 0 {
-						// Friendly-area effect on its own list: the entry IS
+					} else if friendlyAuraList && (friendlyAuraEffect || auraSwitched) && effectTarget != 0 {
+						// Effect on its own list (friendly-area or ref-centered):
+						// the entry IS
 						// the unitTarget (SpellEffects.cpp:1233 EffectApplyAura
 						// applies to unitTarget). Without this the ladder fell
 						// through to the caster, so a party/raid buff landed
@@ -20084,6 +20105,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// effect) on the triggered path — mirrors the client-launch arm
 	// (hasFriendlyAreaEffect, spells.go:9113-9120).
 	var triggeredFriendlyEffectTargets []uint64
+	var triggeredRefCenteredFriendlyTargets []uint64
 	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
 	if !nearbySelected {
 		switch {
@@ -20104,9 +20126,33 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					triggeredFriendlyEffectTargets = []uint64{}
 				}
 			}
+			// Ref-centered leg (37/61) on the triggered path: the
+			// heal or aura effect of a triggered spell selects allies
+			// around the explicit target, not the caster-centered
+			// friendly partition above and not the merged enemy list
+			// — the triggered-path mirror of the launch path's
+			// refCenteredFriendlyTargets. Non-nil even when empty,
+			// like the friendly partition, so the seed switch never
+			// falls back to the wrong list.
+			if hasRefCenteredAreaEffect(spell) {
+				triggeredRefCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, []uint64{spellTarget.UnitGUID})
+				if triggeredRefCenteredFriendlyTargets == nil {
+					triggeredRefCenteredFriendlyTargets = []uint64{}
+				}
+			}
 			selectionTargets = hitTargets
 		case isFriendlyAreaSpell(spell):
 			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
+			// A positive spell pairing a friendly-area effect with a
+			// 37/61 effect: the ref-centered effect's own selection
+			// is around the explicit target, not the caster-centered
+			// list above — same partition as the enemy-area branch.
+			if hasRefCenteredAreaEffect(spell) {
+				triggeredRefCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, spellTarget, []uint64{spellTarget.UnitGUID})
+				if triggeredRefCenteredFriendlyTargets == nil {
+					triggeredRefCenteredFriendlyTargets = []uint64{}
+				}
+			}
 			selectionTargets = hitTargets
 		case isEntryAreaSpell(spell):
 			hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
@@ -20277,6 +20323,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		triggeredRollTargets = make([]uint64, 0, len(hitTargets)+len(triggeredFriendlyEffectTargets))
 		triggeredRollTargets = append(triggeredRollTargets, hitTargets...)
 		triggeredRollTargets = append(triggeredRollTargets, triggeredFriendlyEffectTargets...)
+	}
+	// The ref-centered partition rolls like the friendly one; the
+	// roll loop below dedupes against triggeredMiss, so overlap with
+	// the caster-centered list keeps the first verdict.
+	if triggeredRefCenteredFriendlyTargets != nil {
+		triggeredRollTargets = append(triggeredRollTargets, triggeredRefCenteredFriendlyTargets...)
 	}
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1619) adds jumps via
 	// AddUnitTarget, so a mixed spell's jumps share m_UniqueTargetInfo with
@@ -20635,12 +20687,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		effectTargets := make([]triggeredEffectTarget, 0, len(selectionTargets)+len(chainJumpGUIDs))
 		// Per-effect target list (Spell.cpp:758-779): a heal-family effect with a
 		// friendly-area target seeds from the ally partition, not the merged enemy
-		// list — the triggered-path mirror of the launch-path heal arms. Non-heal
-		// mixed effects keep the merged list, matching the launch path's documented
-		// residual.
+		// list — the triggered-path mirror of the launch-path heal arms. A
+		// heal-family or aura effect with a ref-centered (37/61) target seeds
+		// from the ref-centered partition instead. Other mixed effects keep
+		// the merged list (funnel residual).
 		seedTargets := selectionTargets
 		if triggeredFriendlyEffectTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && (effectHasFriendlyAreaLeg(eff)) {
 			seedTargets = triggeredFriendlyEffectTargets
+		} else if triggeredRefCenteredFriendlyTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && effectHasRefCenteredLeg(eff) {
+			seedTargets = triggeredRefCenteredFriendlyTargets
+		} else if triggeredRefCenteredFriendlyTargets != nil && (eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura)) && effectHasRefCenteredLeg(eff) {
+			seedTargets = triggeredRefCenteredFriendlyTargets
 		}
 		for _, selGUID := range seedTargets {
 			target := selGUID
