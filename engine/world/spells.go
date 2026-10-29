@@ -8677,6 +8677,13 @@ func (s *session) triggeredArrivalTargetState(ctx context.Context, guid uint64) 
 	if s == nil || s.server == nil {
 		return 0, 0, false, false
 	}
+	// Gameobject GUIDs carry no unit flags: C++ PreprocessSpellHit runs
+	// on unit TargetInfos only, and the getCombatTarget fallback below
+	// can resolve a GO guid to an unrelated creature row by its low 24
+	// bits, which would EVADE-drop a GO target that never had flags.
+	if uint16(guid>>48) == 0xF110 {
+		return 0, 0, false, false
+	}
 	if targetSess := s.server.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
 		return targetSess.player.UnitFlags, 0, true, true
 	}
@@ -20699,6 +20706,16 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 	if s == nil || s.player == nil || s.server == nil {
 		return protocol.SpellMissNone
 	}
+	// A gameobject GUID never runs the unit hit table: C++ holds GO
+	// targets in m_UniqueGOTargetInfo (Spell.cpp:2193 AddGOTarget), never
+	// as unit TargetInfos, so no SpellHitResult roll applies to them —
+	// the launch wire blocks skip the same high word (spells.go:10244).
+	// Without this, getCombatTarget's low-24-bit creature-row fallback
+	// can resolve a GO guid to an unrelated creature and roll a bogus
+	// unit-table miss against it.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return protocol.SpellMissNone
+	}
 	tgt, haveTgt := s.getCombatTarget(ctx, targetGUID)
 	targetLevel := uint8(1)
 	var targetFaction uint32
@@ -22821,6 +22838,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if guid == 0 {
 					continue
 				}
+				// GO targets ride m_UniqueGOTargetInfo, not
+				// m_UniqueTargetInfo (Spell.cpp:7764), so they never
+				// dilute the cap divisor.
+				if uint16(guid>>48) == 0xF110 {
+					continue
+				}
 				if _, dup := counted[guid]; dup {
 					continue
 				}
@@ -23322,6 +23345,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 							weaponCounted := make(map[uint64]struct{}, len(triggeredRollTargets))
 							for _, guid := range triggeredRollTargets {
 								if guid == 0 {
+									continue
+								}
+								// Same m_UniqueTargetInfo-only rule as the
+								// effect-2 divisor above (Spell.cpp:7764).
+								if uint16(guid>>48) == 0xF110 {
 									continue
 								}
 								if _, dup := weaponCounted[guid]; dup {

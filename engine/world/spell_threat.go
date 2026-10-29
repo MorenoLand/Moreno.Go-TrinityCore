@@ -440,6 +440,20 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	// Spell.cpp:5123: the defined bonus is distributed among all unique
 	// targets, misses included (their shares are wasted, Spell.cpp:5125).
 	totalTargets := len(hitTargets) + len(missGUIDs)
+	// C++ divides by m_UniqueTargetInfo.size() (Spell.cpp:5123) and
+	// wild gameobject spells cause no threat at all — GO guids riding a
+	// mixed triggered cast's hit/miss lists must not dilute the divisor.
+	// Launch lists are units only, so this is behavior-identical there.
+	for _, guid := range hitTargets {
+		if uint16(guid>>48) == 0xF110 {
+			totalTargets--
+		}
+	}
+	for _, guid := range missGUIDs {
+		if uint16(guid>>48) == 0xF110 {
+			totalTargets--
+		}
+	}
 	// Same whole-list rule as the AoE-cap divisor (Spell.cpp:7761): a
 	// TARGET_UNIT_CASTER sibling effect's TargetInfo dilutes the division
 	// even though it rides neither the hit list nor the miss list (the
