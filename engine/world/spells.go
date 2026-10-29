@@ -9312,8 +9312,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell. C++ runs this before the CheckCast revalidation below, so it
 	// fires even when the cast then fails; target.UnitGUID is the explicit
 	// unit target straight from the client packet (m_targets.GetUnitTarget()),
-	// before any target selection.
-	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && s.server != nil {
+	// before any target selection. A gameobject wire target rides the same
+	// UnitGUID slot but C++ GetUnitTarget() is null for it, so the pets
+	// never engage a GO — the 0xF110 guard keeps a GO-targeted harmful
+	// cast from putting pets in combat against a GO guid.
+	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && uint16(target.UnitGUID>>48) != 0xF110 && s.server != nil {
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
 	}
 
@@ -9360,7 +9363,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	// Spell::_cast revalidates CheckCast at completion: the target may have
 	// moved during the cast bar.
-	if target.UnitGUID != 0 {
+	if target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 {
+		// The unit-target arms below (Spell.cpp:3805-3811 removal,
+		// CheckRange unit arm, 5391 LoS, SpellInfo.cpp:1715 dead) all run
+		// on GetUnitTarget(), which is null for a gameobject target, so
+		// none of them applies here; the GO range leg below
+		// (validateSpellGORange, Spell.cpp:6565-6569) owns GO distance.
+		// getCombatTarget has no GO leg — its motion/DB legs rebuild a
+		// creature from the GO guid's low+entry bits — so a live GO must
+		// neither fail as "removed" nor be range/LoS/dead-checked against
+		// a colliding creature. A GO with no live state and no static
+		// spawn row on the caster's map fails the same removed-target
+		// exit as the unit leg.
+		if _, _, _, ok := s.server.gameObjectAnchorPosition(ctx, target.UnitGUID, s.player.Map, s.player.InstanceID); !ok {
+			s.cancelGlobalCooldown(spellID)
+			s.sendInterrupted(castID, spellID, 0) // Spell::cancel (Spell.cpp:3220-3225): CancelGlobalCooldown -> SendInterrupted(0) -> SendCastResult(INTERRUPTED); SendInterrupted always carries 0, never the failure code
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target removed")
+			return
+		}
+	}
+	if target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
 		// Spell::update (Spell.cpp:3805-3811) cancels the spell on every
 		// tick while PREPARING when the explicit unit target no longer
 		// resolves in the caster's world — the cancel() arm refunds the
@@ -9567,9 +9590,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// after the _cast CheckCast revalidation (Spell.cpp:3349) — so the
 	// rechecks above validate the pre-redirect explicit target, and the
 	// redirect lands here, ahead of every effect-target use of
-	// target.UnitGUID.
+	// target.UnitGUID. A gameobject wire target carries no unit target
+	// (the 729-757 arms run on GetUnitTarget()), so the arm never runs
+	// for a 0xF110 guid — isFriendlyToTarget's nil-session false verdict
+	// would otherwise route it into the magnet lookup.
 	if (spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged) &&
-		target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
 		explicitMask := spell.Targets | spellExplicitUnitTargetMask(spell)
 		targetSess := s.server.findSessionByGUID(target.UnitGUID)
 		if explicitMask&targetFlagUnitEnemy != 0 ||
