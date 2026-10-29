@@ -1330,8 +1330,15 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 	// (Unit::IsImmunedToDamage, Unit.cpp:7829-7847): the school fold is
 	// per-row with the pierce filter; the damage mask needs full
 	// coverage, no pierce (Unit.cpp:7844-7847).
+	// C++ iterates ONE container per op (m_spellImmune[IMMUNITY_SCHOOL /
+	// IMMUNITY_DAMAGE], Unit.cpp:7831-7847), ORing template, script and
+	// live-aura rows together before the full-coverage test — so a
+	// multi-school spell covered only by two sources combined still
+	// reports immune. Each source below ORs into the shared masks; the
+	// school and damage masks stay separate (C++ tests them separately).
+	var schoolImmunityMask uint32
+	var damageImmunityMask uint32
 	if scriptRows := scriptSpellImmuneRows(srv, key); len(scriptRows) > 0 {
-		var scriptSchoolMask uint32
 		for k, ids := range scriptRows {
 			if uint32(k>>32) != immunityOpSchool {
 				continue
@@ -1348,21 +1355,14 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 					}
 				}
 				if !canSpellPierceImmuneAura(spell, immuneSpell) {
-					scriptSchoolMask |= bit
+					schoolImmunityMask |= bit
 				}
 			}
 		}
-		if scriptSchoolMask&schoolMask == schoolMask {
-			return true
-		}
-		var scriptDamageMask uint32
 		for k := range scriptRows {
 			if uint32(k>>32) == immunityOpDamage {
-				scriptDamageMask |= uint32(k)
+				damageImmunityMask |= uint32(k)
 			}
-		}
-		if scriptDamageMask&schoolMask == schoolMask {
-			return true
 		}
 	}
 
@@ -1371,13 +1371,10 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 	// spell id, so the immuneSpellInfo is nil and the row can never be
 	// pierced (SpellInfo.cpp:1339, Go's zero-spell twin) — the bits count
 	// unconditionally once the attribute gates above have passed.
-	if templateMask := srv.cachedTemplateSchoolImmuneMask(key); templateMask&schoolMask == schoolMask {
-		return true
-	}
+	schoolImmunityMask |= srv.cachedTemplateSchoolImmuneMask(key)
 
 	srv.auraMu.Lock()
 	defer srv.auraMu.Unlock()
-	var schoolImmunityMask uint32
 	for _, aura := range srv.activeCreatureAuras[key] {
 		if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
 			continue
@@ -1396,7 +1393,6 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 	if schoolImmunityMask&schoolMask == schoolMask {
 		return true
 	}
-	var damageImmunityMask uint32
 	for _, aura := range srv.activeCreatureAuras[key] {
 		if aura == nil || aura.AuraType != spellAuraDamageImmunity {
 			continue
