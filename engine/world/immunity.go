@@ -411,8 +411,8 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 
 	harmful := isHarmfulSpell(spell)
 
-	// Cyclone (33786) and Banish (710, 18647) make the unit immune to ALL spells (beneficial or harmful)
-	// except Banish itself on a banished target. C++ has no arm for them in
+	// Cyclone (33786) and Banish (710, 18647) make the unit immune to ALL spells (beneficial or harmful),
+	// including a re-cast Banish on a banished target: C++ has no self-exemption in
 	// IsImmunedToSpell (Unit.cpp:7852-7922) — their immunity arrives via the
 	// school fold below (39 rows) — so these arms run through the same
 	// CanPierceImmuneAura test the fold uses (SpellInfo.cpp:1336-1361):
@@ -430,12 +430,12 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 			return true
 		}
 	}
-	if s.hasAuraInLock(710) && spell.ID != 710 && spell.ID != 18647 {
+	if s.hasAuraInLock(710) {
 		if !s.spellPiercesImmunityGrant(spell, 710) {
 			return true
 		}
 	}
-	if s.hasAuraInLock(18647) && spell.ID != 710 && spell.ID != 18647 {
+	if s.hasAuraInLock(18647) {
 		if !s.spellPiercesImmunityGrant(spell, 18647) {
 			return true
 		}
