@@ -9477,6 +9477,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
 		s.autoRepeatSpell = spellID
 		s.autoRepeatTarget = targetGUID
+		// SpellHistory::StartCooldown (SpellHistory.cpp:306-311): a
+		// zero-cooldown shoot-category (76) or auto-repeat spell other
+		// than 75 takes the ranged attack time as its cooldown, so a
+		// manual re-cast inside the swing window fails NOT_READY
+		// instead of firing early. The loop re-fire path never
+		// consults the cooldown list, so only manual casts pay it.
+		if cdMs, catMs, catID := s.server.spellCooldownDurationsForItem(ctx, spell, castItemEntry); cdMs <= 0 && catMs <= 0 && (catID == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spellID != 75)) {
+			rangedMs := int32(0)
+			if s.player.RangedAttackTime > 0 {
+				rangedMs = int32(s.getHastedRangedSpeed(time.Duration(s.player.RangedAttackTime) * time.Millisecond).Milliseconds())
+			}
+			s.startRealSpellCooldown(spell, rangedMs, catMs, catID, castItemEntry, time.Now())
+		}
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			s.executeRangedAttack(ctx, tgt, spellID)
 		}

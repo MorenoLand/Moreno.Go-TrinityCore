@@ -314,8 +314,10 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 			}
 			if (spellInfo.SchoolMask&schoolMask != 0) && spellInfo.PreventionType == spellPreventionTypeSilence {
 				// SpellHistory::GetRemainingCooldown
-				// (SpellHistory.cpp:494-515): the spell arm first, then the
-				// category arm. A remaining cooldown at or past the lockout
+				// (SpellHistory.cpp:494-515): an existing entry decides
+				// alone (expired reads 0, never falling through to the
+				// category arm); the category arm runs only with no
+				// entry. A remaining cooldown at or past the lockout
 				// means C++ skips the spell entirely — no entry touch, no
 				// packet row.
 				remainingMs := int64(0)
@@ -329,7 +331,7 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 						break
 					}
 				}
-				if remainingMs == 0 && spellInfo.Category != 0 {
+				if entryIdx < 0 && spellInfo.Category != 0 {
 					for i := range s.player.Cooldowns {
 						cd := &s.player.Cooldowns[i]
 						if cd.Category == spellInfo.Category && cd.CategoryEnd > nowUnix {
@@ -342,8 +344,11 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 				if remainingMs >= int64(durationMs) {
 					continue
 				}
+				// AddCooldown(spellId, 0, lockoutEnd, 0, now) overwrites
+				// the whole entry: a stale category/item/onHold tail
+				// rides no longer.
 				if entryIdx >= 0 {
-					s.player.Cooldowns[entryIdx].End = cooldownEnd
+					s.player.Cooldowns[entryIdx] = spellCooldown{Spell: ls.ID, End: cooldownEnd}
 				} else {
 					s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: ls.ID, End: cooldownEnd})
 				}

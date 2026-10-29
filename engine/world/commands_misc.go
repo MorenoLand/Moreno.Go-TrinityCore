@@ -679,8 +679,9 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 }
 
 // clearPlayerCooldowns mirrors SpellHistory::ResetAllCooldowns for the
-// player-side cooldown stores the Go tree models (session lockout maps and
-// the playerState cooldown list). SpellHistory::SendClearCooldowns
+// playerState cooldown list only: ResetAllCooldowns clears
+// _spellCooldowns and _categoryCooldowns and touches neither the school
+// lockouts nor the global cooldowns. SpellHistory::SendClearCooldowns
 // (SpellHistory.cpp:606-618) sends SMSG_CLEAR_COOLDOWN per spell still
 // holding a cooldown before _spellCooldowns is erased — mirrored here by
 // sending for every distinct spell id in the player cooldown list (the
@@ -705,16 +706,6 @@ func (s *session) clearPlayerCooldowns() {
 	for _, spellID := range spellIDs {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
 	}
-	if s.schoolLockouts != nil {
-		for k := range s.schoolLockouts {
-			delete(s.schoolLockouts, k)
-		}
-	}
-	if s.gcdCooldowns != nil {
-		for k := range s.gcdCooldowns {
-			delete(s.gcdCooldowns, k)
-		}
-	}
 	if s.player != nil {
 		s.playerStateMu.Lock()
 		s.player.Cooldowns = nil
@@ -732,8 +723,6 @@ func (s *session) clearPlayerCooldown(spellID uint32) {
 		return
 	}
 	hadCooldown := false
-	delete(s.schoolLockouts, spellID)
-	delete(s.gcdCooldowns, spellID)
 	if s.player != nil {
 		s.playerStateMu.Lock()
 		kept := s.player.Cooldowns[:0]
