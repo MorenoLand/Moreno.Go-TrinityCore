@@ -11436,21 +11436,72 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area instakill effect kills its
 				// own ally selection, not the merged enemy list.
 				instaList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				instaSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				if instaSwitched {
 					instaList = friendlyEffectTargets
 					for range reflectedAllyTrips {
 						instaList = append(instaList, s.playerGUID)
 					}
 				}
+				// Caster-targeted instakill in a mixed spell (Spell.cpp:1500
+				// SelectImplicitCasterObjectTargets, same flat-list shape as the
+				// damage caster effect): C++ selects the caster alone for this
+				// effect's bit, but the flat list above is the spell's other
+				// effects' selection, so the instakill fired on every hit target.
+				appendInstaCaster := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == s.playerGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, s.playerGUID)
+				}
+				appendInstaExplicit := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == target.UnitGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, target.UnitGUID)
+				}
+				instaCasterTargetA := eff.ImplicitTargetA == targetUnitCaster
+				instaCasterTargetB := !instaCasterTargetA && eff.ImplicitTargetB == targetUnitCaster
+				if instaCasterTargetA {
+					if instaSwitched || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+						instaList = appendInstaCaster(instaList)
+					} else if isExplicitUnitTargetType(eff.ImplicitTargetB) && target.UnitGUID != 0 {
+						if target.UnitGUID == s.playerGUID {
+							instaList = []uint64{s.playerGUID}
+						} else {
+							instaList = []uint64{s.playerGUID, target.UnitGUID}
+						}
+					} else {
+						instaList = []uint64{s.playerGUID}
+					}
+				} else if instaCasterTargetB {
+					instaList = appendInstaCaster(instaList)
+					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+						instaList = appendInstaExplicit(instaList)
+					}
+				}
+				instaCasterOnlyTrip := (instaCasterTargetA || instaCasterTargetB) && !isAreaEnemyTargetType(eff.ImplicitTargetA) && !isAreaEnemyTargetType(eff.ImplicitTargetB)
 				for _, effectTarget := range instaList {
 					if effectTarget != 0 {
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the instakill
-				// fires on the caster once per reflected target.
-				for range reflectedAoETrips {
-					s.executeSpellInstantKill(effCtx, s.playerGUID, spellID)
+				// fires on the caster once per reflected target -- unless the effect
+				// is caster-targeted with no area leg, in which case no reflector's
+				// TargetInfo carries its bit (same rule as the damage trip gate).
+				if !instaCasterOnlyTrip {
+					for range reflectedAoETrips {
+						s.executeSpellInstantKill(effCtx, s.playerGUID, spellID)
+					}
 				}
 			case 2, 17, 31, 58, 121: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
@@ -11531,6 +11582,45 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if casterTargetB {
 					dmgList = appendCaster(dmgList)
 				}
+				// Mixed area + explicit-target damage (Spell.cpp:758-779 per-effect
+				// selection + :1558 SelectImplicitTargetObjectTargets): an effect
+				// whose own target is the cast's explicit unit target carries its
+				// bit only on that target's TargetInfo, but the area/list branch
+				// above overwrote hitTargets with the area list, so the effect
+				// rode the enemy list instead (share count, AoE-cap divisor and
+				// trips included). A sibling area leg keeps the area list and the
+				// explicit target joins it; otherwise the list is the explicit
+				// target alone. Outside a list overwrite hitTargets already holds
+				// the explicit target (or nothing, on a miss), so no rewrite.
+				// The explicit target's own hit roll in an area spell is unmodeled
+				// (the area roll never sees it) and stays residual.
+				appendExplicit := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == target.UnitGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, target.UnitGUID)
+				}
+				explicitTargetDamage := target.UnitGUID != 0 &&
+					(isExplicitUnitTargetType(eff.ImplicitTargetA) || isExplicitUnitTargetType(eff.ImplicitTargetB))
+				explicitAreaDamage := explicitTargetDamage && (dmgSwitched || isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB))
+				if explicitTargetDamage && (areaSpell || friendlyListSpell) {
+					if casterTargetB {
+						// Caster B slot: the A-slot explicit target was dropped by
+						// the same overwrite and joins the caster list.
+						dmgList = appendExplicit(dmgList)
+					} else if !casterTargetA {
+						if explicitAreaDamage {
+							dmgList = appendExplicit(dmgList)
+						} else {
+							dmgList = []uint64{target.UnitGUID}
+						}
+					}
+				}
+				explicitOnlyDamageEffect := explicitTargetDamage && (areaSpell || friendlyListSpell) && !explicitAreaDamage && !casterTargetA && !casterTargetB
 				// Caster-in-friendly-list gate (Spell.cpp:1227 area selection +
 				// DoEffectOnLaunchTarget, Spell.cpp:7736-7744): the area check
 				// has no caster exclusion -- IsValidAssistTarget (Object.cpp:3087)
@@ -11573,7 +11663,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// A friendly-area B slot makes the effect switched, already
 				// excluded there; an enemy-area B slot keeps the trips.
 				casterOnlyDamageEffect := casterTargetA && !isAreaEnemyTargetType(eff.ImplicitTargetB)
-				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell) || explicitSelfDamage || casterTargetA || casterTargetB
+				// TARGET_UNIT_TARGET_AREA_RAID_CLASS (61) damage caster gate
+				// (SpellInfo.cpp:281, Spell.cpp:8362-8376): the RAID_CLASS check
+				// falls through to the RAID check, whose IsValidAssistTarget
+				// (Object.cpp:3087) and IsInRaidWith (Unit.cpp:12155) legs both
+				// pass for self, so a caster inside its own 61 area selection
+				// (same class as the referer) carries the damage bit -- but 61 is
+				// neither a friendly-area type (20/30/31/33/34/56) nor a
+				// friendlyAreaSpell, so the playerGUID skip above dropped them.
+				raidClassDamage := eff.ImplicitTargetA == implicitTargetTargetAreaRaidClass || eff.ImplicitTargetB == implicitTargetTargetAreaRaidClass
+				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell) || explicitSelfDamage || casterTargetA || casterTargetB || raidClassDamage
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -12010,7 +12109,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// each reflected jump deals its own jump-index-scaled damage
 				// to the caster. The C++ multiplier arm (7771-7774) runs for
 				// reflected jumps too, hence the hit-counted index above.
-				for _, rj := range reflectedJumpIndexes {
+				// Per-effect mask for reflected jumps (Spell.cpp:7717-7725
+				// HandleLaunchPhase fires an effect only for TargetInfos carrying
+				// its bit): a reflected jump's TargetInfo carries only the chain
+				// effect's bit, so a switched or caster-targeted damage effect
+				// sharing the cast with a chain effect dealt its damage to the
+				// caster once per reflected jump, though no jump carries its bit.
+				chainReflectedJumpIndexes := reflectedJumpIndexes
+				if _, _, _, chainEffectMask := chainSpellJumps(s, spell); chainEffectMask != 1<<uint(effectIndex) {
+					chainReflectedJumpIndexes = nil
+				}
+				for _, rj := range chainReflectedJumpIndexes {
 					reflectedDamage := chainScaledAmount(damage, chainMult, rj)
 					if weaponDamageEffect {
 						// Reflected jumps run the same launch pipeline in C++
@@ -12044,7 +12153,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// roll, so dmgSwitched is false there and the trips below are
 				// the friendly reflectors' own return hits.
 				enemyTrips := reflectedAoETrips
-				if dmgSwitched || casterOnlyDamageEffect {
+				if dmgSwitched || casterOnlyDamageEffect || explicitOnlyDamageEffect {
 					enemyTrips = nil
 				}
 				for range enemyTrips {
@@ -12146,7 +12255,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// with a friendly-area target heals its own ally selection,
 				// not the merged enemy list.
 				healList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				healSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				if healSwitched {
 					healList = friendlyEffectTargets
 					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
 					// _spellHitTarget is the caster -- the heal lands on the
@@ -12156,6 +12266,50 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// contents, and each arm rebuilds healList fresh.
 					for range reflectedAllyTrips {
 						healList = append(healList, s.playerGUID)
+					}
+				}
+				// Caster-targeted heal in a mixed spell (Spell.cpp:1500, same
+				// flat-list shape as the damage caster effect): the heal fires
+				// on the caster alone for this effect's bit, not on the spell's
+				// other effects' hit list.
+				appendHealCaster := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == s.playerGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, s.playerGUID)
+				}
+				appendHealExplicit := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == target.UnitGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, target.UnitGUID)
+				}
+				healCasterTargetA := eff.ImplicitTargetA == targetUnitCaster
+				healCasterTargetB := !healCasterTargetA && eff.ImplicitTargetB == targetUnitCaster
+				if healCasterTargetA {
+					if healSwitched || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+						healList = appendHealCaster(healList)
+					} else if isExplicitUnitTargetType(eff.ImplicitTargetB) && target.UnitGUID != 0 {
+						if target.UnitGUID == s.playerGUID {
+							healList = []uint64{s.playerGUID}
+						} else {
+							healList = []uint64{s.playerGUID, target.UnitGUID}
+						}
+					} else {
+						healList = []uint64{s.playerGUID}
+					}
+				} else if healCasterTargetB {
+					healList = appendHealCaster(healList)
+					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+						healList = appendHealExplicit(healList)
 					}
 				}
 				for _, effectTarget := range healList {
@@ -12218,12 +12372,55 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779): same split as
 				// the heal arm above.
 				healList := hitTargets
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				mechSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				if mechSwitched {
 					healList = friendlyEffectTargets
 					// Reflected-ally retarget (Spell.cpp:2350), same as the heal
 					// arm above: one caster heal per reflected ally trip.
 					for range reflectedAllyTrips {
 						healList = append(healList, s.playerGUID)
+					}
+				}
+				// Caster-targeted mechanical heal in a mixed spell (Spell.cpp:1500,
+				// same flat-list shape as the heal arm above).
+				appendMechCaster := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == s.playerGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, s.playerGUID)
+				}
+				appendMechExplicit := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == target.UnitGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, target.UnitGUID)
+				}
+				mechCasterTargetA := eff.ImplicitTargetA == targetUnitCaster
+				mechCasterTargetB := !mechCasterTargetA && eff.ImplicitTargetB == targetUnitCaster
+				if mechCasterTargetA {
+					if mechSwitched || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+						healList = appendMechCaster(healList)
+					} else if isExplicitUnitTargetType(eff.ImplicitTargetB) && target.UnitGUID != 0 {
+						if target.UnitGUID == s.playerGUID {
+							healList = []uint64{s.playerGUID}
+						} else {
+							healList = []uint64{s.playerGUID, target.UnitGUID}
+						}
+					} else {
+						healList = []uint64{s.playerGUID}
+					}
+				} else if mechCasterTargetB {
+					healList = appendMechCaster(healList)
+					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+						healList = appendMechExplicit(healList)
 					}
 				}
 				for _, effectTarget := range healList {
