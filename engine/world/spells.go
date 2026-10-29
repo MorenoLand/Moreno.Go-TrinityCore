@@ -8490,6 +8490,112 @@ func (s *session) revalidateUnk4ArrivalTargets(spell wotlk.Spell, targets []uint
 	return live
 }
 
+// triggeredArrivalTargetState resolves the live unit flags and the
+// GetCharmerOrOwnerGUID value for a triggered arrival arm (Spell.cpp:2740-2745
+// reads the TargetInfo unit's flags and charmer/owner). Player targets carry
+// no charm model in Go, so their charmer/owner is empty (Unit.h:1170 returns
+// the charmer if charmed, else the owner; an unowned unit yields empty,
+// which never equals the caster). Creature targets resolve through the live
+// motion (charmer first when charmed, else owner); anything else falls back
+// to the combat-target row, which carries flags but no owner. A GUID that
+// resolves to no unit (gameobject primaries, unresolvable rows) reports
+// ok=false: C++ PreprocessTarget returns early for a null unit, so no arm
+// runs. Pet GUIDs outside the motion store also report ok=false, except the
+// caster's own pet, whose owner exception decides the arm before any flag
+// read — Go's pet model carries no unit-flag store for them.
+func (s *session) triggeredArrivalTargetState(ctx context.Context, guid uint64) (unitFlags uint32, ownerGUID uint64, isPlayer bool, ok bool) {
+	if s == nil || s.server == nil {
+		return 0, 0, false, false
+	}
+	if targetSess := s.server.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+		return targetSess.player.UnitFlags, 0, true, true
+	}
+	if motion := s.findCreatureMotion(guid); motion != nil {
+		owner := motion.OwnerGUID
+		if motion.Charmed && motion.CharmerGUID != 0 {
+			owner = motion.CharmerGUID
+		}
+		return motion.UnitFlags, owner, false, true
+	}
+	if ownerSess := s.server.findSessionByPetGUID(guid); ownerSess != nil {
+		if ownerSess.playerGUID == s.playerGUID {
+			return 0, s.playerGUID, false, true
+		}
+		return 0, 0, false, false
+	}
+	if tgt, found := s.getCombatTarget(ctx, guid); found {
+		return tgt.UnitFlags, 0, false, true
+	}
+	return 0, 0, false, false
+}
+
+// triggeredSpeedGatedArrivalDrop evaluates the Speed-gated arms of
+// Spell::PreprocessSpellHit (Spell.cpp:2740-2745) for one triggered-cast
+// target. The caller gates on Speed > 0 and skips self and already-missed
+// (including reflected) entries: PreprocessSpellHit runs only for a non-null
+// _spellHitTarget (PreprocessTarget, Spell.cpp:2357-2366), and a clean reflect
+// resolves _spellHitTarget to the caster, which the m_caster != unit gate
+// skips — so reflected entries never reach the arms.
+//   - NON_ATTACKABLE (:2740-2741): the unit carries UNIT_FLAG_NON_ATTACKABLE
+//     and its charmer/owner is not the caster. Any unit type qualifies.
+//   - Duel-end (:2743-2745): the unit is a player, the spell is not
+//     positive, the caster is friendly to it, and it is not a valid assist
+//     target. !IsValidAttackTarget needs no separate check for player
+//     targets: the PvP case (Object.cpp:3045-3080) refuses friendly targets,
+//     and every earlier leg only refuses — none accepts ahead of it.
+//     IsValidAssistTarget is evaluated as its decidable false-legs only (an
+//     under-approximation: a firing is always a true C++ firing, while
+//     undecidable legs stay residual): GM target, dead target on a spell
+//     that disallows dead targets, NOT_SELECTABLE without
+//     CAN_TARGET_UNTARGETABLE, the negative-spell flag bundle
+//     (NON_ATTACKABLE/TAXI_FLIGHT/NOT_ATTACKABLE_1/NON_ATTACKABLE_2,
+//     Object.cpp:3131), IMMUNE_TO_PC (0x100 — negative spells always reject;
+//     the ASSIST_IGNORE_IMMUNE_FLAG bypass saves positive spells only), and
+//     the PvP tail (explicitTargetAssistPvPBlocked: target dueling someone
+//     else, FFA-from-outside, sanctuary-PvP mismatch, Object.cpp:3160-3171).
+//     Residual (the arm stays silent): UNIT_STATE_UNATTACKABLE,
+//     CanSeeOrDetect invisibility, the caster-vehicle passenger/base legs,
+//     and opposite-team GM targets (C++ sets GM faction friendly; Go's
+//     team-based friendly read misses them).
+func (s *session) triggeredSpeedGatedArrivalDrop(ctx context.Context, spell wotlk.Spell, guid uint64) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	unitFlags, ownerGUID, isPlayer, ok := s.triggeredArrivalTargetState(ctx, guid)
+	if !ok {
+		return false
+	}
+	if unitFlags&unitFlagNonAttackable != 0 && ownerGUID != s.playerGUID {
+		return true
+	}
+	if !isPlayer || spellIsPositive(spell) {
+		return false
+	}
+	targetSess := s.server.findSessionByGUID(guid)
+	if targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	if !s.isFriendlyToTarget(guid, targetSess) {
+		return false
+	}
+	if sessionIsGameMaster(targetSess) {
+		return true
+	}
+	if targetSess.isDeadOrGhost() && !spellAllowsDeadTarget(spell) {
+		return true
+	}
+	if unitFlags&unitFlagNotSelectable != 0 && spell.AttributesEx6&spellAttr6CanTargetUntargetable == 0 {
+		return true
+	}
+	if unitFlags&(unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return true
+	}
+	if unitFlags&0x00000100 != 0 {
+		return true
+	}
+	return s.explicitTargetAssistPvPBlocked(targetSess)
+}
+
 const (
 	invTypeAmmo   uint32 = 24 // INVTYPE_AMMO (ItemTemplate.h:285)
 	invTypeThrown uint32 = 25 // INVTYPE_THROWN (ItemTemplate.h:286)
@@ -18293,6 +18399,38 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (Spell.cpp:2606) is structural — this path has no miss model.
 	var comboGainTarget uint64
 	var comboGain int8
+	// Spell::PreprocessSpellHit (Spell.cpp:2740-2745) Speed-gated arrival arms
+	// on the triggered path: the launch roll (triggeredSpellHitResult) never
+	// checks NON_ATTACKABLE or friendly-negative, so a target already flagged
+	// at launch passes it and must drop here instead. This point — after the
+	// GO packet and the initial-threat leg, before the aura-break pass — is
+	// C++'s order (SendSpellGo at _cast, HandleThreatSpells in
+	// _handle_immediate_phase, then DoProcessTargetContainer in
+	// handle_delayed, Spell.cpp:3629-3671), and the arms sit ahead of the
+	// aura-break in PreprocessSpellHit, so a dropped target keeps its
+	// HITBYSPELL auras. A drop joins triggeredMiss with EVADE, so the
+	// effect loop skips it everywhere, and sends SMSG_SPELLLOGMISS
+	// (PreprocessTarget, Spell.cpp:2366-2372); the GO hit list keeps it,
+	// matching C++ GO-before-arrival. Drops do not join triggeredMissGUIDs:
+	// C++ leaves MissCondition at its launch value (NONE) for arrival drops,
+	// so their DoDamageAndTriggers runs the zero-damage hit path, not the
+	// miss arm the nodmg loop models — that path stays residual, as in the
+	// UNK4 strip. The Speed-gated immunity arm (:2720) is not repeated
+	// here: it is launch-covered (see the audit unit in this tick's entry).
+	if spell.Speed > 0 {
+		for _, guid := range triggeredRollTargets {
+			if guid == 0 || guid == s.playerGUID {
+				continue
+			}
+			if _, missed := triggeredMiss[guid]; missed {
+				continue
+			}
+			if s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
+				triggeredMiss[guid] = protocol.SpellMissEvade
+				s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
+			}
+		}
+	}
 	// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) runs on the triggered
 	// path too — triggered casts go through the same per-target processing
 	// (PreprocessTarget ahead of the effect loop).
