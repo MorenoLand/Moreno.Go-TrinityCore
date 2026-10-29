@@ -12036,7 +12036,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// + ForwardThreatForAssistingMe(damage/2) tail (Unit.cpp:6590-6596)
 				// rides energizeBySpellTail (log sender + distributeHealingThreat
 				// with the NO_THREAT gate).
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area energize effect energizes its
+				// own ally selection, with one caster energize per reflected
+				// ally trip (Spell.cpp:2350).
+				energizeList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					energizeList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						energizeList = append(energizeList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range energizeList {
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
@@ -12056,7 +12067,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// below. The Unit::EnergizeBySpell SendEnergizeSpellLog +
 				// ForwardThreatForAssistingMe(damage/2) tail (Unit.cpp:6590-6596)
 				// rides energizeBySpellTail, same as the spellEffectEnergize arm.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area energize-pct effect energizes
+				// its own ally selection, with one caster energize per reflected
+				// ally trip (Spell.cpp:2350).
+				energizePctList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					energizePctList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						energizePctList = append(energizePctList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range energizePctList {
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
@@ -12240,7 +12262,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.applySpellThreat(effCtx, spell, effectTarget, amount)
 				}
 			case spellEffectHealMaxHealth:
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area max-health heal heals its own
+				// ally selection, with one caster heal per reflected ally trip
+				// (Spell.cpp:2350).
+				maxHealthList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					maxHealthList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						maxHealthList = append(maxHealthList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range maxHealthList {
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the max-health
@@ -12255,12 +12288,40 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					schoolMask = 1
 				}
 
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779): a
+				// friendly-area aura effect applies to its own ally
+				// selection, not the merged enemy list — the same switch
+				// as the heal arms above. For a pure friendly-area spell
+				// hitTargets already is that selection.
+				friendlyAuraEffect := isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)
+				auraList := hitTargets
+				friendlyAuraList := friendlyAreaSpell
+				if friendlyEffectTargets != nil && friendlyAuraEffect {
+					auraList = friendlyEffectTargets
+					friendlyAuraList = true
+					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
+					// _spellHitTarget is the caster — the aura lands on the
+					// caster once per reflected ally; the ally itself takes
+					// nothing. The append only ever writes past
+					// len(friendlyEffectTargets), never into its visible
+					// contents, and each arm rebuilds auraList fresh.
+					for range reflectedAllyTrips {
+						auraList = append(auraList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range auraList {
 					auraTarget := s.playerGUID
 					if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
 						auraTarget = effectTarget
 					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
 						auraTarget = s.playerGUID
+					} else if friendlyAuraList && friendlyAuraEffect && effectTarget != 0 {
+						// Friendly-area effect on its own list: the entry IS
+						// the unitTarget (SpellEffects.cpp:1233 EffectApplyAura
+						// applies to unitTarget). Without this the ladder fell
+						// through to the caster, so a party/raid buff landed
+						// on the caster once per ally and never on the allies.
+						auraTarget = effectTarget
 					} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
 						if effectTarget != 0 && effectTarget != s.playerGUID {
 							auraTarget = effectTarget
