@@ -3405,9 +3405,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	if isDualWielding {
 		missChance += 1900
 	}
-	if hitBonusBP > 0 {
-		missChance -= hitBonusBP
-	}
+	// Unit::MeleeSpellMissChance (Unit.cpp:12449-12459) subtracts the
+	// m_modMelee/RangedHitChance, aura-54 and victim-184/185 sums
+	// unconditionally - a negative hit bonus raises the miss chance.
+	missChance -= hitBonusBP
 	if missChance < 0 {
 		missChance = 0
 	}

@@ -97,7 +97,11 @@ func (s *session) spellHitTableBonus(spell wotlk.Spell, targetSess *session) flo
 
 // calculateSpellHitChance calculates the chance [0.0, 1.0] for a spell to hit the target,
 // based on caster level, target level, whether target is a player or creature, and caster's Spell Hit Rating.
-// Formula mirrors TrinityCore Unit::MagicSpellHitResult (Unit.cpp:2470-2520).
+// Base table mirrors WorldObject::MagicSpellHitResult (Object.cpp:2528-2532)
+// plus the m_modSpellHitChance leg (aura 55 + rating via getSpellHitPct);
+// the 199/186/160/rating-taken legs live in spellHitTableBonus on the full
+// cast paths, and the SPELLMOD_RESIST_MISS_CHANCE fold has no spell context
+// on this damage-shield-only roll.
 func (s *session) calculateSpellHitChance(targetLevel uint8, isTargetPlayer bool) float64 {
 	if s == nil || s.player == nil {
 		return 1.0
@@ -111,40 +115,30 @@ func (s *session) calculateSpellHitChance(targetLevel uint8, isTargetPlayer bool
 	}
 
 	levelDiff := int(targetLevel) - int(casterLevel)
-	hitChance := 100.0
-
+	lchance := 11.0
 	if isTargetPlayer {
-		if levelDiff <= 0 {
-			hitChance = 96.0 // 4% base miss in PvP
-		} else if levelDiff == 1 {
-			hitChance = 95.0 // 5% miss
-		} else if levelDiff == 2 {
-			hitChance = 94.0 // 6% miss
-		} else {
-			hitChance = 94.0 - float64(levelDiff-2)*7.0
-		}
+		lchance = 7.0
+	}
+	// WorldObject::MagicSpellHitResult (Object.cpp:2528-2532): 96 - leveldif
+	// below 3 (so a lower-level target raises the base above 96), then
+	// 94 - (leveldif-2)*lchance (7 PvP, 11 PvE; an 83 boss vs 80 is 83%).
+	hitChance := 100.0
+	if levelDiff < 3 {
+		hitChance = 96.0 - float64(levelDiff)
 	} else {
-		// PvE against creatures
-		if levelDiff <= 0 {
-			hitChance = 96.0 // 4% base miss
-		} else if levelDiff == 1 {
-			hitChance = 95.0 // 5% miss
-		} else if levelDiff == 2 {
-			hitChance = 94.0 // 6% miss
-		} else {
-			// Level 83 boss against Level 80 player: 83% hit chance (17% miss)
-			hitChance = 83.0 - float64(levelDiff-3)*11.0
-		}
+		hitChance = 94.0 - float64(levelDiff-2)*lchance
 	}
 
 	// Add spell hit percentage from gear rating (CombatRatingHitSpell = 7)
 	hitChance += s.getSpellHitPct()
 
+	// C++ clamps with RoundToInterval(HitChance, 0, 10000) (Object.cpp:2557):
+	// a fully-negative table is a guaranteed miss, no 1% floor.
 	if hitChance > 100.0 {
 		hitChance = 100.0
 	}
-	if hitChance < 1.0 {
-		hitChance = 1.0
+	if hitChance < 0.0 {
+		hitChance = 0.0
 	}
 
 	return hitChance / 100.0

@@ -2153,13 +2153,14 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 // The shared early-outs below are the IGNORE_HIT_RESULT, self-cast and
 // positive-vs-non-hostile early-outs, then the MagicSpellHitResult table
 // (Object.cpp:2534-2604): the level-diff base with the caster's aura-55
-// sum (pet-verdict precedent) plus the player-victim 186/160/rating legs,
-// the 178 debuff-resist arm and the 287 deflect arm. Callers run it after
+// sum (pet-verdict precedent) plus the victim 186/160 legs (the rating
+// leg is TYPEID_PLAYER-gated in C++), the 178 debuff-resist arm and the
+// 287 deflect arm. Callers run it after
 // the immune/evade/reflect verdicts, matching C++ order inside
 // SpellHitResult, so a reflected/evaded/immune target never rolls here.
 // Deltas shared with the pet verdict: the mechanic-resist roll, the
 // CU_BINARY average-resist arm and the trigger-caster level rule have no
-// Go model; creature victims carry no 186/160 sums. The dead-victim head
+// Go model. The dead-victim head
 // gate (Object.cpp:2525-2526) applies to creature victims only — player
 // victims are exempt in C++.
 func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) uint8 {
@@ -2205,6 +2206,16 @@ func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creature
 		bonusHit -= spellRatingHitPct(float64(victimSess.player.CombatRatings[CombatRatingHitTakenSpell]), victimSess.player.Level)
 		if isAreaEnemySpell(spell) {
 			bonusHit -= float64(victimSess.totalAuraModifier(spellAuraModAoeAvoidance))
+		}
+	} else if victimMotion != nil {
+		// WorldObject::MagicSpellHitResult (Object.cpp:2543-2549) runs the
+		// victim 186/160 legs for any victim type; the victim-rating leg
+		// is TYPEID_PLAYER-gated and stays player-only above.
+		for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(victimMotion), spellAuraModAttackerSpellHitChance, uint32(spell.SchoolMask)) {
+			bonusHit += float64(amount)
+		}
+		if isAreaEnemySpell(spell) {
+			bonusHit -= float64(s.creatureAuraTypeSum(creatureAuraKeyForMotion(victimMotion), spellAuraModAoeAvoidance))
 		}
 	}
 	if miss := magicSpellHitResultFromBase(magicSpellHitBase(casterLevel, victimLevel, isPlayerVictim), bonusHit); miss != protocol.SpellMissNone {
