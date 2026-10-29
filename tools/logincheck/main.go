@@ -826,11 +826,12 @@ func checkMovementSpeedUpdatePlan() error {
 	for _, test := range []struct {
 		auraType                                uint32
 		hasFlightSpeedAura, hasFlightCapability bool
-		run, flight, canFly                     bool
-	}{{31, false, false, true, false, false}, {33, false, false, true, true, false}, {78, false, false, true, false, false}, {78, true, false, true, true, false}, {78, true, true, true, true, true}, {201, false, false, false, false, true}, {206, false, false, false, true, false}, {207, false, false, false, true, true}, {211, false, false, false, true, false}} {
-		run, flight, canFly := world.ResolveMovementSpeedUpdatePlan(test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability)
-		if run != test.run || flight != test.flight || canFly != test.canFly {
-			return fmt.Errorf("aura type %d flight-speed=%t can-fly=%t plan=(%t,%t,%t) want=(%t,%t,%t)", test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability, run, flight, canFly, test.run, test.flight, test.canFly)
+		run, swim, flight                       bool
+		runBack, swimBack, flightBack, canFly   bool
+	}{{31, false, false, true, false, false, false, false, false, false}, {33, false, false, true, true, true, true, true, true, false}, {58, false, false, false, true, false, false, false, false, false}, {78, false, false, true, false, false, false, false, false, false}, {78, true, false, true, false, true, false, false, false, false}, {78, true, true, true, false, true, false, false, false, true}, {191, false, false, true, true, true, false, false, false, false}, {201, false, false, false, false, false, false, false, false, true}, {206, false, false, false, false, true, false, false, false, false}, {207, false, false, false, false, true, false, false, false, true}, {211, false, false, false, false, true, false, false, false, false}, {305, false, false, true, false, false, false, false, false, false}} {
+		run, swim, flight, runBack, swimBack, flightBack, canFly := world.ResolveMovementSpeedUpdatePlan(test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability)
+		if run != test.run || swim != test.swim || flight != test.flight || runBack != test.runBack || swimBack != test.swimBack || flightBack != test.flightBack || canFly != test.canFly {
+			return fmt.Errorf("aura type %d flight-speed=%t can-fly=%t plan=(%t,%t,%t,%t,%t,%t,%t) want=(%t,%t,%t,%t,%t,%t,%t)", test.auraType, test.hasFlightSpeedAura, test.hasFlightCapability, run, swim, flight, runBack, swimBack, flightBack, canFly, test.run, test.swim, test.flight, test.runBack, test.swimBack, test.flightBack, test.canFly)
 		}
 	}
 	return nil

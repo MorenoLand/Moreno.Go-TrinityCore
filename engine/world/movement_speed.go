@@ -285,7 +285,7 @@ func (s *session) mountedRunSpeed() float32 {
 	main := s.maxPositiveAuraModifier(spellAuraIncreaseSpeed)
 	stack := s.auraMultiplier(129)
 	nonStack := float32(1) + float32(s.maxPositiveAuraModifier(spellAuraModSpeedNotStack))/100
-	if s.hasAuraType(spellAuraMounted) || s.player.MountDisplayID != 0 {
+	if s.hasAuraType(spellAuraMounted) || s.player != nil && s.player.MountDisplayID != 0 {
 		main = s.maxPositiveAuraModifier(spellAuraIncreaseMountedSpeed)
 		stack = s.auraMultiplier(spellAuraMountedSpeedAlways)
 		nonStack = float32(1) + float32(s.maxPositiveAuraModifier(spellAuraMountedSpeedNotStack))/100
@@ -429,15 +429,32 @@ func ResolveAuraPercentMultiplier(amounts []int32) float32 {
 
 func movementRunSpeedAura(auraType uint32) bool {
 	switch auraType {
-	case 31, 32, 33, 58, 78, 129, 130, 171, 172, 191, 305:
+	case 31, 32, 33, 78, 129, 130, 171, 172, 191, 305:
 		return true
 	default:
 		return false
 	}
 }
 
+// movementSwimSpeedAura mirrors the swim arms of the speed handlers
+// (SpellAuraEffects.cpp): HandleAuraModIncreaseSwimSpeed (58) recomputes
+// SWIM only, HandleAuraModDecreaseSpeed (33) all six speeds, and
+// HandleAuraModUseNormalSpeed (191) RUN/SWIM/FLIGHT. The 58 arm previously
+// sat in the run set, so a swim-speed aura resent RUN (and cleared a
+// .modify run override) while the swim speed itself went stale.
+func movementSwimSpeedAura(auraType uint32) bool {
+	return auraType == 58 || auraType == spellAuraDecreaseSpeed || auraType == spellAuraUseNormalMovementSpeed
+}
+
+// movementBackSpeedAura mirrors HandleAuraModDecreaseSpeed
+// (SpellAuraEffects.cpp:3078-3083): the decrease arm is the only handler
+// that recomputes the three back speeds.
+func movementBackSpeedAura(auraType uint32) bool {
+	return auraType == spellAuraDecreaseSpeed
+}
+
 func movementFlightSpeedAura(auraType uint32) bool {
-	return auraType == spellAuraDecreaseSpeed || auraType >= spellAuraIncreaseVehicleFlight && auraType <= spellAuraFlightSpeedNotStack
+	return auraType == spellAuraDecreaseSpeed || auraType == spellAuraUseNormalMovementSpeed || auraType >= spellAuraIncreaseVehicleFlight && auraType <= spellAuraFlightSpeedNotStack
 }
 
 func mountedFlightAuraEffects(spell wotlk.Spell) (uint8, int32, [3]int32, [3]int32, bool) {
@@ -498,7 +515,7 @@ func (s *session) hasActiveFlightCapability() bool {
 }
 
 func movementSpeedAura(auraType uint32) bool {
-	return movementRunSpeedAura(auraType) || movementFlightSpeedAura(auraType) || auraType == 201
+	return movementRunSpeedAura(auraType) || movementSwimSpeedAura(auraType) || movementFlightSpeedAura(auraType) || movementBackSpeedAura(auraType) || auraType == 201
 }
 
 func AffectsMovementSpeedAura(auraType uint32) bool {
@@ -509,11 +526,12 @@ func AffectsRunSpeedAura(auraType uint32) bool { return movementRunSpeedAura(aur
 
 func AffectsFlightSpeedAura(auraType uint32) bool { return movementFlightSpeedAura(auraType) }
 
-func ResolveMovementSpeedUpdatePlan(auraType uint32, hasFlightSpeedAura, hasFlightCapability bool) (runSpeed, flightSpeed, canFly bool) {
+func ResolveMovementSpeedUpdatePlan(auraType uint32, hasFlightSpeedAura, hasFlightCapability bool) (runSpeed, swimSpeed, flightSpeed, runBackSpeed, swimBackSpeed, flightBackSpeed, canFly bool) {
 	if !movementSpeedAura(auraType) {
-		return false, false, false
+		return false, false, false, false, false, false, false
 	}
-	return movementRunSpeedAura(auraType), movementFlightSpeedAura(auraType) || auraType == spellAuraMounted && hasFlightSpeedAura, auraType == 201 || auraType == spellAuraMountedFlightSpeed || auraType == spellAuraMounted && hasFlightCapability
+	back := movementBackSpeedAura(auraType)
+	return movementRunSpeedAura(auraType), movementSwimSpeedAura(auraType), movementFlightSpeedAura(auraType) || auraType == spellAuraMounted && hasFlightSpeedAura, back, back, back, auraType == 201 || auraType == spellAuraMountedFlightSpeed || auraType == spellAuraMounted && hasFlightCapability
 }
 
 func (s *session) hasFlightSpeedAura() bool {
@@ -732,7 +750,7 @@ func (s *session) sendRuntimeMovementUpdates(auraType uint32) {
 	if s == nil || s.player == nil {
 		return
 	}
-	runSpeed, flightSpeed, canFly := ResolveMovementSpeedUpdatePlan(auraType, s.hasFlightSpeedAura(), s.hasActiveFlightCapability())
+	runSpeed, swimSpeed, flightSpeed, runBackSpeed, swimBackSpeed, flightBackSpeed, canFly := ResolveMovementSpeedUpdatePlan(auraType, s.hasFlightSpeedAura(), s.hasActiveFlightCapability())
 	if canFly {
 		s.sendRuntimeFlightState()
 	}
@@ -743,8 +761,24 @@ func (s *session) sendRuntimeMovementUpdates(auraType uint32) {
 		s.clearGMSpeedRate(moveTypeRun)
 		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_SPEED, s.mountedRunSpeed(), true)
 	}
+	if swimSpeed {
+		s.clearGMSpeedRate(moveTypeSwim)
+		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_SWIM_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_SWIM_SPEED, s.movementSpeeds()[moveTypeSwim], false)
+	}
 	if flightSpeed {
 		s.clearGMSpeedRate(moveTypeFlight)
 		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_SPEED, s.mountedFlightSpeed(), false)
+	}
+	if runBackSpeed {
+		s.clearGMSpeedRate(moveTypeRunBack)
+		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_RUN_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_RUN_BACK_SPEED, s.movementSpeeds()[moveTypeRunBack], false)
+	}
+	if swimBackSpeed {
+		s.clearGMSpeedRate(moveTypeSwimBack)
+		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_SWIM_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_SWIM_BACK_SPEED, s.movementSpeeds()[moveTypeSwimBack], false)
+	}
+	if flightBackSpeed {
+		s.clearGMSpeedRate(moveTypeFlightBack)
+		s.sendRuntimeMovementSpeed(protocol.OpcodeSMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE, protocol.OpcodeMSG_MOVE_SET_FLIGHT_BACK_SPEED, s.movementSpeeds()[moveTypeFlightBack], false)
 	}
 }
