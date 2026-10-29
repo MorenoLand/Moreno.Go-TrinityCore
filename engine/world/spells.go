@@ -10315,6 +10315,55 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::AddUnitTarget (Spell.cpp:2121) merges selections by GUID: a
+	// unit selected both as the wire target and by a friendly-area or
+	// 37/61 leg carries one TargetInfo whose EffectMask holds both bits,
+	// so the wire outcome decides the partition member too — a clean
+	// reflect trips the friendly/ref effect to the caster (PreprocessTarget,
+	// Spell.cpp:2350), any other miss drops it entirely. The area-roll
+	// block above shares outcomes the same way for rolled spells; the
+	// nearby/GO/no-branch spells here never roll their partitions, so
+	// share the wire missStatus entries instead. A kept wire target needs
+	// no action (it stays in both lists). The reflect proc timer is
+	// already armed by doReflect — the trip below is the same reflect
+	// event, not a second one — and the break pass already skips
+	// missStatus GUIDs, so only effect firing changes. The cap divisor
+	// is unchanged: a shared miss joins the partition miss set and a
+	// shared trip joins the trip list, both counted like the rolled path.
+	if !(areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell) {
+		shareWireOutcome := func(list []uint64, trips *[]uint64, missSet *map[uint64]struct{}, miss protocol.SpellMissStatus) []uint64 {
+			kept := make([]uint64, 0, len(list))
+			shared := false
+			for _, guid := range list {
+				if guid == miss.TargetGUID {
+					shared = true
+					continue
+				}
+				kept = append(kept, guid)
+			}
+			if !shared {
+				return list
+			}
+			if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+				*trips = append(*trips, miss.TargetGUID)
+			} else {
+				if *missSet == nil {
+					*missSet = make(map[uint64]struct{})
+				}
+				(*missSet)[miss.TargetGUID] = struct{}{}
+			}
+			return kept
+		}
+		for _, miss := range missStatus {
+			if friendlyEffectTargets != nil {
+				friendlyEffectTargets = shareWireOutcome(friendlyEffectTargets, &reflectedAllyTrips, &friendlyMissGUIDs, miss)
+			}
+			if refCenteredFriendlyTargets != nil {
+				refCenteredFriendlyTargets = shareWireOutcome(refCenteredFriendlyTargets, &refCenteredAllyTrips, &refCenteredMissGUIDs, miss)
+			}
+		}
+	}
+
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1582): chain spells
 	// (EffectChainTarget > 1) jump from the primary target to nearby units;
 	// chainJumpIndex records each hit jump's order (0 = primary) so the
@@ -15390,6 +15439,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
 				reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, true)
 				reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, true)
+				refCenteredAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, refCenteredAllyTrips, launchMs, true)
+				// Spell::handle_delayed (Spell.cpp:3645-3671) moves every due
+				// TargetInfo out of m_UniqueTargetInfo — the per-effect
+				// friendly/ref partitions are TargetInfos too, not just the
+				// wire list — so their members get the same arrival arms
+				// (death/vanish, sanctuary, evade, NON_ATTACKABLE, immunity,
+				// duel-end). Partition entries are their own TargetInfos,
+				// never reflected entries: their reflect outcomes already
+				// ride the trip lists above, so no caster-to-reflector
+				// remap applies here (isReflected=false). A member dropped
+				// here takes no effects at arrival, matching a dropped
+				// hitTargets member.
+				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0)
+				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -15504,6 +15567,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets = s.revalidateUnk4ArrivalTargets(spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
 		reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, false)
 		reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, false)
+		refCenteredAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, refCenteredAllyTrips, launchMs, false)
+		// Same partition scope as the delayed branch above, through the
+		// UNK4 helper's ungated arms only (evade, sanctuary — the
+		// Speed-gated immunity/NON_ATTACKABLE/duel-end arms stay out for
+		// Speed == 0, and the alive arm stays out as for hitTargets).
+		friendlyEffectTargets = s.revalidateUnk4ArrivalTargets(spell, friendlyEffectTargets, launchMs, false, 0)
+		refCenteredFriendlyTargets = s.revalidateUnk4ArrivalTargets(spell, refCenteredFriendlyTargets, launchMs, false, 0)
 	}
 
 	applyEffects(ctx)
