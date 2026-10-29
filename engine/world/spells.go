@@ -10090,6 +10090,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// The area-roll block above ran exactly for these categories; a wire
+	// roll below must not clobber its lists or misses (Spell.cpp:2117
+	// merges by GUID, never replaces the list).
+	listRollRan := areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell
+	// Clean-reflect wire targets on a rolled list spell: their TargetInfo
+	// counts in the whole-list AoE-cap divisor but rides no trip or miss
+	// list (missedTargets skips clean reflects), so it is tracked here.
+	var wireReflectedGUIDs []uint64
 	isReflected := false
 	// reflectSourceGUID is the pre-retarget unit target of a reflected cast
 	// (Spell.cpp:2174-2188 keeps the reflector as the TargetInfo target;
@@ -10148,19 +10156,56 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// with the ReflectStatus, but the caster takes no effects — the
 		// retarget below is skipped and the reflector stays the target.
 		reflectStatus := s.spellReflectReturnStatus(spell)
-		missStatus = []protocol.SpellMissStatus{{
+		missStatus = append(missStatus, protocol.SpellMissStatus{
 			TargetGUID:    targetGUID,
 			Reason:        protocol.SpellMissReflect,
 			ReflectStatus: reflectStatus,
-		}}
+		})
 		if reflectStatus == protocol.SpellMissNone {
 			targetGUID = s.playerGUID
-			hitTargets = []uint64{s.playerGUID}
-		} else {
+			if listRollRan {
+				wireReflectedGUIDs = append(wireReflectedGUIDs, reflectSourceGUID)
+			} else {
+				hitTargets = []uint64{s.playerGUID}
+			}
+		} else if !listRollRan {
 			hitTargets = nil
 		}
 	}
-	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
+	// Spell::AddUnitTarget (Spell.cpp:2117-2130) merges by GUID: a wire
+	// target the area roll already decided (kept, missed, or tripped)
+	// takes no second roll -- the merged entry's verdict stands. Only
+	// rolled lists count here; unrolled partitions still take the wire
+	// outcome via shareWireOutcome below.
+	wireDecided := false
+	if listRollRan {
+		for _, list := range [][]uint64{hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets} {
+			for _, guid := range list {
+				if guid == targetGUID {
+					wireDecided = true
+				}
+			}
+		}
+		for _, trips := range [][]uint64{reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips} {
+			for _, guid := range trips {
+				if guid == targetGUID {
+					wireDecided = true
+				}
+			}
+		}
+		for _, miss := range missStatus {
+			if miss.TargetGUID == targetGUID {
+				wireDecided = true
+			}
+		}
+		if _, ok := friendlyMissGUIDs[targetGUID]; ok {
+			wireDecided = true
+		}
+		if _, ok := refCenteredMissGUIDs[targetGUID]; ok {
+			wireDecided = true
+		}
+	}
+	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) && !wireDecided {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
@@ -10176,8 +10221,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// IsImmunedToSpell (SPELL_MISS_IMMUNE) ahead of the canReflect
 			// arm, so a target that is both immune and reflecting reports
 			// IMMUNE and the reflection aura is not consumed.
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			if !listRollRan {
+				hitTargets = nil
+			}
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune})
 			// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2354-2357): an
 			// immune player target is still put in combat with the player
 			// caster when the caster could validly attack it (the
@@ -10194,8 +10241,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// spells with only damage effects — for other spells the GO
 			// packet must show a hit, so the immunity only zeroes the
 			// damage at the damage path.
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			if !listRollRan {
+				hitTargets = nil
+			}
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune})
 		} else if targetSess != nil && spellReflectOffered(spell, s, targetGUID, targetSess) && targetSess.checkSpellReflection(spell) {
 			doReflect()
 		} else if targetSess == nil && s.creatureTargetImmuneToSpell(ctx, targetGUID, spell, s, targetFaction) {
@@ -10206,22 +10255,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// never consumes its reflect aura.
 			// (No PreprocessTarget combat arm: Go's miss path doesn't aggro
 			// creatures on a missed harmful cast either.)
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			if !listRollRan {
+				hitTargets = nil
+			}
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune})
 			s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
 		} else if targetSess == nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, spell.SchoolMask) {
 			// Object.cpp:2624-2627 for creature victims: damage immunity
 			// reports SPELL_MISS_IMMUNE at hit resolution for spells with
 			// only damage effects.
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+			if !listRollRan {
+				hitTargets = nil
+			}
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune})
 		} else if targetSess == nil && s.server != nil && s.player != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, targetGUID) {
 			// WorldObject::SpellHitResult (Object.cpp:2637-2639): an
 			// evading creature reports SPELL_MISS_EVADE ahead of the
 			// reflect roll, so its reflect aura is never offered or
 			// consumed.
-			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissEvade}}
+			if !listRollRan {
+				hitTargets = nil
+			}
+			missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissEvade})
 		} else if targetSess == nil && s.creatureReflectOffered(spell, targetFaction) && s.server.creatureCheckSpellReflection(creatureAuraKeyForPlayer(*s.player, targetGUID), spell) {
 			// Creature victims roll the same reflect arm over their
 			// activeCreatureAuras (Object.cpp:2641-2648 applies to any
@@ -10251,15 +10306,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				missInfo = magicSpellHitResultFromBase(float64(baseHit), bonusHit)
 			}
 			if missInfo != protocol.SpellMissNone {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+				if !listRollRan {
+					hitTargets = nil
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: missInfo})
 			} else if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
 				// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592):
 				// the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — a
 				// non-positive aura-carrying spell can be fully resisted by
 				// the victim's 178 auras (MiscValue == DispelType).
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
+				if !listRollRan {
+					hitTargets = nil
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissResist})
 			} else if spellBinaryResistApplies(spell) {
 				var resistances [7]uint32
 				if targetSess != nil && targetSess.player != nil {
@@ -10273,8 +10332,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				chaosBolt := spell.SpellFamilyName == spellFamilyWarlock && spell.SpellIconID == 3178
 				if checkBinarySpellResist(resistances, uint8(spell.SchoolMask), pen, s.player.Level, targetLevel, chaosBolt, s.casterTargetResistMod(uint32(spell.SchoolMask))) {
-					hitTargets = nil
-					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
+					if !listRollRan {
+						hitTargets = nil
+					}
+					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissResist})
 				}
 			}
 			if len(missStatus) == 0 && s.player != nil && spell.DefenseType == spellDamageClassMagic && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
@@ -10285,8 +10346,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// SPELL_AURA_DEFLECT_SPELLS (287) arm — after the resist
 				// rolls, a victim with the caster in its front arc (or
 				// carrying 288) deflects on its 287 total.
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissDeflect}}
+				if !listRollRan {
+					hitTargets = nil
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissDeflect})
 			}
 			// Spell::AddUnitTarget (Spell.cpp:2108-2112) strips per-effect-immune
 			// bits from the target's EffectMask; UpdateSpellCastDataTargets
@@ -10295,8 +10358,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// PreprocessTarget immune combat arm (Spell.cpp:2354-2357) covers
 			// IMMUNE2 too, so the target is put in combat like a spell-immune one.
 			if len(missStatus) == 0 && targetSess != nil && s.spellTargetFullyEffectImmune(spell, targetSess) {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+				if !listRollRan {
+					hitTargets = nil
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2})
 				if targetSess.player != nil {
 					targetSess.player.UnitFlags |= unitFlagInCombat
 					targetSess.lastCombatTime = time.Now()
@@ -10307,8 +10372,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// Creature::IsImmunedToSpellEffect; a zeroed mask reports
 			// SPELL_MISS_IMMUNE2 (Spell.cpp:4491-4492).
 			if len(missStatus) == 0 && targetSess == nil && s.creatureTargetFullyEffectImmune(ctx, targetGUID, spell, s, targetFaction) {
-				hitTargets = nil
-				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2}}
+				if !listRollRan {
+					hitTargets = nil
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2})
 			}
 		}
 	} else if !areaSpell && !friendlyListSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
@@ -13102,6 +13169,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						countCap(guid)
 					}
 					for _, guid := range refCenteredAllyTrips {
+						countCap(guid)
+					}
+					for _, guid := range wireReflectedGUIDs {
 						countCap(guid)
 					}
 					// A TARGET_UNIT_CASTER sibling single-target effect
