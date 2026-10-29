@@ -24978,6 +24978,13 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				stackCount = uint8(procCharges)
 			}
 			for index, effect := range sp.Effects {
+				// The record keeps the first effect's type/amounts, but its
+				// mask must cover every aura effect the self-cast applies,
+				// or per-effect folds (immunity misc, HasAuraType) miss the
+				// non-first effects the way the live-cast record used to.
+				if effect.Effect != 0 && effect.Aura != 0 {
+					effectMask |= 1 << uint(index)
+				}
 				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
 					continue
 				}
@@ -27997,6 +28004,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.refreshSkillBonusForAuraAmountChange(existing, func() {
 					refreshAuraEffectBasepoints(existing, spell, eff, amount)
 				})
+				// Later effects of the same cast only refresh amounts, so
+				// without this the record's EffectMask would miss this
+				// effect and per-effect folds (immunity misc, HasAuraType)
+				// would miss it too.
+				existing.EffectMask |= spellEffectMask(spell, eff)
 				targetSess.castMu.Unlock()
 				return
 			}
@@ -28304,6 +28316,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					aura.Amount = uint32(aura.Amounts[index])
 				}
 			}
+		}
+		// The record collapses a multi-effect cast to one entry, so the
+		// mask must carry every effect applied so far: the previous entry
+		// is either an earlier effect of this cast or, on a re-cast's first
+		// effect, the old aura of the same spell (same effect set). A
+		// stopped previous entry carries nothing.
+		if previous != nil && !previous.Stopped {
+			aura.EffectMask |= previous.EffectMask
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh

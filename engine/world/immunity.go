@@ -52,6 +52,8 @@ const (
 // SPELL_AURA_SCHOOL_IMMUNITY (39) aura counts — C++ ORs the aura effects'
 // misc values into immuneMask and tests (immuneMask & SPELL_SCHOOL_MASK_ALL)
 // as a boolean, so any covered school (not just full coverage) trips it.
+// The fold is per effect, not per record: a 39 effect that is not the
+// record's stored type still counts (GetAuraEffectsByType, not the record).
 func (s *session) isTotalImmune() bool {
 	if s == nil || s.player == nil {
 		return false
@@ -60,8 +62,19 @@ func (s *session) isTotalImmune() bool {
 	s.castMu.Lock()
 	defer s.castMu.Unlock()
 
+	var immuneMask uint32
 	for _, aura := range s.activeAuras {
-		if aura != nil && aura.AuraType == spellAuraSchoolImmunity && uint32(aura.MiscValue)&0x7F != 0 {
+		if aura == nil {
+			continue
+		}
+		spell, found := wotlk.Spell{}, false
+		if s.server != nil && s.server.Data != nil {
+			if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		immuneMask |= auraEffectMiscMask(aura, spell, found, spellAuraSchoolImmunity)
+		if immuneMask&0x7F != 0 {
 			return true
 		}
 	}
@@ -141,36 +154,47 @@ func (s *session) isImmuneToDamage(schoolMask uint32) bool {
 // immuneSchoolMaskLocked is the Unit.cpp:7831-7841 fold over live aura-39
 // rows: each entry whose misc overlaps schoolMask contributes its misc,
 // unless the incoming spell pierces that entry's granting aura
-// (SpellInfo::CanPierceImmuneAura per entry). Caller holds castMu.
+// (SpellInfo::CanPierceImmuneAura per entry). The fold is per effect, not
+// per record — m_spellImmune[IMMUNITY_SCHOOL] holds one row per 39 effect.
+// Caller holds castMu.
 func (s *session) immuneSchoolMaskLocked(spell wotlk.Spell, schoolMask uint32) uint32 {
 	var mask uint32
 	for _, aura := range s.activeAuras {
-		if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+		if aura == nil {
 			continue
 		}
-		misc := uint32(aura.MiscValue)
-		if misc&schoolMask == 0 {
-			continue
-		}
+		immuneSpell, found := wotlk.Spell{}, false
 		if s.server != nil && s.server.Data != nil {
-			if immuneSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found && canSpellPierceImmuneAura(spell, immuneSpell) {
-				continue
+			if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+				immuneSpell, found = sp, true
 			}
 		}
-		mask |= misc
+		if found && canSpellPierceImmuneAura(spell, immuneSpell) {
+			continue
+		}
+		if misc := auraEffectMiscMask(aura, immuneSpell, found, spellAuraSchoolImmunity); misc&schoolMask != 0 {
+			mask |= misc
+		}
 	}
 	return mask
 }
 
 // immuneDamageMaskLocked is the Unit.cpp:7844-7847 fold: the OR of the live
-// aura-40 (SPELL_AURA_DAMAGE_IMMUNITY) misc school masks. Caller holds castMu.
+// aura-40 (SPELL_AURA_DAMAGE_IMMUNITY) misc school masks, per effect like
+// the school fold. Caller holds castMu.
 func (s *session) immuneDamageMaskLocked() uint32 {
 	var mask uint32
 	for _, aura := range s.activeAuras {
-		if aura == nil || aura.AuraType != spellAuraDamageImmunity {
+		if aura == nil {
 			continue
 		}
-		mask |= uint32(aura.MiscValue)
+		spell, found := wotlk.Spell{}, false
+		if s.server != nil && s.server.Data != nil {
+			if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		mask |= auraEffectMiscMask(aura, spell, found, spellAuraDamageImmunity)
 	}
 	return mask
 }
@@ -419,18 +443,20 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 	if schoolMask := spell.SchoolMask; schoolMask != 0 {
 		var schoolImmunityMask uint32
 		for _, aura := range s.activeAuras {
-			if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+			if aura == nil {
 				continue
 			}
-			misc := uint32(aura.MiscValue)
-			if misc&schoolMask == 0 {
-				continue
-			}
+			// Per-effect misc, not the record's: a 39 effect that is not
+			// the stored type still writes its IMMUNITY_SCHOOL row.
 			immuneSpell, found := wotlk.Spell{}, false
 			if s.server != nil && s.server.Data != nil {
 				if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
 					immuneSpell, found = sp, true
 				}
+			}
+			misc := auraEffectMiscMask(aura, immuneSpell, found, spellAuraSchoolImmunity)
+			if misc&schoolMask == 0 {
+				continue
 			}
 			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
 				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
@@ -589,7 +615,21 @@ func (s *session) playerIsIsolated() bool {
 		if aura == nil {
 			continue
 		}
-		if aura.AuraType == spellAuraSchoolImmunity && aura.Mechanic == mechanicBanish {
+		// C++ gates on the granting spell's Mechanic (SpellAuraEffects
+		// :3160-3178 remove leg scans GetAuraEffectsByType(39) the same
+		// way), so the type leg must be per effect, not the record's:
+		// a 39 effect that is not the stored type still isolates.
+		spell, found := wotlk.Spell{}, false
+		if s.server != nil && s.server.Data != nil {
+			if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		mechanic := aura.Mechanic
+		if found {
+			mechanic = spell.Mechanic
+		}
+		if mechanic == mechanicBanish && auraHasEffectType(aura, spell, found, spellAuraSchoolImmunity) {
 			return true
 		}
 	}
@@ -608,7 +648,67 @@ func (srv *Server) creatureIsIsolated(key creatureAuraKey) bool {
 		if aura == nil {
 			continue
 		}
-		if aura.AuraType == spellAuraSchoolImmunity && aura.Mechanic == mechanicBanish {
+		spell, found := wotlk.Spell{}, false
+		if srv.Data != nil {
+			if sp, f, err := srv.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		mechanic := aura.Mechanic
+		if found {
+			mechanic = spell.Mechanic
+		}
+		if mechanic == mechanicBanish && auraHasEffectType(aura, spell, found, spellAuraSchoolImmunity) {
+			return true
+		}
+	}
+	return false
+}
+
+// auraEffectMiscMask is the per-effect misc fold C++ immunity reads use
+// (GetAuraEffectsByType, m_spellImmune rows written per effect by
+// ApplyAllSpellImmunitiesTo, SpellInfo.cpp:2860-2920): the OR of the
+// MiscValue of every effect of the given aura type the record's EffectMask
+// covers. The stored type/misc leg covers the recorded effect when the
+// spell row is unknown; the mask-gated DBC leg covers the rest. Records
+// now carry the full cast mask (live apply accumulates it across effects,
+// restore keeps the saved mask, self-apply and glyph masks cover every aura
+// effect), so this is exact for those paths; single-effect records
+// (dynobj, steal, pet-owner) correctly carry only their one bit.
+func auraEffectMiscMask(aura *activeAura, spell wotlk.Spell, spellFound bool, auraType uint32) uint32 {
+	if aura == nil {
+		return 0
+	}
+	var mask uint32
+	if aura.AuraType == auraType {
+		mask |= uint32(aura.MiscValue)
+	}
+	if !spellFound {
+		return mask
+	}
+	for index, effect := range spell.Effects {
+		if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
+			mask |= uint32(effect.MiscValue)
+		}
+	}
+	return mask
+}
+
+// auraHasEffectType reports whether the record carries an effect of the
+// given aura type: the stored type, or any mask-covered DBC effect of that
+// type. Same record model as auraEffectMiscMask.
+func auraHasEffectType(aura *activeAura, spell wotlk.Spell, spellFound bool, auraType uint32) bool {
+	if aura == nil {
+		return false
+	}
+	if aura.AuraType == auraType {
+		return true
+	}
+	if !spellFound {
+		return false
+	}
+	for index, effect := range spell.Effects {
+		if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == auraType {
 			return true
 		}
 	}
@@ -1714,28 +1814,38 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 	srv.auraMu.Lock()
 	defer srv.auraMu.Unlock()
 	for _, aura := range srv.activeCreatureAuras[key] {
-		if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
+		if aura == nil {
 			continue
 		}
-		misc := uint32(aura.MiscValue)
-		if misc&schoolMask == 0 {
-			continue
-		}
+		immuneSpell, found := wotlk.Spell{}, false
 		if srv.Data != nil {
-			if immuneSpell, found, err := srv.Data.Spell(aura.SpellID); err == nil && found && canSpellPierceImmuneAura(spell, immuneSpell) {
-				continue
+			if sp, f, err := srv.Data.Spell(aura.SpellID); err == nil && f {
+				immuneSpell, found = sp, true
 			}
 		}
-		schoolImmunityMask |= misc
+		if found && canSpellPierceImmuneAura(spell, immuneSpell) {
+			continue
+		}
+		// Per-effect misc, not the record's: a 39 effect that is not the
+		// stored type still writes its IMMUNITY_SCHOOL row.
+		if misc := auraEffectMiscMask(aura, immuneSpell, found, spellAuraSchoolImmunity); misc&schoolMask != 0 {
+			schoolImmunityMask |= misc
+		}
 	}
 	if schoolImmunityMask&schoolMask == schoolMask {
 		return true
 	}
 	for _, aura := range srv.activeCreatureAuras[key] {
-		if aura == nil || aura.AuraType != spellAuraDamageImmunity {
+		if aura == nil {
 			continue
 		}
-		damageImmunityMask |= uint32(aura.MiscValue)
+		spell, found := wotlk.Spell{}, false
+		if srv.Data != nil {
+			if sp, f, err := srv.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		damageImmunityMask |= auraEffectMiscMask(aura, spell, found, spellAuraDamageImmunity)
 	}
 	return damageImmunityMask&schoolMask == schoolMask
 }
@@ -2088,11 +2198,7 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 		if srv != nil {
 			srv.auraMu.Lock()
 			for _, aura := range srv.activeCreatureAuras[key] {
-				if aura == nil || aura.AuraType != spellAuraSchoolImmunity {
-					continue
-				}
-				misc := uint32(aura.MiscValue)
-				if misc&schoolMask == 0 {
+				if aura == nil {
 					continue
 				}
 				immuneSpell, immuneKnown := wotlk.Spell{}, false
@@ -2100,6 +2206,11 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 					if sp, found, err := srv.Data.Spell(aura.SpellID); err == nil && found {
 						immuneSpell, immuneKnown = sp, true
 					}
+				}
+				// Per-effect misc, not the record's.
+				misc := auraEffectMiscMask(aura, immuneSpell, immuneKnown, spellAuraSchoolImmunity)
+				if misc&schoolMask == 0 {
+					continue
 				}
 				if (immuneKnown && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || !friendly {
 					if !canSpellPierceImmuneAura(spell, immuneSpell) {

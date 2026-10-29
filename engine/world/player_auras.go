@@ -365,9 +365,16 @@ func (s *session) loadGlyphAuras(state *playerState) {
 		if _, exists := s.activeAuras[glyph.SpellID]; exists {
 			continue
 		}
-		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, EffectMask: 0x01, ApplyResilience: true, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
-		for _, effect := range spell.Effects {
+		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, ApplyResilience: true, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
+		for index, effect := range spell.Effects {
 			if effect.Effect == 0 || effect.Aura == 0 {
+				continue
+			}
+			// The record keeps the first effect's type/amounts, but C++
+			// lands the glyph aura via CastSpell, so every aura effect is
+			// live and the mask must cover them all for per-effect folds.
+			aura.EffectMask |= 1 << uint(index)
+			if aura.AuraType != 0 {
 				continue
 			}
 			aura.AuraType = effect.Aura
@@ -379,7 +386,6 @@ func (s *session) loadGlyphAuras(state *playerState) {
 			aura.Positive = !isHarmfulAura(effect.Aura)
 			aura.StackAmount = spell.StackAmount
 			aura.HideDuration = spell.AttributesEx5&0x00000400 != 0
-			break
 		}
 		if aura.AuraType == 0 {
 			continue

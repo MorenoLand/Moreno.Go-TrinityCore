@@ -7244,6 +7244,10 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		if existing != nil && !existing.Stopped {
 			if _, ok := castMerged[targetGUID]; ok {
 				refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				// Later effects of the same cast only refresh amounts, so
+				// the record's mask must gain this effect's bit or
+				// per-effect folds miss it.
+				existing.EffectMask |= spellEffectMask(spell, eff)
 				s.auraMu.Unlock()
 				continue
 			}
@@ -7263,6 +7267,9 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			existing.StackCount = stackCount
 			existing.RemainingCharges = maxCharges
 			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			// A re-cast's first effect refreshes the old record instead of
+			// replacing it, so the old mask must gain this cast's bit.
+			existing.EffectMask |= spellEffectMask(spell, eff)
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
