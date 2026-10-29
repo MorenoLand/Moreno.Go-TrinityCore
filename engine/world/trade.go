@@ -1266,6 +1266,18 @@ func (receiver *session) checkTradeFit(ctx context.Context, items []tradeSlotIte
 			// "strange item" (Player.cpp:11200-11201).
 			return uint32(equipErrItemNotFound), 0, nil
 		}
+		// Player::CanStoreItems (Player.cpp:11205-11208): an incoming
+		// item bound to someone other than the receiver answers
+		// EQUIP_ERR_DONT_OWN_THAT_ITEM. This is the arm that catches
+		// the case the accept loop deliberately skips: the his-items
+		// IsBindedNotWith check is commented out in C++
+		// (TradeHandler.cpp:325-331), so a BOP-tradeable item offered
+		// to a trader outside its allowed-looter set passes the accept
+		// loop (CanBeTraded admits BOP-tradeable items) and only fails
+		// here, in the fit pre-check, with the window left open.
+		if receiver.tradeItemBindedNotWith(ctx, it.ItemGUID, receiver.playerGUID) {
+			return uint32(equipErrDontOwnThatItem), 0, nil
+		}
 		// CanTakeMoreSimilarItems (Player.cpp:10410-10460). m_lootGenerated
 		// (EQUIP_ERR_ALREADY_LOOTED) and IsBindedNotWith
 		// (EQUIP_ERR_DONT_OWN_THAT_ITEM) have no Go model — documented
@@ -1474,6 +1486,14 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	partner.player.Money = newMoneyP
 	s.questMoneyChanged(ctx)
 	partner.questMoneyChanged(ctx)
+	// Reference: Player::ModifyMoney -> SetMoney (Player.cpp:22842-22846)
+	// fires HIGHEST_GOLD_VALUE_OWNED on every money set. The trade
+	// execute runs four ModifyMoney calls (deduct then add per side);
+	// the deduction fires cannot raise the max tracker, so a single
+	// fire per side at the final value is observably identical — the
+	// same call shape the mail take-money path uses.
+	s.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, s.player.Money)
+	partner.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, partner.player.Money)
 
 	// Execute trade: 1. remove (TradeHandler.cpp:477-490) — the
 	// character_inventory row deletes ride in the persistence phase; the
