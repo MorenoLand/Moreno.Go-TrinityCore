@@ -79,6 +79,7 @@ func NewThreatManager(motion *creatureMotion) *ThreatManager {
 	return &ThreatManager{
 		ownerGUID:              ownerGUID,
 		ownerCanHaveThreatList: motionCanHaveThreatList(motion),
+		updateTimerMs:          threatUpdateIntervalMs,
 		entries:                make(map[uint64]float32),
 		tauntExpiry:            make(map[uint64]time.Time),
 		tempMods:               make(map[uint64]int32),
@@ -316,7 +317,7 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	if len(tm.entries) == 0 {
+	if !tm.ownerCanHaveThreatList || len(tm.entries) == 0 {
 		return false, tm.currentVictim, false
 	}
 	tm.updateTimerMs -= elapsedMs
@@ -694,8 +695,11 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	return false, tm.currentVictim
 }
 
-// RemoveThreat removes a victim from the threat table and re-evaluates top victim.
-// Reference: TrinityCore ThreatManager::PurgeThreatListRef.
+// RemoveThreat removes a victim from the threat table and re-evaluates the top
+// victim through ReselectVictim (ThreatManager.cpp:531-585, reached via
+// ClearThreat's UpdateVictim leg): taunt precedence first, then threat, with
+// the fixated victim preferred — not a raw effective-threat max, which
+// ignored both taunt state and fixate.
 func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim uint64) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -710,15 +714,7 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 	delete(tm.tauntExpiry, victim)
 	if tm.currentVictim == victim {
 		tm.currentVictim = 0
-		var highestGUID uint64
-		var highestThreat float32
-		for guid := range tm.entries {
-			if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
-				highestThreat = eff
-				highestGUID = guid
-			}
-		}
-		tm.currentVictim = highestGUID
+		tm.currentVictim = tm.reselectVictimLocked(nil)
 		return true, tm.currentVictim
 	}
 	return false, tm.currentVictim
@@ -728,8 +724,10 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 // Reference: ThreatReference::ScaleThreat (ThreatManager.cpp:52-61) no-ops on a
 // factor of 1 and clamps negative factors at 0; ThreatManager::ScaleThreat
 // (ThreatManager.cpp:412-417) only touches an existing entry, so a victim with
-// no entry is a no-op. C++ reselects the victim lazily in UpdateVictim; Go
-// reselects eagerly like RemoveThreat.
+// no entry is a no-op. C++ selects no victim here — reselect happens only in
+// UpdateVictim on the 1s tick — so the returned victim is always the current
+// one and the tick broadcasts any switch; the old eager max-pick ignored
+// taunt precedence, fixate and the 110%/130% gates.
 func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bool, newVictim uint64) {
 	if victim == 0 || factor == 1 {
 		return false, tm.currentVictim
@@ -748,19 +746,6 @@ func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bo
 	// ThreatReference::ScaleThreat (ThreatManager.cpp:61) marks the client
 	// list dirty (the factor==1 early leg above is the C++ no-op).
 	tm.needClientUpdate = true
-
-	var highestGUID uint64
-	var highestThreat float32
-	for guid := range tm.entries {
-		if eff := tm.effectiveThreatLocked(guid); eff > highestThreat {
-			highestThreat = eff
-			highestGUID = guid
-		}
-	}
-	if highestGUID != tm.currentVictim {
-		tm.currentVictim = highestGUID
-		return true, highestGUID
-	}
 	return false, tm.currentVictim
 }
 
@@ -769,9 +754,11 @@ func (tm *ThreatManager) ScaleThreat(victim uint64, factor float32) (switched bo
 // SPELL_EFFECT_HANDLE_HIT_TARGET per unit target:
 // unitTarget->GetThreatManager().ModifyThreatByPercent(unitCaster, damage),
 // where ModifyThreatByPercent (ThreatManager.h:143) no-ops on percent 0 and
-// scales by 0.01*(100+percent). Entities that cannot hold a threat list
-// (taunt precedent: totems, pets, triggers, player minions — OwnerGUID != 0)
-// reject silently.
+// scales by 0.01*(100+percent). The CanHaveThreatList gate
+// (ThreatManager.cpp:156-179) skips pets, totems, triggers and
+// player-summoned minions/guardians; charmed creatures keep their lists,
+// so they are not skipped — ScaleThreat only touches an existing entry,
+// so the gate is outcome-equivalent to C++'s unguarded call.
 func (s *session) handleEffectModifyThreatPercent(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
@@ -790,24 +777,16 @@ func (s *session) handleEffectModifyThreatPercent(ctx context.Context, spell wot
 		}
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
-		if motion == nil || motion.Evading || motion.OwnerGUID != 0 || motion.ThreatMgr == nil {
+		if motion == nil || motion.Evading || !motionCanHaveThreatList(motion) || motion.ThreatMgr == nil {
 			s.server.motionMu.Unlock()
 			continue
 		}
 		tm := motion.ThreatMgr
 		s.server.motionMu.Unlock()
 
-		switched, newVictim := tm.ScaleThreat(s.playerGUID, factor)
-		if !switched {
-			continue
-		}
-		// The taunt broadcast tail: announce the new highest-threat victim.
-		s.server.motionMu.Lock()
-		if m := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID); m != nil {
-			m.TargetGUID = newVictim
-			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, tm.SortedEntries())
-		}
-		s.server.motionMu.Unlock()
+		// ScaleThreat selects no victim (ThreatManager.cpp:412-417); the
+		// 1s Update tick reselects and broadcasts any switch.
+		tm.ScaleThreat(s.playerGUID, factor)
 	}
 	_ = ctx
 }
@@ -848,7 +827,6 @@ func (tm *ThreatManager) ClearThreat() {
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)
-	tm.updateTimerMs = 0
 }
 
 // GetCurrentVictim returns the current primary threat target.
@@ -1190,8 +1168,8 @@ func (s *Server) removeCreatureAttackers(mapID, instanceID uint32, guid uint64) 
 // Spell::EffectSanctuary (SpellEffects.cpp:3767-3770): every threat list in
 // the map/instance carrying the unit scales its entry to 0
 // (ThreatReference::ScaleThreat, ThreatManager.cpp:52-61 — the entry stays,
-// the value zeroes), with the eager victim reselect Go uses for threat
-// changes.
+// the value zeroes); the victim reselect surfaces on the 1s Update tick
+// (ThreatManager::UpdateVictim), which broadcasts the switch.
 func (s *Server) zeroThreatOnAllLists(mapID, instanceID uint32, targetGUID uint64) {
 	if s == nil || targetGUID == 0 {
 		return
@@ -1212,16 +1190,9 @@ func (s *Server) zeroThreatOnAllLists(mapID, instanceID uint32, targetGUID uint6
 		if motion == nil || motion.ThreatMgr == nil {
 			continue
 		}
-		switched, newVictim := motion.ThreatMgr.ScaleThreat(targetGUID, 0)
-		if !switched {
-			continue
-		}
-		s.motionMu.Lock()
-		if m := s.findCreatureMotionLocked(mapID, instanceID, ownerGUID); m != nil {
-			m.TargetGUID = newVictim
-			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, motion.ThreatMgr.SortedEntries())
-		}
-		s.motionMu.Unlock()
+		// ScaleThreat selects no victim (ThreatManager.cpp:412-417); the
+		// 1s Update tick reselects and broadcasts any switch.
+		motion.ThreatMgr.ScaleThreat(targetGUID, 0)
 	}
 }
 

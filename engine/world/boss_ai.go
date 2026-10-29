@@ -5010,10 +5010,11 @@ func (s *Server) creatureEffectRemoveAura(ctx context.Context, m *creatureMotion
 // (100 + damage) / 100 (ThreatManager.h:143; a zero effect value is
 // the C++ no-op). The gates mirror the session helper
 // handleEffectModifyThreatPercent: totem targets, evading targets,
-// owned targets, and targets with no threat manager are skipped, and
+// targets that cannot have a threat list (charmed creatures keep theirs),
+// and targets with no threat manager are skipped, and
 // a target with no entry for the caster is a no-op (ScaleThreat only
-// touches an existing entry). Only a victim switch broadcasts, like
-// the session helper.
+// touches an existing entry). A victim switch surfaces on the 1s Update
+// tick, like the session helper.
 func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -5039,22 +5040,15 @@ func (s *Server) creatureEffectModifyThreatPercent(ctx context.Context, m *creat
 		}
 		s.motionMu.Lock()
 		motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
-		if motion == nil || motion.Evading || motion.OwnerGUID != 0 || motion.ThreatMgr == nil {
+		if motion == nil || motion.Evading || !motionCanHaveThreatList(motion) || motion.ThreatMgr == nil {
 			s.motionMu.Unlock()
 			continue
 		}
 		tm := motion.ThreatMgr
 		s.motionMu.Unlock()
-		switched, newVictim := tm.ScaleThreat(m.GUID, factor)
-		if !switched {
-			continue
-		}
-		s.motionMu.Lock()
-		if live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid); live != nil {
-			live.TargetGUID = newVictim
-			s.broadcastHighestThreatUpdateInInstance(live.Map, live.InstanceID, live.X, live.Y, live.Z, live.GUID, newVictim, tm.SortedEntries())
-		}
-		s.motionMu.Unlock()
+		// ScaleThreat selects no victim (ThreatManager.cpp:412-417); the
+		// 1s Update tick reselects and broadcasts any switch.
+		tm.ScaleThreat(m.GUID, factor)
 	}
 }
 

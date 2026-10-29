@@ -510,10 +510,17 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	if motion == nil {
 		return
 	}
-	// Spell.cpp:5143-5144: the negative path skips targets that cannot
-	// have a threat list (ThreatManager::CanHaveThreatList,
-	// ThreatManager.cpp:156-179 — charmed creatures keep their lists).
+	// Spell.cpp:5143-5144: the negative path skips the threat add for
+	// targets that cannot have a threat list (ThreatManager::CanHaveThreatList,
+	// ThreatManager.cpp:156-179 — charmed creatures keep their lists), but
+	// C++ AddThreat's !CanHaveThreatList() early leg (ThreatManager.cpp:328-339)
+	// still runs SetInCombatWith on both sides, so the target and the caster
+	// engage; the caller pushes the client update after motionMu is released.
 	if !motionCanHaveThreatList(motion) {
+		motion.InCombat = true
+		if s.player.UnitFlags&unitFlagInCombat == 0 {
+			s.player.UnitFlags |= unitFlagInCombat
+		}
 		return
 	}
 	if motion.ThreatMgr == nil {
@@ -649,8 +656,9 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		}
 		// ForwardThreatForAssistingMe iterates the target's _threatenedByMe
 		// refs, which can only exist on threat-list-capable creatures
-		// (ThreatManager.cpp:156-179); owned pet/summon motions never hold one.
-		if m.OwnerGUID != 0 {
+		// (ThreatManager.cpp:156-179); owned pet/summon motions never hold
+		// one, but charmed creatures keep their lists and are recipients.
+		if !motionCanHaveThreatList(m) {
 			continue
 		}
 		// ThreatManager.cpp:662-688 iterates ALL _threatenedByMe pairs with no
