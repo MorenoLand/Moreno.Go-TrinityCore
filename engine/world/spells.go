@@ -11391,6 +11391,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the instakill
+				// fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.executeSpellInstantKill(effCtx, s.playerGUID, spellID)
+				}
 			case 2, 17, 31, 58, 121: // Damage effects (School damage, Weapon damage, etc.)
 				damageEffectSeen = true
 				weaponDamageEffect := eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg
@@ -12004,6 +12009,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
+				// fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.energizeEffectTarget(effCtx, spell, spellID, eff, s.playerGUID)
+				}
 			case spellEffectEnergizePct:
 				// Spell::EffectEnergizePct (SpellEffects.cpp:1847-1873) — audited;
 				// the per-target legs ride energizePctEffectTarget. Already-covered
@@ -12019,10 +12029,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
+				// fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.energizePctEffectTarget(effCtx, spell, spellID, eff, s.playerGUID)
+				}
 			case spellEffectPowerBurn:
 				amount := eff.CalcValueForLevel(spell, casterLevel)
 				var burnLog []takeTargetPowerEntry
-				for _, effectTarget := range hitTargets {
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): one caster
+				// burn per reflected target, joining the same take-power log (the
+				// append writes past len(hitTargets), never into its visible
+				// contents, as in the heal arms).
+				burnTargets := hitTargets
+				for range reflectedAoETrips {
+					burnTargets = append(burnTargets, s.playerGUID)
+				}
+				for _, effectTarget := range burnTargets {
 					// SpellEffects.cpp:1383: the drained power is dealt as
 					// damage scaled by the effect value multiplier. The
 					// Mana Burn cap is burn-only (SpellEffects.cpp:1358);
@@ -12071,6 +12094,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if firesPerTarget {
 					for _, effectTarget := range hitTargets {
 						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, effectTarget)
+					}
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// triggered spell fires on the caster once per reflected target.
+					for range reflectedAoETrips {
+						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, s.playerGUID)
 					}
 				}
 			case spellEffectAddExtraAttacks: // 19: SPELL_EFFECT_ADD_EXTRA_ATTACKS
@@ -12137,6 +12165,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the max-health
+				// heal fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
+				}
 			case 6, 27, 35: // Apply Aura
 				durationMs, periodMs, amount := s.auraEffectParams(spell, eff)
 				schoolMask := spell.SchoolMask
@@ -12184,6 +12217,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
 					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
+				}
+				// Spell::DoProcessTargetContainer (Spell.cpp:3554-3563) + PreprocessTarget
+				// reflect arm (Spell.cpp:2350-2357): each reflected AoE target keeps its
+				// own TargetInfo whose _spellHitTarget is the caster, so the aura effect
+				// lands on the caster once per reflected target — same gates as the
+				// reflected-jump arm above, but per trip, not once.
+				if isHarmfulSpell(spell) &&
+					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
+					for range reflectedAoETrips {
+						s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
+					}
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self + dead-target request chain
 				s.applySelfResurrectEffect(spell)
@@ -12326,6 +12370,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// a reflected dispel strips the caster's own beneficial buffs.
 					s.handleEffectDispel(effCtx, effectTarget, spell, eff, isReflected)
 				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): each reflected
+				// target's TargetInfo fires the dispel on the caster, with the reflected
+				// positivity flip (Unit.cpp:4608-4612) — the same isReflected=true the
+				// single-target reflect arm passes.
+				for range reflectedAoETrips {
+					s.handleEffectDispel(effCtx, s.playerGUID, spell, eff, true)
+				}
 			case spellEffectDispelMechanic: // 108: SPELL_EFFECT_DISPEL_MECHANIC
 				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733) is also
 				// per unit target.
@@ -12334,6 +12385,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						continue
 					}
 					s.handleEffectDispelMechanic(effCtx, effectTarget, spell, eff)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the mechanic
+				// dispel fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.handleEffectDispelMechanic(effCtx, s.playerGUID, spell, eff)
 				}
 			case spellEffectKillCredit: // 90: SPELL_EFFECT_KILL_CREDIT (EffectKillCreditPersonal)
 				for _, effectTarget := range hitTargets {
@@ -12651,7 +12707,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				baseAmount := eff.CalcValueForLevel(spell, casterLevel)
 				var drainLog []takeTargetPowerEntry
-				for _, effectTarget := range hitTargets {
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): one caster
+				// drain per reflected target, joining the same take-power log; the
+				// loop's self-drain arm already covers effectTarget == caster (no
+				// gain, zero gain multiplier).
+				drainTargets := hitTargets
+				for range reflectedAoETrips {
+					drainTargets = append(drainTargets, s.playerGUID)
+				}
+				for _, effectTarget := range drainTargets {
 					// SpellEffects.cpp:1274: damage < 0 returns before any
 					// power moves; a zero amount drains nothing but still
 					// logs. The alive/power-type gates sit ahead of the
@@ -12718,6 +12782,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						continue
 					}
 					s.removeTargetAura(effCtx, effectTarget, eff.TriggerSpell)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the aura
+				// removal fires on the caster once per reflected target.
+				for range reflectedAoETrips {
+					s.removeTargetAura(effCtx, s.playerGUID, eff.TriggerSpell)
 				}
 			case spellEffectModifyThreatPercent: // 125: SPELL_EFFECT_MODIFY_THREAT_PERCENT (EffectModifyThreatPercent, SpellEffects.cpp:4915)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
