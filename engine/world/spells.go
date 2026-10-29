@@ -8360,20 +8360,29 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 // arrival proc (Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers,
 // armed at the reflect site.
 //
-// Documented delta: the duel-end friendliness arm (PreprocessSpellHit,
-// Spell.cpp:2743-2745 — a delayed negative spell whose player target turned
-// friendly mid-flight misses as EVADE when it is no longer a valid assist
-// target) needs the full Unit::IsValidAssistTarget shape at arrival; Go keeps
-// the target live instead.
+// The duel-end friendliness arm (PreprocessSpellHit, Spell.cpp:2743-2745 —
+// a delayed negative spell whose player target turned friendly mid-flight
+// misses as EVADE when it is no longer a valid assist target) runs below via
+// triggeredSpeedGatedArrivalDrop's decidable IsValidAssistTarget legs, the
+// same under-approximation as the triggered funnel: a firing is always a
+// true C++ firing, undecidable legs stay residual. It sits after the
+// immunity arm because C++ runs immunity (:2720) ahead of :2740-2745, so an
+// immune target reports IMMUNE, not EVADE; its EVADE-vs-NON_ATTACKABLE
+// order is unobservable (both return EVADE).
 func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
 	if len(targets) == 0 {
 		return targets
 	}
 	live := make([]uint64, 0, len(targets))
 	for _, guid := range targets {
-		// For a reflected cast the arrival arms run on the reflector (the
-		// C++ TargetInfo target); the retargeted caster only receives the
-		// effects. The non-reflect case is the identity arm.
+		// For a reflected cast the DoTargetSpellHit arrival arms run on
+		// the reflector (the C++ TargetInfo target); the retargeted
+		// caster only receives the effects. The non-reflect case is the
+		// identity arm. The NON_ATTACKABLE and duel-end arms below are
+		// the exception: they are PreprocessSpellHit arms on
+		// _spellHitTarget, which a clean reflect resolves to the caster
+		// (PreprocessTarget, Spell.cpp:2350-2357) and a missed reflect
+		// leaves null, so the m_caster != unit gate skips both.
 		armGUID := guid
 		if isReflected && guid == s.playerGUID {
 			armGUID = reflectSourceGUID
@@ -8390,7 +8399,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
 		}
-		if s.server != nil && s.player != nil && armGUID != s.playerGUID &&
+		if s.server != nil && s.player != nil && !isReflected && armGUID != s.playerGUID &&
 			tgt.UnitFlags&unitFlagNonAttackable != 0 {
 			charmerOrOwner := armGUID
 			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
@@ -8414,6 +8423,18 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
 				continue
 			}
+		}
+		// PreprocessSpellHit (Spell.cpp:2743-2745): the duel-end arm.
+		// A reflected entry is the caster (self-gated in C++), and a
+		// self entry never reaches the friendly branch, so both skip.
+		// The helper's NON_ATTACKABLE leg is redundant here (that arm
+		// already dropped flagged targets above); its duel legs are
+		// the new coverage: player target, non-positive spell, caster
+		// friendly, and a decidable !IsValidAssistTarget leg.
+		if !isReflected && guid != s.playerGUID && !spellIsPositive(spell) &&
+			s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
+			s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
+			continue
 		}
 		live = append(live, guid)
 	}
