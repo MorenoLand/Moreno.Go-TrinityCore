@@ -1524,6 +1524,27 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		damage = glancingReducedDamage(damage, uint8(motion.Level), targetLevel)
 	case protocol.MeleeHitCrit:
 		damage *= 2
+		// Unit::CalculateMeleeDamage MELEE_HIT_CRIT leg (Unit.cpp:1302-1319):
+		// the victim's 203, the attacker's 163 product by the NORMAL
+		// school mask, and the attacker's 169 sum by the victim's
+		// creature-type mask AddPct after the doubling, ahead of the
+		// resilience reduction below. The old twin doubled only.
+		{
+			var victimMask uint32
+			if isTargetPlayer && targetSess != nil && targetSess.player != nil {
+				victimMask = targetSess.playerCreatureTypeMask(targetSess.player)
+			} else if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && vm.CreatureType >= 1 {
+				victimMask = uint32(1) << (vm.CreatureType - 1)
+			}
+			damage = s.creatureMeleeCritDamageBonus(petKey, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, targetSess, isTargetPlayer, victimMask, damage)
+		}
+		// Unit::CalculateMeleeDamage resilience tail (Unit.cpp:1418-1427):
+		// a pet attacker is player-owned, so its victim's resilience
+		// (crit-damage reduction on crits plus the flat damage reduction)
+		// applies ahead of absorbs; player victims only here.
+		if isTargetPlayer && targetSess != nil && owner != nil {
+			targetSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+		}
 	}
 
 	overkill := uint32(0)
@@ -5955,8 +5976,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
-				var nilSess *session
-				heal = nilSess.spellCriticalHealingBonus(ctx, heal, targetGUID, hs.DefenseType, false)
+				heal = s.server.creatureSpellCriticalHealingBonus(creatureAuraKeyForMotion(caster), heal, 0, hs.DefenseType, false)
 			}
 		}
 	}

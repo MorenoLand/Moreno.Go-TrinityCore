@@ -4550,8 +4550,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
-				var nilSess *session
-				heal = nilSess.spellCriticalHealingBonus(ctx, heal, guid, spell.DefenseType, false)
+				heal = s.creatureSpellCriticalHealingBonus(casterKey, heal, 0, spell.DefenseType, false)
 			}
 		}
 		var absorbed uint32

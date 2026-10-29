@@ -858,6 +858,142 @@ func (srv *Server) creatureSpellWeaponCritDamageBonus(casterKey creatureAuraKey,
 	return uint32(total)
 }
 
+// creatureCritPercentVersusMultiplier mirrors the
+// SPELL_AURA_MOD_CRIT_PERCENT_VERSUS (169) arm in
+// Unit::SpellCriticalHealingBonus (Unit.cpp:7464-7468): unlike the damage
+// bonus, where 169 is a sum, the healing bonus multiplies the crit bonus by
+// GetTotalAuraMultiplierByMiscMask over the victim's creature-type mask.
+func creatureCritPercentVersusMultiplier(srv *Server, key creatureAuraKey, victimCreatureTypeMask uint32) float64 {
+	mult := 1.0
+	if srv == nil || srv.Data == nil || key.GUID == 0 || victimCreatureTypeMask == 0 {
+		return mult
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCritPercentVersus {
+				continue
+			}
+			if uint32(effect.MiscValue)&victimCreatureTypeMask == 0 {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			mult *= 1.0 + float64(amount)/100.0
+		}
+	}
+	return mult
+}
+
+// creatureCriticalHealingAmountMultiplier mirrors the
+// SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT (50) tail of
+// Unit::SpellCriticalHealingBonus (Unit.cpp:7477): every 50 aura multiplies,
+// with no misc-mask gate.
+func creatureCriticalHealingAmountMultiplier(srv *Server, key creatureAuraKey) float64 {
+	mult := 1.0
+	if srv == nil || srv.Data == nil || key.GUID == 0 {
+		return mult
+	}
+	srv.auraMu.Lock()
+	auras := srv.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	srv.auraMu.Unlock()
+	for _, aura := range copies {
+		if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+			continue
+		}
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModCriticalHealingAmount {
+				continue
+			}
+			amount := aura.Amounts[index]
+			if amount == 0 {
+				amount = effect.BasePoints
+			}
+			mult *= 1.0 + float64(amount)/100.0
+		}
+	}
+	return mult
+}
+
+// creatureSpellCriticalHealingBonus mirrors Unit::SpellCriticalHealingBonus
+// (Unit.cpp:7453-7479) for creature casters: melee/ranged-DmgClass heals take
+// a 100% bonus, everything else 50%. The 169 arm runs only when applyVersus
+// is set (the direct-heal hit arm passes a null victim in C++,
+// Spell.cpp:2507, so both direct sites pass false), and the 50 tail
+// multiplies the total. The old nil-session call carried only the base.
+func (srv *Server) creatureSpellCriticalHealingBonus(casterKey creatureAuraKey, heal uint32, victimCreatureTypeMask uint32, dmgClass uint32, applyVersus bool) uint32 {
+	critBonus := int64(heal) / 2
+	if dmgClass == spellDamageClassMelee || dmgClass == spellDamageClassRanged {
+		critBonus = int64(heal)
+	}
+	if srv != nil && applyVersus && victimCreatureTypeMask != 0 {
+		critBonus = int64(float64(critBonus) * creatureCritPercentVersusMultiplier(srv, casterKey, victimCreatureTypeMask))
+	}
+	damage := int64(heal)
+	if critBonus > 0 {
+		damage += critBonus
+	}
+	if srv != nil {
+		damage = int64(float32(damage) * float32(creatureCriticalHealingAmountMultiplier(srv, casterKey)))
+	}
+	if damage < 0 {
+		return 0
+	}
+	return uint32(damage)
+}
+
+// creatureMeleeCritDamageBonus mirrors the MELEE_HIT_CRIT leg of
+// Unit::CalculateMeleeDamage (Unit.cpp:1302-1319) for creature attackers:
+// after the x2, AddPct the victim's MOD_ATTACKER_MELEE_CRIT_DAMAGE (203)
+// total, the attacker's MOD_CRIT_DAMAGE_BONUS (163) product by the NORMAL
+// school mask of a white swing, and the attacker's MOD_CRIT_PERCENT_VERSUS
+// (169) sum by the victim's creature-type mask. The old creature and pet
+// swing twins doubled only.
+func (srv *Server) creatureMeleeCritDamageBonus(attackerKey, victimKey creatureAuraKey, vicSess *session, isPlayerVictim bool, victimCreatureTypeMask uint32, damage uint32) uint32 {
+	if damage == 0 {
+		return damage
+	}
+	var mod float64
+	if isPlayerVictim && vicSess != nil {
+		mod += float64(vicSess.totalAuraModifier(spellAuraModAttackerMeleeCritDmg))
+	} else {
+		mod += float64(creatureAuraModifierSum(srv, victimKey, spellAuraModAttackerMeleeCritDmg))
+	}
+	mod += (creatureCritDamageAuraMultiplier(srv, attackerKey, spellSchoolMaskNormal) - 1.0) * 100.0
+	mod += float64(creatureCritPercentVersus(srv, attackerKey, victimCreatureTypeMask))
+	if mod != 0 {
+		nd := float64(damage) * (1 + mod/100)
+		if nd < 0 {
+			nd = 0
+		}
+		damage = uint32(nd)
+	}
+	return damage
+}
+
 // directWeaponCritChanceTaken mirrors the MELEE/RANGED arms of
 // Unit::SpellCritChanceTaken for direct spells: the Rend and Tear /
 // Victory Rush caster class arms (Unit.cpp:7353-7376), then

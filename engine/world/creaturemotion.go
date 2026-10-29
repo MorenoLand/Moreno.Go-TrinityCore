@@ -5486,8 +5486,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			case protocol.MeleeHitCrit:
 				damage *= 2
+				// Unit::CalculateMeleeDamage MELEE_HIT_CRIT leg (Unit.cpp:1302-1319):
+				// the victim's 203, the attacker's 163 product by the NORMAL
+				// school mask, and the attacker's 169 sum by the victim's
+				// creature-type mask AddPct after the doubling, ahead of the
+				// resilience reduction below. The old twin doubled only.
+				{
+					var victimMask uint32
+					if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
+						victimMask = target.Sess.playerCreatureTypeMask(target.Sess.player)
+					} else if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && vm.CreatureType >= 1 {
+						victimMask = uint32(1) << (vm.CreatureType - 1)
+					}
+					damage = s.creatureMeleeCritDamageBonus(attackerKey, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, target.Sess, isPlayerVictim, victimMask, damage)
+				}
 			case protocol.MeleeHitCrushing:
 				damage = uint32(float64(damage) * 1.5)
+			}
+
+			// Unit::CalculateMeleeDamage resilience tail (Unit.cpp:1418-1427):
+			// a player-owned attacker applies the victim's resilience
+			// (crit-damage reduction on crits plus the flat damage
+			// reduction) ahead of absorbs. Wild attackers never apply it
+			// (Unit::CanApplyResilience, Unit.cpp:12333).
+			if isPlayerVictim && target.Sess != nil && s.creatureCasterCanApplyResilience(motion) {
+				target.Sess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
 			}
 
 			// Handle player parry haste when player parries creature attack
