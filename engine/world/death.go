@@ -1360,13 +1360,33 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	}
 	if ok {
 		if s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation) {
+			// Player::RepopAtGraveyard (Player.cpp:5144-5146) sends
+			// SMSG_DEATH_RELEASE_LOC whenever the player is still dead
+			// after TeleportTo returns — including the far-teleport
+			// revive case, where the revive is deferred to the
+			// worldport ack (MovementHandler.cpp:145-146). The
+			// near-teleport revive arm gates on !IsAlive
+			// (Player.cpp:1749), so an alive repop caller (the logout
+			// pending-bind path) on a transport is teleported, not
+			// cut to half health.
+			sendReleaseLoc := func() {
+				packet := protocol.NewBuffer(16)
+				packet.WriteU32(grave.MapID)
+				packet.WriteF32(grave.X)
+				packet.WriteF32(grave.Y)
+				packet.WriteF32(grave.Z)
+				_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+			}
 			if shouldResurrect {
 				if s.farTeleportPending {
 					// TELE_REVIVE_AT_TELEPORT on a far teleport: C++
 					// revives after the map switch, at the worldport ack
 					// (MovementHandler.cpp:145-146), not at initiation.
 					s.teleportReviveAtAck = true
-				} else {
+					if s.isDeadOrGhost() {
+						sendReleaseLoc()
+					}
+				} else if s.isDeadOrGhost() {
 					// TELE_REVIVE_AT_TELEPORT: same-map TeleportTo
 					// resurrects at half health/mana inside the teleport
 					// (Player.cpp:1749-1750).
@@ -1375,12 +1395,7 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 			} else if s.isDeadOrGhost() {
 				// SMSG_DEATH_RELEASE_LOC is sent only when dead (Player.cpp:5146);
 				// the alive homebind-fallback caller skips it.
-				packet := protocol.NewBuffer(16)
-				packet.WriteU32(grave.MapID)
-				packet.WriteF32(grave.X)
-				packet.WriteF32(grave.Y)
-				packet.WriteF32(grave.Z)
-				_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+				sendReleaseLoc()
 			}
 		}
 	} else {
@@ -1954,7 +1969,10 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 			// the corpse's own map, then delete the row (bones are never
 			// persisted, Player.cpp:4867 / Map.cpp:4636).
 			corpseGUID := c.guid | (uint64(0xF101) << 48)
-			fields := corpseObjectFields{DisplayID: c.displayID, Bytes1: c.bytes1, Bytes2: c.bytes2, GuildID: c.guildID, Flags: c.flags | corpseFlagBones, DynamicFlags: c.dynFlags}
+			// Map::ConvertCorpseToBones (Map.cpp:4659) OVERWRITES the
+			// bones flags with UNK2|BONES; the corpse's hide-helm,
+			// hide-cloak and BG-lootable bits do not carry over.
+			fields := corpseObjectFields{DisplayID: c.displayID, Bytes1: c.bytes1, Bytes2: c.bytes2, GuildID: c.guildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: c.dynFlags}
 			block := buildCorpseCreateBlockWithFields(corpseGUID, fields, c.x, c.y, c.z, c.orientation)
 			updates := protocol.NewUpdateData()
 			updates.AddUpdateBlock(block)
