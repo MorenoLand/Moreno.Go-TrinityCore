@@ -483,7 +483,10 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 			if err != nil || !found {
 				continue
 			}
-			for _, eff := range auraSpell.Effects {
+			for index, eff := range auraSpell.Effects {
+				if aura.EffectMask != 0 && aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
 				if eff.Effect == spellEffectApplyAura && eff.Aura == spellAuraDispelImmunity && uint32(eff.MiscValue) == spell.DispelType {
 					dispelImmune = true
 					break
@@ -1069,6 +1072,7 @@ type immuneAura struct {
 	auraType uint32
 	misc     int32
 	spellID  uint32
+	effMask  uint32
 }
 
 // isImmunedToSpellEffect mirrors Unit::IsImmunedToSpellEffect
@@ -1107,6 +1111,45 @@ func (s *session) isImmunedToSpellEffect(spell wotlk.Spell, effIndex int, caster
 	return immunedToSpellEffectEval(spell, effIndex, s, caster, snap)
 }
 
+// snapshotMechanicMask is the per-effect IMMUNITY_MECHANIC list one live
+// aura writes (SpellInfo::ApplyAllSpellImmunitiesTo, SpellInfo.cpp:2860-2920,
+// called per effect index): mechanicImmuneMaskForEffect over the record's
+// mask-covered effects only. The old whole-spell unions over-granted on
+// single-effect records whose other 77/147 effects are not live. A
+// mask-less record keeps the old whole-spell read (no live-effect set is
+// known for it), so the change narrows only records that carry a mask.
+func snapshotMechanicMask(spell wotlk.Spell, effMask uint32) uint32 {
+	if effMask == 0 {
+		return mechanicImmuneMaskGranted(spell) | mechanicImmuneMask147(spell)
+	}
+	var mask uint32
+	for index, eff := range spell.Effects {
+		if effMask&(1<<uint(index)) != 0 {
+			mask |= mechanicImmuneMaskForEffect(spell, eff)
+		}
+	}
+	return mask
+}
+
+// snapshotMechanic147Grants is the per-effect form of
+// mechanicMask147SpellGrants: the AuraTypeImmune / SpellEffectImmune inserts
+// of the record's mask-covered 147 effects only, with the whole-spell read
+// as the mask-less fallback, as in snapshotMechanicMask.
+func snapshotMechanic147Grants(spell wotlk.Spell, effMask uint32) (auraTypes []uint32, spellEffects []uint32) {
+	if effMask == 0 {
+		return mechanicMask147SpellGrants(spell)
+	}
+	for index, eff := range spell.Effects {
+		if effMask&(1<<uint(index)) == 0 || eff.Aura != spellAuraMechanicImmunityMask {
+			continue
+		}
+		at, se := mechanicMask147Grants(spell.ID, eff)
+		auraTypes = append(auraTypes, at...)
+		spellEffects = append(spellEffects, se...)
+	}
+	return auraTypes, spellEffects
+}
+
 // immuneAuraSnapshotLocked collects the immunity-relevant active auras.
 // Caller holds castMu.
 func (s *session) immuneAuraSnapshotLocked() []immuneAura {
@@ -1119,7 +1162,7 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 		case spellAuraEffectImmunity, spellAuraMechanicImmunity,
 			spellAuraMechanicImmunityMask, spellAuraStateImmunity,
 			spellAuraModImmuneAuraApplySchool:
-			auras = append(auras, immuneAura{aura.AuraType, aura.MiscValue, aura.SpellID})
+			auras = append(auras, immuneAura{aura.AuraType, aura.MiscValue, aura.SpellID, uint32(aura.EffectMask)})
 		}
 		// A record keeps only its first effect's stored type/misc, so a
 		// 37/38/77/147/267 effect that is not the first aura effect never
@@ -1129,8 +1172,10 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 		// Fold the mask-covered DBC effects of those types in as extra
 		// entries (same any-match semantics as the stored leg; the
 		// stored leg covers the unknown-spell case). The 77/147 eval
-		// arms union over the granting spell once an entry exists, so
-		// one folded entry per covered effect is enough to reach them.
+		// arms union over the entry's record mask (not the whole
+		// granting spell), so one folded entry per covered effect is
+		// enough to reach them and a non-live effect of the same spell
+		// grants nothing.
 		if s.server != nil && s.server.Data != nil {
 			if auraSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				for index, effect := range auraSpell.Effects {
@@ -1147,7 +1192,7 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 					if aura.AuraType == effect.Aura && aura.MiscValue == effect.MiscValue {
 						continue
 					}
-					auras = append(auras, immuneAura{effect.Aura, effect.MiscValue, aura.SpellID})
+					auras = append(auras, immuneAura{effect.Aura, effect.MiscValue, aura.SpellID, uint32(aura.EffectMask)})
 				}
 			}
 		}
@@ -1194,7 +1239,7 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 			if err != nil || !found {
 				continue
 			}
-			if mechanicImmuneMaskGranted(auraSpell)&(1<<eff.Mechanic) != 0 {
+			if snapshotMechanicMask(auraSpell, a.effMask)&(1<<eff.Mechanic) != 0 {
 				return true
 			}
 		case spellAuraMechanicImmunityMask: // IMMUNITY_MECHANIC/EFFECT via the 147 miscVal table (SpellInfo.cpp:2594-2724)
@@ -1205,10 +1250,10 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 			if err != nil || !found {
 				continue
 			}
-			if eff.Mechanic != 0 && mechanicImmuneMask147(auraSpell)&(1<<eff.Mechanic) != 0 {
+			if eff.Mechanic != 0 && snapshotMechanicMask(auraSpell, a.effMask)&(1<<eff.Mechanic) != 0 {
 				return true
 			}
-			if _, spellEffects := mechanicMask147SpellGrants(auraSpell); uint32InSlice(eff.Effect, spellEffects) {
+			if _, spellEffects := snapshotMechanic147Grants(auraSpell, a.effMask); uint32InSlice(eff.Effect, spellEffects) {
 				return true
 			}
 		}
@@ -1228,7 +1273,7 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 				if err != nil || !found {
 					continue
 				}
-				if auraTypes, _ := mechanicMask147SpellGrants(auraSpell); uint32InSlice(eff.Aura, auraTypes) {
+				if auraTypes, _ := snapshotMechanic147Grants(auraSpell, a.effMask); uint32InSlice(eff.Aura, auraTypes) {
 					return true
 				}
 			}
