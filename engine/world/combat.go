@@ -1190,10 +1190,20 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				targetState = protocol.VictimStateIsImmune
 			}
 		}
-	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
-		outcome = protocol.MeleeHitEvade
-		hitInfo = protocol.HitInfoMiss
-		targetState = protocol.VictimStateEvades
+	} else if !isPlayerVictim && s.server != nil {
+		// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
+		// immune check runs on any victim ahead of the outcome roll, so a
+		// pet/creature victim with NORMAL-school damage immunity reports
+		// IS_IMMUNE, ahead of the evade leg below.
+		if creatureImmuneToDamage(s.server, creatureAuraKeyForTarget(target), 1) {
+			outcome = protocol.MeleeHitImmune
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateIsImmune
+		} else if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID) {
+			outcome = protocol.MeleeHitEvade
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateEvades
+		}
 	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand

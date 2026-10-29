@@ -5455,6 +5455,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					hitInfo = protocol.HitInfoMiss
 					targetState = protocol.VictimStateIsImmune
 				}
+			} else if creatureImmuneToDamage(s, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, 1) {
+				// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
+				// immune check runs on any victim ahead of the outcome roll.
+				outcome = protocol.MeleeHitImmune
+				hitInfo = protocol.HitInfoMiss
+				targetState = protocol.VictimStateIsImmune
 			} else if s.isCreatureEvadingInInstance(target.Map, target.InstanceID, target.GUID) {
 				// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
 				// victim in evade mode evades all melee swings.

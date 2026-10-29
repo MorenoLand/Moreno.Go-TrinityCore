@@ -1479,12 +1479,26 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	victimSitting := isTargetPlayer && targetSess != nil && targetSess.player != nil && targetSess.player.StandState != 0
 	attackerExpertiseBP := s.creatureExpertiseReductionBP(petKey)
 	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, attackerExpertiseBP, victimDodgeBP, s.creatureDodgeReductionBP(petKey)+s.creatureEnemyDodgeBP(petKey), attackerExpertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
-	if !isTargetPlayer && s.isCreatureEvadingInInstance(motion.Map, motion.InstanceID, targetGUID) {
-		// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
-		// victim in evade mode evades all melee swings.
-		outcome = protocol.MeleeHitEvade
-		hitInfo = protocol.HitInfoMiss
-		targetState = protocol.VictimStateEvades
+	if isTargetPlayer && targetSess != nil {
+		// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
+		// immune check runs on any victim ahead of the outcome roll.
+		if targetSess.isImmuneToDamage(1) {
+			outcome = protocol.MeleeHitImmune
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateIsImmune
+		}
+	} else if !isTargetPlayer {
+		if creatureImmuneToDamage(s, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: targetGUID}, 1) {
+			outcome = protocol.MeleeHitImmune
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateIsImmune
+		} else if s.isCreatureEvadingInInstance(motion.Map, motion.InstanceID, targetGUID) {
+			// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
+			// victim in evade mode evades all melee swings.
+			outcome = protocol.MeleeHitEvade
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateEvades
+		}
 	}
 	// Pet attackers read the dodge/parry-reduction arms from their creature
 	// aura store (Unit::GetUnitDodgeChance / Unit::GetUnitParryChance,
