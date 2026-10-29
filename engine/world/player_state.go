@@ -2426,7 +2426,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	case 3, 4: // Hunter, Rogue
 		baseAP = int32(totalStr+totalAgi+uint32(lvl)*2) - 20
 	case 7: // Shaman
-		baseAP = int32(totalStr*2+uint32(lvl)*2) - 20
+		baseAP = int32(totalStr+totalAgi+uint32(lvl)*2) - 20
 	case 11: // Druid: Player::UpdateAttackPowerAndDamage melee arm (StatSystem.cpp:396-435)
 		baseAP = int32(totalStr*2) - 20
 		moonkin := state.ShapeshiftForm == 31 // FORM_MOONKIN
@@ -2474,10 +2474,14 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 
 	var baseRAP int32
 	if state.Class == 3 { // Hunter
-		baseRAP = int32(uint32(lvl)*2+totalAgi*2) - 10
+		baseRAP = int32(uint32(lvl)*2+totalAgi) - 10
 	} else if state.Class == 4 || state.Class == 1 { // Rogue, Warrior
 		baseRAP = int32(uint32(lvl)+totalAgi) - 10
-	} else if state.Class == 11 && !feralForm { // Druid, non-feral (StatSystem.cpp:368-376)
+	} else if state.Class == 11 { // Druid (StatSystem.cpp:368-376): feral forms 0, else AGI-10
+		if !feralForm {
+			baseRAP = int32(totalAgi) - 10
+		}
+	} else { // Default ranged arm (StatSystem.cpp:376): AGI-10 for all other classes
 		baseRAP = int32(totalAgi) - 10
 	}
 	if baseRAP < 0 {
@@ -2885,13 +2889,13 @@ func (s *session) totalAttackPowerValue(ranged bool) float32 {
 		// handlers return early, so no 124/167 fold applies.
 		if class := s.player.Class; class != 5 && class != 8 && class != 9 {
 			flat = s.playerAuraModifier(spellAuraModRangedAttackPower)
-			flat += float32(s.attackPowerOfStatFold(spellAuraModRangedAttackPowerOfStatPercent))
+			flat += s.attackPowerOfStatFold(spellAuraModRangedAttackPowerOfStatPercent)
 			mult = s.rangedAttackPowerAuraMultiplier()
 		}
 	} else {
 		base = s.player.AttackPower
 		flat = s.playerAuraModifier(spellAuraModAttackPower)
-		flat += float32(s.attackPowerOfStatFold(spellAuraModAttackPowerOfStatPercent))
+		flat += s.attackPowerOfStatFold(spellAuraModAttackPowerOfStatPercent)
 		mult = s.attackPowerAuraMultiplier()
 	}
 	ap := int32(base) + int32(flat)

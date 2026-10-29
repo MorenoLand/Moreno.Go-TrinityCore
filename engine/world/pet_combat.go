@@ -2375,6 +2375,9 @@ func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) 
 	pct := s.creatureAuraAttackPowerPct(key)
 	mult = pct - 1
 	total = (base + float64(flat)) * pct
+	if base+float64(flat) < 0 {
+		total = 0
+	}
 	return total, base, flat, mult
 }
 

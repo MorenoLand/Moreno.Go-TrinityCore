@@ -162,17 +162,21 @@ func (s *session) combatSlowCastFactor() float64 {
 // calculatePlayerStats. Negative/out-of-range misc values hit no stat
 // in the DBC-driven handlers' data (C++ reads UNIT_FIELD_STAT0+stat
 // unchecked); Go guards 0..4 like the other of-stat folds.
-func (s *session) attackPowerOfStatFold(auraType uint32) int32 {
+func (s *session) attackPowerOfStatFold(auraType uint32) float32 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
-	var total int32
+	var total float32
 	stats := s.player.Stats
 	for _, ae := range s.auraTypeMiscAmounts(auraType) {
 		if ae.misc < 0 || int(ae.misc) >= len(stats) {
 			continue
 		}
-		total += int32(int64(stats[ae.misc]) * int64(ae.amount) / 100)
+		// C++ CalculatePct(GetStat, amount) is float (Util.h:66, Unit.h:858):
+		// the per-aura values sum as floats and truncate once at the mods
+		// field store (totalAttackPowerValue's int32(flat)); truncating per
+		// aura here lost up to one AP per aura.
+		total += float32(stats[ae.misc]) * float32(ae.amount) / 100
 	}
 	return total
 }
