@@ -11491,6 +11491,46 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dmgList = friendlyEffectTargets
 					dmgSwitched = true
 				}
+				// Caster-targeted damage (TARGET_UNIT_CASTER, Spell.cpp:1500
+				// SelectImplicitCasterObjectTargets with checkIfValid=false):
+				// C++ selects the caster alone for this effect's bit, whatever
+				// the spell's other effects select; a B-slot caster target joins
+				// the A selection instead (both slots run
+				// SelectEffectImplicitTargets, Spell.cpp:778-779). The flat list
+				// above is that A selection for every other shape, so only the
+				// caster-targeted shapes rewrite it.
+				casterTargetA := eff.ImplicitTargetA == targetUnitCaster
+				casterTargetB := !casterTargetA && eff.ImplicitTargetB == targetUnitCaster
+				appendCaster := func(list []uint64) []uint64 {
+					for _, guid := range list {
+						if guid == s.playerGUID {
+							return list
+						}
+					}
+					out := make([]uint64, len(list), len(list)+1)
+					copy(out, list)
+					return append(out, s.playerGUID)
+				}
+				if casterTargetA {
+					if dmgSwitched || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+						// Friendly-area or enemy-area B slot: the list above is
+						// already this effect's area selection; the caster joins
+						// it when the radius or the enemy check left them out.
+						dmgList = appendCaster(dmgList)
+					} else if isExplicitUnitTargetType(eff.ImplicitTargetB) && target.UnitGUID != 0 {
+						// TARGET-reference B slot: the explicit target carries
+						// the bit alongside the caster.
+						if target.UnitGUID == s.playerGUID {
+							dmgList = []uint64{s.playerGUID}
+						} else {
+							dmgList = []uint64{s.playerGUID, target.UnitGUID}
+						}
+					} else {
+						dmgList = []uint64{s.playerGUID}
+					}
+				} else if casterTargetB {
+					dmgList = appendCaster(dmgList)
+				}
 				// Caster-in-friendly-list gate (Spell.cpp:1227 area selection +
 				// DoEffectOnLaunchTarget, Spell.cpp:7736-7744): the area check
 				// has no caster exclusion -- IsValidAssistTarget (Object.cpp:3087)
@@ -11512,7 +11552,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// has no self gate, and DoDamageAndTriggers deals the damage
 				// to the caster): the retained playerGUID skip is wrong here
 				// too, so a self-cast damage spell damages its caster.
-				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell)
+				// Explicitly self-targeted damage (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets -> AddUnitTarget with the
+				// explicit target, Spell.cpp:2095): when the cast's explicit
+				// unit target is the caster -- wire target self via an
+				// ALLY/PARTY/RAID mask (SpellInfo.cpp:1782 CheckExplicitTarget,
+				// IsValidAssistTarget self=true, Object.cpp:3087) or the
+				// RAID/PARTY/ALLY self fallback -- the caster's TargetInfo
+				// carries this effect's bit, and EffectSchoolDMG has no self
+				// gate, so C++ damages the caster exactly as for
+				// TARGET_UNIT_CASTER. Pure ENEMY-mask self casts never reach
+				// this arm (the gauntlet rejects them); mixed ENEMY+ALLY masks
+				// admit self, and every TARGET-reference effect of the cast
+				// then damages the caster.
+				explicitSelfDamage := target.UnitGUID == s.playerGUID &&
+					(isExplicitUnitTargetType(eff.ImplicitTargetA) || isExplicitUnitTargetType(eff.ImplicitTargetB))
+				// Caster-only damage (TARGET_UNIT_CASTER with no area leg): no
+				// area-selected TargetInfo carries this effect's bit, so no
+				// area reflector trips it (used by the enemy-trip loop below).
+				// A friendly-area B slot makes the effect switched, already
+				// excluded there; an enemy-area B slot keeps the trips.
+				casterOnlyDamageEffect := casterTargetA && !isAreaEnemyTargetType(eff.ImplicitTargetB)
+				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell) || explicitSelfDamage || casterTargetA || casterTargetB
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -11974,7 +12035,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// resolves its own return trip on the caster — one unscaled
 				// hit per reflected target (no chain falloff for AoE), with
 				// the same avoidance arm as the reflected jumps above.
-				for range reflectedAoETrips {
+				// Switched damage takes no enemy trips (HandleLaunchPhase,
+				// Spell.cpp:7717-7725, fires an effect only for TargetInfos
+				// carrying its bit: an enemy reflector was never selected for
+				// the friendly-area effect), and neither does a caster-only
+				// effect (no area leg selects any reflector). A pure friendly
+				// spell keeps its trips: its hitTargets roll IS the friendly
+				// roll, so dmgSwitched is false there and the trips below are
+				// the friendly reflectors' own return hits.
+				enemyTrips := reflectedAoETrips
+				if dmgSwitched || casterOnlyDamageEffect {
+					enemyTrips = nil
+				}
+				for range enemyTrips {
 					aoeReflectedDamage := damage
 					if weaponDamageEffect {
 						aoeReflectedDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wd), chainMult, 0)

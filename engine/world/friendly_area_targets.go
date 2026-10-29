@@ -39,6 +39,37 @@ func isFriendlyAreaTargetType(target uint32) bool {
 	}
 }
 
+const (
+	implicitTargetUnitTargetEnemy     uint32 = 6  // TARGET_UNIT_TARGET_ENEMY
+	implicitTargetUnitTargetAlly      uint32 = 21 // TARGET_UNIT_TARGET_ALLY
+	implicitTargetUnitTargetAny       uint32 = 25 // TARGET_UNIT_TARGET_ANY
+	implicitTargetUnitTargetParty     uint32 = 35 // TARGET_UNIT_TARGET_PARTY
+	implicitTargetUnitTargetChainheal uint32 = 45 // TARGET_UNIT_TARGET_CHAINHEAL_ALLY
+	implicitTargetUnitTargetRaid      uint32 = 57 // TARGET_UNIT_TARGET_RAID
+	implicitTargetUnitTargetMinipet   uint32 = 90 // TARGET_UNIT_TARGET_MINIPET
+	implicitTargetUnitTargetPassenger uint32 = 95 // TARGET_UNIT_TARGET_PASSENGER
+)
+
+// isExplicitUnitTargetType reports the SpellImplicitTargetInfo values
+// (SpellInfo.cpp:218-330) that Spell::SelectImplicitTargetObjectTargets
+// (Spell.cpp:1558) resolves to the cast's explicit unit target: the
+// TARGET_OBJECT_TYPE_UNIT + TARGET_REFERENCE_TYPE_TARGET + DEFAULT
+// category rows. Such an effect's bit lands on the explicit target's
+// TargetInfo (AddUnitTarget, Spell.cpp:2095), so when the explicit
+// target is the caster, the caster takes the effect.
+func isExplicitUnitTargetType(target uint32) bool {
+	switch target {
+	case implicitTargetUnitTargetEnemy,
+		implicitTargetUnitTargetAlly, implicitTargetUnitTargetAny,
+		implicitTargetUnitTargetParty, implicitTargetUnitTargetChainheal,
+		implicitTargetUnitTargetRaid, implicitTargetUnitTargetMinipet,
+		implicitTargetUnitTargetPassenger:
+		return true
+	default:
+		return false
+	}
+}
+
 func isFriendlyAreaSpell(spell wotlk.Spell) bool {
 	if isHarmfulSpell(spell) {
 		return false
