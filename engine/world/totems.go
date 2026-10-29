@@ -1516,9 +1516,12 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 // AuraEffect::HandlePeriodicHealAuraTick (SpellAuraEffects.cpp:5375-5440)
 // for a totem-caster aura:
 //
-//   - no SpellHealingBonusDone leg: C++ runs it only for DYNOBJ_AURA_TYPE
-//     ticks (SpellAuraEffects.cpp:5384); the flat aura amount stands (the
-//     totem carries no spell power). The DBC base points of the pulse
+//   - SpellHealingBonusDone runs on the owner (Unit.cpp:7489-7492 totem
+//     redirect): C++ bakes it into the aura amount at apply
+//     (AuraEffect::CalculateAmount :506-518) and runs no second leg for
+//     unit-aura ticks (:5384); this pulse recomputes its base each tick,
+//     so the owner's done leg applies here as the bake's equivalent,
+//     ahead of the Modify hook below. The DBC base points of the pulse
 //     spell's periodic-heal effect feed the amount when the row resolves;
 //     otherwise the legacy flat 50 stands in.
 //   - sScriptMgr->ModifyPeriodicDamageAurasTick ahead of the taken leg
@@ -1559,9 +1562,11 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 	// Flat aura amount: the totem's triggered cast computes it from the DBC
 	// base points at the totem's (owner's) level.
 	heal := uint32(50)
+	pulseEffIndex := 0
 	if healKnown {
-		for _, eff := range healSpell.Effects {
+		for i, eff := range healSpell.Effects {
 			if eff.Aura == spellAuraPeriodicHeal {
+				pulseEffIndex = i
 				if v := eff.CalcValueForLevel(healSpell, ownerLevel); v > 0 {
 					heal = uint32(v)
 				}
@@ -1572,6 +1577,12 @@ func (s *session) totemHealPulseTick(ctx context.Context, def TotemDef, totem *a
 	schoolMask := uint32(1 << 3) // SPELL_SCHOOL_MASK_NATURE
 	if healKnown {
 		schoolMask = healSpell.SchoolMask
+	}
+	// Owner done leg (see the header comment): the totem redirect puts
+	// the owner's spellpower flat and percent legs on the pulse, as the
+	// apply-time bake's equivalent, ahead of the Modify hook below.
+	if healKnown {
+		heal = s.spellHealingBonusDone(healSpell, heal, target, pulseEffIndex, true, 1)
 	}
 	// AuraEffect::HandlePeriodicHealAurasTick (SpellAuraEffects.cpp:5376):
 	// sScriptMgr->ModifyPeriodicDamageAurasTick — AutoBalance_UnitScript's

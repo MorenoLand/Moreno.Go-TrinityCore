@@ -16125,6 +16125,147 @@ func creatureHealingDonePctMultiplier(srv *Server, key creatureAuraKey, spell wo
 	return mult
 }
 
+// creatureHealingDoneFlat mirrors the flat DoneTotal leg of
+// Unit::SpellHealingBonusDone (Unit.cpp:7487-7631) for a creature caster:
+// the caster's SPELL_AURA_MOD_HEALING_DONE (135) auras, the victim's
+// SPELL_AURA_MOD_HEALING (115) auras, the spellpower coefficient, and the
+// flat OVERRIDE_CLASS_SCRIPTS arms from the mod-owner's scripts. The 135
+// fold uses the SpellBaseHealingBonusDone predicate (Unit.cpp:7764-7771):
+// an unset misc applies to every school, otherwise the misc mask must
+// intersect the spell's school mask — unlike the shared misc-mask helpers,
+// which drop unset-misc effects. The victim 115 fold uses the plain
+// GetTotalAuraModifierByMiscMask predicate (Unit.cpp:4937-4946), so the
+// shared helpers serve there. The AP arm (Unit.cpp:7560-7581) and the
+// guardian bonus-damage arm (Unit.cpp:7558) have no creature-side model —
+// Go tracks no creature total attack power and no guardian bonus damage —
+// so bonus-row ap_bonus terms and pet guardian bonuses are not folded.
+// The Impurity arm is player-only in C++ (Unit.cpp:7537) and never applies
+// here. Direct heals carry stack 1 (EffectHeal/EffectHealPct/
+// EffectHealMechanical pass no stack, Unit.cpp:7582-7586 default).
+func (srv *Server) creatureHealingDoneFlat(casterKey creatureAuraKey, casterLevel uint32, spell wotlk.Spell, eff wotlk.SpellEffect, victimSess *session, victimKey creatureAuraKey, modOwner *session) int32 {
+	if spellHealingDoneZeroed(spell) {
+		return 0
+	}
+	if srv == nil {
+		return 0
+	}
+	advertised := int32(0)
+	if srv.Data != nil && spell.SchoolMask != 0 && casterKey.GUID != 0 {
+		srv.auraMu.Lock()
+		auras := srv.activeCreatureAuras[casterKey]
+		copies := make([]*activeAura, 0, len(auras))
+		for _, aura := range auras {
+			copies = append(copies, aura)
+		}
+		srv.auraMu.Unlock()
+		sort.Slice(copies, func(i, j int) bool {
+			if copies[i] == nil || copies[j] == nil {
+				return copies[j] == nil
+			}
+			return copies[i].Slot < copies[j].Slot
+		})
+		cands := make([]auraModifierCandidate, 0)
+		for _, aura := range copies {
+			if aura == nil || aura.Stopped || aura.EffectMask == 0 {
+				continue
+			}
+			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			usedStoredAmount := false
+			for index, effect := range auraSpell.Effects {
+				if index >= len(aura.Amounts) || effect.Aura != auraModHealingDone || aura.EffectMask&(1<<uint(index)) == 0 {
+					continue
+				}
+				// Unit.cpp:7764-7771: unset misc applies to every school.
+				if uint32(effect.MiscValue) != 0 && uint32(effect.MiscValue)&spell.SchoolMask == 0 {
+					continue
+				}
+				amount := aura.Amounts[index]
+				if amount == 0 && aura.AuraType == auraModHealingDone && uint32(aura.MiscValue)&spell.SchoolMask != 0 && !usedStoredAmount {
+					amount = int32(aura.Amount)
+					usedStoredAmount = true
+				}
+				if amount == 0 {
+					amount = effect.BasePoints
+				}
+				cands = append(cands, auraModifierCandidate{spellID: aura.SpellID, amount: amount})
+			}
+		}
+		for _, amt := range gatedCreatureAuraModifierAmounts(srv, auraModHealingDone, cands) {
+			advertised += amt
+		}
+	}
+	if spell.SchoolMask != 0 {
+		if victimSess != nil {
+			for _, amt := range victimSess.auraTypeModifiersByMiscMask(auraModHealing, spell.SchoolMask) {
+				advertised += amt
+			}
+		} else if victimKey.GUID != 0 {
+			for _, amt := range creatureAuraModifiersByMiscMask(srv, victimKey, auraModHealing, spell.SchoolMask) {
+				advertised += amt
+			}
+		}
+	}
+	flat := int32(0)
+	if advertised != 0 {
+		coeff := float64(eff.BonusCoefficient)
+		if bonus, ok := srv.spellBonusData(spell.ID); ok {
+			coeff = bonus.direct
+		}
+		if coeff < 0 {
+			coeff = srv.creatureDefaultHealingCoefficient(spell) * 1.88
+		}
+		factor := spellCoefficientLevelFactor(spell, casterLevel)
+		if modOwner != nil {
+			coeff = modOwner.applySpellModFloat(spell, spellModBonusMultiplier, coeff*100) / 100
+		}
+		flat += int32(float64(advertised) * coeff * factor)
+	}
+	if modOwner != nil {
+		for _, ae := range modOwner.overrideClassScriptAuras(spell) {
+			switch ae.misc {
+			case 4415, 4953, 3736:
+				flat += ae.amount
+			}
+		}
+	}
+	return flat
+}
+
+// creatureDefaultHealingCoefficient mirrors the non-DOT half of
+// Unit::CalculateDefaultCoefficient (Unit.cpp:11012-11040) for a creature
+// caster: the DBC cast time (plus the REQ_AMMO +500, SpellInfo.cpp:3097-3105)
+// clamped to 1500..7000ms, over 3500. The hybrid over-time split, area
+// halving, leech halving, and per-extra-effect -5% legs of
+// GetCastingTimeForBonus (Unit.cpp:10936-10970) are not replicated — a pure
+// direct heal, the only shape creature heals take in practice, has none of
+// them, so the clamp-only form is exact there.
+func (srv *Server) creatureDefaultHealingCoefficient(spell wotlk.Spell) float64 {
+	if srv == nil || srv.Data == nil {
+		return 0
+	}
+	ct, ok, err := srv.Data.SpellCastTime(spell.CastingTimeIndex)
+	if err != nil || !ok {
+		return 0
+	}
+	castTime := int32(ct)
+	if spell.Attributes&spellAttr0ReqAmmo != 0 && spell.AttributesEx1&spellAttr2AutorepeatFlag == 0 {
+		castTime += 500
+	}
+	if castTime <= 0 {
+		return 0
+	}
+	if castTime > 7000 {
+		castTime = 7000
+	}
+	if castTime < 1500 {
+		castTime = 1500
+	}
+	return float64(castTime) / 3500.0
+}
+
 // spellDamagePushesBack mirrors the pushback half of Unit::DealDamage
 // (Unit.cpp:937): damage dealt by a spell carrying
 // SPELL_ATTR7_NO_PUSHBACK_ON_DAMAGE or SPELL_ATTR3_TREAT_AS_PERIODIC never

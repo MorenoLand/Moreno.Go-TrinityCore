@@ -4497,8 +4497,34 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 			}
 		}
 		if doneBonus {
-			heal = uint32(float64(heal) * creatureHealingDonePctMultiplier(s, casterKey, spell))
-			if modOwner != nil {
+			// Unit::SpellHealingBonusDone (Unit.cpp:7487-7631) for a
+			// creature caster: the flat DoneTotal leg was missing — only
+			// the percent leg ran — so a creature caster's own 135 auras
+			// and the victim's 115 auras never raised its direct heals.
+			// Potion-family spells return the raw amount (Unit.cpp:7495)
+			// and DmgClass-NONE spells without a bonus row take only the
+			// percent leg (Unit.cpp:7582-7586); both skip the flat leg
+			// and the SPELLMOD_DAMAGE tail, while the Taken fold below
+			// still runs.
+			flat := int32(0)
+			skipSpellmod := false
+			if spell.SpellFamilyName == spellFamilyPotion {
+				skipSpellmod = true
+			} else if _, hasBonus := s.spellBonusData(spell.ID); !hasBonus && spell.DefenseType == spellDamageClassNone {
+				skipSpellmod = true
+			} else {
+				var victimKey creatureAuraKey
+				if tm != nil {
+					victimKey = creatureAuraKeyForMotion(tm)
+				}
+				flat = s.creatureHealingDoneFlat(casterKey, m.Level, spell, eff, vs, victimKey, modOwner)
+			}
+			tmp := float64(int32(heal)+flat) * creatureHealingDonePctMultiplier(s, casterKey, spell)
+			if tmp < 0 {
+				tmp = 0
+			}
+			heal = uint32(tmp)
+			if modOwner != nil && !skipSpellmod {
 				if sm := modOwner.applySpellMod(spell, uint8(spellModDamage), int32(heal)); sm > 0 {
 					heal = uint32(sm)
 				} else {
