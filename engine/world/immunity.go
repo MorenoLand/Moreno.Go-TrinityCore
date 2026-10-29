@@ -1261,6 +1261,92 @@ func dispelAurasOnImmunityApply(target *session, spell wotlk.Spell, eff wotlk.Sp
 	}
 }
 
+// dispelCreatureAurasOnImmunityApply is the creature-target twin of
+// dispelAurasOnImmunityApply (SpellInfo::ApplyAllSpellImmunitiesTo,
+// SpellInfo.cpp:2860-2920): the same school/mechanic/dispel/aura-type
+// removal arms over the target's activeCreatureAuras, with the same
+// self-skip on the predicate arms (the C++ RemoveAppliedAuras self-check
+// and the RemoveAurasWithMechanic except) and the same unguarded
+// aura-type arm. The IMMUNITY_DAMAGE row has no dispel arm, as in C++.
+// Callers run it per fresh-apply effect, like the player twin; merges
+// never re-run the C++ aura-effect handlers (Aura::RefreshDuration,
+// SpellAuras.cpp:905-927, only resets timers), so merge paths do not
+// call it.
+func (s *Server) dispelCreatureAurasOnImmunityApply(key creatureAuraKey, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	if spell.AttributesEx&spellAttr1DispelAurasOnImmunity == 0 {
+		return
+	}
+	if s.Data == nil {
+		return
+	}
+	var schoolMask uint32
+	if eff.Aura == spellAuraSchoolImmunity {
+		schoolMask = uint32(eff.MiscValue)
+	}
+	mechanicMask := mechanicImmuneMaskForEffect(spell, eff)
+	var dispelImmune uint32
+	if eff.Aura == spellAuraDispelImmunity {
+		dispelImmune = uint32(eff.MiscValue)
+	}
+	var auraTypes []uint32
+	switch eff.Aura {
+	case spellAuraStateImmunity:
+		auraTypes = append(auraTypes, uint32(eff.MiscValue))
+	case spellAuraMechanicImmunityMask:
+		types, _ := mechanicMask147Grants(spell.ID, eff)
+		auraTypes = append(auraTypes, types...)
+	}
+	if schoolMask == 0 && mechanicMask == 0 && dispelImmune == 0 && len(auraTypes) == 0 {
+		return
+	}
+	spellPositive := spellIsPositive(spell)
+	type creatureAuraSnapshot struct {
+		spellID  uint32
+		positive bool
+	}
+	var snapshot []creatureAuraSnapshot
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura != nil {
+				snapshot = append(snapshot, creatureAuraSnapshot{spellID: aura.SpellID, positive: aura.Positive})
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, snap := range snapshot {
+		if snap.spellID == spell.ID {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(snap.spellID)
+		if err != nil || !found {
+			continue
+		}
+		remove := false
+		if schoolMask != 0 && auraSpell.SchoolMask&schoolMask != 0 &&
+			spellCanDispelAura(spell, auraSpell) &&
+			spellPositive != snap.positive &&
+			auraSpell.Attributes&spellAttributePassive == 0 {
+			remove = true
+		}
+		if !remove && mechanicMask != 0 && spellMechanicMask(auraSpell)&mechanicMask != 0 {
+			remove = true
+		}
+		if !remove && dispelImmune != 0 && auraSpell.DispelType == dispelImmune {
+			remove = true
+		}
+		if remove {
+			s.removeCreatureAura(key, snap.spellID)
+		}
+	}
+	for _, auraType := range auraTypes {
+		s.removeCreatureAurasByType(key, auraType)
+	}
+}
+
 // spellTargetFullyEffectImmune reduces the AddUnitTarget effect-immune
 // strip (Spell.cpp:2108-2112) to its IMMUNE2 consequence: true when the
 // spell has at least one effect and every non-zero effect is per-effect

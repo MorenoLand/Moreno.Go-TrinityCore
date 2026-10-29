@@ -120,6 +120,7 @@ const (
 	spellAttr6IgnoreCategoryCooldownMods   uint32 = 0x80000000 // SPELL_ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS (SharedDefines.h:665) — ATTR6 is Go's AttributesEx6
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
+	spellAttr2DamageReducedShield          uint32 = 0x00200000 // SPELL_ATTR2_DAMAGE_REDUCED_SHIELD (SharedDefines.h:507) — ATTR2 is Go's AttributesEx1
 
 	targetFlagCorpseEnemy uint32 = 0x00000200 // TARGET_FLAG_CORPSE_ENEMY (SpellInfo.h:57)
 	targetFlagUnitDead    uint32 = 0x00000400 // TARGET_FLAG_UNIT_DEAD (SpellInfo.h:58)
@@ -29002,6 +29003,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		ApplyResilience:    applyResilience,
 		SingleTarget:       isSingleTargetAuraSpell(spell),
 		TriggerSpell:       eff.TriggerSpell,
+		AuraInterruptFlags: spell.AuraInterruptFlags,
 		StackAmount:        spell.StackAmount,
 		HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
 		// Aura::CalcMaxCharges (SpellAuras.cpp:951-962), precomputed above
@@ -29059,6 +29061,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if s.server != nil {
 		s.server.applyCreatureSpellAreaRows(targetKey, spell.ID)
 		s.applyCreatureLinkedApplyArms(ctx, targetKey, targetGUID, spell.ID, casterGUID)
+	}
+	// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+	// (SpellInfo.cpp:2860-2920): the creature-target twin of the player
+	// path's dispelAurasOnImmunityApply call — an immunity-granting aura
+	// effect whose spell carries ATTR1_DISPEL_AURAS_ON_IMMUNITY dispels
+	// the creature's existing auras per the granted row.
+	s.server.dispelCreatureAurasOnImmunityApply(targetKey, spell, eff)
+	// AuraEffect::HandleAuraModSchoolImmunity flag-aura arms
+	// (SpellAuraEffects.cpp:3185-3190): a NORMAL-school immunity effect,
+	// or an immunity spell carrying both ATTR1_DISPEL_AURAS_ON_IMMUNITY
+	// and ATTR2_DAMAGE_REDUCED_SHIELD, drops the creature's
+	// IMMUNE_OR_LOST_SELECTION auras (the BG flag-drop arm).
+	if eff.Aura == spellAuraSchoolImmunity && (eff.MiscValue == 1 ||
+		(spell.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+			spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
+		if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
+			s.server.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagImmuneOrLostSelection)
+		}
 	}
 	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
 	// creature's run rate — previously snares never slowed creatures.
@@ -34098,6 +34118,29 @@ func (s *Server) clearCreatureFeignDeath(key creatureAuraKey) {
 
 func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 	s.removeCreatureAuraWithMode(key, spellID, auraRemoveByDefault)
+}
+
+// removeCreatureAurasByType is the creature-target twin of session
+// removeAurasByType (Unit::RemoveAurasByType, Unit.cpp:3884): drops the
+// target's activeCreatureAuras whose recorded AuraType matches. Snapshot
+// under auraMu, remove outside it — removeCreatureAura locks auraMu itself.
+func (s *Server) removeCreatureAurasByType(key creatureAuraKey, auraType uint32) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	var ids []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura != nil && aura.AuraType == auraType {
+				ids = append(ids, aura.SpellID)
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range ids {
+		s.removeCreatureAura(key, id)
+	}
 }
 
 // removeCreatureAuraWithMode is the mode-carrying creature remove funnel.

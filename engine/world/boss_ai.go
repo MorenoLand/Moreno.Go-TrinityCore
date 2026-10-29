@@ -7305,31 +7305,32 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		}
 		slot := uint8(len(s.activeCreatureAuras[targetKey]) % 64)
 		aura := &activeAura{
-			SpellID:           spell.ID,
-			DispelType:        spell.DispelType,
-			Mechanic:          spell.Mechanic,
-			AuraType:          eff.Aura,
-			EffectMask:        spellEffectMask(spell, eff),
-			CasterGUID:        m.GUID,
-			TargetGUID:        targetGUID,
-			TargetKey:         targetKey,
-			SchoolMask:        spell.SchoolMask,
-			MiscValue:         eff.MiscValue,
-			Amount:            amount,
-			DurationMs:        durationMs,
-			PeriodMs:          eff.AuraPeriod,
-			RemainingMs:       durationMs,
-			DurationUpdatedAt: time.Now(),
-			Slot:              slot,
-			Positive:          positive,
-			CasterLevel:       uint8(casterLevel(m)),
-			StoredCasterLevel: uint8(casterLevel(m)),
-			ApplyResilience:   applyResilience,
-			SingleTarget:      isSingleTargetAuraSpell(spell),
-			TriggerSpell:      eff.TriggerSpell,
-			StackAmount:       spell.StackAmount,
-			HideDuration:      spell.AttributesEx5&spellAttr5HideDuration != 0,
-			RemainingCharges:  maxCharges,
+			SpellID:            spell.ID,
+			DispelType:         spell.DispelType,
+			Mechanic:           spell.Mechanic,
+			AuraType:           eff.Aura,
+			EffectMask:         spellEffectMask(spell, eff),
+			CasterGUID:         m.GUID,
+			TargetGUID:         targetGUID,
+			TargetKey:          targetKey,
+			SchoolMask:         spell.SchoolMask,
+			MiscValue:          eff.MiscValue,
+			Amount:             amount,
+			DurationMs:         durationMs,
+			PeriodMs:           eff.AuraPeriod,
+			RemainingMs:        durationMs,
+			DurationUpdatedAt:  time.Now(),
+			Slot:               slot,
+			Positive:           positive,
+			CasterLevel:        uint8(casterLevel(m)),
+			StoredCasterLevel:  uint8(casterLevel(m)),
+			ApplyResilience:    applyResilience,
+			SingleTarget:       isSingleTargetAuraSpell(spell),
+			TriggerSpell:       eff.TriggerSpell,
+			AuraInterruptFlags: spell.AuraInterruptFlags,
+			StackAmount:        spell.StackAmount,
+			HideDuration:       spell.AttributesEx5&spellAttr5HideDuration != 0,
+			RemainingCharges:   maxCharges,
 		}
 		s.activeCreatureAuras[targetKey][spell.ID] = aura
 		s.refreshCreaturePhaseOverrideLocked(targetKey)
@@ -7365,6 +7366,22 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			}
 		}
 		s.applyCreatureSpellAreaRows(targetKey, spell.ID)
+		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
+		// (SpellInfo.cpp:2860-2920): the creature-target twin of the player
+		// path's dispelAurasOnImmunityApply call — an immunity-granting aura
+		// effect whose spell carries ATTR1_DISPEL_AURAS_ON_IMMUNITY dispels
+		// the creature's existing auras per the granted row.
+		s.dispelCreatureAurasOnImmunityApply(targetKey, spell, eff)
+		// AuraEffect::HandleAuraModSchoolImmunity flag-aura arms
+		// (SpellAuraEffects.cpp:3185-3190): a NORMAL-school immunity effect,
+		// or an immunity spell carrying both ATTR1_DISPEL_AURAS_ON_IMMUNITY
+		// and ATTR2_DAMAGE_REDUCED_SHIELD, drops the creature's
+		// IMMUNE_OR_LOST_SELECTION auras (the BG flag-drop arm).
+		if eff.Aura == spellAuraSchoolImmunity && (eff.MiscValue == 1 ||
+			(spell.AttributesEx&spellAttr1DispelAurasOnImmunity != 0 &&
+				spell.AttributesEx1&spellAttr2DamageReducedShield != 0)) {
+			s.removeCreatureAurasWithInterruptFlags(target, auraInterruptFlagImmuneOrLostSelection)
+		}
 		if spellHasSpeedAura(spell) {
 			s.refreshCreatureRunSpeed(targetKey, targetGUID)
 		}
