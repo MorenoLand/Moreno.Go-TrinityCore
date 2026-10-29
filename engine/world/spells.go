@@ -9872,6 +9872,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if len(hitTargets) > 0 {
 		targetGUID = hitTargets[0]
 	}
+	// Pre-roll selection GUID: doReflect reassigns targetGUID to the
+	// caster on a reflect, but C++ chains from the selection-time primary
+	// (Spell.cpp:1173/1582), so the plain chain block anchors NEARBY
+	// chains on this, not the return-trip caster.
+	selectionTargetGUID := targetGUID
 
 	// Auto-repeat ranged spells (e.g. Auto Shot, Shoot Wand) (TC: CURRENT_AUTOREPEAT_SPELL)
 	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
@@ -10364,6 +10369,42 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// partitionJumpOutcome reports the already-decided outcome for a unit
+	// that is also a per-effect partition member (Spell.cpp:2121 merged
+	// entry): the partition roll (rolled path), the wire share (unrolled
+	// path), or the unrolled-kept list already fixed it, so a chain jump,
+	// chain primary, or rejoined packet target landing on that GUID must
+	// take the partition outcome, not a fresh roll — a fresh roll would give
+	// the merged entry two independent reflect chances and split outcomes
+	// (kept in one list, tripped or missed in the other). 1 = kept in a
+	// partition list, 2 = clean-reflect trip, 3 = missed; 0 = no partition
+	// outcome, roll normally. Kept wins across partitions: the roll block's
+	// prior sets keep the lists consistent, so any inconsistency can only
+	// come from the unrolled path, where kept is the decided state.
+	partitionJumpOutcome := func(guid uint64) int {
+		for _, list := range [][]uint64{friendlyEffectTargets, refCenteredFriendlyTargets} {
+			for _, kept := range list {
+				if kept == guid {
+					return 1
+				}
+			}
+		}
+		for _, trips := range [][]uint64{reflectedAllyTrips, refCenteredAllyTrips} {
+			for _, trip := range trips {
+				if trip == guid {
+					return 2
+				}
+			}
+		}
+		if _, ok := friendlyMissGUIDs[guid]; ok {
+			return 3
+		}
+		if _, ok := refCenteredMissGUIDs[guid]; ok {
+			return 3
+		}
+		return 0
+	}
+
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1582): chain spells
 	// (EffectChainTarget > 1) jump from the primary target to nearby units;
 	// chainJumpIndex records each hit jump's order (0 = primary) so the
@@ -10461,7 +10502,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
 						primaryFaction = tgt.Faction
 					}
-					if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+					if outcome := partitionJumpOutcome(anchor); outcome != 0 {
+						switch outcome {
+						case 1:
+							hitTargets = append(hitTargets, anchor)
+						case 2:
+							reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+						case 3:
+						}
+					} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
 					} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
@@ -10499,6 +10548,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					if alreadyListed {
+						continue
+					}
+					if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+						switch outcome {
+						case 1:
+							jump++
+							hitTargets = append(hitTargets, extraGUID)
+							chainJumpIndex[extraGUID] = jump
+						case 2:
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						case 3:
+						}
 						continue
 					}
 					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
@@ -10596,7 +10658,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
 						primaryFaction = tgt.Faction
 					}
-					if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+					if outcome := partitionJumpOutcome(anchor); outcome != 0 {
+						switch outcome {
+						case 1:
+							hitTargets = append(hitTargets, anchor)
+						case 2:
+							reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+						case 3:
+						}
+					} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
 					} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
@@ -10631,6 +10701,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					if alreadyListed {
+						continue
+					}
+					if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+						switch outcome {
+						case 1:
+							jump++
+							hitTargets = append(hitTargets, extraGUID)
+							chainJumpIndex[extraGUID] = jump
+						case 2:
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						case 3:
+						}
 						continue
 					}
 					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
@@ -10668,7 +10751,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// nearby pick, which C++ folds into its single entry rather than double-listing.
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
-			anchor := targetGUID
+			anchor := selectionTargetGUID
 			winTarget := uint32(0)
 			for i, eff := range spell.Effects {
 				if effectMask == 1<<uint(i) {
@@ -10695,6 +10778,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				if alreadyListed {
+					continue
+				}
+				if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+					switch outcome {
+					case 1:
+						jump++
+						hitTargets = append(hitTargets, extraGUID)
+						chainJumpIndex[extraGUID] = jump
+					case 2:
+						jump++
+						reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+					case 3:
+					}
 					continue
 				}
 				if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
@@ -10797,7 +10893,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
 						primaryFaction = tgt.Faction
 					}
-					if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+					if outcome := partitionJumpOutcome(anchor); outcome != 0 {
+						switch outcome {
+						case 1:
+							hitTargets = append(hitTargets, anchor)
+						case 2:
+							reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+						case 3:
+						}
+					} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
 					} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
 						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
@@ -10835,6 +10939,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					if alreadyListed {
+						continue
+					}
+					if outcome := partitionJumpOutcome(extraGUID); outcome != 0 {
+						switch outcome {
+						case 1:
+							jump++
+							hitTargets = append(hitTargets, extraGUID)
+							chainJumpIndex[extraGUID] = jump
+						case 2:
+							jump++
+							reflectedJumpIndexes = append(reflectedJumpIndexes, jump)
+						case 3:
+						}
 						continue
 					}
 					if missInfo := s.spellTargetMissResult(ctx, extraGUID, spell); missInfo != protocol.SpellMissNone {
@@ -10901,7 +11018,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
 					primaryFaction = tgt.Faction
 				}
-				if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+				if outcome := partitionJumpOutcome(anchor); outcome != 0 {
+					switch outcome {
+					case 1:
+						hitTargets = append(hitTargets, anchor)
+					case 2:
+						reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+					case 3:
+					}
+				} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
 				} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
 					missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
