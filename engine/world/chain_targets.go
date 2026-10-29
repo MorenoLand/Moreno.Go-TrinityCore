@@ -115,6 +115,202 @@ func creatureChainFamilyPick(winTarget uint32, unitPick, hostilePick, friendlyPi
 	return 0, false
 }
 
+// creatureChainNearbyPick ports the nearby-pick half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) + SearchNearbyTarget
+// (Spell.cpp:1869) for the WINNING chain effect of a creature caster, the
+// motion twin of (*session).spellChainNearbyPick. C++ selects per effect
+// (Spell.cpp:758-900), so the winning effect chains from its own pick:
+// its check type (ENEMY/ALLY/PARTY/RAID/ENTRY) and its own
+// ImplicitTargetConditions rows (effectMask), not the family helpers'
+// union checks / first-effect conditions. The predicate arms mirror the
+// three creature nearby helpers exactly (same range sides, totem/GM
+// gates, party/raid scope via motionChainRefererScope, LOS gate); no
+// pick returns false and the caller keeps its family-pick fallback.
+func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, bool) {
+	if s == nil || m == nil || s.Data == nil {
+		return 0, false
+	}
+	var maxRange float64
+	switch winTarget {
+	case implicitTargetNearbyEnemy:
+		rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+		if err != nil || !ok || rangeEntry.MaxHostile <= 0 {
+			return 0, false
+		}
+		maxRange = spellDBCMaxRange(false, rangeEntry)
+		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+			maxRange = modOwner.applySpellModFloat(spell, spellModRange, maxRange)
+		}
+	case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
+		rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+		if err != nil || !ok || rangeEntry.MaxFriendly <= 0 {
+			return 0, false
+		}
+		maxRange = spellDBCMaxRange(true, rangeEntry)
+		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+			maxRange = modOwner.applySpellModFloat(spell, spellModRange, maxRange)
+		}
+	case implicitTargetNearbyEntry:
+		maxRange = s.creatureEntryNearbyObjectRange(m, spell)
+	default:
+		return 0, false
+	}
+	if maxRange <= 0 {
+		return 0, false
+	}
+	condRows := s.loadImplicitTargetConditionRows(ctx, spellID, effectMask)
+	allowPlayers, allowCreatures := true, true
+	if winTarget == implicitTargetNearbyEntry {
+		allowPlayers, allowCreatures = implicitTargetEntryMask(condRows)
+	}
+	if spellSearchPlayersOnly(spell) {
+		allowCreatures = false
+	}
+	allowDead := spellAllowsDeadTarget(spell)
+	scope := s.motionChainRefererScope(m, m.GUID)
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	var bestX, bestY, bestZ float32
+	consider := func(guid uint64, x, y, z, reach float32) {
+		dist := float64(distance3D(x, y, z, m.X, m.Y, m.Z)) - float64(reach)
+		if dist < 0 {
+			dist = 0
+		}
+		if dist < bestDist {
+			bestDist, bestGUID, bestX, bestY, bestZ = dist, guid, x, y, z
+		}
+	}
+	// accept applies the winning effect's check-type gates to one
+	// candidate; isPlayer selects the session vs motion/DB arm's
+	// faction call, ownerGUID feeds the party/raid scope. Player
+	// candidates carry the full playerPos: the faction helpers read
+	// Race/Class/Reputations, not just the template.
+	accept := func(guid uint64, x, y, z, reach float32, unitFlags, flagsExtra, health uint32, isPlayer, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, pp playerPos) {
+		if guid == 0 {
+			return
+		}
+		switch winTarget {
+		case implicitTargetNearbyEnemy:
+			if guid == m.GUID || health == 0 || isGM || s.isTotemGUID(guid) ||
+				spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) {
+				return
+			}
+			if isPlayer {
+				if !s.isAttackableFaction(m.Faction, pp) {
+					return
+				}
+			} else if !s.factionTemplatesHostile(m.Faction, faction) {
+				return
+			}
+		case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
+			if health == 0 || isGM || s.isTotemGUID(guid) ||
+				spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) {
+				return
+			}
+			if isPlayer {
+				// The friendly helper's gate is non-attackable, not
+				// friendly-standing: neutrals pass here as there.
+				if s.isAttackableFaction(m.Faction, pp) {
+					return
+				}
+			} else if s.factionTemplatesHostile(m.Faction, faction) {
+				return
+			}
+			cand := friendlyCandidate{guid: guid, isPlayer: isPlayer, ownerGUID: ownerGUID, faction: faction}
+			switch winTarget {
+			case implicitTargetNearbyParty:
+				if !scope.inParty(cand) {
+					return
+				}
+			case implicitTargetNearbyRaid:
+				if !scope.inRaid(cand) {
+					return
+				}
+			}
+		case implicitTargetNearbyEntry:
+			if isPlayer && !allowPlayers {
+				return
+			}
+			if !isPlayer && !allowCreatures {
+				return
+			}
+			if health == 0 && !allowDead {
+				return
+			}
+			if spellTargetUnitBlocked(spell, unitFlags, flagsExtra, false) {
+				return
+			}
+		}
+		if !implicitEntryConditionsMet(condRows, isPlayer, entry, spawnLow) {
+			return
+		}
+		consider(guid, x, y, z, reach)
+	}
+	if allowPlayers {
+		s.sessionsMu.RLock()
+		for targetSession := range s.sessions {
+			if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
+				continue
+			}
+			p := targetSession.player
+			if p.Map != m.Map || p.InstanceID != m.InstanceID {
+				continue
+			}
+			candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
+			accept(targetSession.playerGUID, p.X, p.Y, p.Z, p.CombatReach, p.UnitFlags, 0, p.Health, true, sessionIsGameMaster(targetSession), 0, 0, candidate.FactionTemplate, 0, candidate)
+		}
+		s.sessionsMu.RUnlock()
+	}
+	if allowCreatures {
+		s.motionMu.Lock()
+		motionMap := s.motionMapLocked(m.Map, m.InstanceID)
+		motions := make([]*creatureMotion, 0, len(motionMap))
+		motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+		for _, cand := range motionMap {
+			if cand != nil {
+				motions = append(motions, cand)
+				motionGUIDs[cand.GUID] = struct{}{}
+			}
+		}
+		s.motionMu.Unlock()
+		for _, cand := range motions {
+			owner := cand.OwnerGUID
+			if owner == 0 {
+				owner = cand.CharmOwnerGUID
+			}
+			accept(cand.GUID, cand.X, cand.Y, cand.Z, cand.CombatReach, cand.UnitFlags, cand.FlagsExtra, cand.Health, false, false, cand.Entry, uint32(cand.GUID&0xFFFFFF), cand.Faction, owner, playerPos{})
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, m.Map, float64(m.X)-maxRange, float64(m.X)+maxRange, float64(m.Y)-maxRange, float64(m.Y)+maxRange)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
+					var x, y, z float64
+					if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+						continue
+					}
+					guid := creatureWorldGUID(uint32(low), uint32(entry))
+					if _, hasMotion := motionGUIDs[guid]; hasMotion {
+						continue
+					}
+					if uint32(rowMap) != m.Map {
+						continue
+					}
+					accept(guid, float32(x), float32(y), float32(z), 0, uint32(unitFlags), uint32(flagsExtra), uint32(health), false, false, uint32(entry), uint32(low), uint32(faction), 0, playerPos{})
+				}
+			}
+		}
+	}
+	if bestGUID == 0 {
+		return 0, false
+	}
+	if !s.implicitUnitTargetLOSPassesForMotion(spell, m, bestGUID, bestX, bestY, bestZ) {
+		return 0, false
+	}
+	return bestGUID, true
+}
+
 // spellHasTargetObjectEffect reports whether any live effect of the spell
 // carries a TARGET-reference UNIT object implicit target, the scope of
 // the plain-primary rejoin on the triggered path.

@@ -9850,6 +9850,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, hitTargets)
 		refCenteredBranch = true
 	}
+	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) adds a 40
+	// effect's pick via AddGOTarget (Spell.cpp:2193: no miss roll, its
+	// own GO container) regardless of the spell's other legs, so when
+	// an area/list or nearby branch shadows the 40 leg the pick was
+	// dropped from the flat list and its GO effect mask. It joins here,
+	// ahead of the channeled check below (C++ counts the GO container
+	// there) and unrolled like the entry branch's GO pick; an
+	// already-listed pick (entry branch, pure-40 branch) no-ops, and a
+	// missing pick joins nothing (the unit-rejoin precedent, not the
+	// nearby arm's cast failure: the shadowing branch already selected).
+	if isGONearbyEntrySpell(spell) {
+		if goPick, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
+			seenGO := false
+			for _, guid := range hitTargets {
+				if guid == goPick {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				hitTargets = append(hitTargets, goPick)
+				noteGOEffectMask(goPick, nearbyGOMask)
+			}
+		}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-800): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
 	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check runs
@@ -11078,7 +11103,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// chain arm (Spell.cpp:1173 -> 1582) no-ops at ChainTarget 1, but
 	// the pick itself is still a merged entry. Every chain block above
 	// requires jumps > 0, so when an area/list/GO branch shadows the
-	// nearby branch (the else-if selection chain), a ChainTarget-1 (or
+	// nearby branch, or a nearby branch shadows a sibling nearby leg
+	// (friendly over entry/hostile, first-effect pick over a later
+	// effect's conditions), a ChainTarget-1 (or
 	// 0) nearby effect's pick was dropped from the GO packet, the
 	// initial-threat and AOE-cap divisors, the break-aura leg, and the
 	// per-effect fan-out below, which all iterate hitTargets — the
@@ -11094,11 +11121,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// ChainTarget > 1 nearby effects stay out (the standing
 	// single-anchor approximation); a nearby branch that ran already
 	// listed its spell-wide pick, and only a differing scoped pick
-	// joins — but the gate below is the shadowed branches only, so
-	// multi-nearby picks on a plain spell stay residual. A missing
+	// joins, so plain multi-nearby spells rejoin the same way. A missing
 	// pick joins nothing (the chain-block precedent, not the nearby
 	// branch's cast failure: the shadowing branch already selected).
-	if areaSpell || friendlyListSpell {
+	if areaSpell || friendlyListSpell || unitNearbySpell {
 		for i, eff := range spell.Effects {
 			if eff.Effect == 0 && eff.Aura == 0 {
 				continue
@@ -11106,7 +11132,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			nearbyTarget := uint32(0)
 			if nearbyUnitTarget(eff.ImplicitTargetA) {
 				nearbyTarget = eff.ImplicitTargetA
-			} else if nearbyUnitTarget(eff.ImplicitTargetB) {
+			} else if nearbyUnitTarget(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				nearbyTarget = eff.ImplicitTargetB
 			} else {
 				continue
@@ -20542,37 +20568,39 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// arm's cast failure). Non-winning ChainTarget > 1 nearby effects
 	// stay out (the standing single-anchor approximation). When
 	// nearbySelected the spell-wide pick already rides hitTargets, so
-	// no rejoin is computed.
+	// only a differing scoped pick joins (downstream dedup absorbs
+	// the equal ones); a nearby branch shadowing a sibling leg
+	// (friendly over entry/hostile) rejoins the same way as an area
+	// shadow. The winning chain effect's anchor on the nearbySelected
+	// path still rides the branch pick, not the scoped pick — residual.
 	nearbyPrimaries := make(map[int]uint64)
 	nearbyPrimaryList := []uint64{}
-	if !nearbySelected {
-		for i, eff := range spell.Effects {
-			if eff.Effect == 0 && eff.Aura == 0 {
-				continue
-			}
-			nearbyTarget := uint32(0)
-			if nearbyUnitTarget(eff.ImplicitTargetA) {
-				nearbyTarget = eff.ImplicitTargetA
-			} else if nearbyUnitTarget(eff.ImplicitTargetB) {
-				nearbyTarget = eff.ImplicitTargetB
-			} else {
-				continue
-			}
-			if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
-				continue
-			}
-			if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget); ok && pick != 0 {
-				nearbyPrimaries[i] = pick
-				dup := false
-				for _, listed := range nearbyPrimaryList {
-					if listed == pick {
-						dup = true
-						break
-					}
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 && eff.Aura == 0 {
+			continue
+		}
+		nearbyTarget := uint32(0)
+		if nearbyUnitTarget(eff.ImplicitTargetA) {
+			nearbyTarget = eff.ImplicitTargetA
+		} else if nearbyUnitTarget(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+			nearbyTarget = eff.ImplicitTargetB
+		} else {
+			continue
+		}
+		if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
+			continue
+		}
+		if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget); ok && pick != 0 {
+			nearbyPrimaries[i] = pick
+			dup := false
+			for _, listed := range nearbyPrimaryList {
+				if listed == pick {
+					dup = true
+					break
 				}
-				if !dup {
-					nearbyPrimaryList = append(nearbyPrimaryList, pick)
-				}
+			}
+			if !dup {
+				nearbyPrimaryList = append(nearbyPrimaryList, pick)
 			}
 		}
 	}
@@ -20753,6 +20781,43 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			grown = append(grown, selectionTargets...)
 			grown = append(grown, plainGOPrimary)
 			selectionTargets = grown
+		}
+	}
+	// Triggered twin of the launch GO-nearby rejoin: a 40 effect's pick
+	// joins via AddGOTarget (Spell.cpp:2193, no miss roll) regardless of
+	// the spell's other legs, so when the area switch above or the
+	// friendly/hostile nearby arm shadows the 40 leg the pick was
+	// dropped from the roll list, the GO packet, and the fan-out seed.
+	// It joins hitTargets and selectionTargets like the wire GO primary
+	// above, ahead of the channeled check below; an already-listed pick
+	// (entry branch, pure-40 arm) no-ops, and a missing pick joins
+	// nothing (the unit-rejoin precedent).
+	if isGONearbyEntrySpell(spell) {
+		if goPick, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
+			seenGO := false
+			for _, guid := range hitTargets {
+				if guid == goPick {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				hitTargets = append(hitTargets, goPick)
+				noteGOEffectMask(goPick, nearbyGOMask)
+			}
+			seenGO = false
+			for _, guid := range selectionTargets {
+				if guid == goPick {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				grown := make([]uint64, 0, len(selectionTargets)+1)
+				grown = append(grown, selectionTargets...)
+				grown = append(grown, goPick)
+				selectionTargets = grown
+			}
 		}
 	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose

@@ -3994,9 +3994,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// the winning effect's own primary (player convention, 09ec730a): a
 	// TARGET-object winner anchors on target.UnitGUID — the post-redirect wire
 	// target, which the nearby block never rewrites even as it moves targetGUID
-	// to the pick — while a NEARBY winner anchors on its family's
-	// pick (creatureChainFamilyPick), falling back to targetGUID
-	// when that family's leg did not run.
+	// to the pick — while a NEARBY winner anchors on its own
+	// pick (creatureChainNearbyPick), falling back to its family's
+	// pick, then targetGUID.
 	// The owner session is the spell-mod owner for pets (C++ GetSpellModOwner),
 	// so the SPELLMOD_JUMP_TARGETS fold runs here where the twin passes nil.
 	// Jumps join hitTargets ahead of the reflect/miss verdicts below so each
@@ -4025,7 +4025,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					anchor = target.UnitGUID
 				}
 			case 2, 3, 4, 38, 58:
-				if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+				if pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, effectMask, winTarget); ok {
+					anchor = pick
+				} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 					anchor = pick
 				}
 			}

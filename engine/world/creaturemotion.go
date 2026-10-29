@@ -4273,8 +4273,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// anchors on spellTarget.UnitGUID — the post-redirect wire victim,
 				// which the nearby rebuild never rewrites even as hitTargets[0]
 				// becomes the pick — while a NEARBY winner anchors on its
-				// family's pick (creatureChainFamilyPick), falling back to
-				// hitTargets[0] when that family's leg did not run. Jump targets join
+				// own pick (creatureChainNearbyPick), falling back to its
+				// family's pick, then hitTargets[0]. Jump targets join
 				// the area legs like the cone leg so they roll reflect/miss verdicts
 				// and take the damage/dispatch legs below; a static-spawn jump rides
 				// the packet only. Dedupe against hitTargets: a jump already selected
@@ -4298,7 +4298,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								anchor = spellTarget.UnitGUID
 							}
 						case 2, 3, 4, 38, 58:
-							if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+							if pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, effectMask, winTarget); ok {
+								anchor = pick
+							} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 								anchor = pick
 							}
 						}

@@ -1923,8 +1923,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// winning effect anchors on spellTarget.UnitGUID — the post-redirect
 		// wire target, which the nearby block above never rewrites even as it
 		// moves targetGUID to the pick — while a NEARBY winner anchors on
-		// its family's pick (creatureChainFamilyPick), falling back to
-		// targetGUID when that family's leg did not run.
+		// its own pick (creatureChainNearbyPick), falling back to its
+		// family's pick, then targetGUID.
 		if spellKnown && targetGUID != 0 {
 			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
 				anchor := targetGUID
@@ -1944,7 +1944,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 						anchor = spellTarget.UnitGUID
 					}
 				case 2, 3, 4, 38, 58:
-					if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+					if pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, effectMask, winTarget); ok {
+						anchor = pick
+					} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 						anchor = pick
 					}
 				}
