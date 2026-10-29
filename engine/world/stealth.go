@@ -70,6 +70,17 @@ func (s *session) stealthMiscValues() []int32 {
 	return out
 }
 
+// hasStalkedAuraFrom reports whether this session carries a live
+// SPELL_AURA_MOD_STALKED (68) effect cast by the given seer GUID.
+func (s *session) hasStalkedAuraFrom(seerGUID uint64) bool {
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && !aura.Stopped && aura.AuraType == spellAuraModStalked && aura.CasterGUID == seerGUID {
+			return true
+		}
+	}
+	return false
+}
+
 // canDetectStealthOf determines if the observer player can detect the target stealthed player.
 // Mirrors TrinityCore WorldObject::CanDetectStealthOf (Object.cpp:1719-1790).
 func (s *session) canDetectStealthOf(target *session) bool {
@@ -90,17 +101,11 @@ func (s *session) canDetectStealthOf(target *session) bool {
 	if s.groupID != 0 && s.groupID == target.groupID {
 		return true
 	}
-	// Detect Stealth aura (SPELL_AURA_TRACK_STEALTHED = 151)
-	if s.hasAuraType(151) {
+	// SPELL_AURA_MOD_STALKED (68) cast by the observer: Unit::IsAlwaysDetectableFor
+	// (Unit.cpp:8640-8647) is checked by CanDetect before both invisibility and
+	// stealth arms (Object.cpp:1676-1682), so a marked target is always seen.
+	if target.hasStalkedAuraFrom(s.playerGUID) {
 		return true
-	}
-	// Detect Stealth aura (SPELL_AURA_DETECT_STEALTH = 228): an observer
-	// carrying a 228 effect whose misc matches one of the target's stealth
-	// types sees through it outright (Object.cpp:1753).
-	for _, mv := range target.stealthMiscValues() {
-		if s.hasAuraTypeWithMiscValue(spellAuraDetectStealth, mv) {
-			return true
-		}
 	}
 
 	dist := float32(distance3D(s.player.X, s.player.Y, s.player.Z, target.player.X, target.player.Y, target.player.Z))
@@ -116,6 +121,21 @@ func (s *session) canDetectStealthOf(target *session) bool {
 	// Back check: units cannot detect stealth behind them
 	if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, target.player.X, target.player.Y, math.Pi) {
 		return false
+	}
+
+	// Detect Stealth aura (SPELL_AURA_DETECT_STEALTH = 228): an observer
+	// carrying a 228 effect whose misc matches one of the target's stealth
+	// types sees through it outright (Object.cpp:1753). This arm sits after
+	// the back-arc gate above: C++ returns false on the arc check before
+	// reaching the per-type 228 arm, so detect-stealth never sees behind.
+	// (SPELL_AURA_TRACK_STEALTHED = 151 has no arm here: in C++ it only sets
+	// the client minimap PLAYER_FIELD_BYTE_TRACK_STEALTHED flag
+	// (SpellAuraEffects.cpp:2496) and the SPELL_SPECIFIC_TRACKER class
+	// (SpellInfo.cpp:2230); it grants no in-world detection.)
+	for _, mv := range target.stealthMiscValues() {
+		if s.hasAuraTypeWithMiscValue(spellAuraDetectStealth, mv) {
+			return true
+		}
 	}
 
 	obsLevel := s.player.Level
@@ -145,19 +165,60 @@ func (s *session) canDetectInvisibilityOfPlayer(target *session) bool {
 	if (s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0)) || s.security > 0 {
 		return true
 	}
-	detect := s.loadedAuras()
+	// MOD_STALKED arm of Unit::IsAlwaysDetectableFor, checked by CanDetect
+	// before the invisibility arms (Object.cpp:1676-1682).
+	if target.hasStalkedAuraFrom(s.playerGUID) {
+		return true
+	}
+	// WorldObject::CanDetectInvisibilityOf (Object.cpp:1688-1717) works on
+	// per-type summed values, not single auras: the target's invisibility
+	// value for a type is the sum of its MOD_INVISIBILITY (18) effects of
+	// that misc, and detection needs a MOD_INVISIBILITY_DETECT (19) sum at
+	// least as large for every type the target carries. A single-aura
+	// comparison misses detection split across two auras of one type.
+	invisSum := map[int32]int32{}
+	targetDetectHas := map[int32]bool{}
 	for _, targetAura := range target.loadedAuras() {
-		if targetAura == nil || targetAura.AuraType != 18 {
+		if targetAura == nil || targetAura.Stopped {
 			continue
 		}
-		found := false
-		for _, detectAura := range detect {
-			if detectAura != nil && detectAura.AuraType == 19 && detectAura.MiscValue == targetAura.MiscValue && detectAura.Amount >= targetAura.Amount {
-				found = true
-				break
-			}
+		if targetAura.AuraType == 18 {
+			invisSum[targetAura.MiscValue] += int32(targetAura.Amount)
 		}
-		if !found {
+		if targetAura.AuraType == 19 {
+			targetDetectHas[targetAura.MiscValue] = true
+		}
+	}
+	if len(invisSum) == 0 {
+		return true
+	}
+	detectSum := map[int32]int32{}
+	detectHas := map[int32]bool{}
+	for _, detectAura := range s.loadedAuras() {
+		if detectAura == nil || detectAura.Stopped || detectAura.AuraType != 19 {
+			continue
+		}
+		detectSum[detectAura.MiscValue] += int32(detectAura.Amount)
+		detectHas[detectAura.MiscValue] = true
+	}
+	for misc, value := range invisSum {
+		if !detectHas[misc] || detectSum[misc] < value {
+			return false
+		}
+	}
+	// Reciprocal flags arm (Object.cpp:1700-1703, the spell-66 rule): an
+	// invisible seer cannot detect a unit that cannot detect the seer's own
+	// invisibility types, so the seer's invisibility misc set must be a
+	// subset of the target's detect misc set. Flags only, no value compare.
+	seerInvisHas := map[int32]bool{}
+	for _, seerAura := range s.loadedAuras() {
+		if seerAura == nil || seerAura.Stopped || seerAura.AuraType != 18 {
+			continue
+		}
+		seerInvisHas[seerAura.MiscValue] = true
+	}
+	for misc := range seerInvisHas {
+		if !targetDetectHas[misc] {
 			return false
 		}
 	}
@@ -180,6 +241,12 @@ func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *sessio
 	// victim (motion.TargetGUID). Dormant while guards map to passive in
 	// creatureReactState (they never acquire a TargetGUID via the scan).
 	if motion != nil && motion.FlagsExtra&creatureFlagExtraGuard != 0 && motion.TargetGUID != 0 && targetSess.playerGUID == motion.TargetGUID {
+		return true
+	}
+
+	// MOD_STALKED arm of Unit::IsAlwaysDetectableFor, as in the player path:
+	// a target marked by this creature is always detectable.
+	if motion != nil && targetSess.hasStalkedAuraFrom(motion.GUID) {
 		return true
 	}
 
