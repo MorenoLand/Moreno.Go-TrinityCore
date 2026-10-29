@@ -1122,21 +1122,32 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 			auras = append(auras, immuneAura{aura.AuraType, aura.MiscValue, aura.SpellID})
 		}
 		// A record keeps only its first effect's stored type/misc, so a
-		// 267 effect that is not the first aura effect never reaches the
-		// snapshot above, while C++ GetAuraEffectsByType (Unit.cpp:7984)
-		// returns one AuraEffect per effect. Fold the mask-covered DBC
-		// 267 effects in as extra entries (same any-match semantics as
-		// the stored leg; the stored leg covers the unknown-spell case).
+		// 37/38/77/147/267 effect that is not the first aura effect never
+		// reaches the snapshot above, while C++ writes one
+		// m_spellImmune row per effect (SpellInfo.cpp:2860-2920) and
+		// reads the containers, not the stored type (Unit.cpp:7952-7994).
+		// Fold the mask-covered DBC effects of those types in as extra
+		// entries (same any-match semantics as the stored leg; the
+		// stored leg covers the unknown-spell case). The 77/147 eval
+		// arms union over the granting spell once an entry exists, so
+		// one folded entry per covered effect is enough to reach them.
 		if s.server != nil && s.server.Data != nil {
 			if auraSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				for index, effect := range auraSpell.Effects {
-					if aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModImmuneAuraApplySchool {
+					if aura.EffectMask&(1<<uint(index)) == 0 {
 						continue
 					}
-					if aura.AuraType == spellAuraModImmuneAuraApplySchool && aura.MiscValue == effect.MiscValue {
+					switch effect.Aura {
+					case spellAuraEffectImmunity, spellAuraStateImmunity,
+						spellAuraMechanicImmunity, spellAuraMechanicImmunityMask,
+						spellAuraModImmuneAuraApplySchool:
+					default:
 						continue
 					}
-					auras = append(auras, immuneAura{spellAuraModImmuneAuraApplySchool, effect.MiscValue, aura.SpellID})
+					if aura.AuraType == effect.Aura && aura.MiscValue == effect.MiscValue {
+						continue
+					}
+					auras = append(auras, immuneAura{effect.Aura, effect.MiscValue, aura.SpellID})
 				}
 			}
 		}
@@ -1970,14 +1981,32 @@ func creatureLiveEffectStateImmunity(srv *Server, key creatureAuraKey) (map[uint
 			effectGrants[uint32(aura.MiscValue)] = true
 		case spellAuraStateImmunity:
 			stateGrants[uint32(aura.MiscValue)] = true
-		case spellAuraMechanicImmunityMask:
-			auraSpell, found, err := srv.Data.Spell(aura.SpellID)
-			if err != nil || !found {
+		}
+		// A record keeps only its first effect's stored type/misc, so a
+		// 37/38/147 effect that is not the first aura effect never
+		// reaches the switch above, while C++ writes one m_spellImmune
+		// row per effect (SpellInfo.cpp:2913-2920, :2594-2742). Fold
+		// the mask-covered DBC effects in (the stored leg covers the
+		// unknown-spell case); the 147 inserts are per effect, not the
+		// whole-spell union the old stored-147 leg used.
+		auraSpell, found, err := srv.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(index)) == 0 {
 				continue
 			}
-			auraTypes, _ := mechanicMask147SpellGrants(auraSpell)
-			for _, at := range auraTypes {
-				stateGrants[at] = true
+			switch eff.Aura {
+			case spellAuraEffectImmunity:
+				effectGrants[uint32(eff.MiscValue)] = true
+			case spellAuraStateImmunity:
+				stateGrants[uint32(eff.MiscValue)] = true
+			case spellAuraMechanicImmunityMask:
+				auraTypes, _ := mechanicMask147Grants(auraSpell.ID, eff)
+				for _, at := range auraTypes {
+					stateGrants[at] = true
+				}
 			}
 		}
 	}
