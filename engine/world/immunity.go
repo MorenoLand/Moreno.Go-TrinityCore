@@ -406,69 +406,10 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 		return true
 	}
 
-	if requireHarmful && !harmful {
-		return false
-	}
-
-	// Harmful spell immunities:
-	// Divine Shield (642) and Ice Block (45438) make the caster immune to all harmful spells
-	if s.hasAuraInLock(642) || s.hasAuraInLock(45438) {
-		return true
-	}
-
-	// Blessing of Protection (1022, 5599, 10278) makes target immune to physical spells
-	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 {
-		if s.hasAuraInLock(1022) || s.hasAuraInLock(5599) || s.hasAuraInLock(10278) {
-			return true
-		}
-	}
-
-	// Anti-Magic Shell (48707) grants immunity to harmful magical debuffs
-	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(48707) {
-		return true
-	}
-
-	// Cloak of Shadows (31224) grants immunity to harmful magical spells
-	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(31224) {
-		return true
-	}
-
-	// Unit.cpp:7900-7922 school fold over the live aura-39 rows: the
-	// gate is the effect's MiscValue (SpellInfo::_LoadImmunityInfo,
-	// SpellInfo.cpp:2785), not the granting spell's SchoolMask, full
-	// coverage is required, and the positivity/friendly/pierce gates
-	// apply. IMMUNITY_DAMAGE has no arm in IsImmunedToSpell (damage
-	// immunity is consulted only by IsImmunedToDamage), so a live
-	// aura-40 row no longer blocks whole-spell application here.
-	if schoolMask := spell.SchoolMask; schoolMask != 0 {
-		var schoolImmunityMask uint32
-		for _, aura := range s.activeAuras {
-			if aura == nil {
-				continue
-			}
-			// Per-effect misc, not the record's: a 39 effect that is not
-			// the stored type still writes its IMMUNITY_SCHOOL row.
-			immuneSpell, found := wotlk.Spell{}, false
-			if s.server != nil && s.server.Data != nil {
-				if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
-					immuneSpell, found = sp, true
-				}
-			}
-			misc := auraEffectMiscMask(aura, immuneSpell, found, spellAuraSchoolImmunity)
-			if misc&schoolMask == 0 {
-				continue
-			}
-			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
-				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
-					schoolImmunityMask |= misc
-				}
-			}
-		}
-		if schoolImmunityMask&schoolMask == schoolMask {
-			return true
-		}
-	}
-
+	// Unit.cpp:7864-7876 run ahead of the requireHarmful bail: C++ checks
+	// the dispel and spell-level mechanic arms with no positivity gate, so
+	// a positive spell carrying a DispelType/Mechanic still reports immune
+	// on a matching row.
 	// Unit.cpp:7864-7868 — IMMUNITY_DISPEL: the list holds dispel types
 	// written by SPELL_AURA_DISPEL_IMMUNITY (41) effects
 	// (SpellInfo::_LoadImmunityInfo, SpellInfo.cpp:2786-2788 — misc is the
@@ -539,6 +480,73 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 			}
 		}
 		if mechanicImmune {
+			return true
+		}
+	}
+
+	// Arms below stay behind the bail: the Divine Shield/Blessing of
+	// Protection/Anti-Magic Shell/Cloak of Shadows arms are harmful-only
+	// approximations, and the school/all-effects folds are still
+	// bail-gated (residual, not moved here).
+	if requireHarmful && !harmful {
+		return false
+	}
+
+	// Harmful spell immunities:
+	// Divine Shield (642) and Ice Block (45438) make the caster immune to all harmful spells
+	if s.hasAuraInLock(642) || s.hasAuraInLock(45438) {
+		return true
+	}
+
+	// Blessing of Protection (1022, 5599, 10278) makes target immune to physical spells
+	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 {
+		if s.hasAuraInLock(1022) || s.hasAuraInLock(5599) || s.hasAuraInLock(10278) {
+			return true
+		}
+	}
+
+	// Anti-Magic Shell (48707) grants immunity to harmful magical debuffs
+	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(48707) {
+		return true
+	}
+
+	// Cloak of Shadows (31224) grants immunity to harmful magical spells
+	if spell.SchoolMask&1 == 0 && s.hasAuraInLock(31224) {
+		return true
+	}
+
+	// Unit.cpp:7900-7922 school fold over the live aura-39 rows: the
+	// gate is the effect's MiscValue (SpellInfo::_LoadImmunityInfo,
+	// SpellInfo.cpp:2785), not the granting spell's SchoolMask, full
+	// coverage is required, and the positivity/friendly/pierce gates
+	// apply. IMMUNITY_DAMAGE has no arm in IsImmunedToSpell (damage
+	// immunity is consulted only by IsImmunedToDamage), so a live
+	// aura-40 row no longer blocks whole-spell application here.
+	if schoolMask := spell.SchoolMask; schoolMask != 0 {
+		var schoolImmunityMask uint32
+		for _, aura := range s.activeAuras {
+			if aura == nil {
+				continue
+			}
+			// Per-effect misc, not the record's: a 39 effect that is not
+			// the stored type still writes its IMMUNITY_SCHOOL row.
+			immuneSpell, found := wotlk.Spell{}, false
+			if s.server != nil && s.server.Data != nil {
+				if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+					immuneSpell, found = sp, true
+				}
+			}
+			misc := auraEffectMiscMask(aura, immuneSpell, found, spellAuraSchoolImmunity)
+			if misc&schoolMask == 0 {
+				continue
+			}
+			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
+				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
+					schoolImmunityMask |= misc
+				}
+			}
+		}
+		if schoolImmunityMask&schoolMask == schoolMask {
 			return true
 		}
 	}
