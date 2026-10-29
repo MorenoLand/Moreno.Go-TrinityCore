@@ -12935,7 +12935,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				explicitOnlyInsta := explicitTargetInsta && (areaSpell || friendlyListSpell) && !explicitAreaInsta && !instaCasterTargetA && !instaCasterTargetB
 				instaCasterOnlyTrip := (instaCasterTargetA || instaCasterTargetB) && !isAreaEnemyTargetType(eff.ImplicitTargetA) && !isAreaEnemyTargetType(eff.ImplicitTargetB)
 				for _, effectTarget := range instaList {
-					if effectTarget != 0 {
+					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 {
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
@@ -14054,6 +14054,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range energizeList {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
@@ -14095,6 +14099,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range energizePctList {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the energize
@@ -14134,6 +14142,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					burnTargets = append(burnTargets, s.playerGUID)
 				}
 				for _, effectTarget := range burnTargets {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					// SpellEffects.cpp:1383: the drained power is dealt as
 					// damage scaled by the effect value multiplier. The
 					// Mana Burn cap is burn-only (SpellEffects.cpp:1358);
@@ -14202,6 +14214,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					for _, effectTarget := range triggerList {
+						// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+						if uint16(effectTarget>>48) == 0xF110 {
+							continue
+						}
 						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, effectTarget)
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -14287,7 +14303,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						missileList = append(missileList, s.playerGUID)
 					}
 				}
-				s.runTriggerMissileEffect(ctx, spell, eff, missileList)
+				// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+				missileTargets := make([]uint64, 0, len(missileList))
+				for _, guid := range missileList {
+					if uint16(guid>>48) != 0xF110 {
+						missileTargets = append(missileTargets, guid)
+					}
+				}
+				// An empty filtered list must not fall into the helper's empty-list caster arm when the cast had GO-only picks.
+				if len(missileList) == 0 || len(missileTargets) > 0 {
+					s.runTriggerMissileEffect(ctx, spell, eff, missileTargets)
+				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm fires per reflected TargetInfo on the
 				// caster, gated by the same NeedsToBeTriggeredByCaster leg
@@ -14323,6 +14349,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range skillList {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -14368,7 +14398,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					for _, effectTarget := range comboList {
-						if effectTarget == 0 {
+						if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 							continue
 						}
 						if effectTarget != comboGainTarget {
@@ -14424,6 +14454,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					threatList = friendlyEffectTargets
 				}
 				for _, effectTarget := range threatList {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					s.applySpellThreat(effCtx, spell, effectTarget, amount)
 				}
 			case spellEffectHealMaxHealth:
@@ -14449,6 +14483,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range maxHealthList {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the max-health
@@ -14542,6 +14580,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							effEff = ds.Effects[effectIndex]
 						}
 						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
+					}
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(auraTarget>>48) == 0xF110 {
+						continue
 					}
 					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
 				}
@@ -14755,7 +14797,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dispelList = friendlyEffectTargets
 				}
 				for _, effectTarget := range dispelList {
-					if effectTarget == 0 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 						continue
 					}
 					// isReflected flips the positivity gate inside (Unit.cpp:4608-4612):
@@ -14799,7 +14841,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range dispelMechanicList {
-					if effectTarget == 0 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 						continue
 					}
 					s.handleEffectDispelMechanic(effCtx, effectTarget, spell, eff)
@@ -14822,7 +14864,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					killCreditList = friendlyEffectTargets
 				}
 				for _, effectTarget := range killCreditList {
-					if effectTarget == 0 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 						continue
 					}
 					s.handleEffectKillCredit(effCtx, effectTarget, eff.MiscValue)
@@ -14851,7 +14893,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					killCreditGroupList = friendlyEffectTargets
 				}
 				for _, effectTarget := range killCreditGroupList {
-					if effectTarget == 0 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 						continue
 					}
 					s.handleEffectKillCreditGroup(effCtx, effectTarget, spellID, eff.MiscValue)
@@ -15487,6 +15529,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					drainTargets = append(drainTargets, s.playerGUID)
 				}
 				for _, effectTarget := range drainTargets {
+					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+					if uint16(effectTarget>>48) == 0xF110 {
+						continue
+					}
 					// SpellEffects.cpp:1274: damage < 0 returns before any
 					// power moves; a zero amount drains nothing but still
 					// logs. The alive/power-type gates sit ahead of the
@@ -45093,7 +45139,7 @@ func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, 
 	// both read the rolled CalculateDamage.
 	damage := eff.CalcValueForLevel(spell, uint32(s.player.Level))
 	for _, targetGUID := range hitTargets {
-		if targetGUID == 0 {
+		if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
 			continue
 		}
 		targetSess := s.server.findSessionByGUID(targetGUID)
@@ -45834,7 +45880,7 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 	}
 	damageAmount := uint32(amount)
 	for _, target := range hitTargets {
-		if target == 0 {
+		if target == 0 || uint16(target>>48) == 0xF110 {
 			continue
 		}
 		// No self skip: Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553)

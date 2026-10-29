@@ -2167,7 +2167,7 @@ func (s *session) handleRaiseAllyInitial(ctx context.Context, spell wotlk.Spell,
 		aura = uint32(eff.BasePoints) // GetEffectValue: the Raise Ally spell id (unrolled base points)
 	}
 	for _, targetGUID := range hitTargets {
-		if targetGUID == 0 || targetGUID == s.playerGUID {
+		if targetGUID == 0 || targetGUID == s.playerGUID || uint16(targetGUID>>48) == 0xF110 {
 			continue
 		}
 		targetSess := s.server.findSessionByGUID(targetGUID)
@@ -2582,7 +2582,7 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 	}
 	reclaimDelayApplies := spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0
 	for _, targetGUID := range hitTargets {
-		if targetGUID == 0 || targetGUID == s.playerGUID {
+		if targetGUID == 0 || targetGUID == s.playerGUID || uint16(targetGUID>>48) == 0xF110 {
 			continue
 		}
 		targetSess := s.server.findSessionByGUID(targetGUID)
