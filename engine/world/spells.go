@@ -21598,6 +21598,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (hasFriendlyAreaEffect, spells.go:9113-9120).
 	var triggeredFriendlyEffectTargets []uint64
 	var triggeredRefCenteredFriendlyTargets []uint64
+	goAreaBranchRan, goConeBranchRan := false, false
 	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
 	if !nearbySelected {
 		switch {
@@ -21653,6 +21654,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
 			selectionTargets = hitTargets
 		case isGOAreaSpell(spell):
+			goAreaBranchRan = true
 			areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, spellTarget)
 			hitTargets = areaTargets
 			for guid, mask := range areaMasks {
@@ -21660,6 +21662,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			selectionTargets = hitTargets
 		case isGOConeSpell(spell):
+			goConeBranchRan = true
 			coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 			hitTargets = coneTargets
 			for guid, mask := range coneMasks {
@@ -21776,6 +21779,58 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				selectionTargets = grown
 			}
 		}
+	}
+	// Spell::SelectImplicitAreaTargets / SelectImplicitConeTargets
+	// (Spell.cpp:1227/1176) run per effect, so a GO-area (51/52) or
+	// GO-cone (108) leg selects its picks even when an earlier switch
+	// branch won the spell-level selection (area-enemy, friendly-area,
+	// entry-area, friendly-cone, or the other GO branch) or the nearby
+	// arm skipped the switch entirely. The branch-ran guards keep a
+	// pure GO-area/cone spell on its own branch's single selection
+	// (same helper, same cap) instead of scanning twice. Picks join
+	// hitTargets (roll list, GO packet, channeled check) and
+	// selectionTargets (effect fan-out seed) deduped, with their
+	// per-leg effect masks, like the wire and nearby rejoins above;
+	// GO guids take no unit hit roll, no arrival drop, and no
+	// AoE-cap/threat divisor share (prior strips), and unit effect
+	// arms skip them.
+	rejoinTriggeredGOs := func(targets []uint64, masks map[uint64]uint32) {
+		for guid, mask := range masks {
+			noteGOEffectMask(guid, mask)
+		}
+		for _, guid := range targets {
+			seenGO := false
+			for _, listed := range hitTargets {
+				if listed == guid {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				hitTargets = append(hitTargets, guid)
+			}
+			seenGO = false
+			for _, listed := range selectionTargets {
+				if listed == guid {
+					seenGO = true
+					break
+				}
+			}
+			if !seenGO {
+				grown := make([]uint64, 0, len(selectionTargets)+1)
+				grown = append(grown, selectionTargets...)
+				grown = append(grown, guid)
+				selectionTargets = grown
+			}
+		}
+	}
+	if isGOAreaSpell(spell) && !goAreaBranchRan {
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, spellTarget)
+		rejoinTriggeredGOs(areaTargets, areaMasks)
+	}
+	if isGOConeSpell(spell) && !goConeBranchRan {
+		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
+		rejoinTriggeredGOs(coneTargets, coneMasks)
 	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
