@@ -6451,11 +6451,20 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ii.durability > 0`
+	// Player::DurabilityLossAll (Player.cpp:4890-4914): inventory=true
+	// covers equipped + backpack + interiors of carried bags only — bank
+	// slots, bank-bag interiors and the keyring never lose durability.
+	// The bag=0 arm spans slot < 39 (bag slots 19..22 carry no durability
+	// and are skipped by the maxDur==0 arm below).
+	queryArgs := []any{s.playerGUID}
 	if !inventory {
 		query += ` AND ci.bag = 0 AND ci.slot < 19`
+	} else {
+		query += ` AND ((ci.bag = 0 AND ci.slot < ?) OR ci.bag IN (SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))`
+		queryArgs = append(queryArgs, invSlotItemEnd, s.playerGUID, invSlotBagStart, invSlotBagEnd)
 	}
 
-	rows, err := cdb.QueryContext(ctx, query, s.playerGUID)
+	rows, err := cdb.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return
 	}
@@ -6536,11 +6545,18 @@ func (s *session) durabilityPointsLossAll(ctx context.Context, points int32, inv
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ?`
+	// Player::DurabilityPointsLossAll (Player.cpp:4934-4958): same
+	// inventory=true scope as DurabilityLossAll — equipped + backpack +
+	// interiors of carried bags only, never bank/keyring rows.
+	queryArgs := []any{s.playerGUID}
 	if !inventory {
 		query += ` AND ci.bag = 0 AND ci.slot < 19`
+	} else {
+		query += ` AND ((ci.bag = 0 AND ci.slot < ?) OR ci.bag IN (SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))`
+		queryArgs = append(queryArgs, invSlotItemEnd, s.playerGUID, invSlotBagStart, invSlotBagEnd)
 	}
 
-	rows, err := cdb.QueryContext(ctx, query, s.playerGUID)
+	rows, err := cdb.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return
 	}
@@ -6612,13 +6628,17 @@ const durabilityLossChanceOnHit = 0.005
 // rolls DurabilityLossChance.Damage and loses 1 durability point on a random
 // equipment slot (urand(0, EQUIPMENT_SLOT_END-1)). The two arms roll
 // independently — call once per side.
-// Documented no-bridge arms: SPELL_AURA_PREVENT_DURABILITY_LOSS (aura 402 has
-// no Go aura-type model) and the _ApplyItemMods stat strip on the 0-crossing
-// (Go's durability model is DB-backed with a full inventory refresh, the
-// durabilityLossAll precedent — stats are not re-derived on durability
-// changes).
+// The SPELL_AURA_PREVENT_DURABILITY_LOSS (289) gate of
+// Player::DurabilityPointsLoss (Player.cpp:4960-4962) applies here via
+// hasAuraType, the same gate the batch paths use. Documented no-bridge arm:
+// the _ApplyItemMods stat strip on the 0-crossing (Go's durability model is
+// DB-backed with a full inventory refresh, the durabilityLossAll precedent —
+// stats are not re-derived on durability changes).
 func (s *session) rollDurabilityLossOnHit(ctx context.Context, damage uint32) {
 	if s == nil || s.player == nil || damage == 0 || ctx == nil {
+		return
+	}
+	if s.hasAuraType(spellAuraPreventDurabilityLoss) {
 		return
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {

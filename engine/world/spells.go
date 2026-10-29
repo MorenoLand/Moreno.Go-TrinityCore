@@ -40139,9 +40139,11 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 // arm logs via ExecuteLogEffectDurabilityDamage (packed target GUID, item
 // entry, slot; -1/-1 on the all-items arm) flushed as SMSG_SPELLLOGEXECUTE.
 // The PCT arm has no log arm and no-ops on damage <= 0. The
-// SPELL_AURA_PREVENT_DURABILITY_LOSS gate and the _ApplyItemMods stat strip
-// on the 0-crossing follow the Go durability convention (DB-backed +
-// inventory refresh, same as rollDurabilityLossOnHit/durabilityLossAll).
+// SPELL_AURA_PREVENT_DURABILITY_LOSS gate applies on every arm
+// (batch paths via durabilityLossAll/durabilityPointsLossAll, single-slot
+// via the override below); the _ApplyItemMods stat strip on the 0-crossing
+// follows the Go durability convention (DB-backed + inventory refresh,
+// same as durabilityLossAll).
 func (s *session) handleEffectDurabilityDamage(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, casterLevel uint32) {
 	if s == nil || s.server == nil {
 		return
@@ -40219,6 +40221,14 @@ func (s *session) handleEffectDurabilityDamage(ctx context.Context, spell wotlk.
 			}
 			newDur = uint32(nd)
 			targetSess.sendDurabilityDamageLog(spellID, targetGUID, int32(itemEntry), slot)
+		}
+		// Player::DurabilityPointsLoss (Player.cpp:4960-4962): both
+		// single-slot arms route through it, so
+		// SPELL_AURA_PREVENT_DURABILITY_LOSS suppresses the loss — but the
+		// 111 log arm above still fires, as in C++ where
+		// ExecuteLogEffectDurabilityDamage runs after the gated call.
+		if targetSess.hasAuraType(spellAuraPreventDurabilityLoss) {
+			newDur = curDur
 		}
 		if newDur != curDur {
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", newDur, itemGUID)
