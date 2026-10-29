@@ -663,18 +663,33 @@ func (srv *Server) creatureSpellCritChanceTaken(doneChance float64, vicSess *ses
 	}
 	switch spell.DefenseType {
 	case spellDamageClassMagic:
-		if spellIsPositive(spell) {
-			return doneChance
+		if !spellIsPositive(spell) {
+			if isPlayerVictim && vicSess != nil {
+				chance += float64(vicSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
+			} else {
+				for _, amt := range creatureAuraModifiersByMiscMask(srv, victimKey, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
+					chance += float64(amt)
+				}
+			}
+			applyChanceResilience(CombatRatingCritTakenSpell)
+			chance += takenFlat(spellAuraModAttackerSpellAndWeaponCritChance)
 		}
-		if isPlayerVictim && vicSess != nil {
-			chance += float64(vicSess.playerAuraModifierByMiscMask(spellAuraModAttackerSpellCritChance, int32(schoolMask)))
-		} else {
-			for _, amt := range creatureAuraModifiersByMiscMask(srv, victimKey, spellAuraModAttackerSpellCritChance, uint32(schoolMask)) {
-				chance += float64(amt)
+		// Unit::SpellCritChanceTaken (Unit.cpp:7332-7336, 7390-7397): the
+		// scripted/custom arms sit outside the !IsPositive block, so the
+		// creature-victim level suppression and the gated 308 arm run for
+		// positive spells too. The scripted arms need a player caster's
+		// override-class-script auras and stay unbridged for creature
+		// casters; suppression is creature-victim-only, like C++.
+		if casterGUID != 0 {
+			if !isPlayerVictim {
+				chance -= float64(int32(victimLevel)-int32(casterLevel)) * 0.7
+			}
+			if isPlayerVictim && vicSess != nil {
+				chance += vicSess.victimCritChanceForCasterGated(casterGUID, spell)
+			} else if !isPlayerVictim {
+				chance += creatureVictimCritChanceForCasterGated(srv, victimKey, casterGUID, spell)
 			}
 		}
-		applyChanceResilience(CombatRatingCritTakenSpell)
-		chance += takenFlat(spellAuraModAttackerSpellAndWeaponCritChance)
 	case spellDamageClassMelee, spellDamageClassRanged:
 		attackType := spellWeaponAttackType(spell)
 		flatAura := uint32(spellAuraModAttackerMeleeCritChance)
@@ -1186,9 +1201,12 @@ func (s *session) directSpellTakenCritBonus(ctx context.Context, target combatTa
 // player-influenced casters (pets, charmed motions — the Go OwnerGUID != 0
 // convention). Direct (non-periodic) spells without
 // SPELL_ATTR0_CU_CAN_CRIT never crit. SPELL_DAMAGE_CLASS_MAGIC with the
-// physical school never crits; the done leg is m_baseSpellCritChance (no Go
-// creature model — 0) plus SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) by
-// school misc mask. MELEE/RANGED-DmgClass spells ride the
+// physical school never crits; the done leg is m_baseSpellCritChance
+// (Unit.cpp:371 base 5, with SPELL_AURA_MOD_SPELL_CRIT_CHANCE (57) and
+// SPELL_AURA_MOD_CRIT_PCT (290) folded into it at aura apply,
+// SpellAuraEffects.cpp:3852/3879 — summed live here) plus
+// SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) by school misc mask.
+// MELEE/RANGED-DmgClass spells ride the
 // GetUnitCriticalChanceDone creature arm (Unit.cpp:2836-2844): 5% unless
 // CREATURE_FLAG_EXTRA_NO_CRIT, plus 52/290, plus the 71 school-masked sum.
 // SPELL_DAMAGE_CLASS_NONE never crits. Returns a fraction, never negative.
@@ -1202,6 +1220,9 @@ func (s *Server) creatureSpellCritChanceDone(key creatureAuraKey, noCritExtra bo
 		if schoolMask&spellSchoolMaskNormal != 0 {
 			return 0
 		}
+		chance = 5
+		chance += float64(s.creatureAuraTypeSum(key, spellAuraModSpellCritChance))
+		chance += float64(s.creatureAuraTypeSum(key, spellAuraModCritPct))
 		for _, amt := range creatureAuraModifiersByMiscMask(s, key, spellAuraModSpellCritChanceSchool, uint32(schoolMask)) {
 			chance += float64(amt)
 		}
