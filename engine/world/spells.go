@@ -12183,12 +12183,33 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	// Spell.cpp:5123: the initial-threat divisor is m_UniqueTargetInfo.size()
-	// -- the ally partition counts too, so the kept allies join the hit list
+	// -- both ally partitions count, so the kept allies join the hit list
 	// here (the negative leg skips non-threat-list units internally, and the
-	// partition only exists for harmful spells, so the positive leg is out).
+	// partitions only exist for harmful spells, so the positive leg is out).
+	// The union is deduped: a rolled partition's kept list re-includes
+	// GUIDs already kept in hitTargets (rollAreaPartitionReflect's priorKept
+	// arm), and C++ counts each TargetInfo once.
 	threatHits := hitTargets
-	if len(friendlyEffectTargets) > 0 {
-		threatHits = append(append([]uint64{}, hitTargets...), friendlyEffectTargets...)
+	if len(friendlyEffectTargets) > 0 || len(refCenteredFriendlyTargets) > 0 {
+		seen := make(map[uint64]struct{}, len(hitTargets)+len(friendlyEffectTargets)+len(refCenteredFriendlyTargets))
+		for _, guid := range hitTargets {
+			seen[guid] = struct{}{}
+		}
+		threatHits = append([]uint64{}, hitTargets...)
+		for _, guid := range friendlyEffectTargets {
+			if _, dup := seen[guid]; dup {
+				continue
+			}
+			seen[guid] = struct{}{}
+			threatHits = append(threatHits, guid)
+		}
+		for _, guid := range refCenteredFriendlyTargets {
+			if _, dup := seen[guid]; dup {
+				continue
+			}
+			seen[guid] = struct{}{}
+			threatHits = append(threatHits, guid)
+		}
 	}
 	s.handleSpellInitialThreat(ctx, spell, threatHits, missGUIDs)
 
