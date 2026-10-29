@@ -9501,6 +9501,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// (Spell.cpp:1227), so the heal-family arms below iterate this list
 	// instead of the merged enemy list. Nil unless the mixed class fires.
 	var friendlyEffectTargets []uint64
+	// Per-effect friendly-area miss set (Spell.cpp:2152 AddUnitTarget rolls
+	// each ally selection separately): the ally misses of the friendly-area
+	// selection, filtered exactly like missedTargets below (a clean reflect
+	// is not a miss). Block-scoped allyMisses at selection does not reach
+	// applyEffects, so this hoisted set carries the switched-damage AoE-cap
+	// miss partition.
+	var friendlyMissGUIDs map[uint64]struct{}
 	// The explicit unit target arrives resolved: handleCastSpell ran
 	// resolveExplicitUnitTarget at the CheckCast gauntlet (Spell.cpp:5353-5367),
 	// mirroring how C++ fills m_targets via Spell::InitExplicitTargets
@@ -9835,6 +9842,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			var allyMisses []protocol.SpellMissStatus
 			friendlyEffectTargets, reflectedAllyTrips, allyMisses = s.rollAreaTargetReflect(ctx, spell, friendlyEffectTargets)
 			missStatus = append(missStatus, allyMisses...)
+			if len(allyMisses) > 0 {
+				friendlyMissGUIDs = make(map[uint64]struct{}, len(allyMisses))
+				for _, miss := range allyMisses {
+					if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+						continue
+					}
+					friendlyMissGUIDs[miss.TargetGUID] = struct{}{}
+				}
+			}
 		}
 	}
 	isReflected := false
@@ -11475,6 +11491,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dmgList = friendlyEffectTargets
 					dmgSwitched = true
 				}
+				// Caster-in-friendly-list gate (Spell.cpp:1227 area selection +
+				// DoEffectOnLaunchTarget, Spell.cpp:7736-7744): the area check
+				// has no caster exclusion -- IsValidAssistTarget (Object.cpp:3087)
+				// returns true for self, IsInPartyWith/IsInRaidWith (Unit.cpp:12126/
+				// 12155) return true for self -- so the caster's own TargetInfo
+				// carries the damage effect's bit, and DoEffectOnLaunchTarget
+				// resolves it to the caster with no caster skip. The damage
+				// loop's playerGUID skip is therefore wrong whenever the list
+				// came from a friendly-area selection: the switched list of a
+				// harmful spell, or the hitTargets list of a pure-friendly-area
+				// spell (same list provenance, same gate). The instakill and
+				// heal arms never had the skip; only damage did. Unswitched
+				// enemy lists never contain the caster (IsValidAttackTarget
+				// rejects self), so the skip there is vacuous except for the
+				// reflected case, which keeps its own arm.
+				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -11488,7 +11520,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
 					count := 0
 					for _, effectTarget := range dmgList {
-						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							count++
 						}
 					}
@@ -11515,13 +11547,47 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				aoeCapDivisor := 0
 				if isAreaDamageEffect {
 					for _, effectTarget := range dmgList {
-						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+						if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							aoeCapDivisor++
 						}
 					}
-					for guid := range missedTargets {
-						if guid != 0 && (guid != s.playerGUID || isReflected) {
+					// AoE-cap miss partition: a switched damage effect counts its
+					// own friendly misses, not the merged missedTargets map
+					// (enemy misses of the spell's other effects are not this
+					// effect's TargetInfos). Unswitched damage keeps the merged
+					// map, matching the pre-existing targetAmount model.
+					capMissTargets := missedTargets
+					if dmgSwitched {
+						capMissTargets = friendlyMissGUIDs
+					}
+					for guid := range capMissTargets {
+						if guid != 0 && (guid != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							aoeCapDivisor++
+						}
+					}
+					// Unswitched mixed-spell divisor: C++ targetAmount is the
+					// whole m_UniqueTargetInfo (every effect's targets, Spell.cpp:
+					// 7761), so the friendly hits of the spell's other effects
+					// count too -- the merged miss map already carries friendly
+					// misses, but friendly hits live only in friendlyEffectTargets.
+					// GUIDs already in dmgList or the miss set are not counted
+					// twice (C++ dedupes by GUID into one TargetInfo). Switched
+					// damage skips this: its dmgList already is the friendly list.
+					if !dmgSwitched && friendlyEffectTargets != nil {
+						seen := make(map[uint64]struct{}, len(dmgList)+len(capMissTargets))
+						for _, guid := range dmgList {
+							seen[guid] = struct{}{}
+						}
+						for guid := range capMissTargets {
+							seen[guid] = struct{}{}
+						}
+						for _, guid := range friendlyEffectTargets {
+							if guid != 0 && (guid != s.playerGUID || isReflected || dmgCasterIsTarget) {
+								if _, dup := seen[guid]; !dup {
+									seen[guid] = struct{}{}
+									aoeCapDivisor++
+								}
+							}
 						}
 					}
 					if aoeCapDivisor <= 10 {
@@ -11536,7 +11602,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Spell.cpp:7771-7774).
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 				for _, effectTarget := range dmgList {
-					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
 						// the Devastate arm (Warrior family, SpellFamilyFlags[1]
