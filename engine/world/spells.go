@@ -12154,7 +12154,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					firesPerTarget = spellNeedsToBeTriggeredByCaster(triggered, spell)
 				}
 				if firesPerTarget {
-					for _, effectTarget := range hitTargets {
+					// Per-effect target list (Spell.cpp:758-779), same switch as
+					// the heal arms: a friendly-area trigger effect fires on its
+					// own ally selection, not the merged enemy list, with one
+					// caster firing per reflected ally trip (Spell.cpp:2350).
+					triggerList := hitTargets
+					if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+						triggerList = friendlyEffectTargets
+						for range reflectedAllyTrips {
+							triggerList = append(triggerList, s.playerGUID)
+						}
+					}
+					for _, effectTarget := range triggerList {
 						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, effectTarget)
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -12171,7 +12182,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (TARGET_UNIT_CASTER), and Go's player-centric combat models
 				// the counter on the caster session only.
 				amount := uint32(eff.CalcValueForLevel(spell, casterLevel))
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms. C++ sets m_extraAttacks on any unitTarget
+				// (SpellEffects.cpp:4300-4314), so a friendly-area effect banks
+				// on its own ally selection; Go models the counter on the
+				// caster session only, so ally entries no-op at the
+				// playerGUID gate while the caster's own friendly-list entry
+				// banks, with one caster entry per reflected ally trip.
+				extraAttacksList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					extraAttacksList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						extraAttacksList = append(extraAttacksList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range extraAttacksList {
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
 					}
@@ -12193,7 +12218,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996-1043)
 				// — per-target legs ride runTriggerMissileEffect (the
 				// HIT_TARGET / HIT handle-mode split is structural there).
-				s.runTriggerMissileEffect(ctx, spell, eff, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area trigger-missile effect fires
+				// its HIT_TARGET arm on its own ally selection, with one
+				// caster entry per reflected ally trip (Spell.cpp:2350). An
+				// empty friendly list keeps the helper's HIT arm, the same
+				// arm the empty base list fired.
+				missileList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					missileList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						missileList = append(missileList, s.playerGUID)
+					}
+				}
+				s.runTriggerMissileEffect(ctx, spell, eff, missileList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm fires per reflected TargetInfo on the
 				// caster, gated by the same NeedsToBeTriggeredByCaster leg
@@ -12206,7 +12244,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
 				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: C++ applies the step to any player
+				// unitTarget with no hostility or caster gate, so a
+				// friendly-area effect teaches its own ally selection, with
+				// one caster entry per reflected ally trip (Spell.cpp:2350).
+				skillList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					skillList = friendlyEffectTargets
+					for range reflectedAllyTrips {
+						skillList = append(skillList, s.playerGUID)
+					}
+				}
+				for _, effectTarget := range skillList {
 					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
 				}
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -12228,7 +12278,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// in _handle_finish_phase after all targets are processed.
 				gain := int8(eff.CalcValueForLevel(spell, casterLevel))
 				if gain > 0 {
-					for _, effectTarget := range hitTargets {
+					// Per-effect target list (Spell.cpp:758-779), same switch
+					// as the heal arms: AddComboPointGain (Spell.h:513-522)
+					// carries no hostility gate, so a friendly-area effect
+					// banks on its own ally selection — a new ally restarts
+					// the bank, the same ally accumulates — with one caster
+					// entry per reflected ally trip (Spell.cpp:2350).
+					comboList := hitTargets
+					if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+						comboList = friendlyEffectTargets
+						for range reflectedAllyTrips {
+							comboList = append(comboList, s.playerGUID)
+						}
+					}
+					for _, effectTarget := range comboList {
 						if effectTarget == 0 {
 							continue
 						}
@@ -12268,7 +12331,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectThreat:
 				amount := eff.CalcValueForLevel(spell, casterLevel)
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: EffectThreat (SpellEffects.cpp:3470-3485)
+				// runs on any unitTarget with a threat list, so a
+				// friendly-area effect threatens its own ally creatures,
+				// not the merged enemy list. Ally trips need no loop: a
+				// trip's unitTarget is the player caster, and
+				// CanHaveThreatList is false for players in C++ just as
+				// the Go helper's creature-motion lookup finds none.
+				threatList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					threatList = friendlyEffectTargets
+				}
+				for _, effectTarget := range threatList {
 					s.applySpellThreat(effCtx, spell, effectTarget, amount)
 				}
 			case spellEffectHealMaxHealth:
