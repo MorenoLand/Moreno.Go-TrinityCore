@@ -9683,7 +9683,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// above changes the slot here.
 	if explicitUnitGUID != 0 && explicitUnitGUID != target.UnitGUID {
 		target.UnitGUID = explicitUnitGUID
-		target.Flags |= protocol.SpellTargetFlagUnitWireMask
+		target.Flags |= protocol.SpellTargetFlagUnit
 	}
 	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) and
 	// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464): resolve the
@@ -21212,9 +21212,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
 	}
 	hitTargets := []uint64{targetGUID}
-	spellTargetFlags := protocol.SpellTargetFlagUnitWireMask
-	if firstLogin {
-		spellTargetFlags = protocol.SpellTargetFlagUnit
+	// SpellCastTargets::SetUnitTarget (Spell.cpp:256-263) and SetGOTarget
+	// (Spell.cpp:282-289) set exactly one object-target bit; the full wire
+	// mask also sets the GO and corpse bits, which explicitWireTargetFitsMask
+	// rejects, killing the unit anchor in resolveImplicitSpellDestination
+	// for dest-target effects on triggered casts.
+	spellTargetFlags := protocol.SpellTargetFlagUnit
+	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
+		spellTargetFlags = protocol.SpellTargetFlagGameObject
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
 	// Spell::SelectExplicitTargets (Spell.cpp:724-757) runs inside

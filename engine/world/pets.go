@@ -3685,10 +3685,10 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if target.UnitGUID == 0 {
 		if isSelfCastOnly(spell) {
 			target.UnitGUID = motion.GUID
-			target.Flags |= protocol.SpellTargetFlagUnitWireMask
+			target.Flags |= protocol.SpellTargetFlagUnit
 		} else if s.selection != 0 {
 			target.UnitGUID = s.selection
-			target.Flags |= protocol.SpellTargetFlagUnitWireMask
+			target.Flags |= protocol.SpellTargetFlagUnit
 		}
 	}
 	if !s.checkPetCastGauntlet(ctx, motion, spell, spellID, target, castCount, true) {
