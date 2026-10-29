@@ -6406,6 +6406,7 @@ func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.
 		}
 		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
 			isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+			isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB) ||
 			isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB) {
 			continue
 		}
@@ -7180,6 +7181,7 @@ func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellT
 func spellEffectTargetsArea(eff wotlk.SpellEffect) bool {
 	return isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
 		isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+		isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB) ||
 		isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB)
 }
 
@@ -7194,6 +7196,7 @@ func spellInfoTargetsArea(spell wotlk.Spell) bool {
 		}
 		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) ||
 			isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+			isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB) ||
 			isFriendlyConeTargetType(eff.ImplicitTargetA) || isFriendlyConeTargetType(eff.ImplicitTargetB) {
 			return true
 		}
@@ -9625,6 +9628,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// and chain-jump expansion the same way area spells do (Spell.cpp:1227
 	// area selection never calls SelectImplicitChainTargets).
 	friendlyListSpell := friendlyAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell || entryAreaSpell || goAreaSpell || goConeSpell
+	// Unit-nearby selections overwrite hitTargets the same way area lists
+	// do (Spell.cpp:758-779 per-effect selection): a spell pairing a
+	// nearby effect with an explicit-target effect drops the explicit
+	// target from the flat list, so the explicit arms below rejoin it.
+	unitNearbySpell := friendlyNearbySpell || hostileNearbySpell || entryNearbySpell
 	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask)
 	// threaded from the selection legs below: each GO GUID maps to the
 	// union of exactly the arms that selected it (nearby 40, area 51/52,
@@ -9648,6 +9656,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// merged enemy list the heal arms would otherwise iterate.
 		if hasFriendlyAreaEffect(spell) {
 			friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+			if friendlyEffectTargets == nil {
+				friendlyEffectTargets = []uint64{}
+			}
+		} else if isFriendlyLastTargetAreaSpell(spell) || isFriendlyTargetAreaRaidClassSpell(spell) {
+			// Area branch wins: the ref-centered else-if below never runs
+			// for an enemy-area spell, so a 37/61 effect of a mixed spell
+			// never got its own selection and rode the enemy list. The
+			// seed carries the explicit unit target: 61 centers on it
+			// directly, and 37's LAST referer approximates to it the way
+			// the pure ref-centered branch's seed does (Go keeps no
+			// per-effect target history). A spell carrying both a
+			// friendly-area effect and a 37/61 effect keeps the
+			// caster-centered list here; the ref-centered list for that
+			// combo stays residual.
+			friendlyEffectTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, []uint64{target.UnitGUID})
 			if friendlyEffectTargets == nil {
 				friendlyEffectTargets = []uint64{}
 			}
@@ -11436,7 +11459,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the heal arms: a friendly-area instakill effect kills its
 				// own ally selection, not the merged enemy list.
 				instaList := hitTargets
-				instaSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				instaSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
 				if instaSwitched {
 					instaList = friendlyEffectTargets
 					for range reflectedAllyTrips {
@@ -11484,7 +11508,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				} else if instaCasterTargetB {
 					instaList = appendInstaCaster(instaList)
-					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+					if (areaSpell || friendlyListSpell || unitNearbySpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
 						instaList = appendInstaExplicit(instaList)
 					}
 				}
@@ -11498,7 +11522,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// fires on the caster once per reflected target -- unless the effect
 				// is caster-targeted with no area leg, in which case no reflector's
 				// TargetInfo carries its bit (same rule as the damage trip gate).
-				if !instaCasterOnlyTrip {
+				// Switched instakill takes no enemy trips (HandleLaunchPhase,
+				// Spell.cpp:7717-7725, fires an effect only for TargetInfos
+				// carrying its bit: an enemy reflector was never selected
+				// for a friendly-area effect). A pure friendly spell keeps
+				// its trips: its hitTargets roll IS the friendly roll.
+				if !instaCasterOnlyTrip && !instaSwitched {
 					for range reflectedAoETrips {
 						s.executeSpellInstantKill(effCtx, s.playerGUID, spellID)
 					}
@@ -11538,7 +11567,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// own ally selection, not the merged enemy list.
 				dmgList := hitTargets
 				dmgSwitched := false
-				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB)))) {
 					dmgList = friendlyEffectTargets
 					dmgSwitched = true
 				}
@@ -11607,7 +11637,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				explicitTargetDamage := target.UnitGUID != 0 &&
 					(isExplicitUnitTargetType(eff.ImplicitTargetA) || isExplicitUnitTargetType(eff.ImplicitTargetB))
 				explicitAreaDamage := explicitTargetDamage && (dmgSwitched || isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB))
-				if explicitTargetDamage && (areaSpell || friendlyListSpell) {
+				if explicitTargetDamage && (areaSpell || friendlyListSpell || unitNearbySpell) {
 					if casterTargetB {
 						// Caster B slot: the A-slot explicit target was dropped by
 						// the same overwrite and joins the caster list.
@@ -11672,7 +11702,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// neither a friendly-area type (20/30/31/33/34/56) nor a
 				// friendlyAreaSpell, so the playerGUID skip above dropped them.
 				raidClassDamage := eff.ImplicitTargetA == implicitTargetTargetAreaRaidClass || eff.ImplicitTargetB == implicitTargetTargetAreaRaidClass
-				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell) || explicitSelfDamage || casterTargetA || casterTargetB || raidClassDamage
+				// TARGET_UNIT_LASTTARGET_AREA_PARTY (37) damage caster gate,
+				// same shape as 61: the PARTY check (Spell.cpp:8342-8348)
+				// falls through IsValidAssistTarget (Object.cpp:3087) and
+				// IsInPartyWith (Unit.cpp:12126), both true for self, so a
+				// caster inside its own 37 selection (referer in party with
+				// the caster) carries the damage bit. The gate only lifts
+				// the skip when the caster is already in the list, so the
+				// referer-outside-party case is unaffected.
+				lastTargetAreaPartyDamage := eff.ImplicitTargetA == implicitTargetLastTargetAreaParty || eff.ImplicitTargetB == implicitTargetLastTargetAreaParty
+				dmgCasterIsTarget := dmgSwitched || friendlyAreaSpell || isSelfCastOnly(spell) || explicitSelfDamage || casterTargetA || casterTargetB || raidClassDamage || lastTargetAreaPartyDamage
 				// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348): Meteor-like
 				// GENERIC-family spells carrying SPELL_ATTR0_CU_SHARE_DAMAGE
 				// divide the damage by the number of targets hit with this
@@ -12255,7 +12294,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// with a friendly-area target heals its own ally selection,
 				// not the merged enemy list.
 				healList := hitTargets
-				healSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				healSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
 				if healSwitched {
 					healList = friendlyEffectTargets
 					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
@@ -12308,7 +12348,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				} else if healCasterTargetB {
 					healList = appendHealCaster(healList)
-					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+					if (areaSpell || friendlyListSpell || unitNearbySpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
 						healList = appendHealExplicit(healList)
 					}
 				}
@@ -12372,7 +12412,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Per-effect target list (Spell.cpp:758-779): same split as
 				// the heal arm above.
 				healList := hitTargets
-				mechSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB))
+				mechSwitched := friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB) ||
+					(!hasFriendlyAreaEffect(spell) && (isRefCenteredAreaTargetType(eff.ImplicitTargetA) || isRefCenteredAreaTargetType(eff.ImplicitTargetB))))
 				if mechSwitched {
 					healList = friendlyEffectTargets
 					// Reflected-ally retarget (Spell.cpp:2350), same as the heal
@@ -12419,7 +12460,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				} else if mechCasterTargetB {
 					healList = appendMechCaster(healList)
-					if (areaSpell || friendlyListSpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
+					if (areaSpell || friendlyListSpell || unitNearbySpell) && isExplicitUnitTargetType(eff.ImplicitTargetA) && target.UnitGUID != 0 {
 						healList = appendMechExplicit(healList)
 					}
 				}
@@ -12844,7 +12885,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// reflected chain jump resolves its unit to the caster, so a
 				// hostile-targeted aura from a reflected jump lands on the
 				// caster — the same victim-selection arms as the loop above.
-				if len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
+				// Per-effect mask analog of the damage jump arm
+				// (Spell.cpp:7717-7725): a reflected jump's TargetInfo
+				// carries only the chain effect's bit, so a non-chain aura
+				// effect sharing the cast takes nothing from the jump.
+				if _, _, _, chainEffectMask := chainSpellJumps(s, spell); len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
+					chainEffectMask == 1<<uint(effectIndex) &&
 					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
 					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
 				}

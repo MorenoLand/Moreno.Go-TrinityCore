@@ -38,6 +38,24 @@ func isFriendlyNearbyTargetType(target uint32) bool {
 	}
 }
 
+// isRefCenteredAreaTargetType reports the SpellImplicitTargetInfo values
+// (SpellInfo.cpp:218-330) that Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) resolves with a non-caster reference: 37
+// TARGET_UNIT_LASTTARGET_AREA_PARTY (TARGET_REFERENCE_TYPE_LAST,
+// TARGET_CHECK_PARTY) and 61 TARGET_UNIT_TARGET_AREA_RAID_CLASS
+// (TARGET_REFERENCE_TYPE_TARGET, TARGET_CHECK_RAID_CLASS). Both carry
+// TARGET_SELECT_CATEGORY_AREA, so SpellEffectInfo::IsTargetingArea
+// (SpellInfo.cpp:380-383) counts them, and their per-effect list is the
+// ref-centered selection, not the caster-centered friendly-area list.
+func isRefCenteredAreaTargetType(target uint32) bool {
+	switch target {
+	case implicitTargetLastTargetAreaParty, implicitTargetTargetAreaRaidClass:
+		return true
+	default:
+		return false
+	}
+}
+
 // isFriendlyConeTargetType reports the values Spell::SelectImplicitConeTargets
 // (Spell.cpp:1176) resolves with TARGET_CHECK_ALLY/ENTRY.
 func isFriendlyConeTargetType(target uint32) bool {
