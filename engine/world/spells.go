@@ -12975,13 +12975,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// trips are the reflectors Go removed from the hit lists,
 					// and the miss sets carry the misses. Pure spells are
 					// unchanged: their partition already is the whole list.
-					// The caster gate is the pre-existing per-effect
-					// approximation (caster counts when this effect targets
-					// it or the cast was reflected); a caster selected only
-					// by another effect still counts in C++ -- residual.
+					// Every GUID in the union below is one TargetInfo
+					// (AddUnitTarget merges EffectMask per GUID,
+					// Spell.cpp:2117), including the caster whenever any
+					// arm selected it -- a sibling partition, a miss set,
+					// or this effect's own list -- so the caster counts
+					// with no per-effect gate: the old gate (this effect
+					// targets the caster, or the cast was reflected)
+					// undercounted mixed spells whose caster rode only
+					// another effect's selection (Holy Nova class: the
+					// caster sits in the heal partition, not the damage
+					// list, yet C++ counts that TargetInfo).
 					seenCap := make(map[uint64]struct{})
 					countCap := func(guid uint64) {
-						if guid != 0 && (guid != s.playerGUID || isReflected || dmgCasterIsTarget) {
+						if guid != 0 {
 							if _, dup := seenCap[guid]; !dup {
 								seenCap[guid] = struct{}{}
 								aoeCapDivisor++
@@ -22605,13 +22612,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// alike. The old count (hitTargets + jumps + primaries)
 			// missed the partitions, so a friendly/ref-seeded damage
 			// effect of a mixed spell undercounted the cap whenever
-			// allies pushed the total past 10. The caster skip is the
-			// pre-existing per-effect approximation, same residual as
-			// the launch path: a caster selected only by another effect
-			// still counts in C++.
+			// allies pushed the total past 10. Every entry in the union
+			// is one TargetInfo (AddUnitTarget merges EffectMask per
+			// GUID, Spell.cpp:2117), including the caster whenever any
+			// arm selected it — the roll loop never reflects the caster
+			// (SpellHitResult returns NONE for self, Object.cpp:2631),
+			// so a caster entry is a genuine NONE TargetInfo, not a
+			// trip: the old playerGUID skip undercounted mixed spells
+			// whose caster rode only another effect's selection.
 			counted := make(map[uint64]struct{}, len(triggeredRollTargets))
 			for _, guid := range triggeredRollTargets {
-				if guid == 0 || guid == s.playerGUID {
+				if guid == 0 {
 					continue
 				}
 				if _, dup := counted[guid]; dup {
@@ -22990,8 +23001,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// zero here means missing DBC data (C++ divides the computed
 				// damage, SpellEffects.cpp:334-348).
 				if spell.SpellFamilyName == spellFamilyGeneric && s.server != nil &&
-					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 && len(effectTargets) > 1 {
-					baseDmg /= uint32(len(effectTargets))
+					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
+					// Spell::EffectSchoolDMG (SpellEffects.cpp:334-348):
+					// the share count is TargetInfos with MissCondition
+					// == NONE carrying this effect's bit. The miss filter
+					// above drops every non-NONE entry except clean
+					// reflects, which rejoin as the caster with
+					// reflected=true — those are REFLECT TargetInfos, not
+					// NONE hits, so they must not dilute the division
+					// (the launch path already excludes trips this way).
+					shareCount := 0
+					for _, et := range effectTargets {
+						if !et.reflected {
+							shareCount++
+						}
+					}
+					if shareCount > 0 {
+						baseDmg /= uint32(shareCount)
+					}
 				}
 				targetDamage := chainScaledAmount(baseDmg, chainMult, jumpIndex)
 				// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404): the
@@ -23078,11 +23105,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						}
 						targetDamage = s.applySchoolDMGFamilyArms(ctx, spell, spellID, eff, effectIndex, casterLevel, effectTarget, targetDamage)
 						if weaponArea && targetDamage > 0 {
+							// Same whole-list targetAmount as the effect-2
+							// arm above (Spell.cpp:7761): the old hitTargets
+							// count missed the friendly/ref partitions, chain
+							// jumps, and rejoined primaries, so a mixed
+							// weapon-damage spell undercounted the cap
+							// whenever those pushed the total past 10. The
+							// caster counts whenever it rides the union,
+							// like the effect-2 divisor.
 							weaponCapDivisor := 0
-							for _, guid := range hitTargets {
-								if guid == 0 || guid == s.playerGUID {
+							weaponCounted := make(map[uint64]struct{}, len(triggeredRollTargets))
+							for _, guid := range triggeredRollTargets {
+								if guid == 0 {
 									continue
 								}
+								if _, dup := weaponCounted[guid]; dup {
+									continue
+								}
+								weaponCounted[guid] = struct{}{}
 								weaponCapDivisor++
 							}
 							if weaponCapDivisor > 10 {
