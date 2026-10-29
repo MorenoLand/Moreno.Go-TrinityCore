@@ -1674,7 +1674,15 @@ func (s *session) totemDispelPulse(ctx context.Context, def TotemDef, totem *act
 					// SPELLVALUE_BASE_POINT1 = 1 on the 52025 cast.
 					eff.BasePoints = 1
 				}
-				target.dispelEffectAsCaster(ctx, totem.TotemGUID, target.playerGUID, dispelSpell, eff, nil, false)
+				// The script cast (spell_shaman.cpp:406) runs the full
+				// hit path, so a target immune to 52025 takes no dispel
+				// (WorldObject::SpellHitResult, Object.cpp:2617-2627,
+				// via the session whole-spell gate). The routed flag
+				// still marks the cast resolved, so a miss does not
+				// fall through to the legacy sweep below.
+				if !target.isImmuneToSpell(dispelSpell, s) {
+					target.dispelEffectAsCaster(ctx, totem.TotemGUID, target.playerGUID, dispelSpell, eff, nil, false)
+				}
 				routed = true
 			}
 			if routed {
