@@ -70,6 +70,51 @@ func targetObjectTarget(target uint32) bool {
 	return false
 }
 
+// nearbyUnitTarget reports the UNIT nearby implicit targets (2/3/4/38/58),
+// the per-effect nearby legs of Spell::SelectImplicitNearbyTargets
+// (Spell.cpp:1036) whose pick C++ adds via AddUnitTarget regardless of
+// ChainTarget — the chain arm (Spell.cpp:1173 -> 1582) only jumps when
+// maxTargets > 1, so a ChainTarget-1 (or 0) nearby effect's pick is a
+// plain primary, not a chain anchor.
+func nearbyUnitTarget(target uint32) bool {
+	switch target {
+	case 2, 3, 4, 38, 58: // TARGET_UNIT_NEARBY_ENEMY/PARTY/ALLY/ENTRY/RAID
+		return true
+	}
+	return false
+}
+
+// creatureChainFamilyPick maps a winning NEARBY chain target to the pick
+// of its own family from a creature path's nearby block: the blocks pick
+// one target per family (entry, hostile, friendly) but anchor the chain
+// on a precedence pick (entry > hostile > friendly), so a winning
+// friendly chain effect anchored on the entry pick when the spell also
+// carries an entry leg. C++ selects per effect (Spell.cpp:761-900), so
+// each nearby effect chains from its own pick. The families share one
+// helper each on the creature paths (one friendly helper for 3/4/58),
+// so the pick is family-scoped, not winning-effect-scoped like the
+// session spellChainNearbyPick; a winning effect that is not its
+// family's first selecting effect still rides the family's pick.
+// Returns false when the family's pick is 0 (leg did not run or the
+// spell carries no such leg) and the caller keeps its prior anchor.
+func creatureChainFamilyPick(winTarget uint32, unitPick, hostilePick, friendlyPick uint64) (uint64, bool) {
+	switch winTarget {
+	case 38:
+		if unitPick != 0 {
+			return unitPick, true
+		}
+	case 2:
+		if hostilePick != 0 {
+			return hostilePick, true
+		}
+	case 3, 4, 58:
+		if friendlyPick != 0 {
+			return friendlyPick, true
+		}
+	}
+	return 0, false
+}
+
 // spellHasTargetObjectEffect reports whether any live effect of the spell
 // carries a TARGET-reference UNIT object implicit target, the scope of
 // the plain-primary rejoin on the triggered path.

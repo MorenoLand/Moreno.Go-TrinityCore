@@ -3807,6 +3807,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// via getCombatTarget and safely skip a GO guid
 	// (executePetSpellDamage no-ops on unresolvable GUIDs), so no
 	// unit leg lands on the gameobject.
+	// Family picks for the chain anchor below: the nearby block's
+	// targetGUID precedence (entry > hostile > friendly) is not
+	// the winning chain effect's own pick (creatureChainFamilyPick).
+	var chainUnitPick, chainHostilePick, chainFriendlyPick uint64
 	if isEntryNearbySpell(spell) || isGONearbyEntrySpell(spell) || isHostileNearbySpell(spell) || isFriendlyNearbySpell(spell) {
 		var unitPick, goPick, hostilePick, friendlyPick uint64
 		unitOK, goOK, hostileOK, friendlyOK := true, true, true, true
@@ -3825,6 +3829,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if !unitOK || !goOK || !hostileOK || !friendlyOK {
 			return true
 		}
+		chainUnitPick, chainHostilePick, chainFriendlyPick = unitPick, hostilePick, friendlyPick
 		targetGUID = unitPick
 		if isHostileNearbySpell(spell) && !isEntryNearbySpell(spell) {
 			targetGUID = hostilePick
@@ -3989,7 +3994,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// the winning effect's own primary (player convention, 09ec730a): a
 	// TARGET-object winner anchors on target.UnitGUID — the post-redirect wire
 	// target, which the nearby block never rewrites even as it moves targetGUID
-	// to the pick — while a NEARBY winner keeps targetGUID.
+	// to the pick — while a NEARBY winner anchors on its family's
+	// pick (creatureChainFamilyPick), falling back to targetGUID
+	// when that family's leg did not run.
 	// The owner session is the spell-mod owner for pets (C++ GetSpellModOwner),
 	// so the SPELLMOD_JUMP_TARGETS fold runs here where the twin passes nil.
 	// Jumps join hitTargets ahead of the reflect/miss verdicts below so each
@@ -4016,6 +4023,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				if target.UnitGUID != 0 {
 					anchor = target.UnitGUID
+				}
+			case 2, 3, 4, 38, 58:
+				if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+					anchor = pick
 				}
 			}
 			for _, jumpGUID := range s.server.spellSearchChainTargetsForMotion(ctx, motion, spell, spell.ID, anchor, jumps, isChainHeal, checkType, effectMask) {

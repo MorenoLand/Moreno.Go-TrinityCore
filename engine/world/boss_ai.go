@@ -1654,10 +1654,16 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// All legs select independently (Spell.cpp:761-900: each effect's
 		// selection adds to its own list), so a spell carrying several of
 		// 38, 40, 2 and 3/4/58 takes each pick and a miss on any fails the cast
-		// (:1111). The 38 pick drives the chain anchor below, else the
-		// hostile pick, else the friendly pick; a GO pick joins the hit list and takes no unit leg.
+		// (:1111). The 38 pick drives targetGUID below, else the
+		// hostile pick, else the friendly pick; the chain anchor takes
+		// the winning effect's family pick (see below). A GO pick joins
+		// the hit list and takes no unit leg.
 		// The packet's explicit target (spellTarget) stays the
 		// wire target, mirroring C++ m_targets.
+		// Family picks for the chain anchor below: the nearby block's
+		// targetGUID precedence (entry > hostile > friendly) is not
+		// the winning chain effect's own pick (creatureChainFamilyPick).
+		var chainUnitPick, chainHostilePick, chainFriendlyPick uint64
 		if isEntryNearbySpell(spellInfo) || isGONearbyEntrySpell(spellInfo) || isHostileNearbySpell(spellInfo) || isFriendlyNearbySpell(spellInfo) {
 			var unitPick, goPick, hostilePick, friendlyPick uint64
 			unitOK, goOK, hostileOK, friendlyOK := true, true, true, true
@@ -1676,6 +1682,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			if !unitOK || !goOK || !hostileOK || !friendlyOK {
 				return
 			}
+			chainUnitPick, chainHostilePick, chainFriendlyPick = unitPick, hostilePick, friendlyPick
 			hitTargets = nil
 			if isEntryNearbySpell(spellInfo) {
 				hitTargets = append(hitTargets, unitPick)
@@ -1915,7 +1922,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// (player plain/triggered convention, 09ec730a): a TARGET-object
 		// winning effect anchors on spellTarget.UnitGUID — the post-redirect
 		// wire target, which the nearby block above never rewrites even as it
-		// moves targetGUID to the pick — while a NEARBY winner keeps targetGUID.
+		// moves targetGUID to the pick — while a NEARBY winner anchors on
+		// its family's pick (creatureChainFamilyPick), falling back to
+		// targetGUID when that family's leg did not run.
 		if spellKnown && targetGUID != 0 {
 			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
 				anchor := targetGUID
@@ -1933,6 +1942,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				case 6, 21, 25, 35, 45, 57, 90, 95:
 					if spellTarget.UnitGUID != 0 {
 						anchor = spellTarget.UnitGUID
+					}
+				case 2, 3, 4, 38, 58:
+					if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+						anchor = pick
 					}
 				}
 				for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, m, spellInfo, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {

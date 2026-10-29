@@ -3874,6 +3874,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// both skip the wire player legs below. The 38 pick drives
 			// the victim body, else the hostile pick; a non-anchor
 			// hostile pick joins the area legs instead.
+			// Family picks for the chain anchor below: the rebuild's
+			// precedence pick (entry > hostile > friendly) is not the
+			// winning chain effect's own pick (creatureChainFamilyPick).
+			var chainUnitPick, chainHostilePick, chainFriendlyPick uint64
 			if inlineSpellKnown {
 				nearbyHitTargets := func(nearby uint64) []uint64 {
 					rebuilt := []uint64{nearby}
@@ -3919,6 +3923,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					s.rearmAISpell(motion, dueSpell, spellID, now)
 					return
 				}
+				chainUnitPick, chainHostilePick, chainFriendlyPick = unitPick, hostilePick, friendlyPick
 				if isEntryNearbySpell(inlineSpell) || isGONearbyEntrySpell(inlineSpell) || isHostileNearbySpell(inlineSpell) || isFriendlyNearbySpell(inlineSpell) {
 					nearby := goPick
 					if isFriendlyNearbySpell(inlineSpell) {
@@ -4267,7 +4272,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// primary (player convention, 09ec730a): a TARGET-object winner
 				// anchors on spellTarget.UnitGUID — the post-redirect wire victim,
 				// which the nearby rebuild never rewrites even as hitTargets[0]
-				// becomes the pick — while a NEARBY winner keeps hitTargets[0]. Jump targets join
+				// becomes the pick — while a NEARBY winner anchors on its
+				// family's pick (creatureChainFamilyPick), falling back to
+				// hitTargets[0] when that family's leg did not run. Jump targets join
 				// the area legs like the cone leg so they roll reflect/miss verdicts
 				// and take the damage/dispatch legs below; a static-spawn jump rides
 				// the packet only. Dedupe against hitTargets: a jump already selected
@@ -4289,6 +4296,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						case 6, 21, 25, 35, 45, 57, 90, 95:
 							if spellTarget.UnitGUID != 0 {
 								anchor = spellTarget.UnitGUID
+							}
+						case 2, 3, 4, 38, 58:
+							if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
+								anchor = pick
 							}
 						}
 						for _, jumpGUID := range s.spellSearchChainTargetsForMotion(ctx, motion, inlineSpell, spellID, anchor, jumps, isChainHeal, checkType, effectMask) {

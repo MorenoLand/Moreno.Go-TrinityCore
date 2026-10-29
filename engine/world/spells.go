@@ -11073,6 +11073,111 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) adds a nearby
+	// effect's pick via AddUnitTarget regardless of ChainTarget — the
+	// chain arm (Spell.cpp:1173 -> 1582) no-ops at ChainTarget 1, but
+	// the pick itself is still a merged entry. Every chain block above
+	// requires jumps > 0, so when an area/list/GO branch shadows the
+	// nearby branch (the else-if selection chain), a ChainTarget-1 (or
+	// 0) nearby effect's pick was dropped from the GO packet, the
+	// initial-threat and AOE-cap divisors, the break-aura leg, and the
+	// per-effect fan-out below, which all iterate hitTargets — the
+	// same drop the TARGET-object rejoin above repairs for wire
+	// primaries, but its gate (spellHasTargetObjectEffect) never fires
+	// for nearby effects. The rejoin mirrors it exactly (AddUnitTarget,
+	// Spell.cpp:2095: one merged entry, one verdict roll): one scoped
+	// pick per nearby effect (spellChainNearbyPick, that effect's
+	// check type + conditions), skipped when already listed or already
+	// verdicted (a chain block rolled the winning pick), with a clean
+	// reflect recording index 0 like the chain primary. No falloff
+	// index is recorded: ChainTarget <= 1 has no jumps. Non-winning
+	// ChainTarget > 1 nearby effects stay out (the standing
+	// single-anchor approximation); a nearby branch that ran already
+	// listed its spell-wide pick, and only a differing scoped pick
+	// joins — but the gate below is the shadowed branches only, so
+	// multi-nearby picks on a plain spell stay residual. A missing
+	// pick joins nothing (the chain-block precedent, not the nearby
+	// branch's cast failure: the shadowing branch already selected).
+	if areaSpell || friendlyListSpell {
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 && eff.Aura == 0 {
+				continue
+			}
+			nearbyTarget := uint32(0)
+			if nearbyUnitTarget(eff.ImplicitTargetA) {
+				nearbyTarget = eff.ImplicitTargetA
+			} else if nearbyUnitTarget(eff.ImplicitTargetB) {
+				nearbyTarget = eff.ImplicitTargetB
+			} else {
+				continue
+			}
+			if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
+				continue
+			}
+			pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+			if !ok || pick == 0 {
+				continue
+			}
+			primaryInList := false
+			for _, guid := range hitTargets {
+				if guid == pick {
+					primaryInList = true
+					break
+				}
+			}
+			primaryVerdicted := false
+			for _, miss := range missStatus {
+				if miss.TargetGUID == pick {
+					primaryVerdicted = true
+					break
+				}
+			}
+			if primaryInList || primaryVerdicted {
+				continue
+			}
+			var primarySess *session
+			if s.server != nil {
+				primarySess = s.server.findSessionByGUID(pick)
+			}
+			var primaryFaction uint32
+			if tgt, ok := s.getCombatTarget(ctx, pick); ok {
+				primaryFaction = tgt.Faction
+			}
+			if outcome := partitionJumpOutcome(pick); outcome != 0 {
+				switch outcome {
+				case 1:
+					hitTargets = append(hitTargets, pick)
+				case 2:
+					reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+				case 3:
+				}
+			} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+			} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, pick, spell, s, primaryFaction) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+			} else if primarySess != nil && spellHasOnlyDamageEffects(spell) && primarySess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+			} else if primarySess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, pick), spell, spell.SchoolMask) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune})
+			} else if missInfo := s.spellTargetMissResult(ctx, pick, spell); missInfo != protocol.SpellMissNone {
+				entry := protocol.SpellMissStatus{TargetGUID: pick, Reason: missInfo}
+				if missInfo == protocol.SpellMissReflect {
+					entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+					if entry.ReflectStatus == protocol.SpellMissNone {
+						reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+					}
+				}
+				missStatus = append(missStatus, entry)
+			} else if primarySess != nil && s.spellTargetFullyEffectImmune(spell, primarySess) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune2})
+			} else if primarySess == nil && s.creatureTargetFullyEffectImmune(ctx, pick, spell, s, primaryFaction) {
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: pick, Reason: protocol.SpellMissImmune2})
+			} else {
+				hitTargets = append(hitTargets, pick)
+			}
+		}
+	}
+
 	// Spell::prepare (Spell.cpp:3040-3056) fills m_auraScaleMask for
 	// player-cast, non-passive, SpellLevel-carrying, non-channeled,
 	// non-triggered buff spells; the AddUnitTarget min-level arm
@@ -20422,6 +20527,55 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if wireGUID := spellTarget.UnitGUID; wireGUID != 0 && uint16(wireGUID>>48) != 0xF110 && spellHasTargetObjectEffect(spell) {
 		plainObjectPrimary = wireGUID
 	}
+	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) adds a nearby
+	// effect's pick via AddUnitTarget regardless of ChainTarget, so the
+	// client path's nearby-ChainTarget-1 rejoin has a triggered twin:
+	// the nearby arm above runs only when no area/friendly-area spell
+	// shadows it (!nearbySelected), and the chain block rejoins only
+	// the winning ChainTarget > 1 effect's pick (chainUnitPrimary), so
+	// a ChainTarget <= 1 nearby effect's pick was dropped from the roll
+	// list, the GO packet, the threat leg, the break-aura leg, and its
+	// own effect's fan-out. One scoped pick per such effect
+	// (spellChainNearbyPick, that effect's check type + conditions),
+	// keyed by effect index for per-effect threading below; a missing
+	// pick joins nothing (the chain-block precedent, not the nearby
+	// arm's cast failure). Non-winning ChainTarget > 1 nearby effects
+	// stay out (the standing single-anchor approximation). When
+	// nearbySelected the spell-wide pick already rides hitTargets, so
+	// no rejoin is computed.
+	nearbyPrimaries := make(map[int]uint64)
+	nearbyPrimaryList := []uint64{}
+	if !nearbySelected {
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 && eff.Aura == 0 {
+				continue
+			}
+			nearbyTarget := uint32(0)
+			if nearbyUnitTarget(eff.ImplicitTargetA) {
+				nearbyTarget = eff.ImplicitTargetA
+			} else if nearbyUnitTarget(eff.ImplicitTargetB) {
+				nearbyTarget = eff.ImplicitTargetB
+			} else {
+				continue
+			}
+			if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
+				continue
+			}
+			if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget); ok && pick != 0 {
+				nearbyPrimaries[i] = pick
+				dup := false
+				for _, listed := range nearbyPrimaryList {
+					if listed == pick {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					nearbyPrimaryList = append(nearbyPrimaryList, pick)
+				}
+			}
+		}
+	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1575) adds the explicit
 	// gameobject target via AddGOTarget instead (23 TARGET_GAMEOBJECT_TARGET /
 	// 26 TARGET_GAMEOBJECT_ITEM_TARGET, SpellInfo.cpp:243/246), so a GO wire
@@ -20765,6 +20919,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			triggeredRollTargets = append(triggeredRollTargets, plainObjectPrimary)
 		}
 	}
+	// The rejoined nearby primaries roll the same way: the area/cone
+	// switch dropped them from the roll list even though C++ holds
+	// each as a merged entry (Spell.cpp:1036, AddUnitTarget merge at
+	// :2117). Dedup keeps the already-listed cases (a pick inside
+	// the area list, or equal to a rejoined primary) unchanged.
+	for _, pick := range nearbyPrimaryList {
+		seen := make(map[uint64]struct{}, len(triggeredRollTargets))
+		for _, guid := range triggeredRollTargets {
+			seen[guid] = struct{}{}
+		}
+		if _, dup := seen[pick]; !dup {
+			triggeredRollTargets = append(triggeredRollTargets, pick)
+		}
+	}
 	for _, guid := range triggeredRollTargets {
 		if guid == 0 || guid == s.playerGUID {
 			continue
@@ -20979,6 +21147,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// The rejoined nearby primaries break auras like any merged entry
+	// (PreprocessTarget runs per m_UniqueTargetInfo entry, Spell.cpp:2334);
+	// a pick already in the selection list, or already broken as a
+	// chain/plain primary, breaks once, via that leg.
+	for _, pick := range nearbyPrimaryList {
+		if pick == chainUnitPrimary || pick == plainObjectPrimary {
+			continue
+		}
+		if _, dup := selectionSet[pick]; !dup {
+			if _, missed := triggeredMiss[pick]; !missed {
+				s.breakHitBySpellAuras(ctx, spell, pick)
+			}
+		}
+	}
 	// PreprocessTarget runs once per merged m_UniqueTargetInfo entry
 	// (Spell.cpp:2334), and the friendly/ref-centered partitions are
 	// entries too (their effects selected them, Spell.cpp:758-779) —
@@ -21002,6 +21184,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 	if plainObjectPrimary != 0 {
 		brokenSet[plainObjectPrimary] = struct{}{}
+	}
+	for _, pick := range nearbyPrimaryList {
+		brokenSet[pick] = struct{}{}
 	}
 	for _, partGUID := range triggeredFriendlyEffectTargets {
 		if _, dup := brokenSet[partGUID]; dup {
@@ -21304,6 +21489,36 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if _, dup := seedSet[plainObjectPrimary]; !dup {
 				target := plainObjectPrimary
+				origin := target
+				reflected := false
+				take := true
+				if miss, ok := triggeredMiss[target]; ok {
+					if miss == protocol.SpellMissReflect && reflectReturnStatus == protocol.SpellMissNone {
+						reflected = true
+						target = s.playerGUID
+					} else {
+						take = false
+					}
+				}
+				if take {
+					effectTargets = append(effectTargets, triggeredEffectTarget{guid: target, jumpIndex: 0, originGUID: origin, reflected: reflected})
+				}
+			}
+		}
+		// A rejoined nearby primary threads only into its own effect
+		// (Spell.cpp:1036 adds each nearby pick with its own effect's
+		// mask), with jumpIndex 0 (unscaled, like a seed entry). When
+		// the pick equals the chain primary, the chain block above
+		// already threaded it into this chain-eligible effect, so it
+		// is skipped here; otherwise it would double-list. Dedup vs
+		// the seed and miss handling mirror the chain block.
+		if pick, ok := nearbyPrimaries[effectIndex]; ok && pick != chainUnitPrimary {
+			seedSet := make(map[uint64]struct{}, len(seedTargets))
+			for _, seedGUID := range seedTargets {
+				seedSet[seedGUID] = struct{}{}
+			}
+			if _, dup := seedSet[pick]; !dup {
+				target := pick
 				origin := target
 				reflected := false
 				take := true
