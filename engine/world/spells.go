@@ -8351,10 +8351,18 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 //     harmful-spell path implies IsValidAttackTarget).
 //
 // C++ sends no new SMSG_SPELL_GO for these, so missStatus is untouched; the
-// LOGMISS packet is the client's only arrival-time signal. For a reflected
-// cast the arrival arms run on the reflector (the TargetInfo target, which
-// C++ keeps as the reflector while the effects retarget to the caster), so
-// all arms resolve against reflectSourceGUID, not the caster. Reflect gained
+// LOGMISS packet is the client's only arrival-time signal. The arms split
+// by owner: the DoTargetSpellHit arms (alive, sanctuary) read the TargetInfo
+// target, which C++ keeps as the reflector while the effects retarget to
+// the caster, so they resolve against reflectSourceGUID; the
+// PreprocessSpellHit arms (evade, immunity, NON_ATTACKABLE, duel-end) read
+// _spellHitTarget, which a clean reflect resolves to the caster
+// (PreprocessTarget, Spell.cpp:2350-2351) and a missed reflect leaves null
+// (Spell.cpp:2347-2351) — the null case never reaches this function, since
+// a bounced reflect yields nil hitTargets at launch. The LOGMISS packet
+// still names the TargetInfo unit (SendSpellMiss takes unit,
+// Spell.cpp:2370), so a reflected arrival miss reports the reflector.
+// Reflect gained
 // mid-flight is not re-rolled — C++ rolls reflect at AddUnitTarget time
 // (Spell.cpp:2152), matching Go's cast-time roll; the ProcReflectDelayed
 // arrival proc (Spell.cpp:2181) fires via procSpellReflectTakenAuraTriggers,
@@ -8378,15 +8386,22 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// For a reflected cast the DoTargetSpellHit arrival arms run on
 		// the reflector (the C++ TargetInfo target); the retargeted
 		// caster only receives the effects. The non-reflect case is the
-		// identity arm. The NON_ATTACKABLE and duel-end arms below are
-		// the exception: they are PreprocessSpellHit arms on
-		// _spellHitTarget, which a clean reflect resolves to the caster
-		// (PreprocessTarget, Spell.cpp:2350-2357) and a missed reflect
-		// leaves null, so the m_caster != unit gate skips both.
+		// identity arm. The PreprocessSpellHit arms below are the
+		// exception: they run on _spellHitTarget, which a clean reflect
+		// resolves to the caster (PreprocessTarget, Spell.cpp:2350-2357)
+		// and a missed reflect leaves null — bounced reflects never
+		// reach this function (nil hitTargets at launch). The evade arm
+		// is vacuous for a player caster (ToCreature null), the
+		// NON_ATTACKABLE and duel-end arms are skipped by the
+		// m_caster != unit gate, and only immunity evaluates, on the
+		// caster. The gate is per entry, not per cast: a reflected
+		// chain primary shares the cast with unreflected jumps, whose
+		// _spellHitTarget is themselves.
 		armGUID := guid
 		if isReflected && guid == s.playerGUID {
 			armGUID = reflectSourceGUID
 		}
+		reflectedEntry := isReflected && guid == s.playerGUID
 		tgt, ok := s.getCombatTarget(ctx, armGUID)
 		if !ok || tgt.Health == 0 {
 			continue
@@ -8394,12 +8409,12 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if !spellIsPositive(spell) && s.sanctuaryTimeFor(armGUID) >= launchMs {
 			continue
 		}
-		if s.server != nil && s.player != nil && (uint16(armGUID>>48) == 0xF130 || uint16(armGUID>>48) == 0xF140 || uint16(armGUID>>48) == 0xF150) &&
+		if s.server != nil && s.player != nil && !reflectedEntry && (uint16(armGUID>>48) == 0xF130 || uint16(armGUID>>48) == 0xF140 || uint16(armGUID>>48) == 0xF150) &&
 			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, armGUID) {
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
 		}
-		if s.server != nil && s.player != nil && !isReflected && armGUID != s.playerGUID &&
+		if s.server != nil && s.player != nil && !reflectedEntry && armGUID != s.playerGUID &&
 			tgt.UnitFlags&unitFlagNonAttackable != 0 {
 			charmerOrOwner := armGUID
 			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
@@ -8411,15 +8426,26 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			}
 		}
 		if s.server != nil {
-			if ts := s.server.findSessionByGUID(armGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
+			// PreprocessSpellHit runs on _spellHitTarget: the caster for a
+			// reflected entry, the unit itself otherwise. The LOGMISS
+			// packet still names the TargetInfo unit (Spell.cpp:2370),
+			// so the packet target stays armGUID. The combat leg is the
+			// PreprocessTarget :2354 arm on the TargetInfo unit, which
+			// for a reflected entry is the reflector creature — never a
+			// player — so it never fires on a reflected entry.
+			immuneGUID := armGUID
+			if reflectedEntry {
+				immuneGUID = guid
+			}
+			if ts := s.server.findSessionByGUID(immuneGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
-				if ts.player != nil && isHarmfulSpell(spell) {
+				if !reflectedEntry && ts.player != nil && isHarmfulSpell(spell) {
 					ts.player.UnitFlags |= unitFlagInCombat
 					ts.lastCombatTime = time.Now()
 				}
 				continue
 			}
-			if high := uint16(armGUID >> 48); (high == 0xF130 || high == 0xF140 || high == 0xF150) && s.creatureTargetImmuneToSpell(ctx, armGUID, spell, s, tgt.Faction) {
+			if high := uint16(immuneGUID >> 48); (high == 0xF130 || high == 0xF140 || high == 0xF150) && s.creatureTargetImmuneToSpell(ctx, immuneGUID, spell, s, tgt.Faction) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
 				continue
 			}
@@ -8431,7 +8457,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// already dropped flagged targets above); its duel legs are
 		// the new coverage: player target, non-positive spell, caster
 		// friendly, and a decidable !IsValidAssistTarget leg.
-		if !isReflected && guid != s.playerGUID && !spellIsPositive(spell) &&
+		if !reflectedEntry && guid != s.playerGUID && !spellIsPositive(spell) &&
 			s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
 			s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
 			continue
