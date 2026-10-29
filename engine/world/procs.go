@@ -952,6 +952,16 @@ const (
 	spellAuraRaidProcFromChargeWithValue = 225
 )
 
+// isAlwaysTriggeredAura mirrors the LoadSpellProc always-triggered set
+// (SpellMgr.cpp:1736-1743): an aura spell carrying any of these effects
+// gets PROC_ATTR_TRIGGERED_CAN_PROC on its generated entry regardless of
+// its proc flags (SpellMgr.cpp:1777-1782, 1866-1867).
+const (
+	spellAuraModStealth           = 16  // SPELL_AURA_MOD_STEALTH (SpellAuraDefines.h:96)
+	spellAuraModInvisibility      = 18  // SPELL_AURA_MOD_INVISIBILITY (SpellAuraDefines.h:98)
+	spellAuraOverrideClassScripts = 112 // SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (SpellAuraDefines.h:192)
+)
+
 // spellAuraAddTargetTrigger mirrors SPELL_AURA_ADD_TARGET_TRIGGER
 // (SpellAuraDefines.h:189).
 const spellAuraAddTargetTrigger = 109
@@ -1022,20 +1032,54 @@ func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEnt
 	}
 	hasTrigger := false
 	hasTriggerSpellOrDamage := false
-	reflectAura := false
+	alwaysTriggered := false
+	hitMaskDone := false
+	var hitMask uint32
 	for i := range spell.Effects {
 		eff := &spell.Effects[i]
 		if eff.Effect == 0 {
 			continue
 		}
+		// SpellMgr.cpp:1777-1782 — the always-triggered arm runs over every
+		// effect, not just trigger auras: any always-triggered effect sets
+		// the entry's TRIGGERED_CAN_PROC attribute below.
+		switch eff.Aura {
+		case spellAuraOverrideClassScripts, spellAuraModStealth, spellAuraModConfuse,
+			spellAuraModFear, spellAuraModRoot, spellAuraModStun, spellAuraTransform,
+			spellAuraModInvisibility:
+			alwaysTriggered = true
+		}
+		// SpellMgr.cpp:1834-1863 — the HitMask scan runs over aura effects
+		// in order and stops at the first matching effect (the loop break
+		// after the switch), even when a MOD_HIT_CHANCE effect does not
+		// qualify (CalcValue > -100 leaves HitMask NONE but still stops
+		// the scan). Reflect, crit-percent, block-percent, and the
+		// qualifying hit-chance arms all terminate the scan alike.
+		if !hitMaskDone && eff.Aura != 0 {
+			switch eff.Aura {
+			case spellAuraReflectSpells, spellAuraReflectSpellsSchool:
+				hitMask = procHitReflect
+				hitMaskDone = true
+			case spellAuraModWeaponCritPercent:
+				hitMask = procHitCritical
+				hitMaskDone = true
+			case spellAuraModBlockPercent:
+				hitMask = procHitBlock
+				hitMaskDone = true
+			case spellAuraModHitChance:
+				if eff.CalcValue() <= -100 {
+					hitMask = procHitMiss
+				}
+				hitMaskDone = true
+			}
+		}
 		triggerAura := isProcTriggerAuraType(eff.Aura)
 		// SpellMgr.cpp:1697/1704 — reflect auras (28/74) sit in isTriggerAura
 		// even though Go has no HandleProc arm for them (documented at
 		// isProcTriggerAuraType); they still qualify the spell for a
-		// generated entry, with HitMask forced below (SpellMgr.cpp:1838-1841).
+		// generated entry.
 		if eff.Aura == spellAuraReflectSpells || eff.Aura == spellAuraReflectSpellsSchool {
 			triggerAura = true
-			reflectAura = true
 		}
 		if !triggerAura {
 			continue
@@ -1059,12 +1103,14 @@ func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEnt
 	entry.SpellPhaseMask = procSpellPhaseHit
 	entry.Chance = spell.ProcChance
 	entry.Charges = spell.ProcCharges
-	// SpellMgr.cpp:1838-1841 — reflect auras should only proc off reflects:
-	// the generated entry forces HitMask = PROC_HIT_REFLECT instead of the
-	// NORMAL|CRITICAL default the CanSpellTriggerProcOnEvent gate applies
-	// when HitMask is 0.
-	if reflectAura {
-		entry.HitMask = procHitReflect
+	// The HitMask scan above already holds the first matching effect's
+	// mask (NONE when a MOD_HIT_CHANCE effect did not qualify); a zero
+	// HitMask keeps the CanSpellTriggerProcOnEvent default gate.
+	entry.HitMask = hitMask
+	// SpellMgr.cpp:1866-1867 — the always-triggered arm sets
+	// TRIGGERED_CAN_PROC on the entry regardless of proc flags.
+	if alwaysTriggered {
+		entry.AttributesMask |= procAttrTriggeredCanProc
 	}
 	if spell.ProcTypeMask&procFlagKill != 0 {
 		entry.AttributesMask |= procAttrReqExpOrHonor
@@ -2808,6 +2854,12 @@ func checkEffectProcGates(srv *Server, extraAttacks uint32, aura *activeAura, ef
 	case spellAuraReflectSpellsSchool:
 		// Skip melee hits and spells with wrong school
 		if ev.eventSpell == nil || ev.eventSpell.SchoolMask&uint32(eff.MiscValue) == 0 {
+			return false
+		}
+	case spellAuraModSpellCritChance:
+		// Skip spells that can't crit (SpellAuraEffects.cpp:1023-1026);
+		// melee events carry no spell, so they never pass this arm.
+		if ev.eventSpell == nil || ev.eventSpell.Attributes&spellAttr0CuCanCrit == 0 {
 			return false
 		}
 	case spellAuraProcTriggerSpell, spellAuraProcTriggerSpellWithValue:
