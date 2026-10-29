@@ -10782,14 +10782,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// nearby pick once a nearby branch ran — for both, so a nearby+TARGET-object-chain
 	// spell searched its jumps around the nearby pick instead of the wire target.
 	// The wire primary itself needs no rejoin here: the plain-primary block below
-	// rejoins it (30260b42). A NEARBY chain effect's pick needs no rejoin either:
-	// it is hitTargets[0] at chain time and stays in the list. Jumps are deduped
+	// rejoins it (30260b42). A NEARBY chain effect now anchors on its
+	// winning-effect-scoped pick (spellChainNearbyPick); a differing pick joins
+	// via the wire arms below, since it is neither hitTargets[0] nor verdicted,
+	// and no pick keeps the branch pick. Jumps are deduped
 	// against hitTargets (twin/area convention, Spell.cpp:2117 merged entry): the
 	// search excludes only the anchor, so a wire-anchored jump may land on the
 	// nearby pick, which C++ folds into its single entry rather than double-listing.
 	if !areaSpell && !friendlyListSpell && targetGUID != 0 {
 		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 			anchor := selectionTargetGUID
+			scopedAnchor := false
 			winTarget := uint32(0)
 			for i, eff := range spell.Effects {
 				if effectMask == 1<<uint(i) {
@@ -10804,6 +10807,79 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				if target.UnitGUID != 0 {
 					anchor = target.UnitGUID
+				}
+			case 2, 3, 4, 38, 58:
+				// NEARBY chain effect: anchor on the winning effect's own
+				// nearby pick (spellChainNearbyPick), not the branch pick
+				// (selectionTargetGUID) — in a multi-family spell the branch
+				// that won the selection else-if chain may be a sibling
+				// family. No pick keeps the branch pick, the prior behavior.
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+					anchor = pick
+					scopedAnchor = true
+				}
+			}
+			if scopedAnchor {
+				// A differing scoped pick is neither hitTargets[0] nor
+				// verdicted, so it joins via the wire arms (the friendly-list
+				// block's primary arms, AddUnitTarget Spell.cpp:2095); an
+				// already-listed or already-verdicted pick skips, as does a
+				// pick equal to the branch pick.
+				primaryInList := false
+				for _, guid := range hitTargets {
+					if guid == anchor {
+						primaryInList = true
+						break
+					}
+				}
+				primaryVerdicted := false
+				for _, miss := range missStatus {
+					if miss.TargetGUID == anchor {
+						primaryVerdicted = true
+						break
+					}
+				}
+				if !primaryInList && !primaryVerdicted {
+					var primarySess *session
+					if s.server != nil {
+						primarySess = s.server.findSessionByGUID(anchor)
+					}
+					var primaryFaction uint32
+					if tgt, ok := s.getCombatTarget(ctx, anchor); ok {
+						primaryFaction = tgt.Faction
+					}
+					if outcome := partitionJumpOutcome(anchor); outcome != 0 {
+						switch outcome {
+						case 1:
+							hitTargets = append(hitTargets, anchor)
+						case 2:
+							reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+						case 3:
+						}
+					} else if primarySess != nil && primarySess.isImmuneToSpell(spell, s) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess == nil && s.creatureTargetImmuneToSpell(ctx, anchor, spell, s, primaryFaction) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess != nil && spellHasOnlyDamageEffects(spell) && primarySess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if primarySess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, anchor), spell, spell.SchoolMask) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune})
+					} else if missInfo := s.spellTargetMissResult(ctx, anchor, spell); missInfo != protocol.SpellMissNone {
+						entry := protocol.SpellMissStatus{TargetGUID: anchor, Reason: missInfo}
+						if missInfo == protocol.SpellMissReflect {
+							entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+							if entry.ReflectStatus == protocol.SpellMissNone {
+								reflectedJumpIndexes = append(reflectedJumpIndexes, 0)
+							}
+						}
+						missStatus = append(missStatus, entry)
+					} else if primarySess != nil && s.spellTargetFullyEffectImmune(spell, primarySess) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+					} else if primarySess == nil && s.creatureTargetFullyEffectImmune(ctx, anchor, spell, s, primaryFaction) {
+						missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: anchor, Reason: protocol.SpellMissImmune2})
+					} else {
+						hitTargets = append(hitTargets, anchor)
+					}
 				}
 			}
 			jump := 0
@@ -20489,11 +20565,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// Same per-effect anchor rule as the client plain block above: a
 	// TARGET-object chain effect anchors on the wire target (spellTarget.UnitGUID,
 	// post-redirect — targetGUID was overwritten by the nearby pick above, or by
-	// the caster-object pick), while a NEARBY chain effect anchors on that pick
-	// (targetGUID). A NEARBY chain effect's pick needs no rejoin: it is already
-	// hitTargets[0] and the area switch below is skipped when nearbySelected.
-	// When an area spell shadowed the nearby arm (!nearbySelected), the pick
-	// comes from spellChainNearbyPick instead (wire anchor kept if none).
+	// the caster-object pick), while a NEARBY chain effect anchors on its
+	// winning-effect-scoped pick (spellChainNearbyPick). On the nearbySelected
+	// path the branch pick is the spell-wide pick, so the scoped pick replaces
+	// it when it differs and no pick keeps it; the area switch below is skipped
+	// when nearbySelected. When an area spell shadowed the nearby arm
+	// (!nearbySelected), the pick comes from spellChainNearbyPick instead
+	// (wire anchor kept if none).
 	chainUnitPrimary := uint64(0)
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		anchor := targetGUID
@@ -20513,15 +20591,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				anchor = spellTarget.UnitGUID
 			}
 		case 2, 3, 4, 38, 58:
-			// NEARBY chain effect with no nearby branch (an area spell
-			// shadowed the nearby arm): anchor on the winning effect's own
-			// pick. When nearbySelected, targetGUID already is the nearby
-			// pick and is kept; no pick keeps the wire anchor (the prior
-			// behavior) rather than dropping the chain.
-			if !nearbySelected {
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
-					anchor = pick
-				}
+			// NEARBY chain effect: anchor on the winning effect's own
+			// pick (spellChainNearbyPick). On the nearbySelected path the
+			// branch pick is the spell-wide pick, which differs from the
+			// winning effect's pick in multi-family spells; on the shadowed
+			// path the wire anchor was the prior fallback. No pick keeps
+			// the prior anchor rather than dropping the chain.
+			if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+				anchor = pick
 			}
 		}
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, isChainHeal, checkType, effectMask)
@@ -20572,7 +20649,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// the equal ones); a nearby branch shadowing a sibling leg
 	// (friendly over entry/hostile) rejoins the same way as an area
 	// shadow. The winning chain effect's anchor on the nearbySelected
-	// path still rides the branch pick, not the scoped pick — residual.
+	// path is now the scoped pick (chain block above), so only non-winning
+	// picks rejoin here.
 	nearbyPrimaries := make(map[int]uint64)
 	nearbyPrimaryList := []uint64{}
 	for i, eff := range spell.Effects {
