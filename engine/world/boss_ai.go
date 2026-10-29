@@ -9306,7 +9306,10 @@ func (s *Server) creatureSummonPreCast(m *creatureMotion, spell wotlk.Spell, tar
 				return false
 			}
 		case spellEffectCreateTamedPet:
-			if targetGUID == 0 {
+			// The arm runs only with a unit target (Spell.cpp:5830);
+			// a gameobject guid skips it instead of failing on the
+			// session lookup's nil.
+			if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
 				continue
 			}
 			ts := s.findSessionByGUID(targetGUID)
@@ -9335,7 +9338,10 @@ func (s *Server) creatureStealPreCast(m *creatureMotion, spell wotlk.Spell, targ
 		if eff.Effect != 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 			continue
 		}
-		if targetGUID == 0 || targetGUID == m.GUID {
+		// A gameobject guid is no unit target (Spell.cpp:5959), so the
+		// arm fails like a null target instead of scanning a
+		// reconstructed creature's auras.
+		if targetGUID == 0 || targetGUID == m.GUID || uint16(targetGUID>>48) == 0xF110 {
 			return false
 		}
 		if !s.unitHasStealableAura(m, targetGUID, getDispelMask(uint32(eff.MiscValue))) {
@@ -9448,7 +9454,10 @@ func (s *Server) creatureRangedAPBonusPreCast(m *creatureMotion, spell wotlk.Spe
 	if !matched {
 		return true
 	}
-	if targetGUID == 0 {
+	// No unit target fails (Spell.cpp:6114); a gameobject guid is no
+	// unit target, so it fails rather than passing on an unresolvable
+	// target's non-friendly read.
+	if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
 		return false
 	}
 	if s.creatureFriendlyToTarget(m, targetGUID) {
@@ -9534,6 +9543,9 @@ func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targ
 	if nonAoe && s.creatureHasCharmedUnit(m) {
 		return false
 	}
+	if uint16(targetGUID>>48) == 0xF110 {
+		return true
+	}
 	if targetGUID == 0 {
 		return true
 	}
@@ -9593,6 +9605,12 @@ func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targ
 // GUIDs pass, matching the session twin.
 func (s *Server) creatureAuraBouncedPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil || targetGUID == 0 {
+		return true
+	}
+	// A gameobject guid is no unit target (Spell.cpp:6157), so the
+	// bounced tail is skipped rather than reading a reconstructed
+	// creature's auras.
+	if uint16(targetGUID>>48) == 0xF110 {
 		return true
 	}
 	var approximateMask, nonAuraMask uint8

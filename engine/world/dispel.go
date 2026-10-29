@@ -563,6 +563,15 @@ func (s *Server) creatureDispelPreCast(m *creatureMotion, spell wotlk.Spell, tar
 	if m == nil || triggered || targetGUID == 0 {
 		return true
 	}
+	// A gameobject guid in the unit slot is not a unit target in C++
+	// (Spell.cpp:5543, GetUnitTarget() null for a GO object target), so
+	// the arm is skipped. Without this, findCreatureMotion's low+entry
+	// reconstruction leg can scan an unrelated creature's auras and
+	// wrongly fizzle the cast, and creatureFriendlyToTarget can read
+	// that creature's faction for the sanctuary arm.
+	if uint16(targetGUID>>48) == 0xF110 {
+		return true
+	}
 	var dispelMask uint32
 	hasNonDispelEffect := false
 	hasDispellableAura := false
@@ -786,7 +795,10 @@ func (s *session) checkStealPreCast(spell wotlk.Spell, targetGUID uint64) uint8 
 		if eff.Effect != 126 { // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 			continue
 		}
-		if targetGUID == 0 || targetGUID == s.playerGUID {
+		if targetGUID == 0 || targetGUID == s.playerGUID || uint16(targetGUID>>48) == 0xF110 {
+			// A gameobject guid carries no unit target (Spell.cpp:5959,
+			// GetUnitTarget() null), so the arm fails BAD_TARGETS
+			// instead of scanning a reconstructed creature's auras.
 			return spellFailedBadTargets
 		}
 		dispelMask := getDispelMask(uint32(eff.MiscValue))
@@ -849,6 +861,12 @@ func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8
 	// wire unit target skips the whole arm — CheckCast runs before
 	// SetTargetMap (Spell.cpp:3100), so there is no target-map fallback here.
 	if targetGUID == 0 {
+		return 0
+	}
+	// A gameobject guid is likewise no unit target (Spell.cpp:5543):
+	// the sanctuary arm and the candidate scan must not run on a
+	// reconstructed creature's faction/auras.
+	if uint16(targetGUID>>48) == 0xF110 {
 		return 0
 	}
 
