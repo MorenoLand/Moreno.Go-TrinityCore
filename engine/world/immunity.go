@@ -1131,6 +1131,25 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 			spellAuraModImmuneAuraApplySchool, spellAuraSchoolImmunity:
 			auras = append(auras, immuneAura{aura.AuraType, aura.MiscValue, aura.SpellID})
 		}
+		// A record keeps only its first effect's stored type/misc, so a
+		// 267 effect that is not the first aura effect never reaches the
+		// snapshot above, while C++ GetAuraEffectsByType (Unit.cpp:7984)
+		// returns one AuraEffect per effect. Fold the mask-covered DBC
+		// 267 effects in as extra entries (same any-match semantics as
+		// the stored leg; the stored leg covers the unknown-spell case).
+		if s.server != nil && s.server.Data != nil {
+			if auraSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range auraSpell.Effects {
+					if aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraModImmuneAuraApplySchool {
+						continue
+					}
+					if aura.AuraType == spellAuraModImmuneAuraApplySchool && aura.MiscValue == effect.MiscValue {
+						continue
+					}
+					auras = append(auras, immuneAura{spellAuraModImmuneAuraApplySchool, effect.MiscValue, aura.SpellID})
+				}
+			}
+		}
 	}
 	return auras
 }
@@ -1853,9 +1872,10 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 // creatureImmuneAuraApplySchoolMask is the creature-target analog of the
 // player-side 267 snapshot arm: the OR of the misc (school-mask) values of
 // the target's live SPELL_AURA_MOD_IMMUNE_AURA_APPLY_SCHOOL (267) auras
-// (GetAuraEffectsByType, Unit.cpp:7984). Go stores one activeAura per
-// spell id, so the scan reads the stored AuraType/MiscValue the same way
-// immuneAuraSnapshotLocked does for players.
+// (GetAuraEffectsByType, Unit.cpp:7984). A record keeps only its first
+// effect's stored type/misc, so the scan folds the mask-covered DBC 267
+// effects alongside the stored leg (the auraEffectMiscMask twin for
+// creature records; the stored leg covers the unknown-spell case).
 func (s *Server) creatureImmuneAuraApplySchoolMask(key creatureAuraKey) uint32 {
 	if s == nil {
 		return 0
@@ -1864,10 +1884,24 @@ func (s *Server) creatureImmuneAuraApplySchoolMask(key creatureAuraKey) uint32 {
 	defer s.auraMu.Unlock()
 	var mask uint32
 	for _, aura := range s.activeCreatureAuras[key] {
-		if aura == nil || aura.AuraType != spellAuraModImmuneAuraApplySchool {
+		if aura == nil {
 			continue
 		}
-		mask |= uint32(aura.MiscValue)
+		if aura.AuraType == spellAuraModImmuneAuraApplySchool {
+			mask |= uint32(aura.MiscValue)
+		}
+		if s.Data == nil {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(index)) != 0 && effect.Aura == spellAuraModImmuneAuraApplySchool {
+				mask |= uint32(effect.MiscValue)
+			}
+		}
 	}
 	return mask
 }

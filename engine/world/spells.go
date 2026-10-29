@@ -28953,6 +28953,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if !firstMerge {
 			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			// Later effects of the same cast only refresh amounts, so
+			// without this the record's EffectMask would miss this
+			// effect and per-effect folds (the 267 mask fold above)
+			// would miss it too — the player-branch mirror of this
+			// path already ORs the bit.
+			existing.EffectMask |= spellEffectMask(spell, eff)
 			s.server.auraMu.Unlock()
 			return
 		}
