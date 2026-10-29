@@ -9963,6 +9963,39 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		var aoeMisses []protocol.SpellMissStatus
 		hitTargets, reflectedAoETrips, aoeMisses = s.rollAreaTargetReflect(ctx, spell, hitTargets)
 		missStatus = append(missStatus, aoeMisses...)
+		// Shared-roll outcomes for the partition rolls below (see
+		// rollAreaPartitionReflect): a GUID in both hitTargets and a
+		// partition, or in both partitions, rolls once, on the first
+		// list that carries it.
+		priorKept := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			priorKept[guid] = struct{}{}
+		}
+		priorTrips := make(map[uint64]struct{}, len(reflectedAoETrips))
+		for _, guid := range reflectedAoETrips {
+			priorTrips[guid] = struct{}{}
+		}
+		priorMissed := make(map[uint64]struct{}, len(aoeMisses))
+		for _, miss := range aoeMisses {
+			if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+				continue
+			}
+			priorMissed[miss.TargetGUID] = struct{}{}
+		}
+		accumulateRolled := func(kept, trips []uint64, misses []protocol.SpellMissStatus) {
+			for _, guid := range kept {
+				priorKept[guid] = struct{}{}
+			}
+			for _, guid := range trips {
+				priorTrips[guid] = struct{}{}
+			}
+			for _, miss := range misses {
+				if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+					continue
+				}
+				priorMissed[miss.TargetGUID] = struct{}{}
+			}
+		}
 		// Spell::AddUnitTarget (Spell.cpp:2152) rolls every selected target,
 		// including the per-effect friendly-area ally selection of a harmful
 		// spell -- the 2152 carve-out offers reflect to friendlies of a
@@ -9973,29 +10006,38 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (Spell::PreprocessTarget, Spell.cpp:2350) instead of damaging it.
 		if friendlyEffectTargets != nil {
 			var allyMisses []protocol.SpellMissStatus
-			friendlyEffectTargets, reflectedAllyTrips, allyMisses = s.rollAreaTargetReflect(ctx, spell, friendlyEffectTargets)
+			var sharedAllyMissed []uint64
+			friendlyEffectTargets, reflectedAllyTrips, allyMisses, sharedAllyMissed = s.rollAreaPartitionReflect(ctx, spell, friendlyEffectTargets, priorKept, priorTrips, priorMissed)
 			missStatus = append(missStatus, allyMisses...)
-			if len(allyMisses) > 0 {
-				friendlyMissGUIDs = make(map[uint64]struct{}, len(allyMisses))
+			if len(allyMisses) > 0 || len(sharedAllyMissed) > 0 {
+				friendlyMissGUIDs = make(map[uint64]struct{}, len(allyMisses)+len(sharedAllyMissed))
 				for _, miss := range allyMisses {
 					if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
 						continue
 					}
 					friendlyMissGUIDs[miss.TargetGUID] = struct{}{}
 				}
+				for _, guid := range sharedAllyMissed {
+					friendlyMissGUIDs[guid] = struct{}{}
+				}
 			}
+			accumulateRolled(friendlyEffectTargets, reflectedAllyTrips, allyMisses)
 		}
 		if refCenteredFriendlyTargets != nil {
 			var refMisses []protocol.SpellMissStatus
-			refCenteredFriendlyTargets, refCenteredAllyTrips, refMisses = s.rollAreaTargetReflect(ctx, spell, refCenteredFriendlyTargets)
+			var sharedRefMissed []uint64
+			refCenteredFriendlyTargets, refCenteredAllyTrips, refMisses, sharedRefMissed = s.rollAreaPartitionReflect(ctx, spell, refCenteredFriendlyTargets, priorKept, priorTrips, priorMissed)
 			missStatus = append(missStatus, refMisses...)
-			if len(refMisses) > 0 {
-				refCenteredMissGUIDs = make(map[uint64]struct{}, len(refMisses))
+			if len(refMisses) > 0 || len(sharedRefMissed) > 0 {
+				refCenteredMissGUIDs = make(map[uint64]struct{}, len(refMisses)+len(sharedRefMissed))
 				for _, miss := range refMisses {
 					if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
 						continue
 					}
 					refCenteredMissGUIDs[miss.TargetGUID] = struct{}{}
+				}
+				for _, guid := range sharedRefMissed {
+					refCenteredMissGUIDs[guid] = struct{}{}
 				}
 			}
 		}
@@ -11477,6 +11519,53 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// DoTargetSpellHit/HandleEffects. Missed targets carry no hit (the
 		// filter above), matching C++'s _spellHitTarget null gate.
 		for _, guid := range hitTargets {
+			s.breakHitBySpellAuras(effCtx, spell, guid)
+		}
+		// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334) runs once
+		// per merged m_UniqueTargetInfo entry, and the friendly/ref-centered
+		// partitions are entries too (their effects selected them,
+		// Spell.cpp:758-779) — not just the hitTargets list above. A
+		// genuine ally breaks nothing (breakHitBySpellAuras skips friendly
+		// targets, mirroring the IsValidAttackTarget arm of
+		// PreprocessSpellHit, Spell.cpp:2743), but a partition member
+		// attackable under that gate — e.g. a neutral-faction creature the
+		// friendly selection accepts as non-hostile — loses its HITBYSPELL
+		// auras like any other hit target. Deduped against the live hit
+		// list so a GUID in both breaks once, and skipped when it carries
+		// a miss entry: a missed entry has no _spellHitTarget (Spell.cpp:
+		// 2347-2351), which covers the unrolled nearby/GO/no-branch
+		// partitions' wire outcomes too (a wire-reflected or wire-immune
+		// partition member breaks on the caster or not at all, never on
+		// itself). The partition miss sets are subsumed here — every
+		// partition miss entry rides missStatus, shared misses via the
+		// earlier list's entry. Trips need no pass: they resolve to the
+		// caster, which breakHitBySpellAuras skips as self.
+		brokenSet := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			brokenSet[guid] = struct{}{}
+		}
+		missedSet := make(map[uint64]struct{}, len(missStatus))
+		for _, miss := range missStatus {
+			missedSet[miss.TargetGUID] = struct{}{}
+		}
+		for _, guid := range friendlyEffectTargets {
+			if _, dup := brokenSet[guid]; dup {
+				continue
+			}
+			brokenSet[guid] = struct{}{}
+			if _, missed := missedSet[guid]; missed {
+				continue
+			}
+			s.breakHitBySpellAuras(effCtx, spell, guid)
+		}
+		for _, guid := range refCenteredFriendlyTargets {
+			if _, dup := brokenSet[guid]; dup {
+				continue
+			}
+			brokenSet[guid] = struct{}{}
+			if _, missed := missedSet[guid]; missed {
+				continue
+			}
 			s.breakHitBySpellAuras(effCtx, spell, guid)
 		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579): failed
@@ -26597,6 +26686,64 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 // verdicts other than NONE null the return trip's _spellHitTarget
 // (Spell.cpp:2350, 7740-7743): the caster takes nothing, so only NONE
 // trips are returned.
+
+// rollAreaPartitionReflect rolls a per-effect partition sharing the outcome
+// of any GUID an earlier list already rolled: C++ AddUnitTarget merges by
+// GUID (Spell.cpp:2127-2136), so a unit selected by two effects gets one
+// TargetInfo and one SpellHitResult roll, not one roll per list. Rolling a
+// shared GUID twice would give it two independent reflect chances (the roll
+// consumes nothing; the charge is spent at arrival, Spell.cpp:2181) and two
+// ProcReflectDelayed timers on a double reflect, or a kept hit in one list
+// and a trip in the other on a split outcome — C++ fires both effects'
+// bits on the same outcome (kept unit, or caster on a clean reflect).
+// priorKept/priorTrips/priorMissed carry the earlier lists' outcomes in
+// order (hitTargets, then the friendly partition, then the ref partition);
+// priorMissed excludes clean reflects (those ride priorTrips). Fresh GUIDs
+// roll normally; shared misses return in sharedMissed for the caller's miss
+// partition only, never as a second trailer entry (the earlier list's miss
+// entry already covers the GUID). Order of the input list is preserved.
+func (s *session) rollAreaPartitionReflect(ctx context.Context, spell wotlk.Spell, targets []uint64, priorKept, priorTrips, priorMissed map[uint64]struct{}) (kept []uint64, trips []uint64, freshMisses []protocol.SpellMissStatus, sharedMissed []uint64) {
+	fresh := make([]uint64, 0, len(targets))
+	for _, guid := range targets {
+		if _, ok := priorKept[guid]; ok {
+			continue
+		}
+		if _, ok := priorTrips[guid]; ok {
+			continue
+		}
+		if _, ok := priorMissed[guid]; ok {
+			continue
+		}
+		fresh = append(fresh, guid)
+	}
+	freshKept, freshTrips, freshMisses := s.rollAreaTargetReflect(ctx, spell, fresh)
+	freshKeptSet := make(map[uint64]struct{}, len(freshKept))
+	for _, guid := range freshKept {
+		freshKeptSet[guid] = struct{}{}
+	}
+	freshTripSet := make(map[uint64]struct{}, len(freshTrips))
+	for _, guid := range freshTrips {
+		freshTripSet[guid] = struct{}{}
+	}
+	kept = make([]uint64, 0, len(targets))
+	trips = make([]uint64, 0, len(targets))
+	for _, guid := range targets {
+		if _, ok := priorKept[guid]; ok {
+			kept = append(kept, guid)
+		} else if _, ok := priorTrips[guid]; ok {
+			trips = append(trips, guid)
+		} else if _, ok := priorMissed[guid]; ok {
+			sharedMissed = append(sharedMissed, guid)
+		} else if _, ok := freshKeptSet[guid]; ok {
+			kept = append(kept, guid)
+		} else if _, ok := freshTripSet[guid]; ok {
+			trips = append(trips, guid)
+		}
+		// else: a fresh miss — dropped from the list, carried by freshMisses.
+	}
+	return kept, trips, freshMisses, sharedMissed
+}
+
 func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, targets []uint64) (kept []uint64, trips []uint64, misses []protocol.SpellMissStatus) {
 	kept = make([]uint64, 0, len(targets))
 	for _, guid := range targets {
