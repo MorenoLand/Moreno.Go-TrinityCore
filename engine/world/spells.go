@@ -10430,7 +10430,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell.cpp:1575) and its jumps. The anchor is the wire target only for
 	// TARGET-object chain effects (6/21/25/35/45/57/90/95); a NEARBY chain
 	// effect anchors on its own nearby pick, which the area branch never
-	// selected — that shape stays out pending its own census. A primary
+	// selected — now via spellChainNearbyPick. A primary
 	// already in the area list keeps the area roll's verdict (C++ merges it
 	// into one m_UniqueTargetInfo entry); otherwise it rolls the wire arms
 	// (immune, damage-immune, reflect/hit, IMMUNE2) and jumps are searched
@@ -10463,6 +10463,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch winTarget {
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				anchor = target.UnitGUID
+			case 2, 3, 4, 38, 58:
+				// NEARBY chain effect: anchor on the winning effect's own
+				// nearby pick (spellChainNearbyPick); no pick leaves anchor
+				// 0 and the block chains nothing, as before.
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+					anchor = pick
+				}
 			}
 			anchorIsGO := anchor != 0 && uint16(anchor>>48) == 0xF110
 			if anchorIsGO {
@@ -10590,9 +10597,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// added by SelectImplicitTargetObjectTargets, Spell.cpp:1575) and its
 	// jumps. The anchor is the wire target only for TARGET-object chain
 	// effects (6/21/25/35/45/57/90/95); a NEARBY chain effect anchors on its
-	// own nearby pick, which no list branch selects — that shape stays out
-	// (nearby pick helpers are spell-wide/first-effect-scoped, the
-	// area+nearby census). GO-area/cone lists chain in their own block
+	// own nearby pick, which no list branch selects — now via
+	// spellChainNearbyPick (winning-effect-scoped pick). GO-area/cone lists chain in their own block
 	// below (a wire GO anchor on a friendly-list spell already resolved
 	// like the area block's).
 	// A primary already in the list keeps the list roll's verdict (C++ merges
@@ -10619,6 +10625,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch winTarget {
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				anchor = target.UnitGUID
+			case 2, 3, 4, 38, 58:
+				// NEARBY chain effect: anchor on the winning effect's own
+				// nearby pick (spellChainNearbyPick); no pick leaves anchor
+				// 0 and the block chains nothing, as before.
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+					anchor = pick
+				}
 			}
 			anchorIsGO := anchor != 0 && uint16(anchor>>48) == 0xF110
 			if anchorIsGO {
@@ -10825,8 +10838,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// which includes them). The anchor is the wire target only for
 	// TARGET-object chain effects (6/21/25/35/45/57/90/95); a NEARBY chain
 	// effect anchors on its own nearby pick, which no GO branch selects —
-	// that shape stays out (nearby pick helpers are spell-wide, the
-	// area+nearby census). C++ keeps the two selections in separate
+	// now via spellChainNearbyPick (winning-effect-scoped pick). C++ keeps the two selections in separate
 	// containers (m_UniqueGOTargetInfo for the GO list, Spell.cpp:2193, and
 	// m_UniqueTargetInfo for the chain units, :2117); Go's flat list joins
 	// them, so jumps ride the GO packet and the per-hit legs while the GO
@@ -10854,6 +10866,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch winTarget {
 			case 6, 21, 25, 35, 45, 57, 90, 95:
 				anchor = target.UnitGUID
+			case 2, 3, 4, 38, 58:
+				// NEARBY chain effect: anchor on the winning effect's own
+				// nearby pick (spellChainNearbyPick); no pick leaves anchor
+				// 0 and the block chains nothing, as before.
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+					anchor = pick
+				}
 			}
 			anchorIsGO := anchor != 0 && uint16(anchor>>48) == 0xF110
 			if anchorIsGO {
@@ -20342,6 +20361,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// the caster-object pick), while a NEARBY chain effect anchors on that pick
 	// (targetGUID). A NEARBY chain effect's pick needs no rejoin: it is already
 	// hitTargets[0] and the area switch below is skipped when nearbySelected.
+	// When an area spell shadowed the nearby arm (!nearbySelected), the pick
+	// comes from spellChainNearbyPick instead (wire anchor kept if none).
 	chainUnitPrimary := uint64(0)
 	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
 		anchor := targetGUID
@@ -20359,6 +20380,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		case 6, 21, 25, 35, 45, 57, 90, 95:
 			if spellTarget.UnitGUID != 0 {
 				anchor = spellTarget.UnitGUID
+			}
+		case 2, 3, 4, 38, 58:
+			// NEARBY chain effect with no nearby branch (an area spell
+			// shadowed the nearby arm): anchor on the winning effect's own
+			// pick. When nearbySelected, targetGUID already is the nearby
+			// pick and is kept; no pick keeps the wire anchor (the prior
+			// behavior) rather than dropping the chain.
+			if !nearbySelected {
+				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+					anchor = pick
+				}
 			}
 		}
 		chainJumpGUIDs = s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, isChainHeal, checkType, effectMask)

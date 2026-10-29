@@ -148,6 +148,151 @@ func chainSpellJumps(s *session, spell wotlk.Spell) (jumps uint32, isChainHeal b
 	return jumps, isChainHeal, chainCheckType(winTarget), effectMask
 }
 
+// spellChainNearbyPick ports the nearby-pick half of
+// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) + SearchNearbyTarget
+// (Spell.cpp:1869) for the WINNING chain effect only. C++ selects per effect
+// (Spell.cpp:758-900), so a NEARBY chain effect in an area, friendly-list,
+// or GO spell anchors its jumps on its own pick even though no nearby branch
+// ran (the area/list branch won Go's else-if selection chain). The spell-wide
+// pick helpers cannot serve here: spellFriendlyNearbyTarget unions
+// ALLY/PARTY/RAID checks across effects, and spellHostileNearbyTarget /
+// spellEntryNearbyTarget carry the FIRST selecting effect's conditions, while
+// the chain pick must carry the winning effect's check type and conditions
+// (Spell.cpp:1066, the selecting effect's ImplicitTargetConditions). The
+// predicate arms mirror the three helpers exactly (same range sides,
+// totem/GM gates, LOS gate); no pick returns false and the caller keeps its
+// prior anchor behavior.
+func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok {
+		return 0, false
+	}
+	var maxRange float64
+	switch winTarget {
+	case implicitTargetNearbyEnemy:
+		if rangeEntry.MaxHostile <= 0 {
+			return 0, false
+		}
+		maxRange = float64(rangeEntry.MaxHostile)
+	case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
+		if rangeEntry.MaxFriendly <= 0 {
+			return 0, false
+		}
+		maxRange = float64(rangeEntry.MaxFriendly)
+	case implicitTargetNearbyEntry:
+		maxRange = float64(rangeEntry.MaxHostile)
+		if spellIsPositive(spell) {
+			maxRange = float64(rangeEntry.MaxFriendly)
+		}
+	default:
+		return 0, false
+	}
+	// SelectImplicitNearbyTargets (Spell.cpp:1047-1057) ranges the search
+	// with GetMaxRange, which folds SPELLMOD_RANGE (SpellInfo.cpp:3070-3072).
+	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
+	if maxRange <= 0 {
+		return 0, false
+	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:2977): a UBER-flagged
+	// player attacker cannot attack, so an ENEMY pick selects nothing.
+	if winTarget == implicitTargetNearbyEnemy && sessionIsUber(s) {
+		return 0, false
+	}
+	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
+	scope := s.friendlyRefererScope(s.playerGUID)
+	allowPlayers, allowCreatures := implicitTargetEntryMask(condRows)
+	allowDead := spellAllowsDeadTarget(spell)
+	bestGUID := uint64(0)
+	bestDist := maxRange
+	var bestX, bestY, bestZ float32
+	s.friendlyScanCandidates(ctx, s.player.X, s.player.Y, float32(maxRange), spell, func(c friendlyCandidate) {
+		switch winTarget {
+		case implicitTargetNearbyEnemy:
+			if c.guid == s.playerGUID || c.mapID != caster.Map || c.instanceID != caster.InstanceID ||
+				c.health == 0 || spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) ||
+				s.server.isTotemGUID(c.guid) {
+				return
+			}
+			if c.isPlayer {
+				if c.isGM || c.alliance {
+					return
+				}
+			} else if !s.server.isAttackableFaction(c.faction, caster) {
+				return
+			}
+		case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
+			// TARGET_CHECK_ALLY/PARTY/RAID all reject totems (Spell.cpp:8345/
+			// 8354/8371); the gate sits before the nearest-shrink step.
+			if s.server.isTotemGUID(c.guid) || !s.friendlyAssistOK(spell, c, caster, allyOf) {
+				return
+			}
+			switch winTarget {
+			case implicitTargetNearbyParty:
+				if !scope.inParty(c) {
+					return
+				}
+			case implicitTargetNearbyRaid:
+				if !scope.inRaid(c) {
+					return
+				}
+			}
+		case implicitTargetNearbyEntry:
+			if c.mapID != s.player.Map || c.instanceID != s.player.InstanceID {
+				return
+			}
+			if c.isPlayer && !allowPlayers {
+				return
+			}
+			if !c.isPlayer && !allowCreatures {
+				return
+			}
+			if c.health == 0 && !allowDead {
+				return
+			}
+			if spellTargetUnitBlocked(spell, c.unitFlags, c.flagsExtra, false) {
+				return
+			}
+		}
+		// Base WorldObjectSpellTargetCheck tail (Spell.cpp:8380-8387):
+		// a candidate failing the effect's conditions never becomes the
+		// nearest pick and never shrinks the search range.
+		spawnLow := uint32(0)
+		if !c.isPlayer {
+			spawnLow = uint32(c.guid & 0xFFFFFF)
+		}
+		if !implicitEntryConditionsMet(condRows, c.isPlayer, c.entry, spawnLow) {
+			return
+		}
+		// WorldObjectSpellNearbyTargetCheck (Spell.cpp:8394): strict less-than,
+		// shrinking to the nearest match. GetDistance (Object.cpp:1175)
+		// subtracts the candidate's combat reach and floors at 0.
+		dist := float64(distance3D(c.x, c.y, c.z, s.player.X, s.player.Y, s.player.Z)) - float64(c.reach)
+		if dist < 0 {
+			dist = 0
+		}
+		if dist < bestDist {
+			bestDist = dist
+			bestGUID = c.guid
+			bestX, bestY, bestZ = c.x, c.y, c.z
+		}
+	})
+	if bestGUID == 0 {
+		return 0, false
+	}
+	// Spell::CheckEffectTarget (Spell.cpp:1130: AddUnitTarget with
+	// checkIfValid=true) drops a nearby unit target without line of sight
+	// to the caster.
+	if !s.implicitUnitTargetLOSPasses(spell, bestGUID, bestX, bestY, bestZ) {
+		return 0, false
+	}
+	return bestGUID, true
+}
+
 // chainScaledAmount applies the per-jump falloff of a chain spell:
 // base * multiplier^jumpIndex, mirroring the m_damageMultipliers
 // accumulation in Spell::DoEffectOnLaunchTarget (Spell.cpp:7771-7774).
