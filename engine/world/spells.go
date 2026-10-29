@@ -8537,6 +8537,55 @@ func (s *session) revalidateUnk4ArrivalTargets(spell wotlk.Spell, targets []uint
 	return live
 }
 
+// revalidateReflectedAreaTrips runs the arrival arms of
+// Spell::handle_delayed for one reflected area trip (Spell.cpp:2174-2188:
+// each reflected AoE target keeps its own TargetInfo with TargetGUID =
+// reflector, MissCondition = REFLECT, and the return trip's _spellHitTarget
+// = caster). The trips bypass revalidateDelayedHitTargets (they are not in
+// hitTargets; applyEffects appends the caster per trip at effect time), so
+// without this filter a mid-flight change lands the return trip in Go
+// while C++ drops it:
+//   - alive (DoTargetSpellHit, Spell.cpp:2430): the reflector's current
+//     IsAlive vs its launch latch — Go keeps no latch, so a reflector
+//     that no longer resolves or reads Health == 0 drops, the same
+//     treatment revalidateDelayedHitTargets gives vanished/dead targets;
+//     dropped silently (the arm sets no missinfo);
+//   - sanctuary (DoTargetSpellHit, Spell.cpp:2402-2404): state-gated on
+//     SPELL_STATE_DELAYED, which both hook points model (the delayed
+//     branch and the UNK4 delayed-branch collapse), non-positive only,
+//     read on the reflector; dropped silently ("No missinfo");
+//   - immunity (PreprocessSpellHit, Spell.cpp:2720): Speed-gated, read on
+//     the caster (_spellHitTarget), so speedGated=false for UNK4 trips
+//     skips it; drops with SMSG_SPELLLOGMISS naming the reflector
+//     (PreprocessTarget, Spell.cpp:2370, SendSpellMiss takes the
+//     TargetInfo unit). No combat leg: PreprocessTarget :2354 keys on the
+//     launch MissCondition, and a trip launches as REFLECT, not IMMUNE.
+//   - evade, NON_ATTACKABLE, duel-end need no arm: evade reads the caster
+//     (a player here, ToCreature null, vacuous) and the latter two sit
+//     inside the m_caster != unit gate (Spell.cpp:2740-2745), where unit
+//     is the caster itself.
+func (s *session) revalidateReflectedAreaTrips(ctx context.Context, spell wotlk.Spell, trips []uint64, launchMs uint32, speedGated bool) []uint64 {
+	if len(trips) == 0 {
+		return trips
+	}
+	live := make([]uint64, 0, len(trips))
+	for _, reflectorGUID := range trips {
+		tgt, ok := s.getCombatTarget(ctx, reflectorGUID)
+		if !ok || tgt.Health == 0 {
+			continue
+		}
+		if !spellIsPositive(spell) && s.sanctuaryTimeFor(reflectorGUID) >= launchMs {
+			continue
+		}
+		if speedGated && s.server != nil && s.isImmuneToSpell(spell, s) {
+			s.sendSpellMiss(reflectorGUID, spell.ID, protocol.SpellMissImmune)
+			continue
+		}
+		live = append(live, reflectorGUID)
+	}
+	return live
+}
+
 // triggeredArrivalTargetState resolves the live unit flags and the
 // GetCharmerOrOwnerGUID value for a triggered arrival arm (Spell.cpp:2740-2745
 // reads the TargetInfo unit's flags and charmer/owner). Player targets carry
@@ -13232,6 +13281,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// mid-flight, death, sanctuary, or a vanished/evading target
 				// drops the hit.
 				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
+				reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, true)
+				reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, true)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -13342,7 +13393,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// left at its launch value, matching the delayed branch, which
 	// likewise does not recompute it after revalidation.
 	if isDelayedBranch && spell.Speed == 0 {
-		hitTargets = s.revalidateUnk4ArrivalTargets(spell, hitTargets, gameTimeMS(), isReflected, reflectSourceGUID)
+		launchMs := gameTimeMS()
+		hitTargets = s.revalidateUnk4ArrivalTargets(spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
+		reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, false)
+		reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, false)
 	}
 
 	applyEffects(ctx)
