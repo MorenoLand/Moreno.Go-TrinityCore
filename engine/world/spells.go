@@ -20685,18 +20685,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// unscaled amount. Immune targets take nothing; reflected targets resolve
 		// to the caster (Spell.cpp:7740).
 		effectTargets := make([]triggeredEffectTarget, 0, len(selectionTargets)+len(chainJumpGUIDs))
-		// Per-effect target list (Spell.cpp:758-779): a heal-family effect with a
+		// Per-effect target list (Spell.cpp:758-779): an effect with a
 		// friendly-area target seeds from the ally partition, not the merged enemy
-		// list — the triggered-path mirror of the launch-path heal arms. A
-		// heal-family or aura effect with a ref-centered (37/61) target seeds
-		// from the ref-centered partition instead. Other mixed effects keep
-		// the merged list (funnel residual).
+		// list — the triggered-path mirror of the launch-path switches, which
+		// closed family by family (heal, aura, damage, instakill, dispel,
+		// energize, trigger, quest, movement, and the rest); the funnel's
+		// uniform per-target dispatch takes the same switch in one place.
+		// A ref-centered (37/61) effect seeds from the ref-centered
+		// partition instead. The two leg tests are mutually exclusive
+		// under the second-slot skip (both leg families block), so the
+		// branch order never decides a list. Effects with neither leg
+		// keep the merged list.
 		seedTargets := selectionTargets
-		if triggeredFriendlyEffectTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && (effectHasFriendlyAreaLeg(eff)) {
+		if triggeredFriendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 			seedTargets = triggeredFriendlyEffectTargets
-		} else if triggeredRefCenteredFriendlyTargets != nil && (eff.Effect == spellEffectHeal || eff.Effect == spellEffectHealPct || eff.Effect == spellEffectHealMechanical) && effectHasRefCenteredLeg(eff) {
-			seedTargets = triggeredRefCenteredFriendlyTargets
-		} else if triggeredRefCenteredFriendlyTargets != nil && (eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura)) && effectHasRefCenteredLeg(eff) {
+		} else if triggeredRefCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
 			seedTargets = triggeredRefCenteredFriendlyTargets
 		}
 		for _, selGUID := range seedTargets {
