@@ -12811,7 +12811,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectPlayMusic(eff, hitTargets)
 			case spellEffectScriptEffect: // 77: SPELL_EFFECT_SCRIPT_EFFECT (EffectScriptEffect, SpellEffects.cpp:3604)
 				// C++ runs the generic-family arms at SPELL_EFFECT_HANDLE_HIT_TARGET.
-				for _, effectTarget := range hitTargets {
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area script effect runs on its
+				// own ally selection, not the merged enemy list.
+				scriptList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					scriptList = friendlyEffectTargets
+				}
+				for _, effectTarget := range scriptList {
 					if effectTarget == 0 {
 						continue
 					}
@@ -12827,6 +12834,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the RP-GG pickup is creature-only, so both no-op on trips;
 				// Stoneclaw casts on the hit unit's totems, i.e. the caster's.
 				for range reflectedAoETrips {
+					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
+				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
 					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
@@ -12976,8 +12988,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// and rep-reward-rate legs have no Go model; the aura fold
 				// (SPELL_AURA_MOD_REPUTATION_GAIN) rides inside giveReputation
 				// via reputationGainPctMod.
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area reputation effect runs on its
+				// own ally selection, not the merged enemy list.
+				repList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					repList = friendlyEffectTargets
+				}
 				if eff.MiscValue != 0 && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
-					for _, effectTarget := range hitTargets {
+					for _, effectTarget := range repList {
 						if effectTarget == 0 {
 							continue
 						}
@@ -12994,6 +13013,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
 						}
 					}
+					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+					// is the caster, so the arm runs on the caster once per trip.
+					for range reflectedAllyTrips {
+						if ts := s.server.findSessionByGUID(s.playerGUID); ts != nil && ts.player != nil {
+							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+						}
+					}
 				}
 			case spellEffectQuestComplete: // 16: SPELL_EFFECT_QUEST_COMPLETE (EffectQuestComplete, SpellEffects.cpp:4371-4389)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
@@ -13005,8 +13031,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// SetRewardedQuest mark when the quest carries
 				// QUEST_FLAGS_TRACKING (QuestDef.h:142) — otherwise nothing
 				// happens.
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area quest-complete effect runs on its
+				// own ally selection, not the merged enemy list.
+				questList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					questList = friendlyEffectTargets
+				}
 				if eff.MiscValue != 0 {
-					for _, effectTarget := range hitTargets {
+					for _, effectTarget := range questList {
 						if effectTarget == 0 {
 							continue
 						}
@@ -13023,9 +13056,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAoETrips {
 						s.completeQuestFromSpell(effCtx, uint32(eff.MiscValue))
 					}
+					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+					// is the caster, so the arm runs on the caster once per trip.
+					for range reflectedAllyTrips {
+						s.completeQuestFromSpell(effCtx, uint32(eff.MiscValue))
+					}
 				}
 			case spellEffectHealthLeech: // 9: SPELL_EFFECT_HEALTH_LEECH
-				s.handleEffectHealthLeech(effCtx, spell, spellID, hitTargets, effectIndex, eff)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area health-leech effect runs on its
+				// own ally selection, not the merged enemy list.
+				leechList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					leechList = friendlyEffectTargets
+				}
+				s.handleEffectHealthLeech(effCtx, spell, spellID, leechList, effectIndex, eff)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected
 				// target — the helper's self-arm (no self skip: C++ has
@@ -13033,6 +13078,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// damages the caster and heals a fraction back, not
 				// idempotent across trips.
 				for range reflectedAoETrips {
+					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff)
+				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
 					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff)
 				}
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
@@ -13117,7 +13167,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), drainLog)
 				}
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
-				s.handleEffectForceCast(effCtx, spell, spellID, eff, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area force-cast effect runs on its
+				// own ally selection, not the merged enemy list.
+				forceList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					forceList = friendlyEffectTargets
+				}
+				s.handleEffectForceCast(effCtx, spell, spellID, eff, forceList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected
 				// target, so the caster is forced to cast the triggered
@@ -13125,6 +13182,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// forced casts ride the triggered funnel, never this
 				// dispatch, so no trip recursion.
 				for range reflectedAoETrips {
+					s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
+				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
 					s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
 				}
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
@@ -13159,7 +13221,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectDurabilityDamage(effCtx, spell, spellID, eff, []uint64{s.playerGUID}, casterLevel)
 				}
 			case spellEffectQuestClear: // 139: SPELL_EFFECT_CLEAR_QUEST (EffectQuestClear, SpellEffects.cpp:4611)
-				s.handleEffectQuestClear(effCtx, eff, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area quest effect runs on its
+				// own ally selection, not the merged enemy list.
+				questList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					questList = friendlyEffectTargets
+				}
+				s.handleEffectQuestClear(effCtx, eff, questList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected
 				// target. The helper's status gate (never-done quests skip)
@@ -13167,21 +13236,50 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for range reflectedAoETrips {
 					s.handleEffectQuestClear(effCtx, eff, []uint64{s.playerGUID})
 				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
+					s.handleEffectQuestClear(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectQuestFail: // 147: SPELL_EFFECT_QUEST_FAIL (EffectQuestFail, SpellEffects.cpp:5283)
-				s.handleEffectQuestFail(effCtx, eff, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area quest effect runs on its
+				// own ally selection, not the merged enemy list.
+				questList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					questList = friendlyEffectTargets
+				}
+				s.handleEffectQuestFail(effCtx, eff, questList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as
 				// above; the helper's incomplete-only gate makes repeated
 				// trips idempotent (a failed quest fails no twice).
 				for range reflectedAoETrips {
 					s.handleEffectQuestFail(effCtx, eff, []uint64{s.playerGUID})
 				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
+					s.handleEffectQuestFail(effCtx, eff, []uint64{s.playerGUID})
+				}
 			case spellEffectQuestStart: // 150: SPELL_EFFECT_QUEST_START (EffectQuestStart, SpellEffects.cpp:5294)
-				s.handleEffectQuestStart(effCtx, eff, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area quest effect runs on its
+				// own ally selection, not the merged enemy list.
+				questList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					questList = friendlyEffectTargets
+				}
+				s.handleEffectQuestStart(effCtx, eff, questList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as
 				// above; the helper's CanTakeQuest gate makes repeated
 				// trips idempotent (an already-logged quest is not
 				// re-added, and its details packet is gated on CanTake).
 				for range reflectedAoETrips {
+					s.handleEffectQuestStart(effCtx, eff, []uint64{s.playerGUID})
+				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
 					s.handleEffectQuestStart(effCtx, eff, []uint64{s.playerGUID})
 				}
 			case spellEffectRemoveAura: // 164: SPELL_EFFECT_REMOVE_AURA (EffectRemoveAura, SpellEffects.cpp:5611)
@@ -13261,7 +13359,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// target: player targets outside dungeons stop all PvE combat
 				// (CombatStop); otherwise the unit's threat is zeroed on every
 				// enemy threat list carrying it.
-				s.handleEffectSanctuary(effCtx, hitTargets)
+				// Per-effect target list (Spell.cpp:758-779), same switch as
+				// the heal arms: a friendly-area sanctuary effect runs on its
+				// own ally selection, not the merged enemy list.
+				sanctList := hitTargets
+				if friendlyEffectTargets != nil && (isFriendlyAreaTargetType(eff.ImplicitTargetA) || isFriendlyAreaTargetType(eff.ImplicitTargetB)) {
+					sanctList = friendlyEffectTargets
+				}
+				s.handleEffectSanctuary(effCtx, sanctList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected target.
 				// The helper's stopPlayerCombat does not interrupt the causing
@@ -13269,6 +13374,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// sanctuary timestamp lands on the caster ahead of the split,
 				// so repeated trips are idempotent.
 				for range reflectedAoETrips {
+					s.handleEffectSanctuary(effCtx, []uint64{s.playerGUID})
+				}
+				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+				// is the caster, so the arm runs on the caster once per trip.
+				for range reflectedAllyTrips {
 					s.handleEffectSanctuary(effCtx, []uint64{s.playerGUID})
 				}
 			case spellEffectSummonObjectWild: // 76: SPELL_EFFECT_SUMMON_OBJECT_WILD (EffectSummonObjectWild, SpellEffects.cpp:3552)
