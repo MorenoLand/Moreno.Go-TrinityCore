@@ -226,8 +226,33 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 	// it — the fits-mask gate rides here as well as in the cast-completion
 	// explicit block.
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && explicitWireTargetFitsMask(spell, target) {
-		if resolved, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
-			unitTarget, hasUnitTarget = resolved, true
+		// A GO guid must never reach getCombatTarget: its DB leg matches
+		// the low 24 bits against the creature table and would anchor the
+		// destination on an unrelated creature — the same collision the
+		// charge/teleport/leap-back arms already guard.
+		if uint16(target.UnitGUID>>48) != 0xF110 {
+			if resolved, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+				unitTarget, hasUnitTarget = resolved, true
+			}
+		}
+	}
+	// Spell::SelectImplicitTargetDestTargets (Spell.cpp:1433) anchors on
+	// GetObjectTarget — any WorldObject, not just units — so a GO wire
+	// target anchors the destination at the gameobject's position when the
+	// spell's explicit mask takes gameobjects (C++ InitExplicitTargets,
+	// Spell.cpp:668-678, drops a GO target otherwise). The position comes
+	// from the GO anchor helper, never the creature DB leg; the live state
+	// also carries the orientation the offset dest types need, while a
+	// static row falls back to its DB orientation.
+	if !hasUnitTarget && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) == 0xF110 && spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+		if st := s.server.gameObjectState(s.player.Map, s.player.InstanceID, target.UnitGUID); st != nil {
+			unitTarget, hasUnitTarget = combatTarget{GUID: target.UnitGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: st.X, Y: st.Y, Z: st.Z, Orientation: st.Orientation}, true
+		} else if gx, gy, gz, ok := s.server.gameObjectAnchorPosition(ctx, target.UnitGUID, s.player.Map, s.player.InstanceID); ok {
+			var ori float64
+			if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT orientation FROM gameobject WHERE guid = ?", uint32(target.UnitGUID&0xFFFFFF)).Scan(&ori)
+			}
+			unitTarget, hasUnitTarget = combatTarget{GUID: target.UnitGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: gx, Y: gy, Z: gz, Orientation: float32(ori)}, true
 		}
 	}
 	for effIndex, eff := range spell.Effects {
