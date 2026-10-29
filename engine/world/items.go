@@ -4026,7 +4026,15 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// unit (or the legacy wire read for self-cast-only spells) feeds
 		// the gates like m_targets.GetUnitTarget(). Unbridged arms are
 		// documented, not fabricated.
-		if targetGUID := target.UnitGUID; targetGUID != 0 {
+		// A gameobject guid in the shared wire slot is not a unit target:
+		// C++ enters this block only for m_targets.GetUnitTarget() != null
+		// (Spell.cpp:5369), and CheckTarget itself returns SPELL_CAST_OK
+		// for non-unit objects (SpellInfo.cpp:1645, ToUnit null) — so the
+		// pickpocket, disarm, only-target-players, dead-target,
+		// creature-type, aura and positional arms below never judge a GO
+		// guid through the unit reconstruction legs. Mirrors the
+		// creature/pet CheckTarget GO guards.
+		if targetGUID := target.UnitGUID; targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 {
 			// Cannot-target-self (SpellInfo.cpp:1637-1638).
 			if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == s.playerGUID {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
