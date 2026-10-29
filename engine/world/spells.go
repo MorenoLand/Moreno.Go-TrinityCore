@@ -7709,9 +7709,21 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 			continue
 		}
 		wantCaster := linkedTriggerCaster(triggered, spell, parentCasterGUID, targetSess.playerGUID)
+		// Aura::ModStackAmount (SpellAuras.cpp:1030) clamps a stack increase
+		// to the linked spell's stack amount (1 when not stackable): the
+		// parent's stack is not copied verbatim when the linked aura
+		// cannot hold it.
+		maxStack := int32(triggered.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		want := int32(parentStack)
+		if want > maxStack {
+			want = maxStack
+		}
 		targetSess.castMu.Lock()
 		trig := targetSess.activeAuras[se.TriggerSpell]
-		synced := trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack
+		synced := trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != uint8(want)
 		if synced {
 			// Aura::ModStackAmount -> SetStackAmount (SpellAuras.cpp:1008)
 			// recalculates every effect amount from the new stack
@@ -7719,8 +7731,8 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 			// left a linked periodic tick at the old stack's amount.
 			oldCount := uint32(trig.StackCount)
 			targetSess.refreshSkillBonusForAuraAmountChange(trig, func() {
-				trig.StackCount = parentStack
-				rescaleAuraAmountsByStack(trig, oldCount, uint32(parentStack))
+				trig.StackCount = uint8(want)
+				rescaleAuraAmountsByStack(trig, oldCount, uint32(want))
 			})
 		}
 		var slot uint8
@@ -7742,9 +7754,9 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 		}
 		// Aura::SetStackAmount pushes the new stack to the client — the
 		// same self + set update the parent merge sends.
-		targetSess.sendAuraUpdateWithStack(slot, se.TriggerSpell, false, positive, maxDur, dur, parentStack)
+		targetSess.sendAuraUpdateWithStack(slot, se.TriggerSpell, false, positive, maxDur, dur, uint8(want))
 		wireMax, wireDur := auraWireDurations(triggered, maxDur, dur)
-		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, wantCaster, slot, se.TriggerSpell, false, positive, wireMax, wireDur, level, parentStack, effectMask)
+		pkt := protocol.BuildAuraUpdateWithStackEffect(targetSess.playerGUID, wantCaster, slot, se.TriggerSpell, false, positive, wireMax, wireDur, level, uint8(want), effectMask)
 		targetSess.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt)
 	}
 }
@@ -7833,12 +7845,23 @@ func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureA
 			continue
 		}
 		wantCaster := linkedTriggerCaster(triggered, spell, parentCasterGUID, key.GUID)
+		// Same ModStackAmount increase clamp as the player sync above:
+		// the parent's stack is not copied verbatim when the linked
+		// aura cannot hold it.
+		maxStack := int32(triggered.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		want := int32(parentStack)
+		if want > maxStack {
+			want = maxStack
+		}
 		srv.auraMu.Lock()
-		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != parentStack {
+		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != uint8(want) {
 			// Same SetStackAmount recalc as the player sync above.
 			oldCount := uint32(trig.StackCount)
-			trig.StackCount = parentStack
-			rescaleAuraAmountsByStack(trig, oldCount, uint32(parentStack))
+			trig.StackCount = uint8(want)
+			rescaleAuraAmountsByStack(trig, oldCount, uint32(want))
 		}
 		srv.auraMu.Unlock()
 	}

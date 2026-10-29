@@ -7274,7 +7274,10 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 				existing.TickTimer.Stop()
 				existing.TickTimer = nil
 			}
-			stopAuraUpkeepTimer(existing)
+			// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
+			// power-upkeep clock on every refresh: the upkeep chain is left
+			// running here instead of stopped and never re-armed, so a
+			// player-cast upkeep aura merged by a wild re-cast keeps paying.
 			s.auraMu.Unlock()
 			if eff.Aura == spellAuraModTaunt {
 				s.applyCreatureTaunt(targetKey, m.GUID, durationMs)

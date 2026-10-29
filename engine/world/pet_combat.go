@@ -5708,6 +5708,68 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			targetSess.castMu.Unlock()
 			return false
 		}
+		if previous := targetSess.activeAuras[spell.ID]; previous != nil && !previous.Stopped && previous.CasterGUID == caster.GUID {
+			// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) -> Aura::ModStackAmount(+1)
+			// (SpellAuras.cpp:1030): a re-cast by the same pet merges into the existing aura
+			// instead of replacing it — one more stack, clamped to the spell's stack amount
+			// (1 when not stackable), charges reset to max, duration refreshed, amounts
+			// recalculated from the new cast's basepoints at the new stack. The old
+			// replace-here arm reset a stackable aura to a single stack on every re-cast.
+			maxStack := int32(spell.StackAmount)
+			if maxStack == 0 {
+				maxStack = 1
+			}
+			cur := int32(previous.StackCount)
+			if cur == 0 {
+				cur = 1
+			}
+			if cur++; cur > maxStack {
+				cur = maxStack
+			}
+			stackCount := uint8(cur)
+			previous.StackCount = stackCount
+			previous.RemainingCharges = s.server.calcAuraMaxCharges(spell, targetSess.player.Map, targetSess.player.InstanceID, caster.GUID)
+			refreshAuraEffectBasepoints(previous, spell, effect, uint32(amount))
+			previous.DurationMs = durationMs
+			previous.RemainingMs = durationMs
+			previous.DurationUpdatedAt = time.Now()
+			// Spell.cpp:2854 resetPeriodicTimer gate, same as the player-cast merge:
+			// a stackable re-cast keeps the periodic countdown, a non-stackable
+			// direct re-cast restarts it.
+			resetPeriodic := spell.StackAmount < 2 && s.triggeredNoProcEvents == 0
+			if previous.Timer != nil {
+				previous.Timer.Stop()
+				previous.Timer = nil
+			}
+			previous.PeriodMs = periodMs
+			previous.TickCount = 0
+			if resetPeriodic && previous.TickTimer != nil {
+				previous.TickTimer.Stop()
+				previous.TickTimer = nil
+			}
+			if auraUpkeepNeeded(spell) {
+				targetSess.scheduleAuraUpkeepLocked(previous)
+			}
+			slot, effectMask := previous.Slot, previous.EffectMask
+			targetSess.castMu.Unlock()
+			if resetPeriodic && previous.PeriodMs > 0 {
+				targetSess.schedulePlayerPeriodicTickInitial(previous, previous.PeriodMs, periodicTickInitialDelay(spell, previous.PeriodMs))
+			}
+			if durationMs > 0 && durationMs < 18000000 {
+				targetSess.castMu.Lock()
+				previous.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { targetSess.expirePlayerAura(spell.ID) })
+				targetSess.castMu.Unlock()
+			}
+			wireStack := stackCount
+			if spell.StackAmount == 0 && spell.ProcCharges > 0 {
+				wireStack = previous.RemainingCharges
+			}
+			wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+			packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, previous.StoredCasterLevel, wireStack, effectMask)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+			s.server.broadcastToVisibleSetFromSession(targetSess, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
+			return true
+		}
 		if previous := targetSess.activeAuras[spell.ID]; previous != nil {
 			previous.Stopped = true
 			if previous.Timer != nil {
@@ -5794,6 +5856,67 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if highest.suppressed {
 		s.server.auraMu.Unlock()
 		return false
+	}
+	// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) -> Aura::ModStackAmount(+1)
+	// (SpellAuras.cpp:1030): a re-cast by the same pet merges into the existing aura
+	// instead of replacing it — one more stack, clamped to the spell's stack amount
+	// (1 when not stackable), charges reset to max, duration refreshed, amounts
+	// recalculated from the new cast's basepoints at the new stack. The old
+	// replace-here arm reset a stackable aura to a single stack on every re-cast.
+	// A previous aura from another caster keeps the replace path below (C++ finds
+	// no same-caster aura to merge into, and the no-stack purge removes it).
+	if previous := s.server.activeCreatureAuras[targetKey][spell.ID]; previous != nil && !previous.Stopped && previous.CasterGUID == caster.GUID {
+		maxStack := int32(spell.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		cur := int32(previous.StackCount)
+		if cur == 0 {
+			cur = 1
+		}
+		if cur++; cur > maxStack {
+			cur = maxStack
+		}
+		stackCount := uint8(cur)
+		previous.StackCount = stackCount
+		previous.RemainingCharges = s.server.calcAuraMaxCharges(spell, targetKey.Map, targetKey.InstanceID, caster.GUID)
+		refreshAuraEffectBasepoints(previous, spell, effect, uint32(amount))
+		previous.DurationMs = durationMs
+		previous.RemainingMs = durationMs
+		previous.DurationUpdatedAt = time.Now()
+		// Spell.cpp:2854 resetPeriodicTimer gate, same as the player-cast merge:
+		// a stackable re-cast keeps the periodic countdown, a non-stackable
+		// direct re-cast restarts it. The upkeep chain is left running: C++
+		// RefreshDuration re-arms the 1s m_timeCla clock, and this path has
+		// no upkeep scheduler of its own.
+		resetPeriodic := spell.StackAmount < 2 && s.triggeredNoProcEvents == 0
+		if previous.Timer != nil {
+			previous.Timer.Stop()
+			previous.Timer = nil
+		}
+		previous.PeriodMs = periodMs
+		previous.TickCount = 0
+		if resetPeriodic && previous.TickTimer != nil {
+			previous.TickTimer.Stop()
+			previous.TickTimer = nil
+		}
+		slot := previous.Slot
+		s.server.auraMu.Unlock()
+		s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
+		s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+		s.server.recomputePetDamageFieldsOnAuraChange(targetKey, spell.ID)
+		s.server.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
+		if resetPeriodic && previous.PeriodMs > 0 {
+			s.scheduleCreaturePeriodicTickInitial(previous, previous.PeriodMs, periodicTickInitialDelay(spell, previous.PeriodMs))
+		}
+		if durationMs > 0 && durationMs < 18000000 {
+			previous.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() { s.expireCreatureAura(targetKey, spell.ID, slot) })
+		}
+		wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
+		packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, previous.StoredCasterLevel, stackCount, previous.EffectMask)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
+		return true
 	}
 	// Same-spell replacement (Unit::_TryStackingOrRefreshingExistingAura,
 	// Unit.cpp:3326): the old aura instance is removed before the new one is
