@@ -5913,6 +5913,74 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_BATTLEGROUND_PLAYER_POSITIONS is
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:876), so the session update drains
+			// it before the ShouldLogOut check — and the
+			// expiry logout does NOT subsume it. The live arm
+			// gates on the player being in a live
+			// battleground, then answers with the alliance
+			// and horde flag carriers' positions
+			// (BattleGroundHandler.cpp:262); the logout
+			// sends no positions packet, so a drop leaves
+			// the flag-carrier display unanswered. No arm
+			// clears logoutAt, so dispatch it here like the
+			// spirit-healer-queue leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS) && state.authed && !hookBlocked {
+				if !state.handleBattlegroundPlayerPositions(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_PET_STOP_ATTACK is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:877), so the
+			// session update drains it before the
+			// ShouldLogOut check like the honor-stats leg
+			// — and the expiry logout does NOT subsume it.
+			// The live arm gates on the guid resolving to
+			// the player's live pet or charmed creature,
+			// then runs AttackStop: victim cleared and
+			// SMSG_ATTACK_STOP sent, threat kept
+			// (PetHandler.cpp:113-134); the logout stops
+			// combat wholesale but sends no attack-stop, so
+			// a drop leaves the pet attacking until the
+			// logout completes. No arm clears logoutAt, so
+			// dispatch it here like the positions leg,
+			// then fall through to the expiry logout below;
+			// the handler returns true on every path, so
+			// the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_STOP_ATTACK) && state.authed && !hookBlocked {
+				if !state.handlePetStopAttack(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BATTLEMASTER_JOIN is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:881), so
+			// the session update drains it before the
+			// ShouldLogOut check — and the expiry logout
+			// does NOT subsume it. The live arm gates on a
+			// valid battlemaster entry, an enabled
+			// battleground, a level bracket and a free
+			// queue slot, then takes the queue slot and
+			// answers STATUS_WAIT_QUEUE (solo arm
+			// BattleGroundHandler.cpp:74-208; group arm
+			// answers every member the same way); the
+			// logout's own leave leg clears the slot but
+			// sends no queue-status answer, so a drop
+			// leaves the join unanswered and the error
+			// arms (LFG, deserter, duplicate, too-many)
+			// unsent. No arm clears logoutAt, so dispatch
+			// it here like the pet-stop leg, then fall
+			// through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN) && state.authed && !hookBlocked {
+				if !state.handleBattlemasterJoin(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
