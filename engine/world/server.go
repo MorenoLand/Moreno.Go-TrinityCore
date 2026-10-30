@@ -6503,6 +6503,43 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_REPORT_PVP_AFK, CMSG_GUILD_BANKER_ACTIVATE and
+			// CMSG_GUILD_BANK_QUERY_TAB are drained before the
+			// ShouldLogOut check: all three are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1127, 1129, 1130),
+			// and the expiry logout does NOT subsume them. The
+			// report arm records the reporter on the TARGET's
+			// session and casts Idle (43680) at 3 reports
+			// (BattleGroundHandler.cpp:795, Player.cpp:22524),
+			// which survives the reporter's logout, so a drop
+			// loses the report outright. The banker-activate
+			// arm answers the bank tabs list, or the
+			// not-in-guild command result (GuildHandler.cpp:251),
+			// and the query-tab arm answers the tab content
+			// (GuildHandler.cpp:271); the logout sends neither.
+			// (0x3D7-0x3E3 are STATUS_NEVER/SMSG and need no
+			// leg; 0x3E5 is SMSG.) None of the arms clears
+			// logoutAt, so dispatch them here like the
+			// channel-voice-on leg, then fall through to the
+			// expiry logout below; the report arm returns true
+			// on every path, and the two bank arms return false
+			// only on a failed answer write, where returning
+			// matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REPORT_PVP_AFK) && state.authed && !hookBlocked {
+				if !state.handleReportPvPAfk(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANKER_ACTIVATE) && state.authed && !hookBlocked {
+				if !state.handleGuildBankerActivate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_QUERY_TAB) && state.authed && !hookBlocked {
+				if !state.handleGuildBankQueryTab(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
