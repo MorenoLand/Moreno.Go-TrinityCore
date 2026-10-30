@@ -235,6 +235,37 @@ func validateLogoutReplayTrace(trace protocoltrace.Trace, cancel, switched, inst
 			completeIndexes = append(completeIndexes, index)
 		}
 	}
+	if !cancel && len(responseIndexes) > 0 {
+		// The logout legs run stopSpellLifecycle at the head of
+		// completeLogoutWithPacket and write SMSG_LOGOUT_COMPLETE only
+		// at its tail, so a cancel packet belonging to a logout leg
+		// must precede that leg's complete. The replay never seeds a
+		// live cast, channel, or autorepeat (runtime-only state the
+		// login reset clears and each logout nils), so no such packet
+		// appears in a replay trace today — but a future trace that
+		// carries one must still hold the order, and a packet landing
+		// after the complete (or in the inter-leg window of a
+		// character switch, where no cast state exists) is a leak.
+		cancelOpcodes := map[uint32]bool{
+			uint32(protocol.OpcodeSMSG_SPELL_FAILURE):      true,
+			uint32(protocol.OpcodeSMSG_SPELL_FAILED_OTHER): true,
+			uint32(protocol.OpcodeMSG_CHANNEL_UPDATE):      true,
+			uint32(protocol.OpcodeSMSG_CAST_FAILED):        true,
+			uint32(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT): true,
+		}
+		for index, event := range trace.Events {
+			if event.Direction != protocoltrace.ServerToClient || !cancelOpcodes[event.Opcode] || index < responseIndexes[0] {
+				continue
+			}
+			leg := 0
+			for leg+1 < len(responseIndexes) && responseIndexes[leg+1] <= index {
+				leg++
+			}
+			if leg < len(completeIndexes) && completeIndexes[leg] <= index {
+				return fmt.Errorf("logout cancel packet opcode=%d at %d after LOGOUT_COMPLETE at %d", event.Opcode, index, completeIndexes[leg])
+			}
+		}
+	}
 	if len(responseIndexes) != expectedLogoutCount || len(rootIndexes) != expectedLogoutCount {
 		if instant && !cancel && !switched && ackCount == 0 && unrootIndex < 0 && len(responseIndexes) == 1 && len(rootIndexes) == 0 && completeCount == 1 && len(completeIndexes) == 1 && completeIndexes[0] > responseIndexes[0] {
 			return nil
