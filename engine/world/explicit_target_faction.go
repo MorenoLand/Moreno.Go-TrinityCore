@@ -244,6 +244,53 @@ func spellExplicitObjectTargetMask(spell wotlk.Spell) uint32 {
 	return mask | spellMissingExplicitTargetMask(spell, mask)
 }
 
+// isDestReferenceImplicitTarget lists the implicit target numbers whose
+// _data row carries TARGET_REFERENCE_TYPE_DEST (SpellInfo.cpp:216-340).
+func isDestReferenceImplicitTarget(target uint32) bool {
+	switch target {
+	case 8, 16, 28, 29, 31, 34, 52, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 107:
+		return true
+	default:
+		return false
+	}
+}
+
+// spellExplicitDestLocationNeeded mirrors the DEST_LOCATION bit of
+// SpellInfo::GetExplicitTargetMask (SpellInfo.cpp:1956;
+// _InitializeExplicitTargetMask, SpellInfo.cpp:3344-3373) as tested by
+// Spell::InitExplicitTargets (Spell.cpp:700-712): the DBC Targets field,
+// then the per-effect SpellImplicitTargetInfo::GetExplicitTargetMask bits
+// (SpellInfo.cpp:134-210) in effect order under the dstSet latch — a
+// TARGET_REFERENCE_TYPE_DEST row contributes DEST_LOCATION only before
+// any TARGET_OBJECT_TYPE_DEST row sets the latch, and TARGET_DEST_TRAJ
+// (89) contributes it through its own branch — then the
+// GetMissingTargetMask extension for EFFECT_IMPLICIT_TARGET_EXPLICIT
+// effects. The no-max-range strip (SpellInfo.cpp:3367-3369) is unmodeled,
+// as in spellMissingExplicitTargetMask: it only fires for self-range
+// spells. No implicit target number carries
+// TARGET_OBJECT_TYPE_UNIT_AND_DEST (SpellInfo.cpp:216-340), so the latch
+// is exactly the TARGET_OBJECT_TYPE_DEST list (isDestImplicitTarget).
+func spellExplicitDestLocationNeeded(spell wotlk.Spell) bool {
+	if spell.Targets&targetFlagDestLocation != 0 {
+		return true
+	}
+	dstSet := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for _, tgt := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if !dstSet && isDestReferenceImplicitTarget(tgt) {
+				return true
+			}
+			if isDestImplicitTarget(tgt) {
+				dstSet = true
+			}
+		}
+	}
+	return spellMissingExplicitTargetMask(spell, spell.Targets)&targetFlagDestLocation != 0
+}
+
 // explicitSelectionTargetOK mirrors the selection-adoption gate in
 // Spell::SetTargetMap (Spell.cpp:684-690): the caster's current selection
 // becomes the fallback explicit target only when it resolves to a unit in

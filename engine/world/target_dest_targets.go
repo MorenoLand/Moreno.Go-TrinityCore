@@ -266,8 +266,39 @@ func sessionPersistentAreaAuraTarget(base protocol.SpellTargetData, cx, cy, cz f
 // false when a 46 effect finds no object, which fails the cast with
 // SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
-	resolved, _, ok := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target)
+	resolved, _, ok := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, 0)
 	return resolved, ok
+}
+
+// sessionInitExplicitSeed mirrors the destination seed of
+// Spell::InitExplicitTargets (Spell.cpp:700-712): when the spell's explicit
+// mask needs DEST_LOCATION and the packet carries no destination, m_targets
+// dst is seeded from the ORIGINAL packet object target — not the adopted
+// unit the gauntlet mirrors into the target slot (a selection/self fallback
+// seeds the caster, while a mask-removed wire object still seeds its own
+// position, since the seed reads the untouched targets parameter) — else
+// from the caster. A corpse wire target has no Go model and an
+// unresolvable object falls back to the caster, like the other anchor
+// fallbacks. seeded is false when the mask needs no destination; callers
+// apply the seed only when no packet destination was sent, since a packet
+// destination beats the seed (Spell.cpp:702).
+func (s *session) sessionInitExplicitSeed(ctx context.Context, spell wotlk.Spell, wireObjectGUID uint64) (float32, float32, float32, bool) {
+	if s == nil || s.player == nil || s.server == nil || !spellExplicitDestLocationNeeded(spell) {
+		return 0, 0, 0, false
+	}
+	if wireObjectGUID != 0 {
+		if uint16(wireObjectGUID>>48) == 0xF110 {
+			if st := s.server.gameObjectState(s.player.Map, s.player.InstanceID, wireObjectGUID); st != nil {
+				return st.X, st.Y, st.Z, true
+			}
+			if gx, gy, gz, ok := s.server.gameObjectAnchorPosition(ctx, wireObjectGUID, s.player.Map, s.player.InstanceID); ok {
+				return gx, gy, gz, true
+			}
+		} else if resolved, ok := s.getCombatTarget(ctx, wireObjectGUID); ok {
+			return resolved.X, resolved.Y, resolved.Z, true
+		}
+	}
+	return s.player.X, s.player.Y, s.player.Z, true
 }
 
 // resolveImplicitSpellDestinationWithSnapshots is resolveImplicitSpellDestination
@@ -275,22 +306,41 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 // is the running destination after effect i's own A/B arms. The single-target
 // return is unchanged; callers that hand a destination to a HIT arm use the
 // slot, never the spell-final destination.
-func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, []sessionDestSnapshot, bool) {
+func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, wireObjectGUID uint64) (protocol.SpellTargetData, []sessionDestSnapshot, bool) {
 	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasFishingDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
 		// No dest-family target: every slot stamps the packet destination
 		// when one was sent (C++ AddDestTarget fires per effect while
-		// HasDst holds), and none stamps when none was sent.
+		// HasDst holds). With no packet destination, a spell whose
+		// explicit mask needs DEST_LOCATION still stamps the
+		// InitExplicit seed (Spell.cpp:700-712, 789) — a summon or DynObj
+		// effect before any dest arm centers on the seed, not the
+		// caster position the unstamped fallback would give.
 		snapshots := make([]sessionDestSnapshot, len(spell.Effects))
 		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 			for i := range snapshots {
 				snapshots[i] = sessionDestSnapshot{Has: true, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z}
 			}
+		} else if sx, sy, sz, seeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); seeded {
+			for i := range snapshots {
+				snapshots[i] = sessionDestSnapshot{Has: true, X: sx, Y: sy, Z: sz}
+			}
 		}
 		return target, snapshots, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
-	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	seedX, seedY, seedZ, seedApplied := float32(0), float32(0), float32(0), false
+	if !packetHasDst {
+		seedX, seedY, seedZ, seedApplied = s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID)
+	}
+	if packetHasDst {
 		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else if seedApplied {
+		// Spell::InitExplicitTargets (Spell.cpp:700-712): the running
+		// destination starts at the seed, so a dest-dest arm that leaves
+		// the destination unchanged (28/29/87/88) and every effect
+		// before the first dest arm see the seed, not the caster.
+		x, y, z = seedX, seedY, seedZ
 	}
 	var unitTarget combatTarget
 	hasUnitTarget := false
@@ -330,7 +380,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		}
 	}
 	snapshots := make([]sessionDestSnapshot, len(spell.Effects))
-	hasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	hasDst := packetHasDst || seedApplied
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue

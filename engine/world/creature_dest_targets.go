@@ -213,6 +213,19 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 			unitX, unitY, unitZ, unitO, hasUnitTarget = gx, gy, gz, float32(ori), true
 		}
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:700-712): when the spell's
+	// explicit mask needs DEST_LOCATION and no traj seed is present (a
+	// client destination beats the seed, Spell.cpp:702), the running
+	// destination starts at the seed — the explicit object target's
+	// position resolved above, else the motion position — so effects
+	// before the first dest arm stamp the seed, not the caster.
+	seedApplied := false
+	if !traj.HasSeed && spellExplicitDestLocationNeeded(spell) {
+		seedApplied = true
+		if hasUnitTarget {
+			x, y, z = unitX, unitY, unitZ
+		}
+	}
 	// TARGET_DEST_NEARBY_ENTRY (46) scans per effect in the loop below:
 	// each effect's own ImplicitTargetConditions list (Spell.cpp:1066)
 	// gates its scan, cached across the effect's two slots. C++ merges
@@ -306,9 +319,9 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 		// Spell.cpp:789 AddDestTarget after each effect: snapshot the
 		// running destination for this effect's slot now, before any
 		// later effect's dest arm can move it.
-		snapshots[effIndex] = creatureDestSnapshot{Has: traj.HasSeed || otherDest || channelResolved, X: x, Y: y, Z: z}
+		snapshots[effIndex] = creatureDestSnapshot{Has: traj.HasSeed || seedApplied || otherDest || channelResolved, X: x, Y: y, Z: z}
 	}
-	if !otherDest && !channelResolved {
+	if !otherDest && !channelResolved && !seedApplied {
 		return 0, 0, 0, false, false, snapshots
 	}
 	return x, y, z, true, false, snapshots

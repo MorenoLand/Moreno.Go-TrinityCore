@@ -3597,6 +3597,14 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	}
 
 	target, _ := protocol.ReadSpellTargetData(r)
+	// Spell::InitExplicitTargets (Spell.cpp:700-712) seeds the destination
+	// from the ORIGINAL packet object target; the explicit-target
+	// adoption below mirrors the adopted unit into target, so the wire
+	// guid is captured here and rides to finishSpellCast.
+	wireObjectGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		wireObjectGUID = target.UnitGUID
+	}
 
 	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
 	// elevation, speed, and an optional embedded movement block AFTER the
@@ -4995,12 +5003,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				// (m_targets), as on the client path.
 				target := castState.Target
 				s.castMu.Unlock()
-				s.finishSpellCast(context.Background(), castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
+				s.finishSpellCast(context.Background(), castCount, spellID, spell, target, wireObjectGUID, rawItemGUID, uint32(itemEntry), nil)
 			})
 			s.activeCast = castState
 			s.castMu.Unlock()
 		} else {
-			s.finishSpellCast(ctx, castCount, spellID, spell, target, rawItemGUID, uint32(itemEntry), nil)
+			s.finishSpellCast(ctx, castCount, spellID, spell, target, wireObjectGUID, rawItemGUID, uint32(itemEntry), nil)
 		}
 	}
 

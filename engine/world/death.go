@@ -2402,7 +2402,7 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 	// unknown id and the clear still runs).
 	if s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, nil)
+			s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{}, 0, 0, 0, nil)
 		} else {
 			s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
 		}

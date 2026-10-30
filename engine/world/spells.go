@@ -2105,6 +2105,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "malformed targets", "error", err)
 		return true
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:700-712) seeds the destination
+	// from the ORIGINAL packet object target; the gauntlet below mirrors
+	// the adopted unit into target, so the wire guid is captured here
+	// before any adoption and rides to finishSpellCast.
+	wireObjectGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+		wireObjectGUID = target.UnitGUID
+	}
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
 		// SpellHandler.cpp:50-72): projectile data consumed by
@@ -3935,7 +3943,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			// may have rewritten its trajectory mid-cast.
 			target := castState.Target
 			s.castMu.Unlock()
-			s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0, nil)
+			s.finishSpellCast(context.Background(), castID, spellID, spell, target, wireObjectGUID, 0, 0, nil)
 		})
 		s.activeCast = castState
 		s.castMu.Unlock()
@@ -3996,7 +4004,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// (castSpellDirectWithOverrides) runs the _cast tail directly,
 		// skipping SetCurrentCastSpell, SendSpellStart, and the GCD —
 		// matching C++'s direct cast(true).
-		s.finishSpellCast(context.Background(), castID, spellID, spell, target, 0, 0, nil)
+		s.finishSpellCast(context.Background(), castID, spellID, spell, target, wireObjectGUID, 0, 0, nil)
 	}
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -9288,7 +9296,7 @@ func (s *session) applySchoolDMGFamilyArms(effCtx context.Context, spell wotlk.S
 	return targetDamage
 }
 
-func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
+func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
 	}
@@ -9789,7 +9797,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell destination from target-relative / dest-relative implicit
 	// targets once, before the area selection and persistent-area read
 	// sites below consume it.
-	target, sessionDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target)
+	target, sessionDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, wireObjectGUID)
 	if !destOK {
 		// Spell.cpp:1111: no nearby entry object found ->
 		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -22181,6 +22189,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:700-712) seeds from the
+	// caller-supplied explicit target; the redirect and implicit-caster
+	// arms below reassign targetGUID before the resolver runs.
+	triggerWireGUID := targetGUID
 	// C++ Unit::CastSpell(id, true) runs Spell::cast, whose re-entrant
 	// wrapper (Spell.cpp:3266-3280) pushes a fresh taking spell for the
 	// nested cast and restores the outer one after; the context stack
@@ -22479,7 +22491,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// entry 46) resolve server-side here, not just the 76/106 channel leg
 	// the pre-strip code handled. The 46 BAD_IMPLICIT_TARGETS failure
 	// (Spell.cpp:1111) fails the triggered cast the same way.
-	spellTarget, triggeredDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, spellTarget)
+	spellTarget, triggeredDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, spellTarget, triggerWireGUID)
 	if !destOK {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
@@ -28750,7 +28762,7 @@ func (s *session) cancelNextSwingSpell() {
 // every main-hand swing consumes.
 func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
 	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID, SelectionOrientation: s.player.Orientation}
-	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, q.CastItemGUID, q.CastItemEntry, swingCast)
+	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, 0, q.CastItemGUID, q.CastItemEntry, swingCast)
 }
 
 func (s *session) interruptCurrentCast() {
@@ -41716,7 +41728,7 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 					Flags:    clickTargetFlags,
 					UnitGUID: targetUnit,
 				}
-				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, 0, 0, nil)
+				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, targetUnit, 0, 0, nil)
 			}
 		}
 	}
