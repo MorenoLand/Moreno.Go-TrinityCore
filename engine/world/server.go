@@ -5572,6 +5572,80 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LOOT_ROLL and CMSG_LOOT_MASTER_GIVE are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:803,
+			// 806), so the session update drains them before the
+			// ShouldLogOut check — and the expiry logout does NOT
+			// subsume them. The roll arm counts the vote toward
+			// the group roll and fires the need/greed achievement
+			// criteria, resolving the roll at once when the last
+			// outstanding vote lands (GroupHandler.cpp:470-491,
+			// Group.cpp:1452-1690); the logout sends no vote, so
+			// a dropped vote defers resolution to the roll timer
+			// and never fires the criteria. The master-give arm
+			// gates on group, master looter and MASTER_LOOT, then
+			// moves the item into the recipient's inventory with
+			// the item-push packet, the slot-removed broadcast
+			// and the loot achievement criteria
+			// (LootHandler.cpp:392-488); the logout sends none of
+			// those and saves only the logging-out player's own
+			// rows, so a drop leaves the item ungiven in the loot
+			// window instead of delivered. No arm clears logoutAt,
+			// so dispatch them here like the instance-extend leg,
+			// then fall through to the expiry logout below; both
+			// handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT_ROLL) && state.authed && !hookBlocked {
+				if !state.handleLootRoll(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT_MASTER_GIVE) && state.authed && !hookBlocked {
+				if !state.handleLootMasterGive(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_REPAIR_ITEM and MSG_TALENT_WIPE_CONFIRM are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:811,
+			// 813), so the session update drains them before the
+			// ShouldLogOut check — and the expiry logout does NOT
+			// subsume them. The repair arm gates on an
+			// interactable repair NPC, strips a faked death, then
+			// restores one item's durability or all of them at
+			// the reputation-discounted price, paid from personal
+			// money or the guild bank (NPCHandler.cpp:717-758);
+			// Go UPDATEs money and item_instance durability
+			// eagerly and broadcasts the inventory, while the
+			// logout save persists the pre-repair durability and
+			// sends no repair result, so a drop leaves the items
+			// damaged at next login. The talent-wipe arm gates on
+			// an interactable trainer that can reset this
+			// player's talents, strips a faked death, then resets
+			// the talents, answers the talents info and has the
+			// trainer cast the untalent visual (14867), or
+			// answers (0, 0) when nothing can be reset
+			// (SkillHandler.cpp:60-91); Go's reset writes the
+			// talent rows eagerly while the logout save writes
+			// no talent rows, so a drop keeps the spent talents
+			// at next login and sends neither packet. The
+			// interact gates check in-world, flight, death,
+			// flags, charmer, reaction and distance — never
+			// stunned or rooted — so the countdown's root/stun
+			// does not block an NPC the player already stands
+			// at. No arm clears logoutAt, so dispatch them here
+			// like the loot legs, then fall through to the expiry
+			// logout below; both handlers return true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REPAIR_ITEM) && state.authed && !hookBlocked {
+				if !state.handleRepairItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM) && state.authed && !hookBlocked {
+				if !state.handleTalentWipeConfirm(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
