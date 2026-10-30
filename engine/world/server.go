@@ -7747,6 +7747,239 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_JOIN_CHANNEL (0x097), CMSG_LEAVE_CHANNEL (0x098),
+			// CMSG_CHANNEL_LIST (0x09A), CMSG_CHANNEL_PASSWORD (0x09C),
+			// CMSG_CHANNEL_SET_OWNER (0x09D), CMSG_CHANNEL_OWNER (0x09E),
+			// CMSG_CHANNEL_MODERATOR (0x09F), CMSG_CHANNEL_UNMODERATOR (0x0A0),
+			// CMSG_CHANNEL_MUTE (0x0A1), CMSG_CHANNEL_UNMUTE (0x0A2),
+			// CMSG_CHANNEL_INVITE (0x0A3), CMSG_CHANNEL_KICK (0x0A4),
+			// CMSG_CHANNEL_BAN (0x0A5), CMSG_CHANNEL_UNBAN (0x0A6) and
+			// CMSG_CHANNEL_ANNOUNCEMENTS (0x0A7) are all STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:282-298), so the
+			// session update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them. Join joins or creates the channel
+			// (ChannelHandler.cpp:30), leave leaves it (:95), list
+			// answers the member list (:128), password sets it (:141),
+			// set-owner transfers ownership (:156), owner answers the
+			// owner query (:171), moderator/unmoderator grant and
+			// revoke moderation (:183, :198), mute/unmute silence and
+			// unsilence (:213, :228), invite invites (:243), kick
+			// kicks (:258), ban/unban ban and unban (:273, :288) and
+			// announcements toggles announcement notices (:303); the
+			// membership and moderation changes land on other members
+			// and on channel state the logout save never rewrites, and
+			// the list/owner answers are sent by no logout leg.
+			// 0x099/0x09B are SMSG STATUS_NEVER and 0x0A8
+			// (CMSG_CHANNEL_MODERATE) is Handle_NULL in C++, so neither
+			// needs a leg — Go's moderate handler is already a logged
+			// no-op in the normal dispatch. None of the fifteen arms
+			// clears logoutAt (zero logoutAt references in channels.go),
+			// so dispatch them here, then fall through to the expiry
+			// logout below; each arm returns false only on a failed
+			// answer write, where returning matches the normal
+			// dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_JOIN_CHANNEL) && state.authed && !hookBlocked {
+				if !state.handleJoinChannel(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LEAVE_CHANNEL) && state.authed && !hookBlocked {
+				if !state.handleLeaveChannel(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_LIST) && state.authed && !hookBlocked {
+				if !state.handleChannelList(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_PASSWORD) && state.authed && !hookBlocked {
+				if !state.handleChannelPassword(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_SET_OWNER) && state.authed && !hookBlocked {
+				if !state.handleChannelSetOwner(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_OWNER) && state.authed && !hookBlocked {
+				if !state.handleChannelOwner(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_MODERATOR) && state.authed && !hookBlocked {
+				if !state.handleChannelModerator(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_UNMODERATOR) && state.authed && !hookBlocked {
+				if !state.handleChannelUnmoderator(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_MUTE) && state.authed && !hookBlocked {
+				if !state.handleChannelMute(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_UNMUTE) && state.authed && !hookBlocked {
+				if !state.handleChannelUnmute(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_INVITE) && state.authed && !hookBlocked {
+				if !state.handleChannelInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_KICK) && state.authed && !hookBlocked {
+				if !state.handleChannelKick(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_BAN) && state.authed && !hookBlocked {
+				if !state.handleChannelBan(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_UNBAN) && state.authed && !hookBlocked {
+				if !state.handleChannelUnban(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_ANNOUNCEMENTS) && state.authed && !hookBlocked {
+				if !state.handleChannelAnnouncements(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_USE_ITEM (0x0AB), CMSG_OPEN_ITEM (0x0AC),
+			// CMSG_READ_ITEM (0x0AD), CMSG_AUTOSTORE_LOOT_ITEM (0x108),
+			// CMSG_AUTOEQUIP_ITEM (0x10A), CMSG_AUTOSTORE_BAG_ITEM (0x10B),
+			// CMSG_SWAP_ITEM (0x10C), CMSG_SWAP_INV_ITEM (0x10D),
+			// CMSG_SPLIT_ITEM (0x10E), CMSG_AUTOEQUIP_ITEM_SLOT (0x10F)
+			// and CMSG_DESTROYITEM (0x111) are all STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:302-304, 395-404), so the
+			// session update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them. Use-item casts or uses the item
+			// (SpellHandler.cpp:73), open-item opens it (:183),
+			// read-item answers its text (ItemHandler.cpp:339),
+			// autostore-loot moves loot into the bags
+			// (LootHandler.cpp:37), autoequip and autoequip-slot equip
+			// it (ItemHandler.cpp:173, :112), autostore-bag stores it
+			// (:713), swap and swap-inv move it (:131, :70), split
+			// splits the stack (:37) and destroyitem destroys it
+			// (:272); Go mirrors each arm with eager inventory writes
+			// the logout save never rewrites, so dropping any of them
+			// would lose the move, the use, or the answer outright.
+			// 0x0AE-0x0B0 are SMSG STATUS_NEVER and 0x106/0x107/0x109/
+			// 0x110 are STATUS_NEVER Handle_NULL, so none needs a leg.
+			// None of the eleven arms clears logoutAt (zero logoutAt
+			// references in items.go and loot.go), so dispatch them
+			// here, then fall through to the expiry logout below;
+			// each arm returns false only on a failed answer write,
+			// where returning matches the normal dispatch's
+			// write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_USE_ITEM) && state.authed && !hookBlocked {
+				if !state.handleUseItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_OPEN_ITEM) && state.authed && !hookBlocked {
+				if !state.handleOpenItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_READ_ITEM) && state.authed && !hookBlocked {
+				if !state.handleReadItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOSTORE_LOOT_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAutostoreLootItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAutoEquipItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOSTORE_BAG_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAutoStoreBagItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SWAP_ITEM) && state.authed && !hookBlocked {
+				if !state.handleSwapItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SWAP_INV_ITEM) && state.authed && !hookBlocked {
+				if !state.handleSwapInvItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SPLIT_ITEM) && state.authed && !hookBlocked {
+				if !state.handleSplitItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM_SLOT) && state.authed && !hookBlocked {
+				if !state.handleAutoEquipItemSlot(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DESTROYITEM) && state.authed && !hookBlocked {
+				if !state.handleDestroyItem(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GAMEOBJ_USE (0x0B1), CMSG_AREATRIGGER (0x0B4),
+			// CMSG_CANCEL_CHANNELLING (0x13B) and CMSG_ZONEUPDATE (0x1F4)
+			// are all STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:308,
+			// 311, 446, 631), so the session
+			// update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them. Gameobj-use activates the object
+			// (SpellHandler.cpp:300), areatrigger fires the trigger
+			// (MiscHandler.cpp:645), cancel-channelling interrupts the
+			// current channel (SpellHandler.cpp:560) and zoneupdate
+			// refreshes the player's zone/area state
+			// (MiscHandler.cpp:511); the logout performs none of the
+			// four. CMSG_BUSY_TRADE (0x118) and CMSG_IGNORE_TRADE
+			// (0x119) need no leg: both C++ arms are debug-log-only
+			// (TradeHandler.cpp:63-73) and Go's normal dispatch is
+			// likewise a no-op, so dropping them loses no effect and
+			// no answer. None of the four dispatched arms clears
+			// logoutAt (zero logoutAt references in gameobjects.go,
+			// areatrigger.go, the cancel-channelling arm and the
+			// zone-update arm), so dispatch them here, then fall
+			// through to the expiry logout below; each arm returns
+			// false only on a failed answer write, where returning
+			// matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GAMEOBJ_USE) && state.authed && !hookBlocked {
+				if !state.handleGameObjectUse(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AREATRIGGER) && state.authed && !hookBlocked {
+				if !state.handleAreaTrigger(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_CHANNELLING) && state.authed && !hookBlocked {
+				if !state.handleCancelChanneling(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ZONEUPDATE) && state.authed && !hookBlocked {
+				if !state.handleZoneUpdate(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
