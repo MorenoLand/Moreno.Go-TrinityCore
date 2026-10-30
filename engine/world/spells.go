@@ -3064,7 +3064,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
 	if isSelfCastOnly(spell) {
-		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
+		// A gameobject wire guid is exempt from the BAD_TARGETS reject:
+		// TARGET_UNIT_CASTER effects contribute no explicit-target mask
+		// (SpellInfo.cpp:134-210, CASTER reference type), so C++
+		// InitExplicitTargets removes a GO object target (Spell.cpp:668-678,
+		// neededTargets lacks the gameobject bit) and the cast proceeds on
+		// self via implicit caster targets; prepare runs InitExplicitTargets
+		// (3039) before CheckCast (3100), so no BAD_TARGETS arm ever sees it.
+		// Keyed on guid type, not flags, so a lying-flags GO guid is exempt too.
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && uint16(target.UnitGUID>>48) != 0xF110 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "self-cast only spell cannot target other units")
 			return true
