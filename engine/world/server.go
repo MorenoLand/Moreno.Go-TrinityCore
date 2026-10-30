@@ -3250,6 +3250,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_PET_NAME_QUERY, CMSG_NPC_TEXT_QUERY, CMSG_PLAYED_TIME
+			// and MSG_QUERY_NEXT_MAIL_TIME are STATUS_LOGGEDIN
+			// (Opcodes.cpp:213, 514, 591, 775), so the C++ drain runs
+			// their handlers before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them: every handler is a pure read whose only
+			// effect is the response packet to this session, sent while
+			// the socket is still open ahead of SMSG_LOGOUT_COMPLETE.
+			// Pet-name and npc-text answers feed the client's caches,
+			// /played reports the totals, and mail-time drives the mail
+			// icon, so a dropped query is a lost answer, not a no-op.
+			// None of the four arms writes DB state or clears logoutAt
+			// (the logout save already flushes the played-time
+			// accumulator the played-time handler flushes), so dispatch
+			// them here like the query leg, then fall through to the
+			// expiry logout below. Mail-time is the PROCESS_THREADUNSAFE
+			// member of the family: C++ skips thread-unsafe packets in
+			// the map update (MapSessionFilter) but runs them in the
+			// session update (WorldSessionFilter), whose ProcessUnsafe
+			// branch holds the ShouldLogOut check — so it still drains
+			// before LogoutPlayer, and Go's single read loop has no
+			// map/session split to preserve. The write-failure arm
+			// mirrors the sibling legs (pet-name and mail-time always
+			// return true, so their arms never fire; npc-text and
+			// played-time return false only on a failed response write,
+			// and the deferred logout then follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_NAME_QUERY) && state.authed && !hookBlocked {
+				if !state.handlePetNameQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_NPC_TEXT_QUERY) && state.authed && !hookBlocked {
+				if !state.handleNpcTextQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PLAYED_TIME) && state.authed && !hookBlocked {
+				if !state.handlePlayedTime(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_QUERY_NEXT_MAIL_TIME) && state.authed && !hookBlocked {
+				if !state.handleQueryNextMailTime(ctx) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
