@@ -1737,13 +1737,14 @@ func (s *Server) broadcastSpiritHealCast(spiritGUID uint64, sess *session) {
 	if m := s.findCreatureMotion(mapID, instanceID, spiritGUID); m != nil {
 		x, y, z = m.X, m.Y, m.Z
 	}
-	pkt := protocol.NewBuffer(16)
-	pkt.WritePackedGUID(spiritGUID)
-	pkt.WritePackedGUID(spiritGUID)
-	pkt.WriteU8(1)
-	pkt.WriteU32(22012) // SPELL_SPIRIT_HEAL (Battleground.h:133)
-	pkt.WriteU32(0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt.Bytes(), mapID, instanceID, x, y, z, nil)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: spiritGUID}
+	if s.Data != nil {
+		if spellInfo, found, err := s.Data.Spell(22012); err == nil && found {
+			target = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, target), false, x, y, z)
+		}
+	}
+	pkt := protocol.BuildSpellGo(spiritGUID, spiritGUID, 1, 22012, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{spiritGUID}, nil, target)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
 }
 
 // spiritWavePending records a wave's visual pass for one ghost: the spirit

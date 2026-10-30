@@ -3834,15 +3834,16 @@ func (s *session) castVisualSpell(spellID uint32) {
 	if s == nil || s.player == nil {
 		return
 	}
-	castPkt := protocol.NewBuffer(16)
-	castPkt.WritePackedGUID(s.playerGUID)
-	castPkt.WritePackedGUID(s.playerGUID)
-	castPkt.WriteU8(1)
-	castPkt.WriteU32(spellID)
-	castPkt.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			target = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, target), false, s.player.X, s.player.Y, s.player.Z)
+		}
+	}
+	castPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{s.playerGUID}, nil, target)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt, true)
 	if s.server != nil {
-		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
 

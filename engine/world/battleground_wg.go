@@ -1779,13 +1779,14 @@ func (s *Server) broadcastWGSpiritHeal(guideGUID uint64, safeLocID uint32, gyOK 
 			x, y, z = loc.X, loc.Y, loc.Z
 		}
 	}
-	pkt := protocol.NewBuffer(16)
-	pkt.WritePackedGUID(guideGUID)
-	pkt.WritePackedGUID(guideGUID)
-	pkt.WriteU8(1)
-	pkt.WriteU32(22012) // SPELL_SPIRIT_HEAL (Battleground.h:133)
-	pkt.WriteU32(0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt.Bytes(), mapID, instanceID, x, y, z, nil)
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: guideGUID}
+	if s.Data != nil {
+		if spellInfo, found, err := s.Data.Spell(22012); err == nil && found {
+			target = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, target), false, x, y, z)
+		}
+	}
+	pkt := protocol.BuildSpellGo(guideGUID, guideGUID, 1, 22012, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{guideGUID}, nil, target)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
 }
 
 // resurrectWGQueuedPlayers mirrors BfGraveyard::Resurrect
