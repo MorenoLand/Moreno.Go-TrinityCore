@@ -5009,6 +5009,23 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
 				castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 			}
+			// Traj Read-seed snapshot, mirroring the client cast-bar
+			// stamp (spells.go): for a no-explicit-src-need traj spell
+			// Read (Spell.cpp:147-155) seeds m_src at packet-read time
+			// and RemoveSrc (Spell.cpp:388-391) clears only the flag,
+			// so the traj arm and delay leg read the seed, not the live
+			// caster at completion. It rides ReadSrc, never
+			// Source/Flags, so finalize still clears the GO flag and
+			// the mid-bar missile-trajectory gate is unchanged; 22
+			// spells are excluded (effect-order residual).
+			if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+				castTarget.HasReadSrc = true
+				if packetHasSrc {
+					castTarget.ReadSrc = target.Source
+				} else {
+					castTarget.ReadSrc = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+				}
+			}
 			s.castMu.Lock()
 			castState := &activeCastState{
 				CastID:               castCount,

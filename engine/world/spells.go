@@ -3966,6 +3966,27 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
 			castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 		}
+		// Traj Read-seed snapshot, for spells whose explicit mask needs
+		// NO source location: Read (Spell.cpp:147-155) still seeds m_src
+		// to the caster position at packet-read time, and RemoveSrc
+		// (Spell.cpp:388-391) clears only the flag, so the traj arm
+		// (Spell.cpp:1635) and the traj delay leg (Spell.cpp:839-847)
+		// read that seed, not the live caster at completion. The seed
+		// rides ReadSrc, never Source/Flags: finalize clears the GO
+		// flag for no-need spells, and a stamped flag would newly match
+		// the mid-bar missile-trajectory gate (MiscHandler.cpp:1556-1561).
+		// A packet source is already frozen in the target copy, so it
+		// seeds from there; 22 spells are excluded (the 22 arm re-sets
+		// src to the live caster at _cast — the traj-vs-22 effect-order
+		// question stays residual).
+		if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+			castTarget.HasReadSrc = true
+			if packetHasSrc {
+				castTarget.ReadSrc = target.Source
+			} else {
+				castTarget.ReadSrc = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+			}
+		}
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:               castID,
@@ -18186,6 +18207,13 @@ func (s *session) spellDelayMomentMs(ctx context.Context, spell wotlk.Spell, tar
 				srcX, srcY := s.player.X, s.player.Y
 				if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
 					srcX, srcY = target.Source.X, target.Source.Y
+				} else if target.HasReadSrc {
+					// No-explicit-src-need traj spell: the finalized
+					// flag is cleared (RemoveSrc, Spell.cpp:388-391)
+					// but CalculateDelayMomentForDst still measures
+					// from m_src (Spell.cpp:839-847, Spell.h:205),
+					// i.e. the Read seed, not the live caster.
+					srcX, srcY = target.ReadSrc.X, target.ReadSrc.Y
 				}
 				dx := float64(target.Destination.X - srcX)
 				dy := float64(target.Destination.Y - srcY)
@@ -28809,6 +28837,23 @@ func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID
 	if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
 		target.Flags |= protocol.SpellTargetFlagSourceLocation
 		target.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+	}
+	// Traj Read-seed snapshot, mirroring the cast-bar stamp: for a
+	// no-explicit-src-need traj spell the queued Spell object keeps its
+	// Read-time m_src (Spell.cpp:147-155, RemoveSrc clears only the flag
+	// at :388-391) through the swing, while Go's traj arm and delay leg
+	// would live-resolve the caster — which routinely moved to the
+	// melee target between queue and swing. Rides ReadSrc, never
+	// Source/Flags, so the swing-time GO flag stays cleared and the
+	// missile-trajectory gate is unchanged; 22 spells are excluded
+	// (effect-order residual).
+	if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+		target.HasReadSrc = true
+		if packetHasSrc {
+			target.ReadSrc = target.Source
+		} else {
+			target.ReadSrc = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+		}
 	}
 	s.castMu.Lock()
 	old := s.nextSwing

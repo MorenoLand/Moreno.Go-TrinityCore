@@ -111,6 +111,19 @@ type SpellTargetData struct {
 	// is 0; they are transport fields only and never hit the wire.
 	TrajElevation float32
 	TrajSpeed     float32
+	// ReadSrc/HasReadSrc carry the SpellCastTargets::Read source seed
+	// (Spell.cpp:147-155: the packet source, else the caster position at
+	// packet-read time) for trajectory spells whose explicit mask needs
+	// no SOURCE_LOCATION. InitExplicit RemoveSrc (Spell.cpp:388-391)
+	// clears only the flag, so the position still seeds
+	// SelectImplicitTrajTargets (Spell.cpp:1635, unconditional GetSrcPos)
+	// and the traj delay leg (Spell.cpp:839-847, GetDist2d from m_src),
+	// but the GO packet must not carry the flag — so the seed rides
+	// here, never in Source/Flags. A stamped flag would also newly match
+	// the mid-bar missile-trajectory gate (MiscHandler.cpp:1556-1561),
+	// which C++ fails for no-need spells since RemoveSrc cleared it.
+	ReadSrc    SpellTargetLocation
+	HasReadSrc bool
 }
 
 type SpellMissStatus struct {

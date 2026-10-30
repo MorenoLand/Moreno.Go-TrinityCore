@@ -370,6 +370,13 @@ func (s *session) resolveTrajDestination(ctx context.Context, spell wotlk.Spell,
 	sx, sy, sz := s.player.X, s.player.Y, s.player.Z
 	if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
 		sx, sy, sz = target.Source.X, target.Source.Y, target.Source.Z
+	} else if target.HasReadSrc {
+		// SpellCastTargets::Read seed (Spell.cpp:147-155) for a
+		// no-explicit-src-need traj spell: RemoveSrc clears only the
+		// flag (Spell.cpp:388-391), so the Read-time caster position
+		// still seeds the trajectory (Spell.cpp:1635) instead of the
+		// live caster position at finish/swing time.
+		sx, sy, sz = target.ReadSrc.X, target.ReadSrc.Y, target.ReadSrc.Z
 	}
 	return s.server.resolveTrajDestinationForCaster(ctx, trajCasterFromSessionPlayer(s), spell, eff, target.TrajSpeed, target.TrajElevation, sx, sy, sz, dx, dy, dz)
 }
