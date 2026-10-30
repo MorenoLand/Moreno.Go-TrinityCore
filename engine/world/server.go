@@ -5713,6 +5713,48 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_PETITION_RENAME is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:836), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// gates on the renamer holding the charter item and on
+			// the petition row, then answers name-taken or
+			// name-invalid through the guild or arena-team result
+			// arms, or renames the petition row and echoes the
+			// rename (PetitionsHandler.cpp:322-380); the logout
+			// save writes no petition rows, so a drop leaves the
+			// old name in place and the later turn-in creates the
+			// guild or team under the pre-rename name, with no
+			// echo and no error answer ever sent. No arm clears
+			// logoutAt, so dispatch it here like the showing-cloak
+			// leg, then fall through to the expiry logout below;
+			// the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_PETITION_RENAME) && state.authed && !hookBlocked {
+				if !state.handlePetitionRename(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_REQUEST_RAID_INFO is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:848), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// answers SMSG_RAID_INSTANCE_INFO with the permanent
+			// character_instance binds, extended binds reporting
+			// the subsequent reset (GroupHandler.cpp:1055-1059,
+			// Player.cpp:19209-19235); the logout sends no raid
+			// info, so a drop leaves the character-screen query
+			// unanswered. No arm clears logoutAt, so dispatch it
+			// here like the petition-rename leg, then fall through
+			// to the expiry logout below; the handler returns
+			// false only on the SMSG write failure, in which case
+			// returning here matches the normal dispatch's
+			// write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_RAID_INFO) && state.authed && !hookBlocked {
+				if !state.handleRequestRaidInfo(ctx) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
