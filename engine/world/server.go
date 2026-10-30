@@ -6785,6 +6785,34 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CALENDAR_ARENA_TEAM (0x42C), CMSG_CALENDAR_ADD_EVENT (0x42D) and
+			// CMSG_CALENDAR_UPDATE_EVENT (0x42E) are drained before the ShouldLogOut check:
+			// all three are STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1199-1201),
+			// and the expiry logout does NOT subsume them. The arena-team arm mass-invites
+			// the team's members to the event (CalendarHandler.cpp:210); the add-event arm
+			// creates the event and its invites, answering the past/guild/cap/cooldown
+			// errors (:221), which the logout never does; and the update-event arm rewrites
+			// the event and alerts its relatives, or answers the invalid-event result
+			// (:351), which the logout never sends. None of the arms clears logoutAt, so
+			// dispatch them here like the guild-filter leg, then fall through to the expiry
+			// logout below; the arena-team arm returns false only on a failed answer write,
+			// and the add/update arms return false only on a failed command-result write,
+			// where returning matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_ARENA_TEAM) && state.authed && !hookBlocked {
+				if !state.handleCalendarArenaTeam(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_ADD_EVENT) && state.authed && !hookBlocked {
+				if !state.handleCalendarAddEvent(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_UPDATE_EVENT) && state.authed && !hookBlocked {
+				if !state.handleCalendarUpdateEvent(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
