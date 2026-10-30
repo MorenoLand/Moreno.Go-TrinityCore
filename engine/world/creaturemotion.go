@@ -292,7 +292,11 @@ type creatureMotion struct {
 	// breaks through interruptCreatureCast (EffectInterruptCast's
 	// ChannelInterruptFlags INTERRUPT bit + SILENCE prevention gate); the
 	// standing gap is only the infinite-duration channel, which stamps no
-	// state at all.
+	// state at all. ChannelHitTargets records the targets the live
+	// channel spell's aura leg applied to (twin/inline HIT dispatch), so
+	// a Spell::cancel CASTING-leg strip can remove exactly those auras
+	// on interrupt; reset by stampCreatureChannel, cleared with the
+	// channel stamp.
 	ChannelSpellID            uint32
 	ChannelTargetGUID         uint64
 	ChannelHasDest            bool
@@ -300,6 +304,7 @@ type creatureMotion struct {
 	ChannelDestY              float32
 	ChannelDestZ              float32
 	ChannelUntil              time.Time
+	ChannelHitTargets         []uint64
 	SpellCooldowns            map[uint32]time.Time
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32

@@ -7475,6 +7475,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level))
+		s.recordCreatureChannelHitTarget(m, spell, guid)
 	}
 	for _, guid := range hitTargets {
 		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
@@ -7490,6 +7491,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		if tm == nil || tm.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
+		s.recordCreatureChannelHitTarget(m, spell, guid)
 		if os := s.creatureCasterOwnerSession(m); os != nil && os.player != nil && os.player.Map == m.Map && os.player.InstanceID == m.InstanceID {
 			castMerged := make(map[uint64]struct{})
 			for i := range spell.Effects {

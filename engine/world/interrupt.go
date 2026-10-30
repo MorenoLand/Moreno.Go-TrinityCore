@@ -325,12 +325,14 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureC
 	}
 	if s.creatureChannelLive(m) && s.interruptCreatureSpellGate(m.ChannelSpellID, true) {
 		channelSpellID := m.ChannelSpellID
+		s.stripCreatureChannelAuras(m, channelSpellID)
 		m.CastingUntil = time.Time{}
 		m.ChannelSpellID = 0
 		m.ChannelTargetGUID = 0
 		m.ChannelHasDest = false
 		m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
 		m.ChannelUntil = time.Time{}
+		m.ChannelHitTargets = nil
 		s.cancelPendingCreatureCast(m)
 		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
 	}
@@ -377,12 +379,14 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 	}
 	if s.creatureChannelLive(m) {
 		channelSpellID := m.ChannelSpellID
+		s.stripCreatureChannelAuras(m, channelSpellID)
 		m.CastingUntil = time.Time{}
 		m.ChannelSpellID = 0
 		m.ChannelTargetGUID = 0
 		m.ChannelHasDest = false
 		m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
 		m.ChannelUntil = time.Time{}
+		m.ChannelHitTargets = nil
 		s.cancelPendingCreatureCast(m)
 		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
 	}
@@ -430,6 +434,76 @@ func (s *session) interruptCreatureTargetCast(targetGUID uint64, interruptSpell 
 	for _, interrupted := range s.server.interruptCreatureCast(vm) {
 		s.sendInterruptCastLog(interruptSpell.ID, targetGUID, interrupted.spellID)
 		s.server.sendCreatureInterruptPackets(vm, interrupted)
+	}
+}
+
+// recordCreatureChannelHitTarget notes a target the channeled spell's
+// aura leg applied to, so a later Spell::cancel CASTING-leg strip can
+// remove exactly those auras. Twin/inline HIT dispatch runs after the
+// channel stamp, so a nested triggered channel records under its own
+// stamp; the ChannelSpellID match keeps a stale stamp from claiming
+// another spell's targets. Deduped: the creature loop applies per
+// effect but the aura record is once per cast.
+func (s *Server) recordCreatureChannelHitTarget(m *creatureMotion, spell wotlk.Spell, guid uint64) {
+	if s == nil || m == nil || guid == 0 || !isChanneledSpell(spell) || m.ChannelSpellID != spell.ID {
+		return
+	}
+	for _, g := range m.ChannelHitTargets {
+		if g == guid {
+			return
+		}
+	}
+	m.ChannelHitTargets = append(m.ChannelHitTargets, guid)
+}
+
+// stripCreatureChannelAuras mirrors the CASTING leg of Spell::cancel
+// (Spell.cpp:3230-3236): interrupting a channeled spell removes the
+// channel spell's aura from every hit target (MissCondition NONE in
+// C++; Go records exactly the targets creatureEffectApplyAura applied
+// to). Player targets leave through the session remove arm, creature
+// targets through the Server creature-aura arm, both with
+// AURA_REMOVE_BY_CANCEL, ahead of the cancel packets the callers send
+// -- C++ strips before SendChannelUpdate. When nothing was recorded,
+// the channel object doubles as the single-target fallback, but only
+// for unit-targeted channels whose spell carries an aura effect (the
+// pet pipeline records nothing; a destination channel's object is the
+// caster, never a hit target, and a no-aura channel has nothing to
+// strip). Go's aura stores are spell-ID-keyed with no caster
+// dimension, so unlike C++'s caster-GUID filter this also drops a
+// same-spell aura another caster applied to the same target -- the
+// collapsed-store caveat, accepted over leaving the interrupted
+// channel's aura ticking to its full duration. Takes no locks itself;
+// the remove arms lock their own stores, and no interrupt caller holds
+// castMu or auraMu across the helpers.
+func (s *Server) stripCreatureChannelAuras(m *creatureMotion, spellID uint32) {
+	if s == nil || m == nil || spellID == 0 {
+		return
+	}
+	targets := append([]uint64(nil), m.ChannelHitTargets...)
+	if len(targets) == 0 && !m.ChannelHasDest && m.ChannelTargetGUID != 0 && s.Data != nil {
+		if sp, found, err := s.Data.Spell(spellID); err == nil && found {
+			for _, eff := range sp.Effects {
+				if eff.Effect == spellEffectApplyAura || eff.Effect == spellEffectApplyAreaAuraParty || eff.Effect == spellEffectApplyAreaAuraEnemy {
+					targets = append(targets, m.ChannelTargetGUID)
+					break
+				}
+			}
+		}
+	}
+	seen := make(map[uint64]struct{}, len(targets))
+	for _, guid := range targets {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
+			vs.removeAuraWithMode(spellID, auraRemoveByCancel)
+			continue
+		}
+		s.removeCreatureAuraWithMode(creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: guid}, spellID, auraRemoveByCancel)
 	}
 }
 

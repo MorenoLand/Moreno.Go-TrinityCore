@@ -494,6 +494,7 @@ func stampCreatureChannel(m *creatureMotion, spellID uint32, channelTargetGUID u
 	m.ChannelHasDest = hasDest
 	m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = destX, destY, destZ
 	m.ChannelUntil = until
+	m.ChannelHitTargets = nil
 }
 
 // creatureDestTargetOrientation returns the orientation of the explicit
