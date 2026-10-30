@@ -6232,6 +6232,30 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BATTLEMASTER_JOIN_ARENA is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:987), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it. The live arm gates on not-already-in-BG,
+			// an interactable battlemaster, a known arena
+			// slot and a level bracket, then takes the arena
+			// queue slot and answers STATUS_WAIT_QUEUE
+			// (solo arm) or answers every group member
+			// (group arm; BattleGroundHandler.cpp:610-789);
+			// the logout's own leave leg clears a queue slot
+			// but sends no queue-status or error answer
+			// (LFG, join-failed, not-in-team), so a drop
+			// leaves the join unanswered and the slot
+			// untaken. No arm clears logoutAt, so dispatch
+			// it here like the leader leg, then fall through
+			// to the expiry logout below; the handler
+			// returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN_ARENA) && state.authed && !hookBlocked {
+				if !state.handleBattlemasterJoinArena(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
