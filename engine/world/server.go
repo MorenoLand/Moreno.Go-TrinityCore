@@ -6303,6 +6303,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LFG_PROPOSAL_RESULT, CMSG_SET_LFG_COMMENT and
+			// CMSG_LFG_SET_ROLES are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:997, 1001, 1005),
+			// so the session update drains them before the
+			// ShouldLogOut check — and the expiry logout does
+			// NOT subsume them. The proposal arm records the
+			// vote (LFGHandler.cpp:92-106, LFGMgr.cpp:1175):
+			// a deny removes the proposal with the decline
+			// notify, an accept counts toward success, which
+			// sends GROUP_FOUND/REMOVED updates, forms the
+			// new group and drops the queue entries. The
+			// expiry logout is a clean logout, so its LFG leg
+			// (lfgOnPlayerLogout, disconnected=false) declines
+			// a groupless proposal — the opposite of an accept
+			// — and does nothing for a grouped player, so a
+			// drop inverts an accept and loses a grouped deny.
+			// The comment arm writes the server-wide comment
+			// store (LFGHandler.cpp:122-132, LFGMgr.cpp:1984),
+			// which the logout never touches, so a drop loses
+			// the comment outright. The roles arm answers a
+			// live role check with the chosen roles, sending
+			// role-chosen/role-check-update packets and, on
+			// FINISHED, queueing the group (LFGHandler.cpp:
+			// 104-121, LFGMgr.cpp:797); the clean-logout leg
+			// aborts a role check only on disconnect, so a drop
+			// leaves the check pending and the group unqueued.
+			// None of the three arms clears logoutAt, so
+			// dispatch them here like the search legs, then
+			// fall through to the expiry logout below; all
+			// three handlers return true on every path, so
+			// the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_PROPOSAL_RESULT) && state.authed && !hookBlocked {
+				if !state.handleLfgProposalResult(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_LFG_COMMENT) && state.authed && !hookBlocked {
+				if !state.handleSetLfgComment(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_SET_ROLES) && state.authed && !hookBlocked {
+				if !state.handleLfgSetRoles(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
