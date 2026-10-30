@@ -3409,9 +3409,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			var inlineSpell wotlk.Spell
 			inlineSpellKnown := false
 			var inlinePowerCost int32
+			var inlineStartTarget protocol.SpellTargetData
+			inlineStartKnown := false
+			var inlineStartTargetGUID uint64
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 					inlineSpell, inlineSpellKnown = spellInfo, true
+					// Spell::prepare START snapshot (Spell.cpp:3194): the inline cast is a
+					// non-triggered UnitAI::DoCast, so C++ sends SMSG_SPELL_START before _cast.
+					// Snapshot the pre-selection target here — spellGoPacketTarget and the dest
+					// legs below mutate spellTarget into its post-selection GO shape. Instant
+					// casts only, as in the twin; target.GUID is captured because the nearby
+					// block below may reassign target before the GO send.
+					if s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell) == 0 {
+						inlineStartTarget = s.creatureStartTarget(motion, spellInfo, spellTarget, target.GUID)
+						inlineStartTargetGUID = target.GUID
+						inlineStartKnown = true
+					}
 					wireGOMask = spellGOWireEffectMask(spellInfo)
 					nearbyGOMask = spellGOListArmEffectMask(spellInfo, implicitTargetGONearbyEntry)
 					spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
@@ -4858,6 +4872,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// (Spell.cpp:931). GO copy only; the cast's own target
 			// struct is untouched for the HIT legs below.
 			goTarget := finalizeSessionSrcTarget(inlineSpell, spellTarget, false, motion.X, motion.Y, motion.Z)
+			// Instant non-triggered casts ride START immediately ahead of GO, the C++
+			// prepare->cast packet order for cast time 0 (twin comment above).
+			if inlineStartKnown {
+				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), 0, inlineStartTarget))
+			}
 			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, goTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)

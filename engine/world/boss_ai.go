@@ -498,6 +498,68 @@ func (s *Server) castCreatureSpellTriggered(ctx context.Context, m *creatureMoti
 	s.castCreatureSpellInternal(ctx, m, spellID, targetGUID, true)
 }
 
+// creatureStartCastFlags mirrors Spell::SendSpellStart (Spell.cpp:4220-4252)
+// for a creature caster: base CAST_FLAG_UNKNOWN_2, plus CAST_FLAG_NO_GCD
+// for rune spells (RuneCostID + POWER_RUNE, no caster gate on that arm).
+// CAST_FLAG_PENDING is vacuous (non-triggered only), CAST_FLAG_POWER_LEFT_SELF
+// needs a player or pet caster (twin GO precedent: off), CAST_FLAG_AMMO needs
+// the virtual-item model (unbridged, twin GO precedent), CAST_FLAG_IMMUNITY
+// needs the caster immunity masks (no m_spellImmune model).
+func creatureStartCastFlags(spell wotlk.Spell) uint32 {
+	flags := spellCastFlagStart
+	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
+		flags |= protocol.SpellCastFlagNoGCD
+	}
+	return flags
+}
+
+// creatureStartTarget mirrors the InitExplicit half of a creature
+// SMSG_SPELL_START build: startSrcTarget for SOURCE_LOCATION plus the
+// DEST_LOCATION half of Spell::InitExplicitTargets (Spell.cpp:700-716) —
+// a needed-but-absent destination seeds from the explicit unit target's
+// position, else the caster's. Creature casts carry no packet src/dst, so
+// both halves always seed rather than keep. The 22 arm must not apply:
+// selection runs in _cast, after START.
+func (s *Server) creatureStartTarget(m *creatureMotion, spell wotlk.Spell, target protocol.SpellTargetData, targetGUID uint64) protocol.SpellTargetData {
+	if m == nil {
+		return target
+	}
+	target = startSrcTarget(spell, target, false, m.X, m.Y, m.Z)
+	if !spellExplicitDestLocationNeeded(spell) {
+		target.Flags &^= protocol.SpellTargetFlagDestLocation
+		return target
+	}
+	target.Flags |= protocol.SpellTargetFlagDestLocation
+	if targetGUID != 0 && s != nil {
+		if sess := s.findSessionByGUID(targetGUID); sess != nil && sess.player != nil {
+			target.Destination = protocol.SpellTargetLocation{X: sess.player.X, Y: sess.player.Y, Z: sess.player.Z}
+			return target
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+			target.Destination = protocol.SpellTargetLocation{X: tm.X, Y: tm.Y, Z: tm.Z}
+			return target
+		}
+	}
+	target.Destination = protocol.SpellTargetLocation{X: m.X, Y: m.Y, Z: m.Z}
+	return target
+}
+
+// sendCreatureSpellStart mirrors the delivery tail of Spell::SendSpellStart
+// (Spell.cpp:4283, SendMessageToSet true): everyone in range gets the packet,
+// with the target session written directly and excluded from the broadcast —
+// the same delivery shape as the twin GO send.
+func (s *Server) sendCreatureSpellStart(m *creatureMotion, targetGUID uint64, pkt []byte) {
+	if s == nil || m == nil {
+		return
+	}
+	if sess := s.findSessionByGUID(targetGUID); sess != nil {
+		_ = sess.write(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, true)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, sess)
+		return
+	}
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+}
+
 const (
 	unitFlagPossessed   uint32 = 0x01000000 // UNIT_FLAG_POSSESSED (UnitDefines.h:148)
 	creaturePowerHealth uint32 = 0xFFFFFFFE // POWER_HEALTH (-2 as signed, Powers enum)
@@ -1300,6 +1362,20 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+	}
+	// Spell::prepare (Spell.cpp:3174-3194) sends SMSG_SPELL_START for a
+	// non-triggered cast before _cast. Snapshot the pre-selection target here:
+	// spellGoPacketTarget and the selection legs below mutate spellTarget into
+	// its post-selection GO shape, while START writes post-InitExplicit targets.
+	// Instant casts only (Go-computed cast time 0): Go fires GO and effects in
+	// this same call, matching C++'s instant prepare->cast sequence. A cast-time
+	// cast sends its START at t0 and its GO at t0+casttime in C++; Go has no
+	// deferred-cast queue, so no START is faked at effect time for those.
+	var startTarget protocol.SpellTargetData
+	startTargetKnown := false
+	if spellKnown && !triggered && s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo) == 0 {
+		startTarget = s.creatureStartTarget(m, spellInfo, spellTarget, targetGUID)
+		startTargetKnown = true
 	}
 	sendGoPacket := true
 	// Reflect verdicts collected by the AddUnitTarget arm below; read by
@@ -2499,6 +2575,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// copy applies. Applied to the GO copy only, so the cast's
 		// own target struct keeps no src flag for the HIT legs.
 		goTarget := finalizeSessionSrcTarget(spellInfo, spellTarget, false, m.X, m.Y, m.Z)
+		// Instant non-triggered casts ride START immediately ahead of GO, the C++
+		// prepare->cast packet order for cast time 0. Triggered casts take the
+		// CAST_DIRECTLY branch (Spell.cpp:3174) and never send START; cast-time
+		// casts are excluded above (no deferred queue yet).
+		if startTargetKnown {
+			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStart(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), 0, startTarget))
+		}
 		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, goTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
