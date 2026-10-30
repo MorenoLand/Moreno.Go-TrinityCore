@@ -4598,6 +4598,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	missedTarget := func(guid uint64) bool {
 		return petMissVerdicts[guid] != protocol.SpellMissNone
 	}
+	// Pet casts are client-driven; server does not send SMSG_SPELL_START for pets. Go mirrors client packet and omits START, so no deferral queue needed here.
 	// Spell::handle_immediate channel-state arm (Spell.cpp:3569-3596),
 	// the pet twin of the castCreatureSpellInternal stamp: SendChannelStart
 	// precedes HandleLaunchPhase, so the stamp lands here, ahead of the
