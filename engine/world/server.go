@@ -2981,6 +2981,22 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				}
 				continue
 			}
+			// CMSG_LOGOUT_REQUEST is STATUS_LOGGEDIN (Opcodes.cpp:206), so
+			// the C++ drain calls its handler before the ShouldLogOut
+			// check, and ShouldLogOut reads the Update-start timestamp:
+			// a re-arm in that drain always wins over the pending expiry.
+			// Dispatch it here like the cancel leg instead of logging out:
+			// an instant reply already ran completeLogout, a reason reply
+			// cleared logoutAt, and a delayed reply re-armed it to now+20,
+			// so in every arm the expiry logout below must not also run.
+			// A hook-blocked request skips the handler like the C++ break
+			// arm, and the logout then still runs.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST) && state.authed && !hookBlocked {
+				if !state.handleLogoutRequest(ctx) {
+					return
+				}
+				continue
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
