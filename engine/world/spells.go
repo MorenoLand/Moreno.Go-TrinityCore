@@ -24122,26 +24122,49 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if primary, ok := chainPrimaryByEffect[effectIndex]; ok {
 			effPrimary = primary
 		}
-		// Nearby-selected spells only: the winning chain anchor is the
-		// nearby pick for a nearby winner, but a TARGET-object effect
-		// with no nearby leg takes the wire target (Spell.cpp:1558),
-		// not the winner's pick — otherwise the seed subtraction above
-		// is undone by this thread. The plain block below covers the
-		// no-chain case; this covers the chain-present case.
-		if nearbyBranchPick != 0 && uint16(nearbyBranchPick>>48) != 0xF110 && plainObjectPrimary != 0 && !effectHasNearbyLeg(eff) && (targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+		// Chain-winner-present residual: a TARGET-object leg adds the
+		// wire target with this effect's own mask (Spell.cpp:1558)
+		// regardless of the winner's anchor, the nearby branch, or a
+		// sibling nearby leg — SelectEffectImplicitTargets runs the
+		// A and B legs independently (Spell.cpp:758-779), so a mixed
+		// object+nearby effect takes the wire here and its nearby
+		// pick via the nearbyPrimaries thread below, and a
+		// pure-object effect takes the wire on the area-shadowed
+		// path too (the prior nearbySelected-only gate left it on
+		// the winner anchor there). The winner keeps its own legs:
+		// its first-leg anchor is chainUnitPrimary and its second
+		// leg threads via winSecondPrimary below; a non-winning
+		// ChainTarget > 1 effect keeps its chainPrimaryByEffect
+		// anchor. Gated on a chain winner so the plain block below
+		// still owns the no-chain case (it would double-list
+		// otherwise).
+		_, hasChainPrimary := chainPrimaryByEffect[effectIndex]
+		_, _, _, effWinMask := chainSpellJumps(s, spell)
+		isChainWinner := effWinMask == 1<<uint(effectIndex)
+		effHasObjectLeg := targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)
+		if chainUnitPrimary != 0 && plainObjectPrimary != 0 && !hasChainPrimary && !isChainWinner && effHasObjectLeg {
 			effPrimary = plainObjectPrimary
 		}
 		// Same winner-anchor correction for a pure nearby effect with
 		// ChainTarget <= 1: the winning chain anchor is not this
 		// effect's target (Spell.cpp:1036 adds each nearby effect's
 		// own pick with its own mask), so its own scoped pick
-		// replaces it. Object-legged effects stay out: their wire
-		// threads through the plain/chain-primary blocks, and swapping
-		// the primary to the nearby pick would drop it when a chain
-		// winner is present.
-		if nearbyBranchPick != 0 && uint16(nearbyBranchPick>>48) != 0xF110 && !(targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+		// replaces it — on the area-shadowed path too, where the
+		// prior nearbySelected-only gate left it on the winner
+		// anchor beside its own pick. When its own pick lookup
+		// missed, C++ fails the whole cast (Spell.cpp:1111), but a
+		// scoped miss is not proof of a genuine miss
+		// (spellChainNearbyPick also fails on missing range data
+		// or range sides), so the effect threads nothing rather
+		// than the winner anchor — the nearbyPrimaries "missing
+		// pick joins nothing" precedent, not a fabricated primary.
+		// The genuine-miss fail-cast upgrade needs a miss-reason
+		// distinction in spellChainNearbyPick and stays parked.
+		if chainUnitPrimary != 0 && !hasChainPrimary && !isChainWinner && !effHasObjectLeg && effectHasNearbyLeg(eff) {
 			if pick, ok := nearbyPrimaries[effectIndex]; ok {
 				effPrimary = pick
+			} else {
+				effPrimary = 0
 			}
 		}
 		if effPrimary != 0 && (chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
