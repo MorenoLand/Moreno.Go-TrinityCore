@@ -23083,10 +23083,48 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// explicit target stays out: the effect loop's 0 -> caster fallback
 	// already covers it for explicit-typed effects, and appending beside
 	// the 0 entry would double-list the caster there. A gameobject explicit
-	// target stays out too: the caster's unit-container entry beside a GO
-	// container target needs its own dispatch audit first.
+	// target joins the same way: the triggered dispatch is not
+	// homogeneous — the flat lists already mix GO and unit GUIDs (the wire
+	// GO rejoins them above), and every downstream consumer filters by
+	// GUID type: the roll loop skips the caster and reports NONE for GO,
+	// the packet filter passes unit GUIDs through and masks GO GUIDs,
+	// the threat and AoE-cap divisors exclude GO GUIDs, the effect loop's
+	// loop-top filter keeps GO entries out of unit arms, and the
+	// aura-break pass skips the caster and non-creature GUIDs. The caster
+	// leg is independent of the GO mask: C++ adds the caster for the A
+	// leg even when InitExplicitTargets drops the GO target, so no
+	// plainGOPrimary gate applies here.
 	if isSelfCastOnly(spell) {
-		if kept := spellTarget.UnitGUID; kept != 0 && uint16(kept>>48) != 0xF110 {
+		// SelectSpellTargets (Spell.cpp:758-779) runs the A leg and the B
+		// leg of every effect, so a self-cast-only spell carrying a
+		// friendly-area or 37/61 leg in B still holds the caster for that
+		// effect via the A leg (AddUnitTarget merges by GUID, Spell.cpp:2117)
+		// even when the caster sits outside the B leg's area radius. The
+		// effect loop seeds such effects from the per-effect partitions,
+		// bypassing the shared-list join above, so the caster joins each
+		// non-nil partition deduped (an empty non-nil partition still takes
+		// the caster: the area selection found nobody, but the A leg is
+		// independent of it). A nil partition falls back to the shared
+		// list, which the join above already covers.
+		for _, part := range []*[]uint64{&triggeredFriendlyEffectTargets, &triggeredRefCenteredFriendlyTargets} {
+			if *part == nil {
+				continue
+			}
+			seenCaster := false
+			for _, guid := range *part {
+				if guid == s.playerGUID {
+					seenCaster = true
+					break
+				}
+			}
+			if !seenCaster {
+				grown := make([]uint64, 0, len(*part)+1)
+				grown = append(grown, *part...)
+				grown = append(grown, s.playerGUID)
+				*part = grown
+			}
+		}
+		if kept := spellTarget.UnitGUID; kept != 0 {
 			seenCaster := false
 			for _, guid := range hitTargets {
 				if guid == s.playerGUID {
@@ -23212,18 +23250,37 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// spell — the 2152 carve-out offers reflect to friendlies of a
 	// non-positive spell, so a reflecting or immune ally takes no heal and
 	// its reflect aura is consumed at missile arrival like any other target.
-	// The dedupe below keeps the union disjoint-safe.
-	triggeredRollTargets := hitTargets
-	if triggeredFriendlyEffectTargets != nil {
-		triggeredRollTargets = make([]uint64, 0, len(hitTargets)+len(triggeredFriendlyEffectTargets))
-		triggeredRollTargets = append(triggeredRollTargets, hitTargets...)
-		triggeredRollTargets = append(triggeredRollTargets, triggeredFriendlyEffectTargets...)
+	// The dedupe below keeps the union disjoint-safe. C++ holds one
+	// TargetInfo per GUID (AddUnitTarget merges, Spell.cpp:2117), so the
+	// union is built deduped: a GUID in both the shared list and a
+	// partition (the caster, joined to both above) must ride the roll
+	// list and the GO packet once, not twice — the packet writer does
+	// not dedupe, and the threat divisor counts the packet list.
+	triggeredRollTargets := make([]uint64, 0, len(hitTargets)+len(triggeredFriendlyEffectTargets)+len(triggeredRefCenteredFriendlyTargets))
+	seenRoll := make(map[uint64]struct{}, len(triggeredRollTargets))
+	for _, guid := range hitTargets {
+		if _, dup := seenRoll[guid]; dup {
+			continue
+		}
+		seenRoll[guid] = struct{}{}
+		triggeredRollTargets = append(triggeredRollTargets, guid)
+	}
+	for _, guid := range triggeredFriendlyEffectTargets {
+		if _, dup := seenRoll[guid]; dup {
+			continue
+		}
+		seenRoll[guid] = struct{}{}
+		triggeredRollTargets = append(triggeredRollTargets, guid)
 	}
 	// The ref-centered partition rolls like the friendly one; the
 	// roll loop below dedupes against triggeredMiss, so overlap with
 	// the caster-centered list keeps the first verdict.
-	if triggeredRefCenteredFriendlyTargets != nil {
-		triggeredRollTargets = append(triggeredRollTargets, triggeredRefCenteredFriendlyTargets...)
+	for _, guid := range triggeredRefCenteredFriendlyTargets {
+		if _, dup := seenRoll[guid]; dup {
+			continue
+		}
+		seenRoll[guid] = struct{}{}
+		triggeredRollTargets = append(triggeredRollTargets, guid)
 	}
 	// Spell::SelectImplicitChainTargets (Spell.cpp:1619) adds jumps via
 	// AddUnitTarget, so a mixed spell's jumps share m_UniqueTargetInfo with
@@ -23813,7 +23870,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		for _, selGUID := range seedTargets {
 			target := selGUID
-			if target == 0 && spellEffectImplicitTargetExplicit(eff.Effect) {
+			// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556)
+			// adds the caster as a TargetInfo for every TARGET_UNIT_CASTER
+			// leg, so a self-cast-only spell with no explicit target still
+			// holds the caster for every effect — not just the explicit
+			// ones. Appending the caster beside the 0 seed entry would
+			// double-list it for explicit effects (the fallback below
+			// already maps 0 to the caster), so the zero-target join
+			// lands here instead: the seed maps 0 to the caster for all
+			// effects of a self-cast-only spell, letting non-explicit
+			// per-target arms (combo-points, whose gain arm guards on a
+			// non-zero target; trigger-missile, whose list carried the 0)
+			// reach the caster. The flat lists are untouched, so the
+			// packet, roll, and threat consumers keep their existing
+			// caster accounting (channeled caster-effect check, threat
+			// and AoE-cap caster fallbacks).
+			if target == 0 && (spellEffectImplicitTargetExplicit(eff.Effect) || isSelfCastOnly(spell)) {
 				target = s.playerGUID
 			}
 			origin := target
