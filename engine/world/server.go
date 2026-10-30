@@ -5698,24 +5698,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
-			// CMSG_SET_ACTIVE_MOVER is STATUS_LOGGEDIN,
-			// PROCESS_THREADUNSAFE (Opcodes.cpp:749), so the
-			// session update drains it before the ShouldLogOut
-			// check — and the expiry logout does NOT subsume
-			// it: the live arm only logs a mismatch against
-			// GetUnitBeingMoved and applies nothing
-			// (MovementHandler.cpp:518-531), and Go's handler
-			// mirrors it with a debug log alone, so dispatch
-			// changes no observable state either way. No arm
-			// clears logoutAt, so dispatch it here like the
-			// set-ammo leg, then fall through to the expiry
-			// logout below; the handler returns true on every
-			// path, so the write-failure arm never fires.
-			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_ACTIVE_MOVER) && state.authed && !hookBlocked {
-				if !state.handleSetActiveMover(payload) {
-					return
-				}
-			}
 			// CMSG_PET_CANCEL_AURA is STATUS_LOGGEDIN,
 			// PROCESS_INPLACE (Opcodes.cpp:750), so the
 			// session update drains it before the ShouldLogOut
@@ -7529,24 +7511,23 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
-			// CMSG_ITEM_REFUND_INFO (0x4B3), CMSG_ITEM_REFUND (0x4B4) and
-			// CMSG_CORPSE_MAP_POSITION_QUERY (0x4B6) are all
-			// STATUS_LOGGEDIN (Opcodes.cpp:1334-1337; refund-info and
-			// refund PROCESS_INPLACE, corpse-query PROCESS_THREADUNSAFE),
-			// so the session update drains them before the ShouldLogOut
-			// check (WorldSession.cpp:302-472), and the expiry logout
+			// CMSG_ITEM_REFUND_INFO (0x4B3) and CMSG_ITEM_REFUND (0x4B4)
+			// are both STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:1334-1337), so the session update drains
+			// them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472), and the expiry logout
 			// does NOT subsume them. The refund-info arm answers
 			// SMSG_ITEM_REFUND_INFO_RESPONSE for a refundable item the
 			// player holds (ItemHandler.cpp:1169); the refund arm refunds
 			// it (Player::RefundItem, :1186), unless it is currently being
-			// disenchanted; the corpse arm answers the zeroed
-			// SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE (QueryHandler.cpp:317)
-			// — none of which the logout does. None of the three arms
-			// clears logoutAt (zero logoutAt references in items.go and
-			// spells.go), so dispatch them here, then fall through to the
-			// expiry logout below; each handler returns false only on a
+			// disenchanted — neither of which the logout does. Neither
+			// arm clears logoutAt (zero logoutAt references in items.go),
+			// so dispatch them here, then fall through to the expiry
+			// logout below; each handler returns false only on a
 			// failed answer write, where returning matches the normal
-			// dispatch's write-failure arm.
+			// dispatch's write-failure arm. CMSG_CORPSE_MAP_POSITION_QUERY
+			// (0x4B6) is already legged with the questgiver-hello family
+			// above and has no second leg here.
 			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_REFUND_INFO) && state.authed && !hookBlocked {
 				if !state.handleItemRefundInfo(ctx, payload) {
 					return
@@ -7557,8 +7538,66 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
-			if header.Opcode == uint32(protocol.OpcodeCMSG_CORPSE_MAP_POSITION_QUERY) && state.authed && !hookBlocked {
-				if !state.handleCorpseMapPositionQuery(payload) {
+			// CMSG_TUTORIAL_FLAG (0x0FE), CMSG_TUTORIAL_CLEAR (0x0FF) and
+			// CMSG_TUTORIAL_RESET (0x100) are all STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:385-387), so the session
+			// update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them: the flag arm sets one account tutorial
+			// bit, the clear arm sets all eight tutorial ints and the
+			// reset arm zeroes them (CharacterHandler.cpp:1049-1076),
+			// and Go's handlers persist each change eagerly with
+			// saveTutorials, so dropping them would lose the change
+			// outright. None of the three arms clears logoutAt (zero
+			// logoutAt references in the tutorial handlers), so
+			// dispatch them here, then fall through to the expiry
+			// logout below; all three handlers return true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG) && state.authed && !hookBlocked {
+				if !state.handleTutorialFlag(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TUTORIAL_CLEAR) && state.authed && !hookBlocked {
+				if !state.handleTutorialClear(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TUTORIAL_RESET) && state.authed && !hookBlocked {
+				if !state.handleTutorialReset(ctx) {
+					return
+				}
+			}
+			// CMSG_OPENING_CINEMATIC (0x0F9), CMSG_NEXT_CINEMATIC_CAMERA
+			// (0x0FB) and CMSG_COMPLETE_CINEMATIC (0x0FC) are all
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:380-383),
+			// so the session update drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them: the opening arm replays the intro
+			// cinematic for a zero-XP player (CharacterHandler.cpp:2223),
+			// the next-camera arm begins the server-side cinematic
+			// (MiscHandler.cpp:905) and the complete arm ends it (:899).
+			// Go's opening arm answers SMSG_TRIGGER_CINEMATIC and its
+			// next/complete arms are no-ops (no cinematic manager), so
+			// dispatching them changes nothing beyond the opening
+			// answer. None of the three arms clears logoutAt, so
+			// dispatch them here, then fall through to the expiry
+			// logout below; the opening arm returns false only on a
+			// failed answer write, where returning matches the normal
+			// dispatch's write-failure arm, and the other two return
+			// true on every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_OPENING_CINEMATIC) && state.authed && !hookBlocked {
+				if !state.handleOpeningCinematic() {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_NEXT_CINEMATIC_CAMERA) && state.authed && !hookBlocked {
+				if !state.handleNextCinematicCamera() {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_COMPLETE_CINEMATIC) && state.authed && !hookBlocked {
+				if !state.handleCompleteCinematic(ctx) {
 					return
 				}
 			}
