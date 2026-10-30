@@ -5755,6 +5755,67 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BATTLEFIELD_STATUS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:855), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// answers SMSG_BATTLEFIELD_STATUS for every queued slot:
+			// in-progress, invited (wait-join) or queued with the
+			// average wait (BattleGroundHandler.cpp:546-601); the
+			// logout sends no status packet, so a drop leaves the
+			// queue display unanswered. No arm clears logoutAt, so
+			// dispatch it here like the raid-info leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_STATUS) && state.authed && !hookBlocked {
+				if !state.handleBattlefieldStatus(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BATTLEFIELD_PORT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:856), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The accept arm
+			// gates on a valid battleground, queue membership, an
+			// invite instance and a level bracket, demotes to leave
+			// on deserter or over-level, then sets the entry point,
+			// resurrects, ends taxi flight, removes the queue slot
+			// and answers STATUS_IN_PROGRESS before the
+			// SendToBattleground teleport
+			// (BattleGroundHandler.cpp:357-486); the leave arm
+			// clears the slot, answers STATUS_NONE and tracks a
+			// deserter leave (BattleGroundHandler.cpp:487-529).
+			// The logout runs neither arm and sends neither
+			// status packet, so a drop leaves the invite
+			// unanswered and the queue slot in its pre-port state.
+			// No arm clears logoutAt, so dispatch it here like the
+			// status leg, then fall through to the expiry logout
+			// below; the handler returns true on every path, so
+			// the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_PORT) && state.authed && !hookBlocked {
+				if !state.handleBattlefieldPort(ctx, payload) {
+					return
+				}
+			}
+			// MSG_INSPECT_HONOR_STATS is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:857), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// gates only on the target existing, being within
+			// inspect distance and not a valid attack target, then
+			// answers MSG_INSPECT_HONOR_STATS with honor points,
+			// kills and contributions (MiscHandler.cpp:1041-1068);
+			// the logout sends no answer. No arm clears logoutAt,
+			// so dispatch it here like the port leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_INSPECT_HONOR_STATS) && state.authed && !hookBlocked {
+				if !state.handleInspectHonorStats(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
