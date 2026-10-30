@@ -6917,6 +6917,43 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_COMPLETE_MOVIE (0x465), CMSG_QUERY_INSPECT_ACHIEVEMENTS (0x46B),
+			// CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D) and CMSG_REQUEST_VEHICLE_EXIT (0x476)
+			// are drained before the ShouldLogOut check: all four are STATUS_LOGGEDIN
+			// (Opcodes.cpp:1256, 1262, 1264, 1273; complete-movie is PROCESS_THREADUNSAFE,
+			// the other three PROCESS_INPLACE like the spellclick leg), and the expiry
+			// logout does NOT subsume them. The complete-movie arm clears the player's
+			// movie flag (MiscHandler.cpp:969); the query-inspect arm answers
+			// SMSG_RESPOND_INSPECT_ACHIEVEMENTS for a nearby non-hostile target
+			// (MiscHandler.cpp:1415); the dismiss arm stores the packet's movement info
+			// then exits the controlled vehicle (VehicleHandler.cpp:27); and the
+			// vehicle-exit arm exits the vehicle when its seat permits it (:190) —
+			// none of which the logout does. None of the four arms clears logoutAt, so
+			// dispatch them here like the missile-trajectory leg, then fall through to
+			// the expiry logout below; the complete-movie, dismiss and vehicle-exit arms
+			// return true on every path, and the query-inspect arm returns false only on
+			// a failed answer write, where returning matches the normal dispatch's
+			// write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_COMPLETE_MOVIE) && state.authed && !hookBlocked {
+				if !state.handleCompleteMovie(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUERY_INSPECT_ACHIEVEMENTS) && state.authed && !hookBlocked {
+				if !state.handleQueryInspectAchievements(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DISMISS_CONTROLLED_VEHICLE) && state.authed && !hookBlocked {
+				if !state.handleDismissControlledVehicle(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_EXIT) && state.authed && !hookBlocked {
+				if !state.handleRequestVehicleExit(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
