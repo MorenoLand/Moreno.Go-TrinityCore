@@ -6813,6 +6813,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CALENDAR_REMOVE_EVENT (0x42F), CMSG_CALENDAR_COPY_EVENT (0x430) and
+			// CMSG_CALENDAR_EVENT_INVITE (0x431) are drained before the ShouldLogOut check:
+			// all three are STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1202-1204),
+			// and the expiry logout does NOT subsume them. The remove-event arm deletes
+			// the event and its invites, alerting its relatives and mailing every
+			// invitee except the remover (CalendarHandler.cpp:409, CalendarMgr.cpp:217),
+			// or answers the invalid-event result, which the logout never does; the
+			// copy-event arm copies the event and its invites, answering the
+			// past/access/cap/cooldown errors (:420), which the logout never does;
+			// and the invite arm adds the invite or sends the pre-invite packet,
+			// answering the not-found/not-allied/ignoring/no-guild-invites/
+			// event-invalid errors (:507), which the logout never sends. None of
+			// the arms clears logoutAt, so dispatch them here like the
+			// update-event leg, then fall through to the expiry logout below; the
+			// remove/copy arms return false only on a failed command-result
+			// write, and the invite arm only on a failed answer write, where
+			// returning matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_REMOVE_EVENT) && state.authed && !hookBlocked {
+				if !state.handleCalendarRemoveEvent(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_COPY_EVENT) && state.authed && !hookBlocked {
+				if !state.handleCalendarCopyEvent(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_INVITE) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventInvite(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
