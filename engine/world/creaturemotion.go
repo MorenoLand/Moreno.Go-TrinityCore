@@ -269,7 +269,13 @@ type creatureMotion struct {
 	// spell + target + fire time and re-enters the victim body when the
 	// time arrives. A motion holds at most one pending cast of either
 	// kind: scheduling either cancels the other through the token.
-	PendingCastToken        uint64
+	PendingCastToken uint64
+	// PendingCastSpellID carries the twin deferral's in-flight spell so
+	// EffectInterruptCast can gate on its InterruptFlags/PreventionType
+	// (the inline twin is PendingInlineSpellID). Set at the twin schedule
+	// point, cleared by cancelPendingCreatureCast and by the deferred-fire
+	// callback once the window closes.
+	PendingCastSpellID      uint32
 	PendingInlineSpellID    uint32
 	PendingInlineTargetGUID uint64
 	PendingInlineFireAt     time.Time
@@ -282,11 +288,11 @@ type creatureMotion struct {
 	// same window CastingUntil carries for channeled casts). A later cast
 	// carrying a 76/106 channel-dest target resolves against this state in
 	// resolveCreatureSpellDestination; an expired or absent channel leaves
-	// the arm unresolved, as C++'s null GetCurrentSpell does. No
-	// channel-interrupt model exists (a cast that should interrupt the
-	// channel leaves the state until ChannelUntil, the same standing gap
-	// as the infinite-duration stamp), and the SendChannelStart packet
-	// itself is not sent on this path.
+	// the arm unresolved, as C++'s null GetCurrentSpell does. A channel
+	// breaks through interruptCreatureCast (EffectInterruptCast's
+	// ChannelInterruptFlags INTERRUPT bit + SILENCE prevention gate); the
+	// standing gap is only the infinite-duration channel, which stamps no
+	// state at all.
 	ChannelSpellID            uint32
 	ChannelTargetGUID         uint64
 	ChannelHasDest            bool

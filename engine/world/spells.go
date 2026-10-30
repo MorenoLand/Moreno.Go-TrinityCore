@@ -16075,6 +16075,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
 				if primaryLive {
 					s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
+					s.interruptCreatureTargetCast(targetGUID, spell)
 					interruptHandled = true
 				}
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
@@ -17696,21 +17697,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if primaryLive && !interruptHandled && isInterruptSpell(spellID) {
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
+			s.interruptCreatureTargetCast(targetGUID, spell)
 		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2619-2621): a
 		// spell with SPELL_ATTR7_INTERRUPT_ONLY_NONPLAYER (0x800) that lands
 		// on a non-player target fires a triggered SPELL_INTERRUPT_NONPLAYER
 		// (32747, "Deadly Interrupt Effect", SPELL_EFFECT_INTERRUPT_CAST) on
 		// it. Go has no miss model — landed hit targets are all
-		// SPELL_MISS_NONE — so the trigger's interrupt lands directly on the
-		// creature's cast state: CastingUntil arms both the generic and the
-		// channeled current spells (boss_ai.go), matching
-		// Spell::EffectInterruptCast (SpellEffects.cpp:3518-3520) interrupting
-		// CURRENT_FIRST_NON_MELEE_SPELL through CURRENT_AUTOREPEAT_SPELL.
-		// The TYPEID_PLAYER gate rides the findSessionByGUID filter — player
-		// targets are covered by the parent spell's own interrupt effect via
-		// the isInterruptSpell arm above. The SpellHistory school lockout
-		// (SpellHistory.cpp:517) has no creature model — documented delta.
+		// SPELL_MISS_NONE — so the trigger routes through the same gated
+		// creature arm as a direct effect-68 hit: the victim spell must be
+		// silence-preventable and carry the INTERRUPT bit, for both the
+		// generic deferral window and the live channel (SpellEffects.cpp:
+		// 3518-3520 loops CURRENT_FIRST_NON_MELEE_SPELL through
+		// CURRENT_AUTOREPEAT_SPELL). The old unconditional clear is gone:
+		// it broke channels whose ChannelInterruptFlags lack the INTERRUPT
+		// bit and left the channel stamp behind while clearing only the
+		// cast gate. The TYPEID_PLAYER gate rides the findSessionByGUID
+		// filter — player targets are covered by the parent spell's own
+		// interrupt effect via the isInterruptSpell arm above. The
+		// SpellHistory school lockout (SpellHistory.cpp:517) has no
+		// creature model — documented delta — and no interrupt log packet
+		// rides this triggered path, as before.
 		if primaryLive && spell.AttributesEx7&spellAttr7InterruptOnlyNonplayer != 0 {
 			for _, effectTarget := range hitTargets {
 				if effectTarget == 0 {
@@ -17719,9 +17726,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
 					continue
 				}
-				if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && time.Now().Before(motion.CastingUntil) {
-					motion.CastingUntil = time.Time{}
-					s.server.cancelPendingCreatureCast(motion)
+				if vm := s.findCreatureMotion(effectTarget); vm != nil {
+					s.server.interruptCreatureCast(vm)
 				}
 			}
 		}
@@ -25468,9 +25474,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// LAUNCH_TARGET per unit target; like the charge arm above,
 				// the LAUNCH leg has no separate launch-phase home on this
 				// path, so it rides the miss-filtered target list. The
-				// helper covers player targets only, same as the client
-				// arm (creature casts have no interrupt model here).
+				// session helper covers player targets; the creature arm
+				// below covers creature victims under the same gates.
 				s.handleEffectInterruptCast(ctx, effectTarget, spell, eff)
+				s.interruptCreatureTargetCast(effectTarget, spell)
 			} else if eff.Effect == spellEffectKnockBack || eff.Effect == spellEffectKnockBackDest {
 				// Spell::EffectKnockBack (SpellEffects.cpp:4552) runs at
 				// HIT_TARGET per unit target; the client arm's helper over

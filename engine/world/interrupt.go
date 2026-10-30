@@ -255,6 +255,110 @@ func (s *session) handleEffectInterruptCast(ctx context.Context, targetGUID uint
 	// only; procHitInterrupt is defined but unwired).
 }
 
+// interruptCreatureSpellGate evaluates EffectInterruptCast's victim-spell
+// gates (SpellEffects.cpp:3530-3535): the victim spell must be preventable
+// by silence, and the INTERRUPT bit must be set — InterruptFlags 0x08
+// for the generic arm, ChannelInterruptFlags 0x08 for the channeled arm.
+// A missing DBC row leaves the gates unevaluable; like the session arm
+// above, the cast then stays interruptible.
+func (s *Server) interruptCreatureSpellGate(spellID uint32, channeled bool) bool {
+	if s == nil || s.Data == nil {
+		return true
+	}
+	sp, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return true
+	}
+	if sp.PreventionType != spellPreventionTypeSilence {
+		return false
+	}
+	if channeled {
+		return sp.ChannelInterrupt&channelInterruptFlagInterrupt != 0
+	}
+	return sp.InterruptFlags&spellInterruptFlagInterrupt != 0
+}
+
+// interruptCreatureCast mirrors Spell::EffectInterruptCast
+// (SpellEffects.cpp:3511-3551) for a creature victim, returning the
+// interrupted spell IDs in C++ loop order (generic, then channeled) so
+// callers can log each. The generic arm covers the deferral window: a
+// twin cast-time cast (PendingCastSpellID) or a pending inline cast
+// (PendingInlineSpellID) — C++ SPELL_STATE_PREPARING with cast time > 0.
+// The channeled arm covers a live channel stamp (CURRENT_CHANNELED_SPELL,
+// SPELL_STATE_CASTING). Dead victims skip (SpellEffects.cpp:3519-3520).
+// Takes no locks itself; callers follow the ATTR7 lookup-then-operate
+// pattern. Deltas, matching the standing creature model: no SpellHistory
+// school lockout (no creature lockout registry), no SMSG_SPELL_FAILED /
+// MSG_CHANNEL_UPDATE broadcast (the evade, CC and damage-break clears
+// send none either), no AI OnSpellCastFinished hook (Unit.cpp:3171-3172),
+// and no IsInterruptable executing gate — Go creature casts execute
+// synchronously, so no executing window exists to protect. A CastingUntil
+// window with no pending spell ID — the triggered-cast stamp quirk, whose
+// spell cannot be gate-checked — is left alone, as are infinite-duration
+// channels, which stamp no channel state at all.
+func (s *Server) interruptCreatureCast(m *creatureMotion) []uint32 {
+	if s == nil || m == nil || m.Health == 0 {
+		return nil
+	}
+	var interrupted []uint32
+	var genericSpellID uint32
+	if m.PendingInlineSpellID != 0 {
+		genericSpellID = m.PendingInlineSpellID
+	} else if m.PendingCastSpellID != 0 {
+		genericSpellID = m.PendingCastSpellID
+	}
+	if genericSpellID != 0 && s.interruptCreatureSpellGate(genericSpellID, false) {
+		s.cancelPendingCreatureCast(m)
+		if !s.creatureChannelLive(m) {
+			m.CastingUntil = time.Time{}
+		}
+		interrupted = append(interrupted, genericSpellID)
+	}
+	if s.creatureChannelLive(m) && s.interruptCreatureSpellGate(m.ChannelSpellID, true) {
+		channelSpellID := m.ChannelSpellID
+		m.CastingUntil = time.Time{}
+		m.ChannelSpellID = 0
+		m.ChannelTargetGUID = 0
+		m.ChannelHasDest = false
+		m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
+		m.ChannelUntil = time.Time{}
+		s.cancelPendingCreatureCast(m)
+		interrupted = append(interrupted, channelSpellID)
+	}
+	return interrupted
+}
+
+// interruptCreatureTargetCast applies EffectInterruptCast to a creature
+// victim of a session-cast interrupt spell, logging each interrupted
+// spell through the caster session like the player-victim arm.
+func (s *session) interruptCreatureTargetCast(targetGUID uint64, interruptSpell wotlk.Spell) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	vm := s.findCreatureMotion(targetGUID)
+	if vm == nil {
+		return
+	}
+	for _, interruptedSpellID := range s.server.interruptCreatureCast(vm) {
+		s.sendInterruptCastLog(interruptSpell.ID, targetGUID, interruptedSpellID)
+	}
+}
+
+// buildInterruptCastLog packs one SMSG_SPELLLOGEXECUTE interrupt row:
+// the caster, the interrupt spell, the effect id, the interrupted unit
+// and the interrupted spell id.
+func buildInterruptCastLog(casterGUID uint64, interruptSpellID uint32, victimGUID uint64, interruptedSpellID uint32) []byte {
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(casterGUID)
+	log.WriteU32(interruptSpellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectInterruptCast)
+	log.WriteU32(1)
+	log.WritePackedGUID(victimGUID)
+	log.WriteU32(interruptedSpellID)
+	return log.Bytes()
+}
+
 // sendInterruptCastLog mirrors Spell::ExecuteLogEffectInterruptCast
 // (Spell.cpp:4573-4578) as flushed by SendLogExecute (Spell.cpp:4523-4555):
 // SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
@@ -263,17 +367,10 @@ func (s *session) sendInterruptCastLog(interruptSpellID uint32, victimGUID uint6
 	if s == nil || s.player == nil {
 		return
 	}
-	log := protocol.NewBuffer(32)
-	log.WritePackedGUID(s.playerGUID)
-	log.WriteU32(interruptSpellID)
-	log.WriteU32(1)
-	log.WriteU32(spellEffectInterruptCast)
-	log.WriteU32(1)
-	log.WritePackedGUID(victimGUID)
-	log.WriteU32(interruptedSpellID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
+	payload := buildInterruptCastLog(s.playerGUID, interruptSpellID, victimGUID, interruptedSpellID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), payload, true)
 	if s.server != nil {
-		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes())
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), payload)
 	}
 }
 

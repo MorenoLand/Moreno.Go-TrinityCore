@@ -1733,6 +1733,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 				s.cancelPendingCreatureCast(m)
+				m.PendingCastSpellID = spellID
 				s.scheduleDeferredTwinCast(m, spellID, targetGUID, basePoints, castMs, m.PendingCastToken)
 				return
 			}
@@ -3530,11 +3531,15 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 
 // creatureEffectInterruptCast mirrors Spell::EffectInterruptCast
 // (SpellEffects.cpp:3511) for a creature caster: the LAUNCH_TARGET arm,
-// placed ahead of the HIT arms below like the C++ launch phase. Creature
-// victims carry no in-flight casts on this path (fire-and-forget), so only
-// player hit targets interrupt; a landed reflect retargets to the caster
-// (Spell.cpp:2350), which is vacuous for the same reason. Missed, evaded,
-// immune and bounced targets skip like every other per-hit leg here.
+// placed ahead of the HIT arms below like the C++ launch phase. Player
+// hit targets interrupt through the session arm; creature hit targets
+// interrupt through interruptCreatureCast (deferral windows and live
+// channels, under the effect's own gates). A landed reflect retargets to
+// the caster (Spell.cpp:2350), so a reflected hit interrupts the casting
+// creature itself; a reflect that itself missed skips. Missed, evaded,
+// immune and bounced targets skip like every other per-hit leg here. Each
+// interrupted creature spell logs through SMSG_SPELLLOGEXECUTE broadcast
+// around the caster, mirroring the session arm's caster-side log.
 func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -3543,11 +3548,20 @@ func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMot
 		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
 			continue
 		}
-		if _, isReflected := reflected[guid]; isReflected {
-			continue
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
 		}
 		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 			ts.handleEffectInterruptCast(ctx, guid, spell, eff)
+			continue
+		}
+		if vm := s.findCreatureMotion(m.Map, m.InstanceID, guid); vm != nil {
+			for _, interruptedSpellID := range s.interruptCreatureCast(vm) {
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), buildInterruptCastLog(m.GUID, spell.ID, guid, interruptedSpellID), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			}
 		}
 	}
 }

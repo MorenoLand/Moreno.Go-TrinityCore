@@ -6,19 +6,21 @@ import (
 )
 
 // cancelPendingCreatureCast drops a motion's pending cast-time cast: the
-// token moves so an armed twin fire callback no longer matches, and the
-// tick-driven inline pending clears. Callers are every site that ends a
-// cast early (evade, breakable-CC interrupt, Lua CombatStop with
-// includingCast, the interrupt-only-nonplayer arm) and every site where a
-// new non-triggered cast irrevocably starts (the twin deferral point, the
-// twin GO send, the inline schedule point) — C++ Unit::CastSpell replaces
-// the current generic spell, and a fizzled CheckCast never reaches those
-// points, so a failed cast never cancels a live one.
+// token moves so an armed twin fire callback no longer matches, the
+// tick-driven inline pending clears, and the twin pending spell ID
+// clears. Callers are every site that ends a cast early (evade,
+// breakable-CC interrupt, Lua CombatStop with includingCast, the
+// EffectInterruptCast arm) and every site where a new non-triggered cast
+// irrevocably starts (the twin deferral point, the twin GO send, the
+// inline schedule point) — C++ Unit::CastSpell replaces the current
+// generic spell, and a fizzled CheckCast never reaches those points, so
+// a failed cast never cancels a live one.
 func (s *Server) cancelPendingCreatureCast(m *creatureMotion) {
 	if m == nil {
 		return
 	}
 	m.PendingCastToken++
+	m.PendingCastSpellID = 0
 	m.PendingInlineSpellID = 0
 	m.PendingInlineTargetGUID = 0
 	m.PendingInlineFireAt = time.Time{}
@@ -44,6 +46,7 @@ func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, tar
 		if motion == nil || motion.Health == 0 || motion.PendingCastToken != token {
 			return
 		}
+		motion.PendingCastSpellID = 0
 		s.castCreatureSpellInternalWithBasePoints(context.Background(), motion, spellID, targetGUID, false, bpCopy, true)
 	})
 }
