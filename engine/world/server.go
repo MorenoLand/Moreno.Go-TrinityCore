@@ -4831,6 +4831,180 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SEND_MAIL is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:699), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm deducts the postage plus the
+			// sent money, moves the attached items out of
+			// inventory, INSERTs the mail row and answers
+			// MAIL_OK (MailHandler.cpp:62-310); Go's handler
+			// INSERTs the mail and mail_items rows eagerly
+			// while the logout save writes no mail rows, so
+			// a drop loses the sent mail outright. The
+			// mailbox, empty-target, level, unknown-recipient,
+			// self-send and not-enough-money arms are silent
+			// or answered in both. The mailbox gate checks
+			// in-world, flight, flags and distance — never
+			// stunned or rooted — so the countdown's root/stun
+			// does not block a mailbox the player already
+			// stands at. No arm clears logoutAt, so dispatch
+			// it here like the officer-note leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SEND_MAIL) && state.authed && !hookBlocked {
+				if !state.handleSendMail(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GET_MAIL_LIST is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:701), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm answers SMSG_MAIL_LIST_RESULT
+			// with the delivered, non-deleted mails and
+			// recalculates the next-mail time and unread count
+			// (MailHandler.cpp:539-563); the logout sends no
+			// list. The closed-mailbox arm is silent in both.
+			// No arm clears logoutAt, so dispatch it here
+			// like the send-mail leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GET_MAIL_LIST) && state.authed && !hookBlocked {
+				if !state.handleGetMailList(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_TAKE_MONEY is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:712), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm credits the mail money, zeroes
+			// the mail money and commits the gold and mail
+			// rows at once (MailHandler.cpp:505-537); Go's
+			// handler UPDATEs the character money and the
+			// mail money rows eagerly while the logout save
+			// writes no mail rows, so a drop loses the take
+			// outright. The closed-mailbox, missing, deleted
+			// and undelivered arms answer the error in both.
+			// No arm clears logoutAt, so dispatch it here
+			// like the get-mail-list leg, then fall through
+			// to the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_TAKE_MONEY) && state.authed && !hookBlocked {
+				if !state.handleMailTakeMoney(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_TAKE_ITEM is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:713), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm stores the attached item, pays
+			// any COD on to the sender by return mail, and
+			// commits the inventory, gold and mail rows at
+			// once (MailHandler.cpp:409-503); Go's handler
+			// writes those rows eagerly while the logout save
+			// writes no mail rows, so a drop loses the take
+			// outright. The closed-mailbox, missing, deleted,
+			// undelivered, unattached and no-room arms answer
+			// the error in both. No arm clears logoutAt, so
+			// dispatch it here like the take-money leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_TAKE_ITEM) && state.authed && !hookBlocked {
+				if !state.handleMailTakeItem(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_MARK_AS_READ is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:714), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets the READ flag and drops
+			// the unread count (MailHandler.cpp:311-327);
+			// Go's handler UPDATEs the mail checked row
+			// eagerly while the logout save writes no mail
+			// rows, so a drop leaves the mail unread at next
+			// login. The closed-mailbox, missing and deleted
+			// arms are silent in both. No arm clears logoutAt,
+			// so dispatch it here like the take-item leg,
+			// then fall through to the expiry logout below;
+			// the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_MARK_AS_READ) && state.authed && !hookBlocked {
+				if !state.handleMailMarkAsRead(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_RETURN_TO_SENDER is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:715), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm DELETEs the mail and its items
+			// and re-mints it to the sender (MailHandler.cpp:
+			// 351-407); Go's handler DELETEs and re-INSERTs
+			// those rows eagerly while the logout save writes
+			// no mail rows, so a drop keeps the mail with the
+			// receiver at next login. The closed-mailbox,
+			// missing, deleted and undelivered arms answer
+			// the error in both. No arm clears logoutAt, so
+			// dispatch it here like the mark-as-read leg,
+			// then fall through to the expiry logout below;
+			// the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_RETURN_TO_SENDER) && state.authed && !hookBlocked {
+				if !state.handleMailReturnToSender(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_DELETE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:716), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm marks the mail deleted and
+			// answers MAIL_DELETED MAIL_OK (MailHandler.cpp:
+			// 329-349); Go's handler DELETEs the mail and
+			// mail_items rows eagerly while the logout save
+			// writes no mail rows, so a drop resurrects the
+			// mail at next login. The closed-mailbox arm is
+			// silent in both and the COD arm answers the
+			// error in both. No arm clears logoutAt, so
+			// dispatch it here like the return leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_DELETE) && state.authed && !hookBlocked {
+				if !state.handleMailDelete(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_MAIL_CREATE_TEXT_ITEM is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:717), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm mints the body-text item, sets
+			// the COPIED flag and answers MAIL_MADE_PERMANENT
+			// MAIL_OK (MailHandler.cpp:565-639); Go's handler
+			// INSERTs the item row and UPDATEs the mail
+			// checked row eagerly while the logout save writes
+			// no mail rows, so a drop loses the text item
+			// outright. The closed-mailbox, missing, empty,
+			// deleted, undelivered, already-copied and
+			// no-room arms answer the error in both. No arm
+			// clears logoutAt, so dispatch it here like the
+			// delete leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MAIL_CREATE_TEXT_ITEM) && state.authed && !hookBlocked {
+				if !state.handleMailCreateTextItem(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
