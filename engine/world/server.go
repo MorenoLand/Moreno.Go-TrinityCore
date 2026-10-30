@@ -5816,6 +5816,103 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BATTLEMASTER_HELLO is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:858), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// gates on the battlemaster being interactable with
+			// UNIT_NPC_FLAG_BATTLEMASTER, pauses its movement,
+			// re-bases its home position, checks the level gate
+			// and answers the battleground list
+			// (BattleGroundHandler.cpp:41-65); the logout sends
+			// no list, pauses nothing and re-bases nothing, so a
+			// drop leaves the hello unanswered. No arm clears
+			// logoutAt, so dispatch it here like the honor-stats
+			// leg, then fall through to the expiry logout below;
+			// the handler returns false only on a failed list
+			// write, mirroring the normal arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEMASTER_HELLO) && state.authed && !hookBlocked {
+				if !state.handleBattlemasterHello(ctx, payload) {
+					return
+				}
+			}
+			// MSG_PVP_LOG_DATA is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:867), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// answers MSG_PVP_LOG_DATA with the battleground's
+			// scores when the player is in a non-arena
+			// battleground, and stays silent out of one or in an
+			// arena (BattleGroundHandler.cpp:313-330); the logout
+			// sends no log packet, so a drop leaves the scores
+			// display unanswered. No arm clears logoutAt, so
+			// dispatch it here like the hello leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_PVP_LOG_DATA) && state.authed && !hookBlocked {
+				if !state.handlePvpLogData(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_LEAVE_BATTLEFIELD is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:868), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// denies the leave while in combat unless the BG is
+			// already STATUS_WAIT_LEAVE, then runs
+			// LeaveBattleground: deserter cast and tracking plus
+			// the entry-point teleport
+			// (BattleGroundHandler.cpp:528-544); the logout's own
+			// leave call passes fromLogout, which skips exactly
+			// the deserter cast and tracking, so a drop loses
+			// both and strands the slot. No arm clears logoutAt,
+			// so dispatch it here like the log-data leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LEAVE_BATTLEFIELD) && state.authed && !hookBlocked {
+				if !state.handleLeaveBattlefield(ctx, payload, false, false) {
+					return
+				}
+			}
+			// CMSG_AREA_SPIRIT_HEALER_QUERY is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:869), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// gates on the guid resolving to a spirit-service
+			// creature, then answers the area spirit-healer time
+			// through the live battleground and the battlefield
+			// owning the zone (MiscHandler.cpp:1459-1480); the
+			// logout sends no time packet, so a drop leaves the
+			// revive timer unanswered. No arm clears logoutAt, so
+			// dispatch it here like the leave leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUERY) && state.authed && !hookBlocked {
+				if !state.handleAreaSpiritHealerQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AREA_SPIRIT_HEALER_QUEUE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:870), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The live arm
+			// shares the query's spirit-service gate, then joins
+			// the player to the battleground or battlefield
+			// resurrect queue with the waiting-for-resurrect aura
+			// (MiscHandler.cpp:1482-1503); the logout queues
+			// nothing, so a drop leaves the ghost unqueued at
+			// next login. No arm clears logoutAt, so dispatch it
+			// here like the query leg, then fall through to the
+			// expiry logout below; the handler returns true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUEUE) && state.authed && !hookBlocked {
+				if !state.handleAreaSpiritHealerQueue(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
