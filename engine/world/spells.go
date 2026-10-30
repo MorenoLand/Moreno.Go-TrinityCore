@@ -22598,6 +22598,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		anchor := targetGUID
+		skipFirstLeg := false
 		switch chainTarget {
 		case 6, 21, 25, 35, 45, 57, 90, 95:
 			if spellTarget.UnitGUID != 0 {
@@ -22611,16 +22612,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				return
 			}
 			if status != nearbyPickFound || pick == 0 {
-				continue
+				// Unknown miss: the nearby leg itself chains nothing,
+				// but C++ selects TargetA and TargetB independently
+				// (Spell.cpp:761-779), so the object second leg below
+				// still runs from the wire target instead of being
+				// skipped with the first leg.
+				skipFirstLeg = true
+			} else {
+				anchor = pick
 			}
-			anchor = pick
 		default:
 			continue
 		}
-		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
-			chainPrimaryByEffect[i] = anchor
+		if !skipFirstLeg {
+			if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+				chainPrimaryByEffect[i] = anchor
+			}
+			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
 		}
-		chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
 		// A second TARGET-object leg unions here too: DEFAULT never marks
 		// the effect processed (Spell.cpp:866-900), so the B leg's chain
 		// arm runs beside A's with its own check type; the mixed
