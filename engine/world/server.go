@@ -6256,6 +6256,53 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LFG_JOIN, CMSG_LFG_LEAVE, CMSG_SEARCH_LFG_JOIN
+			// and CMSG_SEARCH_LFG_LEAVE are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:991-994), so the
+			// session update drains them before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// them. The join arm gates on the dungeon-finder /
+			// raid-browser option, a grouped non-leader in a full
+			// or non-LFG group, and the dungeon/role gates, then
+			// takes the queue slot and answers the join result
+			// (LFGHandler.cpp:51-76, LFGMgr.cpp:405-557); the
+			// logout enqueues nothing and sends no join result,
+			// so a drop leaves the player unqueued and the join
+			// unanswered. The leave arm gates on group leader,
+			// then leaves the queue (LFGHandler.cpp:78-88,
+			// LFGMgr.cpp:714-751); the logout clears no LFG
+			// queue entry, so a drop leaves the player queued.
+			// The search arms read the raid entry and do nothing
+			// else in both (LFGHandler.cpp:259-275, bodies
+			// commented out), so their legs are drain-order
+			// fidelity, like the arena-team-decline leg. None
+			// of the four arms clears logoutAt, so dispatch
+			// them here like the arena leg, then fall through
+			// to the expiry logout below; the join arm returns
+			// false only on a failed join-result write, where
+			// returning matches the normal dispatch's
+			// write-failure arm, and the other three return
+			// true on every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_JOIN) && state.authed && !hookBlocked {
+				if !state.handleLFGJoin(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_LEAVE) && state.authed && !hookBlocked {
+				if !state.handleLFGLeave() {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SEARCH_LFG_JOIN) && state.authed && !hookBlocked {
+				if !state.handleSearchLfgJoin(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SEARCH_LFG_LEAVE) && state.authed && !hookBlocked {
+				if !state.handleSearchLfgLeave(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
