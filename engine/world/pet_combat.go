@@ -4737,9 +4737,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-			s.server.creatureEffectSummonObject(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
+			s.server.creatureEffectSummonObject(ctx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
 		case spellEffectSummonObjectWild:
-			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz)
+			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
 		}
 	}
 	// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the pet

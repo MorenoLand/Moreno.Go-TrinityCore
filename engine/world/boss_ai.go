@@ -2631,9 +2631,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-				s.creatureEffectSummonObject(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ)
+				s.creatureEffectSummonObject(ctx, m, spellInfo, spellInfo.Effects[i], i, hasDest, destSnapshots)
 			case spellEffectSummonObjectWild:
-				s.creatureEffectSummonObjectWild(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ)
+				s.creatureEffectSummonObjectWild(ctx, m, spellInfo, spellInfo.Effects[i], i, hasDest, destSnapshots)
 			}
 		}
 	}
@@ -3876,14 +3876,18 @@ func (s *Server) creatureEffectSummonPet(ctx context.Context, m *creatureMotion,
 // 104-107 (SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4). The slot's previous game
 // object is despawned first (the recast arm nulls its spell id when the
 // same spell recasts, so despawn doesn't strip the spell's auras), then a
-// fresh GO (effect MiscValue entry) spawns at the cast's dest position — or
-// a close point in front of the caster when no dest is present — with the
-// caster's faction, the spell's duration and spell id, and the slot takes
-// the new GUID. The template lookup is the Go equivalent of
+// fresh GO (effect MiscValue entry) spawns at the effect's own dest slot
+// (Spell.cpp:789, 5159) — a dest-family effect after this effect must not
+// move it — or a close point in front of the caster when the cast carries
+// no dest at all (the m_targets.HasDst gate, SpellEffects.cpp:4215), with
+// the caster's faction, the spell's duration and spell id, and the slot
+// takes the new GUID. A slot with no dest falls back to the caster
+// position (the Spell.cpp:630 slot init), matching creatureEffectSummonType.
+// The template lookup is the Go equivalent of
 // GameObject::Create failing on an unknown entry; the GO model carries no
 // level field, so the C++ GAMEOBJECT_LEVEL stamp has no twin. The spawn
 // log follows the Transmitted-leg format.
-func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32) {
+func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, hasDest bool, snapshots []creatureDestSnapshot) {
 	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
@@ -3912,9 +3916,9 @@ func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMoti
 		return
 	}
 	x, y, z := m.X, m.Y, m.Z
-	if hasDest {
-		x, y, z = dx, dy, dz
-	} else {
+	if effIndex < len(snapshots) && snapshots[effIndex].Has {
+		x, y, z = snapshots[effIndex].X, snapshots[effIndex].Y, snapshots[effIndex].Z
+	} else if !hasDest {
 		// WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS)
 		// (Object.cpp:3307, ObjectDefines.h:39): 0.389 in front of the caster.
 		x = m.X + 0.389*float32(math.Cos(float64(m.Orientation)))
@@ -3954,14 +3958,18 @@ func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMoti
 // creatureEffectSummonObjectWild mirrors Spell::EffectSummonObjectWild
 // (SpellEffects.cpp:3552) for a creature caster: the HIT arm for effect 76
 // (SPELL_EFFECT_SUMMON_OBJECT_WILD). A wild (ownerless) game object spawns
-// at the cast's dest position — or a close point in front of the caster
-// when no dest is present — for the spell's duration. C++ anchors the
+// at the effect's own dest slot (Spell.cpp:789, 5159) — a dest-family
+// effect after this effect must not move it — or a close point in front
+// of the caster when the cast carries no dest at all (the m_targets.HasDst
+// gate, SpellEffects.cpp:3552), for the spell's duration. A slot with no
+// dest falls back to the caster position (the Spell.cpp:630 slot init),
+// matching creatureEffectSummonType. C++ anchors the
 // position and orientation on focusObject when one exists; the creature
 // path carries no focusObject model, so the caster anchors both. The
 // FLAGDROP leg is vacuous (a creature caster is never a battleground
 // player) and the linked-trap leg has no Go trap model (gameobjects.go),
 // matching the Transmitted arm's omission.
-func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32) {
+func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, hasDest bool, snapshots []creatureDestSnapshot) {
 	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
@@ -3977,9 +3985,9 @@ func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creature
 		return
 	}
 	x, y, z := m.X, m.Y, m.Z
-	if hasDest {
-		x, y, z = dx, dy, dz
-	} else {
+	if effIndex < len(snapshots) && snapshots[effIndex].Has {
+		x, y, z = snapshots[effIndex].X, snapshots[effIndex].Y, snapshots[effIndex].Z
+	} else if !hasDest {
 		x = m.X + 0.389*float32(math.Cos(float64(m.Orientation)))
 		y = m.Y + 0.389*float32(math.Sin(float64(m.Orientation)))
 		z = m.Z

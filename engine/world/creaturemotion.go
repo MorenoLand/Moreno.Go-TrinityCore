@@ -5154,9 +5154,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				for i := range inlineSpell.Effects {
 					switch inlineSpell.Effects[i].Effect {
 					case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-						s.creatureEffectSummonObject(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+						s.creatureEffectSummonObject(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, inlineSummonSnapshots)
 					case spellEffectSummonObjectWild:
-						s.creatureEffectSummonObjectWild(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+						s.creatureEffectSummonObjectWild(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, inlineSummonSnapshots)
 					case spellEffectTransmitted:
 						s.creatureEffectTransmitted(ctx, motion, spellTarget, inlineSpell, inlineSpell.Effects[i])
 					case spellEffectTriggerRitualOfSummoning:
