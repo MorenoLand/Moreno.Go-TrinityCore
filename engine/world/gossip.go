@@ -1733,18 +1733,27 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	// 1. Send visual cast of homebind spell 3286 from NPC to player (TC: npc->CastSpell(_player, 3286, true))
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	castFlags := spellCastFlagGo | spellCastFlagPending
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(3286); err == nil && found {
 			target = spellGoPacketTarget(spellInfo, target)
 			if motion := s.findCreatureMotion(npcGUID); motion != nil {
 				target = finalizeSessionSrcTarget(spellInfo, target, false, motion.X, motion.Y, motion.Z)
 			}
+			if spellInfo.StartRecoveryTime == 0 {
+				castFlags |= protocol.SpellCastFlagNoGCD
+			}
 		}
 	}
-	// SendSpellGo (Spell.cpp:4292): NPCHandler.cpp:278 casts 3286
-	// triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs a
-	// player or pet caster, and the innkeeper is neither, so it stays off.
-	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo|spellCastFlagPending, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+	// SendSpellGo (Spell.cpp:4292/4297/4325): NPCHandler.cpp:278 casts
+	// 3286 triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs
+	// a player or pet caster, and the innkeeper is neither, so it stays
+	// off; NO_GCD (:4325) has no caster gate, so it applies when the
+	// resolved spell has no start recovery time. AMMO (:4295) stays off
+	// — the creature virtual-item ammo model is unbridged (boss_ai.go
+	// precedent) — and ADJUST_MISSILE (:4316) needs a packet traj speed
+	// this hand-built target never carries.
+	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)

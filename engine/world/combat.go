@@ -1825,13 +1825,22 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{target.GUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
-	// SendSpellGo (Spell.cpp:4292/4297): PENDING is EXCLUDED here — the
-	// predicate skips auto-repeat ranged spells, and this swing is one
-	// (Unit.cpp:3056 re-fire). POWER_LEFT_SELF applies for the player
-	// caster when the resolved spell's power is not health; an unresolved
-	// spell carries neither new flag.
+	// SendSpellGo (Spell.cpp:4292/4295/4297/4316/4325): PENDING is
+	// EXCLUDED here — the predicate skips auto-repeat ranged spells, and
+	// this swing is one (Unit.cpp:3056 re-fire). POWER_LEFT_SELF applies
+	// for the player caster when the resolved spell's power is not
+	// health; NO_GCD (:4325) has no caster gate, so it applies when the
+	// resolved spell has no start recovery time; AMMO (:4295) applies
+	// when the resolved spell carries REQ_AMMO or CU_NEEDS_AMMO_DATA,
+	// with the ammo block from spellGoAmmoData; ADJUST_MISSILE (:4316)
+	// stays off — the swing target is built fresh with no packet traj
+	// speed (HasTraj is m_speed != 0, Spell.h:198), and the C++ re-fire
+	// reuses the original unit-targeted auto-repeat targets, which
+	// carry no trajectory speed either. An unresolved spell carries
+	// neither new flag.
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
+	var goExtras protocol.SpellGoTrailerExtras
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found {
 			spellTarget = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, spellTarget), false, s.player.X, s.player.Y, s.player.Z)
@@ -1840,12 +1849,19 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				power := s.player.Powers[spellInfo.PowerType]
 				remainingPower = &power
 			}
+			if spellInfo.StartRecoveryTime == 0 {
+				castFlags |= protocol.SpellCastFlagNoGCD
+			}
+			if spellInfo.Attributes&spellAttr0ReqAmmo != 0 || spellInfo.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+				castFlags |= protocol.SpellCastFlagAmmo
+				goExtras.Ammo = s.spellGoAmmoData(ctx)
+			}
 		}
 	}
-	goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower)
+	goPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags, castTimeStamp, hitTargets, nil, spellTarget, remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
-		nearbyPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget)
+		nearbyPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, castID, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, hitTargets, nil, spellTarget, nil, goExtras)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID, scripting.CreatureEventOnOwnerAttacked)
 	}
@@ -3848,14 +3864,22 @@ func (s *session) castVisualSpell(spellID uint32) {
 		return
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-	// SendSpellGo (Spell.cpp:4292/4297): every call site casts triggered
-	// (Unit.cpp:972, DuelHandler.cpp:71, Player.cpp:7399,
+	// SendSpellGo (Spell.cpp:4292/4295/4297/4316/4325): every call site
+	// casts triggered (Unit.cpp:972, DuelHandler.cpp:71, Player.cpp:7399,
 	// Battleground.cpp:318), so PENDING applies; POWER_LEFT_SELF applies
 	// for the player caster when the resolved spell's power is not health
-	// (login-effect 836 precedent, characters.go). An unresolved spell
-	// keeps PENDING only — the flag without power bytes would corrupt parsing.
+	// (login-effect 836 precedent, characters.go); NO_GCD (:4325) has no
+	// caster gate, so it applies when the resolved spell has no start
+	// recovery time; AMMO (:4295) applies when the resolved spell carries
+	// REQ_AMMO or CU_NEEDS_AMMO_DATA, with the ammo block from
+	// spellGoAmmoData (no packet ctx here, so the data query runs only
+	// when the attribute gate fires); ADJUST_MISSILE (:4316) stays off —
+	// the hand-built target carries no packet traj speed (HasTraj is
+	// m_speed != 0, Spell.h:198). An unresolved spell keeps PENDING
+	// only — the flag without power bytes would corrupt parsing.
 	castFlags := spellCastFlagGo | spellCastFlagPending
 	var remainingPower *uint32
+	var goExtras protocol.SpellGoTrailerExtras
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found {
@@ -3865,12 +3889,19 @@ func (s *session) castVisualSpell(spellID uint32) {
 				power := s.player.Powers[spellInfo.PowerType]
 				remainingPower = &power
 			}
+			if spellInfo.StartRecoveryTime == 0 {
+				castFlags |= protocol.SpellCastFlagNoGCD
+			}
+			if spellInfo.Attributes&spellAttr0ReqAmmo != 0 || spellInfo.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+				castFlags |= protocol.SpellCastFlagAmmo
+				goExtras.Ammo = s.spellGoAmmoData(context.Background())
+			}
 		}
 	}
-	castPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 1, spellID, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target, remainingPower)
+	castPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 1, spellID, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target, remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt, true)
 	if s.server != nil {
-		nearbyPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+		nearbyPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 1, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, []uint64{s.playerGUID}, nil, target, nil, goExtras)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
