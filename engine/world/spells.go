@@ -3948,6 +3948,24 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				castTarget.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
 			}
 		}
+		// Src seed snapshot, mirroring the dest stamp above: InitExplicit
+		// SetSrc (Spell.cpp:724-727) freezes the caster position at
+		// prepare when the mask needs SOURCE_LOCATION and the packet
+		// carries no src, and _cast (Spell.cpp:3410) re-runs only
+		// SelectSpellTargets, which re-sets src solely through the 22
+		// arm — so a non-22 seed stays prepare-time while Go's
+		// finalizeSessionSrcTarget would live-resolve it at completion.
+		// A cast without SPELL_INTERRUPT_FLAG_MOVEMENT survives
+		// movement mid-bar, so prepare and finish positions differ.
+		// Excluded when a packet src exists (already frozen in the
+		// target copy) and for 22 spells (finalize's 22 arm overwrites
+		// with the live caster position, matching the _cast re-set).
+		// The stamped flag reads as a packet src at finish, so
+		// finalize keeps the stamped position.
+		if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+			castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
+			castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+		}
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:               castID,

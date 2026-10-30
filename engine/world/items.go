@@ -4997,6 +4997,18 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					castTarget.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
 				}
 			}
+			// Src seed snapshot, mirroring the dest stamp above and the
+			// client cast-bar path (spells.go): InitExplicit SetSrc
+			// (Spell.cpp:724-727) freezes the caster position at prepare
+			// when the mask needs SOURCE_LOCATION and the packet carries
+			// no src; _cast (Spell.cpp:3410) re-sets src only through
+			// the 22 arm, so a non-22 seed stays prepare-time. Excluded
+			// for packet src (frozen in the target copy) and 22 spells
+			// (finalize's 22 arm overwrites with the live caster pos).
+			if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+				castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
+				castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
+			}
 			s.castMu.Lock()
 			castState := &activeCastState{
 				CastID:               castCount,
