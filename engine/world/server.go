@@ -5496,6 +5496,59 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_AUTOSTORE_BANK_ITEM and CMSG_AUTOBANK_ITEM are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:773-774),
+			// so the session update drains them before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume them.
+			// Autostore-bank-item moves a bank item into inventory
+			// (CanStoreItem + StoreItem + ItemAddedQuestCheck) or an
+			// inventory item into the bank (CanBankItem + BankItem),
+			// behind the banker interact gate (BankHandler.cpp:95-136);
+			// autobank-item banks an inventory item (CanBankItem,
+			// own-position EQUIP_ERR_NONE, RemoveItem +
+			// ItemRemovedQuestCheck + BankItem, :62-93). Go moves
+			// the row with an eager UPDATE character_inventory
+			// plus the quest-count adjust and the inventory
+			// broadcast, and the logout save writes no
+			// character_inventory bag/slot rows — so a drop leaves
+			// the item in its pre-move slot at next login. Neither
+			// arm clears logoutAt, so dispatch them here like the
+			// far-sight leg, then fall through to the expiry logout
+			// below; both handlers return true on every path, so
+			// the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOSTORE_BANK_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAutoStoreBankItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUTOBANK_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAutoBankItem(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BUYBACK_ITEM is STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:787), so the session update drains it
+			// before the ShouldLogOut check — and the expiry logout
+			// does NOT subsume it; it destroys it. The live arm
+			// gates on an interactable vendor, strips a faked death,
+			// then spends the money, frees the buyback slot, runs
+			// the quest check and stores the item back into
+			// inventory (ItemHandler.cpp:490-541). Go eagerly
+			// UPDATEs the money and moves the row out of slots
+			// 74-85 before the logout's clearBuybackState deletes
+			// whatever buyback rows remain (C++ _SaveInventory
+			// likewise deletes buyback rows on every save,
+			// Player.cpp:19947-19977) — so a dropped buyback
+			// loses the item outright instead of deferring the
+			// purchase. No arm clears logoutAt, so dispatch it
+			// here like the autobank leg, then fall through to
+			// the expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUYBACK_ITEM) && state.authed && !hookBlocked {
+				if !state.handleBuybackItem(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
