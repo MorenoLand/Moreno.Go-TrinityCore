@@ -1262,7 +1262,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		return
 	}
 	now := time.Now()
-	castID := uint8(1)
+	castID := uint8(0)
 	castFlags := uint32(spellCastFlagGo)
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}

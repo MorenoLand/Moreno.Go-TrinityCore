@@ -3330,7 +3330,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			if targetGUID != 0 && spellOrAction != 0 {
 				castTimeStamp := uint32(time.Now().UnixMilli())
 				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
+				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 0, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 				if s.server != nil {
 					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
