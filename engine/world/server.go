@@ -3020,6 +3020,40 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CANCEL_AURA, CMSG_CANCEL_MOUNT_AURA,
+			// CMSG_CANCEL_GROWTH_AURA and CMSG_CANCEL_TEMP_ENCHANTMENT are
+			// STATUS_LOGGEDIN (Opcodes.cpp:441, 1016, 798, 1020), so the C++
+			// drain runs their handlers before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and unlike the cast and
+			// auto-repeat cancels, the expiry logout does NOT subsume them:
+			// completeLogoutWithPacket saves the player state
+			// (savePlayerAuras) BEFORE clearActiveAuras, so a dropped aura
+			// cancel would persist the aura into character_aura and re-apply
+			// it on next login, and a dropped temp-enchant cancel would leave
+			// the enchantment row in item_instance (the logout save never
+			// rewrites it). Dispatch them here like the cast-start leg, then
+			// fall through to the expiry logout below; the handlers return
+			// true on every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_AURA) && state.authed && !hookBlocked {
+				if !state.handleCancelAura(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_MOUNT_AURA) && state.authed && !hookBlocked {
+				if !state.handleCancelMountAura(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_GROWTH_AURA) && state.authed && !hookBlocked {
+				if !state.handleCancelGrowthAura(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_TEMP_ENCHANTMENT) && state.authed && !hookBlocked {
+				if !state.handleCancelTempEnchantment(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
