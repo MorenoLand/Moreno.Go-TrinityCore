@@ -6738,6 +6738,53 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_ACCEPT_LEVEL_GRANT (0x420), CMSG_ALTER_APPEARANCE (0x426),
+			// CMSG_CALENDAR_GET_CALENDAR (0x429), CMSG_CALENDAR_GET_EVENT
+			// (0x42A) and CMSG_CALENDAR_GUILD_FILTER (0x42B) are drained
+			// before the ShouldLogOut check: all five are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1187, 1193, 1199-1201), and
+			// the expiry logout does NOT subsume them. The accept arm spends
+			// one granter grantable level and gives the acceptor a level
+			// (ReferAFriendHandler.cpp:67); the alter arm charges the barber
+			// cost, applies the new hair/face/skin and stands the player up
+			// (CharacterHandler.cpp:1274), which the logout save would
+			// persist only in its pre-alter form; the get-calendar arm
+			// answers SMSG_CALENDAR_SEND_CALENDAR (CalendarHandler.cpp:56)
+			// and the get-event arm answers the event or the invalid-event
+			// result (:181), which the logout never sends; and the
+			// guild-filter arm mass-invites matching guild members to the
+			// event (:194), which the logout never does. None of the arms
+			// clears logoutAt, so dispatch them here like the
+			// questgiver-multiple leg, then fall through to the expiry
+			// logout below; the accept and alter handlers return true on
+			// every path, and the calendar arms return false only on a
+			// failed answer write, where returning matches the normal
+			// dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ACCEPT_LEVEL_GRANT) && state.authed && !hookBlocked {
+				if !state.handleAcceptLevelGrant(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ALTER_APPEARANCE) && state.authed && !hookBlocked {
+				if !state.handleAlterAppearance(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_GET_CALENDAR) && state.authed && !hookBlocked {
+				if !state.handleCalendarGetCalendar(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_GET_EVENT) && state.authed && !hookBlocked {
+				if !state.handleCalendarGetEvent(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_GUILD_FILTER) && state.authed && !hookBlocked {
+				if !state.handleCalendarGuildFilter(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
