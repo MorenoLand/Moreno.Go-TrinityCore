@@ -3633,6 +3633,86 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_INITIATE_TRADE, CMSG_BEGIN_TRADE, CMSG_ACCEPT_TRADE,
+			// CMSG_UNACCEPT_TRADE, CMSG_SET_TRADE_ITEM,
+			// CMSG_CLEAR_TRADE_ITEM and CMSG_SET_TRADE_GOLD are
+			// STATUS_LOGGEDIN (Opcodes.cpp:409-418) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. Initiate is answered, not
+			// started, at expiry: Go's handler replicates the C++
+			// gate order (stunned, TradeHandler.cpp:606-610, then
+			// isLogingOut, :613-616), so the drain sends
+			// TRADE_STATUS_YOU_STUNNED or TRADE_STATUS_YOU_LOGOUT
+			// and creates no trade. Begin sends TRADE_STATUS_OPEN_WINDOW
+			// to the trader first, then to self (:567-568); set-item,
+			// clear-item and set-gold send the extended window
+			// updates; unaccept clears only the sender's accepted
+			// flag and sends TRADE_STATUS_BACK_TO_TRADE to the partner
+			// alone (:552-558) — none of which the logout's
+			// cancelTrade(false) reproduces (it sends only
+			// TRADE_CANCELED to the partner, Player.cpp:471). Accept
+			// is the sharpest arm: it can execute the trade outright
+			// (TradeHandler.cpp:364-392), moving items and money the
+			// logout save would never move. CMSG_CANCEL_TRADE rides
+			// with the family: it is STATUS_LOGGEDIN_OR_RECENTLY_LOGGOUT
+			// (Opcodes.cpp:415), whose arm (WorldSession.cpp:338-356)
+			// calls the handler without an IsInWorld gate, so the
+			// drain runs it before ShouldLogOut too — and its
+			// sendback arm (TradeCancel(true), TradeHandler.cpp:583-588)
+			// answers TRADE_CANCELED to the cancelling client as well
+			// as the partner, which the logout's sendback=false teardown
+			// does not. After logout the C++ handler is a no-op (null
+			// _player guard), so no post-logout path is owed here.
+			// CMSG_BUSY_TRADE and CMSG_IGNORE_TRADE need no leg: their
+			// C++ handlers are debug-log no-ops (TradeHandler.cpp:63-73),
+			// and Go's normal path likewise runs no handler for them.
+			// No trade arm clears logoutAt (trade.go only reads it for
+			// the initiate gates), so dispatch them here like the
+			// group leg, then fall through to the expiry logout below;
+			// all eight handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_INITIATE_TRADE) && state.authed && !hookBlocked {
+				if !state.handleInitiateTrade(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BEGIN_TRADE) && state.authed && !hookBlocked {
+				if !state.handleBeginTrade(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ACCEPT_TRADE) && state.authed && !hookBlocked {
+				if !state.handleAcceptTrade(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UNACCEPT_TRADE) && state.authed && !hookBlocked {
+				if !state.handleUnacceptTrade(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_TRADE_ITEM) && state.authed && !hookBlocked {
+				if !state.handleSetTradeItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CLEAR_TRADE_ITEM) && state.authed && !hookBlocked {
+				if !state.handleClearTradeItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_TRADE_GOLD) && state.authed && !hookBlocked {
+				if !state.handleSetTradeGold(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_TRADE) && state.authed && !hookBlocked {
+				if !state.handleCancelTrade(ctx) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
