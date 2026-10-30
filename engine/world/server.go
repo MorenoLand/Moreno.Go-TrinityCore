@@ -6845,6 +6845,44 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CALENDAR_EVENT_RSVP (0x432), CMSG_CALENDAR_EVENT_REMOVE_INVITE (0x433),
+			// CMSG_CALENDAR_EVENT_STATUS (0x434) and CMSG_CALENDAR_EVENT_MODERATOR_STATUS (0x435)
+			// are drained before the ShouldLogOut check: all four are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1205-1208), and the expiry logout does NOT
+			// subsume them. The rsvp arm sets the invite's status and status time, then
+			// answers the event status and clears the responder's pending action, or
+			// answers the locked/no-invite/event-invalid result (CalendarHandler.cpp:630);
+			// the remove-invite arm deletes the invite, alerting the removed invitee
+			// and broadcasting the removal, or answers the delete-creator/no-invite
+			// result (:667); the status arm sets the invite's status without touching
+			// its status time, then answers the event status and clears the invitee's
+			// pending action, or answers the no-invite/event-invalid result (:696);
+			// and the moderator-status arm sets the invite's rank and alerts the
+			// relatives, or answers the no-invite/event-invalid result (:730) — none of
+			// which the logout does. None of the arms clears logoutAt, so dispatch
+			// them here like the invite leg, then fall through to the expiry logout
+			// below; all four return false only on a failed command-result write,
+			// where returning matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_RSVP) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventRSVP(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_REMOVE_INVITE) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventRemoveInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_STATUS) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventStatus(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_MODERATOR_STATUS) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventModeratorStatus(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
