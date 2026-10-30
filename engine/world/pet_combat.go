@@ -4679,11 +4679,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// Per-effect GO mask (Spell.cpp:2193, :4512), pet-path twin of the
 		// player-path filter.
 		packetHits = s.server.filterGOPacketTargetsByEffectMaskWithMasks(ctx, motion.Map, motion.InstanceID, spell, target, packetHits, goEffectMasks)
-		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target), power)
+		// The client pet target's source flag is the packet flag, but C++
+		// writes the GO packet from m_targets after InitExplicitTargets
+		// (RemoveSrc, Spell.cpp:726) and the TARGET_SRC_CASTER arm
+		// (Spell.cpp:931) — the same final-HasSrc rule the session
+		// resolver applies to its returned target. Applied to the GO
+		// copy only, so the cast's own target struct keeps the packet
+		// flag the traj arm already consumed.
+		goTarget := finalizeSessionSrcTarget(spell, spellGoPacketTarget(spell, target), target.Flags&protocol.SpellTargetFlagSourceLocation != 0, motion.X, motion.Y, motion.Z)
+		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, goTarget, power)
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 			return false
 		}
-		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, spellGoPacketTarget(spell, target))
+		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, goTarget)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 	}
 	// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),

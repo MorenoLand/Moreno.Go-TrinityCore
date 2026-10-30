@@ -344,10 +344,11 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		} else {
 			target.Flags &^= protocol.SpellTargetFlagDestLocation
 		}
-		return target, snapshots, true
+		return finalizeSessionSrcTarget(spell, target, target.Flags&protocol.SpellTargetFlagSourceLocation != 0, s.player.X, s.player.Y, s.player.Z), snapshots, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	packetHasSrc := target.Flags&protocol.SpellTargetFlagSourceLocation != 0
 	// Spell::InitExplicitTargets (Spell.cpp:716): when the mask needs no
 	// DEST_LOCATION the packet destination is removed, so the running
 	// destination starts at the caster and pre-arm slots stay unstamped —
@@ -536,5 +537,37 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 	} else {
 		target.Flags &^= protocol.SpellTargetFlagDestLocation
 	}
-	return target, snapshots, true
+	return finalizeSessionSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), snapshots, true
+}
+
+// finalizeSessionSrcTarget mirrors the SOURCE_LOCATION half of
+// Spell::InitExplicitTargets (Spell.cpp:720-727) plus the implicit
+// TARGET_SRC_CASTER arm (Spell.cpp:930-936) for a resolver-returned or
+// GO-packet target: the final HasSrc is the mask need OR the 22 arm. A
+// packet source survives only when the mask needs it — RemoveSrc clears
+// the flag otherwise, and the position field is left stale when the flag
+// drops, as with the destination. A needed-but-absent source is set to
+// the caster (InitExplicit SetSrc), and the 22 arm always re-sets the
+// source to the caster, overwriting a kept packet source. The traj arms
+// do NOT take this gate: they read the source position unconditionally
+// (Spell.cpp:1635 GetSrcPos, no HasSrc check) and CheckSrc is dead code
+// (zero call sites), so a dropped packet source still seeds the
+// trajectory — unlike the destination, where CheckDst (Spell.cpp:6523)
+// resets the running destination to the caster before the dest-dest and
+// traj arms run.
+func finalizeSessionSrcTarget(spell wotlk.Spell, target protocol.SpellTargetData, packetHasSrc bool, casterX, casterY, casterZ float32) protocol.SpellTargetData {
+	if spellHasImplicitSrcCasterTarget(spell) {
+		target.Flags |= protocol.SpellTargetFlagSourceLocation
+		target.Source = protocol.SpellTargetLocation{X: casterX, Y: casterY, Z: casterZ}
+		return target
+	}
+	if spellExplicitSourceLocationNeeded(spell) {
+		target.Flags |= protocol.SpellTargetFlagSourceLocation
+		if !packetHasSrc {
+			target.Source = protocol.SpellTargetLocation{X: casterX, Y: casterY, Z: casterZ}
+		}
+		return target
+	}
+	target.Flags &^= protocol.SpellTargetFlagSourceLocation
+	return target
 }

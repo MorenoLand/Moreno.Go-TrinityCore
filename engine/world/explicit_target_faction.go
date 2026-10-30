@@ -291,6 +291,71 @@ func spellExplicitDestLocationNeeded(spell wotlk.Spell) bool {
 	return spellMissingExplicitTargetMask(spell, spell.Targets)&targetFlagDestLocation != 0
 }
 
+// isSrcReferenceImplicitTarget lists the implicit target numbers whose
+// _data row carries TARGET_REFERENCE_TYPE_SRC (SpellInfo.cpp:216-340).
+func isSrcReferenceImplicitTarget(target uint32) bool {
+	switch target {
+	case 7, 11, 15, 30, 33, 51, 93:
+		return true
+	default:
+		return false
+	}
+}
+
+// spellHasImplicitSrcCasterTarget reports whether a non-empty effect
+// carries TARGET_SRC_CASTER (22), the only TARGET_OBJECT_TYPE_SRC row:
+// its DEFAULT-category arm (Spell.cpp:930-936) re-sets the source to the
+// caster during selection, re-setting the flag even after a RemoveSrc at
+// prepare time.
+func spellHasImplicitSrcCasterTarget(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == 22 || eff.ImplicitTargetB == 22 {
+			return true
+		}
+	}
+	return false
+}
+
+// spellExplicitSourceLocationNeeded mirrors the SOURCE_LOCATION bit of
+// SpellInfo::GetExplicitTargetMask (SpellInfo.cpp:1956;
+// _InitializeExplicitTargetMask, SpellInfo.cpp:3344-3373) as tested by
+// Spell::InitExplicitTargets (Spell.cpp:720-727), in the same shape as
+// spellExplicitDestLocationNeeded: the DBC Targets field, then the
+// per-effect GetExplicitTargetMask bits (SpellInfo.cpp:134-210) in effect
+// order under the srcSet latch — TARGET_DEST_TRAJ (89) contributes
+// SOURCE_LOCATION before any TARGET_OBJECT_TYPE_SRC row sets the latch,
+// a TARGET_REFERENCE_TYPE_SRC row contributes it before the latch, and a
+// TARGET_OBJECT_TYPE_SRC row (22) sets the latch without contributing —
+// then the GetMissingTargetMask extension for
+// EFFECT_IMPLICIT_TARGET_EXPLICIT effects.
+func spellExplicitSourceLocationNeeded(spell wotlk.Spell) bool {
+	if spell.Targets&targetFlagSourceLocation != 0 {
+		return true
+	}
+	srcSet := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for _, tgt := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if tgt == 89 {
+				if !srcSet {
+					return true
+				}
+			} else if !srcSet && isSrcReferenceImplicitTarget(tgt) {
+				return true
+			}
+			if tgt == 22 {
+				srcSet = true
+			}
+		}
+	}
+	return spellMissingExplicitTargetMask(spell, spell.Targets)&targetFlagSourceLocation != 0
+}
+
 // explicitSelectionTargetOK mirrors the selection-adoption gate in
 // Spell::SetTargetMap (Spell.cpp:684-690): the caster's current selection
 // becomes the fallback explicit target only when it resolves to a unit in
