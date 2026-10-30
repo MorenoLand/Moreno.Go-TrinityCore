@@ -3534,6 +3534,105 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GROUP_CHANGE_SUB_GROUP, CMSG_GROUP_RAID_CONVERT and
+			// CMSG_GROUP_ASSISTANT_LEADER are STATUS_LOGGEDIN
+			// (Opcodes.cpp:769, 785-786) and PROCESS_THREADUNSAFE, so the
+			// session update (WorldSessionFilter) drains them before the
+			// ShouldLogOut check (WorldSession.cpp:302-472) — and the
+			// expiry logout does NOT subsume them: group state persists
+			// across logout (the logging-out player stays an offline
+			// member, and the logout save never moves members between
+			// subgroups, converts party to raid, or sets assistant
+			// flags), so dropping them loses both the packets and the
+			// roster writes. Change-subgroup moves the named member
+			// (leader/assistant gate, free-slot gate, group_member
+			// subgroup row, GroupHandler.cpp:594-630), raid-convert
+			// sends the party result and converts the party to a raid
+			// (:573-592), and assistant-leader sets or clears the
+			// MEMBER_FLAG_ASSISTANT flag (:633-649). None of the three
+			// arms clears logoutAt, so dispatch them here like the
+			// group leg, then fall through to the expiry logout below;
+			// all three handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_CHANGE_SUB_GROUP) && state.authed && !hookBlocked {
+				if !state.handleGroupChangeSubGroup(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_RAID_CONVERT) && state.authed && !hookBlocked {
+				if !state.handleGroupRaidConvert(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_ASSISTANT_LEADER) && state.authed && !hookBlocked {
+				if !state.handleGroupAssistantLeader(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_REQUEST_PARTY_MEMBER_STATS, MSG_RAID_TARGET_UPDATE and
+			// MSG_PARTY_ASSIGNMENT are STATUS_LOGGEDIN (Opcodes.cpp:770,
+			// 932, 1041) and PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. Party-member-stats is a pure read
+			// whose only effect is the SMSG_PARTY_MEMBER_STATS_FULL
+			// response (offline arm included, GroupHandler.cpp:920-1000),
+			// raid-target-update sets the group's target icon and
+			// broadcasts it (or answers the 0xFF icon-list query,
+			// :534-571), and party-assignment sets or clears the main
+			// assist / main tank flag and sends the group update
+			// (:652-685) — none of which the logout save rewrites.
+			// None of the three arms clears logoutAt, so dispatch them
+			// here like the group leg, then fall through to the expiry
+			// logout below. The write-failure arm mirrors the sibling
+			// legs (target-update and party-assignment return true on
+			// every path; party-member-stats returns false only on a
+			// failed response write, and the deferred logout follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_PARTY_MEMBER_STATS) && state.authed && !hookBlocked {
+				if !state.handleRequestPartyMemberStats(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_RAID_TARGET_UPDATE) && state.authed && !hookBlocked {
+				if !state.handleRaidTargetUpdate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_PARTY_ASSIGNMENT) && state.authed && !hookBlocked {
+				if !state.handlePartyAssignment(ctx, payload) {
+					return
+				}
+			}
+			// MSG_RAID_READY_CHECK and MSG_RAID_READY_CHECK_FINISHED are
+			// STATUS_LOGGEDIN (Opcodes.cpp:933, 1097) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume the ready check: the request broadcasts
+			// MSG_RAID_READY_CHECK to the group and marks offline
+			// members, and the answer broadcasts
+			// MSG_RAID_READY_CHECK_CONFIRM (GroupHandler.cpp:687-720),
+			// effects the logout save never produces. Ready-check-
+			// finished is the no-op member of the family: its C++ body
+			// is entirely commented out (:722-731), so dispatching
+			// Go's no-op handler is unobservable — but the drain runs
+			// it, so the leg runs it too rather than inventing a drop.
+			// Neither arm clears logoutAt, so dispatch them here like
+			// the group leg, then fall through to the expiry logout
+			// below; both handlers return true on every path.
+			// CMSG_GROUP_SWAP_SUB_GROUP needs no leg: it is
+			// STATUS_UNHANDLED with Handle_NULL (Opcodes.cpp:771), so
+			// there is nothing to run.
+			if header.Opcode == uint32(protocol.OpcodeMSG_RAID_READY_CHECK) && state.authed && !hookBlocked {
+				if !state.handleReadyCheck(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED) && state.authed && !hookBlocked {
+				if !state.handleRaidReadyCheckFinished(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
