@@ -3296,6 +3296,63 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_QUEST_QUERY, CMSG_INSPECT, CMSG_GOSSIP_HELLO,
+			// CMSG_QUESTGIVER_HELLO and CMSG_CORPSE_MAP_POSITION_QUERY are
+			// STATUS_LOGGEDIN (Opcodes.cpp:223, 407, 510, 519, 1337), so
+			// the C++ drain runs their handlers before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. Quest-query, inspect and
+			// corpse-position are pure reads whose only effect is the
+			// response packet to this session, sent while the socket is
+			// still open ahead of SMSG_LOGOUT_COMPLETE (corpse-position
+			// answers constant zeroes, QueryHandler.cpp:317; quest-query
+			// answers the template row or nothing on an unknown quest).
+			// Gossip-hello and questgiver-hello go further: before the
+			// menu packet they strip auras the logout save would
+			// otherwise re-persist — gossip-hello removes
+			// TALK-interrupt auras and marks the NPC's faction visible
+			// (NPCHandler.cpp:162-163), questgiver-hello strips feign
+			// death (QuestHandler.cpp:90-92) — and both pause the NPC
+			// and reset its home position (NPCHandler.cpp:168-169,
+			// QuestHandler.cpp:96-97), so dropping them loses both the
+			// menu and the pre-save strip. None of the five arms clears
+			// logoutAt, so dispatch them here like the query leg, then
+			// fall through to the expiry logout below. Corpse-position
+			// is the PROCESS_THREADUNSAFE member of the family: C++
+			// skips thread-unsafe packets in the map update
+			// (MapSessionFilter) but runs them in the session update
+			// (WorldSessionFilter), whose ProcessUnsafe branch holds
+			// the ShouldLogOut check — so it still drains before
+			// LogoutPlayer, and Go's single read loop has no
+			// map/session split to preserve. The write-failure arm
+			// mirrors the sibling legs (every handler returns false
+			// only on a failed response write, and the deferred logout
+			// then follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUEST_QUERY) && state.authed && !hookBlocked {
+				if !state.handleQuestQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_INSPECT) && state.authed && !hookBlocked {
+				if !state.handleInspect(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GOSSIP_HELLO) && state.authed && !hookBlocked {
+				if !state.handleGossipHello(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_HELLO) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverHello(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CORPSE_MAP_POSITION_QUERY) && state.authed && !hookBlocked {
+				if !state.handleCorpseMapPositionQuery(payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
