@@ -4235,6 +4235,83 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_TAXINODE_STATUS_QUERY / CMSG_TAXIQUERYAVAILABLENODES /
+			// CMSG_ACTIVATETAXI are STATUS_LOGGEDIN (Opcodes.cpp:557,
+			// 559-560) but PROCESS_THREADSAFE, so the session-update drain
+			// does NOT run them: WorldSessionFilter::Process
+			// (WorldSession.cpp:92-104) yields a threadsafe packet only for
+			// a player not in world, and the ShouldLogOut check runs in that
+			// same session update (WorldSession.cpp:472-473) BEFORE
+			// World::Update reaches sMapMgr->Update (World.cpp:2418, 2462),
+			// where MapSessionFilter would have run them. A taxi packet read
+			// past logoutAt therefore never gets its SMSG_TAXINODE_STATUS,
+			// SMSG_SHOWTAXINODES, or flight start in C++: the expiry logout
+			// fires first, and the queued packet is then deleted unhandled
+			// by the STATUS_LOGGEDIN arm (no player, or player no longer in
+			// world). The drop stands - dispatching any of the three here
+			// would answer a query or start a flight C++ never answers or
+			// starts - so the taxi trio is deliberately NOT dispatched
+			// below, like WHO. TAXICLEARALLNODES / TAXIENABLEALLNODES /
+			// TAXISHOWNODES need no leg either: STATUS_NEVER Handle_NULL
+			// (Opcodes.cpp:553-555).
+			// CMSG_TRAINER_LIST / CMSG_TRAINER_BUY_SPELL /
+			// CMSG_BINDER_ACTIVATE / CMSG_BANKER_ACTIVATE /
+			// CMSG_BUY_BANK_SLOT are STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:563, 565, 568, 570, 572), so the session update
+			// (WorldSessionFilter::Process returns true for INPLACE,
+			// WorldSession.cpp:92-104) drains them before the ShouldLogOut
+			// check (:302-472) - and the expiry logout does NOT subsume
+			// them. List: a live arm sends SMSG_TRAINER_LIST and strips a
+			// faked death (NPCHandler.cpp:105-122); the logout sends no
+			// list. Buy: a live arm deducts the discounted money, learns
+			// the spell, and answers SMSG_TRAINER_BUY_SUCCEEDED / FAILED
+			// (NPCHandler.cpp:125-148, Trainer::TeachSpell); the logout
+			// save persists the pre-buy money and spell list, so a drop
+			// loses the purchase outright. Binder: a live arm sets the
+			// homebind and sends the bind-point, bound, and buy-succeeded
+			// packets (NPCHandler.cpp:247-286); the logout sends none of
+			// them and its save writes the pre-bind homebind. Banker: a
+			// live arm latches the banker GUID and sends SMSG_SHOW_BANK
+			// (BankHandler.cpp:46-57); the logout never shows the bank.
+			// Buy-bank-slot: a live arm deducts the money, increments the
+			// slot count, and answers SMSG_BUY_BANK_SLOT_RESULT plus the
+			// BUY_BANK_SLOT criteria (BankHandler.cpp:138-181); Go's
+			// handler UPDATEs money and bankSlots eagerly, so a drop saves
+			// the pre-buy values. The interact gate (Player.cpp:2314-2358)
+			// checks in-world, flight, death, flags, charmer, reaction
+			// and distance - never stunned or rooted - so the countdown's
+			// root/stun does not block an NPC the player already stands
+			// at. None of the five arms clears logoutAt, so dispatch them
+			// here like the vendor leg, then fall through to the expiry
+			// logout below; banker-activate returns false only on a
+			// failed SMSG_SHOW_BANK write (deferred logout follows), and
+			// the other four return true on every path, so the
+			// write-failure arm never fires for them.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TRAINER_LIST) && state.authed && !hookBlocked {
+				if !state.handleTrainerList(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TRAINER_BUY_SPELL) && state.authed && !hookBlocked {
+				if !state.handleTrainerBuySpell(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BINDER_ACTIVATE) && state.authed && !hookBlocked {
+				if !state.handleBinderActivate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BANKER_ACTIVATE) && state.authed && !hookBlocked {
+				if !state.handleBankerActivate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUY_BANK_SLOT) && state.authed && !hookBlocked {
+				if !state.handleBuyBankSlot(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
