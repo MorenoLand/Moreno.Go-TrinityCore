@@ -1736,6 +1736,9 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(3286); err == nil && found {
 			target = spellGoPacketTarget(spellInfo, target)
+			if motion := s.findCreatureMotion(npcGUID); motion != nil {
+				target = finalizeSessionSrcTarget(spellInfo, target, false, motion.X, motion.Y, motion.Z)
+			}
 		}
 	}
 	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)

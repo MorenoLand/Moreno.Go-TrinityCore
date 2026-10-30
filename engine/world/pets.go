@@ -1111,7 +1111,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		spellTarget := protocol.SpellTargetData{}
 		if s.server != nil && s.server.Data != nil {
 			if spellInfo, found, err := s.server.Data.Spell(uint32(createdBySpell)); err == nil && found {
-				spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+				spellTarget = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, spellTarget), false, s.player.X, s.player.Y, s.player.Z)
 			}
 		}
 		packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 0, uint32(createdBySpell), spellCastFlagGo, uint32(time.Now().UnixMilli()), nil, nil, spellTarget)

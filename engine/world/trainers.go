@@ -521,6 +521,11 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		// Player casts the teach spell (TC: player->CastSpell(player, trainerSpell->SpellId, true))
 		castTimeStamp := uint32(time.Now().UnixMilli())
 		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+		if s.server != nil && s.server.Data != nil {
+			if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+				target = finalizeSessionSrcTarget(sp, target, false, s.player.X, s.player.Y, s.player.Z)
+			}
+		}
 		goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 		if s.server != nil {
@@ -680,6 +685,7 @@ func (s *session) learnSpellActive(ctx context.Context, spellID uint32, active b
 			if sp.Attributes&0x40 != 0 { // SPELL_ATTR0_PASSIVE
 				castTimeStamp := uint32(time.Now().UnixMilli())
 				target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+				target = finalizeSessionSrcTarget(sp, target, false, s.player.X, s.player.Y, s.player.Z)
 				goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 				if s.server != nil {

@@ -2168,7 +2168,7 @@ func (s *session) sendLoginEffect() error {
 		return nil
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
-	target = spellGoPacketTarget(spell, target)
+	target = finalizeSessionSrcTarget(spell, spellGoPacketTarget(spell, target), false, s.player.X, s.player.Y, s.player.Z)
 	castFlags := spellCastFlagGo | spellCastFlagPending | protocol.SpellCastFlagPowerLeftSelf
 	if spell.StartRecoveryTime == 0 {
 		castFlags |= protocol.SpellCastFlagNoGCD

@@ -41938,6 +41938,9 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(14867); err == nil && found {
 			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+			if motion := s.findCreatureMotion(wipeGUID); motion != nil {
+				spellTarget = finalizeSessionSrcTarget(spellInfo, spellTarget, false, motion.X, motion.Y, motion.Z)
+			}
 		}
 	}
 	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
