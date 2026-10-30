@@ -1190,6 +1190,14 @@ func effectHasRefCenteredLeg(eff wotlk.SpellEffect) bool {
 	return isRefCenteredAreaTargetType(eff.ImplicitTargetA) || (isRefCenteredAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
 }
 
+func effectHasNearbyLeg(eff wotlk.SpellEffect) bool {
+	return nearbyUnitTarget(eff.ImplicitTargetA) || (nearbyUnitTarget(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
+}
+
+func effectHasCasterLeg(eff wotlk.SpellEffect) bool {
+	return eff.ImplicitTargetA == targetUnitCaster || eff.ImplicitTargetB == targetUnitCaster
+}
+
 func effectAllyTrips(eff wotlk.SpellEffect, allyTrips, refCenteredTrips []uint64) []uint64 {
 	if effectHasFriendlyAreaLeg(eff) {
 		return allyTrips
@@ -22417,6 +22425,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	wireGOMask := spellGOWireEffectMask(spell)
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	nearbySelected := false
+	nearbyBranchPick := uint64(0)
 	nearbyMatched := isFriendlyNearbySpell(spell) || isEntryNearbySpell(spell) || isHostileNearbySpell(spell) || isGONearbyEntrySpell(spell)
 	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) {
 		var nearby uint64
@@ -22455,6 +22464,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = append(hitTargets, goPick)
 		}
 		nearbySelected = true
+		nearbyBranchPick = nearby
 	}
 	// Spell::SelectImplicitTargetObjectTargets (Spell.cpp:1558-1580) runs the
 	// chain leg (Spell.cpp:1575 -> SelectImplicitChainTargets, 1582-1624) for
@@ -23863,10 +23873,90 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// branch order never decides a list. Effects with neither leg
 		// keep the merged list.
 		seedTargets := selectionTargets
+		sharedSeed := true
 		if triggeredFriendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
 			seedTargets = triggeredFriendlyEffectTargets
+			sharedSeed = false
 		} else if triggeredRefCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
 			seedTargets = triggeredRefCenteredFriendlyTargets
+			sharedSeed = false
+		}
+		// Spell::SelectSpellTargets per-effect masks (Spell.cpp:758-779;
+		// DoAllEffectOnLaunchTarget mask filter, :7712-7729): when the
+		// nearby arm selected the spell-wide pick, that pick carries
+		// only the nearby effects' masks. C++ adds the wire target
+		// (SelectImplicitTargetObjectTargets, :1558), the caster
+		// (SelectImplicitCasterObjectTargets, :1500-1556), and each
+		// nearby effect's own scoped pick (:1036) with their own
+		// effects' masks instead, so an effect with a unit leg whose
+		// own legs never selected the spell-wide pick must not seed
+		// from it: the pick drops out of its shared seed (its own
+		// targets thread back in below — wire via the plain and
+		// chain-primary blocks, own nearby picks via the nearby and
+		// chain threads), and a caster-leg effect gains the caster,
+		// which the shared seed never held outside the self-cast-only
+		// join. The pick is kept when it IS one of the effect's own
+		// targets (wire, caster, or a recorded leg primary, including
+		// a coincidental wire/pick match). Partition seeds are
+		// untouched — a pick inside an area partition is a legit area
+		// member — and effects with no unit leg keep the shared seed,
+		// their C++ target set being effect-type-dependent
+		// (SelectEffectTypeImplicitTargets). A GO branch pick is not a
+		// unit pick and never subtracts.
+		if nearbyBranchPick != 0 && uint16(nearbyBranchPick>>48) != 0xF110 && sharedSeed {
+			hasObjectLeg := targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)
+			hasCasterLeg := effectHasCasterLeg(eff)
+			hasNearbyLeg := effectHasNearbyLeg(eff)
+			if hasObjectLeg || hasCasterLeg || hasNearbyLeg {
+				keepPick := false
+				if hasObjectLeg && spellTarget.UnitGUID == nearbyBranchPick {
+					keepPick = true
+				}
+				if hasCasterLeg && s.playerGUID == nearbyBranchPick {
+					keepPick = true
+				}
+				if pick, ok := nearbyPrimaries[effectIndex]; ok && pick == nearbyBranchPick {
+					keepPick = true
+				}
+				if pick, ok := chainPrimaryByEffect[effectIndex]; ok && pick == nearbyBranchPick {
+					keepPick = true
+				}
+				if pick, ok := chainSecondPrimaryByEffect[effectIndex]; ok && pick == nearbyBranchPick {
+					keepPick = true
+				}
+				if effectIndex == winSecondIndex && winSecondPrimary == nearbyBranchPick {
+					keepPick = true
+				}
+				if chainUnitPrimary == nearbyBranchPick {
+					if _, _, _, winMask := chainSpellJumps(s, spell); winMask == 1<<uint(effectIndex) {
+						keepPick = true
+					}
+				}
+				if !keepPick {
+					filtered := make([]uint64, 0, len(seedTargets))
+					for _, selGUID := range seedTargets {
+						if selGUID != nearbyBranchPick {
+							filtered = append(filtered, selGUID)
+						}
+					}
+					seedTargets = filtered
+				}
+			}
+		}
+		if nearbyBranchPick != 0 && effectHasCasterLeg(eff) {
+			seenCaster := false
+			for _, selGUID := range seedTargets {
+				if selGUID == s.playerGUID {
+					seenCaster = true
+					break
+				}
+			}
+			if !seenCaster {
+				grown := make([]uint64, 0, len(seedTargets)+1)
+				grown = append(grown, seedTargets...)
+				grown = append(grown, s.playerGUID)
+				seedTargets = grown
+			}
 		}
 		for _, selGUID := range seedTargets {
 			target := selGUID
@@ -24032,6 +24122,28 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if primary, ok := chainPrimaryByEffect[effectIndex]; ok {
 			effPrimary = primary
 		}
+		// Nearby-selected spells only: the winning chain anchor is the
+		// nearby pick for a nearby winner, but a TARGET-object effect
+		// with no nearby leg takes the wire target (Spell.cpp:1558),
+		// not the winner's pick — otherwise the seed subtraction above
+		// is undone by this thread. The plain block below covers the
+		// no-chain case; this covers the chain-present case.
+		if nearbyBranchPick != 0 && uint16(nearbyBranchPick>>48) != 0xF110 && plainObjectPrimary != 0 && !effectHasNearbyLeg(eff) && (targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+			effPrimary = plainObjectPrimary
+		}
+		// Same winner-anchor correction for a pure nearby effect with
+		// ChainTarget <= 1: the winning chain anchor is not this
+		// effect's target (Spell.cpp:1036 adds each nearby effect's
+		// own pick with its own mask), so its own scoped pick
+		// replaces it. Object-legged effects stay out: their wire
+		// threads through the plain/chain-primary blocks, and swapping
+		// the primary to the nearby pick would drop it when a chain
+		// winner is present.
+		if nearbyBranchPick != 0 && uint16(nearbyBranchPick>>48) != 0xF110 && !(targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+			if pick, ok := nearbyPrimaries[effectIndex]; ok {
+				effPrimary = pick
+			}
+		}
 		if effPrimary != 0 && (chainSelectionEligibleTarget(eff.ImplicitTargetA) || chainSelectionEligibleTarget(eff.ImplicitTargetB)) {
 			seedSet := make(map[uint64]struct{}, len(seedTargets))
 			for _, seedGUID := range seedTargets {
@@ -24159,11 +24271,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// A rejoined nearby primary threads only into its own effect
 		// (Spell.cpp:1036 adds each nearby pick with its own effect's
 		// mask), with jumpIndex 0 (unscaled, like a seed entry). When
-		// the pick equals the chain primary, the chain block above
+		// the pick equals the effect primary, the chain block above
 		// already threaded it into this chain-eligible effect, so it
 		// is skipped here; otherwise it would double-list. Dedup vs
 		// the seed and miss handling mirror the chain block.
-		if pick, ok := nearbyPrimaries[effectIndex]; ok && pick != chainUnitPrimary {
+		if pick, ok := nearbyPrimaries[effectIndex]; ok && pick != effPrimary {
 			seedSet := make(map[uint64]struct{}, len(seedTargets))
 			for _, seedGUID := range seedTargets {
 				seedSet[seedGUID] = struct{}{}
