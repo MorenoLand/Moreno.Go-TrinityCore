@@ -5549,6 +5549,29 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_SAVED_INSTANCE_EXTEND is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:789), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm toggles the permanent bind's
+			// extend state (NORMAL, or EXTENDED when toggling
+			// on) via BindToInstance, which UPDATEs the
+			// character_instance row (CalendarHandler.cpp:786-810,
+			// Player.cpp:19121-19170); the logout save writes
+			// no character_instance rows, so a drop leaves the
+			// lockout extension untoggled at next login.
+			// Missing or non-permanent binds are silent no-ops
+			// in both, and an expired bind toggles only when
+			// toggling on. No arm clears logoutAt, so dispatch
+			// it here like the buyback leg, then fall through
+			// to the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_SAVED_INSTANCE_EXTEND) && state.authed && !hookBlocked {
+				if !state.handleSetSavedInstanceExtend(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
