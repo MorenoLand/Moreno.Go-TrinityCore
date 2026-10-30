@@ -14144,6 +14144,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						energizeList = append(energizeList, s.playerGUID)
 					}
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit
+				// target carries this effect's bit alongside the caster
+				// when its B slot is a TARGET-reference unit type; the
+				// friendly/ref-centered switches above cannot fire for
+				// a self-cast-only spell, so the flat list is this
+				// effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range energizeList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(energizeList), len(energizeList)+1)
+						copy(joinedKept, energizeList)
+						energizeList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				for _, effectTarget := range energizeList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
 					if uint16(effectTarget>>48) == 0xF110 {
@@ -14187,6 +14210,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					energizePctList = friendlyEffectTargets
 					for range reflectedAllyTrips {
 						energizePctList = append(energizePctList, s.playerGUID)
+					}
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit
+				// target carries this effect's bit alongside the caster
+				// when its B slot is a TARGET-reference unit type; the
+				// friendly/ref-centered switches above cannot fire for
+				// a self-cast-only spell, so the flat list is this
+				// effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range energizePctList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(energizePctList), len(energizePctList)+1)
+						copy(joinedKept, energizePctList)
+						energizePctList = append(joinedKept, explicitAreaJoin)
 					}
 				}
 				for _, effectTarget := range energizePctList {
@@ -14633,9 +14679,45 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					friendlyAuraList = true
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): a self-cast-only spell
+				// (every ImplicitTargetA == TARGET_UNIT_CASTER) whose B slot
+				// is a TARGET-reference unit type carries that effect's bit
+				// on the kept explicit target's TargetInfo alongside the
+				// caster's, so the aura lands on both. The finishSpellCast
+				// self-cast shortcut appends only the caster to hitTargets,
+				// and the ladder below forces every entry to the caster on
+				// self-cast spells, so without this join the kept target
+				// took nothing and the caster took the aura once. The join
+				// is per-effect: an effect whose B slot is not a
+				// TARGET-reference unit type keeps the caster-only list, so
+				// its TargetA caster leg never over-hits the kept target.
+				// explicitAreaJoin is the explicit target for a non-list
+				// spell (the list branch is vacuous here: a self-cast-only
+				// spell carries no area/friendly-list/nearby selection).
+				selfCastKeptTarget := uint64(0)
+				if isSelfCastOnly(spell) && !isReflected && !auraSwitched &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					selfCastKeptTarget = explicitAreaJoin
+					inList := false
+					for _, guid := range auraList {
+						if guid == selfCastKeptTarget {
+							inList = true
+						}
+					}
+					if !inList {
+						joined := make([]uint64, len(auraList), len(auraList)+1)
+						copy(joined, auraList)
+						auraList = append(joined, selfCastKeptTarget)
+					}
+				}
 				for _, effectTarget := range auraList {
 					auraTarget := s.playerGUID
-					if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
+					if selfCastKeptTarget != 0 && effectTarget == selfCastKeptTarget {
+						auraTarget = effectTarget
+					} else if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
 						auraTarget = effectTarget
 					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
 						auraTarget = s.playerGUID
@@ -14887,6 +14969,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dispelList = friendlyEffectTargets
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit
+				// target carries this effect's bit alongside the caster
+				// when its B slot is a TARGET-reference unit type; the
+				// friendly/ref-centered switches above cannot fire for
+				// a self-cast-only spell, so the flat list is this
+				// effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range dispelList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(dispelList), len(dispelList)+1)
+						copy(joinedKept, dispelList)
+						dispelList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				for _, effectTarget := range dispelList {
 					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 						continue
@@ -14929,6 +15034,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dispelMechanicList = friendlyEffectTargets
 					for range reflectedAllyTrips {
 						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
+					}
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit
+				// target carries this effect's bit alongside the caster
+				// when its B slot is a TARGET-reference unit type; the
+				// friendly/ref-centered switches above cannot fire for
+				// a self-cast-only spell, so the flat list is this
+				// effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range dispelMechanicList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(dispelMechanicList), len(dispelMechanicList)+1)
+						copy(joinedKept, dispelMechanicList)
+						dispelMechanicList = append(joinedKept, explicitAreaJoin)
 					}
 				}
 				for _, effectTarget := range dispelMechanicList {
