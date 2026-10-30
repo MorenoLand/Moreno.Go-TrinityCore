@@ -3890,7 +3890,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// the GCD still run at queue time; power is taken by _cast at swing
 		// time. Replacing the queued spell cancels the old one with the
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
-		s.queueNextSwingSpell(ctx, castID, spellID, spell, target, wireObjectGUID, packetHasDst, 0, 0)
+		s.queueNextSwingSpell(ctx, castID, spellID, spell, target, wireObjectGUID, packetHasDst, packetHasSrc, 0, 0)
 		startFlags := spellStartCastFlags(spell)
 		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
@@ -28762,7 +28762,7 @@ func isNextMeleeSwingSpell(spell wotlk.Spell) bool {
 // is cancelled with the Spell::cancel PREPARING arm (Spell.cpp:3218-3224):
 // CancelGlobalCooldown, then SendInterrupted(0), then
 // SendCastResult(SPELL_FAILED_INTERRUPTED).
-func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, packetHasDst bool, castItemGUID uint64, castItemEntry uint32) {
+func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, packetHasDst bool, packetHasSrc bool, castItemGUID uint64, castItemEntry uint32) {
 	// Spell::prepare (Spell.cpp:3039) already ran InitExplicitTargets
 	// before this queueing: when the spell's explicit mask needs
 	// DEST_LOCATION and the packet carries no destination, m_targets dst
@@ -28784,6 +28784,27 @@ func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID
 			target.Flags |= protocol.SpellTargetFlagDestLocation
 			target.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
 		}
+	}
+	// Src seed snapshot, mirroring the dest stamp above and the cast-bar
+	// stamp: InitExplicit SetSrc (Spell.cpp:724-727) freezes the caster
+	// position at prepare when the mask needs SOURCE_LOCATION and the
+	// packet carries no src, and swing-time cast() (Unit.cpp:2151-2152)
+	// re-runs only SelectSpellTargets (Spell.cpp:3410), which re-sets src
+	// solely through the 22 arm — so a non-22 seed stays queue-time while
+	// Go's finalizeSessionSrcTarget would live-resolve it at swing. The
+	// queued spell survives movement outright (Spell.cpp:3814-3831
+	// exempts IsNextMeleeSwingSpell from the movement cancel, and Go's
+	// interruptSpellsOnMovement never touches nextSwing), so queue and
+	// swing positions routinely differ in melee play. Excluded when a
+	// packet src exists (already frozen in the target copy) and for 22
+	// spells (finalize's 22 arm overwrites with the live caster position,
+	// matching the _cast re-set). The stamped flag reads as a packet src
+	// at swing, so finalize keeps the stamped position. target is passed
+	// by value, so the caller's copy — and the queue-time START build —
+	// keep the raw packet target.
+	if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+		target.Flags |= protocol.SpellTargetFlagSourceLocation
+		target.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 	}
 	s.castMu.Lock()
 	old := s.nextSwing
