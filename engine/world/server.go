@@ -4312,6 +4312,88 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_PETITION_SHOWLIST / CMSG_PETITION_BUY /
+			// CMSG_PETITION_SHOW_SIGNATURES / CMSG_PETITION_SIGN /
+			// MSG_PETITION_DECLINE / CMSG_OFFER_PETITION /
+			// CMSG_TURN_IN_PETITION / CMSG_PETITION_QUERY are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:574,
+			// 576-577, 579, 581-583, 585), so the session update
+			// (WorldSessionFilter::Process returns true for
+			// THREADUNSAFE, WorldSession.cpp:92-104) drains them
+			// before the ShouldLogOut check (:302-472) - and the
+			// expiry logout does NOT subsume them. Show-list: a live
+			// arm sends SMSG_PETITION_SHOWLIST via the petitioner
+			// interact gate (PetitionsHandler.cpp:743-803); the
+			// logout sends no list. Buy: a live arm deducts the
+			// money, mints the charter item, strips a faked death,
+			// and writes the petition row (:48-218); Go's handler
+			// writes the petition row eagerly, so a drop saves the
+			// pre-buy money and inventory. Show-signatures: a live
+			// arm sends SMSG_PETITION_SHOW_SIGNATURES (:220-260);
+			// the logout sends none. Sign: a live arm INSERTs the
+			// signature row and sends SMSG_PETITION_SIGN_RESULTS to
+			// the signer and the online owner (:383-491); the logout
+			// signs nothing. Decline: a live arm forwards
+			// MSG_PETITION_DECLINE to the online owner (:493-512);
+			// the logout sends none. Offer: a live arm sends the
+			// show-signatures packet to the offered player
+			// (:514-587); the logout sends none. Turn-in: a live
+			// arm destroys the charter, creates the guild or arena
+			// team from the signatures, removes the petition, and
+			// answers SMSG_TURN_IN_PETITION_RESULTS (:589-741); the
+			// logout save persists the pre-turn-in charter and no
+			// guild or team, so a drop loses the creation outright.
+			// Query: a live arm sends SMSG_PETITION_QUERY_RESPONSE
+			// (:261-320); the logout sends none. The interact gate
+			// (Player.cpp:2314-2358) checks in-world, flight,
+			// death, flags, charmer, reaction and distance - never
+			// stunned or rooted - so the countdown's root/stun does
+			// not block a petitioner the player already stands at.
+			// None of the eight arms clears logoutAt, so dispatch
+			// them here like the banker leg, then fall through to
+			// the expiry logout below; all eight handlers return
+			// true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PETITION_SHOWLIST) && state.authed && !hookBlocked {
+				if !state.handlePetitionShowList(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PETITION_BUY) && state.authed && !hookBlocked {
+				if !state.handlePetitionBuy(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PETITION_SHOW_SIGNATURES) && state.authed && !hookBlocked {
+				if !state.handlePetitionShowSignatures(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PETITION_SIGN) && state.authed && !hookBlocked {
+				if !state.handlePetitionSign(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_PETITION_DECLINE) && state.authed && !hookBlocked {
+				if !state.handlePetitionDecline(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_OFFER_PETITION) && state.authed && !hookBlocked {
+				if !state.handleOfferPetition(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TURN_IN_PETITION) && state.authed && !hookBlocked {
+				if !state.handleTurnInPetition(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PETITION_QUERY) && state.authed && !hookBlocked {
+				if !state.handlePetitionQuery(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
