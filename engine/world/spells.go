@@ -11075,7 +11075,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// rejoins it (30260b42). A NEARBY chain effect now anchors on its
 	// winning-effect-scoped pick (spellChainNearbyPick); a differing pick joins
 	// via the wire arms below, since it is neither hitTargets[0] nor verdicted,
-	// and no pick keeps the branch pick. Jumps are deduped
+	// and an unknown miss keeps the branch pick. Jumps are deduped
 	// against hitTargets (twin/area convention, Spell.cpp:2117 merged entry): the
 	// search excludes only the anchor, so a wire-anchored jump may land on the
 	// nearby pick, which C++ folds into its single entry rather than double-listing.
@@ -11107,8 +11107,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// nearby pick (spellChainNearbyPick), not the branch pick
 				// (selectionTargetGUID) — in a multi-family spell the branch
 				// that won the selection else-if chain may be a sibling
-				// family. No pick keeps the branch pick, the prior behavior.
-				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
+				// family. A genuine miss fails the cast (SelectImplicitNearbyTargets,
+				// Spell.cpp:1107-1113: no nearby target sends BAD_IMPLICIT_TARGETS
+				// and finishes the spell, and _cast checks the finished state before
+				// TakePower/SendSpellGo, Spell.cpp:3410-3423), so it must not chain
+				// around the branch pick; an unknown miss keeps the branch pick
+				// (the LOS tail-drop case: C++ found the target and AddUnitTarget
+				// dropped it silently, so no :1111 failure fires).
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning chain effect")
+					return
+				} else if status == nearbyPickFound {
 					anchor = pick
 					scopedAnchor = true
 				}
