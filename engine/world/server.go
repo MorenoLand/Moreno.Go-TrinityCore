@@ -6349,6 +6349,54 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LFG_SET_BOOT_VOTE, CMSG_LFD_PLAYER_LOCK_INFO_REQUEST,
+			// CMSG_LFG_TELEPORT and CMSG_LFD_PARTY_LOCK_INFO_REQUEST are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1007,
+			// 1009, 1011, 1012), so the session update drains them before
+			// the ShouldLogOut check — and the expiry logout does NOT
+			// subsume them. The boot-vote arm records the vote
+			// (LFGHandler.cpp:133, LFGMgr.cpp:1439): on a decided
+			// outcome it notifies the voters and, on exactly the
+			// needed agrees, kicks the victim and spends a kick; the
+			// clean-logout leg is a no-op for a grouped player
+			// (lfgOnPlayerLogout, disconnected=false), so a drop
+			// loses the vote outright and leaves a decidable boot
+			// pending until its 120s expiry, which ends without a
+			// kick. The two lock-info arms are pure query answers
+			// (LFGHandler.cpp:154, 225) sending SMSG_LFG_PLAYER_INFO
+			// and SMSG_LFG_PARTY_INFO, which the logout never sends,
+			// so a drop loses the answer outright; the party arm is
+			// a silent no-op without a group in both. The teleport
+			// arm moves the player into the dungeon or back to the
+			// entry point (LFGHandler.cpp:144, LFGMgr.cpp:1507),
+			// with a denied packet on error; the logout teleports
+			// nowhere, so a drop leaves the player logging out at
+			// the pre-teleport position instead of the destination.
+			// None of the four arms clears logoutAt, so dispatch
+			// them here like the roles leg, then fall through to
+			// the expiry logout below; all four handlers return
+			// true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_SET_BOOT_VOTE) && state.authed && !hookBlocked {
+				if !state.handleLfgSetBootVote(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFD_PLAYER_LOCK_INFO_REQUEST) && state.authed && !hookBlocked {
+				if !state.handleLfdPlayerLockInfoRequest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFG_TELEPORT) && state.authed && !hookBlocked {
+				if !state.handleLfgTeleport(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LFD_PARTY_LOCK_INFO_REQUEST) && state.authed && !hookBlocked {
+				if !state.handleLfdPartyLockInfoRequest(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
