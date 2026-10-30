@@ -3933,6 +3933,79 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LOOT_MONEY and CMSG_LOOT_RELEASE are STATUS_LOGGEDIN
+			// (Opcodes.cpp:481-482) and PROCESS_THREADUNSAFE, so the
+			// session update (WorldSessionFilter) drains them before
+			// the ShouldLogOut check (WorldSession.cpp:302-472) — and
+			// the expiry logout does NOT subsume them. Loot-money: the
+			// take moves gold (characters money rows for the looter
+			// and every near group member on the split arm,
+			// LootHandler.cpp:160-195), sends SMSG_LOOT_MONEY_NOTIFY
+			// and the LOOT_MONEY achievement, broadcasts
+			// SMSG_LOOT_CLEAR_MONEY to viewers, removes the stored
+			// container money row, and releases a fully-looted item
+			// container — none of which the logout save reproduces
+			// (it writes the player's unmoved money, touches no group
+			// member, and its releaseActiveLoot clears a corpse's
+			// loot only when fully looted, which gold != 0 blocks).
+			// Loot-release: the logout's releaseActiveLoot is the
+			// packet-less twin of DoLootRelease — it runs the GUID
+			// clear, the looting-flag strip and the fully-looted
+			// cleanup, but it never sends SMSG_LOOT_RELEASE_RESPONSE,
+			// never runs the GameObject arm (door use, fishing-hole
+			// use-count, chest despawn/ready), never broadcasts the
+			// round-robin SendLooter on the not-fully-looted arm,
+			// and never sends the force dynflag update — a dropped
+			// release loses all four ahead of SMSG_LOGOUT_COMPLETE.
+			// The GUID-mismatch arm is silent in both (C++ only calls
+			// DoLootRelease when the packet GUID equals the stored
+			// loot GUID, LootHandler.cpp:250-254), so dispatching the
+			// handler wholesale is identical there. Neither arm
+			// clears logoutAt, so dispatch them here like the loot
+			// leg, then fall through to the expiry logout below;
+			// money returns false only on a failed loot-error write,
+			// release returns true on every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT_MONEY) && state.authed && !hookBlocked {
+				if !state.handleLootMoney(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT_RELEASE) && state.authed && !hookBlocked {
+				if !state.handleLootRelease(payload) {
+					return
+				}
+			}
+			// CMSG_DUEL_ACCEPTED and CMSG_DUEL_CANCELLED are
+			// STATUS_LOGGEDIN (Opcodes.cpp:495-496) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. Accept: the countdown packets
+			// (SMSG_DUEL_COUNTDOWN to both duelists,
+			// DuelHandler.cpp:44-51) and the COUNTDOWN state are live
+			// effects the logout never sends, and the 3s start timer
+			// it arms is neutralized on the logging-out side by the
+			// logout's nil player guard while the partner side is
+			// closed by the logout's DuelComplete below. Cancel: the
+			// surrender arm (combat stop on both, 7267 beg cast,
+			// DuelComplete(DUEL_WON)) and the challenge arm
+			// (DuelComplete(DUEL_INTERRUPTED)) both send
+			// SMSG_DUEL_COMPLETE to both duelists and clear the duel
+			// state, which the logout's DuelComplete would only
+			// repeat as a no-op. Neither arm clears logoutAt, so
+			// dispatch them here like the loot legs, then fall
+			// through to the expiry logout below; both handlers
+			// return true on every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DUEL_ACCEPTED) && state.authed && !hookBlocked {
+				if !state.handleDuelAccepted(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DUEL_CANCELLED) && state.authed && !hookBlocked {
+				if !state.handleDuelCancelled(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}

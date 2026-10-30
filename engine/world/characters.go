@@ -4098,6 +4098,17 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		// (sendback=true) would also send the packet to the disconnecting client.
 		s.cancelTrade(false)
 	}
+	if s.duelPartner != 0 {
+		// Player::CleanupsBeforeDelete (Player.cpp:472) -> DuelComplete(DUEL_INTERRUPTED):
+		// the logout completes any live duel (SMSG_DUEL_COMPLETE to both duelists,
+		// duel state cleared on both sides). The disconnect path (session.logout)
+		// already ends the duel before reaching here, so this arm only fires on
+		// the direct completeLogout paths (expiry, instant logout, logout
+		// request); the duelPartner guard makes a second completion impossible.
+		// Without it, a duel accepted past logoutAt left the partner stuck in
+		// COUNTDOWN with no completion packet.
+		s.endDuel(false, 0, false)
+	}
 	if s.server != nil {
 		s.server.removeSessionFromGroup(s)
 		s.server.removeSessionChannels(s)
