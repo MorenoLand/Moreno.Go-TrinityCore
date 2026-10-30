@@ -3420,6 +3420,59 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CONTACT_LIST, CMSG_ADD_FRIEND, CMSG_DEL_FRIEND,
+			// CMSG_SET_CONTACT_NOTES, CMSG_ADD_IGNORE and CMSG_DEL_IGNORE are
+			// STATUS_LOGGEDIN (Opcodes.cpp:233, 236-240) and
+			// PROCESS_THREADUNSAFE, so the session update (WorldSessionFilter)
+			// drains them before the ShouldLogOut check (WorldSession.cpp:302-472)
+			// — and the expiry logout does NOT subsume them: contact-list is a
+			// pure read whose only effect is the SMSG_CONTACT_LIST response,
+			// while the other five write character_social rows the logout save
+			// never rewrites (add-friend upserts the friend flag plus the note
+			// and sends SMSG_FRIEND_STATUS, del-friend clears the flag and
+			// deletes the row when no flag remains, set-contact-notes updates
+			// the row's note with no response packet of its own, add-ignore
+			// upserts the ignored flag, del-ignore clears it) — so dropping
+			// them loses both the answers and the writes. None of the six arms
+			// clears logoutAt, so dispatch them here like the whois leg, then
+			// fall through to the expiry logout below. Go's add-friend handler
+			// is synchronous, so the dispatch completes before that logout;
+			// C++'s offline non-GM arm defers via a query callback that
+			// ProcessQueryCallbacks runs before ShouldLogOut only when already
+			// ready (WorldSession.cpp:458, 472). The write-failure arm mirrors
+			// the sibling legs (contact-list returns false only on a failed
+			// response write, and the deferred logout then follows; the other
+			// five handlers return true on every path).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CONTACT_LIST) && state.authed && !hookBlocked {
+				if !state.handleContactList(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ADD_FRIEND) && state.authed && !hookBlocked {
+				if !state.handleAddFriend(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DEL_FRIEND) && state.authed && !hookBlocked {
+				if !state.handleDelFriend(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_CONTACT_NOTES) && state.authed && !hookBlocked {
+				if !state.handleSetContactNotes(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ADD_IGNORE) && state.authed && !hookBlocked {
+				if !state.handleAddIgnore(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DEL_IGNORE) && state.authed && !hookBlocked {
+				if !state.handleDelIgnore(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
