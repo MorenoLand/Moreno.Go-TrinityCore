@@ -7080,6 +7080,39 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_ITEM_REFUND_INFO (0x4B3), CMSG_ITEM_REFUND (0x4B4) and
+			// CMSG_CORPSE_MAP_POSITION_QUERY (0x4B6) are all
+			// STATUS_LOGGEDIN (Opcodes.cpp:1334-1337; refund-info and
+			// refund PROCESS_INPLACE, corpse-query PROCESS_THREADUNSAFE),
+			// so the session update drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472), and the expiry logout
+			// does NOT subsume them. The refund-info arm answers
+			// SMSG_ITEM_REFUND_INFO_RESPONSE for a refundable item the
+			// player holds (ItemHandler.cpp:1169); the refund arm refunds
+			// it (Player::RefundItem, :1186), unless it is currently being
+			// disenchanted; the corpse arm answers the zeroed
+			// SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE (QueryHandler.cpp:317)
+			// — none of which the logout does. None of the three arms
+			// clears logoutAt (zero logoutAt references in items.go and
+			// spells.go), so dispatch them here, then fall through to the
+			// expiry logout below; each handler returns false only on a
+			// failed answer write, where returning matches the normal
+			// dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_REFUND_INFO) && state.authed && !hookBlocked {
+				if !state.handleItemRefundInfo(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_REFUND) && state.authed && !hookBlocked {
+				if !state.handleItemRefund(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CORPSE_MAP_POSITION_QUERY) && state.authed && !hookBlocked {
+				if !state.handleCorpseMapPositionQuery(payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
