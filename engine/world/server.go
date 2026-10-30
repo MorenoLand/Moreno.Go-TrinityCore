@@ -3446,6 +3446,54 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1378), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler accepts the war invite (sending
+			// SMSG_BATTLEFIELD_MGR_ENTERED and joining the war) or kicks
+			// a zone decliner from the battlefield (BattlefieldHandler.cpp:143)
+			// while the logout accepts nothing and kicks nobody. Dispatch
+			// it here like the equipment-set-use leg, then fall through
+			// to the expiry logout below; it returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE) && state.authed && !hookBlocked {
+				if !state.handleBfEntryInviteResponse(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1381), so the session update
+			// drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler inserts the accepter into the
+			// battlefield queue and answers
+			// SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE
+			// (BattlefieldHandler.cpp:121) while the logout queues nobody
+			// and answers none. Dispatch it here like the entry-invite
+			// leg, then fall through to the expiry logout below; it
+			// returns true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE) && state.authed && !hookBlocked {
+				if !state.handleBfQueueInviteResponse(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BATTLEFIELD_MGR_EXIT_REQUEST is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1386), so the session update
+			// drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler erases the player from the
+			// battlefield queue (BattlefieldHandler.cpp:173) while the
+			// logout erases nobody from the queue. Dispatch it here like
+			// the queue-invite leg, then fall through to the expiry
+			// logout below; it returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_EXIT_REQUEST) && state.authed && !hookBlocked {
+				if !state.handleBfQueueExitRequest(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
