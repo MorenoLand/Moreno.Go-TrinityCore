@@ -3621,6 +3621,69 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_PLAYER_LOGIN is STATUS_AUTHED, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:192), so the session update drains it before the
+			// ShouldLogOut check -- but it is NOT a dispatch-then-logout leg.
+			// C++ HandlePlayerLoginOpcode kicks when GetPlayer() != nullptr
+			// (CharacterHandler.cpp:707, KickPlayer closes the socket and sets
+			// forceExit, WorldSession.cpp:648-657), yet the ShouldLogOut check
+			// still runs in the same Update (:472-473) because m_playerLoading
+			// was never set, so LogoutPlayer(true) saves and removes the
+			// session right after the kick. The kick analogue here is a bare
+			// return, not a fall-through: the deferred logout() on connection
+			// close runs the same save path with sendLogoutComplete=false,
+			// matching a LogoutComplete sent to a closed socket (never
+			// delivered), while the fall-through tail would send it on an
+			// open socket and keep reading. Do NOT call handlePlayerLogin:
+			// its playerLoaded guard returns false (the same close) but its
+			// pre-guard setPendingBind(0) would erase the pending bind
+			// before the logout's repop leg reads it. A hook-blocked login
+			// skips the kick like the C++ break arm and falls through to
+			// the expiry logout below. The expiry block implies a loaded
+			// player: logoutAt is armed only by the logout-request path on
+			// a loaded player (characters.go:3963).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGIN) && state.authed && !hookBlocked {
+				return
+			}
+			// CMSG_GUILD_QUERY is STATUS_AUTHED, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:215), so the session update drains it before the
+			// ShouldLogOut check (WorldSession.cpp:302-472), and the expiry
+			// logout does NOT subsume it: the C++ handler has no _player
+			// guard (GuildHandler.cpp:28) and answers SMSG_GUILD_QUERY_RESPONSE
+			// for a known guild, while the logout answers none. The Go
+			// handler returns true on every path, so the write-failure arm
+			// never fires; it clears no logoutAt (zero logoutAt references
+			// in guild.go), so dispatch it here, then fall through to the
+			// expiry logout below.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_QUERY) && state.authed && !hookBlocked {
+				if !state.handleGuildQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_REQUEST_ACCOUNT_DATA and CMSG_UPDATE_ACCOUNT_DATA are
+			// STATUS_AUTHED, PROCESS_THREADUNSAFE (Opcodes.cpp:653-654), so
+			// the session update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472), and the expiry logout does NOT
+			// subsume them: neither C++ handler touches _player
+			// (MiscHandler.cpp:793, 848) -- request answers SMSG_UPDATE_ACCOUNT_DATA
+			// with the stored data (guid is the loaded player's, :878) and
+			// update stores the data and answers
+			// SMSG_UPDATE_ACCOUNT_DATA_COMPLETE, while the logout stores and
+			// answers neither. Neither Go handler clears logoutAt (zero
+			// logoutAt references in the account-data arms), so dispatch them
+			// here, then fall through to the expiry logout below; each
+			// returns false only on a failed answer write, where returning
+			// matches the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_ACCOUNT_DATA) && state.authed && !hookBlocked {
+				if !state.handleRequestAccountData(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UPDATE_ACCOUNT_DATA) && state.authed && !hookBlocked {
+				if !state.handleUpdateAccountData(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
