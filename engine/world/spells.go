@@ -18183,8 +18183,12 @@ func (s *session) spellDelayMomentMs(ctx context.Context, spell wotlk.Spell, tar
 		if target.TrajSpeed != 0 {
 			speedXY := float64(target.TrajSpeed) * math.Cos(float64(target.TrajElevation))
 			if speedXY > 0 {
-				dx := float64(target.Destination.X - s.player.X)
-				dy := float64(target.Destination.Y - s.player.Y)
+				srcX, srcY := s.player.X, s.player.Y
+				if target.Flags&protocol.SpellTargetFlagSourceLocation != 0 {
+					srcX, srcY = target.Source.X, target.Source.Y
+				}
+				dx := float64(target.Destination.X - srcX)
+				dy := float64(target.Destination.Y - srcY)
 				dist2d := math.Sqrt(dx*dx + dy*dy)
 				delayMoment = uint64(math.Floor(dist2d / speedXY * 1000.0))
 			}
