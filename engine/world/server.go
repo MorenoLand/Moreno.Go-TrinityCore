@@ -6052,6 +6052,39 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_SET_DUNGEON_DIFFICULTY and CMSG_GMSURVEY_SUBMIT are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:940-941),
+			// so the session update drains them before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume them.
+			// The live difficulty arm drops invalid modes, a mode equal
+			// to the current one, and any change from inside a dungeon;
+			// a group leader's change is blocked whole when any member
+			// is not in world or sits in a non-raid dungeon, and
+			// otherwise resets the binds at the difficulty change and
+			// sets the new difficulty (MiscHandler.cpp:1268-1325); Go's
+			// handler DELETEs those bind rows and UPDATEs the groups
+			// difficulty row eagerly and echoes the difficulty to
+			// members, while the logout save writes no bind rows and
+			// no group difficulty, so a drop leaves the binds unreset
+			// and the difficulty unchanged at next login. The live
+			// survey arm INSERTs the gm_survey and gm_subsurvey rows
+			// in one transaction (TicketHandler.cpp:194-240); Go's
+			// handler commits the same rows eagerly, while the logout
+			// save writes no survey rows, so a drop loses the survey
+			// outright. Neither arm clears logoutAt, so dispatch them
+			// here like the reset-instances leg, then fall through to
+			// the expiry logout below; both handlers return true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY) && state.authed && !hookBlocked {
+				if !state.handleSetDungeonDifficulty(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMSURVEY_SUBMIT) && state.authed && !hookBlocked {
+				if !state.handleGMSurveySubmit(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
