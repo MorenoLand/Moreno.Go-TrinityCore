@@ -6085,6 +6085,55 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SOCKET_GEMS is STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:970), so the session update drains it
+			// before the ShouldLogOut check — and the expiry logout
+			// does NOT subsume it. The live arm validates the
+			// socket/color/meta gates and the unique-equipped and
+			// limit-category checks, then socketing consumes the
+			// gems and sets the socket enchantments plus the
+			// socket-bonus/meta-bonus state (ItemHandler.cpp:947-
+			// 1142); Go's handler UPDATEs the item_instance
+			// enchantments row eagerly and DELETEs the consumed
+			// gem rows, while the logout save writes no
+			// item_instance enchantment rows and no
+			// character_inventory rows outside the buyback clear,
+			// so a drop leaves the item unsocketed and the gems
+			// unconsumed at next login. No arm clears logoutAt,
+			// so dispatch it here like the gmsurvey leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SOCKET_GEMS) && state.authed && !hookBlocked {
+				if !state.handleSocketGems(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_ARENA_TEAM_QUERY and CMSG_ARENA_TEAM_ROSTER are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:
+			// 974, 976), so the session update drains them before
+			// the ShouldLogOut check — and the expiry logout does
+			// NOT subsume them. Both are pure reads: query answers
+			// SMSG_ARENA_TEAM_QUERY_RESPONSE plus SMSG_ARENA_TEAM_
+			// STATS (ArenaTeamHandler.cpp:61-72), roster answers
+			// SMSG_ARENA_TEAM_ROSTER (:75-83), and the logout
+			// sends none of the three, so a drop leaves the query
+			// unanswered. Neither arm clears logoutAt, so dispatch
+			// them here like the socket-gems leg, then fall
+			// through to the expiry logout below. Query returns
+			// true on every path; roster returns false only on a
+			// failed roster write, where returning matches the
+			// normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_QUERY) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_ROSTER) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamRoster(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
