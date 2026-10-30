@@ -5981,6 +5981,77 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_PET_SPELL_AUTOCAST is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:886), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry
+			// logout does NOT subsume it. The live arm gates
+			// on the guid resolving to the player's guardian
+			// pet or charmed creature, then toggles autocast
+			// for every alive controlled unit sharing the
+			// pet's entry (PetHandler.cpp:694-741); Go's
+			// handler UPDATEs pet_spell.active and the
+			// character_pet abdata eagerly, while the logout
+			// pet save rewrites only slot, level, health,
+			// mana, happiness, exp, Reactstate and savetime
+			// (pet_save.go savePetState), so a drop loses
+			// the toggle outright at next login. No arm
+			// clears logoutAt, so dispatch it here like the
+			// battlemaster-join leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_SPELL_AUTOCAST) && state.authed && !hookBlocked {
+				if !state.handlePetSpellAutocast(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GUILD_INFO_TEXT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:895), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it. The live arm sets the guild info when the
+			// player holds GR_RIGHT_MODIFY_GUILD_INFO and
+			// UPDATEs the guild row (GuildHandler.cpp:197,
+			// Guild.cpp:1324-1340); Go's handler UPDATEs that
+			// row eagerly, while the logout save writes no
+			// guild rows at all, so a drop loses the info
+			// change outright. Unchanged info and denied
+			// ranks are silent in both. No arm clears
+			// logoutAt, so dispatch it here like the
+			// autocast leg, then fall through to the expiry
+			// logout below; the handler returns true on
+			// every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_INFO_TEXT) && state.authed && !hookBlocked {
+				if !state.handleGuildInfoText(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_RESET_INSTANCES is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:928), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it. The live arm resets the leader's group
+			// binds or the solo player's binds and answers
+			// SMSG_INSTANCE_RESET per reset map, or
+			// SMSG_INSTANCE_RESET_FAILED for a map with
+			// players inside (MiscHandler.cpp:1255,
+			// Group.cpp:2206-2272); Go's handler DELETEs
+			// those bind rows eagerly and sends the same
+			// packets, while the logout save writes no
+			// instance-bind rows and sends neither packet,
+			// so a drop leaves the lockouts in place at next
+			// login. No arm clears logoutAt, so dispatch it
+			// here like the guild-info leg, then fall
+			// through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_RESET_INSTANCES) && state.authed && !hookBlocked {
+				if !state.handleResetInstances(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
