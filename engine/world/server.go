@@ -7049,6 +7049,37 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_HEARTH_AND_RESURRECT (0x49C), CMSG_PLAYER_VEHICLE_ENTER
+			// (0x4A8) and CMSG_CONTROLLER_EJECT_PASSENGER (0x4A9) are all
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1311,
+			// 1323-1324), so the session update drains them before the
+			// ShouldLogOut check (WorldSession.cpp:302-472), and the expiry
+			// logout does NOT subsume them. The hearth arm repops,
+			// resurrects and teleports a Wintergrasp-flagged player home, or
+			// asks a battlefield-zone player to leave (MiscHandler.cpp:1505);
+			// the vehicle-enter arm boards a nearby raid member's player
+			// vehicle (VehicleHandler.cpp:129); the eject arm exits an
+			// ejectable passenger from the controller's vehicle (:151) —
+			// none of which the logout does. None of the three arms clears
+			// logoutAt (zero logoutAt references in death.go and vehicle.go),
+			// so dispatch them here, then fall through to the expiry logout
+			// below; all three handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_HEARTH_AND_RESURRECT) && state.authed && !hookBlocked {
+				if !state.handleHearthAndResurrect(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_VEHICLE_ENTER) && state.authed && !hookBlocked {
+				if !state.handlePlayerVehicleEnter(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CONTROLLER_EJECT_PASSENGER) && state.authed && !hookBlocked {
+				if !state.handleControllerEjectPassenger(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
