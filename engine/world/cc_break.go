@@ -470,11 +470,15 @@ func (s *Server) breakCreatureChannelOnDamage(m *creatureMotion, damagingSpellID
 	if sp.ChannelInterrupt&flags == 0 {
 		return
 	}
-	m.CastingUntil = time.Time{}
-	m.ChannelSpellID = 0
-	m.ChannelTargetGUID = 0
-	m.ChannelHasDest = false
-	m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
-	m.ChannelUntil = time.Time{}
-	s.cancelPendingCreatureCast(m)
+	// RemoveAurasWithInterruptFlags ends in InterruptNonMeleeSpells ->
+	// Spell::cancel, so the broken channel (and any co-live deferral
+	// arm) broadcasts its cancel packets, not a silent clear.
+	interrupted := s.interruptCreatureNonMeleeCasts(m)
+	if len(interrupted) == 0 {
+		m.CastingUntil = time.Time{}
+		s.cancelPendingCreatureCast(m)
+	}
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(m, arm)
+	}
 }

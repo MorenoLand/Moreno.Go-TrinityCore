@@ -337,6 +337,58 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureC
 	return interrupted
 }
 
+// interruptCreatureNonMeleeCasts mirrors Unit::InterruptNonMeleeSpells(false)
+// (Unit.cpp:3212-3225) for a creature, returning the canceled arms in C++
+// loop order (generic, then channeled) so callers can send their
+// Spell::cancel packets via sendCreatureInterruptPackets. InterruptSpell
+// (Unit.cpp:3140-3172) cancels the generic deferral arm (PREPARING, cast
+// time > 0 by deferral construction, so the withInstant gate passes) and
+// always cancels the live channeled arm (CASTING, called with
+// withDelayed+withInstant true). Unlike interruptCreatureCast it carries
+// NO effect-68 gates: InterruptNonMeleeSpells checks no InterruptFlags
+// or PreventionType, only IsInterruptable (!m_executedCurrently,
+// Spell.h:548), which is vacuous in Go's synchronous cast model. A
+// post-GO CastingUntil stamp with no pending spell and no live channel
+// is NOT an arm: in C++ that spell already finished, so
+// InterruptNonMeleeSpells finds no current spell and sends nothing —
+// broadcasting FAILURE for it would cancel a cast bar the client never
+// saw. The autorepeat slot has no Go creature model and is skipped, and
+// the AI OnSpellCastFinished hook (Unit.cpp:3171-3172) is unmodeled,
+// matching the standing effect-68 delta.
+// Callers still clear the plain gate when no arm returns: the helper
+// only clears state for arms it reports. Takes no locks itself.
+func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interruptedCreatureCast {
+	if s == nil || m == nil {
+		return nil
+	}
+	var interrupted []interruptedCreatureCast
+	var genericSpellID uint32
+	if m.PendingInlineSpellID != 0 {
+		genericSpellID = m.PendingInlineSpellID
+	} else if m.PendingCastSpellID != 0 {
+		genericSpellID = m.PendingCastSpellID
+	}
+	if genericSpellID != 0 {
+		s.cancelPendingCreatureCast(m)
+		if !s.creatureChannelLive(m) {
+			m.CastingUntil = time.Time{}
+		}
+		interrupted = append(interrupted, interruptedCreatureCast{spellID: genericSpellID})
+	}
+	if s.creatureChannelLive(m) {
+		channelSpellID := m.ChannelSpellID
+		m.CastingUntil = time.Time{}
+		m.ChannelSpellID = 0
+		m.ChannelTargetGUID = 0
+		m.ChannelHasDest = false
+		m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
+		m.ChannelUntil = time.Time{}
+		s.cancelPendingCreatureCast(m)
+		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
+	}
+	return interrupted
+}
+
 // interruptCreatureTargetCast applies EffectInterruptCast to a creature
 // victim of a session-cast interrupt spell, logging each interrupted
 // spell through the caster session like the player-victim arm.

@@ -2338,9 +2338,19 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.SpellCooldownCategoryEnds = nil
 	// CreatureAI::_EnterEvadeMode -> Unit::CombatStop(true) interrupts a
 	// non-melee cast in flight (Unit.cpp:5809-5812), so the cast-state
-	// gate clears with the event schedule.
-	motion.CastingUntil = time.Time{}
-	s.cancelPendingCreatureCast(motion)
+	// gate clears with the event schedule. The interrupt runs through
+	// InterruptNonMeleeSpells -> Spell::cancel, so a deferral arm or a
+	// live channel also broadcasts its cancel packets here (the
+	// channel stamp clears with the arm — C++ drops the channeled
+	// current spell, it does not survive evade).
+	interrupted := s.interruptCreatureNonMeleeCasts(motion)
+	if len(interrupted) == 0 {
+		motion.CastingUntil = time.Time{}
+		s.cancelPendingCreatureCast(motion)
+	}
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
 	motion.Health = motion.MaxHealth
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
@@ -3318,8 +3328,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// spell/melee tick, so the creature never breaks its own crowd
 		// control.
 		if motion.AIName == "CasterAI" && target.Sess != nil && s != nil && s.aiVictimHasBreakableCC(motion, target.Sess) {
-			motion.CastingUntil = time.Time{}
-			s.cancelPendingCreatureCast(motion)
+			// InterruptNonMeleeSpells -> Spell::cancel, so a deferral
+			// arm or a live channel broadcasts its cancel packets
+			// like every other non-melee interrupt, not silently.
+			interrupted := s.interruptCreatureNonMeleeCasts(motion)
+			if len(interrupted) == 0 {
+				motion.CastingUntil = time.Time{}
+				s.cancelPendingCreatureCast(motion)
+			}
+			for _, arm := range interrupted {
+				s.sendCreatureInterruptPackets(motion, arm)
+			}
 			return
 		}
 		// Pending inline cast (deferral queue, boss_ai.go twin arm): a

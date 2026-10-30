@@ -1230,9 +1230,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		victim := motion.TargetGUID
+		var interrupted []interruptedCreatureCast
 		if includingCast {
-			motion.CastingUntil = time.Time{}
-			s.cancelPendingCreatureCast(motion)
+			// Unit::CombatStop(true) -> InterruptNonMeleeSpells ->
+			// Spell::cancel, so the arms broadcast their cancel
+			// packets after the lock drops, ahead of AttackStop.
+			interrupted = s.interruptCreatureNonMeleeCasts(motion)
+			if len(interrupted) == 0 {
+				motion.CastingUntil = time.Time{}
+				s.cancelPendingCreatureCast(motion)
+			}
 		}
 		motion.TargetGUID = 0
 		motion.AlreadyCallAssistance = false
@@ -1245,6 +1252,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.sendCreatureInterruptPackets(motion, arm)
+		}
 		if victim != 0 {
 			stopPkt := buildAttackStop(guid, victim, false)
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
