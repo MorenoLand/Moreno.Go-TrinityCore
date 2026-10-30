@@ -2536,7 +2536,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if eff := spellInfo.Effects[i]; eff.Effect == spellEffectTransmitted {
-				s.creatureEffectTransmitted(ctx, m, spellTarget, spellInfo, eff)
+				s.creatureEffectTransmitted(ctx, m, creatureEffectDestTarget(spellTarget, m, i, destSnapshots), spellInfo, eff)
 			}
 		}
 	}

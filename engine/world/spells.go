@@ -16002,7 +16002,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectSummonChangeItem: // 34: SPELL_EFFECT_SUMMON_CHANGE_ITEM (EffectSummonChangeItem, SpellEffects.cpp:2061)
 				s.handleEffectSummonChangeItem(effCtx, castItemGUID, spell, eff)
 			case spellEffectTransmitted: // 50: SPELL_EFFECT_TRANS_DOOR (EffectTransmitted, SpellEffects.cpp:4927)
-				s.handleEffectTransmitted(effCtx, target, spell, eff)
+				s.handleEffectTransmitted(effCtx, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots), spell, eff)
 			case spellEffectCreateItem2: // 157: SPELL_EFFECT_CREATE_ITEM_2 (EffectCreateItem2, SpellEffects.cpp:1688)
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff, casterLevel)
 			case spellEffectPull: // 70: SPELL_EFFECT_PULL — EffectPull calls EffectNULL (SpellEffects.cpp:2541-2545), no-op
@@ -16898,9 +16898,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectDistract(effCtx, spell, eff, distractList, target)
 			case spellEffectAddFarsight: // 72: SPELL_EFFECT_ADD_FARSIGHT (EffectAddFarsight, SpellEffects.cpp:2580)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the spell
-				// destination becomes the caster's viewpoint.
-				s.handleEffectAddFarsight(effCtx, spell, eff, target)
+				// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the effect's
+				// own dest slot becomes the caster's viewpoint.
+				s.handleEffectAddFarsight(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
 			case spellEffectUntrainTalents: // 73: SPELL_EFFECT_UNTRAIN_TALENTS (EffectUntrainTalents, SpellEffects.cpp:2606)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET, but only
 				// when the caster is a trainer NPC (m_caster->GetTypeId() !=
@@ -24787,15 +24787,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if eff.Effect == spellEffectAddFarsight {
 			// Spell::EffectAddFarsight (SpellEffects.cpp:2580) runs once at
 			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper,
-			// with this path's spellTarget (dest, or no-op without one).
-			s.handleEffectAddFarsight(ctx, spell, eff, spellTarget)
+			// with this effect's own dest slot (or no-op without one).
+			s.handleEffectAddFarsight(ctx, spell, eff, sessionEffectDestTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, effectIndex, triggeredDestSnapshots))
 		}
 		if eff.Effect == spellEffectTransmitted {
 			// Spell::EffectTransmitted (SpellEffects.cpp:4927) runs once at
 			// SPELL_EFFECT_HANDLE_HIT on the caster — the client arm's helper
-			// (gameobjects.go), with this path's spellTarget for the dest leg;
+			// (gameobjects.go), with this effect's own dest slot for the dest leg;
 			// its radius/random-range residual rides along unchanged.
-			s.handleEffectTransmitted(ctx, spellTarget, spell, eff)
+			s.handleEffectTransmitted(ctx, sessionEffectDestTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, effectIndex, triggeredDestSnapshots), spell, eff)
 		}
 		if eff.Effect == spellEffectSummonChangeItem {
 			// Spell::EffectSummonChangeItem (SpellEffects.cpp:2061) runs

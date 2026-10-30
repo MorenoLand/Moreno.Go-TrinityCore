@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // spellHasCreatureDestTarget reports whether any active effect carries a
@@ -119,6 +120,27 @@ func persistentAreaAuraDest(spell wotlk.Spell, snapshots []creatureDestSnapshot)
 	}
 	snap := snapshots[idx]
 	return true, snap.X, snap.Y, snap.Z
+}
+
+// creatureEffectDestTarget returns the SpellTargetData an effect's HIT arm
+// must see: its own m_destTargets slot (Spell.cpp:5159), not the spell-final
+// destination stamped into spellTarget. It mirrors sessionEffectDestTarget
+// on the session path: a stamped slot carries the slot; an unstamped slot
+// with a final destination carries the caster position (the Spell.cpp:630
+// slot init); with no destination at all the flag is cleared so the helper
+// falls to its caster-position leg.
+func creatureEffectDestTarget(base protocol.SpellTargetData, m *creatureMotion, effIndex int, snapshots []creatureDestSnapshot) protocol.SpellTargetData {
+	if effIndex >= 0 && effIndex < len(snapshots) && snapshots[effIndex].Has {
+		base.Flags |= protocol.SpellTargetFlagDestLocation
+		base.Destination = protocol.SpellTargetLocation{X: snapshots[effIndex].X, Y: snapshots[effIndex].Y, Z: snapshots[effIndex].Z}
+		return base
+	}
+	if base.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		base.Destination = protocol.SpellTargetLocation{X: m.X, Y: m.Y, Z: m.Z}
+		return base
+	}
+	base.Flags &^= protocol.SpellTargetFlagDestLocation
+	return base
 }
 
 func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {

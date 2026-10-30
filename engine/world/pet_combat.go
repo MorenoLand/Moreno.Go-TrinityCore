@@ -4722,7 +4722,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectTransmitted:
-			s.server.creatureEffectTransmitted(ctx, motion, target, spell, spell.Effects[i])
+			s.server.creatureEffectTransmitted(ctx, motion, creatureEffectDestTarget(target, motion, i, destSnapshots), spell, spell.Effects[i])
 		}
 	}
 	s.server.creatureEffectSummonType(ctx, motion, spell, destSnapshots)

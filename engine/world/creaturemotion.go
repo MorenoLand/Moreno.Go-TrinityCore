@@ -5158,7 +5158,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					case spellEffectSummonObjectWild:
 						s.creatureEffectSummonObjectWild(ctx, motion, inlineSpell, inlineSpell.Effects[i], i, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, inlineSummonSnapshots)
 					case spellEffectTransmitted:
-						s.creatureEffectTransmitted(ctx, motion, spellTarget, inlineSpell, inlineSpell.Effects[i])
+						s.creatureEffectTransmitted(ctx, motion, creatureEffectDestTarget(spellTarget, motion, i, inlineSummonSnapshots), inlineSpell, inlineSpell.Effects[i])
 					case spellEffectTriggerRitualOfSummoning:
 						s.creatureEffectTriggerRitualOfSummoning(ctx, motion, spellID, inlineSpell.Effects[i])
 					}
