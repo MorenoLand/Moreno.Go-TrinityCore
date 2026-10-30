@@ -5210,6 +5210,105 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_AUCTION_LIST_BIDDER_ITEMS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:743), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer interact
+			// gate, strips a faked death, then answers
+			// SMSG_AUCTION_BIDDER_LIST_RESULT with the bidder
+			// page (AuctionHouseHandler.cpp:651-705); the
+			// logout sends no list. The no-auctioneer arm is
+			// silent in both. No arm clears logoutAt, so
+			// dispatch it here like the place-bid leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_LIST_BIDDER_ITEMS) && state.authed && !hookBlocked {
+				if !state.handleAuctionListBidderItems(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_SET_AMMO is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:747), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets or clears the ammo id
+			// (ItemHandler.cpp:764-790, Player::SetAmmo /
+			// RemoveAmmo) and Go sends the values update,
+			// while the logout save persists the pre-set ammo
+			// id, so a drop loses the change outright. The
+			// dead and unknown-ammo arms answer the equip
+			// error in both. No arm clears logoutAt, so
+			// dispatch it here like the bidder-list leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_AMMO) && state.authed && !hookBlocked {
+				if !state.handleSetAmmo(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_SET_ACTIVE_MOVER is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:749), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm only logs a mismatch against
+			// GetUnitBeingMoved and applies nothing
+			// (MovementHandler.cpp:518-531), and Go's handler
+			// mirrors it with a debug log alone, so dispatch
+			// changes no observable state either way. No arm
+			// clears logoutAt, so dispatch it here like the
+			// set-ammo leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_ACTIVE_MOVER) && state.authed && !hookBlocked {
+				if !state.handleSetActiveMover(payload) {
+					return
+				}
+			}
+			// CMSG_PET_CANCEL_AURA is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:750), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm removes the pet-owned aura
+			// (SpellHandler.cpp:503-535) and Go DELETEs the
+			// pet_aura row eagerly, while the logout pet save
+			// persists whatever the aura maps still hold, so a
+			// drop saves the aura back at next login. The
+			// unknown-spell, non-pet and non-owned arms stay
+			// silent in both, and the dead-pet arm answers
+			// the feedback packet in both. No arm clears
+			// logoutAt, so dispatch it here like the mover
+			// leg, then fall through to the expiry logout
+			// below; the handler returns true on every path,
+			// so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_CANCEL_AURA) && state.authed && !hookBlocked {
+				if !state.handlePetCancelAura(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_CANCEL_AUTO_REPEAT_SPELL is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:752), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm interrupts the auto-repeat
+			// slot, which sends SMSG_CANCEL_AUTO_REPEAT for a
+			// player (SpellHandler.cpp:553-557,
+			// Unit::InterruptSpell, Unit.cpp:3156-3158), and
+			// Go's handler sends the same cancel packet; the
+			// logout teardown sends it again only if the slot
+			// is still live, so dispatching keeps the drain
+			// order C++ runs. No arm clears logoutAt, so
+			// dispatch it here like the pet-cancel leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CANCEL_AUTO_REPEAT_SPELL) && state.authed && !hookBlocked {
+				if !state.handleCancelAutoRepeatSpell(payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
