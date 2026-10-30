@@ -191,6 +191,61 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 	return false
 }
 
+// sessionDestSnapshot is one effect's Spell::m_destTargets slot
+// (Spell.cpp:630, 789) on the session path: the running destination as it
+// stood after that effect's own A/B arms — a dest-family effect later in
+// the list does NOT retroactively move an earlier effect's slot, and an
+// effect with no dest arm inherits the running destination from earlier
+// effects (or the packet destination). Indexed by effect position; Has is
+// false for skipped (Effect == 0) effects and for effects before any dest
+// was present (no packet dest and no dest arm yet).
+type sessionDestSnapshot struct {
+	Has     bool
+	X, Y, Z float32
+}
+
+// sessionEffectDestTarget returns the SpellTargetData an effect's HIT arm
+// must see: its own m_destTargets slot (Spell.cpp:5159), not the
+// spell-final destination resolveImplicitSpellDestination returns. A stamped
+// slot carries the slot; an unstamped slot with a final destination carries
+// the caster position (the Spell.cpp:630 slot init — C++'s m_targets.HasDst
+// gate passes at handle time, so the arm uses the slot, not the close
+// point); with no destination at all the flag is cleared so the helper
+// falls to its close-point leg, matching the current no-dest behavior.
+func sessionEffectDestTarget(base protocol.SpellTargetData, cx, cy, cz float32, effIndex int, snapshots []sessionDestSnapshot) protocol.SpellTargetData {
+	if effIndex >= 0 && effIndex < len(snapshots) && snapshots[effIndex].Has {
+		base.Flags |= protocol.SpellTargetFlagDestLocation
+		base.Destination = protocol.SpellTargetLocation{X: snapshots[effIndex].X, Y: snapshots[effIndex].Y, Z: snapshots[effIndex].Z}
+		return base
+	}
+	if base.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		base.Destination = protocol.SpellTargetLocation{X: cx, Y: cy, Z: cz}
+		return base
+	}
+	base.Flags &^= protocol.SpellTargetFlagDestLocation
+	return base
+}
+
+// sessionPersistentAreaAuraTarget returns the SpellTargetData
+// spawnPersistentAreaAura must see: the LAST effect-27's own slot
+// (SpellEffects.cpp:1738 handles only the last one; Spell.cpp:5159 hands
+// each effect its own slot). An unstamped last-27 slot with a final
+// destination centers on the caster position (the Spell.cpp:630 slot init);
+// with no destination at all the base passes through unchanged so the
+// unit-wire fallback inside spawnPersistentAreaAura still runs.
+func sessionPersistentAreaAuraTarget(base protocol.SpellTargetData, cx, cy, cz float32, spell wotlk.Spell, snapshots []sessionDestSnapshot) protocol.SpellTargetData {
+	idx := -1
+	for i, eff := range spell.Effects {
+		if eff.Effect == spellEffectPersistentAreaAura {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return base
+	}
+	return sessionEffectDestTarget(base, cx, cy, cz, idx, snapshots)
+}
+
 // resolveImplicitSpellDestination mirrors the destination half of
 // Spell::SelectSpellTargets (Spell.cpp:758-794) for the target-dest and
 // dest-dest families, the caster-dest family (SelectImplicitCasterDestTargets,
@@ -211,8 +266,27 @@ func spellHasDestFamilyTarget(spell wotlk.Spell) bool {
 // false when a 46 effect finds no object, which fails the cast with
 // SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
+	resolved, _, ok := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target)
+	return resolved, ok
+}
+
+// resolveImplicitSpellDestinationWithSnapshots is resolveImplicitSpellDestination
+// plus the per-effect m_destTargets slots (Spell.cpp:630, 789): snapshots[i]
+// is the running destination after effect i's own A/B arms. The single-target
+// return is unchanged; callers that hand a destination to a HIT arm use the
+// slot, never the spell-final destination.
+func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, []sessionDestSnapshot, bool) {
 	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasFishingDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
-		return target, true
+		// No dest-family target: every slot stamps the packet destination
+		// when one was sent (C++ AddDestTarget fires per effect while
+		// HasDst holds), and none stamps when none was sent.
+		snapshots := make([]sessionDestSnapshot, len(spell.Effects))
+		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+			for i := range snapshots {
+				snapshots[i] = sessionDestSnapshot{Has: true, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z}
+			}
+		}
+		return target, snapshots, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
@@ -255,6 +329,8 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 			unitTarget, hasUnitTarget = combatTarget{GUID: target.UnitGUID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: gx, Y: gy, Z: gz, Orientation: float32(ori)}, true
 		}
 	}
+	snapshots := make([]sessionDestSnapshot, len(spell.Effects))
+	hasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -285,6 +361,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 					return float32(s.applySpellModFloat(spell, spellModRadius, float64(r)))
 				}
 				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, modRadius)
+				hasDst = true
 			case targetType == implicitTargetDestCasterFishing:
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389):
 				// TARGET_DEST_CASTER_FISHING (39) — the bobber point resolves
@@ -293,6 +370,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// NOT_HERE/TOO_SHALLOW fail arms are no-bridge (no
 				// map-height/liquid model).
 				x, y, z = s.fishingDestPoint(spell)
+				hasDst = true
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here; without a
 				// resolvable unit target Go keeps the current destination.
@@ -300,6 +378,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 					continue
 				}
 				x, y, z = resolveTargetDestPosition(s.server.Data, targetType, eff.RadiusIndex, unitTarget.X, unitTarget.Y, unitTarget.Z, unitTarget.Orientation)
+				hasDst = true
 			case isDestDestTarget(targetType):
 				// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
 				// through the player's spell-mod owner.
@@ -309,6 +388,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				nx, ny, nz, changed := resolveDestDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), x, y, z, s.player.Orientation, modRadius)
 				if changed {
 					x, y, z = nx, ny, nz
+					hasDst = true
 				}
 			case targetType == implicitTargetDestTraj:
 				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626):
@@ -317,6 +397,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// the caster-position fallback already applied above.
 				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, target, x, y, z); changed {
 					x, y, z = nx, ny, nz
+					hasDst = true
 				}
 			case targetType == implicitTargetDestChannelTarget || targetType == implicitTargetDestChannelCaster:
 				// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032):
@@ -327,6 +408,7 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				// gate means nothing resolves here in practice.
 				if nx, ny, nz, ok := s.channelDestForSpell(ctx, spell); ok {
 					x, y, z = nx, ny, nz
+					hasDst = true
 				}
 			case targetType == implicitTargetDestNearbyEntry:
 				// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
@@ -345,13 +427,17 @@ func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wot
 				}
 				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID, effIndex); ok {
 					x, y, z = nx, ny, nz
+					hasDst = true
 				} else {
-					return target, false
+					return target, nil, false
 				}
 			}
+		}
+		if hasDst {
+			snapshots[effIndex] = sessionDestSnapshot{Has: true, X: x, Y: y, Z: z}
 		}
 	}
 	target.Flags |= protocol.SpellTargetFlagDestLocation
 	target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
-	return target, true
+	return target, snapshots, true
 }

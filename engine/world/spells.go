@@ -9789,7 +9789,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell destination from target-relative / dest-relative implicit
 	// targets once, before the area selection and persistent-area read
 	// sites below consume it.
-	target, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, target)
+	target, sessionDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target)
 	if !destOK {
 		// Spell.cpp:1111: no nearby entry object found ->
 		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -12146,7 +12146,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// fails at selection (channeled check, chain genuine-miss, aura-scale
 	// LOWLEVEL) never reaches it, so the spawn sits here, behind every
 	// pre-GO fail point, instead of ahead of target selection.
-	s.spawnPersistentAreaAura(ctx, spell, target)
+	s.spawnPersistentAreaAura(ctx, spell, sessionPersistentAreaAuraTarget(target, s.player.X, s.player.Y, s.player.Z, spell, sessionDestSnapshots))
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
 	// Spell::SendSpellGo (Spell.cpp:4325): !StartRecoveryTime sets
@@ -16966,9 +16966,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectSummonObjectWild: // 76: SPELL_EFFECT_SUMMON_OBJECT_WILD (EffectSummonObjectWild, SpellEffects.cpp:3552)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// a wild (ownerless) game object spawns at the spell
-				// destination for the spell's duration.
-				s.handleEffectSummonObjectWild(effCtx, spell, eff, target)
+				// a wild (ownerless) game object spawns at the effect's
+				// own dest slot (Spell.cpp:5159) for the spell's duration.
+				s.handleEffectSummonObjectWild(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
 			case spellEffectActivateObject: // 86: SPELL_EFFECT_ACTIVATE_OBJECT (EffectActivateObject, SpellEffects.cpp:3938)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
@@ -17112,10 +17112,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// SpellEffects.cpp:4215). C++ runs this once at
 				// SPELL_EFFECT_HANDLE_HIT on the caster: the caster's object slot
 				// is cleared (despawning the old GO, with the recast null-spell-id
-				// arm), then a fresh GO spawns at the spell destination (or a
-				// close point) with the caster's faction, the spell's duration
+				// arm), then a fresh GO spawns at the effect's own dest slot
+				// (Spell.cpp:5159, or a close point) with the caster's faction, the spell's duration
 				// and spell id, and the slot takes the new GUID.
-				s.handleEffectSummonObject(effCtx, spell, eff, target)
+				s.handleEffectSummonObject(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
 			case spellEffectSkill: // 118: SPELL_EFFECT_SKILL (EffectSkill, SpellEffects.cpp:4486)
 				// The C++ body is a single debug log line ("WORLD: SkillEFFECT")
 				// — explicit no-op so the effect stops hitting the
@@ -22479,7 +22479,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// entry 46) resolve server-side here, not just the 76/106 channel leg
 	// the pre-strip code handled. The 46 BAD_IMPLICIT_TARGETS failure
 	// (Spell.cpp:1111) fails the triggered cast the same way.
-	spellTarget, destOK := s.resolveImplicitSpellDestination(ctx, spell, spellID, spellTarget)
+	spellTarget, triggeredDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, spellTarget)
 	if !destOK {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
@@ -23395,7 +23395,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// the dynobj's first target-map pass (NextTargetMapPass: now) applies
 	// the aura to units in the radius, replacing the per-target fan-out
 	// application the persistent-aura arm above now skips.
-	s.spawnPersistentAreaAura(ctx, spell, spellTarget)
+	s.spawnPersistentAreaAura(ctx, spell, sessionPersistentAreaAuraTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, spell, triggeredDestSnapshots))
 	// Spell::_cast (Spell.cpp:3416-3420): SPELL_ATTR1_DISMISS_PET dismisses
 	// the caster's active pet at cast time -- no triggered-flags guard, so
 	// triggered casts dismiss too. Placed after target selection like C++,
@@ -24700,15 +24700,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if eff.Effect == spellEffectSummonObjectSlot1 || eff.Effect == spellEffectSummonObjectSlot2 || eff.Effect == spellEffectSummonObjectSlot3 || eff.Effect == spellEffectSummonObjectSlot4 {
 			// Spell::EffectSummonObject (SpellEffects.cpp:4215) runs once at
 			// SPELL_EFFECT_HANDLE_HIT on the caster, never per target — the
-			// client arm's helper, with this path's spellTarget (dest, or
-			// the close-point fallback inside the helper).
-			s.handleEffectSummonObject(ctx, spell, eff, spellTarget)
+			// client arm's helper, with this effect's own dest slot
+			// (Spell.cpp:5159, or the close-point fallback inside the helper).
+			s.handleEffectSummonObject(ctx, spell, eff, sessionEffectDestTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, effectIndex, triggeredDestSnapshots))
 		}
 		if eff.Effect == spellEffectSummonObjectWild {
 			// Spell::EffectSummonObjectWild (SpellEffects.cpp:3552) runs once
 			// at SPELL_EFFECT_HANDLE_HIT on the caster; same shape as the
-			// slot arm above.
-			s.handleEffectSummonObjectWild(ctx, spell, eff, spellTarget)
+			// slot arm above (own dest slot, Spell.cpp:5159).
+			s.handleEffectSummonObjectWild(ctx, spell, eff, sessionEffectDestTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, effectIndex, triggeredDestSnapshots))
 		}
 		if eff.Effect == spellEffectDestroyAllTotems {
 			// Spell::EffectDestroyAllTotems (SpellEffects.cpp:4820) runs once
