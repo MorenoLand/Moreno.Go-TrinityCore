@@ -1741,7 +1741,10 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 			}
 		}
 	}
-	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+	// SendSpellGo (Spell.cpp:4292): NPCHandler.cpp:278 casts 3286
+	// triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs a
+	// player or pet caster, and the innkeeper is neither, so it stays off.
+	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo|spellCastFlagPending, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)

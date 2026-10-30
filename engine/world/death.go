@@ -1743,7 +1743,10 @@ func (s *Server) broadcastSpiritHealCast(spiritGUID uint64, sess *session) {
 			target = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, target), false, x, y, z)
 		}
 	}
-	pkt := protocol.BuildSpellGo(spiritGUID, spiritGUID, 1, 22012, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{spiritGUID}, nil, target)
+	// SendSpellGo (Spell.cpp:4292): a triggered cast with cast count 0
+	// carries CAST_FLAG_PENDING; POWER_LEFT_SELF (:4297) needs a player
+	// or pet caster, and the healer is neither, so it stays off.
+	pkt := protocol.BuildSpellGo(spiritGUID, spiritGUID, 1, 22012, spellCastFlagGo|spellCastFlagPending, uint32(time.Now().UnixMilli()), []uint64{spiritGUID}, nil, target)
 	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
 }
 

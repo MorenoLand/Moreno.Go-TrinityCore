@@ -41943,7 +41943,10 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 			}
 		}
 	}
-	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
+	// SendSpellGo (Spell.cpp:4292): SkillHandler.cpp:90 casts 14867
+	// triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs a
+	// player or pet caster, and the wiper is an NPC trainer, so it stays off.
+	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, spellCastFlagGo|spellCastFlagPending, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
