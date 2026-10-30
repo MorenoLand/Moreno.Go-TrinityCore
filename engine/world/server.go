@@ -3473,6 +3473,67 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GROUP_INVITE, CMSG_GROUP_ACCEPT, CMSG_GROUP_DECLINE,
+			// CMSG_GROUP_UNINVITE, CMSG_GROUP_UNINVITE_GUID,
+			// CMSG_GROUP_SET_LEADER and CMSG_GROUP_DISBAND are
+			// STATUS_LOGGEDIN (Opcodes.cpp:241, 245-246, 248-249, 251,
+			// 254) and PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them: group state persists across logout
+			// (the logging-out player stays an offline member, and the
+			// logout save never sends or answers invites, removes
+			// members, changes leaders, or disbands), so dropping them
+			// loses both the packets and the roster writes. Invite sends
+			// SMSG_GROUP_INVITE and records the pending invite, accept
+			// joins the group, decline notifies the inviter, uninvite /
+			// uninvite-GUID removes the member (or withdraws a pending
+			// invite), set-leader changes the leader, and disband disbands
+			// the group (GroupHandler.cpp:61, 218, 270, 293, 336, 381,
+			// 402). None of the seven arms clears logoutAt, so dispatch
+			// them here like the contact leg, then fall through to the
+			// expiry logout below. The write-failure arm mirrors the
+			// sibling legs (invite, accept, decline, uninvite, set-leader
+			// and disband return true on every path; uninvite-GUID
+			// returns false only via a failed party-result response
+			// write, and the deferred logout then follows).
+			// CMSG_GROUP_CANCEL needs no leg: it is STATUS_LOGGEDIN but
+			// Handle_NULL (Opcodes.cpp:243), so there is nothing to run.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_INVITE) && state.authed && !hookBlocked {
+				if !state.handleGroupInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_ACCEPT) && state.authed && !hookBlocked {
+				if !state.handleGroupAccept(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_DECLINE) && state.authed && !hookBlocked {
+				if !state.handleGroupDecline(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_UNINVITE) && state.authed && !hookBlocked {
+				if !state.handleGroupUninvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_UNINVITE_GUID) && state.authed && !hookBlocked {
+				if !state.handleGroupUninviteGUID(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_SET_LEADER) && state.authed && !hookBlocked {
+				if !state.handleGroupSetLeader(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GROUP_DISBAND) && state.authed && !hookBlocked {
+				if !state.handleGroupDisband(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
