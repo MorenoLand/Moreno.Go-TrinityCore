@@ -4278,7 +4278,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// which the nearby rebuild never rewrites even as hitTargets[0]
 				// becomes the pick — while a NEARBY winner anchors on its
 				// own pick (creatureChainNearbyPick), falling back to its
-				// family's pick, then hitTargets[0]. Jump targets join
+				// family's pick, then hitTargets[0]; a genuine scoped-pick
+				// miss fails the cast (Spell.cpp:1111), an unknown miss
+				// keeps the fallback. Jump targets join
 				// the area legs like the cone leg so they roll reflect/miss verdicts
 				// and take the damage/dispatch legs below; a static-spawn jump rides
 				// the packet only. Dedupe against hitTargets: a jump already selected
@@ -4302,7 +4304,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								anchor = spellTarget.UnitGUID
 							}
 						case 2, 3, 4, 38, 58:
-							if pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, effectMask, winTarget); status == nearbyPickFound {
+							if pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+								s.rearmAISpell(motion, dueSpell, spellID, now)
+								return
+							} else if status == nearbyPickFound {
 								anchor = pick
 							} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 								anchor = pick
@@ -4356,8 +4361,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// searched only the largest ChainTarget. The pick and jumps join on
 			// the cone leg's pattern (player to areaHits, live motion to
 			// areaCreatureHits, static spawn to the packet only) ahead of the
-			// verdicts below; a missing pick chains nothing (the session rejoin
-			// precedent). Creature casters have no spell-mod owner, so the
+			// verdicts below; a genuine scoped-pick miss fails the cast
+			// (Spell.cpp:1111), an unknown miss chains nothing. Creature casters have no spell-mod owner, so the
 			// ChainTarget fold is a pass-through. The winning effect is skipped:
 			// its jumps are already listed.
 			if inlineSpellKnown {
@@ -4414,6 +4419,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						continue
 					}
 					pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, 1<<uint(i), nearbyTarget)
+					if status == nearbyPickGenuineMiss {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					if status != nearbyPickFound || pick == 0 {
 						continue
 					}
@@ -4488,7 +4497,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// eligible leg (A else B), and the non-winning loops skip the winner.
 				// The second leg's pick (nearby) and jumps join on the cone leg's
 				// pattern via joinInlineChainGUID ahead of the verdicts below; a
-				// missing pick or wire victim chains nothing (the non-winning
+				// genuine scoped-pick miss fails the cast (Spell.cpp:1111),
+				// an unknown miss or wire victim chains nothing (the non-winning
 				// precedent: no family-pick fallback; the object leg anchors
 				// strictly on the wire victim, never on a nearby pick).
 				if jumps, _, _, winMask := chainSpellJumps(nil, inlineSpell); jumps > 0 {
@@ -4498,6 +4508,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							anchor = spellTarget.UnitGUID
 						} else {
 							pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, winMask, secondTarget)
+							if status == nearbyPickGenuineMiss {
+								s.rearmAISpell(motion, dueSpell, spellID, now)
+								return
+							}
 							if status == nearbyPickFound && pick != 0 {
 								anchor = pick
 								joinInlineChainGUID(pick)
