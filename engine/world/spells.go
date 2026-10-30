@@ -11501,9 +11501,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// ChainTarget > 1 nearby effects chain from their own scoped picks
 	// in the loop below; a nearby branch that ran already
 	// listed its spell-wide pick, and only a differing scoped pick
-	// joins, so plain multi-nearby spells rejoin the same way. A missing
-	// pick joins nothing (the chain-block precedent, not the nearby
-	// branch's cast failure: the shadowing branch already selected).
+	// joins, so plain multi-nearby spells rejoin the same way. A genuine
+	// miss fails the cast (SelectImplicitNearbyTargets, Spell.cpp:1107-1113:
+	// no nearby target sends BAD_IMPLICIT_TARGETS and finishes the spell;
+	// _cast aborts before TakePower/SendSpellGo, Spell.cpp:3410-3423) —
+	// C++ selects per effect group (Spell.cpp:866-897), so an ungrouped
+	// effect's miss fails even when a shadowing branch already selected,
+	// and a grouped effect's miss is the winning pick's miss. An unknown
+	// miss joins nothing (the LOS tail-drop: C++ found the target and
+	// AddUnitTarget dropped it silently, so no :1111 failure fires).
 	if areaSpell || friendlyListSpell || unitNearbySpell {
 		for i, eff := range spell.Effects {
 			if eff.Effect == 0 && eff.Aura == 0 {
@@ -11521,6 +11527,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				continue
 			}
 			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+			if status == nearbyPickGenuineMiss {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for non-winning nearby effect")
+				return
+			}
 			if status != nearbyPickFound || pick == 0 {
 				continue
 			}
@@ -11594,9 +11605,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// verdict, as C++ selects at selection time, but a jump already listed
 	// or verdicted keeps its single merged verdict and is skipped, and a
 	// jump already indexed keeps the winning effect's falloff index
-	// (first-wins: the flat list shares one index per GUID). A missing
-	// pick chains nothing (the rejoin precedent above, not the nearby
-	// branch's cast failure). The winning effect is skipped: its jumps
+	// (first-wins: the flat list shares one index per GUID). A genuine
+	// miss fails the cast (Spell.cpp:1107-1113, same arm as the rejoin
+	// loop above; an unknown miss chains nothing, LOS tail-drop).
+	// The winning effect is skipped: its jumps
 	// are already in hitTargets from its chain block.
 	if areaSpell || friendlyListSpell || unitNearbySpell {
 		_, _, _, winMask := chainSpellJumps(s, spell)
@@ -11620,6 +11632,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				continue
 			}
 			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+			if status == nearbyPickGenuineMiss {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for non-winning chain effect")
+				return
+			}
 			if status != nearbyPickFound || pick == 0 {
 				continue
 			}
@@ -11849,12 +11866,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// This block searches the winner's second leg when it is NEARBY: the
 	// scoped pick joins via the wire arms and its jumps via the same arms
 	// as the non-winning nearby loop (dedup vs hitTargets/missStatus,
-	// merged-entry single verdict, first-wins chainJumpIndex); a missing
-	// pick chains nothing.
+	// merged-entry single verdict, first-wins chainJumpIndex); a genuine
+	// miss fails the cast (Spell.cpp:1107-1113: the object-first leg is
+	// DEFAULT, so it never marks the effect processed and this NEARBY
+	// second leg selects — and can fail — on its own; an unknown miss
+	// chains nothing, LOS tail-drop).
 	if areaSpell || friendlyListSpell || unitNearbySpell {
 		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
 			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok && nearbyUnitTarget(secondTarget) {
 				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+				if status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning effect second leg")
+					return
+				}
 				if status == nearbyPickFound && pick != 0 {
 					primaryInList := false
 					for _, guid := range hitTargets {
