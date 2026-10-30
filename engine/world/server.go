@@ -6883,6 +6883,40 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CALENDAR_COMPLAIN (0x446), CMSG_CALENDAR_GET_NUM_PENDING (0x447) and
+			// CMSG_UPDATE_MISSILE_TRAJECTORY (0x462) are drained before the ShouldLogOut
+			// check: all three are STATUS_LOGGEDIN, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:1225-1226, 1253), and the expiry logout does NOT subsume
+			// them. The complain arm is drain-order fidelity only: the C++ body
+			// only logs the event and complain GUID and asks "what to do with
+			// complains?" (CalendarHandler.cpp:760), and the Go handler mirrors it
+			// with a debug log; the get-num-pending arm answers
+			// SMSG_CALENDAR_SEND_NUM_PENDING with the player's pending-invite count
+			// (CalendarHandler.cpp:774), which the logout never sends; and the
+			// missile-trajectory arm rewrites the in-flight generic spell's src/dst,
+			// elevation and speed, then runs the moveStop movement packet
+			// (MiscHandler.cpp:1545), which the logout never does. None of the
+			// three arms clears logoutAt (zero logoutAt references in calendar.go
+			// and spells.go), so dispatch them here like the moderator-status leg,
+			// then fall through to the expiry logout below; the complain and
+			// missile arms return true on every path, and the get-num-pending arm
+			// returns false only on a failed answer write, where returning matches
+			// the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_COMPLAIN) && state.authed && !hookBlocked {
+				if !state.handleCalendarComplain(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_GET_NUM_PENDING) && state.authed && !hookBlocked {
+				if !state.handleCalendarGetNumPending(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UPDATE_MISSILE_TRAJECTORY) && state.authed && !hookBlocked {
+				if !state.handleUpdateMissileTrajectory(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
