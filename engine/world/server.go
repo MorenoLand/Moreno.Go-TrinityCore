@@ -4394,6 +4394,54 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BUG / CMSG_RECLAIM_CORPSE / CMSG_WRAP_ITEM /
+			// MSG_MINIMAP_PING are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:589, 597-598, 600),
+			// so the session update (WorldSessionFilter::Process
+			// returns true for THREADUNSAFE, WorldSession.cpp:92-104)
+			// drains them before the ShouldLogOut check (:302-472)
+			// - and the expiry logout does NOT subsume them. Bug: a
+			// live arm debug-logs and INSERTs the bugreport row
+			// (MiscHandler.cpp:551-574); the logout inserts no
+			// report. Reclaim: a live arm resurrects a ghost in
+			// range of its corpse after the reclaim delay and spawns
+			// bones (:576-603); the logout saves the dead/ghost
+			// state, so a drop saves a dead player at the corpse.
+			// The alive/arena/unreleased/no-corpse/delay/range gates
+			// are silent in both. Wrap: a live arm consumes the
+			// wrapper, remaps the item entry, sets the giftcreator
+			// and WRAPPED flag, and REPLACEs the character_gifts row
+			// (ItemHandler.cpp:836-945); Go's handler writes those
+			// rows eagerly while the logout save writes no item
+			// rows, so a drop loses the wrap outright. Minimap ping:
+			// a live arm broadcasts MSG_MINIMAP_PING to the group
+			// minus self (GroupHandler.cpp:496-522); the logout
+			// sends none, and the no-group arm is silent in both.
+			// None of the four arms clears logoutAt, so dispatch
+			// them here like the petition leg, then fall through to
+			// the expiry logout below; all four handlers return
+			// true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUG) && state.authed && !hookBlocked {
+				if !state.handleBug(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_RECLAIM_CORPSE) && state.authed && !hookBlocked {
+				if !state.handleReclaimCorpse(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_WRAP_ITEM) && state.authed && !hookBlocked {
+				if !state.handleWrapItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_MINIMAP_PING) && state.authed && !hookBlocked {
+				if !state.handleMinimapPing(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
