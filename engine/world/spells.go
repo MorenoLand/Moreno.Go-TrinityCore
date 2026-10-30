@@ -11095,9 +11095,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			switch winTarget {
 			case 6, 21, 25, 35, 45, 57, 90, 95:
-				if target.UnitGUID != 0 {
-					anchor = target.UnitGUID
-				}
+				// TARGET-object chain effects anchor strictly on the wire
+				// target (SelectImplicitTargetObjectTargets, Spell.cpp:1558-1580:
+				// a null object target adds nothing and chains nothing), so
+				// a wire-0 leg must not fall back to the branch pick left in
+				// selectionTargetGUID (hitTargets[0], e.g. a sibling nearby
+				// pick); search(0) is nil, so the leg chains nothing.
+				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
 				// NEARBY chain effect: anchor on the winning effect's own
 				// nearby pick (spellChainNearbyPick), not the branch pick
