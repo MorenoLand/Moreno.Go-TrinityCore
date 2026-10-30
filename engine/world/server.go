@@ -4576,6 +4576,115 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GMTICKET_CREATE is STATUS_LOGGEDIN, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:648), so the session update drains it
+			// before the ShouldLogOut check (WorldSession.cpp:302-472)
+			// — and the expiry logout does NOT subsume it: the
+			// live arm INSERTs the gm_ticket row, broadcasts the
+			// new-ticket text to GMs, and answers CREATE_SUCCESS
+			// (TicketHandler.cpp:34-129); Go's handler INSERTs
+			// eagerly while the logout save writes no gm_ticket
+			// rows, so a drop loses the creation outright. The
+			// disabled-queue, level-req and open-ticket arms are
+			// silent or answer CREATE_ERROR in both. No arm clears
+			// logoutAt, so dispatch it here like the unlearn leg,
+			// then fall through to the expiry logout below; the
+			// handler returns false only on a failed response
+			// write, mirroring the normal arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMTICKET_CREATE) && state.authed && !hookBlocked {
+				if !state.handleGMTicketCreate(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GMTICKET_UPDATETEXT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:650), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm UPDATEs the ticket description,
+			// broadcasts the updated text to GMs, and answers
+			// UPDATE_SUCCESS (TicketHandler.cpp:130-152); Go's
+			// handler UPDATEs eagerly while the logout save
+			// writes no gm_ticket rows, so a drop loses the
+			// edit outright. The no-ticket arm answers
+			// UPDATE_ERROR in both. No arm clears logoutAt, so
+			// dispatch it here like the create leg, then fall
+			// through to the expiry logout below; the handler
+			// returns false only on a failed response write.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMTICKET_UPDATETEXT) && state.authed && !hookBlocked {
+				if !state.handleGMTicketUpdate(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GMTICKET_GETTICKET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:660), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm answers the query-time response plus
+			// the ticket state, or the GM response for a
+			// completed ticket (TicketHandler.cpp:170-183); the
+			// logout sends none of them. The no-ticket arm
+			// answers the empty state in both. No arm clears
+			// logoutAt, so dispatch it here like the update leg,
+			// then fall through to the expiry logout below; the
+			// handler returns false only on a failed ticket
+			// response write.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMTICKET_GETTICKET) && state.authed && !hookBlocked {
+				if !state.handleGMTicketGetTicket(ctx, payload) {
+					return
+				}
+			}
+			// MSG_CORPSE_QUERY is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:665), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm answers the corpse-found marker or
+			// the not-found byte (QueryHandler.cpp:144-188);
+			// the logout sends neither. The no-corpse arm
+			// answers identically in both. No arm clears
+			// logoutAt, so dispatch it here like the get-ticket
+			// leg, then fall through to the expiry logout below;
+			// the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_CORPSE_QUERY) && state.authed && !hookBlocked {
+				if !state.handleCorpseQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GMTICKET_DELETETICKET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:666), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm answers TICKET_DELETED, broadcasts
+			// the abandon text to GMs, closes the ticket and
+			// re-sends the empty state (TicketHandler.cpp:155-168);
+			// Go's handler UPDATEs the row to closed eagerly
+			// while the logout save writes no gm_ticket rows, so
+			// a drop resurrects the ticket at next login. The
+			// no-ticket arm is silent in both. No arm clears
+			// logoutAt, so dispatch it here like the corpse-query
+			// leg, then fall through to the expiry logout below;
+			// the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMTICKET_DELETETICKET) && state.authed && !hookBlocked {
+				if !state.handleGMTicketDelete(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GMTICKET_SYSTEMSTATUS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:669), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm answers the queue enabled/disabled
+			// state (TicketHandler.cpp:185-192); the logout
+			// sends none. No arm clears logoutAt, so dispatch
+			// it here like the delete leg, then fall through to
+			// the expiry logout below; the handler returns false
+			// only on a failed response write.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMTICKET_SYSTEMSTATUS) && state.authed && !hookBlocked {
+				if !state.handleGMTicketSystemStatus(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
