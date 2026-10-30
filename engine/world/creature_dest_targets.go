@@ -88,16 +88,59 @@ type creatureDestTraj struct {
 	SeedX, SeedY, SeedZ float32
 }
 
+// creatureDestSnapshot is one effect's Spell::m_destTargets slot
+// (Spell.cpp:630, 789): the running destination as it stood after that
+// effect's own A/B arms — a dest-family effect later in the list does NOT
+// retroactively move an earlier effect's slot, and an effect with no dest
+// arm inherits the running destination from earlier effects (or the
+// explicit client destination on the pet path, via the traj seed).
+// Indexed by effect position; Has is false for skipped (Effect == 0)
+// effects and for effects before any dest arm ran.
+type creatureDestSnapshot struct {
+	Has     bool
+	X, Y, Z float32
+}
+
+// persistentAreaAuraDest returns the m_destTargets slot of the LAST
+// effect-27 in the spell (Spell::EffectPersistentAA, SpellEffects.cpp:1738,
+// handles only the last one; Spell::HandleEffects, Spell.cpp:5159, hands
+// each effect its own slot). Has is false when the slot carries no
+// destination, and the caller falls back to the caster position — the
+// slot's Spell.cpp:630 caster init.
+func persistentAreaAuraDest(spell wotlk.Spell, snapshots []creatureDestSnapshot) (bool, float32, float32, float32) {
+	idx := -1
+	for i, eff := range spell.Effects {
+		if eff.Effect == spellEffectPersistentAreaAura {
+			idx = i
+		}
+	}
+	if idx < 0 || idx >= len(snapshots) || !snapshots[idx].Has {
+		return false, 0, 0, 0
+	}
+	snap := snapshots[idx]
+	return true, snap.X, snap.Y, snap.Z
+}
+
 func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {
-	return s.resolveCreatureSpellDestinationWithTraj(ctx, m, spell, targetGUID, creatureDestTraj{})
+	x, y, z, hasDest, destFailed, _ := s.resolveCreatureSpellDestinationSnapshots(ctx, m, spell, targetGUID)
+	return x, y, z, hasDest, destFailed
+}
+
+func (s *Server) resolveCreatureSpellDestinationSnapshots(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool, []creatureDestSnapshot) {
+	return s.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, m, spell, targetGUID, creatureDestTraj{})
 }
 
 func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64, traj creatureDestTraj) (float32, float32, float32, bool, bool) {
+	x, y, z, hasDest, destFailed, _ := s.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, m, spell, targetGUID, traj)
+	return x, y, z, hasDest, destFailed
+}
+
+func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64, traj creatureDestTraj) (float32, float32, float32, bool, bool, []creatureDestSnapshot) {
 	if s == nil || m == nil {
-		return 0, 0, 0, false, false
+		return 0, 0, 0, false, false, nil
 	}
 	if !spellHasCreatureDestTarget(spell) {
-		return 0, 0, 0, false, false
+		return 0, 0, 0, false, false, nil
 	}
 	x, y, z := m.X, m.Y, m.Z
 	if traj.HasSeed {
@@ -165,6 +208,7 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 	// live channel must keep the pre-change no-dest result, so the
 	// end-gate below returns false unless either flag is set.
 	otherDest, channelResolved := false, false
+	snapshots := make([]creatureDestSnapshot, len(spell.Effects))
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -233,15 +277,19 @@ func (s *Server) resolveCreatureSpellDestinationWithTraj(ctx context.Context, m 
 				if nearbyFound {
 					x, y, z = nearbyX, nearbyY, nearbyZ
 				} else {
-					return x, y, z, true, true
+					return x, y, z, true, true, nil
 				}
 			}
 		}
+		// Spell.cpp:789 AddDestTarget after each effect: snapshot the
+		// running destination for this effect's slot now, before any
+		// later effect's dest arm can move it.
+		snapshots[effIndex] = creatureDestSnapshot{Has: traj.HasSeed || otherDest || channelResolved, X: x, Y: y, Z: z}
 	}
 	if !otherDest && !channelResolved {
-		return 0, 0, 0, false, false
+		return 0, 0, 0, false, false, snapshots
 	}
-	return x, y, z, true, false
+	return x, y, z, true, false, snapshots
 }
 
 // creatureChannelLive reports whether the motion holds a live channeled

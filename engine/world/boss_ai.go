@@ -1281,6 +1281,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// SelectSpellTargets twin. hasDest is false when the spell carries no
 	// dest-family target.
 	var destX, destY, destZ float32
+	var destSnapshots []creatureDestSnapshot
 	hasDest := false
 	var spellInfo wotlk.Spell
 	spellKnown := false
@@ -1426,7 +1427,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// C++ relative order: inside the unit-target block, after the
 		// behind/facing arms, ahead of CheckRange (5496).
 		var destFailed bool
-		destX, destY, destZ, hasDest, destFailed = s.resolveCreatureSpellDestination(ctx, m, spellInfo, targetGUID)
+		destX, destY, destZ, hasDest, destFailed, destSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, m, spellInfo, targetGUID)
 		if destFailed {
 			return
 		}
@@ -1679,7 +1680,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			// dest-LOS gate above keeps the pre-redirect resolution — C++
 			// evaluates that arm at CheckCast time, before the redirect.
 			var destFailed bool
-			destX, destY, destZ, hasDest, destFailed = s.resolveCreatureSpellDestination(ctx, m, spellInfo, targetGUID)
+			destX, destY, destZ, hasDest, destFailed, destSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, m, spellInfo, targetGUID)
 			if destFailed {
 				return
 			}
@@ -2571,7 +2572,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// LAST persistent-area-aura effect (C++ returns early on earlier ones).
 	// Gated on spellKnown like the tail.
 	if spellKnown {
-		s.creatureEffectPersistentAreaAura(ctx, m, spellInfo, hasDest, destX, destY, destZ)
+		// The DynObj centers on the 27 effect's own m_destTargets slot
+		// (Spell.cpp:789, 5159), not the spell-final destination: a
+		// dest-family effect after the 27 effect must not move it.
+		dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spellInfo, destSnapshots)
+		s.creatureEffectPersistentAreaAura(ctx, m, spellInfo, dynHasDest, dynX, dynY, dynZ)
 	}
 	// Spell::EffectSummonType (SpellEffects.cpp:2194-2440) for a creature
 	// caster: the HIT-mode arm spawning SPELL_EFFECT_SUMMON creature
@@ -2579,7 +2584,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// effect-grouped arms above (C++ runs effects in index order;
 	// documented approximation). Gated on spellKnown like the tail.
 	if spellKnown {
-		s.creatureEffectSummonType(ctx, m, spellInfo, hasDest, destX, destY, destZ)
+		s.creatureEffectSummonType(ctx, m, spellInfo, destSnapshots)
 		s.creatureEffectSummonPet(ctx, m, spellInfo, hasDest, destX, destY, destZ)
 	}
 	// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) for a creature
@@ -3548,7 +3553,7 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 // write (Transmitted-leg format) are twinned. Stay-outs, per arm, are noted
 // at the arm sites (guardian level/follow-angle/27893/slot, minipet
 // immunity, puppet possess charm, vehicle ride cast).
-func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, dx, dy, dz float32) {
+func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion, spell wotlk.Spell, snapshots []creatureDestSnapshot) {
 	if s == nil || m == nil || s.Data == nil {
 		return
 	}
@@ -3563,13 +3568,19 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		}
 	}
 	baseX, baseY, baseZ := m.X, m.Y, m.Z
-	if hasDest {
-		baseX, baseY, baseZ = dx, dy, dz
-	}
 	for i := range spell.Effects {
 		eff := spell.Effects[i]
 		if eff.Effect != spellEffectSummon {
 			continue
+		}
+		// Per-effect m_destTargets slot (Spell.cpp:789, 5159; every
+		// non-guardian EffectSummonType branch summons at *destTarget):
+		// a dest-family effect after this summon effect must not move
+		// it; a slot with no dest falls back to the caster position
+		// (the Spell.cpp:630 slot init).
+		baseX, baseY, baseZ = m.X, m.Y, m.Z
+		if i < len(snapshots) && snapshots[i].Has {
+			baseX, baseY, baseZ = snapshots[i].X, snapshots[i].Y, snapshots[i].Z
 		}
 		entry := uint32(0)
 		if eff.MiscValue > 0 {

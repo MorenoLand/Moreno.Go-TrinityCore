@@ -3398,6 +3398,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// can set it before the area legs run.
 			nearbyReplacesWireVictim := false
 			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+			// inlineDyn* carries the 27 effect's own m_destTargets slot
+			// (Spell.cpp:789, 5159) from the resolver runs below to the
+			// DynObj site: the resolver dest vars are block-scoped, and
+			// spellTarget.Destination holds the spell-final dest, which a
+			// dest-family effect after the 27 effect must not move.
+			var inlineDynHasDest bool
+			var inlineDynX, inlineDynY, inlineDynZ float32
+			var inlineSummonSnapshots []creatureDestSnapshot
 			var inlineSpell wotlk.Spell
 			inlineSpellKnown := false
 			var inlinePowerCost int32
@@ -3413,7 +3421,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// destination in the GO packet; C++ SendSpellGo writes
 					// m_targets (Spell.cpp:4338). Resolved the same way
 					// castCreatureSpellInternal does.
-					destX, destY, destZ, hasDest, destFailed := s.resolveCreatureSpellDestination(ctx, motion, spellInfo, target.GUID)
+					destX, destY, destZ, hasDest, destFailed, inlineDestSnapshots := s.resolveCreatureSpellDestinationSnapshots(ctx, motion, spellInfo, target.GUID)
+					inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ = persistentAreaAuraDest(spellInfo, inlineDestSnapshots)
+					inlineSummonSnapshots = inlineDestSnapshots
 					if destFailed {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
@@ -3727,7 +3737,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						nearbyReplacesWireVictim = true
 						areaCreatureHits = append(areaCreatureHits, redirectGUID)
 						var redirectDestFailed bool
-						destX, destY, destZ, hasDest, redirectDestFailed = s.resolveCreatureSpellDestination(ctx, motion, spellInfo, redirectGUID)
+						var redirectDestSnapshots []creatureDestSnapshot
+						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, motion, spellInfo, redirectGUID)
+						inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ = persistentAreaAuraDest(spellInfo, redirectDestSnapshots)
+						inlineSummonSnapshots = redirectDestSnapshots
 						if redirectDestFailed {
 							s.rearmAISpell(motion, dueSpell, spellID, now)
 							return
@@ -3761,7 +3774,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							areaCreatureHits = append(areaCreatureHits, redirectGUID)
 						}
 						var redirectDestFailed bool
-						destX, destY, destZ, hasDest, redirectDestFailed = s.resolveCreatureSpellDestination(ctx, motion, spellInfo, redirectGUID)
+						var redirectDestSnapshots []creatureDestSnapshot
+						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, motion, spellInfo, redirectGUID)
+						inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ = persistentAreaAuraDest(spellInfo, redirectDestSnapshots)
+						inlineSummonSnapshots = redirectDestSnapshots
 						if redirectDestFailed {
 							s.rearmAISpell(motion, dueSpell, spellID, now)
 							return
@@ -4985,10 +5001,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// a victim-targeted AI spell carrying effect 27 spawns
 				// no dynobj on this path today, so its ground aura never
 				// applies. The twin self-gates on the 27 effect and a
-				// positive duration/radius; the center reads back out of
-				// spellTarget like the GO-area twin above (the dest
-				// selection vars are block-scoped there).
-				s.creatureEffectPersistentAreaAura(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+				// positive duration/radius; the center is the 27 effect's
+				// own m_destTargets slot (inlineDyn*, stamped at the
+				// resolver runs above), not spellTarget.Destination —
+				// the GO packet's spell-final dest, which a dest-family
+				// effect after the 27 effect must not move.
+				s.creatureEffectPersistentAreaAura(ctx, motion, inlineSpell, inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ)
 				// Spell::EffectHeal (SpellEffects.cpp:1393) + EffectHealPct
 				// (:1477) + EffectHealMaxHealth (:3488) + EffectHealMechanical
 				// (:1495) + EffectEnergize (:1775) + EffectEnergizePct (:1847)
@@ -5131,7 +5149,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 				// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927) + EffectTriggerRitualOfSummoning (:1106) on the inline path, same dispatch-ahead-of-damage position: the twin runs these once per cast, not per hit target, so they join here rather than the per-effect loop above (the summon-type helper itself keeps only the 28 effect; the GO packet and damage legs below are untouched). Previously a victim-targeted AI spell carrying any of these effects summoned or transmitted nothing server-side (non-victim casts ride castCreatureSpellInternal, which already runs them).
-				s.creatureEffectSummonType(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+				s.creatureEffectSummonType(ctx, motion, inlineSpell, inlineSummonSnapshots)
 				s.creatureEffectSummonPet(ctx, motion, inlineSpell, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 				for i := range inlineSpell.Effects {
 					switch inlineSpell.Effects[i].Effect {

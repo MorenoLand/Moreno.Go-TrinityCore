@@ -3503,7 +3503,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// Spell::SelectSpellTargets (Spell.cpp:3410) runs ahead of CheckCast in
 	// C++'s Spell::prepare, so the dest-family resolution lands before the
 	// LOS gates here; the same values feed the GO packet write below.
-	dx, dy, dz, hasDest, destFailed := s.server.resolveCreatureSpellDestinationWithTraj(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
+	dx, dy, dz, hasDest, destFailed, destSnapshots := s.server.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
 	if destFailed {
 		return true
 	}
@@ -3736,7 +3736,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		targetGUID = redirectGUID
 		target.UnitGUID = redirectGUID
 		var destFailed bool
-		dx, dy, dz, hasDest, destFailed = s.server.resolveCreatureSpellDestinationWithTraj(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
+		dx, dy, dz, hasDest, destFailed, destSnapshots = s.server.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
 		if destFailed {
 			return true
 		}
@@ -4725,7 +4725,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectTransmitted(ctx, motion, target, spell, spell.Effects[i])
 		}
 	}
-	s.server.creatureEffectSummonType(ctx, motion, spell, hasDest, dx, dy, dz)
+	s.server.creatureEffectSummonType(ctx, motion, spell, destSnapshots)
 	// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
 	// same dispatch-ahead-of-damage position as the summon-type block:
 	// the HIT arm, once per cast on the caster — a pet caster is never
@@ -4779,7 +4779,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// twin). The center reads back out of the resolved destination
 	// above (caster position when the spell carries no dest-family
 	// target, like the twin).
-	s.server.creatureEffectPersistentAreaAura(ctx, motion, spell, hasDest, dx, dy, dz)
+	// The DynObj centers on the 27 effect's own m_destTargets slot
+	// (Spell.cpp:789, 5159), not the spell-final destination: a
+	// dest-family effect after the 27 effect must not move it.
+	dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spell, destSnapshots)
+	s.server.creatureEffectPersistentAreaAura(ctx, motion, spell, dynHasDest, dynX, dynY, dynZ)
 
 	// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996) on the pet
 	// path, same dispatch-ahead-of-damage position as the twin and
