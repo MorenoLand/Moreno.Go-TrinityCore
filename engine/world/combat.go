@@ -1534,6 +1534,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.motionMu.Unlock()
 		return
 	}
+	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
+	// melee damage breaks a live channel whose ChannelInterruptFlags carry
+	// TAKE_DAMAGE or DIRECT_DAMAGE; no damaging spell, so except is 0.
+	s.server.breakCreatureChannelOnDamage(motion, 0, true)
 	if damage >= victimHealth {
 		// Target dies
 		corpseFlags := unitDynFlagLootable
@@ -2334,6 +2338,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.server.motionMu.Unlock()
 		return
 	}
+	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
+	// the auto-shot strike breaks a live channel whose ChannelInterruptFlags
+	// carry TAKE_DAMAGE or DIRECT_DAMAGE, excepting the shot's own channel.
+	s.server.breakCreatureChannelOnDamage(motion, spellID, true)
 	if damage >= victimHealth {
 		// Target dies
 		corpseFlags := unitDynFlagLootable

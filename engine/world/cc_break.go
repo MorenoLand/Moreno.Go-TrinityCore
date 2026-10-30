@@ -1,6 +1,8 @@
 package world
 
 import (
+	"time"
+
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
@@ -425,4 +427,54 @@ func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags 
 	for _, spellID := range toRemove {
 		s.removeCreatureAura(key, spellID)
 	}
+}
+
+// breakCreatureChannelOnDamage mirrors the channeled-spell leg of
+// Unit::RemoveAurasWithInterruptFlags (Unit.cpp:4175-4180): a live channel
+// breaks when the damage mask intersects the channel spell's
+// ChannelInterruptFlags, via InterruptNonMeleeSpells(false) — which is why
+// the cast gate (CastingUntil) and the channel stamp clear together with
+// the pending cast, exactly like the evade/CC/CombatStop clears. The
+// TAKE_DAMAGE leg (Unit.cpp:743-747) runs on any damage unless the
+// damaging spell carries SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS; the
+// DIRECT_DAMAGE leg (Unit.cpp:897-898) runs only on direct damage. The
+// damaging spell itself never breaks its own channel (the C++ `except`
+// parameter; melee damage carries except 0). A cast-time, non-channeled
+// creature cast is NOT broken here: C++ breaks preparing spells on damage
+// only through the player-gated ABORT_ON_DMG/Delayed arms (Unit.cpp:749-761,
+// 936-953), so a creature's cast-time window survives damage. A missing
+// DBC row leaves the gate unevaluable and the channel stands, like the
+// interrupt.go arm. Takes no locks itself; callers hold motionMu or follow
+// the DOT funnel's lookup-then-operate pattern.
+func (s *Server) breakCreatureChannelOnDamage(m *creatureMotion, damagingSpellID uint32, isDirect bool) {
+	if s == nil || m == nil || !s.creatureChannelLive(m) {
+		return
+	}
+	if damagingSpellID != 0 && damagingSpellID == m.ChannelSpellID {
+		return
+	}
+	flags := auraInterruptFlagTakeDamage
+	if isDirect {
+		flags |= auraInterruptFlagDirectDamage
+	}
+	if damagingSpellID != 0 && !tickDamageBreaksAuras(s, damagingSpellID) {
+		flags &^= auraInterruptFlagTakeDamage
+	}
+	if flags == 0 || s.Data == nil {
+		return
+	}
+	sp, found, err := s.Data.Spell(m.ChannelSpellID)
+	if err != nil || !found {
+		return
+	}
+	if sp.ChannelInterrupt&flags == 0 {
+		return
+	}
+	m.CastingUntil = time.Time{}
+	m.ChannelSpellID = 0
+	m.ChannelTargetGUID = 0
+	m.ChannelHasDest = false
+	m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
+	m.ChannelUntil = time.Time{}
+	s.cancelPendingCreatureCast(m)
 }

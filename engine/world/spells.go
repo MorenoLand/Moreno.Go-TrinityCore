@@ -21900,6 +21900,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.server.motionMu.Unlock()
 		return damage
 	}
+	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
+	// direct spell damage breaks a live channel whose ChannelInterruptFlags
+	// carry TAKE_DAMAGE or DIRECT_DAMAGE, excepting the spell's own channel.
+	s.server.breakCreatureChannelOnDamage(motion, spellID, true)
 	if damage >= victimHealth {
 		// Target dies
 		corpseFlags := unitDynFlagLootable
@@ -40147,6 +40151,12 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		s.server.motionMu.Unlock()
 		if victimMotion != nil {
 			s.server.removeCreatureAurasWithInterruptFlags(victimMotion, auraInterruptFlagTakeDamage, aura.SpellID)
+			// Unit::RemoveAurasWithInterruptFlags channel leg
+			// (Unit.cpp:4175-4180): a periodic tick breaks a live channel
+			// whose ChannelInterruptFlags carry TAKE_DAMAGE, excepting the
+			// ticking spell's own channel; the DIRECT_DAMAGE leg never
+			// runs on periodic damage.
+			s.server.breakCreatureChannelOnDamage(victimMotion, aura.SpellID, false)
 		}
 	}
 	// Unit::DealDamage's periodic tick procs the victim's auras with

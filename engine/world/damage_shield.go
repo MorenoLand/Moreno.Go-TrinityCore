@@ -404,6 +404,11 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	// split-damage legs (:766-788); the Eluna DamageTaken hook above fires
 	// ahead of it (:697-702).
 	s.stripCreatureRecursiveTakeDamageAuras(motion, spellID)
+	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
+	// these strikes are direct damage (the DIRECT_DAMAGE aura strip below
+	// cites Unit.cpp:897-898), so both legs run, excepting the strike
+	// spell's own channel.
+	s.breakCreatureChannelOnDamage(motion, spellID, true)
 	// Unit::CalcAbsorbResist (Unit.cpp:1977-2060): split-damage auras on the
 	// recursive victim redirect part of the damage to their caster, ahead of
 	// the 300 share leg below (Unit::DealDamage, Unit.cpp:766-788).
