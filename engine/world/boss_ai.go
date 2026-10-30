@@ -6491,6 +6491,9 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			s.motionMu.Lock()
 			delete(s.motionMapLocked(m.Map, m.InstanceID), guid)
 			s.motionMu.Unlock()
+			// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels
+			// a cast in flight before RemoveFromWorld, ahead of destroy.
+			s.interruptCreatureCastsOnRemove(tm)
 			destroyBuf := protocol.NewBuffer(9)
 			destroyBuf.WriteU64(guid)
 			destroyBuf.WriteU8(0)

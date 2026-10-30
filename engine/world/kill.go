@@ -902,6 +902,14 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// pointed at the dying unit are lost — every holder's bank is
 		// cleared (ClearComboPointHolders).
 		s.server.clearComboPointHolders(target.GUID)
+		// Unit::setDeathState (Unit.cpp:8909-8911): a non-melee cast in
+		// flight is interrupted here, ahead of the JustDied hooks below
+		// — the session funnel's setDeathState leg, matching
+		// clearCreatureDeathState on the paths that skip this funnel.
+		// The owner/no-owner arms are exclusive, so no kill runs both.
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.interruptCreatureCastsOnRemove(motion)
+		}
 		// Unit::Kill's party-kill broadcast (Unit.cpp:11208-11232): when
 		// the killing blow lands and the creature's player-damage
 		// requirement is satisfied
@@ -1699,6 +1707,12 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	}
 	s.clearCreatureVisualTarget(dead)
 	s.clearComboPointHolders(dead.GUID)
+	// Unit::setDeathState (Unit.cpp:8909-8911) interrupts a non-melee
+	// cast in flight; the cancel packets broadcast like every other
+	// InterruptNonMeleeSpells clear, ahead of the JustDied hooks the
+	// callers fire next (C++ order: setDeathState at :11320, hooks
+	// at :11324+).
+	s.interruptCreatureCastsOnRemove(dead)
 	dead.AlreadyCallAssistance = false
 	dead.AssistAt = time.Time{}
 	dead.AssistVictim = 0

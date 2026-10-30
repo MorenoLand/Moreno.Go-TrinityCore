@@ -389,6 +389,33 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 	return interrupted
 }
 
+// interruptCreatureCastsOnRemove runs the InterruptNonMeleeSpells leg
+// of a creature leaving play: Unit::setDeathState JUST_DIED
+// (Unit.cpp:8909-8911, withDelayed=false) and
+// Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829, withDelayed=true)
+// both cancel while the unit is still visible — death keeps the corpse
+// in world, removal cancels before RemoveFromWorld — so the
+// Spell::cancel packets go out exactly like the evade/CC/CombatStop
+// clears, ahead of any destroy packet. No modeled difference between
+// the two withDelayed values: Go has no DELAYED creature cast state,
+// and instant casts leave no pending arm. With no arm, the plain gate
+// clears and any pending deferral token dies, mirroring the evade
+// caller's no-arm branch; a post-GO stamp alone still sends nothing.
+func (s *Server) interruptCreatureCastsOnRemove(m *creatureMotion) {
+	if s == nil || m == nil {
+		return
+	}
+	interrupted := s.interruptCreatureNonMeleeCasts(m)
+	if len(interrupted) == 0 {
+		m.CastingUntil = time.Time{}
+		s.cancelPendingCreatureCast(m)
+		return
+	}
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(m, arm)
+	}
+}
+
 // interruptCreatureTargetCast applies EffectInterruptCast to a creature
 // victim of a session-cast interrupt spell, logging each interrupted
 // spell through the caster session like the player-victim arm.

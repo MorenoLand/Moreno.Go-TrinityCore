@@ -46810,16 +46810,22 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		if uint16(targetGUID>>48) != 0xF130 {
 			return
 		}
+		var removedMotion *creatureMotion
 		if s.server != nil && s.player != nil {
 			s.server.motionMu.Lock()
 			motions := s.server.motionMapLocked(s.player.Map, s.player.InstanceID)
-			if _, ok := motions[targetGUID]; ok {
+			if mm, ok := motions[targetGUID]; ok {
+				removedMotion = mm
 				delete(motions, targetGUID)
 			} else {
 				low, entry := uint32(targetGUID&0x00FFFFFF), uint32(targetGUID>>24&0x00FFFFFF)
+				removedMotion = motions[creatureWorldGUID(low, entry)]
 				delete(motions, creatureWorldGUID(low, entry))
 			}
 			s.server.motionMu.Unlock()
+			// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels
+			// a cast in flight before RemoveFromWorld, ahead of destroy.
+			s.server.interruptCreatureCastsOnRemove(removedMotion)
 		}
 		s.sendDestroyObject(targetGUID, false)
 		if s.server != nil {

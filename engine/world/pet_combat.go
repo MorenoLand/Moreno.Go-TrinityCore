@@ -781,6 +781,10 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	}
 	delete(s.motionMapLocked(mapID, instanceID), guid)
 	s.motionMu.Unlock()
+	// TempSummon::UnSummon reaches CleanupBeforeRemoveFromMap
+	// (Unit.cpp:9826-9829) via the remove list, so a cast in flight
+	// cancels ahead of destroy — type 2 fires even in combat.
+	s.interruptCreatureCastsOnRemove(motion)
 	s.unregisterCreatureTotemGUID(guid)
 	s.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid})
 	destroyBuf := protocol.NewBuffer(9)

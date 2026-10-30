@@ -1317,6 +1317,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		maxHealth := m.MaxHealth
 		x, y, z := m.X, m.Y, m.Z
 		s.motionMu.Unlock()
+		// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
+		// cast in flight before RemoveFromWorld, ahead of destroy.
+		s.interruptCreatureCastsOnRemove(m)
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(guid)
 		destroyBuf.WriteU8(0)
