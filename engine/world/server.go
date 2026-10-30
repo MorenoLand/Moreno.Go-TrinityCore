@@ -7017,6 +7017,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_AUCTION_LIST_PENDING_SALES (0x48F) is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1298), so the session update
+			// drains it before the ShouldLogOut check (WorldSession.cpp:302-472),
+			// and the expiry logout does NOT subsume it: the live arm always
+			// answers SMSG_AUCTION_LIST_PENDING_SALES with a zero count
+			// (AuctionHouseHandler.cpp:812-830, the per-sale loop commented out);
+			// the logout sends none. CMSG_ENABLETAXI (0x493) needs no leg:
+			// STATUS_LOGGEDIN but PROCESS_THREADSAFE (Opcodes.cpp:1302), so the
+			// session filter drops it while the player is in world
+			// (WorldSession.cpp:92-104) and Map::Update runs only after
+			// UpdateSessions (World.cpp:2418 vs 2462) — the drop stands
+			// deliberately, like the taxi trio. CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE
+			// (0x49B) is STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:1310), so
+			// the drain runs it before ShouldLogOut; its arm changes the player's
+			// vehicle seat or boards another unit's vehicle through its spellclick
+			// rows (VehicleHandler.cpp:52-127), which the logout does not.
+			// Neither dispatched arm clears logoutAt (zero logoutAt references in
+			// auctionhouse.go and vehicle.go), so dispatch them here, then fall
+			// through to the expiry logout below; the change-seats handler returns
+			// true on every path, and the pending-sales arm returns false only on
+			// a failed answer write, where returning matches the normal dispatch's
+			// write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_LIST_PENDING_SALES) && state.authed && !hookBlocked {
+				if !state.handleAuctionListPendingSales(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE) && state.authed && !hookBlocked {
+				if !state.handleChangeSeatsOnControlledVehicle(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
