@@ -3890,7 +3890,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// the GCD still run at queue time; power is taken by _cast at swing
 		// time. Replacing the queued spell cancels the old one with the
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
-		s.queueNextSwingSpell(castID, spellID, spell, target, wireObjectGUID, 0, 0)
+		s.queueNextSwingSpell(ctx, castID, spellID, spell, target, wireObjectGUID, packetHasDst, 0, 0)
 		startFlags := spellStartCastFlags(spell)
 		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
@@ -28692,6 +28692,13 @@ func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
 // on-next-swing spell queued by the client at cast time, consumed by the
 // next main-hand melee swing (Unit::AttackerStateUpdate, Unit.cpp:2151-2152)
 // instead of firing from the cast bar. Guarded by castMu like activeCast.
+// Target carries the prepare-time destination: Spell::prepare runs
+// InitExplicitTargets (Spell.cpp:3039) before the spell is stored in the
+// slot, and swing-time cast() reuses that same Spell object without
+// re-running prepare, so a dest-needing spell with no packet destination
+// already has its InitExplicit seed (Spell.cpp:700-712) stamped into
+// Target at queue time — the swing-time resolver must never re-resolve
+// it from the wire object's moved position.
 type queuedNextSwing struct {
 	CastID         uint8
 	SpellID        uint32
@@ -28716,7 +28723,29 @@ func isNextMeleeSwingSpell(spell wotlk.Spell) bool {
 // is cancelled with the Spell::cancel PREPARING arm (Spell.cpp:3218-3224):
 // CancelGlobalCooldown, then SendInterrupted(0), then
 // SendCastResult(SPELL_FAILED_INTERRUPTED).
-func (s *session) queueNextSwingSpell(castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, castItemGUID uint64, castItemEntry uint32) {
+func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, packetHasDst bool, castItemGUID uint64, castItemEntry uint32) {
+	// Spell::prepare (Spell.cpp:3039) already ran InitExplicitTargets
+	// before this queueing: when the spell's explicit mask needs
+	// DEST_LOCATION and the packet carries no destination, m_targets dst
+	// is seeded at prepare time from the ORIGINAL packet object target
+	// else the caster (Spell.cpp:700-712), and swing-time cast() on the
+	// same Spell object (Unit.cpp:2151-2152) never re-runs prepare — so
+	// the seed is a queue-time snapshot, not a swing-time lookup. Stamp
+	// it into the queued copy here; the swing-time resolver then reads
+	// it as the kept destination instead of live-resolving the wire
+	// object from wherever it moved to between queue and swing. The
+	// parse-time packetHasDst gates the stamp (the gauntlet may rewrite
+	// target.Flags before this call); a packet destination always beats
+	// the seed, and sessionInitExplicitSeed already returns unseeded
+	// when the mask needs no destination. target is passed by value, so
+	// the caller's copy — and the queue-time START build below — keep
+	// the raw packet target.
+	if !packetHasDst {
+		if sx, sy, sz, seeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); seeded {
+			target.Flags |= protocol.SpellTargetFlagDestLocation
+			target.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
+		}
+	}
 	s.castMu.Lock()
 	old := s.nextSwing
 	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, WireObjectGUID: wireObjectGUID, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
