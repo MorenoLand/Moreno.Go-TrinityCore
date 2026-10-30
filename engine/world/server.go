@@ -3054,6 +3054,101 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// Movement packets are STATUS_LOGGEDIN (Opcodes.cpp:312-369,
+			// 845, 849-852, 968-969, 1040, 358, 749, 850-851, 371, 377),
+			// so the C++ drain runs their handlers before the
+			// ShouldLogOut check (WorldSession.cpp:302-472) — and the
+			// movement handler carries no rooted/stunned reject
+			// (MovementHandler.cpp:423 @todo), so a packet read past
+			// logoutAt still applies, broadcasts, and lands in the
+			// position the expiry logout then saves (completeLogout
+			// -> savePlayerState reads s.player.X/Y/Z, and the
+			// STOP/HEARTBEAT/FALL_LAND legs write the characters
+			// row directly). Dropping it saved the pre-expiry
+			// position and skipped the broadcast, the fall-damage
+			// leg, and the teleport-ack zone/PvP arms. Dispatch
+			// the whole family the normal path already dispatches,
+			// then fall through to the expiry logout below: no
+			// movement arm clears logoutAt (unlike cancel/request),
+			// and every handler returns true on all its paths, so
+			// the write-failure arm never fires. MSG_MOVE_WORLDPORT_ACK
+			// is deliberately excluded: it is STATUS_TRANSFER
+			// (Opcodes.cpp:351), and the C++ transfer arm logs it
+			// unexpected without calling the handler while the
+			// player is still in world — dispatching it here would
+			// complete a worldport the drain never runs.
+			if state.authed && !hookBlocked {
+				switch header.Opcode {
+				case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND):
+					if !state.handleMovement(ctx, header.Opcode, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK):
+					if !state.handleMoveTeleportAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
+					if !state.handleMoveSetCanFlyAck(payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK):
+					if !state.handleForceSpeedChangeAck(uint16(header.Opcode), ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_FORCE_MOVE_ROOT_ACK):
+					if !state.handleForceMoveRootAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_FORCE_MOVE_UNROOT_ACK):
+					if !state.handleForceMoveUnrootAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_FEATHER_FALL_ACK):
+					if !state.handleMoveFeatherFallAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_HOVER_ACK):
+					if !state.handleMoveHoverAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_WATER_WALK_ACK):
+					if !state.handleMoveWaterWalkAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_KNOCK_BACK_ACK):
+					if !state.handleMoveKnockBackAck(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_NOT_ACTIVE_MOVER):
+					if !state.handleMoveNotActiveMover(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_FALL_RESET):
+					if !state.handleMoveFallReset(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_SPLINE_DONE):
+					if !state.handleMoveSplineDone(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_CHNG_TRANSPORT):
+					if !state.handleMoveChngTransport(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_SET_FLY):
+					if !state.handleMoveSetFly(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_MOVE_TIME_SKIPPED):
+					if !state.handleMoveTimeSkipped(ctx, payload) {
+						return
+					}
+				case uint32(protocol.OpcodeCMSG_SET_ACTIVE_MOVER):
+					if !state.handleSetActiveMover(payload) {
+						return
+					}
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
