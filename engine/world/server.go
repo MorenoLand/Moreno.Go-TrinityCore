@@ -3543,6 +3543,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_QUERY_QUESTS_COMPLETED is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1411), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler answers
+			// SMSG_QUERY_QUESTS_COMPLETED_RESPONSE with the player's
+			// rewarded quest ids in ascending order
+			// (QuestHandler.cpp:676) while the logout sends none.
+			// Dispatch it here like the timer-update leg, then fall
+			// through to the expiry logout below; it returns true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUERY_QUESTS_COMPLETED) && state.authed && !hookBlocked {
+				if !state.handleQueryQuestsCompleted(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GM_REPORT_LAG is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1413), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler inserts the lag report
+			// row (lag type, map, position, latency, time) into
+			// lag_reports (TicketHandler.cpp:248) while the logout
+			// inserts none. Dispatch it here like the
+			// query-quests-completed leg, then fall through to the
+			// expiry logout below; it returns true on every path,
+			// so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GM_REPORT_LAG) && state.authed && !hookBlocked {
+				if !state.handleGMReportLag(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
