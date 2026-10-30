@@ -6954,6 +6954,39 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_REQUEST_VEHICLE_PREV_SEAT (0x477), CMSG_REQUEST_VEHICLE_NEXT_SEAT
+			// (0x478), CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x479) and CMSG_PET_LEARN_TALENT
+			// (0x47A) are drained before the ShouldLogOut check: all four are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:1274-1277), like the
+			// vehicle-exit leg, and the expiry logout does NOT subsume them. The
+			// prev/next arms change the player's vehicle seat (VehicleHandler.cpp:74-77),
+			// the switch-seat arm changes to a named seat or boards another unit's
+			// vehicle through its spellclick rows (:108-123), and the pet arm learns
+			// the talent and answers the talents info (PetHandler.cpp:852) — none of
+			// which the logout does. None of the four arms clears logoutAt, so
+			// dispatch them here, then fall through to the expiry logout below; all
+			// four handlers return true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_PREV_SEAT) && state.authed && !hookBlocked {
+				if !state.handleRequestVehiclePrevSeat(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_NEXT_SEAT) && state.authed && !hookBlocked {
+				if !state.handleRequestVehicleNextSeat(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_SWITCH_SEAT) && state.authed && !hookBlocked {
+				if !state.handleRequestVehicleSwitchSeat(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_LEARN_TALENT) && state.authed && !hookBlocked {
+				if !state.handlePetLearnTalent(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
