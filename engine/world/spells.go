@@ -42781,17 +42781,20 @@ func (s *session) finishChannel() {
 // RemoveOwnedAura(spellId, m_originalCasterGUID, 0, AURA_REMOVE_BY_CANCEL)
 // sweep over m_UniqueTargetInfo that both Spell::cancel's CASTING leg
 // (Spell.cpp:3230-3236) and Spell::update's early-end leg (Spell.cpp:3856-3860)
-// run. Before this tick only the caster and the single TargetGUID were
-// stripped, so an area channel's other hit targets kept the aura to its
-// full DBC duration. The recorded HitTargets list is the seeded union of
+// run. The removal mode is BY_CANCEL on every leg: the pre-existing legs
+// used BY_EXPIRE for players and BY_DEFAULT for creatures, which wrongly
+// fired the expire-only arms on a cancel (retain-combo-points withdrawal,
+// the final aligned periodic tick, the invisibility-66 fade cast) and, for
+// creatures, propagated BY_DEFAULT instead of BY_CANCEL to linked auras.
+// The recorded HitTargets list is the seeded union of
 // the aura fan-out lists; the explicit TargetGUID leg below is kept
 // verbatim so a target outside the seeded lists still strips.
 func (s *session) expireChannelAuras(channel *activeChannelState) {
-	s.expirePlayerAura(channel.SpellID)
+	s.removePlayerAuraTimed(channel.SpellID, auraRemoveByCancel)
 	if s.server != nil && s.player != nil && channel.TargetGUID != 0 {
 		if target := s.server.findSessionByGUID(channel.TargetGUID); target != nil {
 			if target != s {
-				target.expirePlayerAura(channel.SpellID)
+				target.removePlayerAuraTimed(channel.SpellID, auraRemoveByCancel)
 			}
 		} else {
 			key := channel.TargetKey
@@ -42802,7 +42805,7 @@ func (s *session) expireChannelAuras(channel *activeChannelState) {
 			_, hasAura := s.server.activeCreatureAuras[key][channel.SpellID]
 			s.server.auraMu.Unlock()
 			if hasAura {
-				s.server.removeCreatureAura(key, channel.SpellID)
+				s.server.removeCreatureAuraWithMode(key, channel.SpellID, auraRemoveByCancel)
 			}
 		}
 	}
@@ -42817,10 +42820,10 @@ func (s *session) expireChannelAuras(channel *activeChannelState) {
 			continue
 		}
 		if target := s.server.findSessionByGUID(guid); target != nil && target.player != nil {
-			target.expirePlayerAura(channel.SpellID)
+			target.removePlayerAuraTimed(channel.SpellID, auraRemoveByCancel)
 			continue
 		}
-		s.server.removeCreatureAura(creatureAuraKeyForPlayer(*s.player, guid), channel.SpellID)
+		s.server.removeCreatureAuraWithMode(creatureAuraKeyForPlayer(*s.player, guid), channel.SpellID, auraRemoveByCancel)
 	}
 }
 
