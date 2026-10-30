@@ -3684,6 +3684,60 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_ACTIONBAR_TOGGLES is STATUS_AUTHED,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:834), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472), and the expiry logout does NOT
+			// subsume it: the C++ handler's GetPlayer() guard
+			// (MiscHandler.cpp:979) passes here -- the expiry block
+			// implies a loaded player, since logoutAt is armed only by
+			// the logout-request path on a loaded player
+			// (characters.go:3963) -- so it sets the player's
+			// PLAYER_FIELD_BYTES action-bar-toggles byte, while the
+			// logout sets no toggles. The Go handler returns true on
+			// every path, so the write-failure arm never fires; it
+			// clears no logoutAt, so dispatch it here, then fall
+			// through to the expiry logout below.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_ACTIONBAR_TOGGLES) && state.authed && !hookBlocked {
+				if !state.handleSetActionBarToggles(payload) {
+					return
+				}
+			}
+			// CMSG_CHAR_RENAME is STATUS_AUTHED, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:842), so the session update drains it before
+			// the ShouldLogOut check (WorldSession.cpp:302-472), and the
+			// expiry logout does NOT subsume it: the C++ handler has no
+			// _player guard (CharacterHandler.cpp:1111) and renames the
+			// account's at-login-flagged character, answering
+			// SMSG_CHAR_RENAME, while the logout renames nothing and
+			// answers none. Ordering note, as with char-create: C++
+			// queues the rename as a query callback, which
+			// ProcessQueryCallbacks runs before ShouldLogOut only when
+			// already ready (:458, 472) -- a callback queued in this
+			// same drain normally fires in a later Update, after the
+			// logout, while Go's handler answers synchronously; the
+			// effect survives the logout either way, so dispatching
+			// here preserves it rather than dropping it. The Go
+			// handler returns true on every path and clears no
+			// logoutAt (no logoutAt reference inside handleCharRename),
+			// so dispatch it here, then fall through to the expiry
+			// logout below.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_RENAME) && state.authed && !hookBlocked {
+				if !state.handleCharRename(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_WARDEN_DATA is STATUS_AUTHED but PROCESS_THREADSAFE
+			// (Opcodes.cpp:874), so it has NO expiry leg, like
+			// enable-taxi and WHO: WorldSessionFilter::Process
+			// (WorldSession.cpp:92-104) yields a threadsafe packet only
+			// for a player not in world, and the ShouldLogOut check runs
+			// in that same session update before World::Update reaches
+			// sMapMgr->Update, so the queued packet is deleted
+			// unhandled. Dispatching it here would feed the warden
+			// session a check response (Warden.cpp:283) C++ never
+			// processes, so the drop stands and the Go handler stays
+			// untouched.
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
