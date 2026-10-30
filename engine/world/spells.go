@@ -23068,6 +23068,50 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		rejoinTriggeredGOs(coneTargets, coneMasks)
 	}
+	// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) adds
+	// the caster via AddUnitTarget for every TARGET_UNIT_CASTER leg, so a
+	// self-cast-only spell (every live effect A == CASTER) holds the caster
+	// as a TargetInfo even when the triggered cast carries an explicit unit
+	// target: the B TARGET-object leg adds that target (Spell.cpp:1558)
+	// beside the caster, never instead of it. This path seeded every effect
+	// from the explicit target alone, so a self-cast-only spell triggered
+	// on another unit (GM .cast with a selection, a Lua CastSpell target)
+	// never reached its caster. The caster joins hitTargets (roll base, GO
+	// packet, channeled check) and selectionTargets (fan-out seed,
+	// aura-break pass) deduped; the plain case (explicit target == caster,
+	// or a friendly-area list that already holds the caster) no-ops. A zero
+	// explicit target stays out: the effect loop's 0 -> caster fallback
+	// already covers it for explicit-typed effects, and appending beside
+	// the 0 entry would double-list the caster there. A gameobject explicit
+	// target stays out too: the caster's unit-container entry beside a GO
+	// container target needs its own dispatch audit first.
+	if isSelfCastOnly(spell) {
+		if kept := spellTarget.UnitGUID; kept != 0 && uint16(kept>>48) != 0xF110 {
+			seenCaster := false
+			for _, guid := range hitTargets {
+				if guid == s.playerGUID {
+					seenCaster = true
+					break
+				}
+			}
+			if !seenCaster {
+				hitTargets = append(hitTargets, s.playerGUID)
+			}
+			seenCaster = false
+			for _, guid := range selectionTargets {
+				if guid == s.playerGUID {
+					seenCaster = true
+					break
+				}
+			}
+			if !seenCaster {
+				grown := make([]uint64, 0, len(selectionTargets)+1)
+				grown = append(grown, selectionTargets...)
+				grown = append(grown, s.playerGUID)
+				selectionTargets = grown
+			}
+		}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
 	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check
