@@ -571,3 +571,27 @@ func finalizeSessionSrcTarget(spell wotlk.Spell, target protocol.SpellTargetData
 	target.Flags &^= protocol.SpellTargetFlagSourceLocation
 	return target
 }
+
+// startSrcTarget mirrors ONLY the SOURCE_LOCATION half of
+// Spell::InitExplicitTargets (Spell.cpp:720-727) for an SMSG_SPELL_START
+// build: SendSpellStart runs inside Spell::prepare (Spell.cpp:3194),
+// after InitExplicitTargets (Spell.cpp:3039) but before SelectSpellTargets,
+// so the implicit TARGET_SRC_CASTER arm (Spell.cpp:930-936) has NOT run
+// yet and must not be applied here — unlike finalizeSessionSrcTarget,
+// which serves the post-selection GO packet. A packet source survives
+// only when the explicit mask needs SOURCE_LOCATION (RemoveSrc clears
+// the flag otherwise, leaving the position field stale); a needed-but-
+// absent source is set to the caster (InitExplicit SetSrc). The returned
+// copy leaves the caller's target untouched, so the finish/queue/traj
+// flows keep the raw packet target.
+func startSrcTarget(spell wotlk.Spell, target protocol.SpellTargetData, packetHasSrc bool, casterX, casterY, casterZ float32) protocol.SpellTargetData {
+	if spellExplicitSourceLocationNeeded(spell) {
+		target.Flags |= protocol.SpellTargetFlagSourceLocation
+		if !packetHasSrc {
+			target.Source = protocol.SpellTargetLocation{X: casterX, Y: casterY, Z: casterZ}
+		}
+		return target
+	}
+	target.Flags &^= protocol.SpellTargetFlagSourceLocation
+	return target
+}

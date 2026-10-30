@@ -3605,6 +3605,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 		wireObjectGUID = target.UnitGUID
 	}
+	// Spell::InitExplicitTargets reads the ORIGINAL packet src flag
+	// (Spell.cpp:720-727); capture it here alongside the wire guid.
+	packetHasSrc := target.Flags&protocol.SpellTargetFlagSourceLocation != 0
 
 	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
 	// elevation, speed, and an optional embedded movement block AFTER the
@@ -4956,7 +4959,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// CasterUnit; flags/powers follow the same arms as the client path.
 		itemGUID := rawItemGUID | (uint64(0x4000) << 48)
 		startFlags := spellStartCastFlags(spell)
-		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}

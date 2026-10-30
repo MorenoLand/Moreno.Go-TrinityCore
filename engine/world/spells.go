@@ -2113,6 +2113,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 		wireObjectGUID = target.UnitGUID
 	}
+	// Spell::InitExplicitTargets reads the ORIGINAL packet src flag
+	// (Spell.cpp:720-727); the gauntlet below may rewrite target.Flags,
+	// so capture it here alongside the wire guid.
+	packetHasSrc := target.Flags&protocol.SpellTargetFlagSourceLocation != 0
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
 		// SpellHandler.cpp:50-72): projectile data consumed by
@@ -3883,7 +3887,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
 		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
 		startFlags := spellStartCastFlags(spell)
-		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}
@@ -3893,7 +3897,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	startFlags := spellStartCastFlags(spell)
-	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, target, s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 		s.endSpellModTaking() // close the prepare-time registry (opened above)
 		return false
 	}
