@@ -4183,6 +4183,58 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LIST_INVENTORY / CMSG_SELL_ITEM / CMSG_BUY_ITEM /
+			// CMSG_BUY_ITEM_IN_SLOT are STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:545, 547, 549-550), so the session update
+			// (WorldSessionFilter::Process returns true for INPLACE,
+			// WorldSession.cpp:92-104) drains them before the
+			// ShouldLogOut check (:302-472) — and the expiry logout
+			// does NOT subsume them. List: the dead-player arm is
+			// silent in both, but a live arm sends SMSG_LIST_INVENTORY
+			// (or the no-inventory / cant-find-vendor error) and
+			// strips a faked death (ItemHandler.cpp:597-627), and C++
+			// also pauses the vendor and resets its home (:626-627);
+			// the logout sends no list and never touches the vendor.
+			// Sell: the vendor/ownership/bag/looted/refundable gates
+			// answer SMSG_SELL_ITEM errors (:372-487), and a live arm
+			// moves the item to a buyback slot, credits the money and
+			// fires the MONEY_FROM_VENDORS criteria; the logout save
+			// persists the pre-sell money and inventory, so a drop
+			// loses the sale outright. Buy / buy-in-slot: the slot,
+			// template, class, faction, interact, condition, stock,
+			// reputation, extended-cost and money gates answer
+			// buy/equip errors (Player.cpp:21904-22110), and a live arm
+			// deducts money, stores or equips the item and decrements
+			// limited stock; the logout save persists the pre-buy
+			// state, so a drop loses the purchase outright. The
+			// interact gate (Player.cpp:2314-2358) checks in-world,
+			// flight, death, flags, charmer, reaction and distance —
+			// never stunned or rooted — so the countdown's root/stun
+			// does not block a vendor the player already stands at.
+			// None of the four arms clears logoutAt, so dispatch them
+			// here like the questlog leg, then fall through to the
+			// expiry logout below; all four Go handlers return true
+			// on every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LIST_INVENTORY) && state.authed && !hookBlocked {
+				if !state.handleListInventory(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SELL_ITEM) && state.authed && !hookBlocked {
+				if !state.handleSellItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUY_ITEM) && state.authed && !hookBlocked {
+				if !state.handleBuyItem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUY_ITEM_IN_SLOT) && state.authed && !hookBlocked {
+				if !state.handleBuyItemInSlot(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
