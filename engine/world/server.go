@@ -6696,6 +6696,48 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GRANT_LEVEL (0x40D), CMSG_DECLINE_CHANNEL_INVITE (0x410),
+			// CMSG_TOTEM_DESTROYED (0x414) and
+			// CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY (0x417) are drained
+			// before the ShouldLogOut check: all four are STATUS_LOGGEDIN
+			// (Opcodes.cpp:1168, 1171, 1175, 1178), and the expiry logout
+			// does NOT subsume them. The grant-level arm answers the
+			// failure packet to the granter or proposes the grant to the
+			// target (ReferAFriendHandler.cpp:24); the decline arm is a
+			// pure no-op in both, so the leg is drain-order fidelity,
+			// like the voice-session-enable leg; the totem arm unsummons
+			// the slotted totem (SpellHandler.cpp:582), which the logout
+			// never does as a slot-targeted destroy; and the
+			// questgiver-multiple arm answers SMSG_QUESTGIVER_STATUS_MULTIPLE
+			// (QuestHandler.cpp:669), which the logout never sends, so a
+			// drop loses the reply or the grant proposal outright. None
+			// of the arms clears logoutAt, so dispatch them here like
+			// the set-guild-bank-text leg, then fall through to the
+			// expiry logout below; the grant-level, decline and totem
+			// handlers return true on every path, and the
+			// questgiver-multiple arm returns false only on a failed
+			// answer write, where returning matches the normal
+			// dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GRANT_LEVEL) && state.authed && !hookBlocked {
+				if !state.handleGrantLevel(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DECLINE_CHANNEL_INVITE) && state.authed && !hookBlocked {
+				if !state.handleDeclineChannelInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TOTEM_DESTROYED) && state.authed && !hookBlocked {
+				if !state.handleTotemDestroyed(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverStatusMultipleQuery(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
