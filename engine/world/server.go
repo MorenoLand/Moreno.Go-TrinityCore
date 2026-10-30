@@ -2997,6 +2997,29 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				}
 				continue
 			}
+			// CMSG_CAST_SPELL is STATUS_LOGGEDIN (Opcodes.cpp:433), so the
+			// C++ drain calls its handler before the ShouldLogOut check
+			// (WorldSession.cpp:302-472), and LogoutPlayer then interrupts
+			// whatever the handler started (CleanupsBeforeDelete ->
+			// InterruptNonMeleeSpells, Unit.cpp:9826-9829). Dispatch it
+			// here like the cancel/request legs instead of dropping it:
+			// an instant cast lands synchronously in the handler, a
+			// cast-time cast sends SMSG_SPELL_START and is then cancelled
+			// by the completeLogout below (stopSpellLifecycle stops the
+			// bar timer and sends the PREPARING interrupt packets), and
+			// a channeled cast gets the CASTING leg the same way; a
+			// rejected cast (e.g. the countdown's stunned flag via
+			// checkCasterAuras) sends its CAST_FAILED and then logs out.
+			// The handler returns false only on write failure, so this
+			// leg mirrors the normal dispatch arm (deferred logout
+			// follows). Unlike the normal path, a hook-replaced packet
+			// is not substituted here, matching the sibling legs and
+			// the C++ bool-only OnPacketReceive.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CAST_SPELL) && state.authed && !hookBlocked {
+				if !state.handleCastSpell(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
