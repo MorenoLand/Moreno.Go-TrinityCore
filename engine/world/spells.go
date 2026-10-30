@@ -3890,7 +3890,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// the GCD still run at queue time; power is taken by _cast at swing
 		// time. Replacing the queued spell cancels the old one with the
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
-		s.queueNextSwingSpell(castID, spellID, spell, target, 0, 0)
+		s.queueNextSwingSpell(castID, spellID, spell, target, wireObjectGUID, 0, 0)
 		startFlags := spellStartCastFlags(spell)
 		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
@@ -28693,12 +28693,13 @@ func (s *session) sendInterrupted(castID uint8, spellID uint32, result uint8) {
 // next main-hand melee swing (Unit::AttackerStateUpdate, Unit.cpp:2151-2152)
 // instead of firing from the cast bar. Guarded by castMu like activeCast.
 type queuedNextSwing struct {
-	CastID        uint8
-	SpellID       uint32
-	Spell         wotlk.Spell
-	Target        protocol.SpellTargetData
-	CastItemGUID  uint64
-	CastItemEntry uint32
+	CastID         uint8
+	SpellID        uint32
+	Spell          wotlk.Spell
+	Target         protocol.SpellTargetData
+	WireObjectGUID uint64
+	CastItemGUID   uint64
+	CastItemEntry  uint32
 }
 
 // isNextMeleeSwingSpell mirrors SpellInfo::IsNextMeleeSwingSpell
@@ -28715,10 +28716,10 @@ func isNextMeleeSwingSpell(spell wotlk.Spell) bool {
 // is cancelled with the Spell::cancel PREPARING arm (Spell.cpp:3218-3224):
 // CancelGlobalCooldown, then SendInterrupted(0), then
 // SendCastResult(SPELL_FAILED_INTERRUPTED).
-func (s *session) queueNextSwingSpell(castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, castItemGUID uint64, castItemEntry uint32) {
+func (s *session) queueNextSwingSpell(castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, castItemGUID uint64, castItemEntry uint32) {
 	s.castMu.Lock()
 	old := s.nextSwing
-	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
+	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, WireObjectGUID: wireObjectGUID, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
 	s.castMu.Unlock()
 	if old != nil {
 		// Spell::cancel PREPARING arm (Spell.cpp:3218-3224) without the
@@ -28771,7 +28772,7 @@ func (s *session) cancelNextSwingSpell() {
 // every main-hand swing consumes.
 func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
 	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID, SelectionOrientation: s.player.Orientation}
-	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, 0, q.CastItemGUID, q.CastItemEntry, swingCast)
+	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, q.WireObjectGUID, q.CastItemGUID, q.CastItemEntry, swingCast)
 }
 
 func (s *session) interruptCurrentCast() {
