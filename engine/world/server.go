@@ -2953,9 +2953,29 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			// cancel read just past logoutAt would be discarded and
 			// the expiry logout would fire instead. Gated on the expiry
 			// condition so ordinary cancels keep the normal dispatch
-			// path (hooks, idle-timer refresh) below; the dispatch arm
+			// path (idle-timer refresh) below; the dispatch arm
 			// returns on a failed ack write, so this leg mirrors it.
-			if header.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL) && state.authed {
+			// Hooks fire here, not below: the C++ drain fires
+			// OnPacketReceive for every guarded packet it processes
+			// BEFORE the ShouldLogOut check at the end of the same
+			// Update (WorldSession.cpp:328-387, 472), so a packet read
+			// past logoutAt was already dequeued for that drain and
+			// its hooks are owed before the expiry logout runs. The
+			// read-timeout leg reads no packet, so it owes none. A
+			// hook-blocked cancel skips the handler like the C++
+			// `if (!OnPacketReceive) break` arm, and the logout then
+			// still runs; a blocked non-cancel packet likewise still
+			// logs out. Gates mirror the normal path below.
+			hookBlocked := false
+			if state.authed && state.server.Features != nil && state.server.Features.Scripts != nil &&
+				!socketHandledOpcode(header.Opcode) && !isNullClientOpcode(header.Opcode) {
+				blocked, _, hookErr := firePacketReceiveHooks(state.server.Features.Scripts, ctx, header.Opcode, payload, state.luaPlayer())
+				if hookErr != nil {
+					state.debug("lua packet hook failed", "account", state.accountName, "opcode", header.Opcode, "error", hookErr)
+				}
+				hookBlocked = blocked
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL) && state.authed && !hookBlocked {
 				if !state.handleLogoutCancel() {
 					return
 				}
