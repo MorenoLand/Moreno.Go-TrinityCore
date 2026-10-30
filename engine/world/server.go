@@ -4137,6 +4137,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_QUESTLOG_SWAP_QUEST / CMSG_QUESTLOG_REMOVE_QUEST are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:534-535) and
+			// CMSG_QUEST_CONFIRM_ACCEPT / CMSG_PUSHQUESTTOPARTY are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:542, 544),
+			// so the session update (WorldSessionFilter::Process returns
+			// true for INPLACE and takes the ProcessUnsafe branch for
+			// THREADUNSAFE, WorldSession.cpp:92-104) drains them before
+			// the ShouldLogOut check (:302-472) — and the expiry logout
+			// does NOT subsume them. Swap: the slot exchange plus the
+			// two values-update packets (QuestHandler.cpp:404-415); the
+			// logout save writes no quest-log rows, so a drop loses the
+			// packets. Remove: the abandon — source-item take gate,
+			// timed-quest removal, PvP re-arm, queststatus row deletes,
+			// item destruction, abandon/status-change hooks and the
+			// QUEST_ABANDONED criteria (:417-472); the logout save never
+			// abandons a quest. Confirm-accept: the party-share add with
+			// its src-spell cast (:474-509); a drop leaves the shared
+			// quest unaccepted, since the logout discards the sharing
+			// info without adding the quest. Push: the per-member share
+			// prompts, response packets and auto-accept add (:563-644);
+			// the logout sends none of them. None of the four arms
+			// clears logoutAt, so dispatch them here like the questgiver
+			// leg, then fall through to the expiry logout below; swap,
+			// remove and push return true on every path, and
+			// confirm-accept returns false only on a failed invalid-packet
+			// write, mirroring the normal arms (deferred logout follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTLOG_SWAP_QUEST) && state.authed && !hookBlocked {
+				if !state.handleQuestlogSwapQuest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTLOG_REMOVE_QUEST) && state.authed && !hookBlocked {
+				if !state.handleQuestLogRemoveQuest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUEST_CONFIRM_ACCEPT) && state.authed && !hookBlocked {
+				if !state.handleQuestConfirmAccept(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PUSHQUESTTOPARTY) && state.authed && !hookBlocked {
+				if !state.handlePushQuestToParty(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
