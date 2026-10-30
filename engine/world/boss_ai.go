@@ -3559,8 +3559,9 @@ func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMot
 			continue
 		}
 		if vm := s.findCreatureMotion(m.Map, m.InstanceID, guid); vm != nil {
-			for _, interruptedSpellID := range s.interruptCreatureCast(vm) {
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), buildInterruptCastLog(m.GUID, spell.ID, guid, interruptedSpellID), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			for _, interrupted := range s.interruptCreatureCast(vm) {
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), buildInterruptCastLog(m.GUID, spell.ID, guid, interrupted.spellID), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+				s.sendCreatureInterruptPackets(vm, interrupted)
 			}
 		}
 	}

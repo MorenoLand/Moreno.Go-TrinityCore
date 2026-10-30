@@ -17727,7 +17727,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					continue
 				}
 				if vm := s.findCreatureMotion(effectTarget); vm != nil {
-					s.server.interruptCreatureCast(vm)
+					for _, interrupted := range s.server.interruptCreatureCast(vm) {
+						s.server.sendCreatureInterruptPackets(vm, interrupted)
+					}
 				}
 			}
 		}

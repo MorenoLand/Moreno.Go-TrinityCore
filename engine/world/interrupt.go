@@ -278,29 +278,38 @@ func (s *Server) interruptCreatureSpellGate(spellID uint32, channeled bool) bool
 	return sp.InterruptFlags&spellInterruptFlagInterrupt != 0
 }
 
+// interruptedCreatureCast is one Spell::cancel victim arm: the generic
+// (PREPARING deferral window) or channeled (CASTING) spell an interrupt
+// stopped, so callers can send the log first and the cancel packets
+// after, in SpellEffects.cpp:3536-3548 order.
+type interruptedCreatureCast struct {
+	spellID   uint32
+	channeled bool
+}
+
 // interruptCreatureCast mirrors Spell::EffectInterruptCast
 // (SpellEffects.cpp:3511-3551) for a creature victim, returning the
-// interrupted spell IDs in C++ loop order (generic, then channeled) so
-// callers can log each. The generic arm covers the deferral window: a
-// twin cast-time cast (PendingCastSpellID) or a pending inline cast
-// (PendingInlineSpellID) — C++ SPELL_STATE_PREPARING with cast time > 0.
-// The channeled arm covers a live channel stamp (CURRENT_CHANNELED_SPELL,
+// interrupted arms in C++ loop order (generic, then channeled) so
+// callers can log each and then send its Spell::cancel packets. The
+// generic arm covers the deferral window: a twin cast-time cast
+// (PendingCastSpellID) or a pending inline cast (PendingInlineSpellID)
+// — C++ SPELL_STATE_PREPARING with cast time > 0. The channeled arm
+// covers a live channel stamp (CURRENT_CHANNELED_SPELL,
 // SPELL_STATE_CASTING). Dead victims skip (SpellEffects.cpp:3519-3520).
 // Takes no locks itself; callers follow the ATTR7 lookup-then-operate
 // pattern. Deltas, matching the standing creature model: no SpellHistory
-// school lockout (no creature lockout registry), no SMSG_SPELL_FAILED /
-// MSG_CHANNEL_UPDATE broadcast (the evade, CC and damage-break clears
-// send none either), no AI OnSpellCastFinished hook (Unit.cpp:3171-3172),
-// and no IsInterruptable executing gate — Go creature casts execute
-// synchronously, so no executing window exists to protect. A CastingUntil
-// window with no pending spell ID — the triggered-cast stamp quirk, whose
-// spell cannot be gate-checked — is left alone, as are infinite-duration
-// channels, which stamp no channel state at all.
-func (s *Server) interruptCreatureCast(m *creatureMotion) []uint32 {
+// school lockout (no creature lockout registry), no AI
+// OnSpellCastFinished hook (Unit.cpp:3171-3172), and no IsInterruptable
+// executing gate — Go creature casts execute synchronously, so no
+// executing window exists to protect. A CastingUntil window with no
+// pending spell ID — the triggered-cast stamp quirk, whose spell cannot
+// be gate-checked — is left alone, as are infinite-duration channels,
+// which stamp no channel state at all.
+func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureCast {
 	if s == nil || m == nil || m.Health == 0 {
 		return nil
 	}
-	var interrupted []uint32
+	var interrupted []interruptedCreatureCast
 	var genericSpellID uint32
 	if m.PendingInlineSpellID != 0 {
 		genericSpellID = m.PendingInlineSpellID
@@ -312,7 +321,7 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []uint32 {
 		if !s.creatureChannelLive(m) {
 			m.CastingUntil = time.Time{}
 		}
-		interrupted = append(interrupted, genericSpellID)
+		interrupted = append(interrupted, interruptedCreatureCast{spellID: genericSpellID})
 	}
 	if s.creatureChannelLive(m) && s.interruptCreatureSpellGate(m.ChannelSpellID, true) {
 		channelSpellID := m.ChannelSpellID
@@ -323,7 +332,7 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []uint32 {
 		m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
 		m.ChannelUntil = time.Time{}
 		s.cancelPendingCreatureCast(m)
-		interrupted = append(interrupted, channelSpellID)
+		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
 	}
 	return interrupted
 }
@@ -339,9 +348,37 @@ func (s *session) interruptCreatureTargetCast(targetGUID uint64, interruptSpell 
 	if vm == nil {
 		return
 	}
-	for _, interruptedSpellID := range s.server.interruptCreatureCast(vm) {
-		s.sendInterruptCastLog(interruptSpell.ID, targetGUID, interruptedSpellID)
+	for _, interrupted := range s.server.interruptCreatureCast(vm) {
+		s.sendInterruptCastLog(interruptSpell.ID, targetGUID, interrupted.spellID)
+		s.server.sendCreatureInterruptPackets(vm, interrupted)
 	}
+}
+
+// sendCreatureInterruptPackets mirrors the packet tail of Spell::cancel
+// (Spell.cpp:3210-3238) for a creature victim, sent by callers after the
+// interrupt log in SpellEffects.cpp:3536-3548 order. PREPARING sends
+// SendInterrupted(0) only; CASTING sends SendChannelUpdate(0) first,
+// then SendInterrupted(0). SendInterrupted has no caster-type gate
+// (Spell.cpp:4624-4639: SMSG_SPELL_FAILURE + SMSG_SPELL_FAILED_OTHER to
+// the caster's set), so creature victims get both, with cast count 0
+// per the server-side GO convention. SendCastResult sends nothing here:
+// the member arm returns early for non-player casters
+// (Spell.cpp:4160-4166), so no SMSG_CAST_FAILED rides a creature
+// interrupt. Delivery is the visible set around the victim, the
+// SendMessageToSet shape; a creature victim has no session of its own.
+func (s *Server) sendCreatureInterruptPackets(m *creatureMotion, interrupted interruptedCreatureCast) {
+	if s == nil || m == nil || interrupted.spellID == 0 {
+		return
+	}
+	if interrupted.channeled {
+		channelPkt := protocol.NewBuffer(12)
+		channelPkt.WritePackedGUID(m.GUID)
+		channelPkt.WriteU32(0)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), channelPkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	}
+	failure := protocol.BuildSpellFailure(m.GUID, 0, interrupted.spellID, 0)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
 }
 
 // buildInterruptCastLog packs one SMSG_SPELLLOGEXECUTE interrupt row:
