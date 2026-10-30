@@ -82,7 +82,9 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 // destination seed. The seed defaults to the caster position (CheckDst,
 // Spell.cpp:6523); a client pet cast seeds it from the client destination
 // instead, since C++ InitExplicitTargets installs the client destination
-// before the implicit arms run.
+// before the implicit arms run — but only when the spell's explicit mask
+// needs DEST_LOCATION (Spell.cpp:716 RemoveDst drops it otherwise, and
+// the resolver gates the seed on spellExplicitDestLocationNeeded).
 type creatureDestTraj struct {
 	Speed, Elevation    float32
 	HasSrc              bool
@@ -204,8 +206,16 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 	if !spellHasCreatureDestTarget(spell) && !spellExplicitDestLocationNeeded(spell) {
 		return 0, 0, 0, false, false, nil
 	}
+	// Spell::InitExplicitTargets (Spell.cpp:716): when the spell's explicit
+	// mask needs no DEST_LOCATION the client destination is removed, so a
+	// traj seed survives only when the mask needs it — otherwise the
+	// running destination starts at the caster and a dest-dest/traj arm's
+	// CheckDst (Spell.cpp:6523) falls back to the caster, not the dropped
+	// packet point. The no-dest-family branch below needs no gate: the
+	// early return above already requires the mask to need DEST_LOCATION.
+	trajSeedKept := traj.HasSeed && spellExplicitDestLocationNeeded(spell)
 	x, y, z := m.X, m.Y, m.Z
-	if traj.HasSeed {
+	if trajSeedKept {
 		x, y, z = traj.SeedX, traj.SeedY, traj.SeedZ
 	}
 	combatReach := m.CombatReach
@@ -366,7 +376,7 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 		// Spell.cpp:789 AddDestTarget after each effect: snapshot the
 		// running destination for this effect's slot now, before any
 		// later effect's dest arm can move it.
-		snapshots[effIndex] = creatureDestSnapshot{Has: traj.HasSeed || seedApplied || otherDest || channelResolved, X: x, Y: y, Z: z}
+		snapshots[effIndex] = creatureDestSnapshot{Has: trajSeedKept || seedApplied || otherDest || channelResolved, X: x, Y: y, Z: z}
 	}
 	if !otherDest && !channelResolved && !seedApplied {
 		return 0, 0, 0, false, false, snapshots

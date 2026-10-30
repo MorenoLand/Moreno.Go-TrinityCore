@@ -316,7 +316,11 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		// effect before any dest arm centers on the seed, not the
 		// caster position the unstamped fallback would give.
 		snapshots := make([]sessionDestSnapshot, len(spell.Effects))
-		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		// Spell::InitExplicitTargets (Spell.cpp:716): when the mask needs
+		// no DEST_LOCATION the packet destination is removed, so it stamps
+		// no slot here either — the slots stay unstamped and HIT arms fall
+		// back to the caster position (the Spell.cpp:630 slot init).
+		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spellExplicitDestLocationNeeded(spell) {
 			for i := range snapshots {
 				snapshots[i] = sessionDestSnapshot{Has: true, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z}
 			}
@@ -329,11 +333,18 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	// Spell::InitExplicitTargets (Spell.cpp:716): when the mask needs no
+	// DEST_LOCATION the packet destination is removed, so the running
+	// destination starts at the caster and pre-arm slots stay unstamped —
+	// a dest-dest/traj arm's CheckDst (Spell.cpp:6523) falls back to the
+	// caster, not the dropped packet point. Dest arms below re-set HasDst
+	// via SetDst, so post-arm slots are unaffected by the gate.
+	packetHasDstKept := packetHasDst && spellExplicitDestLocationNeeded(spell)
 	seedX, seedY, seedZ, seedApplied := float32(0), float32(0), float32(0), false
 	if !packetHasDst {
 		seedX, seedY, seedZ, seedApplied = s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID)
 	}
-	if packetHasDst {
+	if packetHasDstKept {
 		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
 	} else if seedApplied {
 		// Spell::InitExplicitTargets (Spell.cpp:700-712): the running
@@ -380,7 +391,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		}
 	}
 	snapshots := make([]sessionDestSnapshot, len(spell.Effects))
-	hasDst := packetHasDst || seedApplied
+	hasDst := packetHasDstKept || seedApplied
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
