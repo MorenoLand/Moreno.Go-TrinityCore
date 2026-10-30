@@ -12814,7 +12814,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets)+len(missGUIDs) == 1 {
 			channelObjectGUID = targetGUID
 		}
-		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z)
+		channelHits := append(append(append([]uint64(nil), hitTargets...), friendlyEffectTargets...), refCenteredFriendlyTargets...)
+		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z, channelHits)
 	}
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
@@ -25923,7 +25924,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets) == 1 && hitTargets[0] != 0 {
 			channelObjectGUID = hitTargets[0]
 		}
-		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+		channelHits := append(append(append(append([]uint64(nil), hitTargets...), triggeredFriendlyEffectTargets...), triggeredRefCenteredFriendlyTargets...), chainJumpGUIDs...)
+		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, channelHits)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
@@ -42512,15 +42514,23 @@ type activeChannelState struct {
 	// channelDestForSpell. TargetGUID stays the aura/damage target.
 	ChannelObjectGUID uint64
 	TargetKey         creatureAuraKey
-	Spell             wotlk.Spell
-	DurationMs        uint32
-	Remaining         time.Duration
-	PeriodMs          uint32
-	Pushbacks         int
-	Timer             *time.Timer
-	TickTimer         *time.Timer
-	DrainTimer        *time.Timer
-	Stopped           bool
+	// HitTargets is the cast's hit-target list (the Go analog of C++
+	// m_UniqueTargetInfo for this channel): the union of the selection
+	// lists the aura fan-out draws from, seeded at startChannel so the
+	// cancel/update sweep can strip the channel aura from every hit
+	// target, not just TargetGUID (Spell::cancel CASTING leg,
+	// Spell.cpp:3230-3236). Missed/immune targets ride along harmlessly:
+	// the strip removes only a stored aura. Seeded once, never mutated.
+	HitTargets []uint64
+	Spell      wotlk.Spell
+	DurationMs uint32
+	Remaining  time.Duration
+	PeriodMs   uint32
+	Pushbacks  int
+	Timer      *time.Timer
+	TickTimer  *time.Timer
+	DrainTimer *time.Timer
+	Stopped    bool
 	// Executing is the m_executedCurrently analog for channel ticks
 	// (Spell.h:548): true while channelTick runs the tick's effects, so
 	// interruptCurrentChannel honors the same Unit::InterruptSpell
@@ -42598,7 +42608,7 @@ func (s *session) sendChannelUpdate(remainingMs uint32) {
 // record the cast's destination (SpellCastTargets::HasDst analog) so
 // SelectImplicitChannelTargets parity (Spell.cpp:1010) can resolve
 // TARGET_DEST_CHANNEL_TARGET for spells triggered during the channel.
-func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, channelObjectGUID uint64, hasDest bool, destX, destY, destZ float32) {
+func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, channelObjectGUID uint64, hasDest bool, destX, destY, destZ float32, hitTargets []uint64) {
 	if s.player == nil || s.server.Data == nil {
 		return
 	}
@@ -42656,10 +42666,26 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	if !infinite {
 		remaining = time.Duration(durationMs) * time.Millisecond
 	}
+	// Dedupe the seeded hit list (the fan-out lists overlap: the caster
+	// joins several, and triggered chain jumps ride both hitTargets and
+	// the jump list).
+	var hitList []uint64
+	seenHits := make(map[uint64]struct{}, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seenHits[guid]; dup {
+			continue
+		}
+		seenHits[guid] = struct{}{}
+		hitList = append(hitList, guid)
+	}
 	channel := &activeChannelState{
 		CastID:            castID,
 		SpellID:           spellID,
 		TargetGUID:        targetGUID,
+		HitTargets:        hitList,
 		ChannelObjectGUID: channelObjectGUID,
 		TargetKey:         creatureAuraKeyForPlayer(*s.player, targetGUID),
 		Spell:             spell,
@@ -42751,10 +42777,15 @@ func (s *session) finishChannel() {
 }
 
 // expireChannelAuras removes the caster-owned auras of the channel's spell
-// from the caster and the channel target: the Go mirror of the
+// from the caster and every hit target: the Go mirror of the
 // RemoveOwnedAura(spellId, m_originalCasterGUID, 0, AURA_REMOVE_BY_CANCEL)
-// sweep Spell::update runs when a channeled spell ends early for lack of
-// alive targets (Spell.cpp:3856-3860).
+// sweep over m_UniqueTargetInfo that both Spell::cancel's CASTING leg
+// (Spell.cpp:3230-3236) and Spell::update's early-end leg (Spell.cpp:3856-3860)
+// run. Before this tick only the caster and the single TargetGUID were
+// stripped, so an area channel's other hit targets kept the aura to its
+// full DBC duration. The recorded HitTargets list is the seeded union of
+// the aura fan-out lists; the explicit TargetGUID leg below is kept
+// verbatim so a target outside the seeded lists still strips.
 func (s *session) expireChannelAuras(channel *activeChannelState) {
 	s.expirePlayerAura(channel.SpellID)
 	if s.server != nil && s.player != nil && channel.TargetGUID != 0 {
@@ -42774,6 +42805,22 @@ func (s *session) expireChannelAuras(channel *activeChannelState) {
 				s.server.removeCreatureAura(key, channel.SpellID)
 			}
 		}
+	}
+	if s.server == nil || s.player == nil {
+		return
+	}
+	for _, guid := range channel.HitTargets {
+		if guid == 0 || guid == channel.TargetGUID || guid == s.playerGUID {
+			continue
+		}
+		if uint16(guid>>48) == 0xF110 {
+			continue
+		}
+		if target := s.server.findSessionByGUID(guid); target != nil && target.player != nil {
+			target.expirePlayerAura(channel.SpellID)
+			continue
+		}
+		s.server.removeCreatureAura(creatureAuraKeyForPlayer(*s.player, guid), channel.SpellID)
 	}
 }
 
