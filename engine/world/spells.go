@@ -3958,11 +3958,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// A cast without SPELL_INTERRUPT_FLAG_MOVEMENT survives
 		// movement mid-bar, so prepare and finish positions differ.
 		// Excluded when a packet src exists (already frozen in the
-		// target copy) and for 22 spells (finalize's 22 arm overwrites
-		// with the live caster position, matching the _cast re-set).
-		// The stamped flag reads as a packet src at finish, so
-		// finalize keeps the stamped position.
-		if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+		// target copy). For 22 spells finalize's 22 arm overwrites
+		// Source with the live caster position, matching the _cast
+		// re-set, so the stamp only feeds arms that run before the
+		// 22 effect — the resolver's order tracking clears it for
+		// post-22 traj arms. The stamped flag reads as a packet src
+		// at finish, so finalize keeps the stamped position.
+		if !packetHasSrc && spellExplicitSourceLocationNeeded(spell) {
 			castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
 			castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 		}
@@ -3976,10 +3978,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// flag for no-need spells, and a stamped flag would newly match
 		// the mid-bar missile-trajectory gate (MiscHandler.cpp:1556-1561).
 		// A packet source is already frozen in the target copy, so it
-		// seeds from there; 22 spells are excluded (the 22 arm re-sets
-		// src to the live caster at _cast — the traj-vs-22 effect-order
-		// question stays residual).
-		if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+		// seeds from there. 22 spells are stamped too: the resolver
+		// reads ReadSrc only for a traj arm that precedes the 22
+		// effect (SelectSpellTargets order), and the 22 arm's live
+		// re-set governs post-22 traj arms and the delay leg.
+		if spellHasTrajTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
 			castTarget.HasReadSrc = true
 			if packetHasSrc {
 				castTarget.ReadSrc = target.Source
@@ -28831,10 +28834,13 @@ func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID
 	// packet src exists (already frozen in the target copy) and for 22
 	// spells (finalize's 22 arm overwrites with the live caster position,
 	// matching the _cast re-set). The stamped flag reads as a packet src
-	// at swing, so finalize keeps the stamped position. target is passed
-	// by value, so the caller's copy — and the queue-time START build —
-	// keep the raw packet target.
-	if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+	// at swing, so finalize keeps the stamped position. For 22 spells
+	// finalize overwrites Source with the live caster position and
+	// the resolver clears the stamp for post-22 traj arms, so the
+	// stamp only feeds pre-22 arms. target is passed by value, so
+	// the caller's copy — and the queue-time START build — keep
+	// the raw packet target.
+	if !packetHasSrc && spellExplicitSourceLocationNeeded(spell) {
 		target.Flags |= protocol.SpellTargetFlagSourceLocation
 		target.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 	}
@@ -28845,9 +28851,9 @@ func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID
 	// would live-resolve the caster — which routinely moved to the
 	// melee target between queue and swing. Rides ReadSrc, never
 	// Source/Flags, so the swing-time GO flag stays cleared and the
-	// missile-trajectory gate is unchanged; 22 spells are excluded
-	// (effect-order residual).
-	if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+	// missile-trajectory gate is unchanged; 22 spells are stamped
+	// too, gated by the resolver's 22-before-traj order tracking.
+	if spellHasTrajTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
 		target.HasReadSrc = true
 		if packetHasSrc {
 			target.ReadSrc = target.Source

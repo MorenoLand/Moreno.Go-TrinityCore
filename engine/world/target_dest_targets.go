@@ -408,11 +408,22 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 	}
 	snapshots := make([]sessionDestSnapshot, len(spell.Effects))
 	hasDst := packetHasDstKept || seedApplied
+	// seenSrcCaster tracks whether a TARGET_SRC_CASTER (22) arm has
+	// already run at an earlier (effect, slot) in SelectSpellTargets
+	// order (Spell.cpp:758-779: effects in index order, TargetA
+	// before TargetB): the 22 arm re-sets m_src to the live caster
+	// (Spell.cpp:930-936), so a traj arm after it reads the live
+	// caster, while a traj arm before it reads the pre-22 src (packet
+	// src else the Read/prepare-time seed, Spell.cpp:1635).
+	seenSrcCaster := false
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
 		for slotIndex, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if targetType == 22 {
+				seenSrcCaster = true
+			}
 			switch {
 			case isCasterDestTarget(targetType):
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1312-1424):
@@ -478,7 +489,17 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				// shorten the destination to the first missile-body
 				// collision along the ballistic trajectory. CheckDst is
 				// the caster-position fallback already applied above.
-				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, target, x, y, z); changed {
+				// When a 22 arm already ran, m_src is the live caster
+				// at selection time, so the stamped packet/Read src
+				// must not feed the arm: pass a copy with both src
+				// legs cleared and let the arm fall through to the
+				// live caster position.
+				trajTarget := target
+				if seenSrcCaster {
+					trajTarget.Flags &^= protocol.SpellTargetFlagSourceLocation
+					trajTarget.HasReadSrc = false
+				}
+				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, trajTarget, x, y, z); changed {
 					x, y, z = nx, ny, nz
 					hasDst = true
 				}

@@ -5003,9 +5003,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// when the mask needs SOURCE_LOCATION and the packet carries
 			// no src; _cast (Spell.cpp:3410) re-sets src only through
 			// the 22 arm, so a non-22 seed stays prepare-time. Excluded
-			// for packet src (frozen in the target copy) and 22 spells
-			// (finalize's 22 arm overwrites with the live caster pos).
-			if !packetHasSrc && !spellHasImplicitSrcCasterTarget(spell) && spellExplicitSourceLocationNeeded(spell) {
+			// for packet src (frozen in the target copy); for 22 spells
+			// finalize's 22 arm overwrites with the live caster pos
+			// and the resolver clears the stamp for post-22 traj arms.
+			if !packetHasSrc && spellExplicitSourceLocationNeeded(spell) {
 				castTarget.Flags |= protocol.SpellTargetFlagSourceLocation
 				castTarget.Source = protocol.SpellTargetLocation{X: s.player.X, Y: s.player.Y, Z: s.player.Z}
 			}
@@ -5017,8 +5018,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// caster at completion. It rides ReadSrc, never
 			// Source/Flags, so finalize still clears the GO flag and
 			// the mid-bar missile-trajectory gate is unchanged; 22
-			// spells are excluded (effect-order residual).
-			if spellHasTrajTarget(spell) && !spellHasImplicitSrcCasterTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
+			// spells are stamped too, gated by the resolver's
+			// 22-before-traj order tracking.
+			if spellHasTrajTarget(spell) && !spellExplicitSourceLocationNeeded(spell) {
 				castTarget.HasReadSrc = true
 				if packetHasSrc {
 					castTarget.ReadSrc = target.Source
