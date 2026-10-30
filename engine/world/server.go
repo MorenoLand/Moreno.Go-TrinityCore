@@ -7601,6 +7601,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_WORLD_TELEPORT (0x008), CMSG_PLAYER_LOGOUT (0x04A) and
+			// CMSG_LOOT_METHOD (0x07A) are all STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:139, 205, 253), so the
+			// session update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them. World-teleport runs the in-flight gate
+			// before the RBAC 42 gate, then teleports or answers the
+			// no-permission notification (MiscHandler.cpp:1070-1088);
+			// Go mirrors that gate order and teleports, so dropping
+			// the packet would strand a GM teleport the drain would
+			// have run. Player-logout is the triaged member of the
+			// family, not a routine leg: its C++ body is empty
+			// (MiscHandler.cpp:457) and Go's handler is likewise a
+			// bare true, so there is no logout interaction to
+			// special-case — unlike logout-request (re-arms) and
+			// logout-cancel (clears), it touches no logout state,
+			// and the drain-then-ShouldLogOut sequence is exactly
+			// this leg followed by the expiry logout below, as with
+			// the raid-ready-check-finished no-op leg. Loot-method
+			// runs the leader / LFG / method / threshold /
+			// master-member gates, then sets the method, master
+			// looter and threshold and sends the group update
+			// (GroupHandler.cpp:433-466); Go mirrors the gates and
+			// broadcasts the group list, so dropping it would lose a
+			// leader's loot-rule change the logout save never
+			// rewrites. None of the three arms clears logoutAt
+			// (zero logoutAt references in commands.go; group.go:520
+			// only gates broadcast recipients), so dispatch them
+			// here, then fall through to the expiry logout below;
+			// all three handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_WORLD_TELEPORT) && state.authed && !hookBlocked {
+				if !state.handleWorldTeleport(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PLAYER_LOGOUT) && state.authed && !hookBlocked {
+				if !state.handlePlayerLogout() {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT_METHOD) && state.authed && !hookBlocked {
+				if !state.handleLootMethod(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
