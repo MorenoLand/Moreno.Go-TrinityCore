@@ -6188,6 +6188,50 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_ARENA_TEAM_REMOVE, CMSG_ARENA_TEAM_DISBAND and
+			// CMSG_ARENA_TEAM_LEADER are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:983-985), so the
+			// session update drains them before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// them. Remove gates on team validity, captain
+			// permissions, member existence, not-the-captain,
+			// the queue lock and not-fighting, then DelMember
+			// DELETEs the member row, sends QUIT_S to the
+			// removed member and broadcasts REMOVE_SSS
+			// (ArenaTeamHandler.cpp:298-359); the logout save
+			// writes no arena_team_member rows and sends
+			// neither packet, so a drop leaves the membership
+			// intact. Disband gates on captain, the queue lock
+			// and not-fighting, then Disband DELETEs the team
+			// and member rows and sends QUIT_S per member
+			// (:266-296, ArenaTeam.cpp:374-383); the logout
+			// deletes no arena rows, so a drop leaves the team
+			// standing. Leader gates on captain permissions and
+			// member existence and not-already-captain, then
+			// SetCaptain UPDATEs captainGuid, flips both
+			// captains' live flags and broadcasts
+			// LEADER_CHANGED_SSS (:361-402); the logout save
+			// writes no captainGuid, so a drop leaves the old
+			// captain in place. None of the three arms clears
+			// logoutAt, so dispatch them here like the leave
+			// leg, then fall through to the expiry logout
+			// below; all three handlers return true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_REMOVE) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamRemove(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_DISBAND) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamDisband(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEADER) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamLeader(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
