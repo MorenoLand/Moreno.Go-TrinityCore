@@ -5005,6 +5005,86 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_BATTLEFIELD_LIST is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:703), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm answers SMSG_BATTLEFIELD_LIST
+			// via BuildBattlegroundListPacket for a known
+			// battlemaster entry (BattleGroundHandler.cpp:332-
+			// 359); the logout sends no list. The invalid-
+			// bgType arm is silent in both, and no arm needs
+			// an NPC gate, so the countdown's root/stun does
+			// not block it. No arm clears logoutAt, so dispatch
+			// it here like the create-text-item leg, then fall
+			// through to the expiry logout below; the handler
+			// returns false only on a failed list write,
+			// mirroring the normal arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BATTLEFIELD_LIST) && state.authed && !hookBlocked {
+				if !state.handleBattlefieldList(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_ITEM_TEXT_QUERY is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:710), so the session
+			// update drains it before the ShouldLogOut check —
+			// and the expiry logout does NOT subsume it: the
+			// live arm always answers
+			// SMSG_ITEM_TEXT_QUERY_RESPONSE, byte 0 plus guid
+			// and text for an owned item, byte 1 otherwise
+			// (ItemHandler.cpp:1211-1233); the logout sends no
+			// response. No arm clears logoutAt, so dispatch it
+			// here like the battlefield-list leg, then fall
+			// through to the expiry logout below; the handler
+			// returns false only on a failed response write,
+			// mirroring the normal arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_TEXT_QUERY) && state.authed && !hookBlocked {
+				if !state.handleItemTextQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_LEARN_TALENT is STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:724), so the session
+			// update drains it before the ShouldLogOut check —
+			// and the expiry logout does NOT subsume it: the
+			// live arm runs LearnTalent then SendTalentsInfoData
+			// (SkillHandler.cpp:27-32); Go's handler writes the
+			// character_talent and character_spell rows eagerly
+			// and answers SMSG_LEARNED_SPELL plus the talents
+			// info, while the logout save writes no talent or
+			// spell rows, so a drop loses the learn outright.
+			// The failed-learn arms (unknown talent, class-mask,
+			// known rank, points, prereq, tier, null spell)
+			// still answer the talents info in both. No arm
+			// clears logoutAt, so dispatch it here like the
+			// item-text leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LEARN_TALENT) && state.authed && !hookBlocked {
+				if !state.handleLearnTalent(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_TOGGLE_PVP is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:726), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets or toggles PLAYER_FLAGS
+			// IN_PVP and PVP_TIMER, then runs the UpdatePvP
+			// arms (MiscHandler.cpp:485-505); Go flips the
+			// flags in memory and sends the values update,
+			// while the logout sends no values update and
+			// saves the pre-toggle flags, so a drop loses the
+			// toggle outright. No arm clears logoutAt, so
+			// dispatch it here like the learn-talent leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TOGGLE_PVP) && state.authed && !hookBlocked {
+				if !state.handleTogglePvP(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
