@@ -6436,6 +6436,73 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_REALM_SPLIT, CMSG_VOICE_SESSION_ENABLE, CMSG_COMPLAIN,
+			// CMSG_CHANNEL_DISPLAY_LIST, CMSG_SET_ACTIVE_VOICE_CHANNEL,
+			// CMSG_GET_CHANNEL_MEMBER_COUNT and CMSG_CHANNEL_VOICE_ON are
+			// drained before the ShouldLogOut check: realm-split and the
+			// two voice slots are STATUS_AUTHED, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:1039, 1074, 1110) and the rest are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1098,
+			// 1109, 1111, 1113), and the expiry logout does NOT subsume
+			// them. The realm-split arm answers SMSG_REALM_SPLIT
+			// (MiscHandler.cpp:1192), which the logout never sends.
+			// The complain arm answers SMSG_COMPLAIN_RESULT(0)
+			// (MiscHandler.cpp:1151), which the logout never sends.
+			// The display-list arm answers the channel list or the
+			// not-member notice (ChannelHandler.cpp:315, 128), and the
+			// member-count arm answers SMSG_CHANNEL_MEMBER_COUNT for a
+			// joined channel (ChannelHandler.cpp:321); the logout
+			// sends neither. The voice-session-enable, active-voice-
+			// channel and voice-on arms are parse-and-log no-ops in
+			// C++ (VoiceChatHandler.cpp:23, 31, 37) and in Go, so
+			// these legs are drain-order fidelity, like the
+			// arena-team-decline leg. (CMSG_TIME_SYNC_RESP, 0x391,
+			// needs no leg: STATUS_LOGGEDIN but PROCESS_THREADSAFE,
+			// so the session filter drops it while the player is in
+			// world and Map::Update runs only after UpdateSessions
+			// (World.cpp:2418 vs 2462) — the drop stands deliberately,
+			// like taxi-express.) None of the arms clears logoutAt,
+			// so dispatch them here like the set-title leg, then
+			// fall through to the expiry logout below; the
+			// realm-split, complain and display-list handlers
+			// return false only on a failed answer write, where
+			// returning matches the normal dispatch's write-failure
+			// arm, and the other four return true on every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REALM_SPLIT) && state.authed && !hookBlocked {
+				if !state.handleRealmSplit(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_VOICE_SESSION_ENABLE) && state.authed && !hookBlocked {
+				if !state.handleVoiceSessionEnable(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_COMPLAIN) && state.authed && !hookBlocked {
+				if !state.handleComplain(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_DISPLAY_LIST) && state.authed && !hookBlocked {
+				if !state.handleChannelList(payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_ACTIVE_VOICE_CHANNEL) && state.authed && !hookBlocked {
+				if !state.handleSetActiveVoiceChannel(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GET_CHANNEL_MEMBER_COUNT) && state.authed && !hookBlocked {
+				if !state.handleGetChannelMemberCount(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHANNEL_VOICE_ON) && state.authed && !hookBlocked {
+				if !state.handleChannelVoiceOn(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
