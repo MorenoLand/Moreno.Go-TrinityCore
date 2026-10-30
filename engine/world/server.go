@@ -5309,6 +5309,153 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_LIST_STABLED_PETS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:754), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the stablemaster gate,
+			// strips a faked death, removes mount auras, then
+			// answers MSG_LIST_STABLED_PETS with the current
+			// or unslotted hunter pet plus the stabled pets
+			// (NPCHandler.cpp:295-308, SendStablePet :309-379);
+			// the logout sends no list. No arm clears
+			// logoutAt, so dispatch it here like the
+			// auto-repeat leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_LIST_STABLED_PETS) && state.authed && !hookBlocked {
+				if !state.handleListStabledPets(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_STABLE_PET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:755), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm gates on alive plus the
+			// stablemaster, strips a faked death, then moves
+			// the active hunter pet (or the single unslotted
+			// hunter pet) into the first free stable slot and
+			// answers STABLE_SUCCESS_STABLE
+			// (NPCHandler.cpp:380-447); Go UPDATEs the
+			// character_pet slot row eagerly while the logout
+			// save writes no character_pet rows, so a drop
+			// leaves the pet in slot 0 at next login. The
+			// dead, non-stablemaster, no-free-slot and
+			// dead-pet arms answer STABLE_ERR_STABLE in both.
+			// No arm clears logoutAt, so dispatch it here
+			// like the list leg, then fall through to the
+			// expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_STABLE_PET) && state.authed && !hookBlocked {
+				if !state.handleStablePet(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_UNSTABLE_PET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:756), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm gates on the stablemaster,
+			// strips a faked death, stables the current pet
+			// into the requested pet's slot, then loads the
+			// requested pet into slot 0 and answers
+			// STABLE_SUCCESS_UNSTABLE (NPCHandler.cpp:448-562);
+			// Go UPDATEs the character_pet slot rows eagerly
+			// while the logout save writes no character_pet
+			// rows, so a drop leaves the requested pet stabled
+			// and the old pet active at next login. The
+			// non-stablemaster, unknown-pet and dead-pet arms
+			// answer STABLE_ERR_STABLE in both. No arm clears
+			// logoutAt, so dispatch it here like the stable
+			// leg, then fall through to the expiry logout
+			// below; the handler returns true on every path,
+			// so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UNSTABLE_PET) && state.authed && !hookBlocked {
+				if !state.handleUnstablePet(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_BUY_STABLE_SLOT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:757), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm gates on the stablemaster,
+			// strips a faked death, then deducts the slot
+			// price and answers STABLE_SUCCESS_BUY_SLOT
+			// (NPCHandler.cpp:563-596); the logout sends no
+			// result packet. The non-stablemaster, slot-cap
+			// and not-enough-money arms answer the matching
+			// result in both. No arm clears logoutAt, so
+			// dispatch it here like the unstable leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_BUY_STABLE_SLOT) && state.authed && !hookBlocked {
+				if !state.handleBuyStableSlot(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_STABLE_REVIVE_PET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:759), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm only logs "Not implemented"
+			// (NPCHandler.cpp:597-601), and Go's handler
+			// mirrors it with a silent no-op, so dispatch
+			// changes no observable state either way. No arm
+			// clears logoutAt, so dispatch it here like the
+			// buy-slot leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_STABLE_REVIVE_PET) && state.authed && !hookBlocked {
+				if !state.handleStableRevivePet(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_STABLE_SWAP_PET is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:760), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm gates on the stablemaster,
+			// strips a faked death, swaps the active pet into
+			// the requested pet's stable slot, loads the
+			// requested pet into slot 0 and answers
+			// STABLE_SUCCESS_UNSTABLE (NPCHandler.cpp:602-720);
+			// Go UPDATEs the character_pet slot rows eagerly
+			// while the logout save writes no character_pet
+			// rows, so a drop leaves the swap undone at next
+			// login. The non-stablemaster, unknown-pet and
+			// exotic-pet arms answer the matching result in
+			// both. No arm clears logoutAt, so dispatch it
+			// here like the revive leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_STABLE_SWAP_PET) && state.authed && !hookBlocked {
+				if !state.handleStableSwapPet(ctx, payload) {
+					return
+				}
+			}
+			// MSG_QUEST_PUSH_RESULT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:761), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm forwards the push response to
+			// the sharing player and clears the quest-sharing
+			// info (QuestHandler.cpp:647-665); the logout
+			// sends the sharer no response. The
+			// not-sharing arm is silent in both. No arm
+			// clears logoutAt, so dispatch it here like the
+			// swap leg, then fall through to the expiry logout
+			// below; the handler returns true on every path,
+			// so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_QUEST_PUSH_RESULT) && state.authed && !hookBlocked {
+				if !state.handleQuestPushResult(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
