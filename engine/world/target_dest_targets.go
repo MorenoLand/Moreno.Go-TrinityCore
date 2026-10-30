@@ -595,3 +595,33 @@ func startSrcTarget(spell wotlk.Spell, target protocol.SpellTargetData, packetHa
 	target.Flags &^= protocol.SpellTargetFlagSourceLocation
 	return target
 }
+
+// startDestTarget mirrors ONLY the DEST_LOCATION half of
+// Spell::InitExplicitTargets (Spell.cpp:700-716) for an SMSG_SPELL_START
+// build: SendSpellStart runs inside Spell::prepare (Spell.cpp:3194),
+// after InitExplicitTargets (Spell.cpp:3039) but before SelectSpellTargets,
+// so no implicit dest arm has run yet and the dest-dest/traj arms must not
+// be applied here — unlike the resolver, which folds them into the running
+// destination. A packet destination survives only when the explicit mask
+// needs DEST_LOCATION (RemoveDst clears the flag otherwise, leaving the
+// position field stale); a needed-but-absent destination is seeded from
+// the ORIGINAL packet object target (wireObjectGUID, captured at packet
+// parse before the gauntlet rewrites target) else the caster (InitExplicit
+// SetDst). The packet flag itself is the parse-time flag: the gauntlet may
+// rewrite target.Flags wholesale before START, so callers pass the captured
+// packetHasDst, never the live flag. The returned copy leaves the caller's
+// target untouched, so the finish/queue/traj flows keep the raw packet
+// target.
+func (s *session) startDestTarget(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData, packetHasDst bool, wireObjectGUID uint64) protocol.SpellTargetData {
+	if !spellExplicitDestLocationNeeded(spell) {
+		target.Flags &^= protocol.SpellTargetFlagDestLocation
+		return target
+	}
+	target.Flags |= protocol.SpellTargetFlagDestLocation
+	if !packetHasDst {
+		if x, y, z, ok := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); ok {
+			target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+		}
+	}
+	return target
+}
