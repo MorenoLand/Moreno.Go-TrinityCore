@@ -3072,13 +3072,42 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// self via implicit caster targets; prepare runs InitExplicitTargets
 		// (3039) before CheckCast (3100), so no BAD_TARGETS arm ever sees it.
 		// Keyed on guid type, not flags, so a lying-flags GO guid is exempt too.
+		// A mismatched unit wire target follows the same InitExplicitTargets
+		// removal rule, keyed on the spell's explicit mask
+		// (spellExplicitObjectTargetMask: the raw DBC Targets field OR'd with
+		// the per-effect TargetA/TargetB bits and the missing-target
+		// extension, SpellInfo.cpp:3344-3373): with no unit or corpse bit
+		// in the mask C++ removes the target and the cast proceeds on self,
+		// so the old blanket BAD_TARGETS reject was wrong for that case
+		// and the target is rewritten to self below. With a unit or corpse
+		// bit — a TARGET-reference TargetB (6/21/25/35/45/57/61/90/95, plus
+		// the DEST-target rows grouped with them) or a corpse-used
+		// EXPLICIT effect's missing-target bit — C++ keeps the target and
+		// CheckExplicitTarget validates it (Spell.cpp:5365,
+		// SpellInfo.cpp:1784-1816), so the wire target is validated here
+		// via resolveExplicitUnitTarget and kept, feeding the TargetB
+		// implicit leg (SelectImplicitTargetObjectTargets, Spell.cpp:1558).
+		// No Spell.dbc ships in-tree, so no census names a live spell of
+		// the kept class; the arm is mask-driven, so it behaves correctly
+		// for both classes whether or not one exists.
+		keepWireTarget := false
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && uint16(target.UnitGUID>>48) != 0xF110 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "self-cast only spell cannot target other units")
-			return true
+			if spellExplicitObjectTargetMask(spell)&(targetFlagUnitMask|targetFlagCorpseAlly|targetFlagCorpseEnemy) != 0 {
+				var failReason uint8
+				var failDetail string
+				_, target, failReason, failDetail = s.resolveExplicitUnitTarget(ctx, spell, target)
+				if failReason != 0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", failDetail, "failure", failReason)
+					return true
+				}
+				keepWireTarget = true
+			}
 		}
-		target.UnitGUID = s.playerGUID
-		target.Flags = protocol.SpellTargetFlagUnit
+		if !keepWireTarget {
+			target.UnitGUID = s.playerGUID
+			target.Flags = protocol.SpellTargetFlagUnit
+		}
 	}
 	if isFishingSpell(spellID) && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotFishable), true)
