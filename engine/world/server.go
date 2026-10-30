@@ -4685,6 +4685,152 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SPIRIT_HEALER_ACTIVATE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:671), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume it:
+			// the live arm strips a faked death, resurrects at
+			// 0.5 health with sickness, applies the 0.25
+			// durability loss, spawns bones, and teleports to
+			// the corpse grave when it differs from the ghost
+			// grave (NPCHandler.cpp:198-244); the logout only
+			// saves the dead/ghost state (repop at the
+			// graveyard), so a drop leaves the player dead at
+			// next login. The no-spirit-service and failed
+			// interact arms are silent in both, and the
+			// interact gate checks flight, charm, reaction and
+			// distance — never stunned or rooted — so the
+			// countdown's root/stun does not block a healer
+			// the ghost already stands at. No arm clears
+			// logoutAt, so dispatch it here like the
+			// system-status leg, then fall through to the
+			// expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SPIRIT_HEALER_ACTIVATE) && state.authed && !hookBlocked {
+				if !state.handleSpiritHealerActivate(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_CHAT_IGNORED is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:680), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sends the CHAT_MSG_IGNORED
+			// packet to the ignored player
+			// (ChatHandler.cpp:745-761); the logout sends
+			// none. The unknown/offline-target arm is silent
+			// in both. No arm clears logoutAt, so dispatch
+			// it here like the spirit-healer leg, then fall
+			// through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAT_IGNORED) && state.authed && !hookBlocked {
+				if !state.handleChatIgnored(payload) {
+					return
+				}
+			}
+			// CMSG_GUILD_RANK is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:692), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm rewrites the rank name, rights,
+			// gold limit and bank tabs
+			// (GuildHandler.cpp:166-179); Go's handler
+			// UPDATEs the guild_rank and guild_bank_right
+			// rows eagerly while the logout save writes no
+			// guild rows, so a drop loses the rank change
+			// outright. The no-guild arm is silent in both.
+			// No arm clears logoutAt, so dispatch it here
+			// like the chat-ignored leg, then fall through
+			// to the expiry logout below; the handler
+			// returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_RANK) && state.authed && !hookBlocked {
+				if !state.handleGuildRank(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GUILD_ADD_RANK is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:693), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm mints the new rank
+			// (GuildHandler.cpp:181-187); Go's handler
+			// INSERTs the guild_rank and guild_bank_right
+			// rows eagerly while the logout save writes no
+			// guild rows, so a drop loses the rank outright.
+			// The no-guild and rank-cap arms are silent in
+			// both. No arm clears logoutAt, so dispatch it
+			// here like the rank leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_ADD_RANK) && state.authed && !hookBlocked {
+				if !state.handleGuildAddRank(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GUILD_DEL_RANK is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:694), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm removes the lowest rank
+			// (GuildHandler.cpp:189-196); Go's handler
+			// DELETEs the guild_rank and guild_bank_right
+			// rows eagerly while the logout save writes no
+			// guild rows, so a drop resurrects the rank at
+			// next login. The no-guild arm is silent in
+			// both. No arm clears logoutAt, so dispatch it
+			// here like the add-rank leg, then fall through
+			// to the expiry logout below; the handler
+			// returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_DEL_RANK) && state.authed && !hookBlocked {
+				if !state.handleGuildDelRank(ctx) {
+					return
+				}
+			}
+			// CMSG_GUILD_SET_PUBLIC_NOTE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:695), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets the member's public note
+			// (GuildHandler.cpp:146-154); Go's handler
+			// UPDATEs the guild_member pnote row eagerly
+			// while the logout save writes no guild rows, so
+			// a drop loses the note outright. The no-guild
+			// and bad-name arms are silent in both. No arm
+			// clears logoutAt, so dispatch it here like the
+			// del-rank leg, then fall through to the expiry
+			// logout below; the handler returns true on
+			// every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_SET_PUBLIC_NOTE) && state.authed && !hookBlocked {
+				if !state.handleGuildSetPublicNote(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GUILD_SET_OFFICER_NOTE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:696), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets the member's officer note
+			// (GuildHandler.cpp:156-164); Go's handler
+			// UPDATEs the guild_member offnote row eagerly
+			// while the logout save writes no guild rows, so
+			// a drop loses the note outright. The no-guild
+			// and bad-name arms are silent in both. No arm
+			// clears logoutAt, so dispatch it here like the
+			// public-note leg, then fall through to the
+			// expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_SET_OFFICER_NOTE) && state.authed && !hookBlocked {
+				if !state.handleGuildSetOfficerNote(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
